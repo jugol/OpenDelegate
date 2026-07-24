@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { InMemoryEventStore, type EventStore } from "@opendelegate/event-store";
+
 import {
   createOpenDelegate,
   InMemoryOrchestrationJournal,
@@ -228,11 +230,75 @@ const artifacts: ArtifactGateway = {
   },
 };
 
-test("one durable Task ID cannot bind to two Forum posts", () => {
+test("an injected EventStore is read in place without replay append", async () => {
+  const eventStore = new InMemoryEventStore({ clock: new FixedClock() });
+  const stored = await eventStore.append({
+    streamId: JSON.stringify(["task", "task-injected-store"]),
+    expectedVersion: 0,
+    occurredAt: "2026-07-24T00:00:00.000Z",
+    events: [
+      {
+        eventId: JSON.stringify(["orchestration", "task", "task-injected-store"]),
+        type: "task.bound",
+        payload: {
+          taskId: "task-injected-store",
+          forumPostId: "post-injected-store",
+          forumPost: {
+            forumId: "forum-owner-work",
+            postId: "post-injected-store",
+            authorId: "discord-owner",
+            title: "Use the injected EventStore",
+            body: "Restore directly from the durable adapter.",
+            authorizedPrincipalId: "owner-primary",
+          },
+        },
+      },
+    ],
+  });
+  const journal = new InMemoryOrchestrationJournal({
+    clock: new FixedClock(),
+    eventStore,
+  });
+
+  assert.equal(await journal.taskIdFor("post-injected-store"), "task-injected-store");
+  assert.deepEqual(await journal.recordedEvents(), stored);
+  const outOfOrderStore: EventStore = {
+    append: (input) => eventStore.append(input),
+    readStream: (streamId) => eventStore.readStream(streamId),
+    readAll: async () =>
+      stored.map((event) => ({
+        ...event,
+        globalPosition: event.globalPosition + 1,
+      })),
+    streamVersion: (streamId) => eventStore.streamVersion(streamId),
+    replay: (streamId, initial, apply) => eventStore.replay(streamId, initial, apply),
+  };
+  const outOfOrderJournal = new InMemoryOrchestrationJournal({
+    clock: new FixedClock(),
+    eventStore: outOfOrderStore,
+  });
+  await assert.rejects(
+    outOfOrderJournal.recordedEvents(),
+    (error: unknown) =>
+      error instanceof OrchestratorError && error.code === "JOURNAL_EVENT_INVALID",
+  );
+  assert.throws(
+    () =>
+      new InMemoryOrchestrationJournal({
+        clock: new FixedClock(),
+        eventStore,
+        recordedEvents: [],
+      }),
+    (error: unknown) =>
+      error instanceof OrchestratorError && error.code === "JOURNAL_EVENT_INVALID",
+  );
+});
+
+test("one durable Task ID cannot bind to two Forum posts", async () => {
   const journal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
   });
-  journal.bindTask("post-one", {
+  await journal.bindTask("post-one", {
     taskId: "task-one-to-one",
     forumPost: {
       forumId: "forum-owner-work",
@@ -244,7 +310,7 @@ test("one durable Task ID cannot bind to two Forum posts", () => {
     },
   });
 
-  assert.throws(
+  await assert.rejects(
     () =>
       journal.bindTask("post-two", {
         taskId: "task-one-to-one",
@@ -259,13 +325,43 @@ test("one durable Task ID cannot bind to two Forum posts", () => {
       }),
     (error: unknown) => error instanceof OrchestratorError && error.code === "TASK_ID_CONFLICT",
   );
+
+  const concurrentJournal = new InMemoryOrchestrationJournal({
+    clock: new FixedClock(),
+  });
+  const concurrentBindings = await Promise.allSettled(
+    ["post-concurrent-one", "post-concurrent-two"].map((postId) =>
+      concurrentJournal.bindTask(postId, {
+        taskId: "task-concurrent-one-to-one",
+        forumPost: {
+          forumId: "forum-owner-work",
+          postId,
+          authorId: "discord-owner",
+          title: `Concurrent binding ${postId}`,
+          body: "Only one Forum post may own this Task ID.",
+          authorizedPrincipalId: "owner-primary",
+        },
+      }),
+    ),
+  );
+
+  assert.equal(concurrentBindings.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(
+    concurrentBindings.filter(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason instanceof OrchestratorError &&
+        result.reason.code === "TASK_ID_CONFLICT",
+    ).length,
+    1,
+  );
 });
 
-test("Task aggregate state and event streams use the canonical Task ID after channel binding", () => {
+test("Task aggregate state and event streams use the canonical Task ID after channel binding", async () => {
   const journal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
   });
-  journal.bindTask("post-canonical-stream", {
+  await journal.bindTask("post-canonical-stream", {
     taskId: "task-canonical-stream",
     forumPost: {
       forumId: "forum-owner-work",
@@ -277,13 +373,16 @@ test("Task aggregate state and event streams use the canonical Task ID after cha
     },
   });
 
-  journal.recordIntakeReady("task-canonical-stream");
+  await journal.recordIntakeReady("task-canonical-stream");
 
-  assert.equal(journal.taskIdFor("post-canonical-stream"), "task-canonical-stream");
-  assert.equal(journal.taskIntake("task-canonical-stream")?.taskId, "task-canonical-stream");
-  assert.equal(journal.intakeReady("task-canonical-stream"), true);
+  assert.equal(await journal.taskIdFor("post-canonical-stream"), "task-canonical-stream");
+  assert.equal(
+    (await journal.taskIntake("task-canonical-stream"))?.taskId,
+    "task-canonical-stream",
+  );
+  assert.equal(await journal.intakeReady("task-canonical-stream"), true);
   assert.deepEqual(
-    journal.recordedEvents().map((event) => event.streamId),
+    (await journal.recordedEvents()).map((event) => event.streamId),
     [
       JSON.stringify(["task", "task-canonical-stream"]),
       JSON.stringify(["task", "task-canonical-stream"]),
@@ -317,7 +416,7 @@ test("recorded orchestration events restore Task identity and completed side eff
 
   const restoredJournal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
-    recordedEvents: firstJournal.recordedEvents(),
+    recordedEvents: await firstJournal.recordedEvents(),
   });
   const stableAfterRestart = new CountingWorker("worker-stable", ["stable"]);
   const flakyAfterRestart = new CountingWorker("worker-flaky", ["flaky"]);
@@ -340,7 +439,7 @@ test("recorded orchestration events restore Task identity and completed side eff
 
   const afterCompletionRestart = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
-    recordedEvents: restoredJournal.recordedEvents(),
+    recordedEvents: await restoredJournal.recordedEvents(),
   });
   const forbiddenWorker = new CountingWorker("worker-forbidden", ["stable", "flaky"], 99);
   const completedRuntime = createOpenDelegate({
@@ -354,11 +453,11 @@ test("recorded orchestration events restore Task identity and completed side eff
     journal: afterCompletionRestart,
   });
 
-  assert.deepEqual(completedRuntime.getTaskByForumPost(forumPost.postId), completed);
+  assert.deepEqual(await completedRuntime.getTaskByForumPost(forumPost.postId), completed);
   assert.deepEqual(await completedRuntime.acceptForumPost(forumPost), completed);
   assert.equal(forbiddenWorker.calls, 0);
 
-  const validEvents = afterCompletionRestart.recordedEvents();
+  const validEvents = await afterCompletionRestart.recordedEvents();
   const identityTamperCases = [
     {
       name: "recorded Work Order plan",
@@ -409,7 +508,7 @@ test("recorded orchestration events restore Task identity and completed side eff
       clock: new FixedClock(),
       recordedEvents: tamperCase.events,
     });
-    assert.throws(
+    await assert.rejects(
       () => tamperedJournal.completedTask("task-restart-proof"),
       (error: unknown) =>
         error instanceof Error && "code" in error && error.code === "JOURNAL_EVENT_INVALID",
@@ -421,7 +520,7 @@ test("recorded orchestration events restore Task identity and completed side eff
     clock: new FixedClock(),
     recordedEvents: validEvents.filter((event) => event.type !== "artifact.published"),
   });
-  assert.throws(
+  await assert.rejects(
     () => missingArtifactJournal.completedTask("task-restart-proof"),
     (error: unknown) =>
       error instanceof Error && "code" in error && error.code === "JOURNAL_EVENT_INVALID",
@@ -448,7 +547,7 @@ test("recorded orchestration events restore Task identity and completed side eff
     clock: new FixedClock(),
     recordedEvents: invalidHistoryEvents,
   });
-  assert.throws(
+  await assert.rejects(
     () => invalidHistoryJournal.completedTask("task-restart-proof"),
     (error: unknown) =>
       error instanceof Error && "code" in error && error.code === "JOURNAL_EVENT_INVALID",

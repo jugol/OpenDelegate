@@ -1,0 +1,54 @@
+import type {
+  WorkerConfiguration,
+  WorkerOutboundEventV1,
+  WorkerOperationalState,
+  WorkerRunAssignmentV1,
+} from "./contracts.ts";
+
+export type PersistedRunState =
+  "cancelling" | "failed" | "running" | "starting" | "succeeded" | "cancelled";
+
+export interface PersistedWorkerRun {
+  readonly assignment: WorkerRunAssignmentV1;
+  readonly dispatchMessageId: string;
+  readonly assignmentFingerprint: string;
+  readonly state: PersistedRunState;
+  readonly acceptedAtMs: number;
+  readonly finishedAtMs?: number;
+}
+
+export interface PersistedInboxEntry {
+  readonly messageId: string;
+  readonly idempotencyKey: string;
+  readonly fingerprint: string;
+  readonly runId: string;
+}
+
+export interface PersistedOutboxEntry {
+  readonly sequence: number;
+  readonly event: WorkerOutboundEventV1;
+}
+
+export interface PersistedWorkerState {
+  readonly schemaVersion: 1;
+  readonly generation: number;
+  readonly configuration: WorkerConfiguration;
+  readonly configurationFingerprint: string;
+  readonly operationalState: WorkerOperationalState;
+  readonly lastObservedAtMs: number;
+  readonly inbox: readonly PersistedInboxEntry[];
+  readonly runs: readonly PersistedWorkerRun[];
+  readonly outbox: readonly PersistedOutboxEntry[];
+  readonly nextOutboxSequence: number;
+}
+
+export interface WorkerStateRepository {
+  initialize(initialState: PersistedWorkerState): Promise<PersistedWorkerState>;
+  read(): Promise<PersistedWorkerState>;
+  compareAndSwap(expectedGeneration: number, nextState: PersistedWorkerState): Promise<boolean>;
+  close(): void;
+}
+
+export function cloneWorkerState(state: PersistedWorkerState): PersistedWorkerState {
+  return structuredClone(state);
+}

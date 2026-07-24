@@ -1,0 +1,361 @@
+import { randomUUID } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
+import { delimiter, join } from "node:path";
+
+import {
+  type AgentAdapter,
+  type AgentAdapterProbe,
+  type AgentAdapterProbeInput,
+  type AgentResumeRequest,
+  type AgentRunHandle,
+  type AgentStartRequest,
+} from "./contracts.ts";
+import { probeCli } from "./cli-probe.ts";
+import { AgentAdapterError } from "./errors.ts";
+import { type SpawnCommand } from "./process-utils.ts";
+import { isRecord } from "./redaction.ts";
+import { processSessionLeaseStore, type SessionLeaseStore } from "./session-leases.ts";
+import {
+  canonicalizeWorkspace,
+  createNativeSessionReference,
+  validateAgentRequest,
+  validateDangerousGrant,
+  validateResumeReference,
+} from "./session-reference.ts";
+import { startSubprocessTurn, type ProviderSignal } from "./subprocess-turn.ts";
+
+export const CODEX_CLI_TESTED_VERSIONS = ["0.145.0"] as const;
+
+export interface CodexCliAdapterOptions {
+  readonly executable?: string;
+  readonly prefixArgs?: readonly string[];
+  readonly testedVersions?: readonly string[];
+  readonly allowUntestedVersion?: boolean;
+  readonly leaseStore?: SessionLeaseStore;
+  readonly now?: () => number;
+  readonly lineageId?: () => string;
+}
+
+export class CodexCliAdapter implements AgentAdapter {
+  readonly adapterId = "codex-cli";
+  readonly provider = "codex" as const;
+  readonly #executable: string;
+  readonly #prefixArgs: readonly string[];
+  readonly #testedVersions: readonly string[];
+  readonly #allowUntestedVersion: boolean;
+  readonly #leaseStore: SessionLeaseStore;
+  readonly #now: () => number;
+  readonly #lineageId: () => string;
+
+  constructor(options: CodexCliAdapterOptions = {}) {
+    const command =
+      options.executable === undefined && options.prefixArgs === undefined
+        ? defaultCodexCommand()
+        : {
+            executable: options.executable ?? "codex",
+            prefixArgs: options.prefixArgs ?? [],
+          };
+    this.#executable = command.executable;
+    this.#prefixArgs = command.prefixArgs;
+    this.#testedVersions = options.testedVersions ?? CODEX_CLI_TESTED_VERSIONS;
+    this.#allowUntestedVersion = options.allowUntestedVersion ?? false;
+    this.#leaseStore = options.leaseStore ?? processSessionLeaseStore;
+    this.#now = options.now ?? Date.now;
+    this.#lineageId = options.lineageId ?? randomUUID;
+  }
+
+  async probe(input: AgentAdapterProbeInput = {}): Promise<AgentAdapterProbe> {
+    const capabilities = {
+      start: true,
+      resume: true,
+      streaming: true,
+      cancellation: true,
+      approvalBridge: false,
+      steering: false,
+      checkpointContinuation: true,
+      workspaceIsolation: [
+        "none",
+        "agent-native-worktree",
+        "opendelegate-worktree",
+        "container",
+        "custom",
+      ],
+    } as const;
+    return await probeCli({
+      adapterId: this.adapterId,
+      provider: this.provider,
+      providerLabel: "Codex CLI",
+      capabilities,
+      versionCommand: this.#command(
+        [...this.#prefixArgs, "--version"],
+        process.cwd(),
+        input.environment,
+        input.secretEnvironment,
+      ),
+      authCommand: this.#command(
+        [...this.#prefixArgs, "login", "status"],
+        process.cwd(),
+        input.environment,
+        input.secretEnvironment,
+      ),
+      testedVersions: this.#testedVersions,
+      parseVersion: parseCodexVersion,
+    });
+  }
+
+  async start(request: AgentStartRequest): Promise<AgentRunHandle> {
+    return await this.#launch(request);
+  }
+
+  async resume(request: AgentResumeRequest): Promise<AgentRunHandle> {
+    return await this.#launch(request);
+  }
+
+  async #launch(request: AgentStartRequest | AgentResumeRequest): Promise<AgentRunHandle> {
+    validateAgentRequest(request);
+    const workspace = await canonicalizeWorkspace(request.workspace);
+    const { cwd } = workspace;
+    if (request.operation === "resume") {
+      validateResumeReference(request, workspace, this.provider, this.adapterId);
+    }
+    const probe = await this.probe({
+      ...(request.environment === undefined ? {} : { environment: request.environment }),
+      ...(request.secretEnvironment === undefined
+        ? {}
+        : { secretEnvironment: request.secretEnvironment }),
+    });
+    if (!probe.installed) {
+      throw new AgentAdapterError("ADAPTER_UNAVAILABLE", "Codex CLI is unavailable.", true);
+    }
+    if (probe.auth.state !== "ready") {
+      throw new AgentAdapterError(
+        "ADAPTER_AUTH_NOT_READY",
+        "Codex CLI authentication is not ready.",
+        true,
+      );
+    }
+    if (
+      probe.version === undefined ||
+      (probe.compatibility !== "tested" && !this.#allowUntestedVersion)
+    ) {
+      throw new AgentAdapterError(
+        "ADAPTER_VERSION_UNSUPPORTED",
+        "Codex CLI version has not passed the configured compatibility policy.",
+      );
+    }
+    const adapterVersion = probe.version;
+    const args = this.#invocationArgs(request, cwd);
+    return await startSubprocessTurn({
+      adapterId: this.adapterId,
+      adapterVersion,
+      request,
+      cwd,
+      command: this.#command(args, cwd, request.environment, request.secretEnvironment),
+      stdin: request.prompt,
+      leaseStore: this.#leaseStore,
+      now: this.#now,
+      createSession: (nativeSessionId) =>
+        createNativeSessionReference({
+          provider: this.provider,
+          adapterId: this.adapterId,
+          adapterVersion,
+          nativeSessionId,
+          request,
+          workspace,
+          lineageId: this.#lineageId,
+          now: this.#now,
+        }),
+      parseLine: parseCodexSignal,
+    });
+  }
+
+  #invocationArgs(request: AgentStartRequest | AgentResumeRequest, cwd: string): string[] {
+    if (request.permissions.mode === "allow-listed") {
+      throw new AgentAdapterError(
+        "PERMISSION_MODE_UNSUPPORTED",
+        "Codex CLI fallback cannot bridge allow-list approvals; use the SDK/App Server adapter.",
+      );
+    }
+    if (request.sandbox === "container" || request.sandbox === "custom") {
+      throw new AgentAdapterError(
+        "SANDBOX_MODE_UNSUPPORTED",
+        "Codex CLI does not expose the requested sandbox mode.",
+      );
+    }
+    const common = [
+      "--json",
+      "-c",
+      `sandbox_mode="${request.sandbox === "provider-default" ? "read-only" : request.sandbox}"`,
+    ];
+    if (request.permissions.mode === "bypass") {
+      validateDangerousGrant(request);
+      if (request.sandbox !== "danger-full-access") {
+        throw new AgentAdapterError(
+          "DANGEROUS_BYPASS_SCOPE_MISMATCH",
+          "Dangerous bypass requires the explicit danger-full-access sandbox.",
+        );
+      }
+      common.push("--dangerously-bypass-approvals-and-sandbox");
+    } else {
+      common.push("-c", 'approval_policy="never"');
+    }
+    if (request.operation === "start") {
+      return [...this.#prefixArgs, "exec", ...common, "--color", "never", "-C", cwd, "-"];
+    }
+    return [...this.#prefixArgs, "exec", "resume", request.session.nativeSessionId, ...common, "-"];
+  }
+
+  #command(
+    args: readonly string[],
+    cwd: string,
+    environment?: Readonly<Record<string, string>>,
+    secretEnvironment?: Readonly<Record<string, string>>,
+  ): SpawnCommand {
+    return {
+      executable: this.#executable,
+      args,
+      cwd,
+      ...(environment === undefined ? {} : { environment }),
+      ...(secretEnvironment === undefined ? {} : { secretEnvironment }),
+    };
+  }
+}
+
+function defaultCodexCommand(): {
+  readonly executable: string;
+  readonly prefixArgs: readonly string[];
+} {
+  if (process.platform === "win32") {
+    const pathEntries = (process.env.PATH ?? "")
+      .split(delimiter)
+      .map((entry) => entry.trim().replace(/^"(.*)"$/u, "$1"))
+      .filter((entry) => entry.length > 0);
+    for (const directory of pathEntries) {
+      const entrypoint = join(directory, "node_modules", "@openai", "codex", "bin", "codex.js");
+      try {
+        if (statSync(entrypoint).isFile()) {
+          return {
+            executable: process.execPath,
+            prefixArgs: [realpathSync(entrypoint)],
+          };
+        }
+      } catch {
+        // Continue to the next PATH entry.
+      }
+    }
+  }
+  return { executable: "codex", prefixArgs: [] };
+}
+
+function parseCodexVersion(output: string): string {
+  const match = /(?:codex(?:-cli)?\s+)?(\d+\.\d+\.\d+)/iu.exec(output.trim());
+  if (match?.[1] === undefined) {
+    throw new AgentAdapterError(
+      "UNRECOGNIZED_PROVIDER_VERSION",
+      "Codex CLI returned an unrecognized version.",
+    );
+  }
+  return match[1];
+}
+
+function parseCodexSignal(value: unknown): readonly ProviderSignal[] {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex CLI event was not an object with a type.",
+    );
+  }
+  if (value.type === "thread.started") {
+    if (typeof value.thread_id !== "string" || value.thread_id.length === 0) {
+      throw new AgentAdapterError(
+        "MALFORMED_PROVIDER_OUTPUT",
+        "Codex session event did not include a thread ID.",
+      );
+    }
+    return [{ kind: "session", nativeSessionId: value.thread_id }];
+  }
+  if (value.type === "item.completed") {
+    if (!isRecord(value.item) || typeof value.item.type !== "string") {
+      throw new AgentAdapterError("MALFORMED_PROVIDER_OUTPUT", "Codex item was malformed.");
+    }
+    if (value.item.type === "agent_message") {
+      if (typeof value.item.text !== "string") {
+        throw new AgentAdapterError(
+          "MALFORMED_PROVIDER_OUTPUT",
+          "Codex agent message was malformed.",
+        );
+      }
+      return [{ kind: "public_message", text: value.item.text }];
+    }
+    if (value.item.type === "command_execution") {
+      const failed = value.item.status === "failed";
+      return [
+        {
+          kind: "tool_result",
+          toolName: "shell",
+          status: failed ? "failed" : "succeeded",
+          ...(typeof value.item.aggregated_output === "string"
+            ? { summary: value.item.aggregated_output }
+            : {}),
+        },
+      ];
+    }
+    if (value.item.type === "mcp_tool_call") {
+      const failed = value.item.status === "failed";
+      return [
+        {
+          kind: "tool_result",
+          toolName:
+            typeof value.item.tool === "string"
+              ? value.item.tool
+              : typeof value.item.name === "string"
+                ? value.item.name
+                : "mcp-tool",
+          status: failed ? "failed" : "succeeded",
+        },
+      ];
+    }
+    return [];
+  }
+  if (value.type === "turn.completed") {
+    if (!isRecord(value.usage)) {
+      return [{ kind: "terminal", status: "succeeded", usage: {} }];
+    }
+    const inputTokens = numberValue(value.usage.input_tokens);
+    const outputTokens = numberValue(value.usage.output_tokens);
+    const cachedInputTokens = numberValue(value.usage.cached_input_tokens);
+    return [
+      {
+        kind: "terminal",
+        status: "succeeded",
+        usage: {
+          ...(inputTokens === undefined ? {} : { inputTokens }),
+          ...(outputTokens === undefined ? {} : { outputTokens }),
+          ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+        },
+      },
+    ];
+  }
+  if (value.type === "turn.failed") {
+    return [
+      {
+        kind: "terminal",
+        status: "failed",
+        error: {
+          code: "CODEX_TURN_FAILED",
+          message: "Codex reported a failed turn.",
+          retryable: true,
+        },
+      },
+    ];
+  }
+  if (value.type === "error") {
+    const message = typeof value.message === "string" ? value.message : "Codex reported an error.";
+    return [{ kind: "diagnostic", level: "warning", code: "CODEX_ERROR_EVENT", message }];
+  }
+  return [];
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}

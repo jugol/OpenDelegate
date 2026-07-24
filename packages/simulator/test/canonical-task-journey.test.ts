@@ -113,14 +113,14 @@ function asStoredEvents(events: readonly EventDraft[]): readonly StoredEvent[] {
   }));
 }
 
-test("records and projects the complete canonical Task journey", () => {
+test("records and projects the complete canonical Task journey", async () => {
   const simulator = createSimulator();
 
-  const projection = simulator.runToCompletion();
+  const projection = await simulator.runToCompletion();
 
   assert.deepEqual(projection, expectedFinalProjection);
   assert.deepEqual(
-    simulator.recordedEvents().map((event) => event.type),
+    (await simulator.recordedEvents()).map((event) => event.type),
     [
       "task.intake-recorded",
       "task.clarification-requested",
@@ -140,7 +140,7 @@ test("records and projects the complete canonical Task journey", () => {
   );
 });
 
-test("consumes each injected aggregate ID exactly once", () => {
+test("consumes each injected aggregate ID exactly once", async () => {
   let taskIdCalls = 0;
   const simulator = new CanonicalTaskJourneySimulator({
     clock: new FixedClock(),
@@ -153,44 +153,44 @@ test("consumes each injected aggregate ID exactly once", () => {
     },
   });
 
-  const projection = simulator.runToCompletion();
+  const projection = await simulator.runToCompletion();
 
   assert.equal(taskIdCalls, 1);
   assert.equal(projection.taskId, "task-generated-1");
   assert.equal(
-    simulator.recordedEvents().every((event) => event.streamId === "task-generated-1"),
+    (await simulator.recordedEvents()).every((event) => event.streamId === "task-generated-1"),
     true,
   );
 });
 
 test("restarting at every event boundary reaches an identical final projection", async (t) => {
   const baseline = createSimulator();
-  const expected = baseline.runToCompletion();
-  const recorded = baseline.recordedEvents();
+  const expected = await baseline.runToCompletion();
+  const recorded = await baseline.recordedEvents();
 
   for (let boundary = 0; boundary <= recorded.length; boundary += 1) {
-    await t.test(`restart after ${String(boundary)} recorded events`, () => {
+    await t.test(`restart after ${String(boundary)} recorded events`, async () => {
       const restarted = createSimulator(recorded.slice(0, boundary));
 
-      assert.equal(restarted.restore().appliedEventIds.length, boundary);
-      assert.deepEqual(restarted.runToCompletion(), expected);
-      assert.deepEqual(restarted.recordedEvents(), recorded);
+      assert.equal((await restarted.restore()).appliedEventIds.length, boundary);
+      assert.deepEqual(await restarted.runToCompletion(), expected);
+      assert.deepEqual(await restarted.recordedEvents(), recorded);
     });
   }
 });
 
-test("duplicate journal and projector deliveries are idempotent", () => {
+test("duplicate journal and projector deliveries are idempotent", async () => {
   const baseline = createSimulator();
-  const expected = baseline.runToCompletion();
-  const recorded = baseline.recordedEvents();
+  const expected = await baseline.runToCompletion();
+  const recorded = await baseline.recordedEvents();
   const duplicate = recorded[6];
   assert.ok(duplicate);
 
   const restarted = createSimulator([...recorded, duplicate]);
   const deliveredTwice = [...recorded.slice(0, 7), duplicate, ...recorded.slice(7)];
 
-  assert.equal(restarted.recordedEvents().length, recorded.length);
-  assert.deepEqual(restarted.runToCompletion(), expected);
+  assert.equal((await restarted.recordedEvents()).length, recorded.length);
+  assert.deepEqual(await restarted.runToCompletion(), expected);
   assert.deepEqual(projectTaskJourney(deliveredTwice), expected);
 });
 

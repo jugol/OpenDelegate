@@ -311,5 +311,5 @@ export interface OpenDelegateDependencies {
 export interface OpenDelegate {
   acceptForumPost(input: ForumPostInput): Promise<TaskView>;
   answerClarification(input: ClarificationAnswerInput): Promise<CompletedTaskView>;
-  getTaskByForumPost(postId: string): TaskView;
+  getTaskByForumPost(postId: string): Promise<TaskView>;
 }

@@ -21,6 +21,8 @@ import { type CapabilityView, type DeviceOverviewViewModel, type StatusTone } fr
 
 const tabs = ["Overview", "Capabilities", "Roles & Instructions", "Routes", "Runs"] as const;
 
+export type AdminSection = "devices" | "tasks";
+
 interface DeviceSurfaceProps {
   readonly chatOpen: boolean;
   readonly device: DeviceOverviewViewModel;
@@ -33,51 +35,57 @@ export function DeviceSurface({
   onConfigure,
 }: DeviceSurfaceProps): React.JSX.Element {
   return (
-    <>
-      <DeviceRail device={device} />
+    <main className="device-main">
+      <DeviceHeader chatOpen={chatOpen} device={device} onConfigure={onConfigure} />
 
-      <main className="device-main">
-        <DeviceHeader chatOpen={chatOpen} device={device} onConfigure={onConfigure} />
+      <div className="device-tabs" role="tablist" aria-label="Device sections">
+        {tabs.map((tab, index) => {
+          const selected = index === 0;
 
-        <div className="device-tabs" role="tablist" aria-label="Device sections">
-          {tabs.map((tab, index) => {
-            const selected = index === 0;
+          return (
+            <button
+              aria-controls={selected ? "device-panel-overview" : undefined}
+              aria-disabled={!selected}
+              aria-selected={selected}
+              className="device-tab"
+              disabled={!selected}
+              id={`device-tab-${index}`}
+              key={tab}
+              role="tab"
+              tabIndex={selected ? 0 : -1}
+              title={selected ? undefined : "Available in a later implementation phase"}
+              type="button"
+            >
+              {tab}
+            </button>
+          );
+        })}
+      </div>
 
-            return (
-              <button
-                aria-controls={selected ? "device-panel-overview" : undefined}
-                aria-disabled={!selected}
-                aria-selected={selected}
-                className="device-tab"
-                disabled={!selected}
-                id={`device-tab-${index}`}
-                key={tab}
-                role="tab"
-                tabIndex={selected ? 0 : -1}
-                title={selected ? undefined : "Available in a later implementation phase"}
-                type="button"
-              >
-                {tab}
-              </button>
-            );
-          })}
-        </div>
-
-        <section
-          aria-labelledby="device-tab-0"
-          className="tab-panel"
-          id="device-panel-overview"
-          role="tabpanel"
-          tabIndex={0}
-        >
-          <DeviceOverview device={device} />
-        </section>
-      </main>
-    </>
+      <section
+        aria-labelledby="device-tab-0"
+        className="tab-panel"
+        id="device-panel-overview"
+        role="tabpanel"
+        tabIndex={0}
+      >
+        <DeviceOverview device={device} />
+      </section>
+    </main>
   );
 }
 
-function DeviceRail({ device }: { readonly device: DeviceOverviewViewModel }): React.JSX.Element {
+export function AdminRail({
+  activeSection,
+  device,
+  onSelectSection,
+  tasksEnabled = true,
+}: {
+  readonly activeSection: AdminSection;
+  readonly device: DeviceOverviewViewModel;
+  readonly onSelectSection: (section: AdminSection) => void;
+  readonly tasksEnabled?: boolean;
+}): React.JSX.Element {
   const navigationLabel = `${device.name}, ${device.roleLabel}, ${device.connection.label}`;
 
   return (
@@ -88,11 +96,14 @@ function DeviceRail({ device }: { readonly device: DeviceOverviewViewModel }): R
       </div>
 
       <p className="rail-heading">Devices</p>
-      <div
-        aria-current="page"
+      <button
+        aria-current={activeSection === "devices" ? "page" : undefined}
         aria-label={navigationLabel}
-        className="device-selector"
-        role="group"
+        className={`device-selector ${
+          activeSection === "devices" ? "device-selector--selected" : ""
+        }`}
+        onClick={() => onSelectSection("devices")}
+        type="button"
       >
         <Network aria-hidden="true" />
         <span className="device-selector-copy">
@@ -105,10 +116,15 @@ function DeviceRail({ device }: { readonly device: DeviceOverviewViewModel }): R
             </span>
           </span>
         </span>
-      </div>
+      </button>
 
       <nav aria-label="Admin sections" className="primary-navigation">
-        <NavigationItem icon={ClipboardCheck} label="Tasks" />
+        <NavigationItem
+          active={activeSection === "tasks"}
+          icon={ClipboardCheck}
+          label="Tasks"
+          {...(tasksEnabled ? { onClick: () => onSelectSection("tasks") } : {})}
+        />
         <NavigationItem icon={ShieldCheck} label="Approvals" />
         <NavigationItem icon={Folder} label="Artifacts" />
         <NavigationItem icon={FileClock} label="Audit" />
@@ -129,18 +145,24 @@ function DeviceRail({ device }: { readonly device: DeviceOverviewViewModel }): R
 }
 
 function NavigationItem({
+  active = false,
   icon: Icon,
   label,
+  onClick,
 }: {
+  readonly active?: boolean;
   readonly icon: LucideIcon;
   readonly label: string;
+  readonly onClick?: () => void;
 }): React.JSX.Element {
   return (
     <button
+      aria-current={active ? "page" : undefined}
       aria-label={label}
-      className="navigation-item"
-      disabled
-      title="Available in a later implementation phase"
+      className={`navigation-item ${active ? "navigation-item--active" : ""}`}
+      disabled={onClick === undefined}
+      onClick={onClick}
+      title={onClick === undefined ? "Available in a later implementation phase" : undefined}
       type="button"
     >
       <Icon aria-hidden="true" />

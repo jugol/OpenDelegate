@@ -51,9 +51,9 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
   return {
     async acceptForumPost(input) {
       const authorizedForumPost = await authorizeForumPost(input, dependencies);
-      const persistedTaskId = journal.taskIdFor(input.postId);
+      const persistedTaskId = await journal.taskIdFor(input.postId);
       const persistedIntake =
-        persistedTaskId === undefined ? undefined : journal.taskIntake(persistedTaskId);
+        persistedTaskId === undefined ? undefined : await journal.taskIntake(persistedTaskId);
       if (
         persistedIntake !== undefined &&
         JSON.stringify(persistedIntake.forumPost) !== JSON.stringify(authorizedForumPost)
@@ -71,7 +71,7 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
           fingerprint: JSON.stringify(authorizedForumPost),
         },
         async () => {
-          const intake = resolveTaskIntake(authorizedForumPost, dependencies, journal);
+          const intake = await resolveTaskIntake(authorizedForumPost, dependencies, journal);
           return runExclusive(
             activeExecutions,
             intake.taskId,
@@ -80,19 +80,19 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
               fingerprint: JSON.stringify(authorizedForumPost),
             },
             async () => {
-              const completed = journal.completedTask(intake.taskId);
+              const completed = await journal.completedTask(intake.taskId);
               if (completed !== undefined) {
                 return completed;
               }
 
-              const clarification = journal.clarification(intake.taskId);
+              const clarification = await journal.clarification(intake.taskId);
               if (clarification !== undefined && clarification.answer === undefined) {
                 return projectWaitingTask(journal, intake);
               }
 
               if (
-                journal.plan(intake.taskId) === undefined &&
-                !journal.intakeReady(intake.taskId) &&
+                (await journal.plan(intake.taskId)) === undefined &&
+                !(await journal.intakeReady(intake.taskId)) &&
                 clarification === undefined
               ) {
                 const decision = parseCoordinatorIntakeDecision(
@@ -102,10 +102,10 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
                   }),
                 );
                 if (decision.decision === "clarification") {
-                  journal.recordClarificationRequest(intake.taskId, decision.clarification);
+                  await journal.recordClarificationRequest(intake.taskId, decision.clarification);
                   return projectWaitingTask(journal, intake);
                 }
-                journal.recordIntakeReady(intake.taskId);
+                await journal.recordIntakeReady(intake.taskId);
               }
 
               return executeTask(intake, dependencies, journal);
@@ -117,8 +117,8 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
 
     async answerClarification(input) {
       assertClarificationAnswerInput(input);
-      const taskId = journal.taskIdFor(input.postId);
-      const intake = taskId === undefined ? undefined : journal.taskIntake(taskId);
+      const taskId = await journal.taskIdFor(input.postId);
+      const intake = taskId === undefined ? undefined : await journal.taskIntake(taskId);
       if (intake === undefined) {
         throw new OrchestratorError(
           "CLARIFICATION_NOT_FOUND",
@@ -141,7 +141,7 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
         );
       }
 
-      const durableClarification = journal.clarification(intake.taskId);
+      const durableClarification = await journal.clarification(intake.taskId);
       if (
         durableClarification === undefined ||
         durableClarification.request.clarificationId !== input.clarificationId
@@ -172,8 +172,8 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
           }),
         },
         async () => {
-          const currentIntake = journal.taskIntake(intake.taskId);
-          const clarification = journal.clarification(intake.taskId);
+          const currentIntake = await journal.taskIntake(intake.taskId);
+          const clarification = await journal.clarification(intake.taskId);
           if (currentIntake === undefined || clarification === undefined) {
             throw new OrchestratorError(
               "CLARIFICATION_NOT_FOUND",
@@ -191,9 +191,9 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
             ...clarification.request,
             answer: input.answer,
           } satisfies ClarificationExchange);
-          journal.recordClarificationAnswer(intake.taskId, exchange);
+          await journal.recordClarificationAnswer(intake.taskId, exchange);
 
-          const completed = journal.completedTask(intake.taskId);
+          const completed = await journal.completedTask(intake.taskId);
           if (completed !== undefined) {
             return completed;
           }
@@ -202,21 +202,21 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
       );
     },
 
-    getTaskByForumPost(postId) {
-      const taskId = journal.taskIdFor(postId);
+    async getTaskByForumPost(postId) {
+      const taskId = await journal.taskIdFor(postId);
       if (taskId === undefined) {
         throw new OrchestratorError(
           "TASK_NOT_FOUND",
           `No presentable Task view is bound to Forum post ${postId}.`,
         );
       }
-      const completed = journal.completedTask(taskId);
+      const completed = await journal.completedTask(taskId);
       if (completed !== undefined) {
         return completed;
       }
 
-      const intake = journal.taskIntake(taskId);
-      const clarification = journal.clarification(taskId);
+      const intake = await journal.taskIntake(taskId);
+      const clarification = await journal.clarification(taskId);
       if (
         intake !== undefined &&
         clarification !== undefined &&
@@ -239,8 +239,8 @@ async function executeTask(
   journal: OrchestrationJournal,
 ): Promise<CompletedTaskView> {
   const { taskId, forumPost } = intake;
-  const existingPlan = journal.plan(taskId);
-  const clarification = journal.clarification(taskId)?.answer;
+  const existingPlan = await journal.plan(taskId);
+  const clarification = (await journal.clarification(taskId))?.answer;
   const plan =
     existingPlan ??
     parseCoordinatorPlan(
@@ -252,7 +252,7 @@ async function executeTask(
     );
 
   if (existingPlan === undefined) {
-    journal.recordPlan(taskId, plan);
+    await journal.recordPlan(taskId, plan);
   }
 
   const task = Task.create({
@@ -262,7 +262,7 @@ async function executeTask(
       minimumArtifactResults: 1,
     },
   });
-  if (journal.clarification(taskId) !== undefined) {
+  if ((await journal.clarification(taskId)) !== undefined) {
     task.transitionTo("waiting_user");
     task.transitionTo("running");
   }
@@ -276,10 +276,11 @@ async function executeTask(
 
   const completedWorkOrders = validateCachedWorkOrders(
     plan.workOrders,
-    journal.workOrderResults(taskId),
+    await journal.workOrderResults(taskId),
   );
   for (const completedWorkOrder of completedWorkOrders.values()) {
-    const assignment = journal.runAssignment(taskId, completedWorkOrder.workOrderId)?.assignment;
+    const assignment = (await journal.runAssignment(taskId, completedWorkOrder.workOrderId))
+      ?.assignment;
     if (assignment === undefined) {
       throw new OrchestratorError(
         "RUN_ASSIGNMENT_CONFLICT",
@@ -321,7 +322,7 @@ async function executeTask(
     }),
   );
 
-  const cachedSynthesis = journal.synthesis(taskId);
+  const cachedSynthesis = await journal.synthesis(taskId);
   const synthesis =
     cachedSynthesis ??
     parseCoordinatorSynthesis(
@@ -331,7 +332,7 @@ async function executeTask(
       }),
     );
   if (cachedSynthesis === undefined) {
-    journal.recordSynthesis(taskId, synthesis);
+    await journal.recordSynthesis(taskId, synthesis);
   }
   const artifactReference = await publishArtifactResult({
     taskId,
@@ -342,9 +343,9 @@ async function executeTask(
 
   task.recordArtifactResult(ArtifactId.from(artifactReference.artifactId));
   task.transitionTo("review");
-  journal.recordReviewStarted(taskId);
+  await journal.recordReviewStarted(taskId);
 
-  const cachedReview = journal.review(taskId);
+  const cachedReview = await journal.review(taskId);
   const review =
     cachedReview ??
     parseCoordinatorReview(
@@ -361,7 +362,7 @@ async function executeTask(
       plan.taskBrief,
     );
   if (cachedReview === undefined) {
-    journal.recordReview(taskId, review);
+    await journal.recordReview(taskId, review);
   }
   for (const criterion of review.verifiedCompletionCriteria) {
     task.verifyCompletionCriterion(criterion);
@@ -375,9 +376,12 @@ async function executeTask(
     reports,
     summary: synthesis.summary,
     artifactReference,
-    stateHistory: Object.freeze([...journal.taskStateHistory(taskId), "completed" as const]),
+    stateHistory: Object.freeze([
+      ...(await journal.taskStateHistory(taskId)),
+      "completed" as const,
+    ]),
   });
-  journal.recordCompletedTask(taskId, completedTask);
+  await journal.recordCompletedTask(taskId, completedTask);
   return completedTask;
 }
 
@@ -418,7 +422,7 @@ async function executeDependencyWaves(input: {
         });
         let result: WorkerExecutionResult;
         try {
-          result = assertWorkerCompletion(
+          result = await assertWorkerCompletion(
             await worker.execute({
               taskId: input.taskId,
               workOrder,
@@ -430,7 +434,12 @@ async function executeDependencyWaves(input: {
             input.taskId,
           );
         } catch (error: unknown) {
-          recordRunFailedIfCurrent(input.journal, input.taskId, workOrder.workOrderId, run.runId);
+          await recordRunFailedIfCurrent(
+            input.journal,
+            input.taskId,
+            workOrder.workOrderId,
+            run.runId,
+          );
           throw error;
         }
         const report = parseWorkerReport({
@@ -449,7 +458,7 @@ async function executeDependencyWaves(input: {
           fencingToken: result.fencingToken,
           report,
         } satisfies JournaledWorkOrderResult);
-        input.journal.recordWorkOrderResult(input.taskId, completedResult);
+        await input.journal.recordWorkOrderResult(input.taskId, completedResult);
         input.completedWorkOrders.set(workOrder.workOrderId, completedResult);
         input.task.recordWorkOrderSucceeded({
           id: WorkOrderId.from(workOrder.workOrderId),
@@ -469,13 +478,14 @@ async function executeDependencyWaves(input: {
   }
 }
 
-function resolveTaskIntake(
+async function resolveTaskIntake(
   authorizedForumPost: AuthorizedForumPost,
   dependencies: OpenDelegateDependencies,
   journal: OrchestrationJournal,
-): JournaledTaskIntake {
-  const existingTaskId = journal.taskIdFor(authorizedForumPost.postId);
-  const existing = existingTaskId === undefined ? undefined : journal.taskIntake(existingTaskId);
+): Promise<JournaledTaskIntake> {
+  const existingTaskId = await journal.taskIdFor(authorizedForumPost.postId);
+  const existing =
+    existingTaskId === undefined ? undefined : await journal.taskIntake(existingTaskId);
   if (existing !== undefined) {
     if (JSON.stringify(existing.forumPost) !== JSON.stringify(authorizedForumPost)) {
       throw new OrchestratorError(
@@ -497,7 +507,7 @@ function resolveTaskIntake(
     taskId,
     forumPost: authorizedForumPost,
   } satisfies JournaledTaskIntake);
-  journal.bindTask(authorizedForumPost.postId, intake);
+  await journal.bindTask(authorizedForumPost.postId, intake);
   return intake;
 }
 
@@ -555,11 +565,11 @@ function validateCachedWorkOrders(
   return completed;
 }
 
-function projectWaitingTask(
+async function projectWaitingTask(
   journal: OrchestrationJournal,
   intake: JournaledTaskIntake,
-): WaitingUserTaskView {
-  const clarification = journal.clarification(intake.taskId);
+): Promise<WaitingUserTaskView> {
+  const clarification = await journal.clarification(intake.taskId);
   if (clarification === undefined || clarification.answer !== undefined) {
     throw new OrchestratorError(
       "CLARIFICATION_NOT_FOUND",
@@ -570,7 +580,7 @@ function projectWaitingTask(
   return deepFreeze({
     taskId: intake.taskId,
     state: "waiting_user",
-    stateHistory: journal.taskStateHistory(intake.taskId),
+    stateHistory: await journal.taskStateHistory(intake.taskId),
     clarification: clarification.request,
     workOrders: [],
     resultProjection: {
@@ -583,15 +593,15 @@ function projectWaitingTask(
   });
 }
 
-function assertWorkerCompletion(
+async function assertWorkerCompletion(
   value: unknown,
   expectedRun: RunAssignment,
   dependencies: OpenDelegateDependencies,
   journal: OrchestrationJournal,
   taskId: string,
-): WorkerExecutionResult {
+): Promise<WorkerExecutionResult> {
   const completion = parseWorkerExecutionResult(value);
-  const currentRun = journal.runAssignment(taskId, expectedRun.workOrderId)?.assignment;
+  const currentRun = (await journal.runAssignment(taskId, expectedRun.workOrderId))?.assignment;
   const now = parseRfc3339Instant(dependencies.clock.now(), "orchestration clock").epochMs;
   const expiresAt =
     currentRun === undefined

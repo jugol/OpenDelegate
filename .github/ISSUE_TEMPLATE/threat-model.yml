@@ -2,6 +2,24 @@ name: Threat model review
 description: Record a trust-boundary, abuse-case, or security design review.
 title: "Threat model: "
 body:
+  - type: markdown
+    attributes:
+      value: |
+        This public form is only for non-sensitive design review. Do not disclose an undisclosed
+        vulnerability, exploit path, private topology, credentials, Task data, Device Knowledge,
+        or diagnostic evidence here. Report suspected vulnerabilities through GitHub's private
+        form: https://github.com/jugol/OpenDelegate/security/advisories/new
+
+  - type: checkboxes
+    id: disclosure_safety
+    attributes:
+      label: Public disclosure safety
+      options:
+        - label:
+            This is a non-sensitive design review and contains no undisclosed vulnerability, exploit
+            details, credentials, private topology, Task data, or Device Knowledge.
+          required: true
+
   - type: textarea
     id: scope
     attributes:

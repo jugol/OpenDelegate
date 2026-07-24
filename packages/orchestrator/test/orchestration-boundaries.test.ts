@@ -209,9 +209,9 @@ class FakeCoordinator implements Coordinator {
   }
 }
 
-function seedJournalRun(journal: InMemoryOrchestrationJournal): {
+async function seedJournalRun(journal: InMemoryOrchestrationJournal): Promise<{
   readonly assignment: RunAssignment;
-} {
+}> {
   const workOrder = {
     workOrderId: "work-order-journal-lease",
     title: "Prove journal lease enforcement",
@@ -227,15 +227,15 @@ function seedJournalRun(journal: InMemoryOrchestrationJournal): {
     requiredCapabilities: ["safe-check"],
     requiredSecretRefs: [],
   } as const;
-  journal.bindTask(forumPost.postId, {
+  await journal.bindTask(forumPost.postId, {
     taskId: "task-release-check",
     forumPost: {
       ...forumPost,
       authorizedPrincipalId: "owner-primary",
     },
   });
-  journal.recordIntakeReady("task-release-check");
-  journal.recordPlan("task-release-check", {
+  await journal.recordIntakeReady("task-release-check");
+  await journal.recordPlan("task-release-check", {
     taskBrief,
     workOrders: [workOrder],
   });
@@ -251,11 +251,11 @@ function seedJournalRun(journal: InMemoryOrchestrationJournal): {
     fencingToken: 1,
     expiresAt: "2026-07-24T00:01:00.000Z",
   };
-  journal.recordRunAssignment("task-release-check", {
+  await journal.recordRunAssignment("task-release-check", {
     workOrderId: workOrder.workOrderId,
     assignment,
   });
-  const durable = journal.runAssignment("task-release-check", workOrder.workOrderId);
+  const durable = await journal.runAssignment("task-release-check", workOrder.workOrderId);
   assert.ok(durable);
   return { assignment };
 }
@@ -965,11 +965,11 @@ test("Run, lease, and dispatch idempotency identifiers cannot be reused across W
   );
 });
 
-test("a replacement Run requires a strictly higher fence live and during replay", () => {
+test("a replacement Run requires a strictly higher fence live and during replay", async () => {
   const clock = new MutableOrchestrationClock();
   const journal = new InMemoryOrchestrationJournal({ clock });
-  const { assignment } = seedJournalRun(journal);
-  journal.recordRunFailed("task-release-check", assignment.workOrderId, assignment.runId);
+  const { assignment } = await seedJournalRun(journal);
+  await journal.recordRunFailed("task-release-check", assignment.workOrderId, assignment.runId);
   const sameFenceReplacement: RunAssignment = {
     ...assignment,
     runId: "run-journal-same-fence",
@@ -977,7 +977,7 @@ test("a replacement Run requires a strictly higher fence live and during replay"
     leaseId: "lease-journal-same-fence",
   };
 
-  assert.throws(
+  await assert.rejects(
     () =>
       journal.recordRunAssignment("task-release-check", {
         workOrderId: assignment.workOrderId,
@@ -994,11 +994,11 @@ test("a replacement Run requires a strictly higher fence live and during replay"
     leaseId: "lease-journal-higher-fence",
     fencingToken: assignment.fencingToken + 1,
   };
-  journal.recordRunAssignment("task-release-check", {
+  await journal.recordRunAssignment("task-release-check", {
     workOrderId: assignment.workOrderId,
     assignment: higherFenceReplacement,
   });
-  const tamperedEvents = journal.recordedEvents().map((event) =>
+  const tamperedEvents = (await journal.recordedEvents()).map((event) =>
     event.type === "work-order.dispatched" &&
     (event.payload as { readonly assignment?: RunAssignment }).assignment?.runId ===
       higherFenceReplacement.runId
@@ -1015,13 +1015,13 @@ test("a replacement Run requires a strictly higher fence live and during replay"
       : event,
   );
 
-  assert.throws(
-    () => {
+  await assert.rejects(
+    async () => {
       const restored = new InMemoryOrchestrationJournal({
         clock,
         recordedEvents: tamperedEvents,
       });
-      restored.runAssignment("task-release-check", assignment.workOrderId);
+      await restored.runAssignment("task-release-check", assignment.workOrderId);
     },
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "JOURNAL_EVENT_INVALID",
@@ -1036,7 +1036,10 @@ test("a Run assignment is durable before its Device Worker can execute", async (
     workerId: "worker-durable",
     scheduling: workerScheduling(["safe-check", "flaky-check"]),
     async execute(input) {
-      const durable = journal.runAssignment("task-release-check", input.workOrder.workOrderId);
+      const durable = await journal.runAssignment(
+        "task-release-check",
+        input.workOrder.workOrderId,
+      );
       assert.equal(durable?.assignment.runId, input.run.runId);
       assert.equal(durable?.assignment.deviceId, this.deviceId);
       assert.equal(durable?.assignment.workerId, this.workerId);
@@ -1128,7 +1131,7 @@ test("a Worker completion that arrives after its lease expires is rejected", asy
     runtime.acceptForumPost(forumPost),
     (error: unknown) => error instanceof OrchestratorError && error.code === "RUN_COMPLETION_STALE",
   );
-  assert.deepEqual(journal.workOrderResults("task-release-check"), []);
+  assert.deepEqual(await journal.workOrderResults("task-release-check"), []);
 });
 
 test("a replaced Run cannot report completion through its old lease and fence", async () => {
@@ -1159,10 +1162,17 @@ test("a replaced Run cannot report completion through its old lease and fence", 
     workerId: "worker-replaced",
     scheduling: workerScheduling(["safe-check"]),
     async execute(input) {
-      const durable = journal.runAssignment("task-release-check", input.workOrder.workOrderId);
+      const durable = await journal.runAssignment(
+        "task-release-check",
+        input.workOrder.workOrderId,
+      );
       assert.ok(durable);
-      journal.recordRunFailed("task-release-check", input.workOrder.workOrderId, input.run.runId);
-      journal.recordRunAssignment("task-release-check", {
+      await journal.recordRunFailed(
+        "task-release-check",
+        input.workOrder.workOrderId,
+        input.run.runId,
+      );
+      await journal.recordRunAssignment("task-release-check", {
         workOrderId: input.workOrder.workOrderId,
         assignment: {
           ...input.run,
@@ -1201,19 +1211,19 @@ test("a replaced Run cannot report completion through its old lease and fence", 
     (error: unknown) => error instanceof OrchestratorError && error.code === "RUN_COMPLETION_STALE",
   );
   assert.equal(
-    journal.runAssignment("task-release-check", "work-order-safe")?.assignment.runId,
+    (await journal.runAssignment("task-release-check", "work-order-safe"))?.assignment.runId,
     "run-replacement",
   );
-  assert.deepEqual(journal.workOrderResults("task-release-check"), []);
+  assert.deepEqual(await journal.workOrderResults("task-release-check"), []);
 });
 
-test("the durable journal rejects a direct Worker completion at or after lease expiry", () => {
+test("the durable journal rejects a direct Worker completion at or after lease expiry", async () => {
   const clock = new MutableOrchestrationClock();
   const journal = new InMemoryOrchestrationJournal({ clock });
-  const { assignment } = seedJournalRun(journal);
+  const { assignment } = await seedJournalRun(journal);
   clock.value = assignment.expiresAt;
 
-  assert.throws(
+  await assert.rejects(
     () =>
       journal.recordWorkOrderResult("task-release-check", {
         taskId: assignment.taskId,
@@ -1232,14 +1242,14 @@ test("the durable journal rejects a direct Worker completion at or after lease e
       }),
     (error: unknown) => error instanceof OrchestratorError && error.code === "RUN_COMPLETION_STALE",
   );
-  assert.deepEqual(journal.workOrderResults("task-release-check"), []);
+  assert.deepEqual(await journal.workOrderResults("task-release-check"), []);
 });
 
-test("the durable journal rejects a direct or replayed dispatch after lease expiry", () => {
+test("the durable journal rejects a direct or replayed dispatch after lease expiry", async () => {
   const expiredClock = new MutableOrchestrationClock();
   expiredClock.value = "2026-07-24T00:01:00.000Z";
   const expiredJournal = new InMemoryOrchestrationJournal({ clock: expiredClock });
-  assert.throws(
+  await assert.rejects(
     () => seedJournalRun(expiredJournal),
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "RUN_ASSIGNMENT_INVALID",
@@ -1247,9 +1257,9 @@ test("the durable journal rejects a direct or replayed dispatch after lease expi
 
   const sourceClock = new MutableOrchestrationClock();
   const sourceJournal = new InMemoryOrchestrationJournal({ clock: sourceClock });
-  seedJournalRun(sourceJournal);
+  await seedJournalRun(sourceJournal);
   const staleDispatchTime = "2026-07-24T00:02:00.000Z";
-  const tamperedEvents = sourceJournal.recordedEvents().map((event) =>
+  const tamperedEvents = (await sourceJournal.recordedEvents()).map((event) =>
     event.type === "work-order.dispatched"
       ? {
           ...event,
@@ -1262,19 +1272,19 @@ test("the durable journal rejects a direct or replayed dispatch after lease expi
     clock: sourceClock,
     recordedEvents: tamperedEvents,
   });
-  assert.throws(
+  await assert.rejects(
     () => restored.runAssignment("task-release-check", "work-order-journal-lease"),
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "JOURNAL_EVENT_INVALID",
   );
 });
 
-test("journal replay preserves completion time and rejects a result recorded after lease expiry", () => {
+test("journal replay preserves completion time and rejects a result recorded after lease expiry", async () => {
   const clock = new MutableOrchestrationClock();
   const journal = new InMemoryOrchestrationJournal({ clock });
-  const { assignment } = seedJournalRun(journal);
+  const { assignment } = await seedJournalRun(journal);
   clock.value = "2026-07-24T00:00:30.000Z";
-  journal.recordWorkOrderResult("task-release-check", {
+  await journal.recordWorkOrderResult("task-release-check", {
     taskId: assignment.taskId,
     workOrderId: assignment.workOrderId,
     deviceId: assignment.deviceId,
@@ -1290,7 +1300,7 @@ test("journal replay preserves completion time and rejects a result recorded aft
     },
   });
   const staleCompletionTime = "2026-07-24T00:02:00.000Z";
-  const tamperedEvents = journal.recordedEvents().map((event) =>
+  const tamperedEvents = (await journal.recordedEvents()).map((event) =>
     event.type === "work-order.completed"
       ? {
           ...event,
@@ -1305,23 +1315,24 @@ test("journal replay preserves completion time and rejects a result recorded aft
   });
 
   assert.equal(
-    restored.recordedEvents().find((event) => event.type === "work-order.completed")?.occurredAt,
+    (await restored.recordedEvents()).find((event) => event.type === "work-order.completed")
+      ?.occurredAt,
     staleCompletionTime,
   );
-  assert.throws(
+  await assert.rejects(
     () => restored.workOrderResults("task-release-check"),
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "JOURNAL_EVENT_INVALID",
   );
 });
 
-test("the journal clock cannot move backward to revive a Run lease", () => {
+test("the journal clock cannot move backward to revive a Run lease", async () => {
   const clock = new MutableOrchestrationClock();
   const journal = new InMemoryOrchestrationJournal({ clock });
-  const { assignment } = seedJournalRun(journal);
+  const { assignment } = await seedJournalRun(journal);
   clock.value = "2026-07-23T23:59:59.000Z";
 
-  assert.throws(
+  await assert.rejects(
     () =>
       journal.recordWorkOrderResult("task-release-check", {
         taskId: assignment.taskId,
@@ -1341,5 +1352,5 @@ test("the journal clock cannot move backward to revive a Run lease", () => {
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "ORCHESTRATION_CLOCK_INVALID",
   );
-  assert.deepEqual(journal.workOrderResults("task-release-check"), []);
+  assert.deepEqual(await journal.workOrderResults("task-release-check"), []);
 });

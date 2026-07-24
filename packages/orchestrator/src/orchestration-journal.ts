@@ -1,5 +1,10 @@
 import type { TaskState } from "@opendelegate/domain";
-import { InMemoryEventStore, type EventClock, type StoredEvent } from "@opendelegate/event-store";
+import {
+  InMemoryEventStore,
+  type EventClock,
+  type EventStore,
+  type StoredEvent,
+} from "@opendelegate/event-store";
 
 import {
   cloneTaskView,
@@ -57,39 +62,42 @@ export interface JournaledClarification {
 }
 
 export interface OrchestrationJournal {
-  taskIdFor(forumPostId: string): string | undefined;
-  taskIntake(taskId: string): JournaledTaskIntake | undefined;
-  bindTask(forumPostId: string, intake: JournaledTaskIntake): void;
-  intakeReady(taskId: string): boolean;
-  recordIntakeReady(taskId: string): void;
-  clarification(taskId: string): JournaledClarification | undefined;
-  recordClarificationRequest(taskId: string, clarification: ClarificationRequest): void;
-  recordClarificationAnswer(taskId: string, clarification: ClarificationExchange): void;
-  plan(taskId: string): CoordinatorPlan | undefined;
-  recordPlan(taskId: string, plan: CoordinatorPlan): void;
-  runAssignment(taskId: string, workOrderId: string): JournaledRunAssignment | undefined;
-  runAssignments(taskId: string): readonly JournaledRunAssignment[];
-  recordRunAssignment(taskId: string, assignment: JournaledRunAssignment): void;
-  recordRunFailed(taskId: string, workOrderId: string, runId: string): void;
-  synthesis(taskId: string): CoordinatorSynthesis | undefined;
-  recordSynthesis(taskId: string, synthesis: CoordinatorSynthesis): void;
-  workOrderResults(taskId: string): readonly JournaledWorkOrderResult[];
-  recordWorkOrderResult(taskId: string, result: JournaledWorkOrderResult): void;
-  artifactResult(taskId: string): JournaledArtifactResult | undefined;
-  recordArtifactResult(taskId: string, result: JournaledArtifactResult): void;
-  reviewStarted(taskId: string): boolean;
-  recordReviewStarted(taskId: string): void;
-  review(taskId: string): CoordinatorReview | undefined;
-  recordReview(taskId: string, review: CoordinatorReview): void;
-  taskStateHistory(taskId: string): readonly TaskState[];
-  completedTask(taskId: string): CompletedTaskView | undefined;
-  recordCompletedTask(taskId: string, task: CompletedTaskView): void;
+  taskIdFor(forumPostId: string): Promise<string | undefined>;
+  taskIntake(taskId: string): Promise<JournaledTaskIntake | undefined>;
+  bindTask(forumPostId: string, intake: JournaledTaskIntake): Promise<void>;
+  intakeReady(taskId: string): Promise<boolean>;
+  recordIntakeReady(taskId: string): Promise<void>;
+  clarification(taskId: string): Promise<JournaledClarification | undefined>;
+  recordClarificationRequest(taskId: string, clarification: ClarificationRequest): Promise<void>;
+  recordClarificationAnswer(taskId: string, clarification: ClarificationExchange): Promise<void>;
+  plan(taskId: string): Promise<CoordinatorPlan | undefined>;
+  recordPlan(taskId: string, plan: CoordinatorPlan): Promise<void>;
+  runAssignment(taskId: string, workOrderId: string): Promise<JournaledRunAssignment | undefined>;
+  runAssignments(taskId: string): Promise<readonly JournaledRunAssignment[]>;
+  recordRunAssignment(taskId: string, assignment: JournaledRunAssignment): Promise<void>;
+  recordRunFailed(taskId: string, workOrderId: string, runId: string): Promise<void>;
+  synthesis(taskId: string): Promise<CoordinatorSynthesis | undefined>;
+  recordSynthesis(taskId: string, synthesis: CoordinatorSynthesis): Promise<void>;
+  workOrderResults(taskId: string): Promise<readonly JournaledWorkOrderResult[]>;
+  recordWorkOrderResult(taskId: string, result: JournaledWorkOrderResult): Promise<void>;
+  artifactResult(taskId: string): Promise<JournaledArtifactResult | undefined>;
+  recordArtifactResult(taskId: string, result: JournaledArtifactResult): Promise<void>;
+  reviewStarted(taskId: string): Promise<boolean>;
+  recordReviewStarted(taskId: string): Promise<void>;
+  review(taskId: string): Promise<CoordinatorReview | undefined>;
+  recordReview(taskId: string, review: CoordinatorReview): Promise<void>;
+  taskStateHistory(taskId: string): Promise<readonly TaskState[]>;
+  completedTask(taskId: string): Promise<CompletedTaskView | undefined>;
+  recordCompletedTask(taskId: string, task: CompletedTaskView): Promise<void>;
 }
 
 export interface InMemoryOrchestrationJournalOptions {
   readonly clock: EventClock;
+  readonly eventStore?: EventStore;
   readonly recordedEvents?: readonly StoredEvent[];
 }
+
+export type EventStoreOrchestrationJournalOptions = InMemoryOrchestrationJournalOptions;
 
 interface JournalProjection {
   intake?: JournaledTaskIntake;
@@ -108,36 +116,28 @@ interface JournalProjection {
 
 export class InMemoryOrchestrationJournal implements OrchestrationJournal {
   private readonly clock: MonotonicJournalClock;
-  private readonly store: InMemoryEventStore;
+  private readonly initialization: Promise<void>;
+  private readonly store: EventStore;
+  private writeTail: Promise<void> = Promise.resolve();
 
   public constructor(options: InMemoryOrchestrationJournalOptions) {
-    this.clock = new MonotonicJournalClock(options.clock);
-    this.store = new InMemoryEventStore({ clock: this.clock });
-
-    for (const event of [...(options.recordedEvents ?? [])].sort(
-      (left, right) => left.globalPosition - right.globalPosition,
-    )) {
-      this.clock.runAt(event.occurredAt, "JOURNAL_EVENT_INVALID", () => {
-        this.store.append({
-          streamId: event.streamId,
-          expectedVersion: this.store.streamVersion(event.streamId),
-          events: [
-            {
-              eventId: event.eventId,
-              type: event.type,
-              payload: event.payload,
-            },
-          ],
-        });
-      });
+    if (options.eventStore !== undefined && options.recordedEvents !== undefined) {
+      throw new OrchestratorError(
+        "JOURNAL_EVENT_INVALID",
+        "An injected EventStore cannot be combined with recorded in-memory events.",
+      );
     }
-    this.clock.readLive();
-    this.validateGlobalIdentities("JOURNAL_EVENT_INVALID");
+    this.clock = new MonotonicJournalClock(options.clock);
+    this.store = options.eventStore ?? new InMemoryEventStore({ clock: this.clock });
+    this.initialization =
+      options.eventStore === undefined
+        ? this.restore(options.recordedEvents ?? [])
+        : this.initializeExistingStore();
   }
 
-  public taskIdFor(forumPostId: string): string | undefined {
-    const matching = this.store
-      .readAll()
+  public async taskIdFor(forumPostId: string): Promise<string | undefined> {
+    await this.initialization;
+    const matching = (await this.store.readAll())
       .filter((event) => event.type === "task.bound")
       .map((event) => {
         const payload = requireRecord(event.payload);
@@ -150,13 +150,21 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     return matching?.taskId;
   }
 
-  public taskIntake(taskId: string): JournaledTaskIntake | undefined {
-    const intake = this.project(taskId).intake;
+  public async taskIntake(taskId: string): Promise<JournaledTaskIntake | undefined> {
+    const intake = (await this.project(taskId)).intake;
     return intake === undefined ? undefined : freezeTaskIntake(intake);
   }
 
-  public bindTask(forumPostId: string, intake: JournaledTaskIntake): void {
+  public async bindTask(forumPostId: string, intake: JournaledTaskIntake): Promise<void> {
     const normalized = freezeTaskIntake(intake);
+    await this.initialization;
+    await this.enqueueWrite(() => this.bindTaskLocked(forumPostId, normalized));
+  }
+
+  private async bindTaskLocked(
+    forumPostId: string,
+    normalized: JournaledTaskIntake,
+  ): Promise<void> {
     if (normalized.forumPost.postId !== forumPostId) {
       throw new OrchestratorError(
         "FORUM_POST_CONFLICT",
@@ -164,9 +172,9 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       );
     }
 
-    const boundTaskId = this.taskIdFor(forumPostId);
+    const boundTaskId = await this.taskIdFor(forumPostId);
     if (boundTaskId !== undefined) {
-      const existing = this.taskIntake(boundTaskId);
+      const existing = await this.taskIntake(boundTaskId);
       if (existing === undefined || !sameValue(existing, normalized)) {
         throw new OrchestratorError(
           boundTaskId === normalized.taskId ? "FORUM_POST_CONFLICT" : "TASK_ID_CONFLICT",
@@ -175,7 +183,7 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       }
       return;
     }
-    const existingTask = this.taskIntake(normalized.taskId);
+    const existingTask = await this.taskIntake(normalized.taskId);
     if (existingTask !== undefined) {
       throw new OrchestratorError(
         "TASK_ID_CONFLICT",
@@ -183,18 +191,25 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       );
     }
 
-    this.append(normalized.taskId, "task.bound", ["task", normalized.taskId], {
-      forumPostId,
-      ...normalized,
-    });
+    const occurredAt = this.clock.readLive();
+    await this.appendNow(
+      normalized.taskId,
+      "task.bound",
+      ["task", normalized.taskId],
+      {
+        forumPostId,
+        ...normalized,
+      },
+      occurredAt,
+    );
   }
 
-  public intakeReady(taskId: string): boolean {
-    return this.project(taskId).intakeReady;
+  public async intakeReady(taskId: string): Promise<boolean> {
+    return (await this.project(taskId)).intakeReady;
   }
 
-  public recordIntakeReady(taskId: string): void {
-    const projection = this.project(taskId);
+  public async recordIntakeReady(taskId: string): Promise<void> {
+    const projection = await this.project(taskId);
     if (projection.intakeReady) {
       return;
     }
@@ -204,19 +219,22 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "A ready intake requires one Task binding and cannot follow a clarification.",
       );
     }
-    this.append(taskId, "intake.ready", ["intake-ready", taskId], {
+    await this.append(taskId, "intake.ready", ["intake-ready", taskId], {
       taskId,
     });
   }
 
-  public clarification(taskId: string): JournaledClarification | undefined {
-    const clarification = this.project(taskId).clarification;
+  public async clarification(taskId: string): Promise<JournaledClarification | undefined> {
+    const clarification = (await this.project(taskId)).clarification;
     return clarification === undefined ? undefined : freezeJournaledClarification(clarification);
   }
 
-  public recordClarificationRequest(taskId: string, clarification: ClarificationRequest): void {
+  public async recordClarificationRequest(
+    taskId: string,
+    clarification: ClarificationRequest,
+  ): Promise<void> {
     const normalized = parseClarificationRequest(clarification, "COORDINATOR_INTAKE_INVALID");
-    const projection = this.project(taskId);
+    const projection = await this.project(taskId);
     const existing = projection.clarification;
     if (existing !== undefined) {
       if (!sameValue(existing.request, normalized)) {
@@ -233,15 +251,18 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "A clarification requires one unassessed Task binding.",
       );
     }
-    this.append(taskId, "clarification.requested", ["clarification-request", taskId], {
+    await this.append(taskId, "clarification.requested", ["clarification-request", taskId], {
       taskId,
       clarification: normalized,
     });
   }
 
-  public recordClarificationAnswer(taskId: string, clarification: ClarificationExchange): void {
+  public async recordClarificationAnswer(
+    taskId: string,
+    clarification: ClarificationExchange,
+  ): Promise<void> {
     const normalized = parseClarificationExchange(clarification, "CLARIFICATION_ANSWER_INVALID");
-    const existing = this.clarification(taskId);
+    const existing = await this.clarification(taskId);
     if (existing === undefined) {
       throw new OrchestratorError(
         "CLARIFICATION_NOT_FOUND",
@@ -267,20 +288,20 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       return;
     }
 
-    this.append(taskId, "clarification.answered", ["clarification-answer", taskId], {
+    await this.append(taskId, "clarification.answered", ["clarification-answer", taskId], {
       taskId,
       clarification: normalized,
     });
   }
 
-  public plan(taskId: string): CoordinatorPlan | undefined {
-    const plan = this.project(taskId).plan;
+  public async plan(taskId: string): Promise<CoordinatorPlan | undefined> {
+    const plan = (await this.project(taskId)).plan;
     return plan === undefined ? undefined : parseCoordinatorPlan(plan, "JOURNAL_EVENT_INVALID");
   }
 
-  public recordPlan(taskId: string, plan: CoordinatorPlan): void {
+  public async recordPlan(taskId: string, plan: CoordinatorPlan): Promise<void> {
     const normalized = parseCoordinatorPlan(plan);
-    const projection = this.project(taskId);
+    const projection = await this.project(taskId);
     const existing = projection.plan;
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
@@ -300,32 +321,46 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "A Coordinator plan requires a ready intake or answered clarification.",
       );
     }
-    this.append(taskId, "plan.recorded", ["plan", taskId], {
+    await this.append(taskId, "plan.recorded", ["plan", taskId], {
       taskId,
       plan: normalized,
     });
   }
 
-  public runAssignment(taskId: string, workOrderId: string): JournaledRunAssignment | undefined {
-    const projection = this.project(taskId);
+  public async runAssignment(
+    taskId: string,
+    workOrderId: string,
+  ): Promise<JournaledRunAssignment | undefined> {
+    const projection = await this.project(taskId);
     const assignment = projection.runAssignments.get(workOrderId)?.at(-1);
     return assignment === undefined || projection.failedRunIds.has(assignment.assignment.runId)
       ? undefined
       : freezeRunAssignment(assignment);
   }
 
-  public runAssignments(taskId: string): readonly JournaledRunAssignment[] {
+  public async runAssignments(taskId: string): Promise<readonly JournaledRunAssignment[]> {
     return Object.freeze(
-      [...this.project(taskId).runAssignments.values()]
+      [...(await this.project(taskId)).runAssignments.values()]
         .flat()
         .sort((left, right) => left.workOrderId.localeCompare(right.workOrderId))
         .map(freezeRunAssignment),
     );
   }
 
-  public recordRunAssignment(taskId: string, assignment: JournaledRunAssignment): void {
+  public async recordRunAssignment(
+    taskId: string,
+    assignment: JournaledRunAssignment,
+  ): Promise<void> {
     const normalized = freezeRunAssignment(assignment);
-    const projection = this.project(taskId);
+    await this.initialization;
+    await this.enqueueWrite(() => this.recordRunAssignmentLocked(taskId, normalized));
+  }
+
+  private async recordRunAssignmentLocked(
+    taskId: string,
+    normalized: JournaledRunAssignment,
+  ): Promise<void> {
+    const projection = await this.project(taskId);
     const existing = projection.runAssignments.get(normalized.workOrderId)?.at(-1);
     if (existing !== undefined) {
       if (projection.failedRunIds.has(existing.assignment.runId)) {
@@ -364,7 +399,7 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         `Run assignment for Work Order ${normalized.workOrderId} is unplanned or out of dependency order.`,
       );
     }
-    this.assertRunIdentifiersAvailable(normalized.assignment);
+    await this.assertRunIdentifiersAvailable(normalized.assignment);
     const acceptedAt = this.clock.readLive();
     assertAssignmentLiveAt(
       normalized.assignment,
@@ -372,21 +407,23 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       "RUN_ASSIGNMENT_INVALID",
       "A Run assignment must be live when it is durably dispatched.",
     );
-    this.appendAt(
-      taskId,
-      "work-order.dispatched",
-      ["dispatch", taskId, normalized.workOrderId, normalized.assignment.runId],
-      {
+    await this.clock.runAt(acceptedAt, "ORCHESTRATION_CLOCK_INVALID", () =>
+      this.appendNow(
         taskId,
-        ...normalized,
-        planFingerprint: fingerprintPlannedWorkOrder(plannedWorkOrder),
-      },
-      acceptedAt,
+        "work-order.dispatched",
+        ["dispatch", taskId, normalized.workOrderId, normalized.assignment.runId],
+        {
+          taskId,
+          ...normalized,
+          planFingerprint: fingerprintPlannedWorkOrder(plannedWorkOrder),
+        },
+        acceptedAt,
+      ),
     );
   }
 
-  public recordRunFailed(taskId: string, workOrderId: string, runId: string): void {
-    const projection = this.project(taskId);
+  public async recordRunFailed(taskId: string, workOrderId: string, runId: string): Promise<void> {
+    const projection = await this.project(taskId);
     const assignment = projection.runAssignments.get(workOrderId)?.at(-1);
     if (
       assignment === undefined ||
@@ -401,23 +438,28 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     if (projection.failedRunIds.has(runId)) {
       return;
     }
-    this.append(taskId, "work-order.run-failed", ["dispatch-failed", taskId, workOrderId, runId], {
+    await this.append(
       taskId,
-      workOrderId,
-      runId,
-    });
+      "work-order.run-failed",
+      ["dispatch-failed", taskId, workOrderId, runId],
+      {
+        taskId,
+        workOrderId,
+        runId,
+      },
+    );
   }
 
-  public synthesis(taskId: string): CoordinatorSynthesis | undefined {
-    const synthesis = this.project(taskId).synthesis;
+  public async synthesis(taskId: string): Promise<CoordinatorSynthesis | undefined> {
+    const synthesis = (await this.project(taskId)).synthesis;
     return synthesis === undefined
       ? undefined
       : parseCoordinatorSynthesis(synthesis, "JOURNAL_EVENT_INVALID");
   }
 
-  public recordSynthesis(taskId: string, synthesis: CoordinatorSynthesis): void {
+  public async recordSynthesis(taskId: string, synthesis: CoordinatorSynthesis): Promise<void> {
     const normalized = parseCoordinatorSynthesis(synthesis);
-    const projection = this.project(taskId);
+    const projection = await this.project(taskId);
     const existing = projection.synthesis;
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
@@ -439,23 +481,26 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "Coordinator synthesis requires every planned Work Order result.",
       );
     }
-    this.append(taskId, "synthesis.recorded", ["synthesis", taskId], {
+    await this.append(taskId, "synthesis.recorded", ["synthesis", taskId], {
       taskId,
       synthesis: normalized,
     });
   }
 
-  public workOrderResults(taskId: string): readonly JournaledWorkOrderResult[] {
+  public async workOrderResults(taskId: string): Promise<readonly JournaledWorkOrderResult[]> {
     return Object.freeze(
-      [...this.project(taskId).workOrders.values()]
+      [...(await this.project(taskId)).workOrders.values()]
         .sort((left, right) => left.workOrderId.localeCompare(right.workOrderId))
         .map(freezeWorkOrderResult),
     );
   }
 
-  public recordWorkOrderResult(taskId: string, result: JournaledWorkOrderResult): void {
+  public async recordWorkOrderResult(
+    taskId: string,
+    result: JournaledWorkOrderResult,
+  ): Promise<void> {
     const normalized = freezeWorkOrderResult(result);
-    const projection = this.project(taskId);
+    const projection = await this.project(taskId);
     const existing = projection.workOrders.get(result.workOrderId);
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
@@ -495,7 +540,7 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       "RUN_COMPLETION_STALE",
       `Worker completion for Run ${normalized.runId} arrived after its lease expired.`,
     );
-    this.appendAt(
+    await this.appendAt(
       taskId,
       "work-order.completed",
       ["work-order", taskId, result.workOrderId],
@@ -507,14 +552,17 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     );
   }
 
-  public artifactResult(taskId: string): JournaledArtifactResult | undefined {
-    const result = this.project(taskId).artifact;
+  public async artifactResult(taskId: string): Promise<JournaledArtifactResult | undefined> {
+    const result = (await this.project(taskId)).artifact;
     return result === undefined ? undefined : freezeArtifactResult(result);
   }
 
-  public recordArtifactResult(taskId: string, result: JournaledArtifactResult): void {
+  public async recordArtifactResult(
+    taskId: string,
+    result: JournaledArtifactResult,
+  ): Promise<void> {
     const normalized = freezeArtifactResult(result);
-    const projection = this.project(taskId);
+    const projection = await this.project(taskId);
     const existing = projection.artifact;
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
@@ -531,19 +579,19 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "Artifact publication requires and must match one durable Coordinator synthesis.",
       );
     }
-    this.append(taskId, "artifact.published", ["artifact", taskId], {
+    await this.append(taskId, "artifact.published", ["artifact", taskId], {
       taskId,
       ...normalized,
       contentFingerprint: fingerprintArtifactContent(projection.synthesis.artifact),
     });
   }
 
-  public reviewStarted(taskId: string): boolean {
-    return this.project(taskId).reviewStarted;
+  public async reviewStarted(taskId: string): Promise<boolean> {
+    return (await this.project(taskId)).reviewStarted;
   }
 
-  public recordReviewStarted(taskId: string): void {
-    const projection = this.project(taskId);
+  public async recordReviewStarted(taskId: string): Promise<void> {
+    const projection = await this.project(taskId);
     if (projection.reviewStarted) {
       return;
     }
@@ -553,13 +601,13 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "Task review requires a published Artifact.",
       );
     }
-    this.append(taskId, "task.review-started", ["review-started", taskId], {
+    await this.append(taskId, "task.review-started", ["review-started", taskId], {
       taskId,
     });
   }
 
-  public review(taskId: string): CoordinatorReview | undefined {
-    const projection = this.project(taskId);
+  public async review(taskId: string): Promise<CoordinatorReview | undefined> {
+    const projection = await this.project(taskId);
     if (projection.review === undefined) {
       return undefined;
     }
@@ -576,8 +624,8 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     );
   }
 
-  public recordReview(taskId: string, review: CoordinatorReview): void {
-    const projection = this.project(taskId);
+  public async recordReview(taskId: string, review: CoordinatorReview): Promise<void> {
+    const projection = await this.project(taskId);
     const plan = projection.plan;
     if (
       plan === undefined ||
@@ -601,14 +649,14 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       }
       return;
     }
-    this.append(taskId, "task.review-completed", ["review-completed", taskId], {
+    await this.append(taskId, "task.review-completed", ["review-completed", taskId], {
       taskId,
       review: normalized,
     });
   }
 
-  public taskStateHistory(taskId: string): readonly TaskState[] {
-    const projection = this.project(taskId);
+  public async taskStateHistory(taskId: string): Promise<readonly TaskState[]> {
+    const projection = await this.project(taskId);
     if (projection.intake === undefined) {
       return Object.freeze([]);
     }
@@ -629,14 +677,14 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     return Object.freeze(states);
   }
 
-  public completedTask(taskId: string): CompletedTaskView | undefined {
-    const task = this.project(taskId).completedTask;
+  public async completedTask(taskId: string): Promise<CompletedTaskView | undefined> {
+    const task = (await this.project(taskId)).completedTask;
     return task === undefined ? undefined : cloneTaskView(task);
   }
 
-  public recordCompletedTask(taskId: string, task: CompletedTaskView): void {
+  public async recordCompletedTask(taskId: string, task: CompletedTaskView): Promise<void> {
     const normalized = parseCompletedTaskView(task);
-    const projection = this.project(taskId);
+    const projection = await this.project(taskId);
     const existing = projection.completedTask;
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
@@ -654,26 +702,92 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       );
     }
     assertCompletedTaskMatchesProjection(normalized, projection);
-    this.append(taskId, "task.completed", ["completed", taskId], {
+    await this.append(taskId, "task.completed", ["completed", taskId], {
       taskId,
       task: normalized,
     });
   }
 
-  public recordedEvents(): readonly StoredEvent[] {
+  public async recordedEvents(): Promise<readonly StoredEvent[]> {
+    await this.initialization;
     return this.store.readAll();
   }
 
-  private append(
+  private async restore(recordedEvents: readonly StoredEvent[]): Promise<void> {
+    for (const event of [...recordedEvents].sort(
+      (left, right) => left.globalPosition - right.globalPosition,
+    )) {
+      await this.clock.runAt(event.occurredAt, "JOURNAL_EVENT_INVALID", async () => {
+        await this.store.append({
+          streamId: event.streamId,
+          expectedVersion: await this.store.streamVersion(event.streamId),
+          occurredAt: event.occurredAt,
+          events: [
+            {
+              eventId: event.eventId,
+              type: event.type,
+              payload: event.payload,
+            },
+          ],
+        });
+      });
+    }
+    this.clock.readLive();
+    await this.validateGlobalIdentities("JOURNAL_EVENT_INVALID");
+  }
+
+  private async initializeExistingStore(): Promise<void> {
+    const events = await this.store.readAll();
+    const streamVersions = new Map<string, number>();
+    const eventIds = new Set<string>();
+
+    for (const [index, event] of events.entries()) {
+      const expectedGlobalPosition = index + 1;
+      const expectedStreamVersion = (streamVersions.get(event.streamId) ?? 0) + 1;
+      if (
+        event.globalPosition !== expectedGlobalPosition ||
+        event.streamVersion !== expectedStreamVersion ||
+        eventIds.has(event.eventId)
+      ) {
+        throw new OrchestratorError(
+          "JOURNAL_EVENT_INVALID",
+          "An injected EventStore must return one contiguous, uniquely identified global and per-stream event order.",
+        );
+      }
+      streamVersions.set(event.streamId, expectedStreamVersion);
+      eventIds.add(event.eventId);
+      await this.clock.runAt(event.occurredAt, "JOURNAL_EVENT_INVALID", () => undefined);
+    }
+
+    this.clock.readLive();
+    await this.validateGlobalIdentities("JOURNAL_EVENT_INVALID");
+  }
+
+  private async append(
     taskId: string,
     type: string,
     eventIdentity: readonly string[],
     payload: object,
-  ): void {
+  ): Promise<void> {
+    await this.initialization;
+    await this.enqueueWrite(() => {
+      const occurredAt = this.clock.readLive();
+      return this.appendNow(taskId, type, eventIdentity, payload, occurredAt);
+    });
+  }
+
+  private async appendNow(
+    taskId: string,
+    type: string,
+    eventIdentity: readonly string[],
+    payload: object,
+    occurredAt: string,
+  ): Promise<void> {
     const streamId = streamIdFor(taskId);
-    this.store.append({
+    await this.store.append({
       streamId,
-      expectedVersion: this.store.streamVersion(streamId),
+      expectedVersion: await this.store.streamVersion(streamId),
+      occurredAt,
       events: [
         {
           eventId: JSON.stringify(["orchestration", ...eventIdentity]),
@@ -684,19 +798,23 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     });
   }
 
-  private appendAt(
+  private async appendAt(
     taskId: string,
     type: string,
     eventIdentity: readonly string[],
     payload: object,
     occurredAt: string,
-  ): void {
-    this.clock.runAt(occurredAt, "ORCHESTRATION_CLOCK_INVALID", () => {
-      this.append(taskId, type, eventIdentity, payload);
-    });
+  ): Promise<void> {
+    await this.initialization;
+    await this.enqueueWrite(() =>
+      this.clock.runAt(occurredAt, "ORCHESTRATION_CLOCK_INVALID", () =>
+        this.appendNow(taskId, type, eventIdentity, payload, occurredAt),
+      ),
+    );
   }
 
-  private project(taskId: string): JournalProjection {
+  private async project(taskId: string): Promise<JournalProjection> {
+    await this.initialization;
     const initial: JournalProjection = {
       intakeReady: false,
       runAssignments: new Map<string, JournaledRunAssignment[]>(),
@@ -719,8 +837,18 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       : assignment;
   }
 
-  private assertRunIdentifiersAvailable(assignment: RunAssignment): void {
-    for (const event of this.store.readAll()) {
+  private enqueueWrite<TResult>(operation: () => Promise<TResult>): Promise<TResult> {
+    const result = this.writeTail.then(operation, operation);
+    this.writeTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async assertRunIdentifiersAvailable(assignment: RunAssignment): Promise<void> {
+    await this.initialization;
+    for (const event of await this.store.readAll()) {
       if (event.type !== "work-order.dispatched") {
         continue;
       }
@@ -740,14 +868,14 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     }
   }
 
-  private validateGlobalIdentities(code: "JOURNAL_EVENT_INVALID"): void {
+  private async validateGlobalIdentities(code: "JOURNAL_EVENT_INVALID"): Promise<void> {
     const taskBindings = new Map<string, string>();
     const forumBindings = new Map<string, string>();
     const runIds = new Set<string>();
     const leaseIds = new Set<string>();
     const idempotencyKeys = new Set<string>();
 
-    for (const event of this.store.readAll()) {
+    for (const event of await this.store.readAll()) {
       if (event.type === "task.bound") {
         const payload = requireRecord(event.payload);
         const forumPostId = requireString(payload, "forumPostId");
@@ -802,11 +930,11 @@ class MonotonicJournalClock implements EventClock {
     return this.observe(this.source.now(), "ORCHESTRATION_CLOCK_INVALID");
   }
 
-  public runAt<TResult>(
+  public async runAt<TResult>(
     value: string,
     code: OrchestratorErrorCode,
-    operation: () => TResult,
-  ): TResult {
+    operation: () => TResult | Promise<TResult>,
+  ): Promise<TResult> {
     if (this.forcedInstant !== undefined) {
       throw new OrchestratorError(
         code,
@@ -816,7 +944,7 @@ class MonotonicJournalClock implements EventClock {
     const instant = this.observe(value, code);
     this.forcedInstant = instant;
     try {
-      return operation();
+      return await operation();
     } finally {
       this.forcedInstant = undefined;
     }

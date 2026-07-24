@@ -20,7 +20,20 @@ export interface StoredEvent<TPayload = unknown> extends EventDraft<TPayload> {
 export interface AppendEvents {
   readonly streamId: string;
   readonly expectedVersion: number;
+  readonly occurredAt?: string;
   readonly events: readonly EventDraft[];
+}
+
+export interface EventStore {
+  append(input: AppendEvents): Promise<readonly StoredEvent[]>;
+  readStream(streamId: string): Promise<readonly StoredEvent[]>;
+  readAll(): Promise<readonly StoredEvent[]>;
+  streamVersion(streamId: string): Promise<number>;
+  replay<TProjection>(
+    streamId: string,
+    initial: TProjection,
+    apply: (projection: TProjection, event: StoredEvent) => TProjection,
+  ): Promise<TProjection>;
 }
 
 export interface InMemoryEventStoreOptions {
@@ -46,7 +59,7 @@ export class EventStoreError extends Error {
   }
 }
 
-export class InMemoryEventStore {
+export class InMemoryEventStore implements EventStore {
   private readonly clock: EventClock;
   private readonly eventsById = new Map<string, StoredEvent>();
   private readonly eventsByStream = new Map<string, readonly StoredEvent[]>();
@@ -56,7 +69,7 @@ export class InMemoryEventStore {
     this.clock = options.clock;
   }
 
-  public append(input: AppendEvents): readonly StoredEvent[] {
+  public async append(input: AppendEvents): Promise<readonly StoredEvent[]> {
     assertNonBlank(input.streamId, "Stream ID");
     if (
       !Number.isSafeInteger(input.expectedVersion) ||
@@ -123,7 +136,7 @@ export class InMemoryEventStore {
       );
     }
 
-    const currentVersion = this.streamVersion(input.streamId);
+    const currentVersion = this.currentStreamVersion(input.streamId);
 
     if (currentVersion !== input.expectedVersion) {
       throw new EventStoreError(
@@ -132,7 +145,7 @@ export class InMemoryEventStore {
       );
     }
 
-    const occurredAt = this.clock.now();
+    const occurredAt = input.occurredAt ?? this.clock.now();
     assertRfc3339Instant(occurredAt);
     const storedEvents = input.events.map((event, index) =>
       deepFreeze({
@@ -157,24 +170,32 @@ export class InMemoryEventStore {
     return Object.freeze(storedEvents);
   }
 
-  public readStream(streamId: string): readonly StoredEvent[] {
-    return Object.freeze([...(this.eventsByStream.get(streamId) ?? [])]);
+  public async readStream(streamId: string): Promise<readonly StoredEvent[]> {
+    return this.readStreamSnapshot(streamId);
   }
 
-  public readAll(): readonly StoredEvent[] {
+  public async readAll(): Promise<readonly StoredEvent[]> {
     return Object.freeze([...this.globalEvents]);
   }
 
-  public streamVersion(streamId: string): number {
-    return this.eventsByStream.get(streamId)?.length ?? 0;
+  public async streamVersion(streamId: string): Promise<number> {
+    return this.currentStreamVersion(streamId);
   }
 
-  public replay<TProjection>(
+  public async replay<TProjection>(
     streamId: string,
     initial: TProjection,
     apply: (projection: TProjection, event: StoredEvent) => TProjection,
-  ): TProjection {
-    return this.readStream(streamId).reduce(apply, initial);
+  ): Promise<TProjection> {
+    return this.readStreamSnapshot(streamId).reduce(apply, initial);
+  }
+
+  private readStreamSnapshot(streamId: string): readonly StoredEvent[] {
+    return Object.freeze([...(this.eventsByStream.get(streamId) ?? [])]);
+  }
+
+  private currentStreamVersion(streamId: string): number {
+    return this.eventsByStream.get(streamId)?.length ?? 0;
   }
 }
 

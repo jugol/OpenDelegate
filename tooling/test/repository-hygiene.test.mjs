@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
 test("every remote GitHub Action is pinned to an immutable commit with a version comment", async () => {
@@ -29,18 +29,36 @@ test("every remote GitHub Action is pinned to an immutable commit with a version
   assert.deepEqual(mutableReferences, []);
 });
 
-test("public issue intake has a detail-free security-channel request path", async () => {
+test("public issue intake directs vulnerabilities to the verified private reporting route", async () => {
   const config = await readFile(
     new URL("../../.github/ISSUE_TEMPLATE/config.yml", import.meta.url),
     "utf8",
   );
-  const securityChannelForm = await readFile(
-    new URL("../../.github/ISSUE_TEMPLATE/security-channel.yml", import.meta.url),
+  const securityPolicy = await readFile(new URL("../../SECURITY.md", import.meta.url), "utf8");
+  const threatModelForm = await readFile(
+    new URL("../../.github/ISSUE_TEMPLATE/threat-model.yml", import.meta.url),
     "utf8",
+  );
+  const obsoletePublicForm = new URL(
+    "../../.github/ISSUE_TEMPLATE/security-channel.yml",
+    import.meta.url,
   );
 
   assert.match(config, /^blank_issues_enabled:\s*false\s*$/mu);
-  assert.match(securityChannelForm, /^name:\s*Private security channel request\s*$/mu);
-  assert.doesNotMatch(securityChannelForm, /^\s+- type:\s*(?:input|textarea)\s*$/mu);
-  assert.match(securityChannelForm, /included no vulnerability or\s+exploit details/u);
+  assert.match(
+    config,
+    /url:\s*https:\/\/github\.com\/jugol\/OpenDelegate\/security\/advisories\/new/u,
+  );
+  assert.match(
+    securityPolicy,
+    /https:\/\/github\.com\/jugol\/OpenDelegate\/security\/advisories\/new/u,
+  );
+  assert.match(securityPolicy, /Do not use a GitHub issue/u);
+  assert.match(
+    threatModelForm,
+    /https:\/\/github\.com\/jugol\/OpenDelegate\/security\/advisories\/new/u,
+  );
+  assert.match(threatModelForm, /id:\s*disclosure_safety/u);
+  assert.match(threatModelForm, /contains no undisclosed vulnerability/u);
+  await assert.rejects(access(obsoletePublicForm), { code: "ENOENT" });
 });

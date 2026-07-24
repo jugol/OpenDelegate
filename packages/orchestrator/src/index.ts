@@ -55,7 +55,9 @@ export type {
 } from "./contracts.ts";
 export { createOpenDelegate } from "./open-delegate.ts";
 export {
+  InMemoryOrchestrationJournal as EventStoreOrchestrationJournal,
   InMemoryOrchestrationJournal,
+  type EventStoreOrchestrationJournalOptions,
   type InMemoryOrchestrationJournalOptions,
   type JournaledArtifactResult,
   type JournaledClarification,

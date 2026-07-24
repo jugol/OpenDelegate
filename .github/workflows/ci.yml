@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: "ci-${{ github.workflow }}-${{ github.ref }}"
+  group: "ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}"
   cancel-in-progress: true
 
 jobs:
@@ -28,17 +28,19 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
-          version: 9.15.4
+          version: 11.15.1
           run_install: false
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version: 24
+          node-version: 24.18.0
           cache: pnpm
 
       - name: Install dependencies
@@ -46,6 +48,9 @@ jobs:
 
       - name: Verify canonical planning-document links
         run: pnpm docs:check
+
+      - name: Verify release evidence and architecture boundaries
+        run: pnpm release:status && pnpm architecture:check
 
       - name: Check formatting
         run: pnpm format:check
@@ -61,6 +66,36 @@ jobs:
 
       - name: Build applications
         run: pnpm build
+
+      - name: Smoke an explicitly unsupported platform bundle
+        run: >-
+          pnpm release:build --destination "${{ runner.temp }}/opendelegate-internal-preview"
+          --internal-preview
+
+      - name: Archive manually requested internal preview on macOS or Linux
+        if: github.event_name == 'workflow_dispatch' && runner.os != 'Windows'
+        run: >-
+          tar -C "${{ runner.temp }}" -czf "${{ runner.temp }}/opendelegate-internal-preview-${{
+          runner.os }}-${{ runner.arch }}.tar.gz" opendelegate-internal-preview
+
+      - name: Archive manually requested internal preview on Windows
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          Compress-Archive -LiteralPath '${{ runner.temp }}/opendelegate-internal-preview'
+          -DestinationPath '${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{
+          runner.arch }}.zip'
+
+      - name: Upload manually requested internal preview
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            ${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}.tar.gz
+            ${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}.zip
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Install browser runner
         run: pnpm --filter @opendelegate/admin-web exec playwright install --with-deps chromium
@@ -85,11 +120,13 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
-          version: 9.15.4
+          version: 11.15.1
           run_install: false
 
       - name: Set up Node.js
@@ -106,3 +143,50 @@ jobs:
 
       - name: Build applications
         run: pnpm build
+
+  postgres-integration:
+    name: Verify PostgreSQL persistence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+        env:
+          POSTGRES_DB: opendelegate_test
+          POSTGRES_PASSWORD: opendelegate_test
+          POSTGRES_USER: opendelegate_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U opendelegate_test -d opendelegate_test" --health-interval 5s
+          --health-timeout 5s --health-retries 12
+
+    env:
+      OPENDELEGATE_TEST_POSTGRES_URI: postgresql://opendelegate_test:opendelegate_test@127.0.0.1:5432/opendelegate_test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          version: 11.15.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run SQLite and PostgreSQL acceptance contracts
+        run: >-
+          pnpm --filter @opendelegate/storage-sql test && pnpm --filter @opendelegate/acceptance
+          test && pnpm --filter @opendelegate/main test

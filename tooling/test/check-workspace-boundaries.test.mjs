@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  EXPECTED_WORKSPACE_DEPENDENCIES,
   auditWorkspaceBoundaries,
   validateWorkspaceGraph,
   validateWorkspaceTooling,
@@ -10,8 +11,41 @@ import {
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-test("the checked-in workspace graph matches the accepted Phase 0/1 module map", async () => {
+test("the checked-in workspace graph matches the accepted module map", async () => {
   assert.deepEqual(await auditWorkspaceBoundaries(repositoryRoot), []);
+});
+
+test("Phase 2 services keep their accepted inward dependency directions", () => {
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/configuration"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/control-plane"], [
+    "@opendelegate/event-store",
+    "@opendelegate/owner-auth",
+    "@opendelegate/protocol",
+    "@opendelegate/task-service",
+  ]);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/main"], [
+    "@opendelegate/control-plane",
+    "@opendelegate/owner-auth",
+    "@opendelegate/storage-sql",
+    "@opendelegate/task-service",
+  ]);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/owner-auth"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/storage-sql"], [
+    "@opendelegate/event-store",
+    "@opendelegate/owner-auth",
+  ]);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/task-service"], [
+    "@opendelegate/domain",
+    "@opendelegate/event-store",
+    "@opendelegate/protocol",
+  ]);
+});
+
+test("platform and external adapter packages keep injected ports at their edges", () => {
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/agent-adapters"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/computer-use-os"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/discord-adapter"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/platform-services"], []);
 });
 
 test("an undeclared workspace dependency fails the boundary check", () => {

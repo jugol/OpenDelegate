@@ -1,0 +1,18 @@
+{
+  "name": "@opendelegate/task-service",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@opendelegate/domain": "workspace:*",
+    "@opendelegate/event-store": "workspace:*",
+    "@opendelegate/protocol": "workspace:*"
+  }
+}

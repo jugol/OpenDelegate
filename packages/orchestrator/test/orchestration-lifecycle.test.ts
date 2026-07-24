@@ -279,11 +279,11 @@ test("a clarification reply resumes the same durable Task after runtime recreati
   assert.equal(coordinator.assessmentCalls, 1);
   assert.equal(coordinator.planCalls, 0);
   assert.equal(worker.calls.length, 0);
-  assert.deepEqual(firstRuntime.getTaskByForumPost(ambiguousForumPost.postId), waiting);
+  assert.deepEqual(await firstRuntime.getTaskByForumPost(ambiguousForumPost.postId), waiting);
 
   const restoredJournal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
-    recordedEvents: firstJournal.recordedEvents(),
+    recordedEvents: await firstJournal.recordedEvents(),
   });
   const replyAuthorizationInputs: unknown[] = [];
   const unauthorizedRuntime = createOpenDelegate({
@@ -393,7 +393,7 @@ test("a clarification reply resumes the same durable Task after runtime recreati
   );
   assert.deepEqual(worker.calls[0]?.workOrder, richWorkOrder);
   assert.equal(
-    restoredJournal.recordedEvents().filter((event) => event.type === "task.bound").length,
+    (await restoredJournal.recordedEvents()).filter((event) => event.type === "task.bound").length,
     1,
   );
 });
@@ -432,11 +432,11 @@ test("completion is rejected unless coordinator review verifies the exact Task B
 
   assert.equal(worker.calls.length, 1);
   assert.equal(
-    journal.recordedEvents().some((event) => event.type === "task.review-started"),
+    (await journal.recordedEvents()).some((event) => event.type === "task.review-started"),
     true,
   );
   assert.equal(
-    journal.recordedEvents().some((event) => event.type === "task.completed"),
+    (await journal.recordedEvents()).some((event) => event.type === "task.completed"),
     false,
   );
 });
@@ -669,23 +669,26 @@ test("conflicting concurrent Forum intake and clarification answers never share 
 class CrashAfterReviewJournal extends InMemoryOrchestrationJournal {
   private shouldCrash = true;
 
-  public override recordCompletedTask(forumPostId: string, task: CompletedTaskView): void {
+  public override async recordCompletedTask(
+    forumPostId: string,
+    task: CompletedTaskView,
+  ): Promise<void> {
     if (this.shouldCrash) {
       this.shouldCrash = false;
       throw new Error("simulated process loss after durable review");
     }
-    super.recordCompletedTask(forumPostId, task);
+    await super.recordCompletedTask(forumPostId, task);
   }
 }
 
 class CrashAfterDispatchJournal extends InMemoryOrchestrationJournal {
   private shouldCrash = true;
 
-  public override recordRunAssignment(
+  public override async recordRunAssignment(
     forumPostId: string,
     assignment: JournaledRunAssignment,
-  ): void {
-    super.recordRunAssignment(forumPostId, assignment);
+  ): Promise<void> {
+    await super.recordRunAssignment(forumPostId, assignment);
     if (this.shouldCrash) {
       this.shouldCrash = false;
       throw new Error("simulated process loss after durable dispatch");
@@ -735,8 +738,8 @@ test("an expired durable Run is retired after restart before a higher-fenced ret
     /simulated process loss after durable dispatch/,
   );
   assert.equal(
-    firstJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId)?.assignment
-      .runId,
+    (await firstJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId))
+      ?.assignment.runId,
     "run-expiry-1",
   );
   assert.equal(worker.calls.length, 0);
@@ -744,7 +747,7 @@ test("an expired durable Run is retired after restart before a higher-fenced ret
   runtimeClock.value = "2026-07-24T00:02:00.000Z";
   const restoredJournal = new InMemoryOrchestrationJournal({
     clock: runtimeClock,
-    recordedEvents: firstJournal.recordedEvents(),
+    recordedEvents: await firstJournal.recordedEvents(),
   });
   const restoredRuntime = createOpenDelegate({
     ...dispatchDependencies,
@@ -764,12 +767,12 @@ test("an expired durable Run is retired after restart before a higher-fenced ret
       error instanceof OrchestratorError && error.code === "RUN_ASSIGNMENT_INVALID",
   );
   assert.equal(
-    restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId),
+    await restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId),
     undefined,
   );
 
   const completed = await restoredRuntime.acceptForumPost(ambiguousForumPost);
-  const assignments = restoredJournal.runAssignments("task-ambiguous-target");
+  const assignments = await restoredJournal.runAssignments("task-ambiguous-target");
 
   assert.equal(completed.state, "completed");
   assert.deepEqual(
@@ -827,7 +830,7 @@ test("an ineligible durable route is retired before a new route receives a highe
 
   const restoredJournal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
-    recordedEvents: firstJournal.recordedEvents(),
+    recordedEvents: await firstJournal.recordedEvents(),
   });
   const recoveredWorker = new RecordingWorker();
   Object.defineProperty(recoveredWorker, "scheduling", {
@@ -856,12 +859,12 @@ test("an ineligible durable route is retired before a new route receives a highe
       error instanceof OrchestratorError && error.code === "SCHEDULING_SELECTION_INVALID",
   );
   assert.equal(
-    restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId),
+    await restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId),
     undefined,
   );
 
   const completed = await restoredRuntime.acceptForumPost(ambiguousForumPost);
-  const assignments = restoredJournal.runAssignments("task-ambiguous-target");
+  const assignments = await restoredJournal.runAssignments("task-ambiguous-target");
 
   assert.equal(completed.state, "completed");
   assert.deepEqual(
@@ -920,7 +923,7 @@ test("a transient fleet-policy validation failure preserves a still-valid durabl
   );
   const restoredJournal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
-    recordedEvents: firstJournal.recordedEvents(),
+    recordedEvents: await firstJournal.recordedEvents(),
   });
   const invalidPolicyRuntime = createOpenDelegate({
     ...dispatchDependencies,
@@ -943,8 +946,8 @@ test("a transient fleet-policy validation failure preserves a still-valid durabl
     /simulated transient Policy dependency failure/,
   );
   assert.equal(
-    restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId)?.assignment
-      .runId,
+    (await restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId))
+      ?.assignment.runId,
     "run-policy-1",
   );
 
@@ -995,17 +998,17 @@ test("restart reuses durable synthesis and review without repeating semantic cal
   assert.equal(coordinator.reviewCalls, 1);
   assert.equal(worker.calls.length, 1);
   assert.equal(
-    firstJournal.recordedEvents().some((event) => event.type === "synthesis.recorded"),
+    (await firstJournal.recordedEvents()).some((event) => event.type === "synthesis.recorded"),
     true,
   );
   assert.equal(
-    firstJournal.recordedEvents().some((event) => event.type === "task.review-completed"),
+    (await firstJournal.recordedEvents()).some((event) => event.type === "task.review-completed"),
     true,
   );
 
   const restoredJournal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
-    recordedEvents: firstJournal.recordedEvents(),
+    recordedEvents: await firstJournal.recordedEvents(),
   });
   const restoredRuntime = createOpenDelegate({
     ...dispatchDependencies,

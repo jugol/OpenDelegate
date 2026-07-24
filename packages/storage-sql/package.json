@@ -1,0 +1,24 @@
+{
+  "name": "@opendelegate/storage-sql",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@opendelegate/event-store": "workspace:*",
+    "@opendelegate/owner-auth": "workspace:*",
+    "better-sqlite3": "13.0.1",
+    "kysely": "0.29.4",
+    "pg": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/pg": "8.20.0"
+  }
+}

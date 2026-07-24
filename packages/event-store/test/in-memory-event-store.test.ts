@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { EventStoreError, InMemoryEventStore, type EventClock } from "../src/index.ts";
+import {
+  EventStoreError,
+  InMemoryEventStore,
+  type EventClock,
+  type EventStore,
+} from "../src/index.ts";
 
 class FakeClock implements EventClock {
   private currentIso = "2026-07-24T00:00:00.000Z";
@@ -15,11 +20,11 @@ class FakeClock implements EventClock {
   }
 }
 
-test("append assigns stable stream versions and global positions", () => {
+test("append assigns stable stream versions and global positions through the async port", async () => {
   const clock = new FakeClock();
-  const store = new InMemoryEventStore({ clock });
+  const store: EventStore = new InMemoryEventStore({ clock });
 
-  const first = store.append({
+  const first = await store.append({
     streamId: "task-001",
     expectedVersion: 0,
     events: [
@@ -31,7 +36,7 @@ test("append assigns stable stream versions and global positions", () => {
     ],
   });
   clock.set("2026-07-24T00:00:01.000Z");
-  const second = store.append({
+  const second = await store.append({
     streamId: "task-001",
     expectedVersion: 1,
     events: [
@@ -68,7 +73,7 @@ test("append assigns stable stream versions and global positions", () => {
   );
 });
 
-test("a duplicate event delivery is idempotent and does not consume a position", () => {
+test("a duplicate event delivery is idempotent and does not consume a position", async () => {
   const store = new InMemoryEventStore({ clock: new FakeClock() });
   const command = {
     streamId: "task-duplicate",
@@ -82,17 +87,17 @@ test("a duplicate event delivery is idempotent and does not consume a position",
     ],
   } as const;
 
-  const first = store.append(command);
-  const replay = store.append(command);
+  const first = await store.append(command);
+  const replay = await store.append(command);
 
   assert.deepEqual(replay, first);
-  assert.equal(store.readAll().length, 1);
-  assert.equal(store.streamVersion("task-duplicate"), 1);
+  assert.equal((await store.readAll()).length, 1);
+  assert.equal(await store.streamVersion("task-duplicate"), 1);
 });
 
-test("a reused event ID with different content is rejected", () => {
+test("a reused event ID with different content is rejected", async () => {
   const store = new InMemoryEventStore({ clock: new FakeClock() });
-  store.append({
+  await store.append({
     streamId: "task-001",
     expectedVersion: 0,
     events: [
@@ -104,7 +109,7 @@ test("a reused event ID with different content is rejected", () => {
     ],
   });
 
-  assert.throws(
+  await assert.rejects(
     () =>
       store.append({
         streamId: "task-002",
@@ -125,9 +130,9 @@ test("a reused event ID with different content is rejected", () => {
   );
 });
 
-test("optimistic concurrency rejects a stale stream writer", () => {
+test("optimistic concurrency rejects a stale stream writer", async () => {
   const store = new InMemoryEventStore({ clock: new FakeClock() });
-  store.append({
+  await store.append({
     streamId: "task-001",
     expectedVersion: 0,
     events: [
@@ -139,7 +144,7 @@ test("optimistic concurrency rejects a stale stream writer", () => {
     ],
   });
 
-  assert.throws(
+  await assert.rejects(
     () =>
       store.append({
         streamId: "task-001",
@@ -160,9 +165,9 @@ test("optimistic concurrency rejects a stale stream writer", () => {
   );
 });
 
-test("replaying a recorded event sequence produces the same projection", () => {
+test("replaying a recorded event sequence produces the same projection", async () => {
   const store = new InMemoryEventStore({ clock: new FakeClock() });
-  store.append({
+  await store.append({
     streamId: "task-replay",
     expectedVersion: 0,
     events: [
@@ -196,13 +201,13 @@ test("replaying a recorded event sequence produces the same projection", () => {
       applied: projection.applied + 1,
     }));
 
-  assert.deepEqual(project(), { state: "completed", applied: 3 });
-  assert.deepEqual(project(), { state: "completed", applied: 3 });
+  assert.deepEqual(await project(), { state: "completed", applied: 3 });
+  assert.deepEqual(await project(), { state: "completed", applied: 3 });
 });
 
-test("read snapshots cannot mutate stored event payloads", () => {
+test("read snapshots cannot mutate stored event payloads", async () => {
   const store = new InMemoryEventStore({ clock: new FakeClock() });
-  store.append({
+  await store.append({
     streamId: "task-immutable",
     expectedVersion: 0,
     events: [
@@ -214,21 +219,21 @@ test("read snapshots cannot mutate stored event payloads", () => {
     ],
   });
 
-  const [event] = store.readStream("task-immutable");
+  const [event] = await store.readStream("task-immutable");
   assert.ok(event);
   assert.equal(Object.isFrozen(event), true);
   assert.equal(Object.isFrozen(event.payload), true);
   assert.equal(Object.isFrozen((event.payload as { nested: object }).nested), true);
 });
 
-test("non-durable payload shapes fail before consuming a stream or global position", () => {
+test("non-durable payload shapes fail before consuming a stream or global position", async () => {
   const store = new InMemoryEventStore({
     clock: new FakeClock(),
   });
   const circular: { self?: unknown } = {};
   circular.self = circular;
 
-  assert.throws(
+  await assert.rejects(
     () =>
       store.append({
         streamId: "task-unsafe",
@@ -245,7 +250,7 @@ test("non-durable payload shapes fail before consuming a stream or global positi
       error instanceof EventStoreError && error.code === "EVENT_PAYLOAD_UNSERIALIZABLE",
   );
 
-  assert.throws(
+  await assert.rejects(
     () =>
       store.append({
         streamId: "task-unsafe",
@@ -262,7 +267,7 @@ test("non-durable payload shapes fail before consuming a stream or global positi
       error instanceof EventStoreError && error.code === "EVENT_PAYLOAD_UNSERIALIZABLE",
   );
 
-  const [stored] = store.append({
+  const [stored] = await store.append({
     streamId: "task-safe",
     expectedVersion: 0,
     events: [
@@ -276,11 +281,11 @@ test("non-durable payload shapes fail before consuming a stream or global positi
     ],
   });
 
-  assert.equal(store.streamVersion("task-unsafe"), 0);
+  assert.equal(await store.streamVersion("task-unsafe"), 0);
   assert.equal(stored?.globalPosition, 1);
 });
 
-test("an idempotent batch replay must preserve unique event order and stream positions", () => {
+test("an idempotent batch replay must preserve unique event order and stream positions", async () => {
   const store = new InMemoryEventStore({ clock: new FakeClock() });
   const events = [
     {
@@ -294,13 +299,13 @@ test("an idempotent batch replay must preserve unique event order and stream pos
       payload: { state: "running" },
     },
   ] as const;
-  store.append({
+  await store.append({
     streamId: "task-ordered",
     expectedVersion: 0,
     events,
   });
 
-  assert.throws(
+  await assert.rejects(
     () =>
       store.append({
         streamId: "task-ordered",
@@ -310,7 +315,7 @@ test("an idempotent batch replay must preserve unique event order and stream pos
     (error: unknown) =>
       error instanceof EventStoreError && error.code === "EVENT_BATCH_REPLAY_MISMATCH",
   );
-  assert.throws(
+  await assert.rejects(
     () =>
       store.append({
         streamId: "task-ordered",
@@ -321,7 +326,7 @@ test("an idempotent batch replay must preserve unique event order and stream pos
   );
 });
 
-test("blank durable identifiers and event types are rejected before append", () => {
+test("blank durable identifiers and event types are rejected before append", async () => {
   const store = new InMemoryEventStore({ clock: new FakeClock() });
 
   for (const input of [
@@ -341,20 +346,35 @@ test("blank durable identifiers and event types are rejected before append", () 
       events: [{ eventId: "event-valid", type: " ", payload: {} }],
     },
   ]) {
-    assert.throws(
+    await assert.rejects(
       () => store.append(input),
       (error: unknown) => error instanceof EventStoreError && error.code === "EVENT_INPUT_INVALID",
     );
   }
-  assert.equal(store.readAll().length, 0);
+  assert.equal((await store.readAll()).length, 0);
 });
 
-test("a malformed injected clock cannot create a durable event", () => {
+test("an authoritative append instant is persisted instead of consulting the fallback clock", async () => {
+  const clock = new FakeClock();
+  const store = new InMemoryEventStore({ clock });
+  clock.set("not-a-clock-value");
+
+  const [stored] = await store.append({
+    streamId: "task-authoritative-time",
+    expectedVersion: 0,
+    occurredAt: "2026-07-24T03:00:00.000Z",
+    events: [{ eventId: "event-authoritative-time", type: "task.created", payload: {} }],
+  });
+
+  assert.equal(stored?.occurredAt, "2026-07-24T03:00:00.000Z");
+});
+
+test("a malformed injected clock cannot create a durable event", async () => {
   const clock = new FakeClock();
   const store = new InMemoryEventStore({ clock });
   clock.set("July 24 2026");
 
-  assert.throws(
+  await assert.rejects(
     () =>
       store.append({
         streamId: "task-clock",
@@ -363,5 +383,5 @@ test("a malformed injected clock cannot create a durable event", () => {
       }),
     (error: unknown) => error instanceof EventStoreError && error.code === "CLOCK_VALUE_INVALID",
   );
-  assert.equal(store.readAll().length, 0);
+  assert.equal((await store.readAll()).length, 0);
 });

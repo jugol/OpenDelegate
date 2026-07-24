@@ -508,11 +508,11 @@ test(
     assert.equal(secondTask.taskId, "task-backup-policy");
     assert.equal(secondTask.state, "completed");
     assert.equal(
-      openDelegate.getTaskByForumPost("forum-post-launch-report").taskId,
+      (await openDelegate.getTaskByForumPost("forum-post-launch-report")).taskId,
       "task-launch-report",
     );
     assert.equal(
-      openDelegate.getTaskByForumPost("forum-post-backup-policy").taskId,
+      (await openDelegate.getTaskByForumPost("forum-post-backup-policy")).taskId,
       "task-backup-policy",
     );
     assert.deepEqual(coordinator.planInputs, [

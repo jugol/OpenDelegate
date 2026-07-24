@@ -2,3 +2,16 @@ packages:
   - "apps/*"
   - "packages/*"
   - "tooling/*"
+
+allowBuilds:
+  better-sqlite3@13.0.1: true
+  esbuild@0.28.1: true
+
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+trustLockfile: false
+blockExoticSubdeps: true
+
+overrides:
+  brace-expansion: 5.0.7

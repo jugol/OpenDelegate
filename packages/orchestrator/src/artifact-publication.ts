@@ -8,7 +8,7 @@ export async function publishArtifactResult(input: {
   readonly artifacts: ArtifactGateway;
   readonly journal: OrchestrationJournal;
 }): Promise<ArtifactReference> {
-  const cachedArtifact = input.journal.artifactResult(input.taskId);
+  const cachedArtifact = await input.journal.artifactResult(input.taskId);
   if (cachedArtifact !== undefined) {
     return cachedArtifact.reference;
   }
@@ -20,7 +20,7 @@ export async function publishArtifactResult(input: {
       ...input.artifact,
     }),
   );
-  input.journal.recordArtifactResult(input.taskId, {
+  await input.journal.recordArtifactResult(input.taskId, {
     reference: artifactReference,
   });
   return artifactReference;

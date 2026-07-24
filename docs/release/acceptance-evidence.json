@@ -1,0 +1,483 @@
+{
+  "$schema": "./acceptance-evidence.schema.json",
+  "schemaVersion": 1,
+  "product": "OpenDelegate",
+  "milestone": "first",
+  "auditedAt": "2026-07-24T06:44:00.619Z",
+  "sourceCommit": "404e432bcf2547ad206ed9e3c6d996f0cdd05d3d",
+  "releaseStatus": "blocked",
+  "criteria": [
+    {
+      "id": 1,
+      "title": "Agent-first init reaches Main and Admin without a development command",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "skills/opendelegate-init/SKILL.md",
+        "docs/adr/0010-reproducible-platform-bundles-and-provenance.md",
+        "tooling/build-release.mjs",
+        "tooling/test/build-release.test.mjs",
+        "apps/main/src/cli.ts",
+        "apps/main/test/main-runtime.test.ts"
+      ],
+      "nextGate": "Run the pinned bundle and init skill on clean macOS, Windows, and Linux hosts; implement and install the production service commands, then record startup and Admin auto-open proof."
+    },
+    {
+      "id": 2,
+      "title": "Only the current Device appears initially",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "apps/main/test/main-runtime.test.ts",
+        "apps/control-plane/test/control-plane-http.test.ts",
+        "apps/admin-web/src/AdminApplication.test.tsx",
+        "apps/admin-web/e2e/admin-overview.spec.ts"
+      ],
+      "nextGate": "Run the packaged Main and real Admin API from a clean home, record that only the current Device appears before enrollment, and prove that the list expands only after a successful grant enrollment."
+    },
+    {
+      "id": 3,
+      "title": "Embedded SQLite and external PostgreSQL both work",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "docs/adr/0005-sql-portability-and-transaction-semantics.md",
+        "packages/storage-sql/test/sql-event-store.contract.test.ts",
+        "packages/storage-sql/test/sql-owner-auth-repository.contract.test.ts",
+        "packages/acceptance/test/phase2-sql-persistence.test.ts",
+        "apps/main/test/main-runtime.test.ts",
+        ".github/workflows/ci.yml"
+      ],
+      "nextGate": "Run the final-commit PostgreSQL CI job and clean-bundle SQLite and external-PostgreSQL smokes, then capture migration and backup/restore proof for both deployment choices."
+    },
+    {
+      "id": 4,
+      "title": "An approved Discord Community Server and Forum bind successfully",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/discord-adapter/README.md",
+        "packages/discord-adapter/src/discord-forum-adapter.ts",
+        "packages/discord-adapter/test/discord-forum-adapter.test.ts"
+      ],
+      "nextGate": "Implement the production Discord HTTP, Gateway, Main SQL-state, and Secret-backed credential ports, then bind a dedicated Community Forum and record permission, intent, Gateway Resume, and HTTP reconciliation proof."
+    },
+    {
+      "id": 5,
+      "title": "macOS, Windows, and Linux Devices enroll with single-use grants",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "docs/adr/0008-device-identity-enrollment-and-channel-authentication.md",
+        "packages/device-identity/README.md",
+        "packages/device-identity/src/device-identity-authority.ts",
+        "packages/device-identity/test/device-identity.test.ts"
+      ],
+      "nextGate": "Compose the identity core with persistent Main and OS Secret Stores, pinned enrollment HTTP, active-channel revocation, and a join skill, then enroll real macOS, Windows, and Linux Devices."
+    },
+    {
+      "id": 6,
+      "title": "Every OS service survives process and expected host restart",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "docs/adr/0011-native-two-plane-service-supervision-and-authenticated-ipc.md",
+        "packages/platform-services/README.md",
+        "packages/platform-services/test/renderers.test.ts",
+        "packages/platform-services/test/plans.test.ts",
+        "tooling/build-release.mjs"
+      ],
+      "nextGate": "Implement the privileged filesystem and supervisor adapters, durable operation journal, service hosts, and authenticated IPC, then capture clean install, restart, reboot, login/logout, upgrade, rollback, and uninstall proof on all three OS families."
+    },
+    {
+      "id": 7,
+      "title": "Device specification, routes, health, locks, and Runs are accurate",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/device-discovery/test/device-discovery-service.test.ts",
+        "packages/worker-runtime/test/worker-runtime.test.ts",
+        "packages/platform-services/test/readiness.test.ts",
+        "apps/main/test/main-runtime.test.ts",
+        "apps/admin-web/src/AdminApplication.test.tsx"
+      ],
+      "nextGate": "Compose enrolled Worker observations, profile revisions, routes, locks, load, and current Runs into durable Main projections and verify the complete Device surface against real Devices."
+    },
+    {
+      "id": 8,
+      "title": "Per-Device connection methods are deterministic and prompt-free",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/transport/test/transport-resolver.test.ts",
+        "packages/worker-runtime/test/worker-runtime.test.ts",
+        "packages/worker-runtime/test/state-boundaries.test.ts"
+      ],
+      "nextGate": "Compose authenticated Worker channels over configured endpoints and prove different real Tailscale, Omada, and direct profiles, including redacted diagnostics and prompt inspection after deterministic exhaustion."
+    },
+    {
+      "id": 9,
+      "title": "One Forum post creates one Task and replies resume it",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/discord-adapter/test/discord-forum-adapter.test.ts",
+        "packages/task-service/test/task-service.test.ts",
+        "packages/acceptance/test/canonical-task-journey.test.ts"
+      ],
+      "nextGate": "Compose the Discord adapter with the durable Main Task service and production Gateway/HTTP ports, then prove post and reply identity through live ingestion, reconnect, and archived-thread reconciliation."
+    },
+    {
+      "id": 10,
+      "title": "Different Forum posts remain context-isolated Tasks",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/discord-adapter/test/discord-forum-adapter.test.ts",
+        "packages/task-service/test/task-service.test.ts",
+        "packages/orchestrator/test/orchestration-boundaries.test.ts"
+      ],
+      "nextGate": "Prove distinct live Forum posts create distinct durable Tasks, Coordinator Sessions, summaries, and provider-native session bindings with no cross-Task prompt input."
+    },
+    {
+      "id": 11,
+      "title": "Clear work auto-starts and ambiguity asks one useful question",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/task-service/test/task-service.test.ts",
+        "packages/configuration/test/configuration-service.test.ts",
+        "packages/acceptance/test/phase1-public-contracts.test.ts"
+      ],
+      "nextGate": "Compose a real Coordinator adapter and Discord projection so clear Auto work starts and ambiguous work persists and presents exactly one targeted owner question."
+    },
+    {
+      "id": 12,
+      "title": "Main parallelizes work across two Devices and synthesizes reports",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/orchestrator/test/orchestration-lifecycle.test.ts",
+        "packages/acceptance/test/phase1-public-contracts.test.ts",
+        "packages/worker-runtime/test/worker-runtime.test.ts"
+      ],
+      "nextGate": "Compose the Worker protocol and real Agent adapters, then run one Task through parallel Work Orders on two enrolled real Devices and record Main's synthesized result."
+    },
+    {
+      "id": 13,
+      "title": "General Runs are concurrent while desktop input is exclusive",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "docs/adr/0012-computer-use-native-driver-authority-and-readiness.md",
+        "packages/resource-locks/test/resource-lock-kernel.test.ts",
+        "packages/computer-use/test/computer-use.test.ts",
+        "packages/computer-use-os/test/computer-use-os.test.ts",
+        "packages/platform-services/test/readiness.test.ts"
+      ],
+      "nextGate": "Compose durable Resource Locks, external monotonic desktop authority, and authenticated native helpers, then prove real desktop-session serialization while unrelated Agent Runs remain concurrent."
+    },
+    {
+      "id": 14,
+      "title": "Codex and Claude adapters start, observe, and resume native sessions",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/agent-adapters/README.md",
+        "packages/agent-adapters/src/contracts.ts",
+        "packages/agent-adapters/test/codex-cli-adapter.test.ts",
+        "packages/agent-adapters/test/claude-cli-adapter.test.ts",
+        "packages/agent-adapters/test/subprocess-lifecycle.test.ts"
+      ],
+      "nextGate": "Add the SDK-native approval and steering paths, compose adapters into the Worker and durable Main session registry, then run authenticated pinned Codex and Claude start, stream, resume, cancel, and restart smokes."
+    },
+    {
+      "id": 15,
+      "title": "Coordinator pinning and Worker provider participation are correct",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/domain/test/agent-session.test.ts",
+        "packages/agent-adapter/test/agent-adapter.test.ts",
+        "packages/agent-adapters/src/session-reference.ts",
+        "packages/agent-adapters/test/generic-command-adapter.test.ts"
+      ],
+      "nextGate": "Persist Coordinator and Worker session references in Main, compose provider selection with dispatch, and prove a pinned live Coordinator remains unchanged while the other provider participates as a Worker."
+    },
+    {
+      "id": 16,
+      "title": "Native-session loss continues from a durable checkpoint",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/agent-adapter/test/agent-adapter.test.ts",
+        "packages/agent-adapters/README.md",
+        "packages/agent-adapters/test/generic-command-adapter.test.ts"
+      ],
+      "nextGate": "Persist bounded checkpoint packages and lineage through Main and Worker restart, then force native-session loss in each authenticated live provider and prove continuation."
+    },
+    {
+      "id": 17,
+      "title": "Local Markdown Knowledge is useful and never uploaded to Main",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/knowledge/README.md",
+        "packages/knowledge/test/local-knowledge-service.test.ts",
+        "packages/acceptance/test/phase1-public-contracts.test.ts",
+        "packages/worker-runtime/test/state-boundaries.test.ts"
+      ],
+      "nextGate": "Integrate bounded Knowledge search and explicit open into real Worker Work Order startup, then inspect SQL, protocol traffic, prompts, Admin, and diagnostics to prove no local metadata or content reaches Main."
+    },
+    {
+      "id": 18,
+      "title": "Qualifying Knowledge updates rebuild the local index deterministically",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/knowledge/README.md",
+        "packages/knowledge/src/local-knowledge-service.ts",
+        "packages/knowledge/test/local-knowledge-service.test.ts"
+      ],
+      "nextGate": "Wire qualifying Agent-maintained Markdown updates and deterministic rebuild into the supervised Worker lifecycle, then record an end-to-end local update without Main-visible Knowledge metadata."
+    },
+    {
+      "id": 19,
+      "title": "Computer Use completes and cancels on macOS, Windows, and graphical Linux",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "docs/adr/0012-computer-use-native-driver-authority-and-readiness.md",
+        "docs/adr/0013-windows-computer-use-backend.md",
+        "docs/adr/0014-macos-computer-use-backend.md",
+        "docs/adr/0015-ubuntu-gnome-wayland-computer-use-backend.md",
+        "packages/computer-use-os/test/computer-use-os.test.ts",
+        "packages/computer-use-os/test/conformance-lab.test.ts"
+      ],
+      "nextGate": "Accept the three OS backend ADRs, implement real authenticated native helpers and drivers, and pass the fixture, screenshot, permission, cancellation, emergency-stop, and lock tests on real Windows, macOS, and Ubuntu 24.04 GNOME Wayland hosts."
+    },
+    {
+      "id": 20,
+      "title": "Headless Linux remains useful and reports Computer Use unavailable",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/device-discovery/test/device-discovery-service.test.ts",
+        "packages/computer-use-os/README.md",
+        "packages/computer-use-os/test/computer-use-os.test.ts",
+        "packages/platform-services/test/readiness.test.ts",
+        "packages/worker-runtime/test/worker-runtime.test.ts"
+      ],
+      "nextGate": "Install the real Worker service on the headless NAS, record Computer Use as unavailable, and complete a non-desktop Work Order while the core remains healthy without a session helper."
+    },
+    {
+      "id": 21,
+      "title": "Worker report becomes a concise Discord result and Artifact link",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/artifact-store/test/local-artifact-store.test.ts",
+        "apps/artifact-gateway/test/artifact-gateway.test.ts",
+        "packages/discord-adapter/test/discord-forum-adapter.test.ts",
+        "packages/orchestrator/test/orchestration-lifecycle.test.ts"
+      ],
+      "nextGate": "Compose authenticated resumable Worker upload, durable Main Artifact metadata, the isolated Gateway, and the production Discord driver, then prove a real Worker result appears as both a concise native result and openable Artifact link."
+    },
+    {
+      "id": 22,
+      "title": "Private, authenticated, signed-link, and public Artifact modes work",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "docs/adr/0009-artifact-origin-and-content-isolation.md",
+        "packages/domain/test/artifact-audit.test.ts",
+        "packages/artifact-store/test/local-artifact-store.test.ts",
+        "apps/artifact-gateway/test/artifact-gateway.test.ts"
+      ],
+      "nextGate": "Compose exposure precedence and audit with real owner routes and credentials, then prove private-network, authenticated, signed-link, and explicit public access from the required mixed-network viewers."
+    },
+    {
+      "id": 23,
+      "title": "Default static HTML cannot run scripts or access Admin authority",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "docs/adr/0009-artifact-origin-and-content-isolation.md",
+        "apps/artifact-gateway/src/artifact-gateway-app.ts",
+        "apps/artifact-gateway/test/artifact-gateway.test.ts"
+      ],
+      "nextGate": "Deploy Admin, static Artifact, and interactive Artifact listeners on genuinely distinct origins and run browser hostile-HTML and SVG fixtures against real Admin and Artifact credentials."
+    },
+    {
+      "id": 24,
+      "title": "Official packages auto-install while new sources and installers prompt",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/policy/test/evaluate-action.test.ts",
+        "packages/configuration/test/configuration-service.test.ts",
+        "packages/agent-adapters/test/subprocess-lifecycle.test.ts"
+      ],
+      "nextGate": "Connect deterministic package-source classification and Policy to a real package-manager executor and prove official-package allowance plus protected repository and remote-installer prompts on supported hosts."
+    },
+    {
+      "id": 25,
+      "title": "Network and firewall changes require approval and honor denial",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": ["packages/policy/test/evaluate-action.test.ts"],
+      "nextGate": "Enforce Policy at real OS mutation executors."
+    },
+    {
+      "id": 26,
+      "title": "Device Secret values never leak through any product surface",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/secrets/test/secret-lifecycle.test.ts",
+        "packages/acceptance/test/phase1-public-contracts.test.ts",
+        "packages/storage-sql/test/sql-owner-auth-repository.contract.test.ts",
+        "packages/worker-runtime/test/state-boundaries.test.ts",
+        "packages/agent-adapters/test/subprocess-lifecycle.test.ts",
+        "packages/knowledge/test/local-knowledge-service.test.ts"
+      ],
+      "nextGate": "Compose real OS Secret Stores and credential injection, then run adversarial leak scans through the integrated database, provider prompts and output, logs, diagnostics, Discord, Admin, and Artifacts on every OS."
+    },
+    {
+      "id": 27,
+      "title": "Route failure falls back deterministically before Agent diagnosis",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        "packages/transport/test/transport-resolver.test.ts",
+        "packages/worker-runtime/test/worker-runtime.test.ts",
+        "packages/worker-runtime/test/state-boundaries.test.ts"
+      ],
+      "nextGate": "Run authenticated Worker traffic across real mixed routes, force the preferred path to fail, and record deterministic fallback, bounded exhaustion, redacted evidence, and only then Agent escalation."
+    },
+    {
+      "id": 28,
+      "title": "Disconnected Workers buffer and resynchronize without duplicate work",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/worker-runtime/README.md",
+        "packages/worker-runtime/src/sqlite-worker-state-repository.ts",
+        "packages/worker-runtime/test/worker-runtime.test.ts",
+        "packages/worker-runtime/test/state-boundaries.test.ts"
+      ],
+      "nextGate": "Compose the local outbox with the authenticated Main channel and durable Main inbox, then force real network and process interruption and prove ordered acknowledgment, replay, and exactly-once external effects."
+    },
+    {
+      "id": 29,
+      "title": "Main restart reconciles Discord, Runs, leases, and singleton authority",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/orchestrator/test/orchestration-restart.test.ts",
+        "packages/storage-sql/test/sql-event-store.contract.test.ts",
+        "packages/worker-runtime/test/worker-runtime.test.ts",
+        "packages/discord-adapter/test/discord-forum-adapter.test.ts",
+        "apps/main/test/main-runtime.test.ts"
+      ],
+      "nextGate": "Compose Discord, Worker, Run, lease, outbox, and external singleton-authority state in the production Main, then force process and host restarts and prove reconciliation occurs before dispatch without a second coordinator."
+    },
+    {
+      "id": 30,
+      "title": "Admin can inspect and control Tasks during Discord outage",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/task-service/test/task-service.test.ts",
+        "apps/control-plane/test/control-plane-http.test.ts",
+        "apps/main/test/main-runtime.test.ts",
+        "apps/admin-web/src/AdminApplication.test.tsx",
+        "apps/admin-web/e2e/admin-overview.spec.ts"
+      ],
+      "nextGate": "Run the browser suite against the packaged Main rather than mocked HTTP, disable Discord, and prove authenticated inspection, emergency Task creation, pause, resume, cancel, retry, and restart persistence."
+    },
+    {
+      "id": 31,
+      "title": "Audit explains every security- and scheduling-relevant action",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/domain/src/audit-event.ts",
+        "packages/domain/test/artifact-audit.test.ts",
+        "packages/configuration/test/configuration-service.test.ts",
+        "packages/artifact-store/test/local-artifact-store.test.ts",
+        "packages/storage-sql/test/sql-owner-auth-repository.contract.test.ts"
+      ],
+      "nextGate": "Persist and query one complete audit projection covering enrollment, scheduling, profile and Policy changes, approvals, execution, Artifact exposure, Admin controls, and failures through the production composition."
+    },
+    {
+      "id": 32,
+      "title": "Automated and live smoke matrices pass on declared OS versions",
+      "implementationStatus": "partial",
+      "liveProofStatus": "blocked-external",
+      "evidence": [
+        ".github/workflows/ci.yml",
+        "docs/adr/0010-reproducible-platform-bundles-and-provenance.md",
+        "tooling/build-release.mjs",
+        "tooling/test/build-release.test.mjs",
+        "docs/release/PLATFORM_LAB.md"
+      ],
+      "nextGate": "Run final-commit hosted CI and target-native bundle smokes, then complete and attach the owner-controlled macOS, Windows, Linux, Discord, provider, mixed-route, service, and Computer Use lab matrix."
+    },
+    {
+      "id": 33,
+      "title": "Workspace Tasks preserve isolation and resume in the correct directory",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/domain/test/workspace.test.ts",
+        "packages/agent-adapter/test/agent-adapter.test.ts",
+        "packages/agent-adapters/src/session-reference.ts",
+        "packages/agent-adapters/test/codex-cli-adapter.test.ts",
+        "packages/agent-adapters/test/generic-command-adapter.test.ts"
+      ],
+      "nextGate": "Implement the persistent Worker Workspace registry and safe worktree lifecycle, compose it with dispatch, and prove live native-session resume rejects a changed Device, Workspace, cwd, or worktree."
+    },
+    {
+      "id": 34,
+      "title": "Concurrent native-session appends serialize or reject cleanly",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/agent-adapter/test/agent-adapter.test.ts",
+        "packages/agent-adapters/test/file-session-lease-store.test.ts",
+        "packages/agent-adapters/test/subprocess-lifecycle.test.ts"
+      ],
+      "nextGate": "Compose the file-backed session lease with the Worker session registry and run concurrent append attempts against live Codex and Claude sessions through process restart."
+    },
+    {
+      "id": 35,
+      "title": "A runaway Agent stops at its finite hard budget",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "packages/domain/test/budget.test.ts",
+        "packages/agent-adapters/test/subprocess-lifecycle.test.ts",
+        "packages/acceptance/test/phase1-public-contracts.test.ts"
+      ],
+      "nextGate": "Implement hierarchical budget accounting in the production Task and Run services, add a deliberately runaway adapter to the integrated Main/Worker journey, and prove hard stop plus bounded child creation."
+    },
+    {
+      "id": 36,
+      "title": "Remote owner claim is impossible and recovery survives Discord outage",
+      "implementationStatus": "partial",
+      "liveProofStatus": "not-run",
+      "evidence": [
+        "docs/adr/0006-owner-authentication-and-local-claim.md",
+        "packages/owner-auth/test/owner-auth.test.ts",
+        "packages/storage-sql/test/sql-owner-auth-repository.contract.test.ts",
+        "apps/control-plane/test/control-plane-http.test.ts",
+        "apps/main/test/main-runtime.test.ts",
+        "apps/admin-web/src/AdminApplication.test.tsx",
+        "apps/admin-web/e2e/admin-overview.spec.ts",
+        "tooling/build-release.mjs"
+      ],
+      "nextGate": "Run the packaged separate claim and Admin listeners on every Main OS, capture a non-loopback claim rejection and HTTPS session controls, then prove recovery, session revocation, and Task control while Discord is unavailable across restart."
+    }
+  ]
+}

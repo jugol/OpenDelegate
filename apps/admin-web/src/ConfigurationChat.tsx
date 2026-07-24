@@ -19,53 +19,58 @@ interface ChatMessage {
 }
 
 interface ConfigurationChatProps {
-  readonly deviceName: string;
   readonly expanded: boolean;
   readonly focusRequestId: number;
   readonly modal: boolean;
   readonly onClose: () => void;
+  readonly onSendMessage?: (message: string) => Promise<string>;
   readonly onToggleExpanded: () => void;
   readonly open: boolean;
   readonly session: ConfigurationSessionView;
 }
 
 export function ConfigurationChat({
-  deviceName,
   expanded,
   focusRequestId,
   modal,
   onClose,
+  onSendMessage,
   onToggleExpanded,
   open,
   session,
 }: ConfigurationChatProps): React.JSX.Element {
   const [proposalState, setProposalState] = useState<ProposalState>("proposed");
   const [draft, setDraft] = useState("");
+  const [pending, setPending] = useState(false);
   const [messages, setMessages] = useState<readonly ChatMessage[]>(() => [
     {
       id: "message-agent-discovery",
       author: "agent",
-      content: session.assistantMessage,
+      content:
+        onSendMessage === undefined
+          ? "Device assessment and Configuration Agent messaging are not connected in this build. The visible Device facts come only from Main's deterministic runtime report."
+          : session.assistantMessage,
     },
   ]);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const scrollRegionRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLInputElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousMessageCountRef = useRef(messages.length);
 
   useEffect(() => {
     if (open && focusRequestId > 0) {
-      composerRef.current?.focus();
+      (onSendMessage === undefined ? closeButtonRef.current : composerRef.current)?.focus();
     }
-  }, [focusRequestId, open]);
+  }, [focusRequestId, onSendMessage, open]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
 
     if (open && modal && dialog !== null && !dialog.contains(document.activeElement)) {
-      composerRef.current?.focus();
+      (onSendMessage === undefined ? closeButtonRef.current : composerRef.current)?.focus();
     }
-  }, [modal, open]);
+  }, [modal, onSendMessage, open]);
 
   useLayoutEffect(() => {
     const scrollRegion = scrollRegionRef.current;
@@ -75,33 +80,56 @@ export function ConfigurationChat({
     previousMessageCountRef.current = messages.length;
   }, [messages, open]);
 
-  function submitChatMessage(event: FormEvent<HTMLFormElement>): void {
+  useEffect(() => {
+    if (!pending && open && onSendMessage !== undefined) {
+      composerRef.current?.focus();
+    }
+  }, [onSendMessage, open, pending]);
+
+  async function submitChatMessage(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
+    if (onSendMessage === undefined || pending) {
+      return;
+    }
     const message = draft.trim();
 
     if (message === "") {
       return;
     }
 
-    setMessages((current) => {
-      const sequence = current.length;
-
-      return [
+    const sequence = messages.length;
+    setMessages((current) => [
+      ...current,
+      {
+        id: `message-owner-${sequence}`,
+        author: "owner",
+        content: message,
+      },
+    ]);
+    setDraft("");
+    setPending(true);
+    try {
+      const response = await onSendMessage(message);
+      setMessages((current) => [
         ...current,
-        {
-          id: `message-owner-${sequence}`,
-          author: "owner",
-          content: message,
-        },
         {
           id: `message-agent-${sequence + 1}`,
           author: "agent",
-          content: `Got it. This message stays in ${deviceName}'s Device setup session. No settings were changed.`,
+          content: response,
         },
-      ];
-    });
-    setDraft("");
-    composerRef.current?.focus();
+      ]);
+    } catch {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `message-agent-${sequence + 1}`,
+          author: "agent",
+          content: "The Configuration Agent could not respond. No settings were changed.",
+        },
+      ]);
+    } finally {
+      setPending(false);
+    }
   }
 
   function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
@@ -171,7 +199,12 @@ export function ConfigurationChat({
             >
               {expanded ? <Minimize2 aria-hidden="true" /> : <Expand aria-hidden="true" />}
             </button>
-            <button aria-label="Close Configuration Chat" onClick={onClose} type="button">
+            <button
+              aria-label="Close Configuration Chat"
+              onClick={onClose}
+              ref={closeButtonRef}
+              type="button"
+            >
               <X aria-hidden="true" />
             </button>
           </div>
@@ -277,19 +310,30 @@ export function ConfigurationChat({
           ) : null}
         </div>
 
-        <form className="chat-composer" onSubmit={submitChatMessage}>
+        <form className="chat-composer" onSubmit={(event) => void submitChatMessage(event)}>
           <label className="sr-only" htmlFor="configuration-chat-message">
             Message Configuration Chat
           </label>
           <input
             autoComplete="off"
+            disabled={onSendMessage === undefined || pending}
             id="configuration-chat-message"
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="Ask about this Device…"
+            placeholder={
+              onSendMessage === undefined
+                ? "Configuration Agent is not connected in this build."
+                : pending
+                  ? "Waiting for Configuration Agent…"
+                  : "Ask about this Device…"
+            }
             ref={composerRef}
             value={draft}
           />
-          <button aria-label="Send message" disabled={draft.trim() === ""} type="submit">
+          <button
+            aria-label="Send message"
+            disabled={onSendMessage === undefined || pending || draft.trim() === ""}
+            type="submit"
+          >
             <Send aria-hidden="true" />
           </button>
         </form>

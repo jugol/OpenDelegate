@@ -4,6 +4,10 @@ Status: **Accepted**
 
 Date: **2026-07-24**
 
+Decision 5 is superseded by
+[`ADR-0016`](0016-pnpm-toolchain-security-upgrade.md). The remaining decisions stay
+accepted.
+
 ## Context
 
 OpenDelegate must build and test on macOS, Windows, and Linux, while later release
@@ -18,7 +22,8 @@ need independently testable boundaries without becoming separate repositories.
 3. Use Node.js 24 LTS as the CI and release-bundle baseline.
 4. Keep a temporary Node.js 22 compatibility floor while that release line remains
    supported, so contributors can run the dependency-light kernel during transition.
-5. Pin pnpm 9 and exact dependency versions in the lockfile.
+5. Pin pnpm 9 and exact dependency versions in the lockfile. Superseded by
+   ADR-0016.
 6. Run every package's own public-seam test command from the root rather than import
    native `node:test` files through another test runner.
 7. Validate on GitHub-hosted macOS, Windows, and Linux runners; privileged service,

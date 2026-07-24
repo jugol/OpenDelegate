@@ -1,0 +1,28 @@
+{
+  "name": "@opendelegate/main",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "opendelegate": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@node-rs/argon2": "2.0.2",
+    "@opendelegate/control-plane": "workspace:*",
+    "@opendelegate/owner-auth": "workspace:*",
+    "@opendelegate/storage-sql": "workspace:*",
+    "@opendelegate/task-service": "workspace:*",
+    "better-sqlite3": "13.0.1",
+    "pg": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "8.20.0"
+  }
+}

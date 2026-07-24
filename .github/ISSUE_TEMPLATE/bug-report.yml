@@ -10,8 +10,8 @@ body:
         mistaken for an implemented feature.
 
         Never post credentials, Secret values, private Task data, exploit details, or Device
-        Knowledge. For a suspected vulnerability, follow `SECURITY.md` and use the dedicated
-        private-security-channel request form; never put security details in this form.
+        Knowledge. For a suspected vulnerability, follow `SECURITY.md` and use GitHub's private
+        "Report a vulnerability" form; never put security details in this form.
 
   - type: dropdown
     id: area

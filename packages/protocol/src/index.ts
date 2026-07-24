@@ -1,5 +1,7 @@
 import type { OsFamily } from "@opendelegate/domain";
 
+export * from "./http/v1/index.ts";
+
 export const PROTOCOL_VERSION = "v1" as const;
 
 export type ProtocolValidationErrorCode =

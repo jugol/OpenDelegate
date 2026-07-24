@@ -17,7 +17,7 @@ import {
   type ComputerUseInputAuthorizer,
   type ComputerUseRun,
 } from "@opendelegate/computer-use";
-import { type EventClock, type StoredEvent } from "@opendelegate/event-store";
+import { type EventClock, type EventStore, type StoredEvent } from "@opendelegate/event-store";
 import { KnowledgeError, LocalKnowledgeService } from "@opendelegate/knowledge";
 import {
   createOpenDelegate,
@@ -128,8 +128,15 @@ export type RichPhase1Scenario =
   | "stale-fence";
 
 export interface RichPhase1HarnessOptions {
+  readonly eventStoreLifecycle?: RichPhase1EventStoreLifecycle;
   readonly knowledgeRoot: string;
   readonly scenario: RichPhase1Scenario;
+}
+
+export interface RichPhase1EventStoreLifecycle {
+  open(clock: EventClock): Promise<EventStore>;
+  restart(current: EventStore, clock: EventClock): Promise<EventStore>;
+  close(current: EventStore): Promise<void>;
 }
 
 export interface RichPhase1DesktopEvidence {
@@ -1147,7 +1154,9 @@ class ExactComputerInputAuthorizer implements ComputerUseInputAuthorizer {
 
 class RichHarness implements RichPhase1Harness {
   private executed = false;
+  private eventStore: EventStore | undefined;
   private journal: InMemoryOrchestrationJournal;
+  private readonly eventStoreLifecycle: RichPhase1EventStoreLifecycle | undefined;
   private readonly options: {
     readonly scenario: RichPhase1Scenario;
     readonly authorizer: ChannelAuthorizer;
@@ -1174,9 +1183,16 @@ class RichHarness implements RichPhase1Harness {
     readonly computerInputAuthorizer: ExactComputerInputAuthorizer;
     readonly evidence: MutableEvidence;
     readonly diagnostics: MutableDiagnostics;
+    readonly eventStore?: EventStore;
+    readonly eventStoreLifecycle?: RichPhase1EventStoreLifecycle;
   }) {
     this.options = options;
-    this.journal = new InMemoryOrchestrationJournal({ clock: new StringClock() });
+    this.eventStore = options.eventStore;
+    this.eventStoreLifecycle = options.eventStoreLifecycle;
+    this.journal = new InMemoryOrchestrationJournal({
+      clock: new StringClock(),
+      ...(this.eventStore === undefined ? {} : { eventStore: this.eventStore }),
+    });
   }
 
   public async execute(): Promise<RichPhase1Execution> {
@@ -1212,7 +1228,7 @@ class RichHarness implements RichPhase1Harness {
         answer: CLARIFICATION_ANSWER,
       });
 
-      this.recreateJournal();
+      await this.recreateJournal();
       let completed: TaskView;
       try {
         completed = await this.runtime().answerClarification({
@@ -1228,7 +1244,7 @@ class RichHarness implements RichPhase1Harness {
         ) {
           throw error;
         }
-        this.recreateJournal();
+        await this.recreateJournal();
         completed = await this.runtime().answerClarification({
           postId: POST_ID,
           clarificationId: CLARIFICATION_ID,
@@ -1248,12 +1264,12 @@ class RichHarness implements RichPhase1Harness {
         throw new Error("The published Artifact cannot be opened.");
       }
 
-      const events = this.journal.recordedEvents();
+      const events = await this.journal.recordedEvents();
       const replay = new InMemoryOrchestrationJournal({
         clock: new StringClock(),
         recordedEvents: events,
       });
-      const replayedTask = this.runtime(replay).getTaskByForumPost(POST_ID);
+      const replayedTask = await this.runtime(replay).getTaskByForumPost(POST_ID);
       this.options.evidence.replayMatched =
         JSON.stringify(replayedTask) === JSON.stringify(completed);
 
@@ -1268,6 +1284,10 @@ class RichHarness implements RichPhase1Harness {
       });
     } finally {
       this.options.runAssignments.releaseAll();
+      if (this.eventStoreLifecycle !== undefined && this.eventStore !== undefined) {
+        await this.eventStoreLifecycle.close(this.eventStore);
+        this.eventStore = undefined;
+      }
     }
   }
 
@@ -1300,11 +1320,20 @@ class RichHarness implements RichPhase1Harness {
     });
   }
 
-  private recreateJournal(): void {
-    this.journal = new InMemoryOrchestrationJournal({
-      clock: new StringClock(),
-      recordedEvents: this.journal.recordedEvents(),
-    });
+  private async recreateJournal(): Promise<void> {
+    const clock = new StringClock();
+    if (this.eventStoreLifecycle !== undefined && this.eventStore !== undefined) {
+      this.eventStore = await this.eventStoreLifecycle.restart(this.eventStore, clock);
+      this.journal = new InMemoryOrchestrationJournal({
+        clock,
+        eventStore: this.eventStore,
+      });
+    } else {
+      this.journal = new InMemoryOrchestrationJournal({
+        clock,
+        recordedEvents: await this.journal.recordedEvents(),
+      });
+    }
     this.options.computerInputAuthorizer.restart();
     this.options.evidence.restartCount += 1;
   }
@@ -1447,6 +1476,10 @@ export async function createRichPhase1Harness(
   ];
   const artifacts = new Phase1ArtifactGateway(diagnostics, protocol);
   const runAssignments = new LeasedRunAssignments(locks, options.scenario);
+  const eventStore =
+    options.eventStoreLifecycle === undefined
+      ? undefined
+      : await options.eventStoreLifecycle.open(new StringClock());
   return new RichHarness({
     scenario: options.scenario,
     authorizer: new AllowlistedChannel(),
@@ -1459,6 +1492,10 @@ export async function createRichPhase1Harness(
     computerInputAuthorizer,
     evidence,
     diagnostics,
+    ...(eventStore === undefined ? {} : { eventStore }),
+    ...(options.eventStoreLifecycle === undefined
+      ? {}
+      : { eventStoreLifecycle: options.eventStoreLifecycle }),
   });
 }
 

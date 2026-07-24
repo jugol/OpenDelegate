@@ -1,33 +1,31 @@
 # OpenDelegate
 
-OpenDelegate is a personal, self-hosted control plane for coordinating AI agents
-across one fixed Main Device and multiple macOS, Windows, and Linux Devices.
+OpenDelegate is a personal, self-hosted control plane for coordinating AI agents across one fixed
+Main Device and multiple macOS, Windows, and Linux Devices.
 
-The goal is simple: create a Task from any phone or computer, let the Main Agent
-delegate its Work Orders to the right Devices, and receive one inspectable result
-without manually reopening every agent session.
+Create a Task from a phone or computer, let the Main Agent divide it into Work Orders, route those
+Work Orders to eligible Devices, and receive one durable, inspectable result without manually
+reopening every agent session.
 
-> **Pre-release foundation:** this repository does not yet run the first OpenDelegate
-> milestone. It currently contains the approved specification, deterministic domain
-> and orchestration contracts, a simulated end-to-end seam, and an Admin Web design
-> fixture. Do not use it to control real Devices yet.
+> [!WARNING] This repository currently builds an **unsupported internal preview**, not a supported
+> OpenDelegate release. The Main runtime, authenticated Admin Task surface, and many
+> production-shaped contracts exist, but production Worker/Discord/service/Agent/Computer Use
+> execution wiring and the live three-OS acceptance matrix are incomplete. OpenDelegate must not be
+> represented as complete or used as an unattended production control plane yet.
 
 ## Why OpenDelegate
 
-- One Discord Forum post becomes one durable Task and context boundary.
-- Deterministic software owns identity, policy, health, routing, leases, retries, and
-  state transitions; agents handle semantic judgment and assigned work.
-- Workers connect only to Main. They never need an NxN SSH mesh or direct database
-  access.
-- Codex, Claude, and future runners sit behind Agent Adapter contracts while their
-  useful native sessions remain resumable.
-- Each Device keeps its own selective, linked Markdown Knowledge. Main never receives
-  its files, names, graph, index, or contents.
+- One Discord Forum post maps to one durable Task and context boundary.
+- Deterministic software owns identity, policy, health, routing, leases, retries, persistence, and
+  state transitions. Agents handle semantic judgment and assigned work.
+- Workers connect only to Main. They do not need an NxN SSH mesh or direct database access.
+- Codex, Claude, and custom runners sit behind Agent Adapter contracts while useful provider-native
+  sessions remain resumable.
+- Each Device keeps its own selective, linked Markdown Knowledge. Main never receives its filenames,
+  titles, links, graph, index, snippets, or content.
 - Rich results can become Artifacts served by Main under an explicit exposure policy.
 
-## Target architecture
-
-This is the approved target, not a claim about the current runnable foundation.
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -35,7 +33,7 @@ flowchart LR
     owner --> admin["Admin Web<br/>setup and operations"]
     discord --> main["Fixed Main Device<br/>Control Plane + Main Agent"]
     admin --> main
-    main --> database[("Main-owned database")]
+    main --> database[("Main-owned SQLite or PostgreSQL")]
     main --> artifacts["Artifact Gateway"]
     main <-->|"authenticated Device API<br/>configured route"| mac["macOS Worker"]
     main <-->|"authenticated Device API<br/>configured route"| windows["Windows Worker"]
@@ -45,51 +43,109 @@ flowchart LR
     linux -. "local only" .-> linuxKnowledge["Markdown Knowledge"]
 ```
 
-Workers do not connect to the database or to one another as an OpenDelegate control
-mesh. LAN, Omada, Tailscale, tunnels, and custom networking are deterministic
-Transport Profile options between Main and each Device.
+Workers do not connect to the database or to one another as an OpenDelegate control mesh. LAN,
+Omada, Tailscale, tunnels, and custom networking are deterministic Transport Profile options between
+Main and each Device.
 
-## What exists today
+## Current source state
 
-| Area | Available in this repository | Not available yet |
-| --- | --- | --- |
-| Product contract | Approved specification, decisions, threat model, and cross-platform acceptance gate | A supported public release |
-| Orchestration | Deterministic Phase 1 Task journey, public contracts, replay and failure tests | A running Main service or remote Worker service |
-| Admin Web | Responsive one-Device fixture, Configuration Chat interactions, browser tests | Authentication, Control Plane data, or applied configuration |
-| Agents and channels | Fake Agent and Forum-like boundaries | Live Codex, Claude, or Discord adapters |
-| State and networking | In-memory event, policy, transport, Secret, and lock seams | SQLite/PostgreSQL, enrollment, authenticated Device transport, or service installation |
-| Computer Use | Backend-neutral contracts, exclusive lock behavior, and deterministic fake evidence | Real macOS, Windows, or Linux desktop control |
+The following table distinguishes runnable code from boundaries that are not yet connected to
+release-valid external systems.
 
-The in-memory seam rejects malformed and inconsistently paired lock state, but it
-does not prove resistance to coherent rollback of all durable state. The first
-milestone remains gated on the complete real workflow across macOS, Windows, Linux,
-and supported graphical Computer Use environments.
+| Area                 | Implemented and testable now                                                                                                                                                                                  | Still required for the first milestone                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main and persistence | Bundled `opendelegate` CLI with `init`, `serve`, and `status`; Main composition; Control Plane health; authenticated Task inspection/emergency-control APIs; embedded SQLite; PostgreSQL configuration and equivalent storage contracts | Connected orchestration/execution, clean-host and restart proof on every supported OS, backup/restore proof, and complete runtime reconciliation      |
+| Owner access         | Loopback-only initial claim, passphrase login, recovery codes, session revocation, CSRF protection, and SQL persistence                                                                                       | Release-valid remote-route, restart, theft-revocation, and recovery evidence                                                                          |
+| Admin Web            | Authenticated login/recovery; durable Task inspection; pause/cancel emergency controls; responsive Device and read-only Configuration Chat surfaces. Creation/resume/retry fixtures exist but packaged Main gates them while execution is unavailable | Connected Task execution and Configuration Agent messaging, real Device projections, approvals/audit inspectors, and live outage acceptance           |
+| Device runtime       | Device identity and single-use enrollment contracts, Worker durable inbox/outbox and Run supervision contracts, discovery, transport, locks, and local Knowledge                                              | Authenticated end-to-end Main–Worker channel, enrolled real Devices, service installation, and disconnect/restart proof                               |
+| Agents and Discord   | Codex CLI, Claude CLI, and generic command adapter lifecycle packages; durable Discord Forum mapping, authorization, reconciliation, controls, and projection contracts                                       | Authenticated live provider sessions; production Discord HTTP/Gateway driver; dedicated Community Server, Forum, bot, token, intents, and permissions |
+| Artifacts            | Local Artifact Store and isolated Artifact Gateway contracts with hostile-content tests                                                                                                                       | Resumable Worker upload, live Discord presentation, owner-route exposure, and cross-network acceptance                                                |
+| Platform services    | Windows SCM, macOS launchd, and Linux systemd service plans, renderers, readiness models, and read-only validation seams                                                                                      | Privileged native installation, packaged service executors, reboot/login/logout tests, upgrade rollback, and signing/notarization                     |
+| Computer Use         | Resource-lock kernel, OS-driver contract package, permission/readiness probes, and deterministic conformance fixtures                                                                                         | A real input backend and reference workflow on macOS, Windows, and supported graphical Linux, including cancellation and permission-failure proof     |
 
-![OpenDelegate Admin Web one-Device fixture](docs/design/admin-device-overview-baseline.png)
+The machine-readable release ledger is
+[`docs/release/acceptance-evidence.json`](docs/release/acceptance-evidence.json).
+`pnpm release:status` reports its current state. All 36 acceptance criteria require evidence; none
+of the platform or Computer Use gates can be waived.
 
-_The screenshot is a design and browser-test fixture with sample Device data, not a
-live Control Plane connection._
+Release words have deliberately narrow meanings:
 
-## Repository map
+| Label                           | Meaning                                                                 |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| Public source pre-alpha         | Reviewable source; unsupported and not a completed installation         |
+| `internal-preview-*` bundle     | Local validation payload; always unsupported, even if local smoke passes |
+| `release-candidate` bundle      | All 36 gates passed, but the artifact is not yet promoted or supported  |
+| `released`                      | A separately attested artifact published through a supported channel    |
 
-- `apps/admin-web` — the current Admin Web fixture and its component/browser tests.
-- `packages/domain`, `packages/policy`, `packages/scheduler` — deterministic domain
-  mechanics and executable policy seams.
-- `packages/orchestrator`, `packages/event-store` — the simulated Control Plane
-  application seam and in-memory journal.
-- `packages/agent-adapter`, `packages/transport`, `packages/computer-use` — replaceable
-  external-boundary contracts and deterministic fakes.
-- `packages/knowledge`, `packages/secrets`, `packages/device-discovery` — Worker-local
-  reference services and contracts.
-- `packages/acceptance` — the canonical fake Task journey through public contracts.
-- `packages/simulator` — a lower-level recorded-event replay and projection fixture,
-  not a second product contract.
-- `docs` — product, architecture, security, design, research, and delivery contracts.
+No `released` artifact currently exists.
+
+## Implemented Admin Web
+
+The screenshots below show the current Admin Web implementation. They were captured from the browser
+suite using deterministic API fixtures. The UI calls the authenticated Admin API contract, but these
+images are not evidence of a live Discord binding, real Worker enrollment, or three-OS acceptance.
+
+![Implemented OpenDelegate Task operations](docs/design/admin-tasks-implemented.png)
+
+_Task operations design fixture: authenticated list/detail data and controls. Packaged Main disables
+execution-starting actions until its orchestration runtime is connected._
+
+![Implemented OpenDelegate owner login](docs/design/admin-login-implemented.png)
+
+_Implemented owner login and recovery entry surface. Initial owner claim remains a separate
+loopback-only bootstrap flow._
+
+## Build an internal preview
+
+Release bundles require exactly **Node.js 24.18.0**. The repository pins pnpm 11.15.1. Node.js 22.14
+or later in the Node 22 line remains a contributor compatibility target, but it cannot produce a
+release bundle.
+
+From a clean dependency installation:
+
+```sh
+node --version
+pnpm install --frozen-lockfile
+pnpm check
+pnpm build
+pnpm test:browser
+pnpm release:build --destination ABSOLUTE_PATH --internal-preview
+```
+
+`node --version` must print `v24.18.0`. `ABSOLUTE_PATH` must be an absent path outside the source
+checkout. The builder refuses to overwrite an existing destination. It creates a platform-specific
+bundle by downloading the pinned official Node archive and verifying its audited SHA-256. It
+includes Admin assets, the init skill, release metadata, a dependency-instance legal inventory,
+checksums, and smoke evidence for CLI help, clean-home initialization, Main health, Admin serving,
+owner claim/login, session-cookie round-trip, and clean shutdown.
+
+The destination name must contain `internal-preview`. Generated `INTERNAL_PREVIEW.md` and
+`release-metadata.json` record that the bundle is unsupported and preserve the exact release
+evidence state. To inspect the foreground runtime:
+
+```powershell
+.\opendelegate.cmd init --open
+```
+
+```sh
+./opendelegate init --open
+```
+
+Use the launcher for the platform on which the bundle was built. The internal preview does not
+install a persistent OS service and must not be published under a release tag.
+
+A production build intentionally fails while any acceptance criterion is incomplete:
+
+```sh
+pnpm release:gate
+pnpm release:build --destination ABSOLUTE_PATH
+```
+
+Both commands may succeed only after all 36 implementation and live-evidence gates pass. See
+[the release evidence guide](docs/release/README.md) and
+[platform lab checklist](docs/release/PLATFORM_LAB.md).
 
 ## Development
-
-The release and CI baseline is Node.js 24 LTS with pnpm 9. Node.js 22.14 remains a
-temporary contributor compatibility floor.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -99,40 +155,56 @@ pnpm build
 pnpm test:browser
 ```
 
-`pnpm setup:browser` installs the Chromium binary used by Admin Web browser tests. On
-Linux, Playwright may additionally request operating-system packages; install them
-with its printed command or run the equivalent `playwright install --with-deps
-chromium` command for your environment.
+`pnpm setup:browser` installs Chromium for the Admin Web browser suite. On Linux, Playwright may
+also request operating-system dependencies.
 
-To inspect the current Admin Web fixture during development:
+Run the Admin development server with:
 
 ```sh
 pnpm dev:admin
 ```
 
-The development server prints its local URL. There is intentionally no production
-`start` command: the agent-driven `init` experience is delivered only after its
-runtime dependencies and recovery paths exist.
+This development server is not an owner installation path. Use the generated internal-preview
+launcher when validating the bundled Main.
+
+## Repository map
+
+- `apps/main` — Main composition and deterministic CLI.
+- `apps/control-plane` — authenticated HTTP and local-claim boundaries.
+- `apps/admin-web` — owner login, Task operations, Device surface, and Configuration Chat.
+- `apps/artifact-gateway` — isolated Artifact delivery boundary.
+- `packages/domain`, `packages/policy`, and `packages/scheduler` — deterministic domain mechanics
+  and executable policy.
+- `packages/storage-sql`, `packages/owner-auth`, `packages/task-service`, and
+  `packages/configuration` — Main persistence and application services.
+- `packages/device-identity`, `packages/worker-runtime`, `packages/transport`, and
+  `packages/device-discovery` — Device enrollment and Worker-side contracts.
+- `packages/agent-adapters` and `packages/discord-adapter` — provider and Forum adapter
+  implementations that still require live integration proof.
+- `packages/artifact-store` — Main-owned Artifact bytes and metadata boundary.
+- `packages/platform-services` and `packages/computer-use-os` — OS service and graphical-runtime
+  contracts; these are not evidence of installed services or real desktop control.
+- `packages/knowledge` — Device-local Markdown discovery, linked retrieval, and indexing.
+- `packages/acceptance` and `packages/simulator` — deterministic Task journeys, restart cases, and
+  replay fixtures.
+- `skills/opendelegate-init` — agent-facing initialization workflow with explicit internal-preview
+  gating.
+- `docs` — product, architecture, security, design, research, and release evidence.
 
 ## Canonical product documents
 
 Read these in order before planning or changing product behavior:
 
-1. [`CONTEXT.md`](CONTEXT.md) — compact domain model, vocabulary, and non-negotiable
-   invariants.
-2. [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md) — complete product and architecture
-   specification.
-3. [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — delivery phases,
-   public test seams, and release gates.
+1. [`CONTEXT.md`](CONTEXT.md) — compact domain model, vocabulary, and non-negotiable invariants.
+2. [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md) — complete product and architecture specification.
+3. [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — delivery phases, public test
+   seams, and release gates.
 4. [`docs/DECISIONS.md`](docs/DECISIONS.md) — accepted product decisions and rationale.
-5. [`docs/research/platform-capabilities.md`](docs/research/platform-capabilities.md)
-   — primary-source platform constraints.
+5. [`docs/research/platform-capabilities.md`](docs/research/platform-capabilities.md) —
+   primary-source platform constraints.
 
-The first milestone acceptance list is
-[here](docs/PRODUCT_SPEC.md#first-milestone-acceptance-criteria). Contributor
-workflow is documented in [CONTRIBUTING.md](CONTRIBUTING.md), security boundaries and
-reporting status in [SECURITY.md](SECURITY.md), and implementation decisions in
-[docs/adr](docs/adr).
+Contributor workflow is documented in [CONTRIBUTING.md](CONTRIBUTING.md). Security boundaries and
+the verified private vulnerability-reporting route are in [SECURITY.md](SECURITY.md).
 
-OpenDelegate is licensed under the [Apache License 2.0](LICENSE). Repository content,
-domain terms, APIs, logs, and UI defaults use English.
+OpenDelegate is licensed under the [Apache License 2.0](LICENSE). Repository content, domain terms,
+APIs, logs, and UI defaults use English.

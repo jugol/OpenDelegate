@@ -3,7 +3,11 @@ import { join } from "node:path";
 
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = "http://127.0.0.1:4173";
+const requestedPort = Number(process.env["OPENDELEGATE_PLAYWRIGHT_PORT"] ?? "4173");
+if (!Number.isSafeInteger(requestedPort) || requestedPort < 1 || requestedPort > 65_535) {
+  throw new Error("OPENDELEGATE_PLAYWRIGHT_PORT must be an integer from 1 through 65535.");
+}
+const baseURL = `http://127.0.0.1:${String(requestedPort)}`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -20,9 +24,9 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "pnpm build && pnpm preview --host 127.0.0.1 --port 4173 --strictPort",
+    command: `pnpm build && pnpm preview --host 127.0.0.1 --port ${String(requestedPort)} --strictPort`,
     url: baseURL,
-    reuseExistingServer: process.env.CI !== "true",
+    reuseExistingServer: false,
     timeout: 120_000,
   },
   projects: [

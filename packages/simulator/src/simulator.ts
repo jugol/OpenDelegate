@@ -13,6 +13,7 @@ import { projectTaskJourney } from "./projector.ts";
 export class CanonicalTaskJourneySimulator {
   private readonly streamId: string;
   private readonly plan: readonly EventDraft[];
+  private readonly initialization: Promise<void>;
   private readonly journal: InMemoryEventStore;
 
   public constructor(options: CanonicalTaskJourneySimulatorOptions) {
@@ -20,7 +21,8 @@ export class CanonicalTaskJourneySimulator {
     this.streamId = canonicalStreamId(this.plan);
     this.journal = new InMemoryEventStore({ clock: options.clock });
 
-    for (const event of options.recordedEvents ?? []) {
+    const recordedEvents = options.recordedEvents ?? [];
+    for (const event of recordedEvents) {
       const recordedStreamId = (event as Partial<StoredEvent>).streamId;
       if (recordedStreamId !== undefined && recordedStreamId !== this.streamId) {
         throw new SimulatorError(
@@ -28,29 +30,20 @@ export class CanonicalTaskJourneySimulator {
           `Recorded event ${event.eventId} belongs to stream ${recordedStreamId}, not ${this.streamId}.`,
         );
       }
-      this.journal.append({
-        streamId: this.streamId,
-        expectedVersion: this.journal.streamVersion(this.streamId),
-        events: [
-          {
-            eventId: event.eventId,
-            type: event.type,
-            payload: event.payload,
-          },
-        ],
-      });
     }
+    this.initialization = this.restoreEvents(recordedEvents);
   }
 
-  public restore(): TaskJourneyProjection {
-    return projectTaskJourney(this.recordedEvents());
+  public async restore(): Promise<TaskJourneyProjection> {
+    return projectTaskJourney(await this.recordedEvents());
   }
 
-  public runToCompletion(): TaskJourneyProjection {
-    this.assertCanonicalPrefix();
+  public async runToCompletion(): Promise<TaskJourneyProjection> {
+    await this.initialization;
+    await this.assertCanonicalPrefix();
 
     for (
-      let index = this.journal.streamVersion(this.streamId);
+      let index = await this.journal.streamVersion(this.streamId);
       index < this.plan.length;
       index += 1
     ) {
@@ -61,7 +54,7 @@ export class CanonicalTaskJourneySimulator {
           `Canonical journey event ${String(index)} is missing.`,
         );
       }
-      this.journal.append({
+      await this.journal.append({
         streamId: this.streamId,
         expectedVersion: index,
         events: [event],
@@ -71,12 +64,13 @@ export class CanonicalTaskJourneySimulator {
     return this.restore();
   }
 
-  public recordedEvents(): readonly StoredEvent[] {
+  public async recordedEvents(): Promise<readonly StoredEvent[]> {
+    await this.initialization;
     return this.journal.readStream(this.streamId);
   }
 
-  private assertCanonicalPrefix(): void {
-    const recorded = this.recordedEvents();
+  private async assertCanonicalPrefix(): Promise<void> {
+    const recorded = await this.recordedEvents();
     if (recorded.length > this.plan.length) {
       throw new SimulatorError(
         "SIMULATOR_JOURNAL_DIVERGED",
@@ -97,6 +91,22 @@ export class CanonicalTaskJourneySimulator {
           `Recorded event at stream version ${String(index + 1)} is not the canonical journey event.`,
         );
       }
+    }
+  }
+
+  private async restoreEvents(recordedEvents: readonly EventDraft[]): Promise<void> {
+    for (const event of recordedEvents) {
+      await this.journal.append({
+        streamId: this.streamId,
+        expectedVersion: await this.journal.streamVersion(this.streamId),
+        events: [
+          {
+            eventId: event.eventId,
+            type: event.type,
+            payload: event.payload,
+          },
+        ],
+      });
     }
   }
 }

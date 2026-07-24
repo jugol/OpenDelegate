@@ -16,7 +16,8 @@ export type CanonicalCapabilityId = "codex" | "claude-code" | "computer-use" | "
 export interface CapabilityView {
   readonly capabilityId: CanonicalCapabilityId;
   readonly label: string;
-  readonly state: "Verified" | "Detected" | "Ready" | "Degraded" | "Unavailable" | "Disabled";
+  readonly state:
+    "Verified" | "Detected" | "Ready" | "Degraded" | "Unavailable" | "Disabled" | "Not assessed";
   readonly tone: StatusTone;
 }
 

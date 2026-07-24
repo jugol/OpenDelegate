@@ -1,11 +1,16 @@
 # Contributing to OpenDelegate
 
-OpenDelegate welcomes focused issues and pull requests that preserve its personal-first, local-first
-security boundaries.
+OpenDelegate welcomes focused issues and pull requests that preserve its personal-first security
+model and fixed-Main architecture.
 
-## Before changing code
+The repository is pre-release. A passing local build is useful engineering evidence, but it does not
+make a change release-ready or make an operating system, provider, Discord integration, or Computer
+Use backend supported.
 
-Read [`AGENTS.md`](AGENTS.md) first. It requires the following context in this exact order:
+## Read the product contract first
+
+Read [`AGENTS.md`](AGENTS.md), then read these files in order before planning or implementing a
+change:
 
 1. [`CONTEXT.md`](CONTEXT.md)
 2. [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)
@@ -13,14 +18,16 @@ Read [`AGENTS.md`](AGENTS.md) first. It requires the following context in this e
 4. [`docs/DECISIONS.md`](docs/DECISIONS.md)
 5. Relevant primary-source material under [`docs/research`](docs/research)
 
-These documents are the product contract. Material changes to persistence, protocols, security,
-platform support, or extension boundaries require an ADR under [`docs/adr`](docs/adr) before
-behavior changes.
+These documents are the canonical product contract. Do not weaken an accepted invariant for
+implementation convenience. Material changes to persistence, protocols, security, platform support,
+release packaging, or extension boundaries require an ADR under [`docs/adr`](docs/adr) and any
+corresponding canonical-document update before behavior changes.
 
-## Development
+## Development environment
 
-The release baseline is Node.js 24 LTS and pnpm 9. Node.js 22.14 remains a temporary compatibility
-floor.
+Release bundles require exactly **Node.js 24.18.0**, as recorded in `.node-version`. The contributor
+engine also accepts Node.js 22 from 22.14.0 onward, but release-builder and release-proof work must
+use the pinned Node 24.18.0 runtime. The repository pins pnpm 11.15.1.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -30,37 +37,80 @@ pnpm build
 pnpm test:browser
 ```
 
-`pnpm setup:browser` installs Chromium for the Admin Web browser suite. On Linux, Playwright may
-also request system packages; follow its printed dependency command or use the
-environment-appropriate `playwright install --with-deps chromium` invocation.
+`pnpm check` validates canonical documents and release evidence, architecture boundaries,
+formatting, lint, types, tooling tests, and package tests. A blocked release ledger is expected
+during development; an invalid ledger is not.
 
-Useful focused commands:
+`pnpm setup:browser` installs Chromium for the Admin Web browser suite. On Linux, Playwright may
+also request operating-system packages.
+
+Useful focused commands include:
 
 ```sh
 pnpm test:tooling
 pnpm --filter @opendelegate/domain test
+pnpm --filter @opendelegate/storage-sql test
 pnpm --filter @opendelegate/admin-web test
 pnpm dev:admin
 ```
 
-Use test-driven development for public behavior. Add a failing test at the narrowest stable seam,
-implement the smallest coherent behavior, then refactor only while the suite stays green.
+Use test-driven development for public behavior: add a failing test at the narrowest stable seam,
+implement the smallest coherent behavior, and refactor while the suite stays green. Contract changes
+should exercise duplicate delivery, denial, restart, cancellation, and partial failure wherever
+those conditions apply.
 
-## Issues and security
+## Release evidence and internal previews
 
-Use the Bug report form for reproducible behavior, the Product or implementation proposal form for
-new work, and the dedicated architecture or threat-model forms for their named review boundaries.
-State whether a request concerns the current foundation, a planned implementation phase, or the
-first-milestone release gate.
+Run:
 
-Never disclose vulnerability details in a public issue. Follow [`SECURITY.md`](SECURITY.md); until a
-verified private route exists, use only the detail-free Private security channel request form.
+```sh
+pnpm release:status
+```
+
+The output separates implementation status from required live proof for all 36 first-milestone
+criteria. Hosted CI, fake adapters, WSL, and contract tests cannot substitute for owner-controlled
+platform-lab evidence where the specification requires real macOS, Windows, Linux, Discord,
+provider, reboot, or desktop behavior.
+
+An unsupported, platform-specific validation bundle may be built on Node 24.18.0:
+
+```sh
+pnpm release:build --destination ABSOLUTE_PATH --internal-preview
+```
+
+The destination must be absent, absolute, and outside the checkout. Never commit the bundle, runtime
+state, or generated evidence back into the source tree.
+
+The production command intentionally fails until every criterion has complete evidence:
+
+```sh
+pnpm release:gate
+pnpm release:build --destination ABSOLUTE_PATH
+```
+
+Do not bypass the gate, remove the internal-preview marker, publish an unsupported bundle under a
+release tag, or describe a contract fixture as live platform proof. See
+[`docs/release/README.md`](docs/release/README.md) and
+[`docs/release/PLATFORM_LAB.md`](docs/release/PLATFORM_LAB.md).
 
 ## Pull requests
 
-- Keep one concern per pull request.
-- Explain macOS, Windows, Linux, Secret, Policy, and local Knowledge impact.
-- Include test evidence and any manual platform proof.
-- Do not weaken a canonical invariant to make an adapter easier to implement.
-- Never commit credentials, native provider transcripts, private chain-of-thought, local Worker
-  Knowledge, runtime databases, or generated Artifacts.
+- Keep one coherent concern per pull request.
+- Explain macOS, Windows, Linux, Secret, Policy, local Knowledge, Artifact, and upgrade impact where
+  relevant.
+- Include automated evidence and identify every manual or live proof that remains unrun.
+- Update the release ledger only with durable evidence, never a prose assertion.
+- Keep schemas, state transitions, and adapter contracts vendor-neutral at their shared boundaries.
+- Preserve application authentication on private networks; network reachability is not identity.
+- Keep runtime state, databases, logs, generated Artifacts, provider transcripts, credentials,
+  recovery data, and Device Knowledge outside the checkout.
+- Never commit private chain-of-thought or rely on it as durable Task state.
+
+## Issues and security
+
+Use the Bug report form for reproducible behavior and the Product or implementation proposal form
+for new work. Architecture and threat-model changes have dedicated forms.
+
+Never disclose vulnerability details in a public issue. Follow [SECURITY.md](SECURITY.md) and use
+GitHub's verified **Report a vulnerability** form, which creates a private draft security advisory
+for this repository.

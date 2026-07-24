@@ -7,7 +7,15 @@ import { firstRunDevice, type DeviceOverviewViewModel } from "./view-model";
 
 function renderApp(device: DeviceOverviewViewModel = firstRunDevice) {
   const user = userEvent.setup();
-  render(<App device={device} />);
+  render(
+    <App
+      configurationAgentAvailable
+      device={device}
+      executionAvailable
+      initialChatOpen
+      onConfigurationMessage={async (message) => `Fixture response for: ${message}`}
+    />,
+  );
   return user;
 }
 

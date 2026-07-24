@@ -37,7 +37,7 @@ export async function resolveDeviceDispatch(input: {
   readonly worker: Worker;
 }> {
   const durableDispatch =
-    input.journal.runAssignment(input.taskId, input.workOrder.workOrderId) ??
+    (await input.journal.runAssignment(input.taskId, input.workOrder.workOrderId)) ??
     (await createDurableDispatch(input));
 
   let run: RunAssignment;
@@ -55,7 +55,7 @@ export async function resolveDeviceDispatch(input: {
     );
   } catch (error: unknown) {
     if (error instanceof ExpiredRunAssignmentError) {
-      recordRunFailedIfCurrent(
+      await recordRunFailedIfCurrent(
         input.journal,
         input.taskId,
         input.workOrder.workOrderId,
@@ -71,7 +71,12 @@ export async function resolveDeviceDispatch(input: {
     input.dependencies,
   ).find((value) => value.deviceId === run.deviceId && value.workerId === run.workerId);
   if (candidate === undefined) {
-    recordRunFailedIfCurrent(input.journal, input.taskId, input.workOrder.workOrderId, run.runId);
+    await recordRunFailedIfCurrent(
+      input.journal,
+      input.taskId,
+      input.workOrder.workOrderId,
+      run.runId,
+    );
     throw new OrchestratorError(
       "WORKER_UNAVAILABLE",
       `Durable Run ${run.runId} no longer has its assigned Device-specific Worker.`,
@@ -82,7 +87,12 @@ export async function resolveDeviceDispatch(input: {
     assertSelectedCandidateEligible(input.workOrder, candidate, run.routeId);
   } catch (error: unknown) {
     if (error instanceof OrchestratorError && error.code === "SCHEDULING_SELECTION_INVALID") {
-      recordRunFailedIfCurrent(input.journal, input.taskId, input.workOrder.workOrderId, run.runId);
+      await recordRunFailedIfCurrent(
+        input.journal,
+        input.taskId,
+        input.workOrder.workOrderId,
+        run.runId,
+      );
     }
     throw error;
   }
@@ -91,7 +101,12 @@ export async function resolveDeviceDispatch(input: {
     (value) => value.workerId === run.workerId && value.deviceId === run.deviceId,
   );
   if (worker === undefined) {
-    recordRunFailedIfCurrent(input.journal, input.taskId, input.workOrder.workOrderId, run.runId);
+    await recordRunFailedIfCurrent(
+      input.journal,
+      input.taskId,
+      input.workOrder.workOrderId,
+      run.runId,
+    );
     throw new OrchestratorError(
       "WORKER_UNAVAILABLE",
       `Run ${run.runId} cannot resolve its assigned Device-specific Worker.`,
@@ -101,15 +116,15 @@ export async function resolveDeviceDispatch(input: {
   return { run, worker };
 }
 
-export function recordRunFailedIfCurrent(
+export async function recordRunFailedIfCurrent(
   journal: OrchestrationJournal,
   taskId: string,
   workOrderId: string,
   runId: string,
-): void {
-  const currentRun = journal.runAssignment(taskId, workOrderId)?.assignment;
+): Promise<void> {
+  const currentRun = (await journal.runAssignment(taskId, workOrderId))?.assignment;
   if (currentRun?.runId === runId) {
-    journal.recordRunFailed(taskId, workOrderId, runId);
+    await journal.recordRunFailed(taskId, workOrderId, runId);
   }
 }
 
@@ -179,7 +194,7 @@ async function createDurableDispatch(input: {
     workOrderId: input.workOrder.workOrderId,
     assignment,
   });
-  input.journal.recordRunAssignment(input.taskId, dispatch);
+  await input.journal.recordRunAssignment(input.taskId, dispatch);
   return dispatch;
 }
 
