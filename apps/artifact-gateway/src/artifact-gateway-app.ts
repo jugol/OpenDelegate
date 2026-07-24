@@ -137,75 +137,86 @@ export async function createArtifactGatewayApp(
   app.get<{
     Params: { artifactId: string };
     Querystring: { token?: string | readonly string[] };
-  }>("/artifacts/:artifactId", async (request, reply) => {
-    const artifactId = request.params.artifactId;
-    const correlationId = `artifact-request:${request.id}`;
-    const context: ArtifactMutationContext = {
-      actor: { type: "system", id: "artifact-gateway" },
-      correlationId,
-    };
+  }>(
+    "/artifacts/:artifactId",
+    {
+      config: {
+        rateLimit: ARTIFACT_REQUEST_RATE_LIMIT,
+      },
+    },
+    async (request, reply) => {
+      const artifactId = request.params.artifactId;
+      const correlationId = `artifact-request:${request.id}`;
+      const context: ArtifactMutationContext = {
+        actor: { type: "system", id: "artifact-gateway" },
+        correlationId,
+      };
 
-    let metadata: StoredArtifactMetadata;
-    try {
-      metadata = await options.store.getAvailableMetadata(artifactId);
-    } catch {
-      return reply.status(404).send(NOT_FOUND);
-    }
+      let metadata: StoredArtifactMetadata;
+      try {
+        metadata = await options.store.getAvailableMetadata(artifactId);
+      } catch {
+        return reply.status(404).send(NOT_FOUND);
+      }
 
-    if (!presentationBelongsToPlane(metadata, options.plane)) {
-      await recordAccess(options.store, metadata, false, context);
-      return reply.status(404).send(NOT_FOUND);
-    }
+      if (!presentationBelongsToPlane(metadata, options.plane)) {
+        await recordAccess(options.store, metadata, false, context);
+        return reply.status(404).send(NOT_FOUND);
+      }
 
-    const authorized = await authorizeArtifact({
-      metadata,
-      request,
-      token: request.query.token,
-      authorization: options.authorization,
-      store: options.store,
-      context,
-      correlationId,
-    });
-    if (!authorized) {
-      await recordAccess(options.store, metadata, false, context);
-      return reply.status(404).send(NOT_FOUND);
-    }
-    if (metadata.exposurePolicy.mode !== "signed-link") {
-      await recordAccess(options.store, metadata, true, context);
-    }
-
-    let content;
-    try {
-      content = await options.store.read(metadata.artifactId);
-    } catch {
-      return reply.status(404).send(NOT_FOUND);
-    }
-    const range = parseRange(request.headers.range, content.bytes.byteLength);
-    if (range === "invalid") {
-      return reply.header("Content-Range", `bytes */${content.bytes.byteLength}`).status(416).send({
-        type: "about:blank",
-        title: "Range Not Satisfiable",
-        status: 416,
-        code: "ARTIFACT_RANGE_INVALID",
+      const authorized = await authorizeArtifact({
+        metadata,
+        request,
+        token: request.query.token,
+        authorization: options.authorization,
+        store: options.store,
+        context,
+        correlationId,
       });
-    }
+      if (!authorized) {
+        await recordAccess(options.store, metadata, false, context);
+        return reply.status(404).send(NOT_FOUND);
+      }
+      if (metadata.exposurePolicy.mode !== "signed-link") {
+        await recordAccess(options.store, metadata, true, context);
+      }
 
-    const selected =
-      range === undefined
-        ? content.bytes
-        : content.bytes.slice(range.start, range.endInclusive + 1);
-    setArtifactHeaders(reply, content.metadata);
-    reply.header("Accept-Ranges", "bytes");
-    reply.header("Content-Length", selected.byteLength);
-    if (range !== undefined) {
-      reply.header(
-        "Content-Range",
-        `bytes ${range.start}-${range.endInclusive}/${content.bytes.byteLength}`,
-      );
-      reply.status(206);
-    }
-    return reply.send(Buffer.from(selected));
-  });
+      let content;
+      try {
+        content = await options.store.read(metadata.artifactId);
+      } catch {
+        return reply.status(404).send(NOT_FOUND);
+      }
+      const range = parseRange(request.headers.range, content.bytes.byteLength);
+      if (range === "invalid") {
+        return reply
+          .header("Content-Range", `bytes */${content.bytes.byteLength}`)
+          .status(416)
+          .send({
+            type: "about:blank",
+            title: "Range Not Satisfiable",
+            status: 416,
+            code: "ARTIFACT_RANGE_INVALID",
+          });
+      }
+
+      const selected =
+        range === undefined
+          ? content.bytes
+          : content.bytes.slice(range.start, range.endInclusive + 1);
+      setArtifactHeaders(reply, content.metadata);
+      reply.header("Accept-Ranges", "bytes");
+      reply.header("Content-Length", selected.byteLength);
+      if (range !== undefined) {
+        reply.header(
+          "Content-Range",
+          `bytes ${range.start}-${range.endInclusive}/${content.bytes.byteLength}`,
+        );
+        reply.status(206);
+      }
+      return reply.send(Buffer.from(selected));
+    },
+  );
 
   await app.ready();
   return app;
