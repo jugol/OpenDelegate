@@ -22,6 +22,7 @@ import {
   determineSupportStatus,
   evaluateSmokeShutdown,
   inspectReleaseCandidateProvenance,
+  isDirectReleaseInvocation,
   listProductionPackageDirectories,
   officialRuntimeArchiveFor,
   parseRawGitDiff,
@@ -115,6 +116,24 @@ test("release arguments require an explicit absolute destination", () => {
     },
   );
   assert.throws(() => parseReleaseArguments(["--wat"]), /Unknown release-build option/);
+});
+
+test("release CLI detection follows canonical filesystem paths", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-release-cli-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const realDirectory = join(root, "real");
+  const aliasDirectory = join(root, "alias");
+  const modulePath = join(realDirectory, "build-release.mjs");
+  await mkdir(realDirectory);
+  await writeFile(modulePath, "export {};\n", "utf8");
+  await symlink(realDirectory, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+
+  assert.equal(
+    await isDirectReleaseInvocation(join(aliasDirectory, "build-release.mjs"), modulePath),
+    true,
+  );
+  assert.equal(await isDirectReleaseInvocation(undefined, modulePath), false);
+  assert.equal(await isDirectReleaseInvocation(join(root, "missing.mjs"), modulePath), false);
 });
 
 test("the release runtime pin matches local and hosted build configuration", async () => {

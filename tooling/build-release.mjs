@@ -101,6 +101,24 @@ const fullGitCommitPattern = /^[0-9a-f]{40}$/;
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const regularFileMode = "100644";
 
+export async function isDirectReleaseInvocation(invokedPath, modulePath = currentFile) {
+  if (invokedPath === undefined) {
+    return false;
+  }
+  try {
+    const [canonicalInvokedPath, canonicalModulePath] = await Promise.all([
+      realpath(invokedPath),
+      realpath(modulePath),
+    ]);
+    return canonicalInvokedPath === canonicalModulePath;
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function compareCodeUnits(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -2032,8 +2050,7 @@ async function runCommittedReleaseCli(rawArguments) {
   }
 }
 
-const invokedFile = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
-if (invokedFile === resolve(currentFile)) {
+if (await isDirectReleaseInvocation(process.argv[1])) {
   try {
     const arguments_ = parseReleaseArguments(process.argv.slice(2));
     if (arguments_.help) {
