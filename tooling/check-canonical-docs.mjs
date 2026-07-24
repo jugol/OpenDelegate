@@ -1,34 +1,87 @@
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const canonicalDocuments = [
+export const CANONICAL_DOCUMENTS = Object.freeze([
   "CONTEXT.md",
   "docs/PRODUCT_SPEC.md",
   "docs/IMPLEMENTATION_PLAN.md",
   "docs/DECISIONS.md",
   "docs/research/platform-capabilities.md",
-];
-const approvedDocuments = [
-  "CONTEXT.md",
-  "docs/PRODUCT_SPEC.md",
-  "docs/IMPLEMENTATION_PLAN.md",
-  "docs/DECISIONS.md",
-];
-const readme = await readFile("README.md", "utf8");
+]);
 
-for (const document of canonicalDocuments) {
-  await access(document);
+const APPROVED_DOCUMENTS = Object.freeze(CANONICAL_DOCUMENTS.slice(0, 4));
+const APPROVED_STATUS = /^Status: \*\*(?:Approved|Accepted)(?:(?:\s+—|;)[^*]+)?\*\*$/;
 
-  if (!readme.includes(`(${document})`)) {
-    throw new Error(`README.md does not link to canonical document: ${document}`);
+export async function checkCanonicalDocumentation(rootDirectory = process.cwd()) {
+  const readDocument = async (document) => {
+    try {
+      return await readFile(resolve(rootDirectory, document), "utf8");
+    } catch (error) {
+      if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+        throw new Error(`Missing canonical document: ${document}`, {
+          cause: error,
+        });
+      }
+
+      throw error;
+    }
+  };
+
+  const readme = await readDocument("README.md");
+  let previousLinkIndex = -1;
+
+  for (const document of CANONICAL_DOCUMENTS) {
+    await readDocument(document);
+    const linkIndex = readme.indexOf(`](${document})`);
+
+    if (linkIndex === -1) {
+      throw new Error(`README.md does not link to canonical document: ${document}`);
+    }
+
+    if (linkIndex <= previousLinkIndex) {
+      throw new Error(
+        `README.md must link canonical documents in the required order: ${CANONICAL_DOCUMENTS.join(
+          " → ",
+        )}`,
+      );
+    }
+
+    previousLinkIndex = linkIndex;
+  }
+
+  for (const document of APPROVED_DOCUMENTS) {
+    const content = await readDocument(document);
+    assertLeadingApprovedStatus(document, content);
+  }
+
+  return Object.freeze({
+    approvedDocumentCount: APPROVED_DOCUMENTS.length,
+    canonicalDocumentCount: CANONICAL_DOCUMENTS.length,
+  });
+}
+
+function assertLeadingApprovedStatus(document, content) {
+  const lines = content.replaceAll("\r\n", "\n").split("\n");
+  const title = lines[0] ?? "";
+  let statusIndex = 1;
+
+  while (lines[statusIndex]?.trim() === "") {
+    statusIndex += 1;
+  }
+
+  if (!title.startsWith("# ") || !APPROVED_STATUS.test(lines[statusIndex] ?? "")) {
+    throw new Error(
+      `${document} must declare an Approved or Accepted Status immediately after its title.`,
+    );
   }
 }
 
-for (const document of approvedDocuments) {
-  const content = await readFile(document, "utf8");
+const entryPath = process.argv[1];
 
-  if (!content.includes("Approved") && !content.includes("Accepted")) {
-    throw new Error(`Canonical document is not approved: ${document}`);
-  }
+if (entryPath !== undefined && import.meta.url === pathToFileURL(resolve(entryPath)).href) {
+  const result = await checkCanonicalDocumentation();
+  console.log(
+    `Verified ${result.canonicalDocumentCount} canonical planning documents and ${result.approvedDocumentCount} leading approval contracts.`,
+  );
 }
-
-console.log(`Verified ${canonicalDocuments.length} canonical planning documents.`);

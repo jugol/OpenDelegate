@@ -1,0 +1,126 @@
+name: Bug report
+description: Report a reproducible defect without exposing private Device data.
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        OpenDelegate is currently a pre-release foundation, not a supported Device-control release.
+        Before reporting, check the current-status table in the README so planned behavior is not
+        mistaken for an implemented feature.
+
+        Never post credentials, Secret values, private Task data, exploit details, or Device
+        Knowledge. For a suspected vulnerability, follow `SECURITY.md` and use the dedicated
+        private-security-channel request form; never put security details in this form.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Select the closest observable product or repository boundary.
+      options:
+        - Domain, policy, scheduling, or resource locks
+        - Orchestration, protocol, or event replay
+        - Agent, transport, Secret, Knowledge, or Computer Use boundary
+        - Admin Web
+        - Documentation, tooling, or CI
+        - Other or unknown
+    validations:
+      required: true
+
+  - type: input
+    id: phase
+    attributes:
+      label: Implementation phase
+      description: Name the implementation-plan phase if known.
+      placeholder: "Phase 0/1 foundation, planned Phase 2, or unknown"
+    validations:
+      required: true
+
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: Provide the commit SHA, branch, or exact source archive identifier.
+      placeholder: "Commit SHA or branch name"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Affected platforms
+      description: Select every environment where the defect was observed.
+      multiple: true
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Browser or Admin Web
+        - Platform-independent
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Defect summary
+      description: Describe the externally observable problem and its impact.
+      placeholder: "What failed, and what work does it prevent or make unsafe?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List the smallest deterministic sequence that demonstrates the problem.
+      placeholder: |
+        1. Start from ...
+        2. Invoke ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: State the observable result required by the specification or documentation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: State what happened, including any stable public error code.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: |
+        Include only the smallest useful excerpt. Remove tokens, credentials, owner or Device
+        identifiers, private routes, native session IDs, Task content, and all Device Knowledge
+        metadata or content.
+      render: text
+
+  - type: checkboxes
+    id: disclosure_safety
+    attributes:
+      label: Disclosure safety
+      options:
+        - label:
+            I removed credentials, Secret values, enrollment grants, recovery data, and private Task
+            or route data.
+          required: true
+        - label:
+            I included no Device Knowledge filenames, titles, links, index data, snippets, or
+            content.
+          required: true
+        - label: This issue contains no vulnerability or exploit details.
+          required: true
