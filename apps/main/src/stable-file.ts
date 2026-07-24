@@ -25,7 +25,17 @@ export async function readStableRegularFile(
 
   const noFollow = fileConstants.O_NOFOLLOW ?? 0;
   const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
-  const handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking);
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking);
+  } catch (error) {
+    if (isErrno(error, "ELOOP")) {
+      throw new StableFileError("NOT_REGULAR", "The path is not a regular file.", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
   try {
     const opened = await handle.stat({ bigint: true });
     const openedPath = await lstat(path, { bigint: true });
@@ -86,5 +96,11 @@ function sameSnapshot(left: BigIntStats, right: BigIntStats): boolean {
     left.mode === right.mode &&
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
+  );
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === code
   );
 }
