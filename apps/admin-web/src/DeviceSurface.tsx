@@ -17,9 +17,16 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { type CapabilityView, type DeviceOverviewViewModel, type StatusTone } from "./view-model";
+import { localizeCapabilityState, localizePresentationText, useAdminI18n } from "./i18n";
+import { LanguageSelector } from "./LanguageSelector";
+import {
+  type CapabilityView,
+  type DeviceOverviewViewModel,
+  presentationTextFallback,
+  type StatusTone,
+} from "./view-model";
 
-const tabs = ["Overview", "Capabilities", "Roles & Instructions", "Routes", "Runs"] as const;
+const tabKeys = ["overview", "capabilities", "rolesInstructions", "routes", "runs"] as const;
 
 export type AdminSection = "devices" | "tasks";
 
@@ -34,29 +41,32 @@ export function DeviceSurface({
   device,
   onConfigure,
 }: DeviceSurfaceProps): React.JSX.Element {
+  const { messages } = useAdminI18n();
+
   return (
     <main className="device-main">
       <DeviceHeader chatOpen={chatOpen} device={device} onConfigure={onConfigure} />
 
-      <div className="device-tabs" role="tablist" aria-label="Device sections">
-        {tabs.map((tab, index) => {
+      <div className="device-tabs" role="tablist" aria-label={messages.device.sections}>
+        {tabKeys.map((tabKey, index) => {
           const selected = index === 0;
 
           return (
             <button
               aria-controls={selected ? "device-panel-overview" : undefined}
+              aria-description={selected ? undefined : messages.common.laterPhase}
               aria-disabled={!selected}
               aria-selected={selected}
               className="device-tab"
               disabled={!selected}
               id={`device-tab-${index}`}
-              key={tab}
+              key={tabKey}
               role="tab"
               tabIndex={selected ? 0 : -1}
-              title={selected ? undefined : "Available in a later implementation phase"}
+              title={selected ? undefined : messages.common.laterPhase}
               type="button"
             >
-              {tab}
+              {messages.device[tabKey]}
             </button>
           );
         })}
@@ -86,7 +96,10 @@ export function AdminRail({
   readonly onSelectSection: (section: AdminSection) => void;
   readonly tasksEnabled?: boolean;
 }): React.JSX.Element {
-  const navigationLabel = `${device.name}, ${device.roleLabel}, ${device.connection.label}`;
+  const { messages } = useAdminI18n();
+  const roleLabel = localizePresentationText(device.roleLabel, messages);
+  const connectionLabel = localizePresentationText(device.connection.label, messages);
+  const navigationLabel = `${device.name}, ${roleLabel}, ${connectionLabel}`;
 
   return (
     <aside className="device-rail">
@@ -95,7 +108,7 @@ export function AdminRail({
         <span className="brand-word">OpenDelegate</span>
       </div>
 
-      <p className="rail-heading">Devices</p>
+      <p className="rail-heading">{messages.navigation.devices}</p>
       <button
         aria-current={activeSection === "devices" ? "page" : undefined}
         aria-label={navigationLabel}
@@ -109,37 +122,41 @@ export function AdminRail({
         <span className="device-selector-copy">
           <strong>{device.name}</strong>
           <span>
-            {device.roleLabel} <span aria-hidden="true">·</span>{" "}
+            {roleLabel} <span aria-hidden="true">·</span>{" "}
             <span className={`inline-status status-${device.connection.tone}`}>
               <StatusDot tone={device.connection.tone} />
-              {device.connection.label}
+              {connectionLabel}
             </span>
           </span>
         </span>
       </button>
 
-      <nav aria-label="Admin sections" className="primary-navigation">
+      <nav aria-label={messages.navigation.adminSections} className="primary-navigation">
         <NavigationItem
           active={activeSection === "tasks"}
           icon={ClipboardCheck}
-          label="Tasks"
+          label={messages.navigation.tasks}
           {...(tasksEnabled ? { onClick: () => onSelectSection("tasks") } : {})}
         />
-        <NavigationItem icon={ShieldCheck} label="Approvals" />
-        <NavigationItem icon={Folder} label="Artifacts" />
-        <NavigationItem icon={FileClock} label="Audit" />
+        <NavigationItem icon={ShieldCheck} label={messages.navigation.approvals} />
+        <NavigationItem icon={Folder} label={messages.navigation.artifacts} />
+        <NavigationItem icon={FileClock} label={messages.navigation.audit} />
       </nav>
 
-      <button
-        aria-label="Join a device"
-        className="join-device"
-        disabled
-        title="Available in a later implementation phase"
-        type="button"
-      >
-        <CirclePlus aria-hidden="true" />
-        <span>Join a device</span>
-      </button>
+      <div className="rail-utilities">
+        <LanguageSelector placement="rail" />
+        <button
+          aria-label={messages.navigation.joinDevice}
+          aria-description={messages.common.laterPhase}
+          className="join-device"
+          disabled
+          title={messages.common.laterPhase}
+          type="button"
+        >
+          <CirclePlus aria-hidden="true" />
+          <span>{messages.navigation.joinDevice}</span>
+        </button>
+      </div>
     </aside>
   );
 }
@@ -155,14 +172,16 @@ function NavigationItem({
   readonly label: string;
   readonly onClick?: () => void;
 }): React.JSX.Element {
+  const { messages } = useAdminI18n();
   return (
     <button
       aria-current={active ? "page" : undefined}
+      aria-description={onClick === undefined ? messages.common.laterPhase : undefined}
       aria-label={label}
       className={`navigation-item ${active ? "navigation-item--active" : ""}`}
       disabled={onClick === undefined}
       onClick={onClick}
-      title={onClick === undefined ? "Available in a later implementation phase" : undefined}
+      title={onClick === undefined ? messages.common.laterPhase : undefined}
       type="button"
     >
       <Icon aria-hidden="true" />
@@ -172,18 +191,21 @@ function NavigationItem({
 }
 
 function DeviceHeader({ chatOpen, device, onConfigure }: DeviceSurfaceProps): React.JSX.Element {
-  const headerSummary = `${device.deviceTypeLabel} · ${device.operatingSystem} · ${device.connection.label}`;
+  const { messages } = useAdminI18n();
+  const deviceTypeLabel = localizePresentationText(device.deviceTypeLabel, messages);
+  const connectionLabel = localizePresentationText(device.connection.label, messages);
+  const headerSummary = `${deviceTypeLabel} · ${device.operatingSystem} · ${connectionLabel}`;
 
   return (
     <header className="device-header">
       <div>
         <h1>{device.name}</h1>
         <p aria-label={headerSummary}>
-          {device.deviceTypeLabel} <span aria-hidden="true">·</span> {device.operatingSystem}{" "}
+          {deviceTypeLabel} <span aria-hidden="true">·</span> {device.operatingSystem}{" "}
           <span aria-hidden="true">·</span>{" "}
           <span className={`inline-status status-${device.connection.tone}`}>
             <StatusDot tone={device.connection.tone} />
-            {device.connection.label}
+            {connectionLabel}
           </span>
         </p>
       </div>
@@ -195,7 +217,7 @@ function DeviceHeader({ chatOpen, device, onConfigure }: DeviceSurfaceProps): Re
         type="button"
       >
         <Settings aria-hidden="true" />
-        Configure
+        {messages.device.configure}
       </button>
     </header>
   );
@@ -206,60 +228,62 @@ function DeviceOverview({
 }: {
   readonly device: DeviceOverviewViewModel;
 }): React.JSX.Element {
+  const { messages } = useAdminI18n();
+
   return (
     <div className="overview-grid">
-      <DetailSection area="facts" title="Device facts">
+      <DetailSection area="facts" title={messages.device.facts}>
         <dl className="key-value-list">
           {device.facts.map((fact) => (
-            <div className="key-value-row" key={fact.label}>
-              <dt>{fact.label}</dt>
-              <dd>{fact.value}</dd>
+            <div className="key-value-row" key={presentationTextFallback(fact.label)}>
+              <dt>{localizePresentationText(fact.label, messages)}</dt>
+              <dd>{localizePresentationText(fact.value, messages)}</dd>
             </div>
           ))}
         </dl>
       </DetailSection>
 
-      <DetailSection area="roles" title="Roles">
+      <DetailSection area="roles" title={messages.device.roles}>
         <ul className="role-list">
           {device.roles.map((role) => (
-            <li key={role}>
+            <li key={presentationTextFallback(role)}>
               <UserRound aria-hidden="true" />
-              {role}
+              {localizePresentationText(role, messages)}
             </li>
           ))}
         </ul>
       </DetailSection>
 
-      <DetailSection area="runtime" title="Runtime status">
+      <DetailSection area="runtime" title={messages.device.runtimeStatus}>
         <dl className="key-value-list">
           {device.runtimeStatuses.map((status) => (
-            <div className="key-value-row" key={status.label}>
-              <dt>{status.label}</dt>
+            <div className="key-value-row" key={presentationTextFallback(status.label)}>
+              <dt>{localizePresentationText(status.label, messages)}</dt>
               <dd className={`status-${status.tone}`}>
                 <StatusDot tone={status.tone} />
-                {status.value}
+                {localizePresentationText(status.value, messages)}
               </dd>
             </div>
           ))}
         </dl>
       </DetailSection>
 
-      <DetailSection area="routes" title="Transport routes">
+      <DetailSection area="routes" title={messages.device.transportRoutes}>
         <ol className="route-list">
           {device.routes.map((route) => (
             <li key={route.order}>
               <span className="route-order">{route.order}</span>
-              <span className="route-name">{route.label}</span>
+              <span className="route-name">{localizePresentationText(route.label, messages)}</span>
               <span className={`route-summary status-${route.tone}`}>
                 <StatusDot tone={route.tone} />
-                {route.summary}
+                {localizePresentationText(route.summary, messages)}
               </span>
             </li>
           ))}
         </ol>
       </DetailSection>
 
-      <DetailSection area="capabilities" title="Capabilities">
+      <DetailSection area="capabilities" title={messages.device.capabilities}>
         <ul className="capability-list">
           {device.capabilities.map((capability) => (
             <CapabilityRow capability={capability} key={capability.capabilityId} />
@@ -267,21 +291,21 @@ function DeviceOverview({
         </ul>
       </DetailSection>
 
-      <DetailSection area="knowledge" title="Knowledge health">
+      <DetailSection area="knowledge" title={messages.device.knowledgeHealth}>
         <div className="knowledge-health">
           <BookOpen aria-hidden="true" />
-          <span>{device.knowledge.label}</span>
+          <span>{localizePresentationText(device.knowledge.label, messages)}</span>
           <span className={`status-${device.knowledge.tone}`}>
             <StatusDot tone={device.knowledge.tone} />
-            {device.knowledge.status}
+            {localizePresentationText(device.knowledge.status, messages)}
           </span>
         </div>
       </DetailSection>
 
-      <DetailSection area="work" title="Current work">
+      <DetailSection area="work" title={messages.device.currentWork}>
         <div className="empty-work">
           <Inbox aria-hidden="true" />
-          <span>{device.currentWork.summary}</span>
+          <span>{localizePresentationText(device.currentWork.summary, messages)}</span>
         </div>
       </DetailSection>
     </div>
@@ -308,6 +332,7 @@ function DetailSection({
 }
 
 function CapabilityRow({ capability }: { readonly capability: CapabilityView }): React.JSX.Element {
+  const { messages } = useAdminI18n();
   const Icon =
     capability.capabilityId === "codex"
       ? Code2
@@ -320,14 +345,14 @@ function CapabilityRow({ capability }: { readonly capability: CapabilityView }):
   return (
     <li>
       <Icon aria-hidden="true" />
-      <span>{capability.label}</span>
+      <span>{localizePresentationText(capability.label, messages)}</span>
       <span className={`capability-state status-${capability.tone}`}>
         {capability.tone === "success" ? (
           <CheckCircle2 aria-hidden="true" />
         ) : (
           <StatusDot tone={capability.tone} />
         )}
-        {capability.state}
+        {localizeCapabilityState(capability.state, messages)}
       </span>
     </li>
   );

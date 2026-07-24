@@ -222,6 +222,10 @@ export class BrowserAdminApi implements AdminApi {
   ): Promise<TValue> {
     const headers = new Headers({
       Accept: "application/json",
+      "Accept-Language":
+        typeof document === "undefined" || document.documentElement.lang === ""
+          ? "en"
+          : document.documentElement.lang,
     });
     if (options.body !== undefined) {
       headers.set("Content-Type", "application/json");

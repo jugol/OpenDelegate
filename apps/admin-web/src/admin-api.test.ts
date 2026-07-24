@@ -28,9 +28,28 @@ const task: TaskDetail = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  document.documentElement.lang = "en";
 });
 
 describe("BrowserAdminApi JSON responses", () => {
+  it("sends the active Admin presentation locale without changing API fields", async () => {
+    document.documentElement.lang = "fr";
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        csrfToken: "csrf-locale",
+        session: ownerSession,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new BrowserAdminApi().session();
+
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers;
+    expect(headers).toBeInstanceOf(Headers);
+    expect((headers as Headers).get("Accept-Language")).toBe("fr");
+    expect((headers as Headers).get("Accept")).toBe("application/json");
+  });
+
   it("preserves Problem Details and refreshes CSRF state after a 401", async () => {
     const fetchMock = vi
       .fn()

@@ -13,6 +13,8 @@ import {
   type TaskDetail,
 } from "./admin-api";
 import { App } from "./App";
+import { AdminI18nProvider } from "./i18n";
+import { koreanMessages } from "./i18n/messages.ko";
 import { firstRunDevice } from "./view-model";
 
 const ownerSession: OwnerSession = {
@@ -83,6 +85,8 @@ const readyFeatures: RuntimeFeatures = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  window.localStorage.clear();
+  document.documentElement.lang = "en";
 });
 
 describe("Admin authentication and Task control", () => {
@@ -127,6 +131,35 @@ describe("Admin authentication and Task control", () => {
     expect(await screen.findByRole("heading", { name: "Tasks" })).toBeTruthy();
     expect((await screen.findAllByText(runningTask.objective)).length).toBeGreaterThan(0);
     expect(api.login).toHaveBeenCalledWith("correct horse battery staple");
+  });
+
+  it("re-renders a deterministic authentication error when the locale changes", async () => {
+    const api = createApi({
+      session: vi
+        .fn<AdminApi["session"]>()
+        .mockRejectedValue(
+          new AdminApiError(401, "AUTHENTICATION_REQUIRED", "Owner authentication is required."),
+        ),
+      login: vi
+        .fn<AdminApi["login"]>()
+        .mockRejectedValue(new AdminApiError(429, "RATE_LIMITED", "Raw server detail.")),
+    });
+    const user = userEvent.setup();
+    render(
+      <AdminI18nProvider initialLocale="en">
+        <AdminApplication api={api} />
+      </AdminI18nProvider>,
+    );
+
+    await user.type(await screen.findByLabelText("Owner passphrase"), "incorrect passphrase");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(
+      await screen.findByText("Too many attempts. Wait a moment before trying again."),
+    ).toBeTruthy();
+
+    await user.selectOptions(screen.getByLabelText("Language"), "ko");
+    expect(await screen.findByText(koreanMessages.auth.rateLimited)).toBeTruthy();
+    expect(screen.queryByText("Raw server detail.")).toBeNull();
   });
 
   it("completes Discord-independent recovery and requires the new codes to be acknowledged", async () => {

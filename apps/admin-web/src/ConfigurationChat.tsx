@@ -8,15 +8,31 @@ import {
   useState,
 } from "react";
 
+import {
+  formatMessage,
+  localizeCapabilityState,
+  localizePresentationText,
+  useAdminI18n,
+} from "./i18n";
 import type { ConfigurationSessionView } from "./view-model";
 
 type ProposalState = "proposed" | "reviewing" | "dismissed";
 
-interface ChatMessage {
+type SystemChatMessageKey = "failedMessage" | "unavailableMessage";
+
+type ChatMessage = {
   readonly id: string;
   readonly author: "agent" | "owner";
-  readonly content: string;
-}
+} & (
+  | {
+      readonly content: string;
+      readonly systemMessageKey?: never;
+    }
+  | {
+      readonly content?: never;
+      readonly systemMessageKey: SystemChatMessageKey;
+    }
+);
 
 interface ConfigurationChatProps {
   readonly expanded: boolean;
@@ -39,24 +55,28 @@ export function ConfigurationChat({
   open,
   session,
 }: ConfigurationChatProps): React.JSX.Element {
+  const { messages: copy } = useAdminI18n();
   const [proposalState, setProposalState] = useState<ProposalState>("proposed");
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
-  const [messages, setMessages] = useState<readonly ChatMessage[]>(() => [
-    {
-      id: "message-agent-discovery",
-      author: "agent",
-      content:
-        onSendMessage === undefined
-          ? "Device assessment and Configuration Agent messaging are not connected in this build. The visible Device facts come only from Main's deterministic runtime report."
-          : session.assistantMessage,
-    },
+  const [conversationMessages, setConversationMessages] = useState<readonly ChatMessage[]>(() => [
+    onSendMessage === undefined
+      ? {
+          id: "message-agent-discovery",
+          author: "agent",
+          systemMessageKey: "unavailableMessage",
+        }
+      : {
+          id: "message-agent-discovery",
+          author: "agent",
+          content: session.assistantMessage,
+        },
   ]);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const scrollRegionRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLInputElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  const previousMessageCountRef = useRef(messages.length);
+  const previousMessageCountRef = useRef(conversationMessages.length);
 
   useEffect(() => {
     if (open && focusRequestId > 0) {
@@ -74,11 +94,15 @@ export function ConfigurationChat({
 
   useLayoutEffect(() => {
     const scrollRegion = scrollRegionRef.current;
-    if (open && scrollRegion !== null && messages.length > previousMessageCountRef.current) {
+    if (
+      open &&
+      scrollRegion !== null &&
+      conversationMessages.length > previousMessageCountRef.current
+    ) {
       scrollRegion.scrollTop = scrollRegion.scrollHeight;
     }
-    previousMessageCountRef.current = messages.length;
-  }, [messages, open]);
+    previousMessageCountRef.current = conversationMessages.length;
+  }, [conversationMessages, open]);
 
   useEffect(() => {
     if (!pending && open && onSendMessage !== undefined) {
@@ -97,8 +121,8 @@ export function ConfigurationChat({
       return;
     }
 
-    const sequence = messages.length;
-    setMessages((current) => [
+    const sequence = conversationMessages.length;
+    setConversationMessages((current) => [
       ...current,
       {
         id: `message-owner-${sequence}`,
@@ -110,7 +134,7 @@ export function ConfigurationChat({
     setPending(true);
     try {
       const response = await onSendMessage(message);
-      setMessages((current) => [
+      setConversationMessages((current) => [
         ...current,
         {
           id: `message-agent-${sequence + 1}`,
@@ -119,12 +143,12 @@ export function ConfigurationChat({
         },
       ]);
     } catch {
-      setMessages((current) => [
+      setConversationMessages((current) => [
         ...current,
         {
           id: `message-agent-${sequence + 1}`,
           author: "agent",
-          content: "The Configuration Agent could not respond. No settings were changed.",
+          systemMessageKey: "failedMessage",
         },
       ]);
     } finally {
@@ -188,19 +212,19 @@ export function ConfigurationChat({
       >
         <header className="chat-header">
           <div>
-            <h2 id="configuration-chat-title">Configuration Chat</h2>
-            <p>Device setup stays separate from Task conversations.</p>
+            <h2 id="configuration-chat-title">{copy.chat.title}</h2>
+            <p>{copy.chat.subtitle}</p>
           </div>
           <div className="chat-header-actions">
             <button
-              aria-label={expanded ? "Restore Configuration Chat" : "Expand Configuration Chat"}
+              aria-label={expanded ? copy.chat.restore : copy.chat.expand}
               onClick={onToggleExpanded}
               type="button"
             >
               {expanded ? <Minimize2 aria-hidden="true" /> : <Expand aria-hidden="true" />}
             </button>
             <button
-              aria-label="Close Configuration Chat"
+              aria-label={copy.chat.close}
               onClick={onClose}
               ref={closeButtonRef}
               type="button"
@@ -212,15 +236,15 @@ export function ConfigurationChat({
 
         <div className="chat-scroll-region" ref={scrollRegionRef}>
           <div
-            aria-label="Configuration conversation"
+            aria-label={copy.chat.conversation}
             aria-live="polite"
             aria-relevant="additions"
             className="chat-messages"
             role="log"
           >
-            {messages.map((message) => (
+            {conversationMessages.map((message) => (
               <article
-                aria-label={message.author === "agent" ? "OpenDelegate" : "You"}
+                aria-label={message.author === "agent" ? "OpenDelegate" : copy.chat.you}
                 className={`chat-message chat-message--${message.author}`}
                 key={message.id}
               >
@@ -229,43 +253,58 @@ export function ConfigurationChat({
                     <Network aria-hidden="true" />
                   </span>
                 ) : null}
-                <p>{message.content}</p>
+                <p>
+                  {message.systemMessageKey === undefined
+                    ? message.content
+                    : copy.chat[message.systemMessageKey]}
+                </p>
               </article>
             ))}
           </div>
 
           {session.proposal !== null && proposalState !== "dismissed" ? (
             <div className="proposal-stack">
-              <section aria-label="Proposed change" className="proposal-panel">
+              <section aria-label={copy.chat.proposedChange} className="proposal-panel">
                 <div className="proposal-heading">
-                  <h3>Proposed change</h3>
-                  <span>Review only</span>
+                  <h3>{copy.chat.proposedChange}</h3>
+                  <span>{copy.chat.reviewOnly}</span>
                 </div>
-                <p className="proposal-note">This preview does not apply settings.</p>
+                <p className="proposal-note">{copy.chat.previewNotice}</p>
                 {proposalState === "reviewing" ? (
                   <div className="proposal-diff">
                     <div>
                       <UserRound aria-hidden="true" />
-                      <span>{session.proposal.role.actionLabel}</span>
+                      <span>
+                        {localizePresentationText(session.proposal.role.actionLabel, copy)}
+                      </span>
                       <strong data-testid="role-diff">
                         <span aria-hidden="true">+</span>
-                        {session.proposal.role.label}
+                        {localizePresentationText(session.proposal.role.label, copy)}
                       </strong>
                     </div>
                     <div>
                       <ShieldCheck aria-hidden="true" />
-                      <span>{session.proposal.capability.actionLabel}</span>
+                      <span>
+                        {localizePresentationText(session.proposal.capability.actionLabel, copy)}
+                      </span>
                       <strong data-testid="capability-diff">
-                        <span>{session.proposal.capability.label}</span>
+                        <span>
+                          {localizePresentationText(session.proposal.capability.label, copy)}
+                        </span>
                         <code>{session.proposal.capability.capabilityId}</code>
                         <span aria-hidden="true" className="proposal-transition">
-                          {session.proposal.capability.fromState}
+                          {localizeCapabilityState(session.proposal.capability.fromState, copy)}
                           <span>→</span>
-                          {session.proposal.capability.toState}
+                          {localizeCapabilityState(session.proposal.capability.toState, copy)}
                         </span>
                         <span className="sr-only">
-                          {session.proposal.capability.fromState} to{" "}
-                          {session.proposal.capability.toState}
+                          {formatMessage(copy.chat.transitionDescription, {
+                            from: localizeCapabilityState(
+                              session.proposal.capability.fromState,
+                              copy,
+                            ),
+                            to: localizeCapabilityState(session.proposal.capability.toState, copy),
+                          })}
                         </span>
                       </strong>
                     </div>
@@ -274,14 +313,18 @@ export function ConfigurationChat({
                   <div className="proposal-summary">
                     <div>
                       <UserRound aria-hidden="true" />
-                      <span>{session.proposal.role.actionLabel}</span>
-                      <strong>{session.proposal.role.label}</strong>
+                      <span>
+                        {localizePresentationText(session.proposal.role.actionLabel, copy)}
+                      </span>
+                      <strong>{localizePresentationText(session.proposal.role.label, copy)}</strong>
                     </div>
                     <div>
                       <ShieldCheck aria-hidden="true" />
-                      <span>{session.proposal.capability.actionLabel}</span>
+                      <span>
+                        {localizePresentationText(session.proposal.capability.actionLabel, copy)}
+                      </span>
                       <strong>
-                        {session.proposal.capability.label}
+                        {localizePresentationText(session.proposal.capability.label, copy)}
                         <code>{session.proposal.capability.capabilityId}</code>
                       </strong>
                     </div>
@@ -296,14 +339,14 @@ export function ConfigurationChat({
                   type="button"
                 >
                   {proposalState === "reviewing" ? <Check aria-hidden="true" /> : null}
-                  {proposalState === "reviewing" ? "Change reviewed" : "Review change"}
+                  {proposalState === "reviewing" ? copy.chat.reviewed : copy.chat.review}
                 </button>
                 <button
                   className="secondary-button"
                   onClick={() => setProposalState("dismissed")}
                   type="button"
                 >
-                  Not now
+                  {copy.chat.notNow}
                 </button>
               </div>
             </div>
@@ -312,7 +355,7 @@ export function ConfigurationChat({
 
         <form className="chat-composer" onSubmit={(event) => void submitChatMessage(event)}>
           <label className="sr-only" htmlFor="configuration-chat-message">
-            Message Configuration Chat
+            {copy.chat.messageLabel}
           </label>
           <input
             autoComplete="off"
@@ -321,16 +364,16 @@ export function ConfigurationChat({
             onChange={(event) => setDraft(event.target.value)}
             placeholder={
               onSendMessage === undefined
-                ? "Configuration Agent is not connected in this build."
+                ? copy.chat.unavailablePlaceholder
                 : pending
-                  ? "Waiting for Configuration Agent…"
-                  : "Ask about this Device…"
+                  ? copy.chat.waitingPlaceholder
+                  : copy.chat.askPlaceholder
             }
             ref={composerRef}
             value={draft}
           />
           <button
-            aria-label="Send message"
+            aria-label={copy.chat.send}
             disabled={onSendMessage === undefined || pending || draft.trim() === ""}
             type="submit"
           >

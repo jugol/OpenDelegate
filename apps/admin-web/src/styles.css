@@ -28,6 +28,14 @@
     -apple-system,
     BlinkMacSystemFont,
     "Segoe UI",
+    "Apple SD Gothic Neo",
+    "Malgun Gothic",
+    "Noto Sans KR",
+    "Hiragino Sans",
+    "Yu Gothic UI",
+    Meiryo,
+    "Microsoft YaHei UI",
+    "Noto Sans SC",
     sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -289,6 +297,61 @@ textarea:focus-visible,
   margin-top: 16px;
 }
 
+.rail-utilities {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.language-selector {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-body);
+}
+
+.language-selector svg {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  stroke-width: 1.7px;
+}
+
+.language-selector select {
+  min-width: 0;
+  height: 40px;
+  flex: 1;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-control);
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-control);
+  cursor: pointer;
+}
+
+.language-selector--utility {
+  position: fixed;
+  z-index: 40;
+  top: 22px;
+  right: 24px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 4px 18px rgb(17 24 39 / 8%);
+  backdrop-filter: blur(8px);
+}
+
+.language-selector--utility select {
+  width: 128px;
+  border: 0;
+  box-shadow: none;
+}
+
 .navigation-item,
 .join-device {
   width: 100%;
@@ -342,9 +405,7 @@ textarea:focus-visible,
 
 .join-device {
   min-height: 64px;
-  margin-top: auto;
   padding-top: 12px;
-  border-top: 1px solid var(--color-border);
   border-radius: 0;
 }
 
@@ -1163,6 +1224,7 @@ textarea:focus-visible,
   font-weight: 650;
   letter-spacing: -0.04em;
   line-height: 1.2;
+  text-wrap: balance;
 }
 
 .auth-release-note {
@@ -1505,7 +1567,22 @@ textarea:focus-visible,
   align-items: center;
   gap: 8px;
   color: var(--color-body);
-  white-space: nowrap;
+  line-height: 1.35;
+}
+
+:root:lang(ko) .brand,
+:root:lang(ja) .brand,
+:root:lang(zh-CN) .brand,
+:root:lang(ko) .auth-brand,
+:root:lang(ja) .auth-brand,
+:root:lang(zh-CN) .auth-brand,
+:root:lang(ko) h1,
+:root:lang(ja) h1,
+:root:lang(zh-CN) h1,
+:root:lang(ko) h2,
+:root:lang(ja) h2,
+:root:lang(zh-CN) h2 {
+  letter-spacing: normal;
 }
 
 .task-state > span {
@@ -1827,6 +1904,35 @@ textarea:focus-visible,
     padding-inline: 10px;
   }
 
+  .rail-utilities {
+    padding-inline: 2px;
+  }
+
+  .language-selector--rail {
+    position: relative;
+    width: 48px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    margin-inline: auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-control);
+    background: var(--color-canvas);
+  }
+
+  .language-selector--rail > svg {
+    display: block;
+  }
+
+  .language-selector--rail select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.01;
+    cursor: pointer;
+  }
+
   .brand {
     justify-content: center;
     padding: 0;
@@ -1921,6 +2027,41 @@ textarea:focus-visible,
     overflow: visible;
     border-right: 0;
     border-bottom: 1px solid var(--color-border);
+  }
+
+  .rail-utilities {
+    position: relative;
+    flex: 0 0 44px;
+    display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .language-selector--rail {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-control);
+    background: var(--color-canvas);
+  }
+
+  .language-selector--rail > svg {
+    width: 21px;
+    height: 21px;
+    display: block;
+  }
+
+  .language-selector--rail select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.01;
+    cursor: pointer;
   }
 
   .brand {
@@ -2071,8 +2212,8 @@ textarea:focus-visible,
 
   .task-inspector {
     position: fixed;
-    z-index: 18;
-    inset: 74px 0 0 8%;
+    z-index: 30;
+    inset: 0 0 0 8%;
     height: auto;
     margin: 0;
     border-width: 1px 0 0 1px;
@@ -2091,6 +2232,15 @@ textarea:focus-visible,
 }
 
 @media (max-width: 480px) {
+  .language-selector--utility {
+    top: 14px;
+    right: 12px;
+  }
+
+  .language-selector--utility select {
+    width: 104px;
+  }
+
   .brand {
     display: none;
   }

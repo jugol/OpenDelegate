@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AdminApi } from "./admin-api";
 import { ConfigurationChat } from "./ConfigurationChat";
 import { AdminRail, type AdminSection, DeviceSurface } from "./DeviceSurface";
+import { useAdminI18n } from "./i18n";
 import { TaskSurface } from "./TaskSurface";
 import { useMediaQuery } from "./use-media-query";
 import type { DeviceOverviewViewModel } from "./view-model";
@@ -33,6 +34,7 @@ export function App({
   onConfigurationMessage,
   releaseChannel = "development",
 }: AppProps): React.JSX.Element {
+  const { messages } = useAdminI18n();
   const [activeSection, setActiveSection] = useState<AdminSection>(initialSection);
   const [chatOpen, setChatOpen] = useState(initialChatOpen && initialSection === "devices");
   const [chatExpanded, setChatExpanded] = useState(false);
@@ -86,17 +88,17 @@ export function App({
       >
         <strong>
           {releaseChannel === "internal-preview"
-            ? "Unsupported internal preview"
+            ? messages.runtime.internalPreview
             : releaseChannel === "release-candidate"
-              ? "Unpromoted release candidate"
+              ? messages.runtime.releaseCandidate
               : releaseChannel === "development"
-                ? "Development build"
-                : "Setup is incomplete"}
+                ? messages.runtime.development
+                : messages.runtime.incomplete}
         </strong>
         <span>
           {releaseChannel === "released"
-            ? "Agent execution and Configuration Chat changes stay unavailable until their production runtimes are connected."
-            : "This build is not a supported release. Agent-shaped controls remain gated by connected production runtimes."}
+            ? messages.runtime.releasedDetail
+            : messages.runtime.prereleaseDetail}
         </span>
       </div>
       <div
@@ -141,7 +143,7 @@ export function App({
         <button
           aria-controls="configuration-chat"
           aria-expanded="false"
-          aria-label="Open Configuration Chat"
+          aria-label={messages.chat.open}
           className={`chat-launcher ${activeSection === "tasks" ? "chat-launcher--tasks" : ""}`}
           onClick={(event) => openChat(event.currentTarget)}
           ref={launcherRef}
