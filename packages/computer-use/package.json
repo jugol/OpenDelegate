@@ -7,10 +7,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@opendelegate/domain": "workspace:*",
     "@opendelegate/resource-locks": "workspace:*"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/computer-use.test.ts",
+    "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   }
 }

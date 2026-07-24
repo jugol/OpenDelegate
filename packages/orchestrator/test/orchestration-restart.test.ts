@@ -15,7 +15,6 @@ import {
   type Worker,
   type WorkerDeviceSnapshot,
   type WorkerExecutionInput,
-  type WorkOrderSchedulingInput,
 } from "../src/index.ts";
 
 const forumPost = {
@@ -46,26 +45,6 @@ const dispatchDependencies = {
   dispatchPolicy: {
     evaluate() {
       return { outcome: "allow", code: "test-dispatch-allowed" } as const;
-    },
-  },
-  scheduler: {
-    select(input: WorkOrderSchedulingInput) {
-      const candidate = input.candidates.find((value) =>
-        input.workOrder.requiredCapabilities.every((required) =>
-          value.capabilities.some(
-            (capability) => capability.name === required && capability.verification === "verified",
-          ),
-        ),
-      );
-      assert.ok(candidate);
-      const route = candidate.routes.find((value) => value.health === "healthy");
-      assert.ok(route);
-      return {
-        deviceId: candidate.deviceId,
-        workerId: candidate.workerId,
-        routeId: route.routeId,
-        explanations: [],
-      };
     },
   },
 } as const;
@@ -139,6 +118,21 @@ class RestartCoordinator implements Coordinator {
         },
       ],
     };
+  }
+
+  public async selectDevice(input: {
+    readonly taskId: string;
+    readonly workOrder: { readonly workOrderId: string };
+    readonly eligibleDevices: readonly { readonly deviceId: string }[];
+  }) {
+    const preferredDevice = input.eligibleDevices[0];
+    assert.ok(preferredDevice);
+    return {
+      protocolVersion: "v1",
+      taskId: input.taskId,
+      workOrderId: input.workOrder.workOrderId,
+      preferredDeviceId: preferredDevice.deviceId,
+    } as const;
   }
 
   public async synthesize() {
@@ -267,6 +261,36 @@ test("one durable Task ID cannot bind to two Forum posts", () => {
   );
 });
 
+test("Task aggregate state and event streams use the canonical Task ID after channel binding", () => {
+  const journal = new InMemoryOrchestrationJournal({
+    clock: new FixedClock(),
+  });
+  journal.bindTask("post-canonical-stream", {
+    taskId: "task-canonical-stream",
+    forumPost: {
+      forumId: "forum-owner-work",
+      postId: "post-canonical-stream",
+      authorId: "discord-owner",
+      title: "Canonical identity",
+      body: "Keep the channel binding separate from durable Task identity.",
+      authorizedPrincipalId: "owner-primary",
+    },
+  });
+
+  journal.recordIntakeReady("task-canonical-stream");
+
+  assert.equal(journal.taskIdFor("post-canonical-stream"), "task-canonical-stream");
+  assert.equal(journal.taskIntake("task-canonical-stream")?.taskId, "task-canonical-stream");
+  assert.equal(journal.intakeReady("task-canonical-stream"), true);
+  assert.deepEqual(
+    journal.recordedEvents().map((event) => event.streamId),
+    [
+      JSON.stringify(["task", "task-canonical-stream"]),
+      JSON.stringify(["task", "task-canonical-stream"]),
+    ],
+  );
+});
+
 test("recorded orchestration events restore Task identity and completed side effects", async () => {
   const firstJournal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
@@ -335,12 +359,70 @@ test("recorded orchestration events restore Task identity and completed side eff
   assert.equal(forbiddenWorker.calls, 0);
 
   const validEvents = afterCompletionRestart.recordedEvents();
+  const identityTamperCases = [
+    {
+      name: "recorded Work Order plan",
+      events: validEvents.map((event) => {
+        if (event.type !== "plan.recorded") {
+          return event;
+        }
+        const payload = structuredClone(event.payload) as {
+          plan: { workOrders: Array<Record<string, unknown>> };
+        };
+        const firstWorkOrder = payload.plan.workOrders[0];
+        assert.ok(firstWorkOrder);
+        firstWorkOrder["brief"] = "Tampered after durable planning.";
+        return { ...event, payload };
+      }),
+    },
+    {
+      name: "Work Order completion fingerprint",
+      events: validEvents.map((event) =>
+        event.type === "work-order.completed"
+          ? {
+              ...event,
+              payload: {
+                ...(structuredClone(event.payload) as Record<string, unknown>),
+                planFingerprint: "tampered-plan-fingerprint",
+              },
+            }
+          : event,
+      ),
+    },
+    {
+      name: "Artifact content fingerprint",
+      events: validEvents.map((event) =>
+        event.type === "artifact.published"
+          ? {
+              ...event,
+              payload: {
+                ...(structuredClone(event.payload) as Record<string, unknown>),
+                contentFingerprint: "tampered-content-fingerprint",
+              },
+            }
+          : event,
+      ),
+    },
+  ];
+  for (const tamperCase of identityTamperCases) {
+    const tamperedJournal = new InMemoryOrchestrationJournal({
+      clock: new FixedClock(),
+      recordedEvents: tamperCase.events,
+    });
+    assert.throws(
+      () => tamperedJournal.completedTask("task-restart-proof"),
+      (error: unknown) =>
+        error instanceof Error && "code" in error && error.code === "JOURNAL_EVENT_INVALID",
+      tamperCase.name,
+    );
+  }
+
   const missingArtifactJournal = new InMemoryOrchestrationJournal({
     clock: new FixedClock(),
     recordedEvents: validEvents.filter((event) => event.type !== "artifact.published"),
   });
   assert.throws(
-    () => missingArtifactJournal.completedTask(forumPost.postId),
+    () => missingArtifactJournal.completedTask("task-restart-proof"),
     (error: unknown) =>
       error instanceof Error && "code" in error && error.code === "JOURNAL_EVENT_INVALID",
   );
@@ -367,7 +449,7 @@ test("recorded orchestration events restore Task identity and completed side eff
     recordedEvents: invalidHistoryEvents,
   });
   assert.throws(
-    () => invalidHistoryJournal.completedTask(forumPost.postId),
+    () => invalidHistoryJournal.completedTask("task-restart-proof"),
     (error: unknown) =>
       error instanceof Error && "code" in error && error.code === "JOURNAL_EVENT_INVALID",
   );

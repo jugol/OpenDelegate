@@ -8,6 +8,7 @@ import {
   type ResourceLockKernel,
   type ResourceLockSnapshot,
 } from "@opendelegate/resource-locks";
+import type { OsFamily } from "@opendelegate/domain";
 
 export type ComputerUseErrorCode =
   | "COMPUTER_USE_AUTHORIZATION_INVALID"
@@ -41,7 +42,7 @@ export class ComputerUseError extends Error {
   }
 }
 
-export type OsFamily = "linux" | "macos" | "windows";
+export type { OsFamily } from "@opendelegate/domain";
 
 export type ComputerUseReadinessStatus =
   "ready" | "no-user-session" | "locked-session" | "permission-denied" | "helper-unavailable";

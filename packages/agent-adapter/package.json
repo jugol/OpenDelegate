@@ -6,8 +6,11 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "dependencies": {
+    "@opendelegate/domain": "workspace:*"
+  },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/agent-adapter.test.ts",
+    "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   }
 }

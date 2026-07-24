@@ -10,6 +10,8 @@ import {
   parseForumTaskIntake,
   parseSemanticPlanningRequest,
   parseSemanticPlanningResponse,
+  parseSemanticDeviceSelectionRequest,
+  parseSemanticDeviceSelectionResponse,
   parseWorkerReport,
   parseWorkOrder,
 } from "../src/index.ts";
@@ -146,9 +148,17 @@ test("a semantic planning response parses provider-neutral Work Orders", () => {
         title: "Research launch checks",
         brief: "Verify every launch-readiness check.",
         completionCriteria: ["Return a concise verified result."],
-        requiredCapabilities: ["research"],
         constraints: ["Do not change production systems."],
+        selectedInputIds: ["artifact-release-checklist"],
         dependsOn: [],
+        schedulingHints: {
+          preferredDeviceIds: ["device-mac-research"],
+          preferredRoles: ["release-research"],
+        },
+        requiredCapabilities: ["research"],
+        requiredSecretRefs: ["secret-release-api"],
+        requiredOsFamily: "macos",
+        workspaceId: "workspace-release",
       },
     ],
   });
@@ -163,12 +173,69 @@ test("a semantic planning response parses provider-neutral Work Orders", () => {
         title: "Research launch checks",
         brief: "Verify every launch-readiness check.",
         completionCriteria: ["Return a concise verified result."],
-        requiredCapabilities: ["research"],
         constraints: ["Do not change production systems."],
+        selectedInputIds: ["artifact-release-checklist"],
         dependsOn: [],
+        schedulingHints: {
+          preferredDeviceIds: ["device-mac-research"],
+          preferredRoles: ["release-research"],
+        },
+        requiredCapabilities: ["research"],
+        requiredSecretRefs: ["secret-release-api"],
+        requiredOsFamily: "macos",
+        workspaceId: "workspace-release",
       },
     ],
   });
+});
+
+test("semantic Device selection accepts only an explicitly bounded eligible set", () => {
+  const workOrder = {
+    protocolVersion: "v1",
+    workOrderId: "work-order-research",
+    title: "Research launch checks",
+    brief: "Verify every launch-readiness check.",
+    completionCriteria: ["Return a concise verified result."],
+    constraints: [],
+    selectedInputIds: [],
+    dependsOn: [],
+    schedulingHints: { preferredDeviceIds: [], preferredRoles: [] },
+    requiredCapabilities: ["research"],
+    requiredSecretRefs: [],
+  } as const;
+  const eligibleDevices = ["device-a", "device-b"].map((deviceId) => ({
+    protocolVersion: "v1" as const,
+    deviceId,
+    roles: [],
+    verifiedCapabilities: ["research"],
+  }));
+
+  const request = parseSemanticDeviceSelectionRequest({
+    protocolVersion: "v1",
+    taskId: "task-launch-report",
+    workOrder,
+    eligibleDevices,
+  });
+  const response = parseSemanticDeviceSelectionResponse({
+    protocolVersion: "v1",
+    taskId: request.taskId,
+    workOrderId: request.workOrder.workOrderId,
+    preferredDeviceId: request.eligibleDevices[1]?.deviceId,
+  });
+
+  assert.equal(request.eligibleDevices.length, 2);
+  assert.equal(response.preferredDeviceId, "device-b");
+  assert.throws(
+    () =>
+      parseSemanticDeviceSelectionRequest({
+        protocolVersion: "v1",
+        taskId: "task-launch-report",
+        workOrder,
+        eligibleDevices: eligibleDevices.slice(0, 1),
+      }),
+    (error: unknown) =>
+      error instanceof ProtocolValidationError && error.path === "eligibleDevices",
+  );
 });
 
 test("a Work Order rejects a malformed capability array with a stable error", () => {
@@ -237,9 +304,17 @@ test("a standalone Work Order parses through its public contract", () => {
     title: "Render the report",
     brief: "Create a static HTML launch report.",
     completionCriteria: ["Return one openable static HTML Artifact."],
-    requiredCapabilities: ["artifact-rendering"],
     constraints: ["Scripts must remain disabled."],
+    selectedInputIds: ["artifact-release-checklist"],
     dependsOn: ["work-order-research"],
+    schedulingHints: {
+      preferredDeviceIds: ["device-linux-render"],
+      preferredRoles: ["artifact-rendering"],
+    },
+    requiredCapabilities: ["artifact-rendering"],
+    requiredSecretRefs: [],
+    requiredOsFamily: "linux",
+    workspaceId: "workspace-release",
   });
 
   assert.deepEqual(workOrder, {
@@ -248,9 +323,17 @@ test("a standalone Work Order parses through its public contract", () => {
     title: "Render the report",
     brief: "Create a static HTML launch report.",
     completionCriteria: ["Return one openable static HTML Artifact."],
-    requiredCapabilities: ["artifact-rendering"],
     constraints: ["Scripts must remain disabled."],
+    selectedInputIds: ["artifact-release-checklist"],
     dependsOn: ["work-order-research"],
+    schedulingHints: {
+      preferredDeviceIds: ["device-linux-render"],
+      preferredRoles: ["artifact-rendering"],
+    },
+    requiredCapabilities: ["artifact-rendering"],
+    requiredSecretRefs: [],
+    requiredOsFamily: "linux",
+    workspaceId: "workspace-release",
   });
 });
 
@@ -431,7 +514,7 @@ test("every public contract parser rejects an unknown protocol version", () => {
         workOrderId: "work-order-research",
         title: "Research launch checks",
         brief: "Verify every launch-readiness check.",
-        completionCriteria: [],
+        completionCriteria: ["Return a concise result."],
         requiredCapabilities: [],
         constraints: [],
         dependsOn: [],
@@ -459,6 +542,26 @@ test("every public contract parser rejects an unknown protocol version", () => {
         protocolVersion: "v2",
         taskId: "task-launch-report",
         workOrders: [],
+      },
+    },
+    {
+      name: "semantic Device selection request",
+      parse: parseSemanticDeviceSelectionRequest,
+      input: {
+        protocolVersion: "v2",
+        taskId: "task-launch-report",
+        workOrder: {},
+        eligibleDevices: [],
+      },
+    },
+    {
+      name: "semantic Device selection response",
+      parse: parseSemanticDeviceSelectionResponse,
+      input: {
+        protocolVersion: "v2",
+        taskId: "task-launch-report",
+        workOrderId: "work-order-research",
+        preferredDeviceId: "device-mac-research",
       },
     },
     {
@@ -759,7 +862,7 @@ test("a standalone Work Order rejects a malformed capability array", () => {
         workOrderId: "work-order-research",
         title: "Research launch checks",
         brief: "Verify every launch-readiness check.",
-        completionCriteria: [],
+        completionCriteria: ["Return a concise result."],
         requiredCapabilities: { capability: "research" },
         constraints: [],
         dependsOn: [],

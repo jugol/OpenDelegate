@@ -48,8 +48,6 @@ import {
   type WorkerDeviceSnapshot,
   type WorkerExecutionInput,
   type WorkerExecutionResult,
-  type WorkOrderScheduler,
-  type WorkOrderSchedulingInput,
 } from "@opendelegate/orchestrator";
 import {
   createActionFingerprint,
@@ -68,11 +66,12 @@ import {
   parseArtifactReference,
   parseEventEnvelope,
   parseForumTaskIntake,
+  parseSemanticDeviceSelectionRequest,
+  parseSemanticDeviceSelectionResponse,
   parseSemanticPlanningRequest,
   parseSemanticPlanningResponse,
   parseWorkOrder,
   parseWorkerReport,
-  type SemanticPlanningCandidateV1,
   type WorkOrderV1,
 } from "@opendelegate/protocol";
 import {
@@ -81,7 +80,7 @@ import {
   type Clock as ResourceClock,
   type ResourceLease,
 } from "@opendelegate/resource-locks";
-import { scheduleWorkOrder, type DeviceCandidate } from "@opendelegate/scheduler";
+import { type DeviceCandidate } from "@opendelegate/scheduler";
 import {
   InMemorySecretStore,
   SecretLeaseBroker,
@@ -415,16 +414,10 @@ class Phase1Coordinator implements Coordinator {
   public planCalls = 0;
   public synthesisCalls = 0;
   public reviewCalls = 0;
-  private readonly candidates: readonly DeviceCandidate[];
   private readonly protocol: ProtocolBoundary;
   private readonly workOrders: Map<string, WorkOrderV1>;
 
-  public constructor(
-    candidates: readonly DeviceCandidate[],
-    protocol: ProtocolBoundary,
-    workOrders: Map<string, WorkOrderV1>,
-  ) {
-    this.candidates = candidates;
+  public constructor(protocol: ProtocolBoundary, workOrders: Map<string, WorkOrderV1>) {
     this.protocol = protocol;
     this.workOrders = workOrders;
   }
@@ -472,7 +465,7 @@ class Phase1Coordinator implements Coordinator {
         selectedInputRefs: [`forum-post:${input.forumPost.postId}`],
         decisions: ["Use deterministic public contracts only."],
         openQuestions: [],
-        eligibleDevices: this.candidates.map(toPlanningCandidate),
+        eligibleDevices: [],
       },
       parseSemanticPlanningRequest,
     );
@@ -489,9 +482,17 @@ class Phase1Coordinator implements Coordinator {
             title: "Collect Quasar readiness evidence",
             brief: "Use the quasar readiness procedure.",
             completionCriteria: ["Return a concise readiness result."],
-            requiredCapabilities: ["research"],
             constraints: ["Do not return local Knowledge content to Main."],
+            selectedInputIds: [`forum-post:${POST_ID}`],
             dependsOn: [],
+            schedulingHints: {
+              preferredDeviceIds: [RESEARCH_DEVICE_ID],
+              preferredRoles: ["researcher"],
+            },
+            requiredCapabilities: ["research"],
+            requiredSecretRefs: [RESEARCH_SECRET],
+            requiredOsFamily: "linux",
+            workspaceId: `workspace-${RESEARCH_DEVICE_ID}`,
           },
           {
             protocolVersion: PROTOCOL_VERSION,
@@ -499,9 +500,17 @@ class Phase1Coordinator implements Coordinator {
             title: "Complete the Zephyr desktop fixture",
             brief: "Use the zephyr desktop procedure.",
             completionCriteria: ["Reach visible success and return screenshot metadata."],
-            requiredCapabilities: ["computer-use"],
             constraints: ["Authorize every input and hold desktop-session."],
+            selectedInputIds: [`forum-post:${POST_ID}`],
             dependsOn: [],
+            schedulingHints: {
+              preferredDeviceIds: [DESKTOP_DEVICE_ID],
+              preferredRoles: ["desktop-operator"],
+            },
+            requiredCapabilities: ["computer-use"],
+            requiredSecretRefs: [DESKTOP_SECRET],
+            requiredOsFamily: "windows",
+            workspaceId: `workspace-${DESKTOP_DEVICE_ID}`,
           },
           {
             protocolVersion: PROTOCOL_VERSION,
@@ -509,9 +518,17 @@ class Phase1Coordinator implements Coordinator {
             title: "Reconcile Device readiness",
             brief: "Use the quasar summary procedure after both prerequisite reports.",
             completionCriteria: ["Return a reconciled readiness statement."],
-            requiredCapabilities: ["research"],
             constraints: ["Run only after both independent Work Orders."],
+            selectedInputIds: [`forum-post:${POST_ID}`],
             dependsOn: [RESEARCH_WORK_ORDER_ID, COMPUTER_WORK_ORDER_ID],
+            schedulingHints: {
+              preferredDeviceIds: [RESEARCH_DEVICE_ID],
+              preferredRoles: ["researcher"],
+            },
+            requiredCapabilities: ["research"],
+            requiredSecretRefs: [RESEARCH_SECRET],
+            requiredOsFamily: "linux",
+            workspaceId: `workspace-${RESEARCH_DEVICE_ID}`,
           },
         ],
       },
@@ -531,6 +548,42 @@ class Phase1Coordinator implements Coordinator {
       },
       workOrders: response.workOrders.map(toPlannedWorkOrder),
     };
+  }
+
+  public async selectDevice(input: Parameters<Coordinator["selectDevice"]>[0]) {
+    const request = this.protocol.request(
+      "planning.device-selection.requested",
+      "main-device",
+      {
+        protocolVersion: PROTOCOL_VERSION,
+        taskId: input.taskId,
+        workOrder: {
+          protocolVersion: PROTOCOL_VERSION,
+          ...input.workOrder,
+        },
+        eligibleDevices: input.eligibleDevices.map((candidate) => ({
+          protocolVersion: PROTOCOL_VERSION,
+          ...candidate,
+        })),
+      },
+      parseSemanticDeviceSelectionRequest,
+    );
+    const preferredDevice = request.eligibleDevices[0];
+    if (preferredDevice === undefined) {
+      throw new Error("Semantic Device selection requires an eligible Device.");
+    }
+    const response = this.protocol.event(
+      "planning.device-selection.completed",
+      "main-device",
+      {
+        protocolVersion: PROTOCOL_VERSION,
+        taskId: request.taskId,
+        workOrderId: request.workOrder.workOrderId,
+        preferredDeviceId: preferredDevice.deviceId,
+      },
+      parseSemanticDeviceSelectionResponse,
+    );
+    return response;
   }
 
   public async synthesize(input: CoordinatorSynthesisInput): Promise<CoordinatorSynthesis> {
@@ -645,66 +698,6 @@ class Phase1DispatchPolicy implements DispatchPolicyEvaluator {
     );
     return { outcome: decision.outcome, code: decision.code };
   }
-}
-
-class SchedulerAdapter implements WorkOrderScheduler {
-  private readonly calls: SchedulingCall[];
-
-  public constructor(calls: SchedulingCall[]) {
-    this.calls = calls;
-  }
-
-  public select(input: WorkOrderSchedulingInput) {
-    this.calls.push({
-      workOrderId: input.workOrder.workOrderId,
-      completedWorkOrderIds: [...input.completedWorkOrderIds].sort(),
-    });
-    const devices = input.candidates.map(toSchedulerCandidate);
-    const request = {
-      workOrderId: input.workOrder.workOrderId,
-      requiredCapabilities: input.workOrder.requiredCapabilities,
-      preferredCapabilities: input.workOrder.requiredCapabilities,
-      preferredRoles: input.workOrder.schedulingHints.preferredRoles,
-      requiredSecretRefs: input.workOrder.requiredSecretRefs,
-      ...(input.workOrder.requiredOsFamily === undefined
-        ? {}
-        : { requiredOsFamily: input.workOrder.requiredOsFamily }),
-      ...(input.workOrder.workspaceId === undefined
-        ? {}
-        : { workspaceId: input.workOrder.workspaceId }),
-    };
-    const fullSelection = scheduleWorkOrder(request, devices);
-    const eligiblePreferredIds = input.workOrder.schedulingHints.preferredDeviceIds.filter(
-      (deviceId) =>
-        fullSelection.explanations.some(
-          (explanation) => explanation.deviceId === deviceId && explanation.eligible,
-        ),
-    );
-    const selection =
-      eligiblePreferredIds.length === 0
-        ? fullSelection
-        : scheduleWorkOrder(
-            request,
-            devices.filter((device) => eligiblePreferredIds.includes(device.deviceId)),
-          );
-    const worker = input.candidates.find(
-      (candidate) => candidate.deviceId === selection.selectedDevice.deviceId,
-    );
-    if (worker === undefined) {
-      throw new Error("The scheduler selected a Device without a Worker.");
-    }
-    return {
-      deviceId: selection.selectedDevice.deviceId,
-      workerId: worker.workerId,
-      routeId: selection.selectedRoute.routeId,
-      explanations: selection.explanations,
-    };
-  }
-}
-
-interface SchedulingCall {
-  readonly workOrderId: string;
-  readonly completedWorkOrderIds: readonly string[];
 }
 
 class ConcurrentRunProbe {
@@ -1164,11 +1157,9 @@ class RichHarness implements RichPhase1Harness {
     readonly ids: OrchestrationIdSource;
     readonly runAssignments: LeasedRunAssignments;
     readonly dispatchPolicy: DispatchPolicyEvaluator;
-    readonly scheduler: WorkOrderScheduler;
     readonly computerInputAuthorizer: ExactComputerInputAuthorizer;
     readonly evidence: MutableEvidence;
     readonly diagnostics: MutableDiagnostics;
-    readonly schedulingCalls: readonly SchedulingCall[];
   };
 
   public constructor(options: {
@@ -1180,11 +1171,9 @@ class RichHarness implements RichPhase1Harness {
     readonly ids: OrchestrationIdSource;
     readonly runAssignments: LeasedRunAssignments;
     readonly dispatchPolicy: DispatchPolicyEvaluator;
-    readonly scheduler: WorkOrderScheduler;
     readonly computerInputAuthorizer: ExactComputerInputAuthorizer;
     readonly evidence: MutableEvidence;
     readonly diagnostics: MutableDiagnostics;
-    readonly schedulingCalls: readonly SchedulingCall[];
   }) {
     this.options = options;
     this.journal = new InMemoryOrchestrationJournal({ clock: new StringClock() });
@@ -1273,11 +1262,7 @@ class RichHarness implements RichPhase1Harness {
         replayedTask,
         artifact,
         clarification,
-        evidence: freezeEvidence(
-          this.options.evidence,
-          this.options.coordinator,
-          this.options.schedulingCalls,
-        ),
+        evidence: freezeEvidence(this.options.evidence, this.options.coordinator, events),
         journalEventTypes: Object.freeze(events.map((event) => event.type)),
         orchestrationEvents: Object.freeze(events.map(toOrchestrationEvent)),
       });
@@ -1310,7 +1295,6 @@ class RichHarness implements RichPhase1Harness {
       ids: this.options.ids,
       runAssignments: this.options.runAssignments,
       dispatchPolicy: this.options.dispatchPolicy,
-      scheduler: this.options.scheduler,
       clock: new StringClock(),
       journal,
     });
@@ -1401,8 +1385,7 @@ export async function createRichPhase1Harness(
   });
   const candidates = baselineCandidates(secretBrokers);
   const workOrders = new Map<string, WorkOrderV1>();
-  const coordinator = new Phase1Coordinator(candidates, protocol, workOrders);
-  const schedulingCalls: SchedulingCall[] = [];
+  const coordinator = new Phase1Coordinator(protocol, workOrders);
   const concurrentRuns = new ConcurrentRunProbe(evidence);
   const replayScenario =
     options.scenario === "computer-input-once-replay" ||
@@ -1473,11 +1456,9 @@ export async function createRichPhase1Harness(
     ids: new FixedTaskIds(),
     runAssignments,
     dispatchPolicy: new Phase1DispatchPolicy(options.scenario, evidence),
-    scheduler: new SchedulerAdapter(schedulingCalls),
     computerInputAuthorizer,
     evidence,
     diagnostics,
-    schedulingCalls,
   });
 }
 
@@ -1602,6 +1583,7 @@ function baselineCandidates(
   return [
     createCandidate({
       deviceId: RESEARCH_DEVICE_ID,
+      workerId: RESEARCH_WORKER_ID,
       osFamily: "linux",
       capabilities: ["research"],
       roles: ["researcher"],
@@ -1613,6 +1595,7 @@ function baselineCandidates(
     }),
     createCandidate({
       deviceId: DESKTOP_DEVICE_ID,
+      workerId: DESKTOP_WORKER_ID,
       osFamily: "windows",
       capabilities: ["computer-use"],
       roles: ["desktop-operator"],
@@ -1627,6 +1610,7 @@ function baselineCandidates(
 
 function createCandidate(input: {
   readonly deviceId: string;
+  readonly workerId: string;
   readonly osFamily: "linux" | "macos" | "windows";
   readonly capabilities: readonly string[];
   readonly roles: readonly string[];
@@ -1636,6 +1620,7 @@ function createCandidate(input: {
 }): DeviceCandidate {
   return {
     deviceId: input.deviceId,
+    workerId: input.workerId,
     enabled: true,
     status: "online",
     draining: false,
@@ -1678,58 +1663,12 @@ function candidateToWorkerSnapshot(candidate: DeviceCandidate | undefined): Work
   };
 }
 
-function toSchedulerCandidate(
-  candidate: WorkOrderSchedulingInput["candidates"][number],
-): DeviceCandidate {
-  return {
-    deviceId: candidate.deviceId,
-    enabled: candidate.enabled,
-    status: candidate.status,
-    draining: candidate.draining,
-    osFamily: candidate.osFamily,
-    capabilities: candidate.capabilities,
-    roles: candidate.roles,
-    workspaceIds: candidate.workspaceIds,
-    transports: candidate.routes,
-    availableRunSlots: candidate.availableRunSlots,
-    loadRatio: candidate.loadRatio,
-    desktopSessionAvailable: candidate.desktopSessionAvailable,
-    executionPolicyDecision: candidate.executionPolicyDecision,
-    availableSecretRefs: candidate.availableSecretRefs,
-  };
-}
-
-function toPlanningCandidate(candidate: DeviceCandidate): SemanticPlanningCandidateV1 {
-  return {
-    protocolVersion: PROTOCOL_VERSION,
-    deviceId: candidate.deviceId,
-    roles: candidate.roles,
-    verifiedCapabilities: candidate.capabilities
-      .filter((capability) => capability.verification === "verified")
-      .map((capability) => capability.name),
-  };
-}
-
 function toPlannedWorkOrder(workOrder: WorkOrderV1): PlannedWorkOrder {
-  const computer = workOrder.workOrderId === COMPUTER_WORK_ORDER_ID;
-  const deviceId = computer ? DESKTOP_DEVICE_ID : RESEARCH_DEVICE_ID;
-  return {
-    workOrderId: workOrder.workOrderId,
-    title: workOrder.title,
-    brief: workOrder.brief,
-    completionCriteria: workOrder.completionCriteria,
-    constraints: workOrder.constraints,
-    selectedInputIds: [`forum-post:${POST_ID}`],
-    dependsOn: workOrder.dependsOn,
-    schedulingHints: {
-      preferredDeviceIds: [deviceId],
-      preferredRoles: [computer ? "desktop-operator" : "researcher"],
-    },
-    requiredCapabilities: workOrder.requiredCapabilities,
-    requiredSecretRefs: [computer ? DESKTOP_SECRET : RESEARCH_SECRET],
-    requiredOsFamily: computer ? "windows" : "linux",
-    workspaceId: `workspace-${deviceId}`,
-  };
+  const { protocolVersion, ...plannedWorkOrder } = workOrder;
+  if (protocolVersion !== PROTOCOL_VERSION) {
+    throw new Error(`Unsupported Work Order protocol version: ${String(protocolVersion)}`);
+  }
+  return plannedWorkOrder;
 }
 
 function dispatchFingerprint(workOrderId: string, deviceId: string): ActionFingerprint {
@@ -1856,9 +1795,18 @@ function toDesktopEvidence(evidence: ComputerUseEvidence): RichPhase1DesktopEvid
 function freezeEvidence(
   evidence: MutableEvidence,
   coordinator: Phase1Coordinator,
-  schedulingCalls: readonly SchedulingCall[],
+  events: readonly StoredEvent[],
 ): RichPhase1Evidence {
-  const summaryCall = schedulingCalls.find((call) => call.workOrderId === SUMMARY_WORK_ORDER_ID);
+  const completionOrder = events
+    .filter((event) => event.type === "work-order.completed")
+    .map((event) => {
+      const payload = event.payload as { readonly workOrderId?: unknown };
+      return typeof payload.workOrderId === "string" ? payload.workOrderId : undefined;
+    })
+    .filter((workOrderId): workOrderId is string => workOrderId !== undefined);
+  const summaryIndex = completionOrder.indexOf(SUMMARY_WORK_ORDER_ID);
+  const computerIndex = completionOrder.indexOf(COMPUTER_WORK_ORDER_ID);
+  const researchIndex = completionOrder.indexOf(RESEARCH_WORK_ORDER_ID);
   return Object.freeze({
     selectedDeviceIds: Object.freeze([...evidence.selectedDeviceIds]),
     transportEndpointIds: Object.freeze([...evidence.transportEndpointIds]),
@@ -1871,9 +1819,10 @@ function freezeEvidence(
     agentTurnCount: evidence.agentTurnCount,
     maxConcurrentWorkerRuns: evidence.maxConcurrentWorkerRuns,
     dependencyWaveProven:
-      summaryCall !== undefined &&
-      JSON.stringify(summaryCall.completedWorkOrderIds) ===
-        JSON.stringify([COMPUTER_WORK_ORDER_ID, RESEARCH_WORK_ORDER_ID]),
+      computerIndex >= 0 &&
+      researchIndex >= 0 &&
+      summaryIndex > computerIndex &&
+      summaryIndex > researchIndex,
     crossDeviceKnowledgeRejected: evidence.crossDeviceKnowledgeRejected,
     restartCount: evidence.restartCount,
     coordinatorCallCounts: Object.freeze({

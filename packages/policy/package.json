@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/evaluate-action.test.ts"
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
   }
 }

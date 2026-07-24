@@ -32,9 +32,6 @@ importers:
       typescript-eslint:
         specifier: 8.65.0
         version: 8.65.0(eslint@10.7.0)(typescript@6.0.3)
-      vitest:
-        specifier: 4.1.10
-        version: 4.1.10(@types/node@22.20.1)(jsdom@29.1.1)(vite@8.1.5(@types/node@22.20.1))
 
   apps/admin-web:
     dependencies:
@@ -51,6 +48,9 @@ importers:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
     devDependencies:
+      '@axe-core/playwright':
+        specifier: 4.12.1
+        version: 4.12.1(playwright-core@1.61.1)
       '@playwright/test':
         specifier: 1.61.1
         version: 1.61.1
@@ -75,6 +75,9 @@ importers:
       vite:
         specifier: 8.1.5
         version: 8.1.5(@types/node@22.20.1)
+      vitest:
+        specifier: 4.1.10
+        version: 4.1.10(@types/node@22.20.1)(jsdom@29.1.1)(vite@8.1.5(@types/node@22.20.1))
 
   packages/acceptance:
     dependencies:
@@ -112,15 +115,26 @@ importers:
         specifier: workspace:*
         version: link:../transport
 
-  packages/agent-adapter: {}
+  packages/agent-adapter:
+    dependencies:
+      '@opendelegate/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/computer-use:
     dependencies:
+      '@opendelegate/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@opendelegate/resource-locks':
         specifier: workspace:*
         version: link:../resource-locks
 
-  packages/device-discovery: {}
+  packages/device-discovery:
+    dependencies:
+      '@opendelegate/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/domain: {}
 
@@ -136,14 +150,28 @@ importers:
       '@opendelegate/event-store':
         specifier: workspace:*
         version: link:../event-store
+      '@opendelegate/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@opendelegate/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
 
   packages/policy: {}
 
-  packages/protocol: {}
+  packages/protocol:
+    dependencies:
+      '@opendelegate/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/resource-locks: {}
 
-  packages/scheduler: {}
+  packages/scheduler:
+    dependencies:
+      '@opendelegate/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/secrets: {}
 
@@ -171,6 +199,11 @@ packages:
 
   '@asamuzakjp/nwsapi@2.3.9':
     resolution: {integrity: sha512-n8GuYSrI9bF7FFZ/SjhwevlHc8xaVlb/7HmHelnc/PZXBD2ZR49NnN9sMMuDdEGPeeRQ5d0hqlSlEpgCX3Wl0Q==}
+
+  '@axe-core/playwright@4.12.1':
+    resolution: {integrity: sha512-rMd7xriptqKpP+w5265i4Hdkv2X5kbu6uiBi/B2I7uf3hieRBM3qDCfaKPtxfiYb2mKXfF+yLODJwIx+Jv1GDw==}
+    peerDependencies:
+      playwright-core: '>= 1.0.0'
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -601,6 +634,10 @@ packages:
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
+
+  axe-core@4.12.1:
+    resolution: {integrity: sha512-s7iGf5GaVMxEG0ENN9x+xTr7GFZCb1ZP/1uATUpCEK2X78nDB3RwbtFCo9pGAf9ru+VwoQ464DkaLEeRM08wJA==}
+    engines: {node: '>=4'}
 
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
@@ -1281,6 +1318,11 @@ snapshots:
 
   '@asamuzakjp/nwsapi@2.3.9': {}
 
+  '@axe-core/playwright@4.12.1(playwright-core@1.61.1)':
+    dependencies:
+      axe-core: 4.12.1
+      playwright-core: 1.61.1
+
   '@babel/code-frame@7.29.7':
     dependencies:
       '@babel/helper-validator-identifier': 7.29.7
@@ -1673,6 +1715,8 @@ snapshots:
       dequal: 2.0.3
 
   assertion-error@2.0.1: {}
+
+  axe-core@4.12.1: {}
 
   balanced-match@4.0.4: {}
 

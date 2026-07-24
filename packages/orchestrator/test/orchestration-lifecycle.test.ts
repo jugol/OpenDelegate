@@ -21,7 +21,6 @@ import {
   type Worker,
   type WorkerDeviceSnapshot,
   type WorkerExecutionInput,
-  type WorkOrderSchedulingInput,
 } from "../src/index.ts";
 
 const ambiguousForumPost = {
@@ -82,42 +81,9 @@ const allowDispatchPolicy = {
   },
 } as const;
 
-const deterministicScheduler = {
-  select(input: WorkOrderSchedulingInput) {
-    const candidate = input.candidates.find((value) => {
-      const verified = new Set(
-        value.capabilities
-          .filter((capability) => capability.verification === "verified")
-          .map((capability) => capability.name),
-      );
-      return (
-        value.executionPolicyDecision.outcome === "allow" &&
-        input.workOrder.requiredCapabilities.every((capability) => verified.has(capability)) &&
-        input.workOrder.requiredSecretRefs.every((secret) =>
-          value.availableSecretRefs.includes(secret),
-        ) &&
-        (input.workOrder.requiredOsFamily === undefined ||
-          value.osFamily === input.workOrder.requiredOsFamily) &&
-        (input.workOrder.workspaceId === undefined ||
-          value.workspaceIds.includes(input.workOrder.workspaceId))
-      );
-    });
-    assert.ok(candidate);
-    const route = candidate.routes.find((value) => value.health === "healthy");
-    assert.ok(route);
-    return {
-      deviceId: candidate.deviceId,
-      workerId: candidate.workerId,
-      routeId: route.routeId,
-      explanations: [],
-    };
-  },
-} as const;
-
 const dispatchDependencies = {
   clock: new FixedClock(),
   dispatchPolicy: allowDispatchPolicy,
-  scheduler: deterministicScheduler,
 } as const;
 
 function workerScheduling(capabilities: readonly string[]): WorkerDeviceSnapshot {
@@ -202,6 +168,21 @@ class ClarifyingCoordinator implements Coordinator {
       taskBrief: fullTaskBrief,
       workOrders: [richWorkOrder],
     };
+  }
+
+  public async selectDevice(input: {
+    readonly taskId: string;
+    readonly workOrder: { readonly workOrderId: string };
+    readonly eligibleDevices: readonly { readonly deviceId: string }[];
+  }) {
+    const preferredDevice = input.eligibleDevices[0];
+    assert.ok(preferredDevice);
+    return {
+      protocolVersion: "v1",
+      taskId: input.taskId,
+      workOrderId: input.workOrder.workOrderId,
+      preferredDeviceId: preferredDevice.deviceId,
+    } as const;
   }
 
   public async synthesize() {
@@ -754,7 +735,7 @@ test("an expired durable Run is retired after restart before a higher-fenced ret
     /simulated process loss after durable dispatch/,
   );
   assert.equal(
-    firstJournal.runAssignment(ambiguousForumPost.postId, richWorkOrder.workOrderId)?.assignment
+    firstJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId)?.assignment
       .runId,
     "run-expiry-1",
   );
@@ -783,12 +764,12 @@ test("an expired durable Run is retired after restart before a higher-fenced ret
       error instanceof OrchestratorError && error.code === "RUN_ASSIGNMENT_INVALID",
   );
   assert.equal(
-    restoredJournal.runAssignment(ambiguousForumPost.postId, richWorkOrder.workOrderId),
+    restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId),
     undefined,
   );
 
   const completed = await restoredRuntime.acceptForumPost(ambiguousForumPost);
-  const assignments = restoredJournal.runAssignments(ambiguousForumPost.postId);
+  const assignments = restoredJournal.runAssignments("task-ambiguous-target");
 
   assert.equal(completed.state, "completed");
   assert.deepEqual(
@@ -875,12 +856,12 @@ test("an ineligible durable route is retired before a new route receives a highe
       error instanceof OrchestratorError && error.code === "SCHEDULING_SELECTION_INVALID",
   );
   assert.equal(
-    restoredJournal.runAssignment(ambiguousForumPost.postId, richWorkOrder.workOrderId),
+    restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId),
     undefined,
   );
 
   const completed = await restoredRuntime.acceptForumPost(ambiguousForumPost);
-  const assignments = restoredJournal.runAssignments(ambiguousForumPost.postId);
+  const assignments = restoredJournal.runAssignments("task-ambiguous-target");
 
   assert.equal(completed.state, "completed");
   assert.deepEqual(
@@ -962,7 +943,7 @@ test("a transient fleet-policy validation failure preserves a still-valid durabl
     /simulated transient Policy dependency failure/,
   );
   assert.equal(
-    restoredJournal.runAssignment(ambiguousForumPost.postId, richWorkOrder.workOrderId)?.assignment
+    restoredJournal.runAssignment("task-ambiguous-target", richWorkOrder.workOrderId)?.assignment
       .runId,
     "run-policy-1",
   );

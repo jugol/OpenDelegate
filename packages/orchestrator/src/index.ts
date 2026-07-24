@@ -10,6 +10,9 @@ export type {
   ClarificationRequest,
   CompletedTaskView,
   Coordinator,
+  CoordinatorDeviceSelection,
+  CoordinatorDeviceSelectionCandidate,
+  CoordinatorDeviceSelectionInput,
   CoordinatorIntakeDecision,
   CoordinatorIntakeInput,
   CoordinatorPlan,
@@ -47,10 +50,7 @@ export type {
   WorkerOsFamily,
   WorkerReport,
   WorkerRouteSnapshot,
-  WorkOrderScheduler,
   WorkOrderSchedulingCandidate,
-  WorkOrderSchedulingInput,
-  WorkOrderSchedulingSelection,
   WorkOrderView,
 } from "./contracts.ts";
 export { createOpenDelegate } from "./open-delegate.ts";

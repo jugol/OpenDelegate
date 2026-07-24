@@ -1,4 +1,4 @@
-export type OsFamily = "macos" | "windows" | "linux";
+import type { OsFamily } from "@opendelegate/domain";
 
 export type CapabilityVerification =
   "detected" | "verified" | "degraded" | "unavailable" | "disabled";
@@ -23,6 +23,7 @@ export interface ExecutablePolicyDecision {
 
 export interface DeviceCandidate {
   readonly deviceId: string;
+  readonly workerId: string;
   readonly enabled: boolean;
   readonly status: "online" | "offline";
   readonly draining: boolean;
@@ -42,6 +43,7 @@ export interface ScheduleRequest {
   readonly workOrderId: string;
   readonly requiredCapabilities: readonly string[];
   readonly preferredCapabilities: readonly string[];
+  readonly preferredDeviceIds: readonly string[];
   readonly preferredRoles: readonly string[];
   readonly requiredSecretRefs: readonly string[];
   readonly requiredOsFamily?: OsFamily;
@@ -102,5 +104,12 @@ export interface CandidateExplanation {
 export interface ScheduleSelection {
   readonly selectedDevice: DeviceCandidate;
   readonly selectedRoute: TransportRoute;
+  /**
+   * The mechanically indistinguishable, eligible Devices that may be passed to
+   * semantic selection. An empty collection means code determined the choice.
+   */
+  readonly semanticSelectionCandidates: readonly DeviceCandidate[];
   readonly explanations: readonly CandidateExplanation[];
 }
+
+export type { OsFamily };

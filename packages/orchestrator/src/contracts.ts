@@ -1,4 +1,12 @@
-import type { TaskBrief, TaskState } from "@opendelegate/domain";
+import type { OsFamily, TaskBrief, TaskState } from "@opendelegate/domain";
+import type {
+  ArtifactReferenceV1,
+  SemanticDeviceSelectionResponseV1,
+  SemanticPlanningCandidateV1,
+  WorkerReportV1,
+  WorkOrderV1,
+} from "@opendelegate/protocol";
+import type { DeviceCandidate, DeviceCapability, TransportRoute } from "@opendelegate/scheduler";
 
 import type { OrchestrationJournal } from "./orchestration-journal.ts";
 
@@ -64,25 +72,8 @@ export type CoordinatorIntakeDecision =
       readonly clarification: ClarificationRequest;
     };
 
-export interface PlannedWorkOrderSchedulingHints {
-  readonly preferredDeviceIds: readonly string[];
-  readonly preferredRoles: readonly string[];
-}
-
-export interface PlannedWorkOrder {
-  readonly workOrderId: string;
-  readonly title: string;
-  readonly brief: string;
-  readonly completionCriteria: readonly string[];
-  readonly constraints: readonly string[];
-  readonly selectedInputIds: readonly string[];
-  readonly dependsOn: readonly string[];
-  readonly schedulingHints: PlannedWorkOrderSchedulingHints;
-  readonly requiredCapabilities: readonly string[];
-  readonly requiredSecretRefs: readonly string[];
-  readonly requiredOsFamily?: "macos" | "windows" | "linux";
-  readonly workspaceId?: string;
-}
+export type PlannedWorkOrderSchedulingHints = WorkOrderV1["schedulingHints"];
+export type PlannedWorkOrder = Omit<WorkOrderV1, "protocolVersion">;
 
 export interface CoordinatorPlanInput {
   readonly taskId: string;
@@ -95,11 +86,20 @@ export interface CoordinatorPlan {
   readonly workOrders: readonly PlannedWorkOrder[];
 }
 
-export interface WorkerReport {
-  readonly workOrderId: string;
-  readonly workerId: string;
-  readonly report: string;
+export type CoordinatorDeviceSelectionCandidate = Omit<
+  SemanticPlanningCandidateV1,
+  "protocolVersion"
+>;
+
+export interface CoordinatorDeviceSelectionInput {
+  readonly taskId: string;
+  readonly workOrder: PlannedWorkOrder;
+  readonly eligibleDevices: readonly CoordinatorDeviceSelectionCandidate[];
 }
+
+export type CoordinatorDeviceSelection = SemanticDeviceSelectionResponseV1;
+
+export type WorkerReport = Pick<WorkerReportV1, "workOrderId" | "workerId" | "report">;
 
 export interface CoordinatorSynthesisInput {
   readonly taskId: string;
@@ -134,6 +134,7 @@ export interface CoordinatorReview {
 export interface Coordinator {
   assessIntake(input: CoordinatorIntakeInput): Promise<CoordinatorIntakeDecision>;
   plan(input: CoordinatorPlanInput): Promise<CoordinatorPlan>;
+  selectDevice(input: CoordinatorDeviceSelectionInput): Promise<CoordinatorDeviceSelection>;
   synthesize(input: CoordinatorSynthesisInput): Promise<CoordinatorSynthesis>;
   review(input: CoordinatorReviewInput): Promise<CoordinatorReview>;
 }
@@ -144,33 +145,25 @@ export interface WorkerExecutionInput {
   readonly run: RunAssignment;
 }
 
-export interface WorkerRunCompletion {
-  readonly taskId: string;
-  readonly workOrderId: string;
-  readonly deviceId: string;
-  readonly workerId: string;
-  readonly routeId: string;
-  readonly runId: string;
-  readonly leaseId: string;
-  readonly fencingToken: number;
-}
+export type WorkerRunCompletion = Pick<
+  WorkerReportV1,
+  | "taskId"
+  | "workOrderId"
+  | "deviceId"
+  | "workerId"
+  | "routeId"
+  | "runId"
+  | "leaseId"
+  | "fencingToken"
+>;
 
-export interface WorkerExecutionResult extends WorkerRunCompletion {
-  readonly report: string;
-}
+export type WorkerExecutionResult = WorkerRunCompletion & Pick<WorkerReportV1, "report">;
 
-export type WorkerOsFamily = "macos" | "windows" | "linux";
+export type WorkerOsFamily = OsFamily;
 
-export interface WorkerCapabilitySnapshot {
-  readonly name: string;
-  readonly verification: "detected" | "verified" | "degraded" | "unavailable" | "disabled";
-}
+export type WorkerCapabilitySnapshot = DeviceCapability;
 
-export interface WorkerRouteSnapshot {
-  readonly routeId: string;
-  readonly priority: number;
-  readonly health: "healthy" | "unhealthy";
-}
+export type WorkerRouteSnapshot = TransportRoute;
 
 export interface WorkerDeviceSnapshot {
   readonly enabled: boolean;
@@ -212,39 +205,14 @@ export interface DispatchPolicyEvaluator {
   evaluate(input: DispatchPolicyEvaluationInput): DispatchPolicyDecision;
 }
 
-export interface WorkOrderSchedulingCandidate extends WorkerDeviceSnapshot {
-  readonly deviceId: string;
-  readonly workerId: string;
-  readonly executionPolicyDecision: DispatchPolicyDecision;
-}
-
-export interface WorkOrderSchedulingInput {
-  readonly taskId: string;
-  readonly workOrder: PlannedWorkOrder;
-  readonly candidates: readonly WorkOrderSchedulingCandidate[];
-  readonly completedWorkOrderIds: readonly string[];
-}
-
-export interface WorkOrderSchedulingSelection {
-  readonly deviceId: string;
-  readonly workerId: string;
-  readonly routeId: string;
-  readonly explanations: readonly unknown[];
-}
-
-export interface WorkOrderScheduler {
-  select(input: WorkOrderSchedulingInput): WorkOrderSchedulingSelection;
-}
+export type WorkOrderSchedulingCandidate = DeviceCandidate;
 
 export interface ArtifactPublishInput extends ArtifactContent {
   readonly taskId: string;
   readonly idempotencyKey: string;
 }
 
-export interface ArtifactReference {
-  readonly artifactId: string;
-  readonly href: string;
-}
+export type ArtifactReference = Omit<ArtifactReferenceV1, "protocolVersion">;
 
 export interface ArtifactGateway {
   publish(input: ArtifactPublishInput): Promise<ArtifactReference>;
@@ -336,7 +304,6 @@ export interface OpenDelegateDependencies {
   readonly ids: OrchestrationIdSource;
   readonly runAssignments: RunAssignmentSource;
   readonly dispatchPolicy: DispatchPolicyEvaluator;
-  readonly scheduler: WorkOrderScheduler;
   readonly clock: OrchestrationClock;
   readonly journal?: OrchestrationJournal;
 }

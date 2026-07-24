@@ -1,3 +1,5 @@
+import type { OsFamily } from "@opendelegate/domain";
+
 export const PROTOCOL_VERSION = "v1" as const;
 
 export type ProtocolValidationErrorCode =
@@ -33,9 +35,19 @@ export interface WorkOrderV1 {
   readonly title: string;
   readonly brief: string;
   readonly completionCriteria: readonly string[];
-  readonly requiredCapabilities: readonly string[];
   readonly constraints: readonly string[];
+  readonly selectedInputIds: readonly string[];
   readonly dependsOn: readonly string[];
+  readonly schedulingHints: WorkOrderSchedulingHintsV1;
+  readonly requiredCapabilities: readonly string[];
+  readonly requiredSecretRefs: readonly string[];
+  readonly requiredOsFamily?: OsFamily;
+  readonly workspaceId?: string;
+}
+
+export interface WorkOrderSchedulingHintsV1 {
+  readonly preferredDeviceIds: readonly string[];
+  readonly preferredRoles: readonly string[];
 }
 
 export interface SemanticPlanningCandidateV1 {
@@ -61,6 +73,20 @@ export interface SemanticPlanningResponseV1 {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly taskId: string;
   readonly workOrders: readonly WorkOrderV1[];
+}
+
+export interface SemanticDeviceSelectionRequestV1 {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly taskId: string;
+  readonly workOrder: WorkOrderV1;
+  readonly eligibleDevices: readonly SemanticPlanningCandidateV1[];
+}
+
+export interface SemanticDeviceSelectionResponseV1 {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly taskId: string;
+  readonly workOrderId: string;
+  readonly preferredDeviceId: string;
 }
 
 export interface ArtifactReferenceV1 {
@@ -122,7 +148,7 @@ function assertProtocolVersion(input: unknown, path = "protocolVersion"): void {
 }
 
 function parseIdentifier(value: unknown, path: string): string {
-  if (typeof value !== "string" || value.trim() === "") {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
     throw new ProtocolValidationError(
       "BLANK_IDENTIFIER",
       path,
@@ -142,7 +168,7 @@ function parseString(value: unknown, path: string): string {
 }
 
 function parseNonBlankString(value: unknown, path: string): string {
-  if (typeof value !== "string" || value.trim() === "") {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) {
     throw new ProtocolValidationError("INVALID_CONTRACT", path, "Expected a non-blank string.");
   }
 
@@ -170,8 +196,8 @@ function parseStringArray(value: unknown, path: string): readonly string[] {
     );
   }
 
-  return value.map((entry, index) => {
-    if (typeof entry !== "string" || entry.trim() === "") {
+  const values = value.map((entry, index) => {
+    if (typeof entry !== "string" || entry.trim() === "" || entry !== entry.trim()) {
       throw new ProtocolValidationError(
         "INVALID_CONTRACT",
         `${path}[${index}]`,
@@ -181,6 +207,8 @@ function parseStringArray(value: unknown, path: string): readonly string[] {
 
     return entry;
   });
+  assertUnique(values, path);
+  return values;
 }
 
 function parseCapabilityArray(value: unknown, path: string): readonly string[] {
@@ -192,8 +220,12 @@ function parseCapabilityArray(value: unknown, path: string): readonly string[] {
     );
   }
 
-  return value.map((capability, index) => {
-    if (typeof capability !== "string" || capability.trim() === "") {
+  const capabilities = value.map((capability, index) => {
+    if (
+      typeof capability !== "string" ||
+      capability.trim() === "" ||
+      capability !== capability.trim()
+    ) {
       throw new ProtocolValidationError(
         "MALFORMED_CAPABILITY_ARRAY",
         `${path}[${index}]`,
@@ -203,6 +235,8 @@ function parseCapabilityArray(value: unknown, path: string): readonly string[] {
 
     return capability;
   });
+  assertUnique(capabilities, path);
+  return capabilities;
 }
 
 function parseIdentifierArray(value: unknown, path: string): readonly string[] {
@@ -214,7 +248,17 @@ function parseIdentifierArray(value: unknown, path: string): readonly string[] {
     );
   }
 
-  return value.map((identifier, index) => parseIdentifier(identifier, `${path}[${index}]`));
+  const identifiers = value.map((identifier, index) =>
+    parseIdentifier(identifier, `${path}[${index}]`),
+  );
+  assertUnique(identifiers, path);
+  return identifiers;
+}
+
+function assertUnique(values: readonly string[], path: string): void {
+  if (new Set(values).size !== values.length) {
+    throw new ProtocolValidationError("INVALID_CONTRACT", path, "Expected unique values.");
+  }
 }
 
 function parseWorkerReportStatus(value: unknown, path: string): WorkerReportStatusV1 {
@@ -223,6 +267,18 @@ function parseWorkerReportStatus(value: unknown, path: string): WorkerReportStat
       "INVALID_CONTRACT",
       path,
       "Expected blocked, failed, or succeeded.",
+    );
+  }
+
+  return value;
+}
+
+function parseOsFamily(value: unknown, path: string): OsFamily {
+  if (value !== "macos" && value !== "windows" && value !== "linux") {
+    throw new ProtocolValidationError(
+      "INVALID_CONTRACT",
+      path,
+      "Expected macos, windows, or linux.",
     );
   }
 
@@ -238,7 +294,7 @@ function parseWorkOrderAt(input: unknown, prefix: string): WorkOrderV1 {
     workOrderId: parseIdentifier(value.workOrderId, fieldPath(prefix, "workOrderId")),
     title: parseNonBlankString(value.title, fieldPath(prefix, "title")),
     brief: parseNonBlankString(value.brief, fieldPath(prefix, "brief")),
-    completionCriteria: parseStringArray(
+    completionCriteria: parseNonEmptyStringArray(
       value.completionCriteria,
       fieldPath(prefix, "completionCriteria"),
     ),
@@ -247,7 +303,60 @@ function parseWorkOrderAt(input: unknown, prefix: string): WorkOrderV1 {
       fieldPath(prefix, "requiredCapabilities"),
     ),
     constraints: parseStringArray(value.constraints, fieldPath(prefix, "constraints")),
+    selectedInputIds: parseIdentifierArray(
+      value.selectedInputIds,
+      fieldPath(prefix, "selectedInputIds"),
+    ),
     dependsOn: parseIdentifierArray(value.dependsOn, fieldPath(prefix, "dependsOn")),
+    schedulingHints: parseWorkOrderSchedulingHintsAt(
+      value.schedulingHints,
+      fieldPath(prefix, "schedulingHints"),
+    ),
+    requiredSecretRefs: parseIdentifierArray(
+      value.requiredSecretRefs,
+      fieldPath(prefix, "requiredSecretRefs"),
+    ),
+    ...(value.requiredOsFamily === undefined
+      ? {}
+      : {
+          requiredOsFamily: parseOsFamily(
+            value.requiredOsFamily,
+            fieldPath(prefix, "requiredOsFamily"),
+          ),
+        }),
+    ...(value.workspaceId === undefined
+      ? {}
+      : { workspaceId: parseIdentifier(value.workspaceId, fieldPath(prefix, "workspaceId")) }),
+  };
+}
+
+function parseNonEmptyStringArray(value: unknown, path: string): readonly string[] {
+  const values = parseStringArray(value, path);
+  if (values.length === 0) {
+    throw new ProtocolValidationError("INVALID_CONTRACT", path, "Expected at least one value.");
+  }
+  return values;
+}
+
+function parseWorkOrderSchedulingHintsAt(
+  input: unknown,
+  prefix: string,
+): WorkOrderSchedulingHintsV1 {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new ProtocolValidationError(
+      "INVALID_CONTRACT",
+      prefix,
+      "Expected Work Order scheduling hints.",
+    );
+  }
+  const value = input as WorkOrderSchedulingHintsV1;
+
+  return {
+    preferredDeviceIds: parseIdentifierArray(
+      value.preferredDeviceIds,
+      fieldPath(prefix, "preferredDeviceIds"),
+    ),
+    preferredRoles: parseStringArray(value.preferredRoles, fieldPath(prefix, "preferredRoles")),
   };
 }
 
@@ -318,7 +427,7 @@ function parseArtifactHref(value: unknown, path: string): string {
     );
   }
 
-  return parsed.href;
+  return href;
 }
 
 const RFC3339_INSTANT_PATTERN =
@@ -420,6 +529,42 @@ export function parseSemanticPlanningResponse(input: unknown): SemanticPlanningR
   };
 }
 
+export function parseSemanticDeviceSelectionRequest(
+  input: unknown,
+): SemanticDeviceSelectionRequestV1 {
+  assertProtocolVersion(input);
+  const value = input as SemanticDeviceSelectionRequestV1;
+  if (!Array.isArray(value.eligibleDevices) || value.eligibleDevices.length < 2) {
+    throw new ProtocolValidationError(
+      "INVALID_CONTRACT",
+      "eligibleDevices",
+      "Expected at least two eligible Devices.",
+    );
+  }
+
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    taskId: parseIdentifier(value.taskId, "taskId"),
+    workOrder: parseWorkOrderAt(value.workOrder, "workOrder"),
+    eligibleDevices: value.eligibleDevices.map((candidate, index) =>
+      parseSemanticPlanningCandidateAt(candidate, `eligibleDevices[${index}]`),
+    ),
+  };
+}
+
+export function parseSemanticDeviceSelectionResponse(
+  input: unknown,
+): SemanticDeviceSelectionResponseV1 {
+  assertProtocolVersion(input);
+  const value = input as SemanticDeviceSelectionResponseV1;
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    taskId: parseIdentifier(value.taskId, "taskId"),
+    workOrderId: parseIdentifier(value.workOrderId, "workOrderId"),
+    preferredDeviceId: parseIdentifier(value.preferredDeviceId, "preferredDeviceId"),
+  };
+}
+
 export function parseWorkOrder(input: unknown): WorkOrderV1 {
   return parseWorkOrderAt(input, "");
 }
@@ -498,6 +643,12 @@ export function parseEventEnvelope<TPayload = unknown>(
 export type ForumTaskIntake = InferProtocol<typeof parseForumTaskIntake>;
 export type SemanticPlanningRequest = InferProtocol<typeof parseSemanticPlanningRequest>;
 export type SemanticPlanningResponse = InferProtocol<typeof parseSemanticPlanningResponse>;
+export type SemanticDeviceSelectionRequest = InferProtocol<
+  typeof parseSemanticDeviceSelectionRequest
+>;
+export type SemanticDeviceSelectionResponse = InferProtocol<
+  typeof parseSemanticDeviceSelectionResponse
+>;
 export type WorkOrder = InferProtocol<typeof parseWorkOrder>;
 export type ArtifactReference = InferProtocol<typeof parseArtifactReference>;
 export type WorkerReport = InferProtocol<typeof parseWorkerReport>;

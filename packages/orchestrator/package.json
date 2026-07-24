@@ -8,9 +8,12 @@
   },
   "dependencies": {
     "@opendelegate/domain": "workspace:*",
-    "@opendelegate/event-store": "workspace:*"
+    "@opendelegate/event-store": "workspace:*",
+    "@opendelegate/protocol": "workspace:*",
+    "@opendelegate/scheduler": "workspace:*"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
   }
 }

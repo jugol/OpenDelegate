@@ -1,17 +1,14 @@
 import { ArtifactId, RunId, Task, TaskId, WorkOrderId } from "@opendelegate/domain";
 
+import { publishArtifactResult } from "./artifact-publication.ts";
 import {
   deepFreeze,
-  fingerprintArtifactContent,
-  fingerprintPlannedWorkOrder,
-  parseArtifactReference,
   parseAuthorizedForumPost,
   parseCoordinatorIntakeDecision,
   parseCoordinatorPlan,
   parseCoordinatorReview,
   parseCoordinatorSynthesis,
   parseRfc3339Instant,
-  parseRunAssignment,
   parseWorkerExecutionResult,
   parseWorkerReport,
 } from "./contract-validation.ts";
@@ -28,12 +25,12 @@ import type {
   RunAssignment,
   TaskView,
   WaitingUserTaskView,
-  WorkOrderSchedulingCandidate,
   WorkerExecutionResult,
   WorkerReport,
   WorkerRunCompletion,
   WorkOrderView,
 } from "./contracts.ts";
+import { recordRunFailedIfCurrent, resolveDeviceDispatch } from "./device-dispatch.ts";
 import {
   InMemoryOrchestrationJournal,
   type JournaledTaskIntake,
@@ -44,6 +41,7 @@ import { OrchestratorError } from "./orchestrator-error.ts";
 
 export function createOpenDelegate(dependencies: OpenDelegateDependencies): OpenDelegate {
   const activeExecutions = new Map<string, ActiveExecution>();
+  const activeBindings = new Map<string, ActiveExecution>();
   const journal =
     dependencies.journal ??
     new InMemoryOrchestrationJournal({
@@ -53,7 +51,9 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
   return {
     async acceptForumPost(input) {
       const authorizedForumPost = await authorizeForumPost(input, dependencies);
-      const persistedIntake = journal.taskIntake(input.postId);
+      const persistedTaskId = journal.taskIdFor(input.postId);
+      const persistedIntake =
+        persistedTaskId === undefined ? undefined : journal.taskIntake(persistedTaskId);
       if (
         persistedIntake !== undefined &&
         JSON.stringify(persistedIntake.forumPost) !== JSON.stringify(authorizedForumPost)
@@ -64,7 +64,7 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
         );
       }
       return runExclusive(
-        activeExecutions,
+        activeBindings,
         input.postId,
         {
           kind: "accept",
@@ -72,42 +72,53 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
         },
         async () => {
           const intake = resolveTaskIntake(authorizedForumPost, dependencies, journal);
-          const completed = journal.completedTask(input.postId);
-          if (completed !== undefined) {
-            return completed;
-          }
+          return runExclusive(
+            activeExecutions,
+            intake.taskId,
+            {
+              kind: "accept",
+              fingerprint: JSON.stringify(authorizedForumPost),
+            },
+            async () => {
+              const completed = journal.completedTask(intake.taskId);
+              if (completed !== undefined) {
+                return completed;
+              }
 
-          const clarification = journal.clarification(input.postId);
-          if (clarification !== undefined && clarification.answer === undefined) {
-            return projectWaitingTask(journal, intake);
-          }
+              const clarification = journal.clarification(intake.taskId);
+              if (clarification !== undefined && clarification.answer === undefined) {
+                return projectWaitingTask(journal, intake);
+              }
 
-          if (
-            journal.plan(input.postId) === undefined &&
-            !journal.intakeReady(input.postId) &&
-            clarification === undefined
-          ) {
-            const decision = parseCoordinatorIntakeDecision(
-              await dependencies.coordinator.assessIntake({
-                taskId: intake.taskId,
-                forumPost: intake.forumPost,
-              }),
-            );
-            if (decision.decision === "clarification") {
-              journal.recordClarificationRequest(input.postId, decision.clarification);
-              return projectWaitingTask(journal, intake);
-            }
-            journal.recordIntakeReady(input.postId);
-          }
+              if (
+                journal.plan(intake.taskId) === undefined &&
+                !journal.intakeReady(intake.taskId) &&
+                clarification === undefined
+              ) {
+                const decision = parseCoordinatorIntakeDecision(
+                  await dependencies.coordinator.assessIntake({
+                    taskId: intake.taskId,
+                    forumPost: intake.forumPost,
+                  }),
+                );
+                if (decision.decision === "clarification") {
+                  journal.recordClarificationRequest(intake.taskId, decision.clarification);
+                  return projectWaitingTask(journal, intake);
+                }
+                journal.recordIntakeReady(intake.taskId);
+              }
 
-          return executeTask(intake, dependencies, journal);
+              return executeTask(intake, dependencies, journal);
+            },
+          );
         },
       );
     },
 
     async answerClarification(input) {
       assertClarificationAnswerInput(input);
-      const intake = journal.taskIntake(input.postId);
+      const taskId = journal.taskIdFor(input.postId);
+      const intake = taskId === undefined ? undefined : journal.taskIntake(taskId);
       if (intake === undefined) {
         throw new OrchestratorError(
           "CLARIFICATION_NOT_FOUND",
@@ -130,7 +141,7 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
         );
       }
 
-      const durableClarification = journal.clarification(input.postId);
+      const durableClarification = journal.clarification(intake.taskId);
       if (
         durableClarification === undefined ||
         durableClarification.request.clarificationId !== input.clarificationId
@@ -152,7 +163,7 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
 
       return runExclusive(
         activeExecutions,
-        input.postId,
+        intake.taskId,
         {
           kind: "answer",
           fingerprint: JSON.stringify({
@@ -161,8 +172,8 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
           }),
         },
         async () => {
-          const currentIntake = journal.taskIntake(input.postId);
-          const clarification = journal.clarification(input.postId);
+          const currentIntake = journal.taskIntake(intake.taskId);
+          const clarification = journal.clarification(intake.taskId);
           if (currentIntake === undefined || clarification === undefined) {
             throw new OrchestratorError(
               "CLARIFICATION_NOT_FOUND",
@@ -180,9 +191,9 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
             ...clarification.request,
             answer: input.answer,
           } satisfies ClarificationExchange);
-          journal.recordClarificationAnswer(input.postId, exchange);
+          journal.recordClarificationAnswer(intake.taskId, exchange);
 
-          const completed = journal.completedTask(input.postId);
+          const completed = journal.completedTask(intake.taskId);
           if (completed !== undefined) {
             return completed;
           }
@@ -192,13 +203,20 @@ export function createOpenDelegate(dependencies: OpenDelegateDependencies): Open
     },
 
     getTaskByForumPost(postId) {
-      const completed = journal.completedTask(postId);
+      const taskId = journal.taskIdFor(postId);
+      if (taskId === undefined) {
+        throw new OrchestratorError(
+          "TASK_NOT_FOUND",
+          `No presentable Task view is bound to Forum post ${postId}.`,
+        );
+      }
+      const completed = journal.completedTask(taskId);
       if (completed !== undefined) {
         return completed;
       }
 
-      const intake = journal.taskIntake(postId);
-      const clarification = journal.clarification(postId);
+      const intake = journal.taskIntake(taskId);
+      const clarification = journal.clarification(taskId);
       if (
         intake !== undefined &&
         clarification !== undefined &&
@@ -221,9 +239,8 @@ async function executeTask(
   journal: OrchestrationJournal,
 ): Promise<CompletedTaskView> {
   const { taskId, forumPost } = intake;
-  const forumPostId = forumPost.postId;
-  const existingPlan = journal.plan(forumPostId);
-  const clarification = journal.clarification(forumPostId)?.answer;
+  const existingPlan = journal.plan(taskId);
+  const clarification = journal.clarification(taskId)?.answer;
   const plan =
     existingPlan ??
     parseCoordinatorPlan(
@@ -235,7 +252,7 @@ async function executeTask(
     );
 
   if (existingPlan === undefined) {
-    journal.recordPlan(forumPostId, plan);
+    journal.recordPlan(taskId, plan);
   }
 
   const task = Task.create({
@@ -245,7 +262,7 @@ async function executeTask(
       minimumArtifactResults: 1,
     },
   });
-  if (journal.clarification(forumPostId) !== undefined) {
+  if (journal.clarification(taskId) !== undefined) {
     task.transitionTo("waiting_user");
     task.transitionTo("running");
   }
@@ -259,13 +276,10 @@ async function executeTask(
 
   const completedWorkOrders = validateCachedWorkOrders(
     plan.workOrders,
-    journal.workOrderResults(forumPostId),
+    journal.workOrderResults(taskId),
   );
   for (const completedWorkOrder of completedWorkOrders.values()) {
-    const assignment = journal.runAssignment(
-      forumPostId,
-      completedWorkOrder.workOrderId,
-    )?.assignment;
+    const assignment = journal.runAssignment(taskId, completedWorkOrder.workOrderId)?.assignment;
     if (assignment === undefined) {
       throw new OrchestratorError(
         "RUN_ASSIGNMENT_CONFLICT",
@@ -288,7 +302,6 @@ async function executeTask(
   await executeDependencyWaves({
     task,
     taskId,
-    forumPostId,
     workOrders: plan.workOrders,
     completedWorkOrders,
     dependencies,
@@ -308,7 +321,7 @@ async function executeTask(
     }),
   );
 
-  const cachedSynthesis = journal.synthesis(forumPostId);
+  const cachedSynthesis = journal.synthesis(taskId);
   const synthesis =
     cachedSynthesis ??
     parseCoordinatorSynthesis(
@@ -318,21 +331,20 @@ async function executeTask(
       }),
     );
   if (cachedSynthesis === undefined) {
-    journal.recordSynthesis(forumPostId, synthesis);
+    journal.recordSynthesis(taskId, synthesis);
   }
   const artifactReference = await publishArtifactResult({
     taskId,
-    forumPostId,
-    synthesis,
-    dependencies,
+    artifact: synthesis.artifact,
+    artifacts: dependencies.artifacts,
     journal,
   });
 
   task.recordArtifactResult(ArtifactId.from(artifactReference.artifactId));
   task.transitionTo("review");
-  journal.recordReviewStarted(forumPostId);
+  journal.recordReviewStarted(taskId);
 
-  const cachedReview = journal.review(forumPostId);
+  const cachedReview = journal.review(taskId);
   const review =
     cachedReview ??
     parseCoordinatorReview(
@@ -349,7 +361,7 @@ async function executeTask(
       plan.taskBrief,
     );
   if (cachedReview === undefined) {
-    journal.recordReview(forumPostId, review);
+    journal.recordReview(taskId, review);
   }
   for (const criterion of review.verifiedCompletionCriteria) {
     task.verifyCompletionCriterion(criterion);
@@ -363,16 +375,15 @@ async function executeTask(
     reports,
     summary: synthesis.summary,
     artifactReference,
-    stateHistory: Object.freeze([...journal.taskStateHistory(forumPostId), "completed" as const]),
+    stateHistory: Object.freeze([...journal.taskStateHistory(taskId), "completed" as const]),
   });
-  journal.recordCompletedTask(forumPostId, completedTask);
+  journal.recordCompletedTask(taskId, completedTask);
   return completedTask;
 }
 
 async function executeDependencyWaves(input: {
   readonly task: Task;
   readonly taskId: string;
-  readonly forumPostId: string;
   readonly workOrders: readonly PlannedWorkOrder[];
   readonly completedWorkOrders: Map<string, JournaledWorkOrderResult>;
   readonly dependencies: OpenDelegateDependencies;
@@ -399,88 +410,12 @@ async function executeDependencyWaves(input: {
 
     const settlements = await Promise.allSettled(
       ready.map(async (workOrder) => {
-        const durableDispatch = input.journal.runAssignment(
-          input.forumPostId,
-          workOrder.workOrderId,
-        );
-        const dispatch =
-          durableDispatch ??
-          createDurableDispatch({
-            taskId: input.taskId,
-            forumPostId: input.forumPostId,
-            workOrder,
-            completedWorkOrderIds: [...input.completedWorkOrders.keys()],
-            dependencies: input.dependencies,
-            journal: input.journal,
-          });
-        let run: RunAssignment;
-        try {
-          run = assertRunAssignment(
-            dispatch.assignment,
-            {
-              taskId: input.taskId,
-              workOrderId: workOrder.workOrderId,
-              deviceId: dispatch.assignment.deviceId,
-              workerId: dispatch.assignment.workerId,
-              routeId: dispatch.assignment.routeId,
-            },
-            input.dependencies,
-          );
-        } catch (error: unknown) {
-          if (error instanceof ExpiredRunAssignmentError) {
-            recordRunFailedIfCurrent(
-              input.journal,
-              input.forumPostId,
-              workOrder.workOrderId,
-              dispatch.assignment.runId,
-            );
-          }
-          throw error;
-        }
-        const candidates = createSchedulingCandidates(input.taskId, workOrder, input.dependencies);
-        const candidate = candidates.find(
-          (value) => value.deviceId === run.deviceId && value.workerId === run.workerId,
-        );
-        if (candidate === undefined) {
-          recordRunFailedIfCurrent(
-            input.journal,
-            input.forumPostId,
-            workOrder.workOrderId,
-            run.runId,
-          );
-          throw new OrchestratorError(
-            "WORKER_UNAVAILABLE",
-            `Durable Run ${run.runId} no longer has its assigned Device-specific Worker.`,
-          );
-        }
-        try {
-          assertSelectedCandidateEligible(workOrder, candidate, run.routeId);
-        } catch (error: unknown) {
-          if (error instanceof OrchestratorError && error.code === "SCHEDULING_SELECTION_INVALID") {
-            recordRunFailedIfCurrent(
-              input.journal,
-              input.forumPostId,
-              workOrder.workOrderId,
-              run.runId,
-            );
-          }
-          throw error;
-        }
-        const worker = input.dependencies.workers.find(
-          (value) => value.workerId === run.workerId && value.deviceId === run.deviceId,
-        );
-        if (worker === undefined) {
-          recordRunFailedIfCurrent(
-            input.journal,
-            input.forumPostId,
-            workOrder.workOrderId,
-            run.runId,
-          );
-          throw new OrchestratorError(
-            "WORKER_UNAVAILABLE",
-            `Run ${run.runId} cannot resolve its assigned Device-specific Worker.`,
-          );
-        }
+        const { run, worker } = await resolveDeviceDispatch({
+          taskId: input.taskId,
+          workOrder,
+          dependencies: input.dependencies,
+          journal: input.journal,
+        });
         let result: WorkerExecutionResult;
         try {
           result = assertWorkerCompletion(
@@ -492,15 +427,10 @@ async function executeDependencyWaves(input: {
             run,
             input.dependencies,
             input.journal,
-            input.forumPostId,
+            input.taskId,
           );
         } catch (error: unknown) {
-          recordRunFailedIfCurrent(
-            input.journal,
-            input.forumPostId,
-            workOrder.workOrderId,
-            run.runId,
-          );
+          recordRunFailedIfCurrent(input.journal, input.taskId, workOrder.workOrderId, run.runId);
           throw error;
         }
         const report = parseWorkerReport({
@@ -517,10 +447,9 @@ async function executeDependencyWaves(input: {
           runId: result.runId,
           leaseId: result.leaseId,
           fencingToken: result.fencingToken,
-          planFingerprint: fingerprintPlannedWorkOrder(workOrder),
           report,
         } satisfies JournaledWorkOrderResult);
-        input.journal.recordWorkOrderResult(input.forumPostId, completedResult);
+        input.journal.recordWorkOrderResult(input.taskId, completedResult);
         input.completedWorkOrders.set(workOrder.workOrderId, completedResult);
         input.task.recordWorkOrderSucceeded({
           id: WorkOrderId.from(workOrder.workOrderId),
@@ -540,245 +469,13 @@ async function executeDependencyWaves(input: {
   }
 }
 
-function createDurableDispatch(input: {
-  readonly taskId: string;
-  readonly forumPostId: string;
-  readonly workOrder: PlannedWorkOrder;
-  readonly completedWorkOrderIds: readonly string[];
-  readonly dependencies: OpenDelegateDependencies;
-  readonly journal: OrchestrationJournal;
-}) {
-  const candidates = createSchedulingCandidates(input.taskId, input.workOrder, input.dependencies);
-  const selection = input.dependencies.scheduler.select(
-    deepFreeze({
-      taskId: input.taskId,
-      workOrder: input.workOrder,
-      candidates,
-      completedWorkOrderIds: Object.freeze([...input.completedWorkOrderIds].sort()),
-    }),
-  );
-  const selected = candidates.find(
-    (candidate) =>
-      candidate.deviceId === selection.deviceId && candidate.workerId === selection.workerId,
-  );
-  if (selected === undefined) {
-    throw new OrchestratorError(
-      "SCHEDULING_SELECTION_INVALID",
-      `The scheduler selected an unknown Device-specific Worker for Work Order ${input.workOrder.workOrderId}.`,
-    );
-  }
-  assertSelectedCandidateEligible(input.workOrder, selected, selection.routeId);
-
-  const assignment = assertRunAssignment(
-    input.dependencies.runAssignments.nextRun({
-      taskId: input.taskId,
-      workOrderId: input.workOrder.workOrderId,
-      deviceId: selection.deviceId,
-      workerId: selection.workerId,
-      routeId: selection.routeId,
-    }),
-    {
-      taskId: input.taskId,
-      workOrderId: input.workOrder.workOrderId,
-      deviceId: selection.deviceId,
-      workerId: selection.workerId,
-      routeId: selection.routeId,
-    },
-    input.dependencies,
-  );
-  const dispatch = deepFreeze({
-    workOrderId: input.workOrder.workOrderId,
-    planFingerprint: fingerprintPlannedWorkOrder(input.workOrder),
-    assignment,
-  });
-  input.journal.recordRunAssignment(input.forumPostId, dispatch);
-  return dispatch;
-}
-
-function createSchedulingCandidates(
-  taskId: string,
-  workOrder: PlannedWorkOrder,
-  dependencies: OpenDelegateDependencies,
-): readonly WorkOrderSchedulingCandidate[] {
-  const candidates = dependencies.workers.map((worker) => {
-    assertWorkerSchedulingSnapshot(worker);
-    const device = deepFreeze({
-      deviceId: worker.deviceId,
-      workerId: worker.workerId,
-      ...worker.scheduling,
-    });
-    const executionPolicyDecision = dependencies.dispatchPolicy.evaluate({
-      taskId,
-      workOrder,
-      device,
-    });
-    if (
-      (executionPolicyDecision.outcome !== "allow" &&
-        executionPolicyDecision.outcome !== "require-approval" &&
-        executionPolicyDecision.outcome !== "deny") ||
-      executionPolicyDecision.code.trim() === ""
-    ) {
-      throw new OrchestratorError(
-        "SCHEDULING_SELECTION_INVALID",
-        `Dispatch Policy returned an invalid decision for Device ${worker.deviceId}.`,
-      );
-    }
-    return deepFreeze({
-      ...device,
-      executionPolicyDecision,
-    });
-  });
-  const workerIds = new Set(candidates.map((candidate) => candidate.workerId));
-  const deviceIds = new Set(candidates.map((candidate) => candidate.deviceId));
-  if (workerIds.size !== candidates.length || deviceIds.size !== candidates.length) {
-    throw new OrchestratorError(
-      "WORKER_UNAVAILABLE",
-      "Worker and Device identifiers must be unique across the dispatch fleet.",
-    );
-  }
-  return Object.freeze(candidates);
-}
-
-function assertSelectedCandidateEligible(
-  workOrder: PlannedWorkOrder,
-  candidate: WorkOrderSchedulingCandidate,
-  routeId: string,
-): void {
-  const verifiedCapabilities = new Set(
-    candidate.capabilities
-      .filter((capability) => capability.verification === "verified")
-      .map((capability) => capability.name),
-  );
-  const route = candidate.routes.find(
-    (candidateRoute) => candidateRoute.routeId === routeId && candidateRoute.health === "healthy",
-  );
-  const eligible =
-    candidate.enabled &&
-    candidate.status === "online" &&
-    !candidate.draining &&
-    candidate.executionPolicyDecision.outcome === "allow" &&
-    (workOrder.requiredOsFamily === undefined ||
-      candidate.osFamily === workOrder.requiredOsFamily) &&
-    workOrder.requiredCapabilities.every((capability) => verifiedCapabilities.has(capability)) &&
-    workOrder.requiredSecretRefs.every((secretRef) =>
-      candidate.availableSecretRefs.includes(secretRef),
-    ) &&
-    (workOrder.workspaceId === undefined ||
-      candidate.workspaceIds.includes(workOrder.workspaceId)) &&
-    Number.isSafeInteger(candidate.availableRunSlots) &&
-    candidate.availableRunSlots > 0 &&
-    Number.isFinite(candidate.loadRatio) &&
-    candidate.loadRatio >= 0 &&
-    candidate.loadRatio <= 1 &&
-    route !== undefined &&
-    (!workOrder.requiredCapabilities.includes("computer-use") || candidate.desktopSessionAvailable);
-  if (!eligible) {
-    throw new OrchestratorError(
-      "SCHEDULING_SELECTION_INVALID",
-      `The scheduler selected ineligible Device ${candidate.deviceId} for Work Order ${workOrder.workOrderId}.`,
-    );
-  }
-}
-
-function assertWorkerSchedulingSnapshot(worker: OpenDelegateDependencies["workers"][number]): void {
-  const snapshot = worker.scheduling;
-  const validCapabilityStates = new Set([
-    "detected",
-    "verified",
-    "degraded",
-    "unavailable",
-    "disabled",
-  ]);
-  const identifiers = [
-    worker.workerId,
-    worker.deviceId,
-    ...snapshot.capabilities.map((capability) => capability.name),
-    ...snapshot.roles,
-    ...snapshot.workspaceIds,
-    ...snapshot.routes.map((route) => route.routeId),
-    ...snapshot.availableSecretRefs,
-  ];
-  const uniqueLists = [
-    snapshot.capabilities.map((capability) => capability.name),
-    snapshot.roles,
-    snapshot.workspaceIds,
-    snapshot.routes.map((route) => route.routeId),
-    snapshot.availableSecretRefs,
-  ];
-  const valid =
-    identifiers.every((identifier) => identifier.trim() !== "") &&
-    uniqueLists.every((values) => new Set(values).size === values.length) &&
-    (snapshot.status === "online" || snapshot.status === "offline") &&
-    (snapshot.osFamily === "macos" ||
-      snapshot.osFamily === "windows" ||
-      snapshot.osFamily === "linux") &&
-    snapshot.capabilities.every((capability) =>
-      validCapabilityStates.has(capability.verification),
-    ) &&
-    snapshot.routes.every(
-      (route) =>
-        Number.isSafeInteger(route.priority) &&
-        route.priority >= 0 &&
-        (route.health === "healthy" || route.health === "unhealthy"),
-    ) &&
-    Number.isSafeInteger(snapshot.availableRunSlots) &&
-    snapshot.availableRunSlots >= 0 &&
-    Number.isFinite(snapshot.loadRatio) &&
-    snapshot.loadRatio >= 0 &&
-    snapshot.loadRatio <= 1;
-  if (!valid) {
-    throw new OrchestratorError(
-      "SCHEDULING_SELECTION_INVALID",
-      `Worker ${worker.workerId} exposed an invalid or ambiguous scheduling snapshot.`,
-    );
-  }
-}
-
-async function publishArtifactResult(input: {
-  readonly taskId: string;
-  readonly forumPostId: string;
-  readonly synthesis: {
-    readonly artifact: {
-      readonly filename: string;
-      readonly mediaType: string;
-      readonly content: string;
-    };
-  };
-  readonly dependencies: OpenDelegateDependencies;
-  readonly journal: OrchestrationJournal;
-}): Promise<ArtifactReference> {
-  const contentFingerprint = fingerprintArtifactContent(input.synthesis.artifact);
-  const cachedArtifact = input.journal.artifactResult(input.forumPostId);
-  if (cachedArtifact !== undefined) {
-    if (cachedArtifact.contentFingerprint !== contentFingerprint) {
-      throw new OrchestratorError(
-        "ARTIFACT_ID_CONFLICT",
-        `The result Artifact for Task ${input.taskId} changed after it was published.`,
-      );
-    }
-    return cachedArtifact.reference;
-  }
-
-  const artifactReference = parseArtifactReference(
-    await input.dependencies.artifacts.publish({
-      taskId: input.taskId,
-      idempotencyKey: artifactPublicationKey(input.taskId),
-      ...input.synthesis.artifact,
-    }),
-  );
-  input.journal.recordArtifactResult(input.forumPostId, {
-    contentFingerprint,
-    reference: artifactReference,
-  });
-  return artifactReference;
-}
-
 function resolveTaskIntake(
   authorizedForumPost: AuthorizedForumPost,
   dependencies: OpenDelegateDependencies,
   journal: OrchestrationJournal,
 ): JournaledTaskIntake {
-  const existing = journal.taskIntake(authorizedForumPost.postId);
+  const existingTaskId = journal.taskIdFor(authorizedForumPost.postId);
+  const existing = existingTaskId === undefined ? undefined : journal.taskIntake(existingTaskId);
   if (existing !== undefined) {
     if (JSON.stringify(existing.forumPost) !== JSON.stringify(authorizedForumPost)) {
       throw new OrchestratorError(
@@ -835,10 +532,7 @@ function validateCachedWorkOrders(
 
   for (const cached of cachedResults) {
     const workOrder = byId.get(cached.workOrderId);
-    if (
-      workOrder === undefined ||
-      cached.planFingerprint !== fingerprintPlannedWorkOrder(workOrder)
-    ) {
+    if (workOrder === undefined) {
       throw new OrchestratorError(
         "WORK_ORDER_ID_CONFLICT",
         `Work Order ID ${cached.workOrderId} was reused with different execution content.`,
@@ -865,7 +559,7 @@ function projectWaitingTask(
   journal: OrchestrationJournal,
   intake: JournaledTaskIntake,
 ): WaitingUserTaskView {
-  const clarification = journal.clarification(intake.forumPost.postId);
+  const clarification = journal.clarification(intake.taskId);
   if (clarification === undefined || clarification.answer !== undefined) {
     throw new OrchestratorError(
       "CLARIFICATION_NOT_FOUND",
@@ -876,7 +570,7 @@ function projectWaitingTask(
   return deepFreeze({
     taskId: intake.taskId,
     state: "waiting_user",
-    stateHistory: journal.taskStateHistory(intake.forumPost.postId),
+    stateHistory: journal.taskStateHistory(intake.taskId),
     clarification: clarification.request,
     workOrders: [],
     resultProjection: {
@@ -889,55 +583,15 @@ function projectWaitingTask(
   });
 }
 
-function artifactPublicationKey(taskId: string): string {
-  return `${taskId}:result-artifact`;
-}
-
-class ExpiredRunAssignmentError extends OrchestratorError {
-  public constructor(workOrderId: string) {
-    super(
-      "RUN_ASSIGNMENT_INVALID",
-      `Run assignment for Work Order ${workOrderId} is expired and must be retired.`,
-    );
-    this.name = "ExpiredRunAssignmentError";
-  }
-}
-
-function assertRunAssignment(
-  value: RunAssignment,
-  target: Pick<RunAssignment, "taskId" | "workOrderId" | "deviceId" | "workerId" | "routeId">,
-  dependencies: OpenDelegateDependencies,
-): RunAssignment {
-  const run = parseRunAssignment(value);
-  if (
-    run.taskId !== target.taskId ||
-    run.workOrderId !== target.workOrderId ||
-    run.deviceId !== target.deviceId ||
-    run.workerId !== target.workerId ||
-    run.routeId !== target.routeId
-  ) {
-    throw new OrchestratorError(
-      "RUN_ASSIGNMENT_INVALID",
-      `Run assignment for Work Order ${target.workOrderId} is invalid or incorrectly scoped.`,
-    );
-  }
-  const now = parseRfc3339Instant(dependencies.clock.now(), "orchestration clock").epochMs;
-  const expiresAt = parseRfc3339Instant(run.expiresAt, "expiresAt").epochMs;
-  if (expiresAt <= now) {
-    throw new ExpiredRunAssignmentError(target.workOrderId);
-  }
-  return run;
-}
-
 function assertWorkerCompletion(
   value: unknown,
   expectedRun: RunAssignment,
   dependencies: OpenDelegateDependencies,
   journal: OrchestrationJournal,
-  forumPostId: string,
+  taskId: string,
 ): WorkerExecutionResult {
   const completion = parseWorkerExecutionResult(value);
-  const currentRun = journal.runAssignment(forumPostId, expectedRun.workOrderId)?.assignment;
+  const currentRun = journal.runAssignment(taskId, expectedRun.workOrderId)?.assignment;
   const now = parseRfc3339Instant(dependencies.clock.now(), "orchestration clock").epochMs;
   const expiresAt =
     currentRun === undefined
@@ -956,18 +610,6 @@ function assertWorkerCompletion(
     );
   }
   return completion;
-}
-
-function recordRunFailedIfCurrent(
-  journal: OrchestrationJournal,
-  forumPostId: string,
-  workOrderId: string,
-  runId: string,
-): void {
-  const currentRun = journal.runAssignment(forumPostId, workOrderId)?.assignment;
-  if (currentRun?.runId === runId) {
-    journal.recordRunFailed(forumPostId, workOrderId, runId);
-  }
 }
 
 function runCompletionMatchesAssignment(
@@ -1052,24 +694,24 @@ interface ActiveExecution {
 
 async function runExclusive<TView extends TaskView>(
   activeExecutions: Map<string, ActiveExecution>,
-  forumPostId: string,
+  executionKey: string,
   identity: Pick<ActiveExecution, "kind" | "fingerprint">,
   operation: () => Promise<TView>,
 ): Promise<TView> {
-  const existing = activeExecutions.get(forumPostId);
+  const existing = activeExecutions.get(executionKey);
   if (existing !== undefined) {
     if (existing.kind === identity.kind) {
       if (existing.fingerprint !== identity.fingerprint) {
         throw new OrchestratorError(
           identity.kind === "accept" ? "FORUM_POST_CONFLICT" : "CLARIFICATION_ANSWER_CONFLICT",
-          `Forum post ${forumPostId} already has a conflicting in-flight ${identity.kind} operation.`,
+          `Task operation ${executionKey} already has a conflicting in-flight ${identity.kind} operation.`,
         );
       }
       return existing.promise as Promise<TView>;
     }
 
     await existing.promise;
-    return runExclusive(activeExecutions, forumPostId, identity, operation);
+    return runExclusive(activeExecutions, executionKey, identity, operation);
   }
 
   const execution = operation();
@@ -1077,12 +719,12 @@ async function runExclusive<TView extends TaskView>(
     ...identity,
     promise: execution,
   };
-  activeExecutions.set(forumPostId, active);
+  activeExecutions.set(executionKey, active);
   try {
     return await execution;
   } finally {
-    if (activeExecutions.get(forumPostId) === active) {
-      activeExecutions.delete(forumPostId);
+    if (activeExecutions.get(executionKey) === active) {
+      activeExecutions.delete(executionKey);
     }
   }
 }

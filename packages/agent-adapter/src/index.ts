@@ -1,4 +1,6 @@
-export type AgentProvider = "claude" | "codex" | "generic-command";
+import type { AgentProvider } from "@opendelegate/domain";
+
+export type { AgentProvider } from "@opendelegate/domain";
 
 export type AgentAuthenticationState = "missing" | "not-required" | "ready";
 

@@ -32,7 +32,7 @@ The Phase 0 and Phase 1 workspace map is:
 | Admin Web | `apps/admin-web` | Initial one-Device setup surface |
 | Storage | `packages/event-store` plus future storage implementations | In-memory journal only; SQL and Artifact stores deferred |
 | Bootstrap and Service Management | `tooling/` plus future init/join skills and service applications | Reserved boundary; no service behavior yet |
-| Acceptance Harness | `packages/acceptance`, `packages/simulator` | Canonical fake journey, fault, replay, and restart proof |
+| Acceptance Harness | `packages/acceptance`, `packages/simulator` | Canonical public-contract journey plus lower-level event replay fixture |
 
 Process entrypoints will be added only when their implementation phase begins:
 Main Control Plane and Worker service in Phases 2–4, service installation,
@@ -46,6 +46,34 @@ path containment, bounded retrieval, Markdown linking, and local-only behavior a
 security-sensitive contracts worth proving early. It is not wired into a Main
 entrypoint or declared production-ready; Phase 9 remains responsible for Worker
 integration, watcher behavior, index durability, and live acceptance.
+
+`packages/acceptance` owns the canonical fake Task journey through public contracts.
+`packages/simulator` is the lower-level deterministic fixture for recorded-event
+projection, replay, and restart boundaries. Its private event vocabulary is not a
+second product contract; changes to the canonical journey must review the fixture
+for continued relevance or parity.
+
+The checked dependency direction for the active orchestration path is:
+
+```mermaid
+flowchart LR
+    acceptance["Acceptance harness"] --> orchestrator["Orchestrator"]
+    acceptance --> protocol["Protocol"]
+    acceptance --> scheduler["Scheduler"]
+    orchestrator --> eventStore["Event store"]
+    orchestrator --> protocol
+    orchestrator --> scheduler
+    orchestrator --> domain["Domain"]
+    protocol --> domain
+    scheduler --> domain
+```
+
+Protocol reuses the canonical `OsFamily` vocabulary from Domain. Scheduler owns
+mechanical Device eligibility, scoring, preferred-Device fallback, and bounded
+tie-candidate exposure. Orchestrator consumes those public contracts and asks the
+Coordinator to choose only when Scheduler returns a semantic tie. This direction
+keeps provider-neutral validation and deterministic scheduling out of the
+acceptance harness.
 
 ## Alternatives considered
 
@@ -79,7 +107,12 @@ behavior.
 
 - Workspace dependency review shows no Admin or Main dependency on Worker Knowledge
   content.
-- The canonical acceptance harness uses boundary contracts and deterministic fakes.
+- `pnpm architecture:check` rejects unmapped workspaces, dependency drift, cycles, and
+  source imports that bypass a workspace manifest; every workspace also exposes a
+  package-local strict typecheck surface and a test command that cannot enumerate
+  only today's test files.
+- The canonical journey in `packages/acceptance` uses boundary contracts and
+  deterministic fakes; `packages/simulator` remains explicitly lower-level.
 - No service, SQL, Discord, or live desktop support is claimed from this map.
 
 ## References

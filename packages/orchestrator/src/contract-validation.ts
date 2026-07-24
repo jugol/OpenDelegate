@@ -1,4 +1,11 @@
 import type { TaskBrief, TaskState } from "@opendelegate/domain";
+import {
+  PROTOCOL_VERSION,
+  ProtocolValidationError,
+  parseArtifactReference as parseProtocolArtifactReference,
+  parseSemanticDeviceSelectionResponse,
+  parseWorkOrder as parseProtocolWorkOrder,
+} from "@opendelegate/protocol";
 
 import type {
   ArtifactContent,
@@ -8,6 +15,7 @@ import type {
   ClarificationRequest,
   CompletedTaskView,
   CoordinatorIntakeDecision,
+  CoordinatorDeviceSelection,
   CoordinatorPlan,
   CoordinatorReview,
   CoordinatorSynthesis,
@@ -124,6 +132,46 @@ export function parseCoordinatorIntakeDecision(value: unknown): CoordinatorIntak
   );
 }
 
+export function parseCoordinatorDeviceSelection(
+  value: unknown,
+  expected: {
+    readonly taskId: string;
+    readonly workOrderId: string;
+    readonly eligibleDeviceIds: readonly string[];
+  },
+): CoordinatorDeviceSelection {
+  requireRecord(value, "SCHEDULING_SELECTION_INVALID", "Coordinator Device selection");
+  const parsed = parseProtocolBoundary(
+    () => parseSemanticDeviceSelectionResponse(value),
+    "SCHEDULING_SELECTION_INVALID",
+    "Coordinator Device selection",
+  );
+  if (parsed.taskId !== expected.taskId) {
+    throw invalid(
+      "SCHEDULING_SELECTION_INVALID",
+      `Coordinator Device selection belongs to Task ${parsed.taskId}, expected ${expected.taskId}.`,
+    );
+  }
+  if (parsed.workOrderId !== expected.workOrderId) {
+    throw invalid(
+      "SCHEDULING_SELECTION_INVALID",
+      `Coordinator Device selection belongs to Work Order ${parsed.workOrderId}, expected ${expected.workOrderId}.`,
+    );
+  }
+  if (!expected.eligibleDeviceIds.includes(parsed.preferredDeviceId)) {
+    throw invalid(
+      "SCHEDULING_SELECTION_INVALID",
+      `Coordinator selected Device ${parsed.preferredDeviceId} outside the bounded eligible set.`,
+    );
+  }
+  return Object.freeze({
+    protocolVersion: parsed.protocolVersion,
+    taskId: parsed.taskId,
+    workOrderId: parsed.workOrderId,
+    preferredDeviceId: parsed.preferredDeviceId,
+  });
+}
+
 export function parseClarificationRequest(
   value: unknown,
   code: OrchestratorErrorCode = "JOURNAL_EVENT_INVALID",
@@ -235,9 +283,18 @@ export function parseArtifactReference(
   code: OrchestratorErrorCode = "ARTIFACT_REFERENCE_INVALID",
 ): ArtifactReference {
   const record = requireRecord(value, code, "Artifact reference");
+  const parsed = parseProtocolBoundary(
+    () =>
+      parseProtocolArtifactReference({
+        ...record,
+        protocolVersion: PROTOCOL_VERSION,
+      }),
+    code,
+    "Artifact reference",
+  );
   return Object.freeze({
-    artifactId: requireString(record["artifactId"], "artifactId", code),
-    href: parseHttpUrl(record["href"], "href", code),
+    artifactId: parsed.artifactId,
+    href: parsed.href,
   });
 }
 
@@ -304,27 +361,43 @@ export function parseWorkerRunCompletion(
   value: unknown,
   code: OrchestratorErrorCode = "RUN_COMPLETION_INVALID",
 ): WorkerRunCompletion {
-  const record = requireRecord(value, code, "Worker Run completion");
+  const record = { ...requireRecord(value, code, "Worker Run completion") };
+  return parseWorkerRunIdentity(record, code);
+}
+
+function parseWorkerRunIdentity(
+  record: Readonly<Record<string, unknown>>,
+  code: OrchestratorErrorCode,
+): WorkerRunCompletion {
+  const taskId = requireString(record["taskId"], "taskId", code);
+  const workOrderId = requireString(record["workOrderId"], "workOrderId", code);
+  const deviceId = requireString(record["deviceId"], "deviceId", code);
+  const workerId = requireString(record["workerId"], "workerId", code);
+  const routeId = requireString(record["routeId"], "routeId", code);
+  const runId = requireString(record["runId"], "runId", code);
+  const leaseId = requireString(record["leaseId"], "leaseId", code);
   const fencingToken = record["fencingToken"];
   if (!Number.isSafeInteger(fencingToken) || (fencingToken as number) <= 0) {
-    throw invalid(code, "Worker Run completion fencingToken must be a positive safe integer.");
+    throw invalid(code, "fencingToken must be a positive safe integer.");
   }
 
   return Object.freeze({
-    taskId: requireString(record["taskId"], "taskId", code),
-    workOrderId: requireString(record["workOrderId"], "workOrderId", code),
-    deviceId: requireString(record["deviceId"], "deviceId", code),
-    workerId: requireString(record["workerId"], "workerId", code),
-    routeId: requireString(record["routeId"], "routeId", code),
-    runId: requireString(record["runId"], "runId", code),
-    leaseId: requireString(record["leaseId"], "leaseId", code),
+    taskId,
+    workOrderId,
+    deviceId,
+    workerId,
+    routeId,
+    runId,
+    leaseId,
     fencingToken: fencingToken as number,
   });
 }
 
 export function parseWorkerExecutionResult(value: unknown): WorkerExecutionResult {
-  const record = requireRecord(value, "RUN_COMPLETION_INVALID", "Worker execution result");
-  const completion = parseWorkerRunCompletion(record);
+  const record = {
+    ...requireRecord(value, "RUN_COMPLETION_INVALID", "Worker execution result"),
+  };
+  const completion = parseWorkerRunIdentity(record, "RUN_COMPLETION_INVALID");
   return Object.freeze({
     ...completion,
     report: requireString(record["report"], "report", "RUN_COMPLETION_INVALID"),
@@ -493,56 +566,20 @@ function hasValidCalendarDate(value: string): boolean {
 
 function parsePlannedWorkOrder(value: unknown, code: OrchestratorErrorCode): PlannedWorkOrder {
   const record = requireRecord(value, code, "Planned Work Order");
-  const schedulingHints = requireRecord(
-    record["schedulingHints"],
+  const parsed = parseProtocolBoundary(
+    () =>
+      parseProtocolWorkOrder({
+        ...record,
+        protocolVersion: PROTOCOL_VERSION,
+      }),
     code,
-    "Work Order scheduling hints",
+    "Planned Work Order",
   );
-  const requiredOsFamily = record["requiredOsFamily"];
-  if (
-    requiredOsFamily !== undefined &&
-    requiredOsFamily !== "macos" &&
-    requiredOsFamily !== "windows" &&
-    requiredOsFamily !== "linux"
-  ) {
-    throw invalid(code, "Work Order requiredOsFamily is invalid.");
+  const { protocolVersion, ...workOrder } = parsed;
+  if (protocolVersion !== PROTOCOL_VERSION) {
+    throw invalid(code, "Planned Work Order uses an unsupported protocol version.");
   }
-  const workspaceId =
-    record["workspaceId"] === undefined
-      ? undefined
-      : requireString(record["workspaceId"], "workspaceId", code);
-
-  return Object.freeze({
-    workOrderId: requireString(record["workOrderId"], "workOrderId", code),
-    title: requireString(record["title"], "title", code),
-    brief: requireString(record["brief"], "brief", code),
-    completionCriteria: parseStringList(record["completionCriteria"], "completionCriteria", code, {
-      allowEmpty: false,
-    }),
-    constraints: parseStringList(record["constraints"], "constraints", code),
-    selectedInputIds: parseStringList(record["selectedInputIds"], "selectedInputIds", code),
-    dependsOn: parseStringList(record["dependsOn"], "dependsOn", code),
-    schedulingHints: Object.freeze({
-      preferredDeviceIds: parseStringList(
-        schedulingHints["preferredDeviceIds"],
-        "schedulingHints.preferredDeviceIds",
-        code,
-      ),
-      preferredRoles: parseStringList(
-        schedulingHints["preferredRoles"],
-        "schedulingHints.preferredRoles",
-        code,
-      ),
-    }),
-    requiredCapabilities: parseStringList(
-      record["requiredCapabilities"],
-      "requiredCapabilities",
-      code,
-    ),
-    requiredSecretRefs: parseStringList(record["requiredSecretRefs"], "requiredSecretRefs", code),
-    ...(requiredOsFamily === undefined ? {} : { requiredOsFamily }),
-    ...(workspaceId === undefined ? {} : { workspaceId }),
-  });
+  return deepFreeze(workOrder);
 }
 
 function assertWorkOrderGraph(
@@ -687,4 +724,19 @@ function parseHttpUrl(value: unknown, field: string, code: OrchestratorErrorCode
 
 function invalid(code: OrchestratorErrorCode, message: string): OrchestratorError {
   return new OrchestratorError(code, message);
+}
+
+function parseProtocolBoundary<TValue>(
+  parse: () => TValue,
+  code: OrchestratorErrorCode,
+  label: string,
+): TValue {
+  try {
+    return parse();
+  } catch (error: unknown) {
+    if (error instanceof ProtocolValidationError) {
+      throw invalid(code, `${label} is invalid at ${error.path}: ${error.message}`);
+    }
+    throw error;
+  }
 }

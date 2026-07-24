@@ -1,7 +1,6 @@
-export type OsFamily = "macos" | "windows" | "linux";
+import type { CapabilityState, OsFamily } from "@opendelegate/domain";
 
-export type CapabilityState =
-  "detected" | "verification-pending" | "verified" | "degraded" | "unavailable" | "disabled";
+export type { CapabilityState, OsFamily } from "@opendelegate/domain";
 
 export type EvidenceSource =
   | "agent-adapter"

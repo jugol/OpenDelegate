@@ -25,7 +25,6 @@ import {
   type WorkerDeviceSnapshot,
   type WorkerExecutionInput,
   type WorkerExecutionResult,
-  type WorkOrderSchedulingInput,
 } from "@opendelegate/orchestrator";
 
 class AllowlistedOwner implements ChannelAuthorizer {
@@ -50,31 +49,6 @@ const dispatchDependencies = {
   dispatchPolicy: {
     evaluate() {
       return { outcome: "allow", code: "acceptance-dispatch-allowed" } as const;
-    },
-  },
-  scheduler: {
-    select(input: WorkOrderSchedulingInput) {
-      const preferred = input.workOrder.schedulingHints.preferredDeviceIds;
-      const eligible = input.candidates.filter((candidate) =>
-        input.workOrder.requiredCapabilities.every((required) =>
-          candidate.capabilities.some(
-            (capability) => capability.name === required && capability.verification === "verified",
-          ),
-        ),
-      );
-      const candidate =
-        preferred
-          .map((deviceId) => eligible.find((value) => value.deviceId === deviceId))
-          .find((value) => value !== undefined) ?? eligible[0];
-      assert.ok(candidate);
-      const route = candidate.routes.find((value) => value.health === "healthy");
-      assert.ok(route);
-      return {
-        deviceId: candidate.deviceId,
-        workerId: candidate.workerId,
-        routeId: route.routeId,
-        explanations: [],
-      };
     },
   },
 } as const;
@@ -219,6 +193,17 @@ class FakeCoordinator implements Coordinator {
         },
       ],
     };
+  }
+
+  async selectDevice(input: Parameters<Coordinator["selectDevice"]>[0]) {
+    const preferredDevice = input.eligibleDevices[0];
+    assert.ok(preferredDevice);
+    return {
+      protocolVersion: "v1",
+      taskId: input.taskId,
+      workOrderId: input.workOrder.workOrderId,
+      preferredDeviceId: preferredDevice.deviceId,
+    } as const;
   }
 
   async synthesize(input: CoordinatorSynthesisInput): Promise<CoordinatorSynthesis> {

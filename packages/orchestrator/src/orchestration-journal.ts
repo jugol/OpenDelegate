@@ -39,18 +39,15 @@ export interface JournaledTaskIntake {
 }
 
 export interface JournaledWorkOrderResult extends WorkerRunCompletion {
-  readonly planFingerprint: string;
   readonly report: WorkerReport;
 }
 
 export interface JournaledRunAssignment {
   readonly workOrderId: string;
-  readonly planFingerprint: string;
   readonly assignment: RunAssignment;
 }
 
 export interface JournaledArtifactResult {
-  readonly contentFingerprint: string;
   readonly reference: ArtifactReference;
 }
 
@@ -61,32 +58,32 @@ export interface JournaledClarification {
 
 export interface OrchestrationJournal {
   taskIdFor(forumPostId: string): string | undefined;
-  taskIntake(forumPostId: string): JournaledTaskIntake | undefined;
+  taskIntake(taskId: string): JournaledTaskIntake | undefined;
   bindTask(forumPostId: string, intake: JournaledTaskIntake): void;
-  intakeReady(forumPostId: string): boolean;
-  recordIntakeReady(forumPostId: string): void;
-  clarification(forumPostId: string): JournaledClarification | undefined;
-  recordClarificationRequest(forumPostId: string, clarification: ClarificationRequest): void;
-  recordClarificationAnswer(forumPostId: string, clarification: ClarificationExchange): void;
-  plan(forumPostId: string): CoordinatorPlan | undefined;
-  recordPlan(forumPostId: string, plan: CoordinatorPlan): void;
-  runAssignment(forumPostId: string, workOrderId: string): JournaledRunAssignment | undefined;
-  runAssignments(forumPostId: string): readonly JournaledRunAssignment[];
-  recordRunAssignment(forumPostId: string, assignment: JournaledRunAssignment): void;
-  recordRunFailed(forumPostId: string, workOrderId: string, runId: string): void;
-  synthesis(forumPostId: string): CoordinatorSynthesis | undefined;
-  recordSynthesis(forumPostId: string, synthesis: CoordinatorSynthesis): void;
-  workOrderResults(forumPostId: string): readonly JournaledWorkOrderResult[];
-  recordWorkOrderResult(forumPostId: string, result: JournaledWorkOrderResult): void;
-  artifactResult(forumPostId: string): JournaledArtifactResult | undefined;
-  recordArtifactResult(forumPostId: string, result: JournaledArtifactResult): void;
-  reviewStarted(forumPostId: string): boolean;
-  recordReviewStarted(forumPostId: string): void;
-  review(forumPostId: string): CoordinatorReview | undefined;
-  recordReview(forumPostId: string, review: CoordinatorReview): void;
-  taskStateHistory(forumPostId: string): readonly TaskState[];
-  completedTask(forumPostId: string): CompletedTaskView | undefined;
-  recordCompletedTask(forumPostId: string, task: CompletedTaskView): void;
+  intakeReady(taskId: string): boolean;
+  recordIntakeReady(taskId: string): void;
+  clarification(taskId: string): JournaledClarification | undefined;
+  recordClarificationRequest(taskId: string, clarification: ClarificationRequest): void;
+  recordClarificationAnswer(taskId: string, clarification: ClarificationExchange): void;
+  plan(taskId: string): CoordinatorPlan | undefined;
+  recordPlan(taskId: string, plan: CoordinatorPlan): void;
+  runAssignment(taskId: string, workOrderId: string): JournaledRunAssignment | undefined;
+  runAssignments(taskId: string): readonly JournaledRunAssignment[];
+  recordRunAssignment(taskId: string, assignment: JournaledRunAssignment): void;
+  recordRunFailed(taskId: string, workOrderId: string, runId: string): void;
+  synthesis(taskId: string): CoordinatorSynthesis | undefined;
+  recordSynthesis(taskId: string, synthesis: CoordinatorSynthesis): void;
+  workOrderResults(taskId: string): readonly JournaledWorkOrderResult[];
+  recordWorkOrderResult(taskId: string, result: JournaledWorkOrderResult): void;
+  artifactResult(taskId: string): JournaledArtifactResult | undefined;
+  recordArtifactResult(taskId: string, result: JournaledArtifactResult): void;
+  reviewStarted(taskId: string): boolean;
+  recordReviewStarted(taskId: string): void;
+  review(taskId: string): CoordinatorReview | undefined;
+  recordReview(taskId: string, review: CoordinatorReview): void;
+  taskStateHistory(taskId: string): readonly TaskState[];
+  completedTask(taskId: string): CompletedTaskView | undefined;
+  recordCompletedTask(taskId: string, task: CompletedTaskView): void;
 }
 
 export interface InMemoryOrchestrationJournalOptions {
@@ -139,11 +136,22 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
   }
 
   public taskIdFor(forumPostId: string): string | undefined {
-    return this.project(forumPostId).intake?.taskId;
+    const matching = this.store
+      .readAll()
+      .filter((event) => event.type === "task.bound")
+      .map((event) => {
+        const payload = requireRecord(event.payload);
+        return {
+          forumPostId: requireString(payload, "forumPostId"),
+          taskId: requireString(payload, "taskId"),
+        };
+      })
+      .find((binding) => binding.forumPostId === forumPostId);
+    return matching?.taskId;
   }
 
-  public taskIntake(forumPostId: string): JournaledTaskIntake | undefined {
-    const intake = this.project(forumPostId).intake;
+  public taskIntake(taskId: string): JournaledTaskIntake | undefined {
+    const intake = this.project(taskId).intake;
     return intake === undefined ? undefined : freezeTaskIntake(intake);
   }
 
@@ -156,46 +164,37 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       );
     }
 
-    const existing = this.taskIntake(forumPostId);
-    if (existing !== undefined) {
-      if (!sameValue(existing, normalized)) {
+    const boundTaskId = this.taskIdFor(forumPostId);
+    if (boundTaskId !== undefined) {
+      const existing = this.taskIntake(boundTaskId);
+      if (existing === undefined || !sameValue(existing, normalized)) {
         throw new OrchestratorError(
-          existing.taskId === normalized.taskId ? "FORUM_POST_CONFLICT" : "TASK_ID_CONFLICT",
+          boundTaskId === normalized.taskId ? "FORUM_POST_CONFLICT" : "TASK_ID_CONFLICT",
           `Forum post ${forumPostId} already has a conflicting Task binding.`,
         );
       }
       return;
     }
-    const conflictingBinding = this.store
-      .readAll()
-      .filter((event) => event.type === "task.bound")
-      .map((event) => {
-        const payload = requireRecord(event.payload);
-        return {
-          forumPostId: requireString(payload, "forumPostId"),
-          taskId: requireString(payload, "taskId"),
-        };
-      })
-      .find((binding) => binding.taskId === normalized.taskId);
-    if (conflictingBinding !== undefined) {
+    const existingTask = this.taskIntake(normalized.taskId);
+    if (existingTask !== undefined) {
       throw new OrchestratorError(
         "TASK_ID_CONFLICT",
-        `Task ${normalized.taskId} is already bound to Forum post ${conflictingBinding.forumPostId}.`,
+        `Task ${normalized.taskId} is already bound to Forum post ${existingTask.forumPost.postId}.`,
       );
     }
 
-    this.append(forumPostId, "task.bound", ["task", forumPostId], {
+    this.append(normalized.taskId, "task.bound", ["task", normalized.taskId], {
       forumPostId,
       ...normalized,
     });
   }
 
-  public intakeReady(forumPostId: string): boolean {
-    return this.project(forumPostId).intakeReady;
+  public intakeReady(taskId: string): boolean {
+    return this.project(taskId).intakeReady;
   }
 
-  public recordIntakeReady(forumPostId: string): void {
-    const projection = this.project(forumPostId);
+  public recordIntakeReady(taskId: string): void {
+    const projection = this.project(taskId);
     if (projection.intakeReady) {
       return;
     }
@@ -205,22 +204,19 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "A ready intake requires one Task binding and cannot follow a clarification.",
       );
     }
-    this.append(forumPostId, "intake.ready", ["intake-ready", forumPostId], {
-      forumPostId,
+    this.append(taskId, "intake.ready", ["intake-ready", taskId], {
+      taskId,
     });
   }
 
-  public clarification(forumPostId: string): JournaledClarification | undefined {
-    const clarification = this.project(forumPostId).clarification;
+  public clarification(taskId: string): JournaledClarification | undefined {
+    const clarification = this.project(taskId).clarification;
     return clarification === undefined ? undefined : freezeJournaledClarification(clarification);
   }
 
-  public recordClarificationRequest(
-    forumPostId: string,
-    clarification: ClarificationRequest,
-  ): void {
+  public recordClarificationRequest(taskId: string, clarification: ClarificationRequest): void {
     const normalized = parseClarificationRequest(clarification, "COORDINATOR_INTAKE_INVALID");
-    const projection = this.project(forumPostId);
+    const projection = this.project(taskId);
     const existing = projection.clarification;
     if (existing !== undefined) {
       if (!sameValue(existing.request, normalized)) {
@@ -237,22 +233,19 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "A clarification requires one unassessed Task binding.",
       );
     }
-    this.append(forumPostId, "clarification.requested", ["clarification-request", forumPostId], {
-      forumPostId,
+    this.append(taskId, "clarification.requested", ["clarification-request", taskId], {
+      taskId,
       clarification: normalized,
     });
   }
 
-  public recordClarificationAnswer(
-    forumPostId: string,
-    clarification: ClarificationExchange,
-  ): void {
+  public recordClarificationAnswer(taskId: string, clarification: ClarificationExchange): void {
     const normalized = parseClarificationExchange(clarification, "CLARIFICATION_ANSWER_INVALID");
-    const existing = this.clarification(forumPostId);
+    const existing = this.clarification(taskId);
     if (existing === undefined) {
       throw new OrchestratorError(
         "CLARIFICATION_NOT_FOUND",
-        `Forum post ${forumPostId} has no pending clarification.`,
+        `Task ${taskId} has no pending clarification.`,
       );
     }
     if (
@@ -274,26 +267,26 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       return;
     }
 
-    this.append(forumPostId, "clarification.answered", ["clarification-answer", forumPostId], {
-      forumPostId,
+    this.append(taskId, "clarification.answered", ["clarification-answer", taskId], {
+      taskId,
       clarification: normalized,
     });
   }
 
-  public plan(forumPostId: string): CoordinatorPlan | undefined {
-    const plan = this.project(forumPostId).plan;
+  public plan(taskId: string): CoordinatorPlan | undefined {
+    const plan = this.project(taskId).plan;
     return plan === undefined ? undefined : parseCoordinatorPlan(plan, "JOURNAL_EVENT_INVALID");
   }
 
-  public recordPlan(forumPostId: string, plan: CoordinatorPlan): void {
+  public recordPlan(taskId: string, plan: CoordinatorPlan): void {
     const normalized = parseCoordinatorPlan(plan);
-    const projection = this.project(forumPostId);
+    const projection = this.project(taskId);
     const existing = projection.plan;
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
         throw new OrchestratorError(
           "COORDINATOR_PLAN_CONFLICT",
-          `Forum post ${forumPostId} already has a different durable plan.`,
+          `Task ${taskId} already has a different durable plan.`,
         );
       }
       return;
@@ -307,35 +300,32 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "A Coordinator plan requires a ready intake or answered clarification.",
       );
     }
-    this.append(forumPostId, "plan.recorded", ["plan", forumPostId], {
-      forumPostId,
+    this.append(taskId, "plan.recorded", ["plan", taskId], {
+      taskId,
       plan: normalized,
     });
   }
 
-  public runAssignment(
-    forumPostId: string,
-    workOrderId: string,
-  ): JournaledRunAssignment | undefined {
-    const projection = this.project(forumPostId);
+  public runAssignment(taskId: string, workOrderId: string): JournaledRunAssignment | undefined {
+    const projection = this.project(taskId);
     const assignment = projection.runAssignments.get(workOrderId)?.at(-1);
     return assignment === undefined || projection.failedRunIds.has(assignment.assignment.runId)
       ? undefined
       : freezeRunAssignment(assignment);
   }
 
-  public runAssignments(forumPostId: string): readonly JournaledRunAssignment[] {
+  public runAssignments(taskId: string): readonly JournaledRunAssignment[] {
     return Object.freeze(
-      [...this.project(forumPostId).runAssignments.values()]
+      [...this.project(taskId).runAssignments.values()]
         .flat()
         .sort((left, right) => left.workOrderId.localeCompare(right.workOrderId))
         .map(freezeRunAssignment),
     );
   }
 
-  public recordRunAssignment(forumPostId: string, assignment: JournaledRunAssignment): void {
+  public recordRunAssignment(taskId: string, assignment: JournaledRunAssignment): void {
     const normalized = freezeRunAssignment(assignment);
-    const projection = this.project(forumPostId);
+    const projection = this.project(taskId);
     const existing = projection.runAssignments.get(normalized.workOrderId)?.at(-1);
     if (existing !== undefined) {
       if (projection.failedRunIds.has(existing.assignment.runId)) {
@@ -365,9 +355,8 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     );
     if (
       plannedWorkOrder === undefined ||
-      normalized.planFingerprint !== fingerprintPlannedWorkOrder(plannedWorkOrder) ||
       normalized.assignment.workOrderId !== normalized.workOrderId ||
-      normalized.assignment.taskId !== projection.intake?.taskId ||
+      normalized.assignment.taskId !== taskId ||
       !plannedWorkOrder.dependsOn.every((dependencyId) => projection.workOrders.has(dependencyId))
     ) {
       throw new OrchestratorError(
@@ -384,19 +373,20 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       "A Run assignment must be live when it is durably dispatched.",
     );
     this.appendAt(
-      forumPostId,
+      taskId,
       "work-order.dispatched",
-      ["dispatch", forumPostId, normalized.workOrderId, normalized.assignment.runId],
+      ["dispatch", taskId, normalized.workOrderId, normalized.assignment.runId],
       {
-        forumPostId,
+        taskId,
         ...normalized,
+        planFingerprint: fingerprintPlannedWorkOrder(plannedWorkOrder),
       },
       acceptedAt,
     );
   }
 
-  public recordRunFailed(forumPostId: string, workOrderId: string, runId: string): void {
-    const projection = this.project(forumPostId);
+  public recordRunFailed(taskId: string, workOrderId: string, runId: string): void {
+    const projection = this.project(taskId);
     const assignment = projection.runAssignments.get(workOrderId)?.at(-1);
     if (
       assignment === undefined ||
@@ -411,34 +401,29 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     if (projection.failedRunIds.has(runId)) {
       return;
     }
-    this.append(
-      forumPostId,
-      "work-order.run-failed",
-      ["dispatch-failed", forumPostId, workOrderId, runId],
-      {
-        forumPostId,
-        workOrderId,
-        runId,
-      },
-    );
+    this.append(taskId, "work-order.run-failed", ["dispatch-failed", taskId, workOrderId, runId], {
+      taskId,
+      workOrderId,
+      runId,
+    });
   }
 
-  public synthesis(forumPostId: string): CoordinatorSynthesis | undefined {
-    const synthesis = this.project(forumPostId).synthesis;
+  public synthesis(taskId: string): CoordinatorSynthesis | undefined {
+    const synthesis = this.project(taskId).synthesis;
     return synthesis === undefined
       ? undefined
       : parseCoordinatorSynthesis(synthesis, "JOURNAL_EVENT_INVALID");
   }
 
-  public recordSynthesis(forumPostId: string, synthesis: CoordinatorSynthesis): void {
+  public recordSynthesis(taskId: string, synthesis: CoordinatorSynthesis): void {
     const normalized = parseCoordinatorSynthesis(synthesis);
-    const projection = this.project(forumPostId);
+    const projection = this.project(taskId);
     const existing = projection.synthesis;
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
         throw new OrchestratorError(
           "COORDINATOR_SYNTHESIS_INVALID",
-          `Forum post ${forumPostId} already has a different durable synthesis.`,
+          `Task ${taskId} already has a different durable synthesis.`,
         );
       }
       return;
@@ -454,23 +439,23 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "Coordinator synthesis requires every planned Work Order result.",
       );
     }
-    this.append(forumPostId, "synthesis.recorded", ["synthesis", forumPostId], {
-      forumPostId,
+    this.append(taskId, "synthesis.recorded", ["synthesis", taskId], {
+      taskId,
       synthesis: normalized,
     });
   }
 
-  public workOrderResults(forumPostId: string): readonly JournaledWorkOrderResult[] {
+  public workOrderResults(taskId: string): readonly JournaledWorkOrderResult[] {
     return Object.freeze(
-      [...this.project(forumPostId).workOrders.values()]
+      [...this.project(taskId).workOrders.values()]
         .sort((left, right) => left.workOrderId.localeCompare(right.workOrderId))
         .map(freezeWorkOrderResult),
     );
   }
 
-  public recordWorkOrderResult(forumPostId: string, result: JournaledWorkOrderResult): void {
+  public recordWorkOrderResult(taskId: string, result: JournaledWorkOrderResult): void {
     const normalized = freezeWorkOrderResult(result);
-    const projection = this.project(forumPostId);
+    const projection = this.project(taskId);
     const existing = projection.workOrders.get(result.workOrderId);
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
@@ -492,7 +477,6 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       plannedWorkOrder === undefined ||
       currentAssignment === undefined ||
       projection.synthesis !== undefined ||
-      normalized.planFingerprint !== fingerprintPlannedWorkOrder(plannedWorkOrder) ||
       normalized.report.workOrderId !== normalized.workOrderId ||
       normalized.report.workerId !== normalized.workerId ||
       !runCompletionMatchesAssignment(normalized, currentAssignment) ||
@@ -512,56 +496,54 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       `Worker completion for Run ${normalized.runId} arrived after its lease expired.`,
     );
     this.appendAt(
-      forumPostId,
+      taskId,
       "work-order.completed",
-      ["work-order", forumPostId, result.workOrderId],
+      ["work-order", taskId, result.workOrderId],
       {
-        forumPostId,
         ...normalized,
+        planFingerprint: fingerprintPlannedWorkOrder(plannedWorkOrder),
       },
       acceptedAt,
     );
   }
 
-  public artifactResult(forumPostId: string): JournaledArtifactResult | undefined {
-    const result = this.project(forumPostId).artifact;
+  public artifactResult(taskId: string): JournaledArtifactResult | undefined {
+    const result = this.project(taskId).artifact;
     return result === undefined ? undefined : freezeArtifactResult(result);
   }
 
-  public recordArtifactResult(forumPostId: string, result: JournaledArtifactResult): void {
+  public recordArtifactResult(taskId: string, result: JournaledArtifactResult): void {
     const normalized = freezeArtifactResult(result);
-    const projection = this.project(forumPostId);
+    const projection = this.project(taskId);
     const existing = projection.artifact;
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
         throw new OrchestratorError(
           "ARTIFACT_ID_CONFLICT",
-          `Forum post ${forumPostId} already has a conflicting Artifact result.`,
+          `Task ${taskId} already has a conflicting Artifact result.`,
         );
       }
       return;
     }
-    if (
-      projection.synthesis === undefined ||
-      normalized.contentFingerprint !== fingerprintArtifactContent(projection.synthesis.artifact)
-    ) {
+    if (projection.synthesis === undefined) {
       throw new OrchestratorError(
         "ARTIFACT_ID_CONFLICT",
         "Artifact publication requires and must match one durable Coordinator synthesis.",
       );
     }
-    this.append(forumPostId, "artifact.published", ["artifact", forumPostId], {
-      forumPostId,
+    this.append(taskId, "artifact.published", ["artifact", taskId], {
+      taskId,
       ...normalized,
+      contentFingerprint: fingerprintArtifactContent(projection.synthesis.artifact),
     });
   }
 
-  public reviewStarted(forumPostId: string): boolean {
-    return this.project(forumPostId).reviewStarted;
+  public reviewStarted(taskId: string): boolean {
+    return this.project(taskId).reviewStarted;
   }
 
-  public recordReviewStarted(forumPostId: string): void {
-    const projection = this.project(forumPostId);
+  public recordReviewStarted(taskId: string): void {
+    const projection = this.project(taskId);
     if (projection.reviewStarted) {
       return;
     }
@@ -571,13 +553,13 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         "Task review requires a published Artifact.",
       );
     }
-    this.append(forumPostId, "task.review-started", ["review-started", forumPostId], {
-      forumPostId,
+    this.append(taskId, "task.review-started", ["review-started", taskId], {
+      taskId,
     });
   }
 
-  public review(forumPostId: string): CoordinatorReview | undefined {
-    const projection = this.project(forumPostId);
+  public review(taskId: string): CoordinatorReview | undefined {
+    const projection = this.project(taskId);
     if (projection.review === undefined) {
       return undefined;
     }
@@ -594,8 +576,8 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     );
   }
 
-  public recordReview(forumPostId: string, review: CoordinatorReview): void {
-    const projection = this.project(forumPostId);
+  public recordReview(taskId: string, review: CoordinatorReview): void {
+    const projection = this.project(taskId);
     const plan = projection.plan;
     if (
       plan === undefined ||
@@ -614,19 +596,19 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       if (!sameValue(existing, normalized)) {
         throw new OrchestratorError(
           "COORDINATOR_REVIEW_INVALID",
-          `Forum post ${forumPostId} already has a different durable review.`,
+          `Task ${taskId} already has a different durable review.`,
         );
       }
       return;
     }
-    this.append(forumPostId, "task.review-completed", ["review-completed", forumPostId], {
-      forumPostId,
+    this.append(taskId, "task.review-completed", ["review-completed", taskId], {
+      taskId,
       review: normalized,
     });
   }
 
-  public taskStateHistory(forumPostId: string): readonly TaskState[] {
-    const projection = this.project(forumPostId);
+  public taskStateHistory(taskId: string): readonly TaskState[] {
+    const projection = this.project(taskId);
     if (projection.intake === undefined) {
       return Object.freeze([]);
     }
@@ -647,20 +629,20 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
     return Object.freeze(states);
   }
 
-  public completedTask(forumPostId: string): CompletedTaskView | undefined {
-    const task = this.project(forumPostId).completedTask;
+  public completedTask(taskId: string): CompletedTaskView | undefined {
+    const task = this.project(taskId).completedTask;
     return task === undefined ? undefined : cloneTaskView(task);
   }
 
-  public recordCompletedTask(forumPostId: string, task: CompletedTaskView): void {
+  public recordCompletedTask(taskId: string, task: CompletedTaskView): void {
     const normalized = parseCompletedTaskView(task);
-    const projection = this.project(forumPostId);
+    const projection = this.project(taskId);
     const existing = projection.completedTask;
     if (existing !== undefined) {
       if (!sameValue(existing, normalized)) {
         throw new OrchestratorError(
           "TASK_ID_CONFLICT",
-          `Forum post ${forumPostId} already has a conflicting completed Task.`,
+          `Task ${taskId} already has a conflicting completed Task.`,
         );
       }
       return;
@@ -672,8 +654,8 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       );
     }
     assertCompletedTaskMatchesProjection(normalized, projection);
-    this.append(forumPostId, "task.completed", ["completed", forumPostId], {
-      forumPostId,
+    this.append(taskId, "task.completed", ["completed", taskId], {
+      taskId,
       task: normalized,
     });
   }
@@ -683,12 +665,12 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
   }
 
   private append(
-    forumPostId: string,
+    taskId: string,
     type: string,
     eventIdentity: readonly string[],
     payload: object,
   ): void {
-    const streamId = streamIdFor(forumPostId);
+    const streamId = streamIdFor(taskId);
     this.store.append({
       streamId,
       expectedVersion: this.store.streamVersion(streamId),
@@ -703,18 +685,18 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
   }
 
   private appendAt(
-    forumPostId: string,
+    taskId: string,
     type: string,
     eventIdentity: readonly string[],
     payload: object,
     occurredAt: string,
   ): void {
     this.clock.runAt(occurredAt, "ORCHESTRATION_CLOCK_INVALID", () => {
-      this.append(forumPostId, type, eventIdentity, payload);
+      this.append(taskId, type, eventIdentity, payload);
     });
   }
 
-  private project(forumPostId: string): JournalProjection {
+  private project(taskId: string): JournalProjection {
     const initial: JournalProjection = {
       intakeReady: false,
       runAssignments: new Map<string, JournaledRunAssignment[]>(),
@@ -722,7 +704,7 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       workOrders: new Map<string, JournaledWorkOrderResult>(),
       reviewStarted: false,
     };
-    return this.store.replay(streamIdFor(forumPostId), initial, (projection, event) =>
+    return this.store.replay(streamIdFor(taskId), initial, (projection, event) =>
       applyJournalEvent(projection, event),
     );
   }
@@ -743,7 +725,7 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         continue;
       }
       const payload = requireRecord(event.payload);
-      const existingForumPostId = requireString(payload, "forumPostId");
+      const existingTaskId = requireString(payload, "taskId");
       const existing = parseRunAssignment(payload["assignment"], "JOURNAL_EVENT_INVALID");
       if (
         existing.runId === assignment.runId ||
@@ -752,7 +734,7 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
       ) {
         throw new OrchestratorError(
           "RUN_ASSIGNMENT_CONFLICT",
-          `Run, lease, and dispatch idempotency identifiers must be globally unique; conflict with Forum post ${existingForumPostId}.`,
+          `Run, lease, and dispatch idempotency identifiers must be globally unique; conflict with Task ${existingTaskId}.`,
         );
       }
     }
@@ -760,6 +742,7 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
 
   private validateGlobalIdentities(code: "JOURNAL_EVENT_INVALID"): void {
     const taskBindings = new Map<string, string>();
+    const forumBindings = new Map<string, string>();
     const runIds = new Set<string>();
     const leaseIds = new Set<string>();
     const idempotencyKeys = new Set<string>();
@@ -769,11 +752,17 @@ export class InMemoryOrchestrationJournal implements OrchestrationJournal {
         const payload = requireRecord(event.payload);
         const forumPostId = requireString(payload, "forumPostId");
         const taskId = requireString(payload, "taskId");
-        const existing = taskBindings.get(taskId);
-        if (existing !== undefined && existing !== forumPostId) {
+        const existingForumPostId = taskBindings.get(taskId);
+        const existingTaskId = forumBindings.get(forumPostId);
+        if (
+          event.streamId !== streamIdFor(taskId) ||
+          (existingForumPostId !== undefined && existingForumPostId !== forumPostId) ||
+          (existingTaskId !== undefined && existingTaskId !== taskId)
+        ) {
           throw new OrchestratorError(code, `Task ${taskId} is bound to more than one Forum post.`);
         }
         taskBindings.set(taskId, forumPostId);
+        forumBindings.set(forumPostId, taskId);
       }
       if (event.type === "work-order.dispatched") {
         const payload = requireRecord(event.payload);
@@ -846,20 +835,20 @@ class MonotonicJournalClock implements EventClock {
   }
 }
 
-function streamIdFor(forumPostId: string): string {
-  return JSON.stringify(["forum-task", forumPostId]);
+function streamIdFor(taskId: string): string {
+  return JSON.stringify(["task", taskId]);
 }
 
 function applyJournalEvent(projection: JournalProjection, event: StoredEvent): JournalProjection {
   const payload = requireRecord(event.payload);
-  const forumPostId = requireString(payload, "forumPostId");
+  const taskId = requireString(payload, "taskId");
   assertJournalState(
-    event.streamId === streamIdFor(forumPostId),
-    "An orchestration event must stay in its Forum Task stream.",
+    event.streamId === streamIdFor(taskId),
+    "An orchestration event must stay in its canonical Task stream.",
   );
   if (event.type !== "task.bound") {
     assertJournalState(
-      projection.intake?.forumPost.postId === forumPostId,
+      projection.intake?.taskId === taskId,
       "An orchestration event must follow its matching Task binding.",
     );
   }
@@ -871,12 +860,13 @@ function applyJournalEvent(projection: JournalProjection, event: StoredEvent): J
         "A Task binding must be the first event in its orchestration stream.",
       );
       projection.intake = freezeTaskIntake({
-        taskId: requireString(payload, "taskId"),
+        taskId,
         forumPost: parseAuthorizedForumPost(payload["forumPost"], "JOURNAL_EVENT_INVALID"),
       });
       assertJournalState(
-        projection.intake.forumPost.postId === forumPostId,
-        "A Task binding payload must match its Forum Task stream.",
+        projection.intake.taskId === taskId &&
+          projection.intake.forumPost.postId === requireString(payload, "forumPostId"),
+        "A Task binding payload must match its canonical Task stream and channel binding.",
       );
       break;
     case "intake.ready":
@@ -932,9 +922,9 @@ function applyJournalEvent(projection: JournalProjection, event: StoredEvent): J
         projection.plan !== undefined && projection.synthesis === undefined,
         "A Work Order dispatch must follow its plan and precede synthesis.",
       );
+      const planFingerprint = requireString(payload, "planFingerprint");
       const assignment = freezeRunAssignment({
         workOrderId: requireString(payload, "workOrderId"),
-        planFingerprint: requireString(payload, "planFingerprint"),
         assignment: parseRunAssignment(payload["assignment"], "JOURNAL_EVENT_INVALID"),
       });
       const plannedWorkOrder = projection.plan.workOrders.find(
@@ -943,7 +933,7 @@ function applyJournalEvent(projection: JournalProjection, event: StoredEvent): J
       const priorAssignment = projection.runAssignments.get(assignment.workOrderId)?.at(-1);
       assertJournalState(
         plannedWorkOrder !== undefined &&
-          assignment.planFingerprint === fingerprintPlannedWorkOrder(plannedWorkOrder) &&
+          planFingerprint === fingerprintPlannedWorkOrder(plannedWorkOrder) &&
           assignment.assignment.taskId === projection.intake?.taskId &&
           assignment.assignment.workOrderId === assignment.workOrderId &&
           assignmentIsLiveAt(assignment.assignment, event.occurredAt, "JOURNAL_EVENT_INVALID") &&
@@ -1000,9 +990,9 @@ function applyJournalEvent(projection: JournalProjection, event: StoredEvent): J
         "A Work Order result must follow its plan and precede synthesis.",
       );
       const completion = parseWorkerRunCompletion(payload, "JOURNAL_EVENT_INVALID");
+      const planFingerprint = requireString(payload, "planFingerprint");
       const result = freezeWorkOrderResult({
         ...completion,
-        planFingerprint: requireString(payload, "planFingerprint"),
         report: parseWorkerReport(payload["report"]),
       });
       const plannedWorkOrder = projection.plan.workOrders.find(
@@ -1010,7 +1000,7 @@ function applyJournalEvent(projection: JournalProjection, event: StoredEvent): J
       );
       assertJournalState(
         plannedWorkOrder !== undefined &&
-          result.planFingerprint === fingerprintPlannedWorkOrder(plannedWorkOrder) &&
+          planFingerprint === fingerprintPlannedWorkOrder(plannedWorkOrder) &&
           result.report.workOrderId === result.workOrderId &&
           result.report.workerId === result.workerId &&
           (() => {
@@ -1037,21 +1027,21 @@ function applyJournalEvent(projection: JournalProjection, event: StoredEvent): J
       projection.workOrders.set(result.workOrderId, result);
       break;
     }
-    case "artifact.published":
+    case "artifact.published": {
       assertJournalState(
         projection.synthesis !== undefined && projection.artifact === undefined,
         "Artifact publication must follow one durable synthesis.",
       );
+      const contentFingerprint = requireString(payload, "contentFingerprint");
       projection.artifact = freezeArtifactResult({
-        contentFingerprint: requireString(payload, "contentFingerprint"),
         reference: parseArtifactReference(payload["reference"], "JOURNAL_EVENT_INVALID"),
       });
       assertJournalState(
-        projection.artifact.contentFingerprint ===
-          fingerprintArtifactContent(projection.synthesis.artifact),
+        contentFingerprint === fingerprintArtifactContent(projection.synthesis.artifact),
         "Artifact content must match the durable Coordinator synthesis.",
       );
       break;
+    }
     case "task.review-started":
       assertJournalState(
         projection.artifact !== undefined && !projection.reviewStarted,
@@ -1190,10 +1180,10 @@ function freezeJournaledClarification(
 }
 
 function freezeRunAssignment(assignment: JournaledRunAssignment): JournaledRunAssignment {
-  if (assignment.workOrderId.trim() === "" || assignment.planFingerprint.trim() === "") {
+  if (assignment.workOrderId.trim() === "") {
     throw new OrchestratorError(
       "JOURNAL_EVENT_INVALID",
-      "A journaled Run assignment requires non-blank Work Order and plan identifiers.",
+      "A journaled Run assignment requires a non-blank Work Order identifier.",
     );
   }
   const normalized = parseRunAssignment(assignment.assignment, "JOURNAL_EVENT_INVALID");
@@ -1205,7 +1195,6 @@ function freezeRunAssignment(assignment: JournaledRunAssignment): JournaledRunAs
   }
   return Object.freeze({
     workOrderId: assignment.workOrderId,
-    planFingerprint: assignment.planFingerprint,
     assignment: normalized,
   });
 }
@@ -1214,7 +1203,6 @@ function freezeWorkOrderResult(result: JournaledWorkOrderResult): JournaledWorkO
   const completion = parseWorkerRunCompletion(result, "JOURNAL_EVENT_INVALID");
   if (
     result.workOrderId.trim() === "" ||
-    result.planFingerprint.trim() === "" ||
     result.report.workOrderId !== result.workOrderId ||
     result.report.workerId !== result.workerId
   ) {
@@ -1225,7 +1213,6 @@ function freezeWorkOrderResult(result: JournaledWorkOrderResult): JournaledWorkO
   }
   return Object.freeze({
     ...completion,
-    planFingerprint: result.planFingerprint,
     report: parseWorkerReport(result.report),
   });
 }
@@ -1269,14 +1256,7 @@ function assertAssignmentLiveAt(
 }
 
 function freezeArtifactResult(result: JournaledArtifactResult): JournaledArtifactResult {
-  if (result.contentFingerprint.trim() === "") {
-    throw new OrchestratorError(
-      "JOURNAL_EVENT_INVALID",
-      "An Artifact journal result requires a content fingerprint.",
-    );
-  }
   return Object.freeze({
-    contentFingerprint: result.contentFingerprint,
     reference: parseArtifactReference(result.reference, "JOURNAL_EVENT_INVALID"),
   });
 }

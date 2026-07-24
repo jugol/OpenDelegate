@@ -12,5 +12,5 @@ export type {
   ScheduleSelection,
   TransportRoute,
 } from "./contracts.ts";
-export { scheduleWorkOrder } from "./schedule-work-order.ts";
+export { isWorkOrderAssignmentEligible, scheduleWorkOrder } from "./schedule-work-order.ts";
 export { SchedulerError, type SchedulerErrorCode } from "./scheduler-error.ts";

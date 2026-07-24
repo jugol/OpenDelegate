@@ -17,6 +17,7 @@
     "@opendelegate/transport": "workspace:*"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
   }
 }

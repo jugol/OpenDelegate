@@ -1,7 +1,7 @@
 import { DomainError } from "./domain-error.ts";
 import { AgentSessionId, DeviceId, TaskId, type RunId } from "./identifiers.ts";
 
-export type AgentProvider = "codex" | "claude" | "generic";
+export type AgentProvider = "claude" | "codex" | "generic-command";
 export type AgentSessionState = "available" | "in-use" | "lost";
 
 export interface AgentWorkspaceBinding {

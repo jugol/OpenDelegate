@@ -24,6 +24,7 @@ approved product specification.
 1. [`0001-foundational-runtime-boundaries.md`](0001-foundational-runtime-boundaries.md)
 2. [`0002-development-runtime-and-monorepo.md`](0002-development-runtime-and-monorepo.md)
 3. [`0003-phase-zero-module-map.md`](0003-phase-zero-module-map.md)
+4. [`0004-task-journal-and-scheduling-contracts.md`](0004-task-journal-and-scheduling-contracts.md)
 
 ## Initial required ADRs
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SchedulerError } from "@opendelegate/scheduler";
 
 import {
   createOpenDelegate,
@@ -16,9 +17,7 @@ import {
   type Worker,
   type WorkerDeviceSnapshot,
   type WorkerExecutionInput,
-  type WorkOrderSchedulingInput,
 } from "../src/index.ts";
-import { fingerprintPlannedWorkOrder } from "../src/contract-validation.ts";
 
 const forumPost = {
   forumId: "forum-owner-work",
@@ -55,45 +54,9 @@ const allowDispatchPolicy = {
   },
 } as const;
 
-const deterministicScheduler = {
-  select(input: WorkOrderSchedulingInput) {
-    const candidate = input.candidates.find((value) => {
-      const verified = new Set(
-        value.capabilities
-          .filter((capability) => capability.verification === "verified")
-          .map((capability) => capability.name),
-      );
-      return (
-        value.enabled &&
-        value.status === "online" &&
-        !value.draining &&
-        value.executionPolicyDecision.outcome === "allow" &&
-        input.workOrder.requiredCapabilities.every((capability) => verified.has(capability)) &&
-        input.workOrder.requiredSecretRefs.every((secret) =>
-          value.availableSecretRefs.includes(secret),
-        ) &&
-        (input.workOrder.requiredOsFamily === undefined ||
-          value.osFamily === input.workOrder.requiredOsFamily) &&
-        (input.workOrder.workspaceId === undefined ||
-          value.workspaceIds.includes(input.workOrder.workspaceId))
-      );
-    });
-    assert.ok(candidate, "The test scheduler requires one eligible Worker.");
-    const route = candidate.routes.find((value) => value.health === "healthy");
-    assert.ok(route, "The test scheduler requires one healthy route.");
-    return {
-      deviceId: candidate.deviceId,
-      workerId: candidate.workerId,
-      routeId: route.routeId,
-      explanations: [],
-    };
-  },
-} as const;
-
 const dispatchDependencies = {
   clock: orchestrationClock,
   dispatchPolicy: allowDispatchPolicy,
-  scheduler: deterministicScheduler,
 } as const;
 
 function workerScheduling(capabilities: readonly string[]): WorkerDeviceSnapshot {
@@ -211,6 +174,21 @@ class FakeCoordinator implements Coordinator {
     };
   }
 
+  public async selectDevice(input: {
+    readonly taskId: string;
+    readonly workOrder: { readonly workOrderId: string };
+    readonly eligibleDevices: readonly { readonly deviceId: string }[];
+  }) {
+    const preferredDevice = input.eligibleDevices[0];
+    assert.ok(preferredDevice);
+    return {
+      protocolVersion: "v1",
+      taskId: input.taskId,
+      workOrderId: input.workOrder.workOrderId,
+      preferredDeviceId: preferredDevice.deviceId,
+    } as const;
+  }
+
   public async synthesize() {
     this.synthesisCalls += 1;
     return {
@@ -233,7 +211,6 @@ class FakeCoordinator implements Coordinator {
 
 function seedJournalRun(journal: InMemoryOrchestrationJournal): {
   readonly assignment: RunAssignment;
-  readonly planFingerprint: string;
 } {
   const workOrder = {
     workOrderId: "work-order-journal-lease",
@@ -257,8 +234,8 @@ function seedJournalRun(journal: InMemoryOrchestrationJournal): {
       authorizedPrincipalId: "owner-primary",
     },
   });
-  journal.recordIntakeReady(forumPost.postId);
-  journal.recordPlan(forumPost.postId, {
+  journal.recordIntakeReady("task-release-check");
+  journal.recordPlan("task-release-check", {
     taskBrief,
     workOrders: [workOrder],
   });
@@ -274,17 +251,13 @@ function seedJournalRun(journal: InMemoryOrchestrationJournal): {
     fencingToken: 1,
     expiresAt: "2026-07-24T00:01:00.000Z",
   };
-  journal.recordRunAssignment(forumPost.postId, {
+  journal.recordRunAssignment("task-release-check", {
     workOrderId: workOrder.workOrderId,
-    planFingerprint: fingerprintPlannedWorkOrder(workOrder),
     assignment,
   });
-  const durable = journal.runAssignment(forumPost.postId, workOrder.workOrderId);
+  const durable = journal.runAssignment("task-release-check", workOrder.workOrderId);
   assert.ok(durable);
-  return {
-    assignment,
-    planFingerprint: durable.planFingerprint,
-  };
+  return { assignment };
 }
 
 class RecordingWorker implements Worker {
@@ -579,7 +552,6 @@ test("synthesis rejects Artifact filenames that are not safe basenames", async (
 test("dispatch uses the scheduler's Device-specific selection and binds the Run to that Worker", async () => {
   const linuxWorker = new RecordingWorker("worker-linux", ["safe-check"]);
   const windowsWorker = new RecordingWorker("worker-windows", ["safe-check"]);
-  const schedulerCalls: unknown[] = [];
   const runtime = createOpenDelegate({
     authorizer: new FakeAuthorizer(true),
     coordinator: {
@@ -624,6 +596,20 @@ test("dispatch uses the scheduler's Device-specific selection and binds the Run 
         return {
           decision: "complete",
           verifiedCompletionCriteria: taskBrief.completionCriteria,
+        } as const;
+      },
+      async selectDevice(input: {
+        readonly taskId: string;
+        readonly workOrder: { readonly workOrderId: string };
+        readonly eligibleDevices: readonly { readonly deviceId: string }[];
+      }) {
+        const preferredDevice = input.eligibleDevices[0];
+        assert.ok(preferredDevice);
+        return {
+          protocolVersion: "v1",
+          taskId: input.taskId,
+          workOrderId: input.workOrder.workOrderId,
+          preferredDeviceId: preferredDevice.deviceId,
         } as const;
       },
     },
@@ -675,23 +661,11 @@ test("dispatch uses the scheduler's Device-specific selection and binds the Run 
         } as const;
       },
     },
-    scheduler: {
-      select(input: unknown) {
-        schedulerCalls.push(input);
-        return {
-          deviceId: "device-windows",
-          workerId: "worker-windows",
-          routeId: "route-windows",
-          explanations: [],
-        };
-      },
-    },
   } as Parameters<typeof createOpenDelegate>[0]);
 
   const task = await runtime.acceptForumPost(forumPost);
 
   assert.equal(task.state, "completed");
-  assert.equal(schedulerCalls.length, 1);
   assert.equal(linuxWorker.calls.length, 0);
   assert.equal(windowsWorker.calls.length, 1);
   assert.deepEqual(windowsWorker.calls[0]?.run, {
@@ -708,7 +682,192 @@ test("dispatch uses the scheduler's Device-specific selection and binds the Run 
   });
 });
 
-test("ambiguous Worker route snapshots are rejected before scheduler selection", async () => {
+test("semantic selection receives only mechanically eligible tied Devices", async () => {
+  const workerA = new RecordingWorker("worker-a", ["safe-check"]);
+  const workerB = new RecordingWorker("worker-b", ["safe-check"]);
+  const incapableWorker = new RecordingWorker("worker-incapable", ["other-check"]);
+  const selectionInputs: Array<Parameters<Coordinator["selectDevice"]>[0]> = [];
+  const runtime = createOpenDelegate({
+    ...dispatchDependencies,
+    authorizer: new FakeAuthorizer(true),
+    coordinator: {
+      async assessIntake() {
+        return { decision: "ready" } as const;
+      },
+      async plan() {
+        return {
+          taskBrief,
+          workOrders: [
+            {
+              workOrderId: "work-order-semantic-tie",
+              title: "Resolve a semantic scheduling tie",
+              brief: "Run the safe check on the semantically suitable Device.",
+              completionCriteria: ["Return the safe result."],
+              constraints: [],
+              selectedInputIds: [],
+              dependsOn: [],
+              schedulingHints: { preferredDeviceIds: [], preferredRoles: [] },
+              requiredCapabilities: ["safe-check"],
+              requiredSecretRefs: [],
+            },
+          ],
+        };
+      },
+      async selectDevice(input) {
+        selectionInputs.push(input);
+        return {
+          protocolVersion: "v1",
+          taskId: input.taskId,
+          workOrderId: input.workOrder.workOrderId,
+          preferredDeviceId: "device-b",
+        } as const;
+      },
+      async synthesize() {
+        return {
+          summary: "The semantic selection completed.",
+          artifact: {
+            filename: "semantic-selection.html",
+            mediaType: "text/html",
+            content: "<p>Complete</p>",
+          },
+        };
+      },
+      async review() {
+        return {
+          decision: "complete",
+          verifiedCompletionCriteria: taskBrief.completionCriteria,
+        } as const;
+      },
+    },
+    workers: [incapableWorker, workerB, workerA],
+    artifacts,
+    ids: new FakeIds(),
+    runAssignments: new FakeRunAssignments(),
+  });
+
+  await runtime.acceptForumPost(forumPost);
+
+  assert.deepEqual(
+    selectionInputs[0]?.eligibleDevices.map((candidate) => candidate.deviceId),
+    ["device-a", "device-b"],
+  );
+  assert.equal(workerA.calls.length, 0);
+  assert.equal(workerB.calls.length, 1);
+  assert.equal(incapableWorker.calls.length, 0);
+});
+
+function createInvalidSemanticSelectionRuntime(selection: unknown) {
+  const workerA = new RecordingWorker("worker-a", ["safe-check"]);
+  const workerB = new RecordingWorker("worker-b", ["safe-check"]);
+  const runtime = createOpenDelegate({
+    ...dispatchDependencies,
+    authorizer: new FakeAuthorizer(true),
+    coordinator: {
+      async assessIntake() {
+        return { decision: "ready" } as const;
+      },
+      async plan() {
+        return {
+          taskBrief,
+          workOrders: [
+            {
+              workOrderId: "work-order-semantic-correlation",
+              title: "Correlate a semantic scheduling choice",
+              brief: "Run the safe check on the semantically selected Device.",
+              completionCriteria: ["Return the safe result."],
+              constraints: [],
+              selectedInputIds: [],
+              dependsOn: [],
+              schedulingHints: { preferredDeviceIds: [], preferredRoles: [] },
+              requiredCapabilities: ["safe-check"],
+              requiredSecretRefs: [],
+            },
+          ],
+        };
+      },
+      async selectDevice() {
+        return selection as Awaited<ReturnType<Coordinator["selectDevice"]>>;
+      },
+      async synthesize() {
+        return {
+          summary: "The semantic selection completed.",
+          artifact: {
+            filename: "semantic-correlation.html",
+            mediaType: "text/html",
+            content: "<p>Complete</p>",
+          },
+        };
+      },
+      async review() {
+        return {
+          decision: "complete",
+          verifiedCompletionCriteria: taskBrief.completionCriteria,
+        } as const;
+      },
+    },
+    workers: [workerA, workerB],
+    artifacts,
+    ids: new FakeIds(),
+    runAssignments: new FakeRunAssignments(),
+  });
+
+  return { runtime, workerA, workerB };
+}
+
+const invalidSemanticSelections = [
+  {
+    name: "an unsupported protocol version",
+    selection: {
+      protocolVersion: "v2",
+      taskId: "task-release-check",
+      workOrderId: "work-order-semantic-correlation",
+      preferredDeviceId: "device-b",
+    },
+  },
+  {
+    name: "a response correlated to another Task",
+    selection: {
+      protocolVersion: "v1",
+      taskId: "task-stale-selection",
+      workOrderId: "work-order-semantic-correlation",
+      preferredDeviceId: "device-b",
+    },
+  },
+  {
+    name: "a response correlated to another Work Order",
+    selection: {
+      protocolVersion: "v1",
+      taskId: "task-release-check",
+      workOrderId: "work-order-stale-selection",
+      preferredDeviceId: "device-b",
+    },
+  },
+  {
+    name: "a Device outside the bounded eligible set",
+    selection: {
+      protocolVersion: "v1",
+      taskId: "task-release-check",
+      workOrderId: "work-order-semantic-correlation",
+      preferredDeviceId: "device-outside",
+    },
+  },
+] as const;
+
+for (const { name, selection } of invalidSemanticSelections) {
+  test(`semantic selection rejects ${name}`, async () => {
+    const { runtime, workerA, workerB } = createInvalidSemanticSelectionRuntime(selection);
+
+    await assert.rejects(
+      runtime.acceptForumPost(forumPost),
+      (error: unknown) =>
+        error instanceof OrchestratorError && error.code === "SCHEDULING_SELECTION_INVALID",
+    );
+    assert.equal(workerA.calls.length, 0);
+    assert.equal(workerB.calls.length, 0);
+  });
+}
+
+test("the scheduler rejects ambiguous Worker route snapshots", async () => {
   const worker = new RecordingWorker("worker-ambiguous", ["safe-check", "flaky-check"]);
   Object.assign(worker, {
     scheduling: {
@@ -732,7 +891,13 @@ test("ambiguous Worker route snapshots are rejected before scheduler selection",
   await assert.rejects(
     runtime.acceptForumPost(forumPost),
     (error: unknown) =>
-      error instanceof OrchestratorError && error.code === "SCHEDULING_SELECTION_INVALID",
+      error instanceof SchedulerError &&
+      error.explanations.some((explanation) =>
+        explanation.exclusions.some(
+          (exclusion) =>
+            exclusion.code === "DEVICE_SNAPSHOT_INVALID" && exclusion.fields.includes("transports"),
+        ),
+      ),
   );
   assert.equal(worker.calls.length, 0);
 });
@@ -803,8 +968,8 @@ test("Run, lease, and dispatch idempotency identifiers cannot be reused across W
 test("a replacement Run requires a strictly higher fence live and during replay", () => {
   const clock = new MutableOrchestrationClock();
   const journal = new InMemoryOrchestrationJournal({ clock });
-  const { assignment, planFingerprint } = seedJournalRun(journal);
-  journal.recordRunFailed(forumPost.postId, assignment.workOrderId, assignment.runId);
+  const { assignment } = seedJournalRun(journal);
+  journal.recordRunFailed("task-release-check", assignment.workOrderId, assignment.runId);
   const sameFenceReplacement: RunAssignment = {
     ...assignment,
     runId: "run-journal-same-fence",
@@ -814,9 +979,8 @@ test("a replacement Run requires a strictly higher fence live and during replay"
 
   assert.throws(
     () =>
-      journal.recordRunAssignment(forumPost.postId, {
+      journal.recordRunAssignment("task-release-check", {
         workOrderId: assignment.workOrderId,
-        planFingerprint,
         assignment: sameFenceReplacement,
       }),
     (error: unknown) =>
@@ -830,9 +994,8 @@ test("a replacement Run requires a strictly higher fence live and during replay"
     leaseId: "lease-journal-higher-fence",
     fencingToken: assignment.fencingToken + 1,
   };
-  journal.recordRunAssignment(forumPost.postId, {
+  journal.recordRunAssignment("task-release-check", {
     workOrderId: assignment.workOrderId,
-    planFingerprint,
     assignment: higherFenceReplacement,
   });
   const tamperedEvents = journal.recordedEvents().map((event) =>
@@ -858,7 +1021,7 @@ test("a replacement Run requires a strictly higher fence live and during replay"
         clock,
         recordedEvents: tamperedEvents,
       });
-      restored.runAssignment(forumPost.postId, assignment.workOrderId);
+      restored.runAssignment("task-release-check", assignment.workOrderId);
     },
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "JOURNAL_EVENT_INVALID",
@@ -873,7 +1036,7 @@ test("a Run assignment is durable before its Device Worker can execute", async (
     workerId: "worker-durable",
     scheduling: workerScheduling(["safe-check", "flaky-check"]),
     async execute(input) {
-      const durable = journal.runAssignment(forumPost.postId, input.workOrder.workOrderId);
+      const durable = journal.runAssignment("task-release-check", input.workOrder.workOrderId);
       assert.equal(durable?.assignment.runId, input.run.runId);
       assert.equal(durable?.assignment.deviceId, this.deviceId);
       assert.equal(durable?.assignment.workerId, this.workerId);
@@ -965,7 +1128,7 @@ test("a Worker completion that arrives after its lease expires is rejected", asy
     runtime.acceptForumPost(forumPost),
     (error: unknown) => error instanceof OrchestratorError && error.code === "RUN_COMPLETION_STALE",
   );
-  assert.deepEqual(journal.workOrderResults(forumPost.postId), []);
+  assert.deepEqual(journal.workOrderResults("task-release-check"), []);
 });
 
 test("a replaced Run cannot report completion through its old lease and fence", async () => {
@@ -996,12 +1159,11 @@ test("a replaced Run cannot report completion through its old lease and fence", 
     workerId: "worker-replaced",
     scheduling: workerScheduling(["safe-check"]),
     async execute(input) {
-      const durable = journal.runAssignment(forumPost.postId, input.workOrder.workOrderId);
+      const durable = journal.runAssignment("task-release-check", input.workOrder.workOrderId);
       assert.ok(durable);
-      journal.recordRunFailed(forumPost.postId, input.workOrder.workOrderId, input.run.runId);
-      journal.recordRunAssignment(forumPost.postId, {
+      journal.recordRunFailed("task-release-check", input.workOrder.workOrderId, input.run.runId);
+      journal.recordRunAssignment("task-release-check", {
         workOrderId: input.workOrder.workOrderId,
-        planFingerprint: durable.planFingerprint,
         assignment: {
           ...input.run,
           runId: "run-replacement",
@@ -1039,21 +1201,21 @@ test("a replaced Run cannot report completion through its old lease and fence", 
     (error: unknown) => error instanceof OrchestratorError && error.code === "RUN_COMPLETION_STALE",
   );
   assert.equal(
-    journal.runAssignment(forumPost.postId, "work-order-safe")?.assignment.runId,
+    journal.runAssignment("task-release-check", "work-order-safe")?.assignment.runId,
     "run-replacement",
   );
-  assert.deepEqual(journal.workOrderResults(forumPost.postId), []);
+  assert.deepEqual(journal.workOrderResults("task-release-check"), []);
 });
 
 test("the durable journal rejects a direct Worker completion at or after lease expiry", () => {
   const clock = new MutableOrchestrationClock();
   const journal = new InMemoryOrchestrationJournal({ clock });
-  const { assignment, planFingerprint } = seedJournalRun(journal);
+  const { assignment } = seedJournalRun(journal);
   clock.value = assignment.expiresAt;
 
   assert.throws(
     () =>
-      journal.recordWorkOrderResult(forumPost.postId, {
+      journal.recordWorkOrderResult("task-release-check", {
         taskId: assignment.taskId,
         workOrderId: assignment.workOrderId,
         deviceId: assignment.deviceId,
@@ -1062,7 +1224,6 @@ test("the durable journal rejects a direct Worker completion at or after lease e
         runId: assignment.runId,
         leaseId: assignment.leaseId,
         fencingToken: assignment.fencingToken,
-        planFingerprint,
         report: {
           workOrderId: assignment.workOrderId,
           workerId: assignment.workerId,
@@ -1071,7 +1232,7 @@ test("the durable journal rejects a direct Worker completion at or after lease e
       }),
     (error: unknown) => error instanceof OrchestratorError && error.code === "RUN_COMPLETION_STALE",
   );
-  assert.deepEqual(journal.workOrderResults(forumPost.postId), []);
+  assert.deepEqual(journal.workOrderResults("task-release-check"), []);
 });
 
 test("the durable journal rejects a direct or replayed dispatch after lease expiry", () => {
@@ -1102,7 +1263,7 @@ test("the durable journal rejects a direct or replayed dispatch after lease expi
     recordedEvents: tamperedEvents,
   });
   assert.throws(
-    () => restored.runAssignment(forumPost.postId, "work-order-journal-lease"),
+    () => restored.runAssignment("task-release-check", "work-order-journal-lease"),
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "JOURNAL_EVENT_INVALID",
   );
@@ -1111,9 +1272,9 @@ test("the durable journal rejects a direct or replayed dispatch after lease expi
 test("journal replay preserves completion time and rejects a result recorded after lease expiry", () => {
   const clock = new MutableOrchestrationClock();
   const journal = new InMemoryOrchestrationJournal({ clock });
-  const { assignment, planFingerprint } = seedJournalRun(journal);
+  const { assignment } = seedJournalRun(journal);
   clock.value = "2026-07-24T00:00:30.000Z";
-  journal.recordWorkOrderResult(forumPost.postId, {
+  journal.recordWorkOrderResult("task-release-check", {
     taskId: assignment.taskId,
     workOrderId: assignment.workOrderId,
     deviceId: assignment.deviceId,
@@ -1122,7 +1283,6 @@ test("journal replay preserves completion time and rejects a result recorded aft
     runId: assignment.runId,
     leaseId: assignment.leaseId,
     fencingToken: assignment.fencingToken,
-    planFingerprint,
     report: {
       workOrderId: assignment.workOrderId,
       workerId: assignment.workerId,
@@ -1149,7 +1309,7 @@ test("journal replay preserves completion time and rejects a result recorded aft
     staleCompletionTime,
   );
   assert.throws(
-    () => restored.workOrderResults(forumPost.postId),
+    () => restored.workOrderResults("task-release-check"),
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "JOURNAL_EVENT_INVALID",
   );
@@ -1158,12 +1318,12 @@ test("journal replay preserves completion time and rejects a result recorded aft
 test("the journal clock cannot move backward to revive a Run lease", () => {
   const clock = new MutableOrchestrationClock();
   const journal = new InMemoryOrchestrationJournal({ clock });
-  const { assignment, planFingerprint } = seedJournalRun(journal);
+  const { assignment } = seedJournalRun(journal);
   clock.value = "2026-07-23T23:59:59.000Z";
 
   assert.throws(
     () =>
-      journal.recordWorkOrderResult(forumPost.postId, {
+      journal.recordWorkOrderResult("task-release-check", {
         taskId: assignment.taskId,
         workOrderId: assignment.workOrderId,
         deviceId: assignment.deviceId,
@@ -1172,7 +1332,6 @@ test("the journal clock cannot move backward to revive a Run lease", () => {
         runId: assignment.runId,
         leaseId: assignment.leaseId,
         fencingToken: assignment.fencingToken,
-        planFingerprint,
         report: {
           workOrderId: assignment.workOrderId,
           workerId: assignment.workerId,
@@ -1182,5 +1341,5 @@ test("the journal clock cannot move backward to revive a Run lease", () => {
     (error: unknown) =>
       error instanceof OrchestratorError && error.code === "ORCHESTRATION_CLOCK_INVALID",
   );
-  assert.deepEqual(journal.workOrderResults(forumPost.postId), []);
+  assert.deepEqual(journal.workOrderResults("task-release-check"), []);
 });
