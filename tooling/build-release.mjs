@@ -36,6 +36,7 @@ export const PINNED_PNPM_ARCHIVE_INTEGRITY =
   "sha512-gTULB+U8lTigLx8jA7QpD6LXvgTlbiqXDEzEtBfcdh3hlu2r1J1Vx9yVgNuBAHxEFD5OPX5GKzAA0jwlUSLQZQ==";
 const pinnedPnpmArchiveUrl = `https://registry.npmjs.org/pnpm/-/pnpm-${PINNED_PNPM_VERSION}.tgz`;
 const maximumPnpmArchiveBytes = 25 * 1024 * 1024;
+const maximumNodeArchiveBytes = 128 * 1024 * 1024;
 const runningReleaseToolPaths = ["tooling/build-release.mjs", "tooling/check-release-evidence.mjs"];
 const nodeDistributionRoot = `https://nodejs.org/dist/v${REQUIRED_RELEASE_NODE_VERSION}`;
 const nodeShasumsUrl = `${nodeDistributionRoot}/SHASUMS256.txt`;
@@ -588,7 +589,7 @@ export async function readBoundedResponseBody(response, maximumBytes) {
     !Number.isSafeInteger(maximumBytes) ||
     maximumBytes <= 0
   ) {
-    throw new Error("The package-manager response has no bounded readable body.");
+    throw new Error("The download response has no bounded readable body.");
   }
   const reader = response.body.getReader();
   const chunks = [];
@@ -602,8 +603,8 @@ export async function readBoundedResponseBody(response, maximumBytes) {
       const chunk = Buffer.from(result.value);
       length += chunk.byteLength;
       if (length > maximumBytes) {
-        await reader.cancel("OpenDelegate package-manager archive limit exceeded.");
-        throw new Error("The pnpm archive exceeds its byte limit.");
+        await reader.cancel("OpenDelegate download archive limit exceeded.");
+        throw new Error("The download archive exceeds its byte limit.");
       }
       chunks.push(chunk);
     }
@@ -617,6 +618,7 @@ export async function withPinnedPnpm(parent, operation) {
   const archivePath = join(directory, `pnpm-${PINNED_PNPM_VERSION}.tgz`);
   try {
     const response = await fetch(pinnedPnpmArchiveUrl, {
+      redirect: "error",
       signal: AbortSignal.timeout(90_000),
     });
     if (!response.ok) {
@@ -1091,12 +1093,24 @@ async function copyRuntime(staging, sourceRoot) {
   const archivePath = join(extractionRoot, input.filename);
   try {
     const response = await fetch(input.url, {
+      redirect: "error",
       signal: AbortSignal.timeout(90_000),
     });
     if (!response.ok) {
       throw new Error(`Could not retrieve the pinned Node.js archive (${response.status}).`);
     }
-    const archive = Buffer.from(await response.arrayBuffer());
+    const declaredLengthHeader = response.headers.get("content-length");
+    if (declaredLengthHeader !== null) {
+      const declaredLength = Number(declaredLengthHeader);
+      if (
+        !Number.isSafeInteger(declaredLength) ||
+        declaredLength < 0 ||
+        declaredLength > maximumNodeArchiveBytes
+      ) {
+        throw new Error("The pinned Node.js archive has an invalid or excessive content length.");
+      }
+    }
+    const archive = await readBoundedResponseBody(response, maximumNodeArchiveBytes);
     const archiveSha256 = createHash("sha256").update(archive).digest("hex");
     if (archiveSha256 !== input.sha256) {
       throw new Error("The Node.js archive hash did not match the audited official input.");

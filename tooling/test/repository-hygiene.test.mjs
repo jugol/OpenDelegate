@@ -62,20 +62,40 @@ test("public issue intake directs vulnerabilities to the verified private report
   );
 
   assert.match(config, /^blank_issues_enabled:\s*false\s*$/mu);
-  assert.match(
-    config,
-    /url:\s*https:\/\/github\.com\/jugol\/OpenDelegate\/security\/advisories\/new/u,
+  assert.equal(
+    hasExactTrimmedLine(
+      config,
+      "url: https://github.com/jugol/OpenDelegate/security/advisories/new",
+    ),
+    true,
   );
-  assert.match(
-    securityPolicy,
-    /https:\/\/github\.com\/jugol\/OpenDelegate\/security\/advisories\/new/u,
+  assert.equal(
+    hasExactTrimmedLine(
+      securityPolicy,
+      "[**Report a vulnerability privately**](https://github.com/jugol/OpenDelegate/security/advisories/new).",
+    ),
+    true,
   );
   assert.match(securityPolicy, /Do not use a GitHub issue/u);
-  assert.match(
-    threatModelForm,
-    /https:\/\/github\.com\/jugol\/OpenDelegate\/security\/advisories\/new/u,
+  assert.equal(
+    hasExactTrimmedLine(
+      threatModelForm,
+      "form: https://github.com/jugol/OpenDelegate/security/advisories/new",
+    ),
+    true,
   );
   assert.match(threatModelForm, /id:\s*disclosure_safety/u);
   assert.match(threatModelForm, /contains no undisclosed vulnerability/u);
+  assert.equal(
+    hasExactTrimmedLine(
+      "url: https://github.com/jugol/OpenDelegate/security/advisories/new.attacker.example",
+      "url: https://github.com/jugol/OpenDelegate/security/advisories/new",
+    ),
+    false,
+  );
   await assert.rejects(access(obsoletePublicForm), { code: "ENOENT" });
 });
+
+function hasExactTrimmedLine(text, expected) {
+  return text.split(/\r?\n/u).some((line) => line.trim() === expected);
+}

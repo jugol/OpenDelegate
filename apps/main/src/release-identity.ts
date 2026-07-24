@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
+
+import { readStableRegularFile } from "./stable-file.ts";
 
 const DEVELOPMENT_VERSION = "0.0.0-development";
 const DEVELOPMENT_BUILD_ID = "development-local";
@@ -774,11 +776,7 @@ function countsEqual(
 async function readRegularPayloadFile(root: string, relativePath: string): Promise<Buffer> {
   assertPortableRelativePath(relativePath, "Bundle");
   const path = join(root, ...relativePath.split("/"));
-  const metadata = await lstat(path);
-  if (!metadata.isFile() || metadata.isSymbolicLink()) {
-    invalid(`Bundled identity input must be a regular file: ${relativePath}.`);
-  }
-  return readFile(path);
+  return await readStableRegularFile(path);
 }
 
 function parseJsonRecord(bytes: Buffer, label: string): Record<string, unknown> {

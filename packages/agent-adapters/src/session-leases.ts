@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { constants as fileConstants, type BigIntStats } from "node:fs";
+import { lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { isAbsolute, dirname, resolve } from "node:path";
 
 import { AgentAdapterError } from "./errors.ts";
@@ -107,6 +108,22 @@ interface FileLeaseState {
   readonly records: Map<string, LeaseRecord>;
 }
 
+interface MutationLockMetadata {
+  readonly pid: number;
+  readonly token: string;
+  readonly createdAt: number;
+}
+
+interface OwnedMutationLock {
+  readonly handle: Awaited<ReturnType<typeof open>>;
+}
+
+interface ObservedMutationLock {
+  readonly handle: Awaited<ReturnType<typeof open>>;
+  readonly information: BigIntStats;
+  readonly metadata?: MutationLockMetadata;
+}
+
 export interface FileSessionLeaseStoreOptions {
   readonly statePath: string;
   readonly mutationTimeoutMs?: number;
@@ -116,6 +133,7 @@ export interface FileSessionLeaseStoreOptions {
 export class FileSessionLeaseStore implements SessionLeaseStore {
   readonly #statePath: string;
   readonly #lockPath: string;
+  readonly #recoveryPath: string;
   readonly #mutationTimeoutMs: number;
   readonly #staleMutationLockMs: number;
 
@@ -128,6 +146,7 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
     }
     this.#statePath = resolve(options.statePath);
     this.#lockPath = `${this.#statePath}.mutation.lock`;
+    this.#recoveryPath = `${this.#lockPath}.recovery`;
     this.#mutationTimeoutMs = options.mutationTimeoutMs ?? 5_000;
     this.#staleMutationLockMs = options.staleMutationLockMs ?? 30_000;
     if (
@@ -228,7 +247,7 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
   ): Promise<T> {
     await mkdir(dirname(this.#statePath), { recursive: true, mode: 0o700 });
     const lock = await this.#acquireMutationLock();
-    try {
+    return await withOwnedMutationLock(this.#lockPath, lock, async () => {
       await rejectSymlink(this.#statePath);
       const state = await readState(this.#statePath);
       const outcome = mutation(state);
@@ -236,33 +255,15 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
         await writeStateAtomically(this.#statePath, state);
       }
       return outcome.value;
-    } finally {
-      await lock.close().catch(() => undefined);
-      await unlink(this.#lockPath).catch(() => undefined);
-    }
+    });
   }
 
-  async #acquireMutationLock(): Promise<Awaited<ReturnType<typeof open>>> {
+  async #acquireMutationLock(): Promise<OwnedMutationLock> {
     const startedAt = Date.now();
     for (;;) {
+      let handle: Awaited<ReturnType<typeof open>>;
       try {
-        const handle = await open(this.#lockPath, "wx", 0o600);
-        try {
-          await handle.writeFile(
-            JSON.stringify({ pid: process.pid, createdAt: Date.now() }),
-            "utf8",
-          );
-          await handle.sync();
-          return handle;
-        } catch {
-          await handle.close().catch(() => undefined);
-          await unlink(this.#lockPath).catch(() => undefined);
-          throw new AgentAdapterError(
-            "SESSION_LEASE_STORE_LOCK_FAILED",
-            "File lease store mutation lock could not be initialized.",
-            true,
-          );
-        }
+        handle = await open(this.#lockPath, "wx", 0o600);
       } catch (error) {
         if (!isErrno(error, "EEXIST")) {
           throw new AgentAdapterError(
@@ -271,8 +272,7 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
             true,
           );
         }
-        await rejectSymlink(this.#lockPath);
-        await this.#removeAbandonedLock();
+        await this.#attemptAbandonedLockRecovery();
         if (Date.now() - startedAt >= this.#mutationTimeoutMs) {
           throw new AgentAdapterError(
             "SESSION_LEASE_STORE_BUSY",
@@ -281,39 +281,93 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
           );
         }
         await delay(10);
+        continue;
+      }
+
+      try {
+        return await initializeOwnedMutationLock(this.#lockPath, handle);
+      } catch {
+        throw new AgentAdapterError(
+          "SESSION_LEASE_STORE_LOCK_FAILED",
+          "File lease store mutation lock could not be initialized.",
+          true,
+        );
       }
     }
   }
 
-  async #removeAbandonedLock(): Promise<void> {
+  async #attemptAbandonedLockRecovery(): Promise<void> {
+    let recoveryHandle: Awaited<ReturnType<typeof open>>;
     try {
-      const information = await stat(this.#lockPath);
-      let value: unknown;
-      try {
-        value = JSON.parse(await readFile(this.#lockPath, "utf8")) as unknown;
-      } catch {
-        value = undefined;
+      recoveryHandle = await open(this.#recoveryPath, "wx", 0o600);
+    } catch (error) {
+      if (isErrno(error, "EEXIST")) {
+        await rejectUnsafeExistingLockPath(this.#recoveryPath);
+        return;
       }
-      if (
-        typeof value === "object" &&
-        value !== null &&
-        "pid" in value &&
-        typeof value.pid === "number" &&
-        Number.isSafeInteger(value.pid)
-      ) {
-        if (isProcessAlive(value.pid)) {
+      throw new AgentAdapterError(
+        "SESSION_LEASE_STORE_LOCK_FAILED",
+        "File lease store recovery leadership could not be acquired.",
+        true,
+      );
+    }
+
+    let recovery: OwnedMutationLock;
+    try {
+      recovery = await initializeOwnedMutationLock(this.#recoveryPath, recoveryHandle);
+    } catch {
+      throw new AgentAdapterError(
+        "SESSION_LEASE_STORE_LOCK_FAILED",
+        "File lease store recovery leadership could not be initialized.",
+        true,
+      );
+    }
+    await withOwnedMutationLock(this.#recoveryPath, recovery, async () => {
+      await this.#removeAbandonedLockUnderRecovery();
+    });
+  }
+
+  async #removeAbandonedLockUnderRecovery(): Promise<void> {
+    const observed = await readMutationLock(this.#lockPath);
+    if (observed === undefined) {
+      return;
+    }
+    try {
+      if (observed.metadata === undefined) {
+        if (Date.now() - Number(observed.information.mtimeMs) < this.#staleMutationLockMs) {
           return;
         }
-        await unlink(this.#lockPath);
+        throw new AgentAdapterError(
+          "SESSION_LEASE_STORE_LOCK_CORRUPT",
+          "File lease store mutation lock is malformed and requires manual recovery.",
+        );
+      }
+      if (probeProcessLiveness(observed.metadata.pid) !== "dead") {
         return;
       }
-      if (Date.now() - information.mtimeMs >= this.#staleMutationLockMs) {
-        await unlink(this.#lockPath);
+      const current = await lstat(this.#lockPath, { bigint: true });
+      if (
+        current.isSymbolicLink() ||
+        !current.isFile() ||
+        !sameFile(current, observed.information)
+      ) {
+        return;
       }
+      // Once the observed owner is conclusively absent and this recovery leader
+      // still sees the same inode, no compliant participant can replace the path:
+      // the owner cannot release it, and every competing reaper is excluded.
+      await unlink(this.#lockPath);
     } catch (error) {
-      if (!isErrno(error, "ENOENT")) {
-        return;
+      if (error instanceof AgentAdapterError) {
+        throw error;
       }
+      throw new AgentAdapterError(
+        "SESSION_LEASE_STORE_LOCK_FAILED",
+        "The abandoned file lease store mutation lock could not be removed safely.",
+        true,
+      );
+    } finally {
+      await observed.handle.close().catch(() => undefined);
     }
   }
 }
@@ -461,6 +515,258 @@ async function rejectSymlink(path: string): Promise<void> {
   }
 }
 
+async function rejectUnsafeExistingLockPath(path: string): Promise<void> {
+  try {
+    const information = await lstat(path);
+    if (information.isSymbolicLink() || !information.isFile()) {
+      throw new AgentAdapterError(
+        "UNSAFE_LEASE_STORE_PATH",
+        "File session lease lock paths must be regular files.",
+      );
+    }
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function readMutationLock(path: string): Promise<ObservedMutationLock | undefined> {
+  const noFollow = fileConstants.O_NOFOLLOW ?? 0;
+  const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) {
+      return undefined;
+    }
+    if (isErrno(error, "ELOOP")) {
+      throw new AgentAdapterError(
+        "UNSAFE_LEASE_STORE_PATH",
+        "File session lease lock paths may not be symbolic links.",
+      );
+    }
+    throw error;
+  }
+
+  let retained = false;
+  try {
+    const opened = await handle.stat({ bigint: true });
+    let openedPath: BigIntStats;
+    try {
+      openedPath = await lstat(path, { bigint: true });
+    } catch (error) {
+      if (isErrno(error, "ENOENT")) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (
+      !opened.isFile() ||
+      openedPath.isSymbolicLink() ||
+      !openedPath.isFile() ||
+      !sameFile(opened, openedPath)
+    ) {
+      throw new AgentAdapterError(
+        "UNSAFE_LEASE_STORE_PATH",
+        "File session lease lock paths must remain stable regular files.",
+      );
+    }
+
+    const maximumMetadataBytes = 4 * 1024;
+    if (opened.size > BigInt(maximumMetadataBytes)) {
+      retained = true;
+      return { handle, information: opened };
+    }
+    const bytes = Buffer.alloc(Number(opened.size));
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const result = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+      if (result.bytesRead === 0) {
+        return undefined;
+      }
+      offset += result.bytesRead;
+    }
+    const overflowProbe = Buffer.alloc(1);
+    if ((await handle.read(overflowProbe, 0, 1, offset)).bytesRead !== 0) {
+      return undefined;
+    }
+
+    const afterRead = await handle.stat({ bigint: true });
+    let afterReadPath: BigIntStats;
+    try {
+      afterReadPath = await lstat(path, { bigint: true });
+    } catch (error) {
+      if (isErrno(error, "ENOENT")) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (
+      afterReadPath.isSymbolicLink() ||
+      !sameSnapshot(opened, afterRead) ||
+      !sameSnapshot(afterRead, afterReadPath)
+    ) {
+      return undefined;
+    }
+
+    let value: unknown;
+    try {
+      value = JSON.parse(bytes.toString("utf8")) as unknown;
+    } catch {
+      value = undefined;
+    }
+    const metadata = parseMutationLockMetadata(value);
+    retained = true;
+    return {
+      handle,
+      information: afterRead,
+      ...(metadata === undefined ? {} : { metadata }),
+    };
+  } finally {
+    if (!retained) {
+      await handle.close();
+    }
+  }
+}
+
+async function initializeOwnedMutationLock(
+  path: string,
+  handle: Awaited<ReturnType<typeof open>>,
+): Promise<OwnedMutationLock> {
+  try {
+    const metadata: MutationLockMetadata = {
+      pid: process.pid,
+      token: randomUUID(),
+      createdAt: Date.now(),
+    };
+    await handle.writeFile(JSON.stringify(metadata), "utf8");
+    await handle.sync();
+    return { handle };
+  } catch {
+    await releaseOwnedMutationLock(path, { handle }).catch(() => undefined);
+    throw new AgentAdapterError(
+      "SESSION_LEASE_STORE_LOCK_FAILED",
+      "File lease store lock initialization failed and was rolled back.",
+      true,
+    );
+  }
+}
+
+async function withOwnedMutationLock<T>(
+  path: string,
+  lock: OwnedMutationLock,
+  operation: () => Promise<T>,
+): Promise<T> {
+  let outcome:
+    | { readonly status: "fulfilled"; readonly value: T }
+    | { readonly status: "rejected"; readonly error: unknown };
+  try {
+    outcome = { status: "fulfilled", value: await operation() };
+  } catch (error) {
+    outcome = { status: "rejected", error };
+  }
+
+  try {
+    await releaseOwnedMutationLock(path, lock);
+  } catch (releaseError) {
+    if (outcome.status === "rejected") {
+      throw new AggregateError(
+        [outcome.error, releaseError],
+        "File lease store mutation and lock release both failed.",
+        { cause: releaseError },
+      );
+    }
+    throw releaseError;
+  }
+  if (outcome.status === "rejected") {
+    throw outcome.error;
+  }
+  return outcome.value;
+}
+
+async function releaseOwnedMutationLock(path: string, lock: OwnedMutationLock): Promise<void> {
+  let unlinkFailure: unknown;
+  try {
+    await unlink(path);
+  } catch (error) {
+    unlinkFailure = error;
+  }
+  let closeFailure: unknown;
+  try {
+    await lock.handle.close();
+  } catch (error) {
+    closeFailure = error;
+  }
+  if (unlinkFailure !== undefined) {
+    const ownershipLost = isErrno(unlinkFailure, "ENOENT");
+    throw new AgentAdapterError(
+      ownershipLost
+        ? "SESSION_LEASE_STORE_LOCK_OWNERSHIP_LOST"
+        : "SESSION_LEASE_STORE_LOCK_RELEASE_FAILED",
+      ownershipLost
+        ? "File lease store lock ownership was lost before release."
+        : "File lease store lock could not be released.",
+    );
+  }
+  if (closeFailure !== undefined) {
+    throw new AgentAdapterError(
+      "SESSION_LEASE_STORE_LOCK_RELEASE_FAILED",
+      "File lease store lock handle could not be closed after release.",
+      true,
+    );
+  }
+}
+
+function parseMutationLockMetadata(value: unknown): MutationLockMetadata | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join(",") !== "createdAt,pid,token" ||
+    !("pid" in value) ||
+    typeof value.pid !== "number" ||
+    !Number.isSafeInteger(value.pid) ||
+    value.pid < 1 ||
+    !("token" in value) ||
+    typeof value.token !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value.token) ||
+    !("createdAt" in value) ||
+    typeof value.createdAt !== "number" ||
+    !Number.isSafeInteger(value.createdAt) ||
+    value.createdAt < 0
+  ) {
+    return undefined;
+  }
+  return {
+    pid: value.pid,
+    token: value.token,
+    createdAt: value.createdAt,
+  };
+}
+
+function sameFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
+  );
+}
+
+function sameSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
 function corruptState(): AgentAdapterError {
   return new AgentAdapterError(
     "SESSION_LEASE_STORE_CORRUPT",
@@ -477,12 +783,12 @@ function rejectClockRegression(lastObservedAt: number, now: number): void {
   }
 }
 
-function isProcessAlive(pid: number): boolean {
+function probeProcessLiveness(pid: number): "alive" | "dead" | "unknown" {
   try {
     process.kill(pid, 0);
-    return true;
+    return "alive";
   } catch (error) {
-    return isErrno(error, "EPERM");
+    return isErrno(error, "ESRCH") ? "dead" : "unknown";
   }
 }
 

@@ -90,6 +90,20 @@ All adapter instances on one Device must use the same store. This store is a
 host-local session guard, not a distributed consensus system or an anti-rollback
 root for cloned Device state.
 
+The state and lock files must be on a local filesystem that provides reliable
+exclusive create and same-directory atomic rename semantics (for example, NTFS,
+APFS, or ext4). SMB, NFS, network shares, cloud-synchronized folders, cloned
+runtime directories, and containers that do not share the host PID namespace are
+unsupported. Restrict the runtime-data directory to the Worker service account;
+the Device threat boundary does not include a hostile same-privilege process.
+
+Lock recovery is deliberately fail-closed. One recovery leader may remove a
+well-formed primary lock only after its owning PID is conclusively absent. A
+malformed primary lock or an orphaned recovery-leader lock requires manual
+recovery: stop every Worker and adapter process using the store, preserve the lock
+files for diagnosis, remove only the confirmed orphan, and then restart the
+service. Never remove either lock while an adapter process may still be running.
+
 ## Permission inputs
 
 Every turn declares a sandbox and permission mode.

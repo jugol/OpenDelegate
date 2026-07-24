@@ -34,6 +34,7 @@ import { TaskService } from "@opendelegate/task-service";
 import type { RuntimeReleaseChannel } from "./release-identity.ts";
 
 import { closeAfterPrimaryFailure, closeMainResources } from "./shutdown.ts";
+import { readStableRegularFile, StableFileError } from "./stable-file.ts";
 
 const CONFIG_SCHEMA_VERSION = 1;
 const DEFAULT_MAIN_PORT = 4380;
@@ -529,21 +530,26 @@ async function loadAdminAssets(root: string): Promise<ReadonlyMap<string, Buffer
           "The Admin Web bundle contains unsupported or too many entries.",
         );
       }
-      const metadata = await lstat(absolute);
-      if (metadata.size > MAX_ADMIN_FILE_BYTES) {
+      let bytes: Buffer;
+      try {
+        bytes = await readStableRegularFile(absolute, MAX_ADMIN_FILE_BYTES);
+      } catch (error) {
         throw new MainRuntimeError(
           "ADMIN_ASSET_INVALID",
-          "An Admin Web asset exceeds the size limit.",
+          error instanceof StableFileError && error.code === "TOO_LARGE"
+            ? "An Admin Web asset exceeds the size limit."
+            : "An Admin Web asset is not a stable regular file.",
+          { cause: error },
         );
       }
-      totalBytes += metadata.size;
+      totalBytes += bytes.byteLength;
       if (totalBytes > MAX_ADMIN_TOTAL_BYTES) {
         throw new MainRuntimeError(
           "ADMIN_ASSET_INVALID",
           "The Admin Web bundle exceeds the total size limit.",
         );
       }
-      files.set(relativePath.replaceAll("\\", "/"), await readFile(absolute));
+      files.set(relativePath.replaceAll("\\", "/"), bytes);
     }
   };
 
