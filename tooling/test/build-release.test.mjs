@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -9,7 +9,10 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import {
+  PINNED_PNPM_ARCHIVE_INTEGRITY,
+  PINNED_PNPM_VERSION,
   REQUIRED_RELEASE_NODE_VERSION,
+  assertCleanBundleSource,
   assertPortableTree,
   collectShaBoundAttestationPaths,
   createCommittedSourceSnapshot,
@@ -23,7 +26,10 @@ import {
   officialRuntimeArchiveFor,
   parseRawGitDiff,
   parseReleaseArguments,
+  readBoundedResponseBody,
   readSourceIdentity,
+  removePackageManagerBinDirectories,
+  resolveExternalPnpmCli,
   renderBundleReadme,
   renderUnixLauncher,
   renderWindowsLauncher,
@@ -31,6 +37,9 @@ import {
   validateReleaseDestination,
   validateReleaseDestinationName,
   validateReleaseAttestationDiff,
+  verifyPinnedPnpmArchive,
+  verifyRunningReleaseToolFiles,
+  withCommittedSourceSnapshot,
   writeIntegrityManifests,
   writeThirdPartyNotices,
 } from "../build-release.mjs";
@@ -119,12 +128,21 @@ test("the release runtime pin matches local and hosted build configuration", asy
   );
 });
 
+test("every bundle mode requires a clean committed source", () => {
+  assert.doesNotThrow(() => assertCleanBundleSource({ commit: auditedCommit, dirty: false }));
+  assert.throws(
+    () => assertCleanBundleSource({ commit: auditedCommit, dirty: true }),
+    /clean committed checkout/u,
+  );
+});
+
 test("the reviewed package-manager and dependency execution policies stay pinned", async () => {
   const manifest = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8"));
   const workspace = await readFile(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
+  const lockfile = await readFile(join(repositoryRoot, "pnpm-lock.yaml"), "utf8");
 
-  assert.equal(manifest.packageManager, "pnpm@11.15.1");
-  assert.equal(manifest.devDependencies?.pnpm, "11.15.1");
+  assert.equal(manifest.packageManager, `pnpm@${PINNED_PNPM_VERSION}`);
+  assert.equal(manifest.devDependencies?.pnpm, PINNED_PNPM_VERSION);
   assert.equal(manifest.engines?.pnpm, ">=11.15.1 <12");
   for (const workflow of ["ci.yml", "security.yml"]) {
     assert.match(
@@ -138,6 +156,55 @@ test("the reviewed package-manager and dependency execution policies stay pinned
   assert.match(workspace, /^\s+better-sqlite3@13\.0\.1:\s*true\s*$/mu);
   assert.match(workspace, /^\s+esbuild@0\.28\.1:\s*true\s*$/mu);
   assert.doesNotMatch(workspace, /set this to true or false/u);
+  assert.equal(
+    lockfile.includes(
+      `pnpm@${PINNED_PNPM_VERSION}:\n    resolution: {integrity: ${PINNED_PNPM_ARCHIVE_INTEGRITY}}`,
+    ),
+    true,
+  );
+  assert.throws(
+    () => verifyPinnedPnpmArchive(Buffer.from("untrusted pnpm archive", "utf8")),
+    /hash did not match/u,
+  );
+});
+
+test("package-manager downloads stop at the streaming byte limit", async () => {
+  const exact = await readBoundedResponseBody(new Response(new Uint8Array([1, 2, 3, 4])), 4);
+  assert.deepEqual([...exact], [1, 2, 3, 4]);
+
+  let cancelled = false;
+  const oversized = new Response(
+    new ReadableStream({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(6));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }),
+  );
+  await assert.rejects(readBoundedResponseBody(oversized, 5), /exceeds its byte limit/u);
+  assert.equal(cancelled, true);
+  await assert.rejects(readBoundedResponseBody(new Response(null), 5), /no bounded readable body/u);
+});
+
+test("pnpm execution cannot resolve from the live source checkout", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-external-pnpm-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const externalCli = join(root, "pnpm.cjs");
+  await writeFile(externalCli, "export {};\n", "utf8");
+
+  assert.equal(
+    await resolveExternalPnpmCli(repositoryRoot, externalCli),
+    await realpath(externalCli),
+  );
+  await assert.rejects(
+    resolveExternalPnpmCli(
+      repositoryRoot,
+      join(repositoryRoot, "node_modules", "pnpm", "bin", "pnpm.cjs"),
+    ),
+    /outside the source checkout/u,
+  );
 });
 
 test("Main deployment opts into pnpm's pinned non-injected workspace behavior", () => {
@@ -150,6 +217,38 @@ test("Main deployment opts into pnpm's pinned non-injected workspace behavior", 
     "--prod",
     "release/apps/main",
   ]);
+});
+
+test("release deployment removes package-manager bins without following their links", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-deploy-bin-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const packageDirectory = join(nodeModules, "runtime-package");
+  const nestedBin = join(packageDirectory, "node_modules", ".bin");
+  const packageDataBin = join(packageDirectory, "assets", ".bin");
+  const linkTarget = join(root, "retained-target");
+  await mkdir(nestedBin, { recursive: true });
+  await mkdir(packageDataBin, { recursive: true });
+  await mkdir(linkTarget);
+  await writeFile(join(packageDirectory, "index.js"), "export {};\n", "utf8");
+  await writeFile(join(nestedBin, "tool"), "unused executable shim\n", "utf8");
+  await writeFile(join(packageDataBin, "retained.bin"), "package data\n", "utf8");
+  await writeFile(join(linkTarget, "retained.txt"), "retained\n", "utf8");
+  await symlink(
+    linkTarget,
+    join(nodeModules, ".bin"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  await removePackageManagerBinDirectories(nodeModules);
+
+  assert.equal(await readFile(join(packageDirectory, "index.js"), "utf8"), "export {};\n");
+  assert.equal(await readFile(join(packageDataBin, "retained.bin"), "utf8"), "package data\n");
+  assert.equal(await readFile(join(linkTarget, "retained.txt"), "utf8"), "retained\n");
+  await assert.rejects(readFile(join(nodeModules, ".bin", "retained.txt"), "utf8"), {
+    code: "ENOENT",
+  });
+  await assert.rejects(readFile(join(nestedBin, "tool"), "utf8"), { code: "ENOENT" });
 });
 
 test("every supported release target has a pinned official Node.js archive", () => {
@@ -553,6 +652,91 @@ test("candidate provenance resolves a real audited ancestor and restricted attes
   );
 });
 
+test("isolated bundle assembly preserves live dependency state on success and failure", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-isolated-source-"));
+  const snapshotParent = await mkdtemp(join(tmpdir(), "opendelegate-isolated-parent-"));
+  t.after(async () => {
+    await Promise.all([
+      rm(root, { force: true, recursive: true }),
+      rm(snapshotParent, { force: true, recursive: true }),
+    ]);
+  });
+  await git(root, ["init", "--initial-branch=main"]);
+  await git(root, ["config", "user.name", "OpenDelegate test"]);
+  await git(root, ["config", "user.email", "test@opendelegate.invalid"]);
+  await mkdir(join(root, "tooling"));
+  await writeFile(join(root, ".gitattributes"), "* text=auto eol=lf\n", "utf8");
+  await writeFile(join(root, ".gitignore"), "node_modules/\n", "utf8");
+  await writeFile(join(root, "package.json"), '{"name":"isolated-source"}\n', "utf8");
+  await writeFile(join(root, "tooling", "build-release.mjs"), "export const tree = 'A';\n");
+  await writeFile(
+    join(root, "tooling", "check-release-evidence.mjs"),
+    "export const tree = 'A';\n",
+  );
+  await git(root, ["add", "."]);
+  await git(root, ["commit", "-m", "isolated source"]);
+  const commit = await git(root, ["rev-parse", "HEAD"]);
+  const toolPaths = ["tooling/build-release.mjs", "tooling/check-release-evidence.mjs"];
+  await verifyRunningReleaseToolFiles(root, commit, toolPaths);
+  await writeFile(join(root, "tooling", "build-release.mjs"), "export const tree = 'B';\n");
+  await writeFile(
+    join(root, "tooling", "check-release-evidence.mjs"),
+    "export const tree = 'B';\n",
+  );
+  await git(root, ["add", "."]);
+  await git(root, ["commit", "-m", "concurrent clean checkout"]);
+  const concurrentCommit = await git(root, ["rev-parse", "HEAD"]);
+  await assert.rejects(
+    verifyRunningReleaseToolFiles(root, commit, toolPaths),
+    /does not match captured build commit/u,
+  );
+  const loadedToolRoot = await createCommittedSourceSnapshot(root, commit, snapshotParent);
+  await assert.rejects(
+    verifyRunningReleaseToolFiles(root, concurrentCommit, toolPaths, loadedToolRoot),
+    /does not match captured build commit/u,
+  );
+  await git(root, ["checkout", "--detach", commit]);
+  await verifyRunningReleaseToolFiles(root, commit, toolPaths);
+
+  const workspaceStatePath = join(root, "node_modules", ".pnpm-workspace-state-v1.json");
+  await mkdir(join(root, "node_modules"));
+  await writeFile(workspaceStatePath, '{"mode":"development"}\n', "utf8");
+
+  let successfulSnapshot = "";
+  const result = await withCommittedSourceSnapshot(
+    root,
+    commit,
+    snapshotParent,
+    async (snapshot) => {
+      successfulSnapshot = snapshot;
+      const isolatedStatePath = join(snapshot, "node_modules", ".pnpm-workspace-state-v1.json");
+      await mkdir(join(snapshot, "node_modules"));
+      await writeFile(isolatedStatePath, '{"mode":"production"}\n', "utf8");
+      return "assembled";
+    },
+  );
+  assert.equal(result, "assembled");
+  assert.equal(await readFile(workspaceStatePath, "utf8"), '{"mode":"development"}\n');
+  await assert.rejects(readFile(successfulSnapshot, "utf8"), { code: "ENOENT" });
+
+  let failedSnapshot = "";
+  await assert.rejects(
+    withCommittedSourceSnapshot(root, commit, snapshotParent, async (snapshot) => {
+      failedSnapshot = snapshot;
+      await mkdir(join(snapshot, "node_modules"));
+      await writeFile(
+        join(snapshot, "node_modules", ".pnpm-workspace-state-v1.json"),
+        '{"mode":"production"}\n',
+        "utf8",
+      );
+      throw new Error("simulated assembly failure");
+    }),
+    /simulated assembly failure/u,
+  );
+  assert.equal(await readFile(workspaceStatePath, "utf8"), '{"mode":"development"}\n');
+  await assert.rejects(readFile(failedSnapshot, "utf8"), { code: "ENOENT" });
+});
+
 test("bundle guidance is launcher-first and never presents source-checkout commands", () => {
   const readme = renderBundleReadme(
     "internal-preview-blocked",
@@ -562,6 +746,7 @@ test("bundle guidance is launcher-first and never presents source-checkout comma
     },
     "win32",
     "arm64",
+    "0.1.0-alpha.1",
   );
 
   assert.match(readme, /unsupported internal preview/u);

@@ -16,24 +16,27 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { auditReleaseEvidence, summarizeReleaseEvidence } from "./check-release-evidence.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
-const repositoryRoot = resolve(dirname(currentFile), "..");
-const require = createRequire(import.meta.url);
-const pnpmCli = join(dirname(require.resolve("pnpm")), "bin", "pnpm.cjs");
-const productManifest = JSON.parse(await readFile(join(repositoryRoot, "package.json"), "utf8"));
-const productVersion = productManifest.version;
-if (
-  typeof productVersion !== "string" ||
-  !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(productVersion)
-) {
-  throw new Error("The root package has no valid semantic product version.");
-}
+const releaseToolRoot = resolve(dirname(currentFile), "..");
+const releaseRunnerSourceEnvironment = "OPENDELEGATE_INTERNAL_RELEASE_SOURCE";
+const releaseRunnerCommitEnvironment = "OPENDELEGATE_INTERNAL_RELEASE_COMMIT";
+const configuredReleaseSource = process.env[releaseRunnerSourceEnvironment];
+const expectedReleaseCommit = process.env[releaseRunnerCommitEnvironment];
+const repositoryRoot =
+  configuredReleaseSource === undefined ? releaseToolRoot : resolve(configuredReleaseSource);
 export const REQUIRED_RELEASE_NODE_VERSION = "24.18.0";
+export const PINNED_PNPM_VERSION = "11.15.1";
+export const PINNED_PNPM_ARCHIVE_INTEGRITY =
+  "sha512-gTULB+U8lTigLx8jA7QpD6LXvgTlbiqXDEzEtBfcdh3hlu2r1J1Vx9yVgNuBAHxEFD5OPX5GKzAA0jwlUSLQZQ==";
+const pinnedPnpmArchiveUrl = `https://registry.npmjs.org/pnpm/-/pnpm-${PINNED_PNPM_VERSION}.tgz`;
+const maximumPnpmArchiveBytes = 25 * 1024 * 1024;
+const runningReleaseToolPaths = ["tooling/build-release.mjs", "tooling/check-release-evidence.mjs"];
 const nodeDistributionRoot = `https://nodejs.org/dist/v${REQUIRED_RELEASE_NODE_VERSION}`;
 const nodeShasumsUrl = `${nodeDistributionRoot}/SHASUMS256.txt`;
 const officialRuntimeArchives = new Map([
@@ -149,7 +152,9 @@ export function renderBundleReadme(
   summary,
   platform = process.platform,
   architecture = process.arch,
+  productVersion,
 ) {
+  assertProductVersion(productVersion);
   const preview = supportStatus.startsWith("internal-preview");
   const launcher = platform === "win32" ? "opendelegate.cmd" : "./opendelegate";
   const statusLabel = preview ? "unsupported internal preview" : "unpublished release candidate";
@@ -528,6 +533,150 @@ export async function createCommittedSourceSnapshot(sourceRoot, commit, parent) 
   }
 }
 
+export async function withCommittedSourceSnapshot(sourceRoot, commit, parent, operation) {
+  const snapshot = await createCommittedSourceSnapshot(sourceRoot, commit, parent);
+  try {
+    return await operation(snapshot);
+  } finally {
+    await rm(snapshot, { force: true, recursive: true });
+  }
+}
+
+export async function verifyRunningReleaseToolFiles(
+  sourceRoot,
+  commit,
+  paths = runningReleaseToolPaths,
+  runningRoot = sourceRoot,
+) {
+  if (!/^[0-9a-f]{40}$/u.test(commit)) {
+    throw new Error("A running release-tool verification requires a full Git commit ID.");
+  }
+  for (const path of paths) {
+    const segments = path.split("/");
+    if (
+      !/^[A-Za-z0-9._/-]+$/u.test(path) ||
+      segments.some((segment) => segment === "" || segment === "." || segment === "..")
+    ) {
+      throw new Error("A running release-tool path is not a safe repository-relative path.");
+    }
+    const [runningBytes, committed] = await Promise.all([
+      readFile(join(runningRoot, ...segments), "utf8"),
+      runProvenanceGit(["show", `${commit}:${path}`], sourceRoot, { capture: true }),
+    ]);
+    if (runningBytes !== committed.stdout) {
+      throw new Error(
+        `The running release tool does not match captured build commit ${commit}: ${path}.`,
+      );
+    }
+  }
+}
+
+export function verifyPinnedPnpmArchive(archive) {
+  if (!(archive instanceof Uint8Array) || archive.byteLength > maximumPnpmArchiveBytes) {
+    throw new Error("The pinned pnpm archive is missing or exceeds its byte limit.");
+  }
+  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  if (integrity !== PINNED_PNPM_ARCHIVE_INTEGRITY) {
+    throw new Error("The pnpm archive hash did not match the audited official input.");
+  }
+}
+
+export async function readBoundedResponseBody(response, maximumBytes) {
+  if (
+    response?.body === null ||
+    response?.body === undefined ||
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes <= 0
+  ) {
+    throw new Error("The package-manager response has no bounded readable body.");
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const result = await reader.read();
+      if (result.done) {
+        return Buffer.concat(chunks, length);
+      }
+      const chunk = Buffer.from(result.value);
+      length += chunk.byteLength;
+      if (length > maximumBytes) {
+        await reader.cancel("OpenDelegate package-manager archive limit exceeded.");
+        throw new Error("The pnpm archive exceeds its byte limit.");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export async function withPinnedPnpm(parent, operation) {
+  const directory = await mkdtemp(join(parent, ".od-pnpm-bootstrap-"));
+  const archivePath = join(directory, `pnpm-${PINNED_PNPM_VERSION}.tgz`);
+  try {
+    const response = await fetch(pinnedPnpmArchiveUrl, {
+      signal: AbortSignal.timeout(90_000),
+    });
+    if (!response.ok) {
+      throw new Error(`Could not retrieve the pinned pnpm archive (${response.status}).`);
+    }
+    const declaredLengthHeader = response.headers.get("content-length");
+    if (declaredLengthHeader !== null) {
+      const declaredLength = Number(declaredLengthHeader);
+      if (
+        !Number.isSafeInteger(declaredLength) ||
+        declaredLength < 0 ||
+        declaredLength > maximumPnpmArchiveBytes
+      ) {
+        throw new Error("The pinned pnpm archive has an invalid or excessive content length.");
+      }
+    }
+    const archive = await readBoundedResponseBody(response, maximumPnpmArchiveBytes);
+    verifyPinnedPnpmArchive(archive);
+    await writeFile(archivePath, archive);
+    await runCommand("tar", ["-xf", archivePath, "-C", directory], parent, { capture: true });
+
+    const packageRoot = join(directory, "package");
+    const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+    if (manifest.name !== "pnpm" || manifest.version !== PINNED_PNPM_VERSION) {
+      throw new Error("The verified pnpm archive contains unexpected package metadata.");
+    }
+    await assertPortableTree(packageRoot);
+    const cli = join(packageRoot, "bin", "pnpm.cjs");
+    const cliMetadata = await lstat(cli);
+    if (!cliMetadata.isFile() || cliMetadata.isSymbolicLink()) {
+      throw new Error("The verified pnpm archive has no regular CLI entrypoint.");
+    }
+    return await operation(cli);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+}
+
+async function readProductManifest(sourceRoot) {
+  const manifest = JSON.parse(await readFile(join(sourceRoot, "package.json"), "utf8"));
+  assertProductVersion(manifest.version);
+  if (
+    manifest.packageManager !== `pnpm@${PINNED_PNPM_VERSION}` ||
+    manifest.devDependencies?.pnpm !== PINNED_PNPM_VERSION ||
+    typeof manifest.devDependencies?.esbuild !== "string"
+  ) {
+    throw new Error("The committed product manifest does not match the pinned release toolchain.");
+  }
+  return manifest;
+}
+
+function assertProductVersion(productVersion) {
+  if (
+    typeof productVersion !== "string" ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(productVersion)
+  ) {
+    throw new Error("The root package has no valid semantic product version.");
+  }
+}
+
 async function createFileEntries(root, excluded) {
   const files = await listFiles(root);
   const entries = [];
@@ -548,6 +697,10 @@ async function createFileEntries(root, excluded) {
 
 export async function buildRelease(options) {
   assertReleaseHost();
+  const source = await readSourceIdentity();
+  assertCleanBundleSource(source);
+  await assertCommittedReleaseRunner(source);
+
   const lexicalDestination = validateReleaseDestination(repositoryRoot, options.destination);
   validateReleaseDestinationName(lexicalDestination, options.internalPreview);
   const destination = await validateProspectiveDestination(repositoryRoot, lexicalDestination);
@@ -562,7 +715,6 @@ export async function buildRelease(options) {
   }
   const summary = summarizeReleaseEvidence(ledger);
   const supportStatus = determineSupportStatus(summary, options.internalPreview);
-  const source = await readSourceIdentity();
   const provenance =
     supportStatus === "release-candidate"
       ? await inspectReleaseCandidateProvenance(repositoryRoot, ledger, source)
@@ -576,56 +728,58 @@ export async function buildRelease(options) {
   await mkdir(parent, { recursive: true });
   const staging = join(parent, `.od-${process.pid}-${randomUUID().slice(0, 8)}`);
   await mkdir(staging);
-  let committedSnapshot;
 
   try {
-    let assemblyLedgerText = ledgerText;
-    const assemblySourceRoot =
-      supportStatus === "release-candidate"
-        ? (committedSnapshot = await createCommittedSourceSnapshot(
-            repositoryRoot,
-            source.commit,
-            parent,
-          ))
-        : repositoryRoot;
-    if (committedSnapshot !== undefined) {
-      const snapshotLedger = await readFile(
-        join(committedSnapshot, "docs", "release", "acceptance-evidence.json"),
-        "utf8",
+    await withPinnedPnpm(parent, async (bootstrapPnpmCli) => {
+      await withCommittedSourceSnapshot(
+        repositoryRoot,
+        source.commit,
+        parent,
+        async (assemblySourceRoot) => {
+          const snapshotLedger = await readFile(
+            join(assemblySourceRoot, "docs", "release", "acceptance-evidence.json"),
+            "utf8",
+          );
+          const snapshotLedgerObject = JSON.parse(snapshotLedger);
+          if (JSON.stringify(snapshotLedgerObject) !== JSON.stringify(ledger)) {
+            throw new Error(
+              "The committed build snapshot does not contain the validated release ledger.",
+            );
+          }
+          const snapshotLedgerErrors = await auditReleaseEvidence(
+            assemblySourceRoot,
+            snapshotLedgerObject,
+          );
+          if (snapshotLedgerErrors.length > 0) {
+            throw new Error(
+              `Committed build snapshot evidence is invalid:\n${snapshotLedgerErrors.join("\n")}`,
+            );
+          }
+          const productManifest = await readProductManifest(assemblySourceRoot);
+          await runCommand("pnpm", ["install", "--frozen-lockfile"], assemblySourceRoot, {
+            pnpmCli: bootstrapPnpmCli,
+          });
+          await assembleRelease({
+            assemblySourceRoot,
+            ledger,
+            ledgerDigest: createHash("sha256").update(snapshotLedger).digest("hex"),
+            productManifest,
+            productVersion: productManifest.version,
+            provenance,
+            source,
+            staging,
+            summary,
+            supportStatus,
+          });
+        },
       );
-      const snapshotLedgerObject = JSON.parse(snapshotLedger);
-      if (JSON.stringify(snapshotLedgerObject) !== JSON.stringify(ledger)) {
-        throw new Error("The committed B snapshot does not contain the validated release ledger.");
-      }
-      const snapshotLedgerErrors = await auditReleaseEvidence(
-        committedSnapshot,
-        snapshotLedgerObject,
-      );
-      if (snapshotLedgerErrors.length > 0) {
-        throw new Error(
-          `Committed B snapshot evidence is invalid:\n${snapshotLedgerErrors.join("\n")}`,
-        );
-      }
-      assemblyLedgerText = snapshotLedger;
-      await runCommand("pnpm", ["install", "--frozen-lockfile"], committedSnapshot);
-    }
-    await assembleRelease({
-      assemblySourceRoot,
-      ledger,
-      ledgerDigest: createHash("sha256").update(assemblyLedgerText).digest("hex"),
-      provenance,
-      source,
-      staging,
-      summary,
-      supportStatus,
     });
+
+    const finalSource = await readSourceIdentity();
+    if (finalSource.dirty || finalSource.commit !== source.commit) {
+      throw new Error("The source checkout changed while the bundle was assembled.");
+    }
     if (supportStatus === "release-candidate") {
-      const finalSource = await readSourceIdentity();
-      if (finalSource.dirty || finalSource.commit !== source.commit) {
-        throw new Error(
-          "The source checkout changed while the supported release candidate was assembled.",
-        );
-      }
       const finalProvenance = await inspectReleaseCandidateProvenance(
         repositoryRoot,
         ledger,
@@ -641,10 +795,6 @@ export async function buildRelease(options) {
   } catch (error) {
     await rm(staging, { force: true, recursive: true });
     throw error;
-  } finally {
-    if (committedSnapshot !== undefined) {
-      await rm(committedSnapshot, { force: true, recursive: true });
-    }
   }
 
   return {
@@ -654,6 +804,41 @@ export async function buildRelease(options) {
     provenance,
     summary,
   };
+}
+
+async function assertCommittedReleaseRunner(source) {
+  if (
+    configuredReleaseSource === undefined ||
+    !isAbsolute(configuredReleaseSource) ||
+    expectedReleaseCommit === undefined ||
+    !/^[0-9a-f]{40}$/u.test(expectedReleaseCommit)
+  ) {
+    throw new Error(
+      "Release assembly must execute through the committed-source CLI runner snapshot.",
+    );
+  }
+  if (source.commit !== expectedReleaseCommit) {
+    throw new Error("The source checkout changed before the committed release runner started.");
+  }
+  const [canonicalSource, canonicalToolRoot] = await Promise.all([
+    realpath(repositoryRoot),
+    realpath(releaseToolRoot),
+  ]);
+  validateReleaseDestination(canonicalSource, canonicalToolRoot);
+  await verifyRunningReleaseToolFiles(
+    canonicalSource,
+    source.commit,
+    runningReleaseToolPaths,
+    canonicalToolRoot,
+  );
+}
+
+export function assertCleanBundleSource(source) {
+  if (source.dirty) {
+    throw new Error(
+      "Release bundles require a clean committed checkout so assembly can run in an isolated snapshot.",
+    );
+  }
 }
 
 async function validateProspectiveDestination(sourceRoot, destination) {
@@ -691,6 +876,8 @@ async function assembleRelease({
   assemblySourceRoot,
   ledger,
   ledgerDigest,
+  productManifest,
+  productVersion,
   provenance,
   source,
   staging,
@@ -709,6 +896,7 @@ async function assembleRelease({
   await runCommand("pnpm", createMainDeployArguments(mainDirectory), assemblySourceRoot, {
     pnpmCli: assemblyPnpmCli,
   });
+  await removePackageManagerBinDirectories(join(mainDirectory, "node_modules"));
 
   await bundle({
     absWorkingDir: assemblySourceRoot,
@@ -734,7 +922,11 @@ async function assembleRelease({
   await copyReleaseMaterials(staging, assemblySourceRoot);
   const runtimeProvenance = await copyRuntime(staging, assemblySourceRoot);
   await writeThirdPartyNotices(staging, mainDirectory, assemblySourceRoot);
-  await writeFile(join(staging, "README.md"), renderBundleReadme(supportStatus, summary), "utf8");
+  await writeFile(
+    join(staging, "README.md"),
+    renderBundleReadme(supportStatus, summary, process.platform, process.arch, productVersion),
+    "utf8",
+  );
 
   const buildId = createBuildId(source, supportStatus);
   await writeLaunchers(staging);
@@ -812,7 +1004,7 @@ Run \`opendelegate help\` for the deterministic CLI surface. Review
   }
 
   await writeIntegrityManifests(staging);
-  const smokeEvidence = await smokeBundle(staging, buildId);
+  const smokeEvidence = await smokeBundle(staging, buildId, productVersion);
   await writeFile(
     join(staging, "smoke-evidence.json"),
     `${JSON.stringify(smokeEvidence, null, 2)}\n`,
@@ -831,6 +1023,24 @@ export function createMainDeployArguments(mainDirectory) {
     "--prod",
     mainDirectory,
   ];
+}
+
+export async function removePackageManagerBinDirectories(root) {
+  await removePackageManagerBinsFromTree(root, basename(root) === "node_modules");
+}
+
+async function removePackageManagerBinsFromTree(root, rootIsNodeModules) {
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (rootIsNodeModules && entry.name === ".bin") {
+      await rm(path, { force: true, recursive: true });
+      continue;
+    }
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      await removePackageManagerBinsFromTree(path, entry.name === "node_modules");
+    }
+  }
 }
 
 async function readRuntimeExternalVersions(sourceRoot) {
@@ -1356,7 +1566,8 @@ export function evaluateSmokeShutdown(input) {
   };
 }
 
-async function smokeBundle(staging, buildId) {
+async function smokeBundle(staging, buildId, productVersion) {
+  assertProductVersion(productVersion);
   const runtime = join(staging, "runtime", process.platform === "win32" ? "node.exe" : "node");
   const entrypoint = join(staging, "apps", "main", "opendelegate.mjs");
   const releaseEnvironment = {
@@ -1680,10 +1891,28 @@ async function runProvenanceGit(arguments_, cwd, options = {}) {
   });
 }
 
+export async function resolveExternalPnpmCli(sourceRoot, candidate) {
+  if (typeof candidate !== "string" || !isAbsolute(candidate)) {
+    throw new Error("A pnpm command requires an explicit absolute verified CLI path.");
+  }
+  const [canonicalSource, canonicalCandidate] = await Promise.all([
+    realpath(sourceRoot),
+    realpath(candidate),
+  ]);
+  validateReleaseDestination(canonicalSource, canonicalCandidate);
+  const metadata = await lstat(canonicalCandidate);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error("The pnpm CLI must resolve to a regular file outside the source checkout.");
+  }
+  return canonicalCandidate;
+}
+
 async function runCommand(command, arguments_, cwd, options = {}) {
-  const executable = command === "pnpm" ? process.execPath : command;
+  const externalPnpmCli =
+    command === "pnpm" ? await resolveExternalPnpmCli(repositoryRoot, options.pnpmCli) : undefined;
+  const executable = externalPnpmCli === undefined ? command : process.execPath;
   const executableArguments =
-    command === "pnpm" ? [options.pnpmCli ?? pnpmCli, ...arguments_] : arguments_;
+    externalPnpmCli === undefined ? arguments_ : [externalPnpmCli, ...arguments_];
   const child = spawn(executable, executableArguments, {
     cwd,
     env: options.environment ?? process.env,
@@ -1754,12 +1983,49 @@ always rejected.
 `);
 }
 
+async function runCommittedReleaseCli(rawArguments) {
+  const source = await readSourceIdentity(releaseToolRoot);
+  assertCleanBundleSource(source);
+  const runnerParent = await mkdtemp(join(tmpdir(), "opendelegate-release-runner-"));
+  try {
+    const runnerRoot = await createCommittedSourceSnapshot(
+      releaseToolRoot,
+      source.commit,
+      runnerParent,
+    );
+    const runnerFile = join(runnerRoot, "tooling", "build-release.mjs");
+    const child = spawn(process.execPath, [runnerFile, ...rawArguments], {
+      cwd: releaseToolRoot,
+      env: {
+        ...process.env,
+        [releaseRunnerSourceEnvironment]: releaseToolRoot,
+        [releaseRunnerCommitEnvironment]: source.commit,
+      },
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    const exitCode = await new Promise((resolvePromise, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code) => resolvePromise(code));
+    });
+    if (exitCode !== 0) {
+      throw new Error(
+        `The committed release runner exited without producing a bundle (exit ${String(exitCode)}).`,
+      );
+    }
+  } finally {
+    await rm(runnerParent, { force: true, recursive: true });
+  }
+}
+
 const invokedFile = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
 if (invokedFile === resolve(currentFile)) {
   try {
     const arguments_ = parseReleaseArguments(process.argv.slice(2));
     if (arguments_.help) {
       printHelp();
+    } else if (expectedReleaseCommit === undefined && configuredReleaseSource === undefined) {
+      await runCommittedReleaseCli(process.argv.slice(2));
     } else {
       const result = await buildRelease(arguments_);
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

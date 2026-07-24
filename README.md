@@ -101,10 +101,11 @@ Release bundles require exactly **Node.js 24.18.0**. The repository pins pnpm 11
 or later in the Node 22 line remains a contributor compatibility target, but it cannot produce a
 release bundle.
 
-From a clean dependency installation:
+From a clean committed checkout and dependency installation:
 
 ```sh
 node --version
+git status --short
 pnpm install --frozen-lockfile
 pnpm check
 pnpm build
@@ -112,12 +113,14 @@ pnpm test:browser
 pnpm release:build --destination ABSOLUTE_PATH --internal-preview
 ```
 
-`node --version` must print `v24.18.0`. `ABSOLUTE_PATH` must be an absent path outside the source
-checkout. The builder refuses to overwrite an existing destination. It creates a platform-specific
-bundle by downloading the pinned official Node archive and verifying its audited SHA-256. It
-includes Admin assets, the init skill, release metadata, a dependency-instance legal inventory,
-checksums, and smoke evidence for CLI help, clean-home initialization, Main health, Admin serving,
-owner claim/login, session-cookie round-trip, and clean shutdown.
+`node --version` must print `v24.18.0`, and `git status --short` must print nothing.
+`ABSOLUTE_PATH` must be an absent path outside the source checkout. The builder refuses to overwrite
+an existing destination. A minimal launcher exports the clean commit and re-executes the release
+logic from that disposable snapshot before assembly. The builder creates a platform-specific bundle
+by downloading the pinned official Node archive and verifying its audited SHA-256. It includes
+Admin assets, the init skill, release metadata, a dependency-instance legal inventory, checksums,
+and smoke evidence for CLI help, clean-home initialization, Main health, Admin serving, owner
+claim/login, session-cookie round-trip, and clean shutdown.
 
 The destination name must contain `internal-preview`. Generated `INTERNAL_PREVIEW.md` and
 `release-metadata.json` record that the bundle is unsupported and preserve the exact release

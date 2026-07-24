@@ -104,7 +104,7 @@ export const processSessionLeaseStore: SessionLeaseStore = new InMemorySessionLe
 
 interface FileLeaseState {
   readonly schemaVersion: 1;
-  readonly records: Record<string, LeaseRecord>;
+  readonly records: Map<string, LeaseRecord>;
 }
 
 export interface FileSessionLeaseStoreOptions {
@@ -152,7 +152,7 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
     validateLeaseInput(sessionKey, holderId, ttlMs, now);
     const sessionKeyHash = hashSessionKey(sessionKey);
     return await this.#mutate((state) => {
-      const record = state.records[sessionKeyHash] ?? {
+      const record = state.records.get(sessionKeyHash) ?? {
         fence: 0,
         lastObservedAt: now,
       };
@@ -174,11 +174,11 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
         fence: record.fence + 1,
         expiresAt: now + ttlMs,
       };
-      state.records[sessionKeyHash] = {
+      state.records.set(sessionKeyHash, {
         fence: lease.fence,
         lastObservedAt: now,
         active: lease,
-      };
+      });
       return { value: lease, changed: true };
     });
   }
@@ -186,7 +186,7 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
   async renew(lease: SessionLease, ttlMs: number, now: number): Promise<SessionLease> {
     validateLeaseInput(lease.sessionKeyHash, lease.holderId, ttlMs, now);
     return await this.#mutate((state) => {
-      const record = state.records[lease.sessionKeyHash];
+      const record = state.records.get(lease.sessionKeyHash);
       if (record !== undefined) {
         rejectClockRegression(record.lastObservedAt, now);
       }
@@ -210,7 +210,7 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
 
   async release(lease: SessionLease): Promise<void> {
     await this.#mutate((state) => {
-      const record = state.records[lease.sessionKeyHash];
+      const record = state.records.get(lease.sessionKeyHash);
       if (
         record?.active === undefined ||
         record.active.holderId !== lease.holderId ||
@@ -324,7 +324,7 @@ async function readState(statePath: string): Promise<FileLeaseState> {
     text = await readFile(statePath, "utf8");
   } catch (error) {
     if (isErrno(error, "ENOENT")) {
-      return { schemaVersion: 1, records: {} };
+      return { schemaVersion: 1, records: new Map() };
     }
     throw new AgentAdapterError(
       "SESSION_LEASE_STORE_READ_FAILED",
@@ -350,7 +350,7 @@ async function readState(statePath: string): Promise<FileLeaseState> {
   ) {
     throw corruptState();
   }
-  const records: Record<string, LeaseRecord> = {};
+  const records = new Map<string, LeaseRecord>();
   for (const [key, candidate] of Object.entries(value.records)) {
     if (
       !/^[a-f0-9]{64}$/u.test(key) ||
@@ -392,11 +392,11 @@ async function readState(statePath: string): Promise<FileLeaseState> {
         expiresAt: activeCandidate.expiresAt,
       };
     }
-    records[key] = {
+    records.set(key, {
       fence: candidate.fence,
       lastObservedAt: candidate.lastObservedAt,
       ...(active === undefined ? {} : { active }),
-    };
+    });
   }
   return { schemaVersion: 1, records };
 }
@@ -407,7 +407,7 @@ async function writeStateAtomically(statePath: string, state: FileLeaseState): P
   try {
     handle = await open(temporaryPath, "wx", 0o600);
     const orderedRecords = Object.fromEntries(
-      Object.entries(state.records)
+      [...state.records.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([key, record]) => [
           key,

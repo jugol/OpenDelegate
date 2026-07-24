@@ -197,6 +197,39 @@ test("public Artifact supports bounded byte ranges and hardened non-CORS respons
   });
 });
 
+test("Artifact authorization and lookup are rate-limited without throttling liveness", async () => {
+  await withGateway(async ({ staticApp }) => {
+    for (let request = 0; request < 120; request += 1) {
+      const response = await staticApp.inject({
+        method: "GET",
+        url: `/artifacts/missing-${String(request)}`,
+        headers: { host: staticHost },
+      });
+      assert.equal(response.statusCode, 404);
+    }
+
+    const limited = await staticApp.inject({
+      method: "GET",
+      url: "/artifacts/missing-limited",
+      headers: { host: staticHost },
+    });
+    assert.equal(limited.statusCode, 429);
+    assert.deepEqual(limited.json(), {
+      type: "about:blank",
+      title: "Too Many Requests",
+      status: 429,
+      code: "ARTIFACT_RATE_LIMITED",
+    });
+
+    const health = await staticApp.inject({
+      method: "GET",
+      url: "/health/live",
+      headers: { host: staticHost },
+    });
+    assert.equal(health.statusCode, 200);
+  });
+});
+
 test("authenticated exposure ignores Admin cookies and delegates explicit Artifact credentials", async () => {
   await withGateway(async ({ staticApp, store, authorizationCalls }) => {
     await putArtifact(store, {

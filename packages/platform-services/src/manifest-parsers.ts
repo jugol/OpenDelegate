@@ -9,9 +9,13 @@ export interface ParsedWindowsTask {
   readonly arguments: string;
 }
 
+const WINDOWS_TASK_PROLOGUE = '<?xml version="1.0" encoding="UTF-16"?>\n';
+const WINDOWS_TASK_MAX_CODE_UNITS = 64 * 1024;
+
 export function parseWindowsTaskXml(xml: string): ParsedWindowsTask {
   if (
-    !xml.startsWith('<?xml version="1.0" encoding="UTF-16"?>\n') ||
+    xml.length > WINDOWS_TASK_MAX_CODE_UNITS ||
+    !xml.startsWith(WINDOWS_TASK_PROLOGUE) ||
     !xml.includes(
       '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
     ) ||
@@ -76,19 +80,93 @@ const WINDOWS_TASK_ELEMENTS = new Set([
   "UserId",
 ]);
 
+const WINDOWS_TASK_CHILDREN = new Map<string, readonly string[]>([
+  ["Task", ["RegistrationInfo", "Triggers", "Principals", "Settings", "Actions"]],
+  ["RegistrationInfo", ["Author", "Description"]],
+  ["Author", []],
+  ["Description", []],
+  ["Triggers", ["LogonTrigger"]],
+  ["LogonTrigger", ["Enabled"]],
+  ["Enabled", []],
+  ["Principals", ["Principal"]],
+  ["Principal", ["UserId", "LogonType", "RunLevel"]],
+  ["UserId", []],
+  ["LogonType", []],
+  ["RunLevel", []],
+  [
+    "Settings",
+    [
+      "MultipleInstancesPolicy",
+      "DisallowStartIfOnBatteries",
+      "StopIfGoingOnBatteries",
+      "AllowHardTerminate",
+      "StartWhenAvailable",
+      "ExecutionTimeLimit",
+      "RestartOnFailure",
+    ],
+  ],
+  ["MultipleInstancesPolicy", []],
+  ["DisallowStartIfOnBatteries", []],
+  ["StopIfGoingOnBatteries", []],
+  ["AllowHardTerminate", []],
+  ["StartWhenAvailable", []],
+  ["ExecutionTimeLimit", []],
+  ["RestartOnFailure", ["Interval", "Count"]],
+  ["Interval", []],
+  ["Count", []],
+  ["Actions", ["Exec"]],
+  ["Exec", ["Command", "Arguments"]],
+  ["Command", []],
+  ["Arguments", []],
+]);
+
+const WINDOWS_TASK_FIXED_TEXT = new Map<string, string>([
+  ["Author", "OpenDelegate"],
+  ["Description", "OpenDelegate per-user graphical session helper"],
+  ["Enabled", "true"],
+  ["LogonType", "InteractiveToken"],
+  ["RunLevel", "LeastPrivilege"],
+  ["MultipleInstancesPolicy", "IgnoreNew"],
+  ["DisallowStartIfOnBatteries", "false"],
+  ["StopIfGoingOnBatteries", "false"],
+  ["AllowHardTerminate", "true"],
+  ["StartWhenAvailable", "true"],
+  ["ExecutionTimeLimit", "PT0S"],
+  ["Interval", "PT15S"],
+  ["Count", "3"],
+]);
+const WINDOWS_TASK_DYNAMIC_TEXT = new Set(["Arguments", "Command", "UserId"]);
+
 function validateWindowsTaskElements(xml: string): void {
-  const elementPattern = /<(\/?)([A-Za-z][A-Za-z0-9]*)([^<>]*)>/g;
-  const elements = [...xml.matchAll(elementPattern)];
-  if (elements.length === 0) {
-    throw new PlatformServiceError(
-      "INVALID_CONFIGURATION",
-      "Windows helper Task XML contains no elements.",
-    );
-  }
-  for (const element of elements) {
-    const closing = element[1] === "/";
-    const name = element[2] ?? "";
-    const attributes = (element[3] ?? "").trim();
+  const openElements: Array<{ name: string; nextChildIndex: number }> = [];
+  let cursor = WINDOWS_TASK_PROLOGUE.length;
+  let elementCount = 0;
+  let rootClosed = false;
+
+  while (cursor < xml.length) {
+    const elementStart = xml.indexOf("<", cursor);
+    if (elementStart === -1) {
+      validateWindowsTaskCharacterData(openElements.at(-1)?.name, xml.slice(cursor));
+      break;
+    }
+    validateWindowsTaskCharacterData(openElements.at(-1)?.name, xml.slice(cursor, elementStart));
+    const elementEnd = xml.indexOf(">", elementStart + 1);
+    if (elementEnd === -1) {
+      throw invalidWindowsTaskSyntax();
+    }
+
+    const raw = xml.slice(elementStart + 1, elementEnd);
+    const closing = raw.startsWith("/");
+    let nameEnd = closing ? 1 : 0;
+    if (!isAsciiLetter(raw.charCodeAt(nameEnd))) {
+      throw invalidWindowsTaskSyntax();
+    }
+    nameEnd += 1;
+    while (isAsciiAlphaNumeric(raw.charCodeAt(nameEnd))) {
+      nameEnd += 1;
+    }
+    const name = raw.slice(closing ? 1 : 0, nameEnd);
+    const attributes = raw.slice(nameEnd).trim();
     if (!WINDOWS_TASK_ELEMENTS.has(name)) {
       throw new PlatformServiceError(
         "INVALID_CONFIGURATION",
@@ -101,6 +179,34 @@ function validateWindowsTaskElements(xml: string): void {
         "Windows helper Task XML has attributes on a closing element.",
       );
     }
+
+    if (closing) {
+      const frame = openElements.pop();
+      if (
+        frame?.name !== name ||
+        frame.nextChildIndex !== WINDOWS_TASK_CHILDREN.get(name)?.length
+      ) {
+        throw invalidWindowsTaskSyntax();
+      }
+      if (openElements.length === 0) {
+        rootClosed = true;
+      }
+      elementCount += 1;
+      cursor = elementEnd + 1;
+      continue;
+    }
+    if (rootClosed || (openElements.length === 0 && name !== "Task")) {
+      throw invalidWindowsTaskSyntax();
+    }
+    const parent = openElements.at(-1);
+    if (parent !== undefined) {
+      const expectedChild = WINDOWS_TASK_CHILDREN.get(parent.name)?.[parent.nextChildIndex];
+      if (expectedChild !== name) {
+        throw invalidWindowsTaskSyntax();
+      }
+      parent.nextChildIndex += 1;
+    }
+
     const expectedAttributes =
       name === "Task"
         ? 'version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"'
@@ -115,7 +221,53 @@ function validateWindowsTaskElements(xml: string): void {
         `Windows helper Task XML has unsupported attributes on ${name}.`,
       );
     }
+    openElements.push({ name, nextChildIndex: 0 });
+    elementCount += 1;
+    cursor = elementEnd + 1;
   }
+
+  if (elementCount === 0 || openElements.length !== 0 || !rootClosed) {
+    throw invalidWindowsTaskSyntax();
+  }
+}
+
+function validateWindowsTaskCharacterData(element: string | undefined, text: string): void {
+  if (element === undefined || (WINDOWS_TASK_CHILDREN.get(element)?.length ?? 0) > 0) {
+    if (text.trim() !== "") {
+      throw invalidWindowsTaskSyntax();
+    }
+    return;
+  }
+  const fixedText = WINDOWS_TASK_FIXED_TEXT.get(element);
+  if (fixedText !== undefined) {
+    if (text !== fixedText) {
+      throw invalidWindowsTaskSyntax();
+    }
+    return;
+  }
+  if (WINDOWS_TASK_DYNAMIC_TEXT.has(element)) {
+    const decoded = decodeXml(text);
+    if (decoded === "" || /[\r\n]/u.test(decoded) || decoded.includes("\0")) {
+      throw invalidWindowsTaskSyntax();
+    }
+    return;
+  }
+  throw invalidWindowsTaskSyntax();
+}
+
+function isAsciiLetter(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isAsciiAlphaNumeric(code: number): boolean {
+  return isAsciiLetter(code) || (code >= 48 && code <= 57);
+}
+
+function invalidWindowsTaskSyntax(): PlatformServiceError {
+  return new PlatformServiceError(
+    "INVALID_CONFIGURATION",
+    "Windows helper Task XML contains unsupported or unbalanced syntax.",
+  );
 }
 
 export type PlistValue =
@@ -203,7 +355,7 @@ export function parseLaunchdPlist(xml: string): Record<string, PlistValue> {
 
   function parseDictionary(): Record<string, PlistValue> {
     expectOpen("dict");
-    const output: Record<string, PlistValue> = {};
+    const output = Object.create(null) as Record<string, PlistValue>;
     while (tokens[index]?.type !== "close" || tokens[index]?.name !== "dict") {
       const key = parseTextElement("key");
       if (Object.hasOwn(output, key)) {

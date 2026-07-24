@@ -39,8 +39,10 @@ ambiguous.
    to the source checkout, a pnpm content-addressable store, or a build user's home
    directory. Because OpenDelegate workspace code is bundled into Main rather than
    deployed as injected links, the pinned pnpm release command explicitly uses its
-   legacy non-injected deploy mode. Native externals must resolve from this tree
-   under the bundled Node runtime.
+   legacy non-injected deploy mode. Package-manager executable-link directories are
+   removed after deployment because the packaged runtime invokes no dependency CLI;
+   every other link remains a hard packaging failure. Native externals must resolve
+   from this tree under the bundled Node runtime.
 5. The complete Admin Web production build, Main application, stable CLI launchers,
    init skill, license, notices, and operator-facing release documentation ship in
    the same target payload. Source-only or Admin-only archives are not release
@@ -52,11 +54,24 @@ ambiguous.
    destination must not exist; the builder refuses to merge with or overwrite a
    prior output. An internal-preview destination basename contains
    `internal-preview`.
-2. Build inputs are pinned by the lockfile and release tool versions. Archive entry
+2. Every bundle, including an unsupported internal preview, requires a clean
+   committed checkout. Assembly exports that commit into an external disposable
+   snapshot and performs its frozen install there. It never runs production deploy
+   against the live checkout or consumes ignored, untracked, or environment files.
+   A minimal launcher re-executes the builder and release-evidence auditor from the
+   exported commit, then byte-matches those snapshot files to their Git blobs before
+   accepting any repository input. Code already loaded from another checkout state
+   therefore cannot label the captured commit.
+3. Snapshot bootstrap downloads the official pnpm **11.15.1** package archive from
+   the npm registry, enforces a 25 MiB limit while streaming, and verifies its pinned
+   SHA-512 before execution. Every pnpm process receives an explicit regular CLI
+   path outside the live checkout; neither `PATH` nor the checkout's ignored
+   `node_modules` can provide release authority.
+4. Build inputs are pinned by the lockfile and release tool versions. Archive entry
    order, normalized paths, generated metadata shape, and checksum-manifest order
    use locale-independent ordering and are deterministic. Target-specific native
    binaries are expected to differ across target tuples.
-3. The payload contains a machine-readable manifest with at least:
+5. The payload contains a machine-readable manifest with at least:
    - product and protocol versions;
    - target OS and architecture;
    - exact Node.js, package-manager, bundler, and runtime-external versions;
@@ -68,12 +83,12 @@ ambiguous.
      manifest/checksum self-references, with those exclusions recorded explicitly;
      and
    - the overall payload or archive SHA-256 digest when an archive is produced.
-4. The checksum manifest covers the packaged bytes, including the bundled runtime,
+6. The checksum manifest covers the packaged bytes, including the bundled runtime,
    Main, Admin Web, native externals, skills, and notices. It proves payload
    self-consistency after acquisition; because it travels with the payload, it does
    not authenticate the publisher. Supported publication requires a digest,
    signature, or attestation delivered through a separately trusted channel.
-5. The third-party inventory records every deployed runtime package instance and
+7. The third-party inventory records every deployed runtime package instance and
    every production dependency compiled into Admin Web, together with retained
    license/notice file paths and hashes. Admin dependency terms, including bundled
    font terms, are copied into the payload under `licenses/admin-web/`. When a
@@ -107,14 +122,11 @@ ambiguous.
    before and after assembly. Release metadata records `buildCommit`,
    `auditedSourceCommit`, and `changedAttestationPaths`; unsupported previews
    mark this candidate-only diff as unverified.
-6. Candidate assembly does not consume first-party files from the live checkout.
-   With replacement objects disabled, the builder exports commit B through
-   `git archive`, performs a frozen dependency install in that external snapshot,
-   and builds and copies every source, Admin, documentation, skill, and legal input
-   from the snapshot. Untracked and ignored files, including environment inputs,
-   therefore cannot enter or alter the candidate. The live clean-B check still
-   explicitly includes all untracked files regardless of local Git status
-   configuration as defense in depth.
+6. The common snapshot rule above applies to candidate B as well as previews. With
+   replacement objects disabled, candidate assembly builds and copies every source,
+   Admin, documentation, skill, and legal input from exported B. The live clean-B
+   check still explicitly includes all untracked files regardless of local Git
+   status configuration as defense in depth.
 
 ### Packaged smoke and support status
 

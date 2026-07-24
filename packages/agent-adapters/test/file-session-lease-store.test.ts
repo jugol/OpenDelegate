@@ -69,4 +69,17 @@ test("file lease store serializes concurrent acquisition and fails closed on cor
     (error: unknown) =>
       error instanceof AgentAdapterError && error.code === "SESSION_LEASE_STORE_CORRUPT",
   );
+
+  await writeFile(
+    statePath,
+    '{"schemaVersion":1,"records":{"__proto__":{"fence":1,"lastObservedAt":21000}}}',
+    "utf8",
+  );
+  assert.equal(Object.hasOwn(Object.prototype, "fence"), false);
+  await assert.rejects(
+    corrupt.acquire("another-session", "run-3", 1_000, 21_000),
+    (error: unknown) =>
+      error instanceof AgentAdapterError && error.code === "SESSION_LEASE_STORE_CORRUPT",
+  );
+  assert.equal(Object.hasOwn(Object.prototype, "fence"), false);
 });

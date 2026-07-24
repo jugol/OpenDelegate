@@ -90,6 +90,9 @@ importers:
 
   apps/artifact-gateway:
     dependencies:
+      '@fastify/rate-limit':
+        specifier: 11.1.0
+        version: 11.1.0
       '@opendelegate/artifact-store':
         specifier: workspace:*
         version: link:../../packages/artifact-store

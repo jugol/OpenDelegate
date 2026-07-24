@@ -99,6 +99,10 @@ exist.
 7. Missing, unauthorized, expired, and revoked Artifacts return one
    enumeration-resistant not-found response. No response or log contains a bearer,
    storage path, stack, or Admin credential.
+8. Artifact lookup and authorization are rate-limited per directly observed peer
+   before metadata or credential work. Liveness remains available outside that
+   budget. A bounded `429` response is common to all Artifact IDs and reveals no
+   existence or authorization state.
 
 ## Alternatives considered
 
@@ -152,7 +156,7 @@ required control.
   audit, and hash-only token persistence.
 - Gateway injection tests cover all five exposure modes, owner-cookie rejection,
   token binding/replay/revocation/expiry, range and attachment behavior, origin
-  validation, and non-disclosure responses.
+  validation, ingress rate limiting, and non-disclosure responses.
 - Malicious HTML and SVG fixtures remain byte-for-byte untrusted while their response
   headers prove scripts, origin access, framing, sniffing, referrers, and cross-origin
   reads are contained according to the selected mode.

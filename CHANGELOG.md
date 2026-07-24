@@ -72,6 +72,12 @@ represents a supported release or completed first milestone.
   whose diff from the audited source commit is restricted to the ledger and SHA-bound regular
   evidence files, revalidated before and after assembly without honoring Git replacement refs, and
   assembled from a committed snapshot that excludes ignored or untracked checkout inputs.
+- Isolated unsupported preview assembly in the same disposable committed-snapshot model, removed
+  package-manager executable shims without deleting package-owned `.bin` data, and kept the live
+  checkout's dependency state unchanged on both successful and failed packaging.
+- Re-executed release assembly from the captured commit's disposable tool snapshot and bootstrapped
+  pnpm from its separately downloaded, streaming-size-bounded, SHA-512-pinned official archive
+  instead of trusting ignored checkout dependencies or a global executable.
 
 ### Security
 
@@ -87,6 +93,9 @@ represents a supported release or completed first milestone.
 - Upgraded to the patched pnpm 11 toolchain, enforced a strict dependency release-age hold, blocked
   exotic transitive sources, allowlisted only exact reviewed native build scripts, and removed all
   known dependency advisories.
+- Added per-peer Artifact lookup and authorization rate limiting, replaced the Windows Task XML
+  regular-expression scan with a bounded linear parser, and moved file-backed session lease keys to
+  a `Map` so persisted input cannot reach prototype setters.
 
 ### Known release blockers
 

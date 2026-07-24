@@ -66,13 +66,15 @@ Prepare and validate the checkout:
 
 ```sh
 node --version
+git status --short
 pnpm install --frozen-lockfile
 pnpm check
 pnpm build
 pnpm test:browser
 ```
 
-`node --version` must print `v24.18.0`. Then build a platform-specific validation bundle:
+`node --version` must print `v24.18.0`, and `git status --short` must print nothing. Then build a
+platform-specific validation bundle:
 
 ```sh
 pnpm release:build --destination ABSOLUTE_PATH --internal-preview
@@ -104,6 +106,15 @@ for the current OS and architecture, verifies its audited archive SHA-256, and w
   standalone file;
 - the Admin assets, init skill, release documentation, and launchers; and
 - the bundled Main runtime and production dependencies.
+
+All bundle modes export the clean build commit into a disposable directory, run the frozen install
+and production deployment there, and remove it after success or failure. Packaging therefore
+cannot rewrite the live checkout's pnpm state, and ignored, untracked, or environment files cannot
+enter a preview. A minimal launcher re-executes the release tool and evidence auditor from the
+captured commit's snapshot; the snapshot files must then byte-match their Git blobs before any
+repository input is accepted. It streams the official pnpm 11.15.1 npm archive through a 25 MiB
+limit and executes it only after its pinned SHA-512 matches. Every later pnpm process receives an
+explicit regular CLI path outside the live checkout.
 
 The launchers clear caller-provided identity variables. The packaged CLI derives its version,
 build ID, and runtime channel only after verifying the enclosed
@@ -157,14 +168,13 @@ rejects unreferenced files, deletions, renames or copies, type or mode changes, 
 submodules, and every source, configuration, builder, schema, or ordinary documentation change.
 Candidate `release-metadata.json` records B as `buildCommit`, A as `auditedSourceCommit`, and the
 complete `changedAttestationPaths` list. Unsupported previews set that candidate-only path list to
-`null` because their dirty or unrestricted checkout has not passed this provenance gate.
+`null` because their incomplete evidence state has not passed this candidate provenance gate.
 
-All provenance Git reads ignore local replacement refs. Candidate assembly exports B through
-`git archive`, performs the frozen install inside that external committed snapshot, and uses only
-the snapshot for source, Admin, documentation, skill, and legal inputs. Ignored and untracked
-checkout files—including environment files—cannot enter or alter the candidate. As defense in
-depth, the clean-B check still requests every untracked path explicitly even when local Git status
-configuration would otherwise hide it.
+All provenance Git reads ignore local replacement refs. Every bundle exports its clean build commit
+through `git archive`, performs the frozen install inside that external committed snapshot, and
+uses only the snapshot for source, Admin, documentation, skill, and legal inputs. As defense in
+depth, the clean-checkout test still requests every untracked path explicitly even when local Git
+status configuration would otherwise hide it.
 
 Do not:
 

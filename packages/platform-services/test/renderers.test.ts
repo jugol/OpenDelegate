@@ -136,6 +136,49 @@ test("manifest parsers reject widened privilege and ambiguous duplicate state", 
     (error: unknown) =>
       error instanceof PlatformServiceError && error.code === "INVALID_CONFIGURATION",
   );
+  assert.throws(
+    () =>
+      parseWindowsTaskXml(
+        windows.helper.manifest.content
+          .replace("<Principals>", "<Settings>")
+          .replace("</Principals>", "</Settings>"),
+      ),
+    (error: unknown) =>
+      error instanceof PlatformServiceError && error.code === "INVALID_CONFIGURATION",
+  );
+  assert.throws(
+    () =>
+      parseWindowsTaskXml(
+        windows.helper.manifest.content.replace(
+          "</LogonTrigger>",
+          `${"0".repeat(70 * 1024)}</LogonTrigger>`,
+        ),
+      ),
+    (error: unknown) =>
+      error instanceof PlatformServiceError && error.code === "INVALID_CONFIGURATION",
+  );
+  assert.throws(
+    () =>
+      parseWindowsTaskXml(
+        windows.helper.manifest.content.replace("</LogonTrigger>", "</Principal></LogonTrigger>"),
+      ),
+    (error: unknown) =>
+      error instanceof PlatformServiceError && error.code === "INVALID_CONFIGURATION",
+  );
+  for (const content of [
+    windows.helper.manifest.content.replace("<Principals>", "<Principals>JUNK"),
+    windows.helper.manifest.content.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
+    windows.helper.manifest.content.replace(
+      "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+      "<MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>",
+    ),
+  ]) {
+    assert.throws(
+      () => parseWindowsTaskXml(content),
+      (error: unknown) =>
+        error instanceof PlatformServiceError && error.code === "INVALID_CONFIGURATION",
+    );
+  }
 
   const macos = renderPlatformServiceArtifacts(macOsConfiguration());
   assert.throws(
@@ -160,6 +203,15 @@ test("manifest parsers reject widened privilege and ambiguous duplicate state", 
     (error: unknown) =>
       error instanceof PlatformServiceError && error.code === "INVALID_CONFIGURATION",
   );
+  const prototypeKey = parseLaunchdPlist(
+    macos.core.manifest.content.replace(
+      "<dict>",
+      "<dict><key>__proto__</key><string>ordinary-data</string>",
+    ),
+  );
+  assert.equal(Object.getPrototypeOf(prototypeKey), null);
+  assert.equal(Object.hasOwn(prototypeKey, "__proto__"), true);
+  assert.equal(prototypeKey["__proto__"], "ordinary-data");
 
   const linux = renderPlatformServiceArtifacts(linuxConfiguration());
   assert.throws(

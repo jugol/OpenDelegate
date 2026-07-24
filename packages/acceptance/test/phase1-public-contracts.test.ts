@@ -273,8 +273,9 @@ async function createHarness(
   const knowledgeRoot = await mkdtemp(join(tmpdir(), "opendelegate-acceptance-"));
 
   t.after(async () => {
+    const resolvedTemporaryRoot = await realpath(tmpdir());
     const resolvedRoot = await realpath(knowledgeRoot).catch(() => knowledgeRoot);
-    const relativeRoot = relative(tmpdir(), resolvedRoot);
+    const relativeRoot = relative(resolvedTemporaryRoot, resolvedRoot);
     const firstSegment = relativeRoot.split(sep)[0];
     assert.equal(isAbsolute(relativeRoot), false);
     assert.equal(relativeRoot.startsWith(".."), false);

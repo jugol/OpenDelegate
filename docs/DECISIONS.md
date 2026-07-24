@@ -363,3 +363,23 @@ therefore part of the safety boundary rather than optional operational hardening
 mixed snapshot pairs, expiry across downtime, and exclusive capacity. It does not
 provide the external monotonic store or OS service singleton, so coherent rollback
 resistance remains unproven until the persistence and platform phases.
+
+## D-040 — Isolated bundle assembly
+
+**Decision:** Every platform bundle, including an unsupported internal preview,
+requires a clean committed checkout and is assembled from an external disposable
+snapshot with a frozen dependency install. Production deployment never runs against
+the live source checkout. A minimal launcher exports the captured commit, and the
+release logic and evidence auditor are re-executed from that immutable tool snapshot.
+Snapshot bootstrap uses a separately downloaded, streaming-size-bounded pnpm archive
+with a pinned SHA-512 rather than executable code from the checkout's ignored
+dependency tree.
+
+**Rationale:** pnpm's legacy deploy mode can rewrite ignored workspace state, and
+live ignored, untracked, environment, or dependency files are not trustworthy
+release inputs. A concurrent clean checkout transition must not let code from one
+tree label a bundle as another tree.
+
+**Consequence:** Local changes must be committed or removed before packaging.
+Candidate-only A-to-B attestation restrictions still apply only to a supported
+release candidate; an incomplete preview remains explicitly unsupported.

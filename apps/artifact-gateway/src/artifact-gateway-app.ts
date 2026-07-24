@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import rateLimit from "@fastify/rate-limit";
 
 import {
   type ArtifactMutationContext,
@@ -62,6 +63,16 @@ const NOT_FOUND = Object.freeze({
   status: 404,
   code: "ARTIFACT_NOT_FOUND",
 });
+const RATE_LIMITED = Object.freeze({
+  type: "about:blank",
+  title: "Too Many Requests",
+  status: 429,
+  code: "ARTIFACT_RATE_LIMITED",
+});
+const ARTIFACT_REQUEST_RATE_LIMIT = Object.freeze({
+  max: 120,
+  timeWindow: "1 minute",
+});
 
 export const ARTIFACT_SESSION_COOKIE_NAME = "__Host-opendelegate_artifact_session";
 
@@ -78,6 +89,7 @@ export async function createArtifactGatewayApp(
     trustProxy: false,
     bodyLimit: 16 * 1024,
   });
+  await app.register(rateLimit, ARTIFACT_REQUEST_RATE_LIMIT);
 
   app.addHook("onRequest", async (request) => {
     if (request.headers.host !== expectedHost) {
@@ -99,16 +111,28 @@ export async function createArtifactGatewayApp(
       });
       return;
     }
+    if (isRateLimitError(error)) {
+      void reply.status(429).send(RATE_LIMITED);
+      return;
+    }
     void reply.status(404).send(NOT_FOUND);
   });
   app.setNotFoundHandler((_request, reply) => {
     void reply.status(404).send(NOT_FOUND);
   });
 
-  app.get("/health/live", async () => ({
-    status: "ok",
-    service: `opendelegate-artifact-${options.plane}`,
-  }));
+  app.get(
+    "/health/live",
+    {
+      config: {
+        rateLimit: false,
+      },
+    },
+    async () => ({
+      status: "ok",
+      service: `opendelegate-artifact-${options.plane}`,
+    }),
+  );
 
   app.get<{
     Params: { artifactId: string };
@@ -185,6 +209,12 @@ export async function createArtifactGatewayApp(
 
   await app.ready();
   return app;
+}
+
+function isRateLimitError(error: unknown): error is { readonly statusCode: 429 } {
+  return (
+    typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === 429
+  );
 }
 
 async function authorizeArtifact(input: {
