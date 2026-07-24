@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { arch, hostname, platform, release, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import { Pool } from "pg";
 
@@ -17,6 +19,7 @@ import {
 } from "../src/index.ts";
 
 const postgresUri = process.env["OPENDELEGATE_TEST_POSTGRES_URI"];
+const execFileAsync = promisify(execFile);
 
 test("CLI init accepts secret-free database and exact HTTPS listener configuration", () => {
   const parsed = parseArguments([
@@ -73,6 +76,7 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
     adminRoot,
     sourceCheckout: resolve("."),
   });
+  await assertWindowsRuntimeOwnership(home);
 
   assert.equal(initialized.created, true);
   assert.equal(initialized.configuration.database.adapter, "sqlite");
@@ -156,6 +160,12 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     releaseChannel: "development",
     sourceCheckout: resolve("."),
   });
+  if (process.platform === "win32") {
+    const stateEntries = await readdir(initialized.paths.stateDirectory);
+    assert.ok(stateEntries.includes("main.sqlite3-wal"));
+    assert.ok(stateEntries.includes("main.sqlite3-shm"));
+  }
+  await assertWindowsRuntimeOwnership(home);
   const claim = await runtime.ownerAuth.issueInitialClaim({ channel: "local-bootstrap" });
   const claimed = await runtime.ownerAuth.claimOwner({
     channel: "local-bootstrap",
@@ -434,6 +444,38 @@ test("configuration rejects remote cleartext binding, unknown fields, and checko
   );
   await assert.rejects(loadMainConfiguration(configPath), isRuntimeError("CONFIG_INVALID"));
 });
+
+async function assertWindowsRuntimeOwnership(root: string): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+  const verificationScript = String.raw`
+$ErrorActionPreference = "Stop"
+Import-Module (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1")
+$root = $env:OPENDELEGATE_TEST_ACL_ROOT
+$currentSid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+$items = @((Get-Item -LiteralPath $root -Force)) + @(Get-ChildItem -LiteralPath $root -Force -Recurse)
+foreach ($item in $items) {
+  $ownerSid = (Get-Acl -LiteralPath $item.FullName).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if ($ownerSid -ne $currentSid) {
+    throw "Expected '$($item.FullName)' to be owned by '$currentSid', but found '$ownerSid'."
+  }
+}
+`;
+  await execFileAsync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", verificationScript],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENDELEGATE_TEST_ACL_ROOT: root,
+      },
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    },
+  );
+}
 
 async function createAdminFixture(parent: string): Promise<string> {
   const root = join(parent, "admin-dist");

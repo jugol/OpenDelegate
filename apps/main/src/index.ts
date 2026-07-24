@@ -175,6 +175,7 @@ export async function initializeMainHome(
       paths,
       environment: options.environment ?? process.env,
     });
+    await sealRuntimeState(paths);
     return {
       created: false,
       configuration,
@@ -208,6 +209,7 @@ export async function initializeMainHome(
     paths,
     environment: options.environment ?? process.env,
   });
+  await sealRuntimeState(paths);
 
   return {
     created: true,
@@ -338,6 +340,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     });
     await registerAdminAssets(app, configuration.adminRoot);
     await app.ready();
+    await sealRuntimeState(paths);
 
     let closePromise: Promise<void> | undefined;
     return {
@@ -640,6 +643,11 @@ async function ensureRuntimeDirectories(
       "Resolved runtime state must live outside the OpenDelegate source checkout.",
     );
   }
+  await sealRuntimeState(paths, actualHome);
+}
+
+async function sealRuntimeState(paths: RuntimePaths, resolvedHome?: string): Promise<void> {
+  const actualHome = resolvedHome ?? (await realpath(paths.home));
   await assertManagedTreeHasNoLinks(actualHome);
   if (process.platform === "win32") {
     await enforceWindowsRuntimeAcl(actualHome);
@@ -727,25 +735,24 @@ $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1")
 $root = $env:OPENDELEGATE_ACL_ROOT
 $userSidText = $env:OPENDELEGATE_ACL_USER_SID
-$userSid = [System.Security.Principal.SecurityIdentifier]::new($userSidText)
-$systemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
+$systemSidText = "S-1-5-18"
 $items = @((Get-Item -LiteralPath $root -Force)) + @(Get-ChildItem -LiteralPath $root -Force -Recurse)
 foreach ($item in $items) {
   if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw "Runtime state contains a reparse point."
   }
   $acl = Get-Acl -LiteralPath $item.FullName
-  $ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
-  if ($ownerSid -ne $userSid -and $ownerSid -ne $systemSid) {
-    throw "Runtime state is not owned by the current user or LocalSystem."
+  $ownerSidText = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if ($ownerSidText -ne $userSidText -and $ownerSidText -ne $systemSidText) {
+    throw "Runtime state item '$($item.FullName)' is owned by '$ownerSidText', not the current user or LocalSystem."
   }
   if ($item.FullName -eq $root -and -not $acl.AreAccessRulesProtected) {
     throw "Runtime state still inherits access rules."
   }
   foreach ($existingRule in @($acl.Access)) {
-    $ruleSid = $existingRule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier])
+    $ruleSidText = $existingRule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
     if (
-      ($ruleSid -ne $userSid -and $ruleSid -ne $systemSid) -or
+      ($ruleSidText -ne $userSidText -and $ruleSidText -ne $systemSidText) -or
       $existingRule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
       (($existingRule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne
         [System.Security.AccessControl.FileSystemRights]::FullControl)
@@ -757,10 +764,11 @@ foreach ($item in $items) {
 `;
   try {
     for (const arguments_ of [
-      [root, "/reset", "/Q"],
-      [root, "/grant:r", `*${userSid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "/Q"],
-      [root, "/inheritance:r", "/Q"],
-      [join(root, "*"), "/reset", "/T", "/Q"],
+      [root, "/reset", "/L", "/Q"],
+      [root, "/grant:r", `*${userSid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "/L", "/Q"],
+      [root, "/inheritance:r", "/L", "/Q"],
+      [join(root, "*"), "/reset", "/T", "/L", "/Q"],
+      [root, "/setowner", `*${userSid}`, "/T", "/L", "/Q"],
     ]) {
       await execFileAsync("icacls.exe", arguments_, {
         encoding: "utf8",
