@@ -29,6 +29,23 @@ test("every remote GitHub Action is pinned to an immutable commit with a version
   assert.deepEqual(mutableReferences, []);
 });
 
+test("secret scanning verifies a pinned Gitleaks binary against the full Git history", async () => {
+  const workflow = await readFile(
+    new URL("../../.github/workflows/security.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(workflow, /fetch-depth:\s*0/u);
+  assert.match(workflow, /GITLEAKS_VERSION:\s*8\.30\.1/u);
+  assert.match(
+    workflow,
+    /GITLEAKS_ARCHIVE_SHA256:\s*551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb/u,
+  );
+  assert.match(workflow, /sha256sum --check/u);
+  assert.match(workflow, /gitleaks" git --no-banner --redact --log-opts="--all" \./u);
+  assert.doesNotMatch(workflow, /gitleaks\/gitleaks-action@/u);
+});
+
 test("public issue intake directs vulnerabilities to the verified private reporting route", async () => {
   const config = await readFile(
     new URL("../../.github/ISSUE_TEMPLATE/config.yml", import.meta.url),
