@@ -14,6 +14,7 @@ import {
   collectShaBoundAttestationPaths,
   createCommittedSourceSnapshot,
   createChecksumManifest,
+  createMainDeployArguments,
   createPayloadManifest,
   determineSupportStatus,
   evaluateSmokeShutdown,
@@ -137,6 +138,18 @@ test("the reviewed package-manager and dependency execution policies stay pinned
   assert.match(workspace, /^\s+better-sqlite3@13\.0\.1:\s*true\s*$/mu);
   assert.match(workspace, /^\s+esbuild@0\.28\.1:\s*true\s*$/mu);
   assert.doesNotMatch(workspace, /set this to true or false/u);
+});
+
+test("Main deployment opts into pnpm's pinned non-injected workspace behavior", () => {
+  assert.deepEqual(createMainDeployArguments("release/apps/main"), [
+    "--config.node-linker=hoisted",
+    "--filter",
+    "@opendelegate/main",
+    "deploy",
+    "--legacy",
+    "--prod",
+    "release/apps/main",
+  ]);
 });
 
 test("every supported release target has a pinned official Node.js archive", () => {

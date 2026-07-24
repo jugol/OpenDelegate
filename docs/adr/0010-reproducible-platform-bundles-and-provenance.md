@@ -37,8 +37,10 @@ ambiguous.
 4. Production dependencies are materialized as a portable, hoisted dependency tree
    beside the bundled application. It may not contain links that escape the payload
    to the source checkout, a pnpm content-addressable store, or a build user's home
-   directory. Native externals must resolve from this tree under the bundled Node
-   runtime.
+   directory. Because OpenDelegate workspace code is bundled into Main rather than
+   deployed as injected links, the pinned pnpm release command explicitly uses its
+   legacy non-injected deploy mode. Native externals must resolve from this tree
+   under the bundled Node runtime.
 5. The complete Admin Web production build, Main application, stable CLI launchers,
    init skill, license, notices, and operator-facing release documentation ship in
    the same target payload. Source-only or Admin-only archives are not release

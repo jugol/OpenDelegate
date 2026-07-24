@@ -706,19 +706,9 @@ async function assembleRelease({
 
   const mainDirectory = join(staging, "apps", "main");
   await mkdir(mainDirectory, { recursive: true });
-  await runCommand(
-    "pnpm",
-    [
-      "--config.node-linker=hoisted",
-      "--filter",
-      "@opendelegate/main",
-      "deploy",
-      "--prod",
-      mainDirectory,
-    ],
-    assemblySourceRoot,
-    { pnpmCli: assemblyPnpmCli },
-  );
+  await runCommand("pnpm", createMainDeployArguments(mainDirectory), assemblySourceRoot, {
+    pnpmCli: assemblyPnpmCli,
+  });
 
   await bundle({
     absWorkingDir: assemblySourceRoot,
@@ -829,6 +819,18 @@ Run \`opendelegate help\` for the deterministic CLI surface. Review
     "utf8",
   );
   await writeIntegrityManifests(staging);
+}
+
+export function createMainDeployArguments(mainDirectory) {
+  return [
+    "--config.node-linker=hoisted",
+    "--filter",
+    "@opendelegate/main",
+    "deploy",
+    "--legacy",
+    "--prod",
+    mainDirectory,
+  ];
 }
 
 async function readRuntimeExternalVersions(sourceRoot) {
