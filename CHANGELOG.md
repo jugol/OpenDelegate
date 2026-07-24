@@ -78,6 +78,9 @@ represents a supported release or completed first milestone.
 - Re-executed release assembly from the captured commit's disposable tool snapshot and bootstrapped
   pnpm from its separately downloaded, streaming-size-bounded, SHA-512-pinned official archive
   instead of trusting ignored checkout dependencies or a global executable.
+- Canonicalized parsed X.509 certificate serials before durable lookup and rotation proof
+  verification so valid 128-bit serials with DER-trimmed leading zeroes remain stable across
+  platforms.
 
 ### Security
 

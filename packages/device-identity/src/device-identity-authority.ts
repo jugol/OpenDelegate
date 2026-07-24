@@ -222,10 +222,11 @@ export class DeviceIdentityAuthority {
       }
 
       const keyId = `ca_${base64Url(this.random.bytes(16))}`;
+      const serialNumber = nextCertificateSerial(this.random);
       const keys = await this.secrets.createP256KeyPair(keyId);
       const certificate = await X509CertificateGenerator.createSelfSigned(
         {
-          serialNumber: hex(this.random.bytes(16)),
+          serialNumber,
           name: `CN=OpenDelegate instance ${escapeDistinguishedName(instanceId)}`,
           notBefore: new Date(now - CLOCK_SKEW_MS),
           notAfter: new Date(safeTimestampAfter(now, CA_VALIDITY_MS)),
@@ -455,7 +456,7 @@ export class DeviceIdentityAuthority {
           );
         }
 
-        const serialNumber = hex(this.random.bytes(16));
+        const serialNumber = nextCertificateSerial(this.random);
         if ((await transaction.getCertificateBySerial(serialNumber)) !== null) {
           throw new DeviceIdentityError(
             "IDENTITY_REPOSITORY_CONFLICT",
@@ -651,7 +652,7 @@ export class DeviceIdentityAuthority {
           "The certificate authority is unavailable for rotation.",
         );
       }
-      const serialNumber = hex(this.random.bytes(16));
+      const serialNumber = nextCertificateSerial(this.random);
       if ((await transaction.getCertificateBySerial(serialNumber)) !== null) {
         throw new DeviceIdentityError(
           "IDENTITY_REPOSITORY_CONFLICT",
@@ -748,6 +749,10 @@ export class DeviceIdentityAuthority {
     ) {
       throw rotationInvalid();
     }
+    const certificateSerial = normalizeParsedCertificateSerial(certificate.serialNumber);
+    if (certificateSerial === null) {
+      throw rotationInvalid();
+    }
 
     return this.repository.transaction(async (transaction) => {
       const now = readClock(this.clock);
@@ -769,7 +774,7 @@ export class DeviceIdentityAuthority {
         throw rotationInvalid();
       }
       const device = await transaction.getDevice(deviceId);
-      const pending = await transaction.getCertificateBySerial(certificate.serialNumber);
+      const pending = await transaction.getCertificateBySerial(certificateSerial);
       if (
         !certificateSignatureValid ||
         certificate.issuer !== issuer.subject ||
@@ -799,7 +804,7 @@ export class DeviceIdentityAuthority {
         signature,
         rotationProofPayload({
           activationChallenge,
-          certificateSerial: certificate.serialNumber,
+          certificateSerial,
           deviceId,
         }),
       );
@@ -922,6 +927,13 @@ export class DeviceIdentityAuthority {
     } catch {
       throw peerCertificateError("PEER_CERTIFICATE_INVALID", "The peer certificate is malformed.");
     }
+    const certificateSerial = normalizeParsedCertificateSerial(certificate.serialNumber);
+    if (certificateSerial === null) {
+      throw peerCertificateError(
+        "PEER_CERTIFICATE_INVALID",
+        "The peer certificate serial is invalid.",
+      );
+    }
 
     return this.repository.transaction(async (transaction) => {
       const now = readClock(this.clock);
@@ -987,7 +999,7 @@ export class DeviceIdentityAuthority {
       }
 
       const device = await transaction.getDevice(certificateDeviceId);
-      const persisted = await transaction.getCertificateBySerial(certificate.serialNumber);
+      const persisted = await transaction.getCertificateBySerial(certificateSerial);
       if (device === null || persisted === null) {
         throw peerCertificateError(
           "PEER_CERTIFICATE_UNKNOWN",
@@ -1462,6 +1474,25 @@ function base64Url(value: Uint8Array): string {
 
 function hex(value: Uint8Array): string {
   return Buffer.from(value).toString("hex");
+}
+
+function nextCertificateSerial(random: IdentityRandomSource): string {
+  const bytes = random.bytes(16);
+  if (bytes.byteLength !== 16 || bytes.every((value) => value === 0)) {
+    throw new DeviceIdentityError(
+      "IDENTITY_CONFIGURATION_INVALID",
+      "The identity random source produced an invalid certificate serial.",
+    );
+  }
+  return hex(bytes);
+}
+
+function normalizeParsedCertificateSerial(value: string): string | null {
+  const normalized = value.toLowerCase();
+  if (!/^[0-9a-f]{1,32}$/u.test(normalized)) {
+    return null;
+  }
+  return normalized.padStart(32, "0");
 }
 
 function deepFreeze<TValue>(value: TValue): TValue {

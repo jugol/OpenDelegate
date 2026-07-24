@@ -54,6 +54,25 @@ class CounterRandomSource implements IdentityRandomSource {
   }
 }
 
+class LeadingZeroRandomSource implements IdentityRandomSource {
+  private next = 1;
+
+  public bytes(length: number): Uint8Array {
+    const result = new Uint8Array(length);
+    for (let index = 1; index < result.length; index += 1) {
+      result[index] = this.next % 256;
+      this.next += 1;
+    }
+    return result;
+  }
+}
+
+class AllZeroRandomSource implements IdentityRandomSource {
+  public bytes(length: number): Uint8Array {
+    return new Uint8Array(length);
+  }
+}
+
 test("Main bootstraps one durable public certificate authority without persisting its private key", async () => {
   const now = Date.UTC(2026, 6, 24, 0, 0, 0);
   const clock = new MutableClock(now);
@@ -93,6 +112,26 @@ test("Main bootstraps one durable public certificate authority without persistin
   assert.equal(serialized.includes("pkcs8"), false);
   assert.equal(await secrets.has(first.keyId), true);
   assert.equal((await secrets.getPrivateKey(first.keyId))?.extractable, false);
+});
+
+test("certificate issuance rejects an invalid all-zero random serial before persisting authority", async () => {
+  const repository = new InMemoryDeviceIdentityRepository();
+  const authority = new DeviceIdentityAuthority({
+    clock: new MutableClock(Date.UTC(2026, 6, 24, 0, 0, 0)),
+    random: new AllZeroRandomSource(),
+    repository,
+    secrets: new InMemoryDeviceIdentitySecretStore(),
+  });
+
+  await assert.rejects(
+    () => authority.bootstrapCertificateAuthority({ instanceId: "instance-personal" }),
+    (error: unknown) => {
+      assert.ok(error instanceof DeviceIdentityError);
+      assert.equal(error.code, "IDENTITY_CONFIGURATION_INVALID");
+      return true;
+    },
+  );
+  assert.equal((await repository.snapshot()).certificateAuthority, null);
 });
 
 test("a Worker creates a Device-bound P-256 CSR locally and verifies the explicit Main pin", async () => {
@@ -483,6 +522,7 @@ test("mTLS peer validation binds the trusted certificate, durable serial, and en
   const repository = new InMemoryDeviceIdentityRepository();
   const authority = new DeviceIdentityAuthority({
     clock,
+    random: new LeadingZeroRandomSource(),
     repository,
     secrets: new InMemoryDeviceIdentitySecretStore(),
   });
@@ -515,6 +555,7 @@ test("mTLS peer validation binds the trusted certificate, durable serial, and en
     protocolVersion: 1,
     token: grant.secret.reveal(),
   });
+  assert.match(identity.serialNumber, /^00[0-9a-f]{30}$/u);
 
   assert.deepEqual(
     await authority.validatePeerIdentity({
@@ -564,7 +605,7 @@ test("certificate rotation requires new-key proof and gives the old generation o
   const mainSecrets = new InMemoryDeviceIdentitySecretStore();
   const authority = new DeviceIdentityAuthority({
     clock,
-    random: new CounterRandomSource(),
+    random: new LeadingZeroRandomSource(),
     repository,
     secrets: mainSecrets,
   });
