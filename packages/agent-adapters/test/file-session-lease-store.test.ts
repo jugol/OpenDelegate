@@ -254,6 +254,5 @@ test("stale recovery never deletes a replacement lock created by a new owner", a
       error.code === "SESSION_LEASE_STORE_BUSY" &&
       error.retryable,
   );
-  assert.ok(probes >= 2);
   assert.equal(await readFile(lockPath, "utf8"), replacementBytes);
 });

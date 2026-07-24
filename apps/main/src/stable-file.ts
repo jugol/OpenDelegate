@@ -23,23 +23,16 @@ export async function readStableRegularFile(
     throw new StableFileError("TOO_LARGE", "The stable-file byte limit is invalid.");
   }
 
-  const before = await lstat(path, { bigint: true });
-  if (!before.isFile() || before.isSymbolicLink()) {
-    throw new StableFileError("NOT_REGULAR", "The path is not a regular file.");
-  }
-
   const noFollow = fileConstants.O_NOFOLLOW ?? 0;
   const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
   const handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking);
   try {
     const opened = await handle.stat({ bigint: true });
     const openedPath = await lstat(path, { bigint: true });
-    if (
-      !opened.isFile() ||
-      openedPath.isSymbolicLink() ||
-      !sameFile(before, opened) ||
-      !sameFile(opened, openedPath)
-    ) {
+    if (!opened.isFile() || openedPath.isSymbolicLink() || !openedPath.isFile()) {
+      throw new StableFileError("NOT_REGULAR", "The path is not a regular file.");
+    }
+    if (!sameFile(opened, openedPath)) {
       throw new StableFileError("CHANGED", "The regular file changed while it was opened.");
     }
     if (opened.size > BigInt(maximumBytes)) {
@@ -64,6 +57,7 @@ export async function readStableRegularFile(
     const afterReadPath = await lstat(path, { bigint: true });
     if (
       afterReadPath.isSymbolicLink() ||
+      !afterReadPath.isFile() ||
       !sameSnapshot(opened, afterRead) ||
       !sameSnapshot(afterRead, afterReadPath)
     ) {
