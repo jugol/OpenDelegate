@@ -3,8 +3,8 @@
   "schemaVersion": 1,
   "product": "OpenDelegate",
   "milestone": "first",
-  "auditedAt": "2026-07-24T10:54:55.536Z",
-  "sourceCommit": "428bdf9347b6bee97eccb91203650af2c1898af3",
+  "auditedAt": "2026-07-24T11:02:51.076Z",
+  "sourceCommit": "e8587697824be4995705b9abb1f5ee885017b281",
   "releaseStatus": "blocked",
   "criteria": [
     {
