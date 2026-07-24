@@ -1,0 +1,41 @@
+name: Threat model review
+description: Record a trust-boundary, abuse-case, or security design review.
+title: "Threat model: "
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and assets
+      description:
+        Identify the component, data, credentials, identities, and external systems in scope.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Trust boundaries and actors
+      description: Describe authority changes, untrusted inputs, and communication boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: threats
+    attributes:
+      label: Threats and attack paths
+      description:
+        Include misuse, compromise, replay, escalation, disclosure, and availability risks.
+    validations:
+      required: true
+  - type: textarea
+    id: controls
+    attributes:
+      label: Controls and residual risk
+      description: Separate deterministic controls from agent guidance and state remaining risk.
+    validations:
+      required: true
+  - type: textarea
+    id: proof
+    attributes:
+      label: Negative tests and evidence
+      description: List the denial, bypass, restart, and adversarial cases that must pass.
+    validations:
+      required: true

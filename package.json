@@ -1,0 +1,36 @@
+{
+  "name": "opendelegate",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A personal, self-hosted control plane for orchestrating AI agents across devices.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22.14.0 <23 || >=24.0.0 <25",
+    "pnpm": ">=9.15.4 <10"
+  },
+  "scripts": {
+    "build": "pnpm --recursive --if-present run build",
+    "check": "pnpm run docs:check && pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test",
+    "docs:check": "node tooling/check-canonical-docs.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings=0",
+    "test": "pnpm --recursive --if-present run test",
+    "test:browser": "pnpm --filter @opendelegate/admin-web test:browser",
+    "test:watch": "pnpm --recursive --parallel --if-present run test:watch",
+    "typecheck": "tsc --project tsconfig.json --noEmit && pnpm --recursive --if-present run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.1",
+    "eslint": "10.7.0",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.7.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.65.0",
+    "vitest": "4.1.10"
+  }
+}

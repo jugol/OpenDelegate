@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+coverage/
+.pnpm-store/
+pnpm-lock.yaml
+**/*.svg
+
+# Canonical prose is intentionally hand-wrapped and reviewed as documentation.
+AGENTS.md
+CLAUDE.md
+CONTEXT.md
+README.md
+docs/

@@ -1,0 +1,16 @@
+{
+  "name": "@opendelegate/simulator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@opendelegate/event-store": "workspace:*"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": [
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "tooling/**/*.ts",
+    "tooling/**/*.tsx",
+    "vitest.config.ts"
+  ],
+  "exclude": ["apps/**", "**/build/**", "**/coverage/**", "**/dist/**", "**/node_modules/**"]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@opendelegate/policy",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/evaluate-action.test.ts"
+  }
+}

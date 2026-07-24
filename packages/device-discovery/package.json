@@ -1,0 +1,12 @@
+{
+  "name": "@opendelegate/device-discovery",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/device-discovery-service.test.ts"
+  }
+}

@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build and test output
+dist/
+build/
+coverage/
+.playwright-mcp/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Tool caches
+.eslintcache
+.vitest/
+
+# Logs
+*.log
+pnpm-debug.log*
+
+# Environment files and local credentials
+.env
+.env.*
+!.env.example
+
+# OpenDelegate runtime data must remain outside the source checkout.
+.opendelegate/
+.runtime/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

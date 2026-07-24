@@ -1,0 +1,13 @@
+{
+  "name": "@opendelegate/scheduler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/schedule-work-order.test.ts",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  }
+}

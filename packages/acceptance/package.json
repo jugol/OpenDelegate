@@ -1,0 +1,22 @@
+{
+  "name": "@opendelegate/acceptance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opendelegate/agent-adapter": "workspace:*",
+    "@opendelegate/computer-use": "workspace:*",
+    "@opendelegate/event-store": "workspace:*",
+    "@opendelegate/knowledge": "workspace:*",
+    "@opendelegate/orchestrator": "workspace:*",
+    "@opendelegate/policy": "workspace:*",
+    "@opendelegate/protocol": "workspace:*",
+    "@opendelegate/resource-locks": "workspace:*",
+    "@opendelegate/scheduler": "workspace:*",
+    "@opendelegate/secrets": "workspace:*",
+    "@opendelegate/transport": "workspace:*"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  }
+}

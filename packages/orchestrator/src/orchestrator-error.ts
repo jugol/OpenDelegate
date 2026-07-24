@@ -1,0 +1,36 @@
+export type OrchestratorErrorCode =
+  | "ARTIFACT_ID_CONFLICT"
+  | "ARTIFACT_REFERENCE_INVALID"
+  | "CLARIFICATION_ANSWER_CONFLICT"
+  | "CLARIFICATION_ANSWER_INVALID"
+  | "CLARIFICATION_NOT_FOUND"
+  | "COORDINATOR_INTAKE_INVALID"
+  | "COORDINATOR_PLAN_CONFLICT"
+  | "COORDINATOR_PLAN_INVALID"
+  | "COORDINATOR_REVIEW_INVALID"
+  | "COORDINATOR_SYNTHESIS_INVALID"
+  | "FORUM_AUTHOR_UNAUTHORIZED"
+  | "FORUM_POST_CONFLICT"
+  | "JOURNAL_EVENT_INVALID"
+  | "ORCHESTRATION_CLOCK_INVALID"
+  | "RUN_ASSIGNMENT_CONFLICT"
+  | "RUN_ASSIGNMENT_INVALID"
+  | "RUN_COMPLETION_INVALID"
+  | "RUN_COMPLETION_STALE"
+  | "SCHEDULING_SELECTION_INVALID"
+  | "TASK_ID_UNAVAILABLE"
+  | "TASK_ID_CONFLICT"
+  | "TASK_NOT_FOUND"
+  | "WORK_ORDER_ID_CONFLICT"
+  | "WORK_ORDER_ID_DUPLICATED"
+  | "WORKER_UNAVAILABLE";
+
+export class OrchestratorError extends Error {
+  public readonly code: OrchestratorErrorCode;
+
+  public constructor(code: OrchestratorErrorCode, message: string) {
+    super(message);
+    this.name = "OrchestratorError";
+    this.code = code;
+  }
+}
