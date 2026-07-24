@@ -1,46 +1,95 @@
+export type StatusTone = "success" | "accent" | "muted" | "warning" | "danger";
+
 export interface DeviceFact {
   readonly label: string;
   readonly value: string;
-  readonly state?: "success";
 }
 
-export interface CapabilityView {
-  readonly capabilityId: "codex" | "claude" | "computer-use" | "browser";
+export interface RuntimeStatusView {
   readonly label: string;
-  readonly state: "Verified" | "Detected" | "Ready";
-  readonly tone: "success" | "accent";
+  readonly value: string;
+  readonly tone: StatusTone;
+}
+
+export type CanonicalCapabilityId = "codex" | "claude-code" | "computer-use" | "browser-automation";
+
+export interface CapabilityView {
+  readonly capabilityId: CanonicalCapabilityId;
+  readonly label: string;
+  readonly state: "Verified" | "Detected" | "Ready" | "Degraded" | "Unavailable" | "Disabled";
+  readonly tone: StatusTone;
 }
 
 export interface RouteView {
   readonly order: number;
   readonly label: string;
   readonly summary: string;
-  readonly tone: "success" | "muted";
+  readonly tone: StatusTone;
 }
 
-export interface DeviceOverviewViewModel {
-  readonly name: string;
-  readonly navigationSummary: string;
-  readonly headerSummary: string;
-  readonly facts: readonly DeviceFact[];
-  readonly roles: readonly string[];
-  readonly capabilities: readonly CapabilityView[];
-  readonly routes: readonly RouteView[];
-  readonly activeRunCount: number;
-  readonly knowledge: {
-    readonly status: "Ready";
+export interface ConfigurationProposalView {
+  readonly role: {
+    readonly actionLabel: string;
+    readonly label: string;
+  };
+  readonly capability: {
+    readonly actionLabel: string;
+    readonly capabilityId: CanonicalCapabilityId;
+    readonly fromState: CapabilityView["state"];
+    readonly label: string;
+    readonly toState: CapabilityView["state"];
   };
 }
 
+export interface ConfigurationSessionView {
+  readonly assistantMessage: string;
+  readonly proposal: ConfigurationProposalView | null;
+}
+
+export interface DeviceOverviewViewModel {
+  readonly deviceId: string;
+  readonly name: string;
+  readonly roleLabel: string;
+  readonly deviceTypeLabel: string;
+  readonly operatingSystem: string;
+  readonly connection: {
+    readonly label: string;
+    readonly tone: StatusTone;
+  };
+  readonly facts: readonly DeviceFact[];
+  readonly runtimeStatuses: readonly RuntimeStatusView[];
+  readonly roles: readonly string[];
+  readonly capabilities: readonly CapabilityView[];
+  readonly routes: readonly RouteView[];
+  readonly currentWork: {
+    readonly activeRunCount: number;
+    readonly summary: string;
+  };
+  readonly knowledge: {
+    readonly label: string;
+    readonly status: string;
+    readonly tone: StatusTone;
+  };
+  readonly configurationSession: ConfigurationSessionView;
+}
+
 export const firstRunDevice = deepFreeze({
+  deviceId: "device-main-mac-studio",
   name: "Mac Studio",
-  navigationSummary: "Main · Online",
-  headerSummary: "Main computer · macOS · Online",
+  roleLabel: "Main",
+  deviceTypeLabel: "Main computer",
+  operatingSystem: "macOS",
+  connection: {
+    label: "Online",
+    tone: "success",
+  },
   facts: [
     { label: "Operating system", value: "macOS" },
     { label: "Architecture", value: "Apple silicon" },
-    { label: "Worker service", value: "Healthy", state: "success" },
-    { label: "User session", value: "Ready", state: "success" },
+  ],
+  runtimeStatuses: [
+    { label: "Worker service", value: "Healthy", tone: "success" },
+    { label: "User session", value: "Ready", tone: "success" },
   ],
   roles: ["Main Coordinator", "Development"],
   capabilities: [
@@ -51,7 +100,7 @@ export const firstRunDevice = deepFreeze({
       tone: "success",
     },
     {
-      capabilityId: "claude",
+      capabilityId: "claude-code",
       label: "Claude",
       state: "Detected",
       tone: "accent",
@@ -63,7 +112,7 @@ export const firstRunDevice = deepFreeze({
       tone: "accent",
     },
     {
-      capabilityId: "browser",
+      capabilityId: "browser-automation",
       label: "Browser automation",
       state: "Verified",
       tone: "success",
@@ -83,9 +132,31 @@ export const firstRunDevice = deepFreeze({
       tone: "muted",
     },
   ],
-  activeRunCount: 0,
+  currentWork: {
+    activeRunCount: 0,
+    summary: "No active runs",
+  },
   knowledge: {
+    label: "Local Knowledge",
     status: "Ready",
+    tone: "success",
+  },
+  configurationSession: {
+    assistantMessage:
+      "Codex and this desktop session are ready. I can verify Computer Use and propose it as a role for this Device.",
+    proposal: {
+      role: {
+        actionLabel: "Add role",
+        label: "Computer Use",
+      },
+      capability: {
+        actionLabel: "Verify capability",
+        capabilityId: "computer-use",
+        fromState: "Detected",
+        label: "Computer Use",
+        toState: "Verified",
+      },
+    },
   },
 }) satisfies DeviceOverviewViewModel;
 

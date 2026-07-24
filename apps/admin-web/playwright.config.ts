@@ -56,5 +56,15 @@ export default defineConfig({
         },
       },
     },
+    {
+      name: "minimum-width-chromium",
+      use: {
+        ...devices["Pixel 7"],
+        viewport: {
+          width: 320,
+          height: 720,
+        },
+      },
+    },
   ],
 });
