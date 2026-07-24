@@ -3,8 +3,10 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AdminApplication } from "./AdminApplication";
+import { AdminI18nProvider, initializeDocumentLocale } from "./i18n";
 import "./styles.css";
 
+const initialLocale = initializeDocumentLocale();
 const root = document.querySelector<HTMLDivElement>("#root");
 
 if (root === null) {
@@ -13,6 +15,8 @@ if (root === null) {
 
 createRoot(root).render(
   <StrictMode>
-    <AdminApplication />
+    <AdminI18nProvider initialLocale={initialLocale}>
+      <AdminApplication />
+    </AdminI18nProvider>
   </StrictMode>,
 );

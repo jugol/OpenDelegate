@@ -69,7 +69,9 @@ as selective context for agents running on that Device.
     end-to-end behavior works across macOS, Windows, and Linux and Computer Use works
     on supported graphical sessions.
 20. **English is the default.** Repository content, domain terms, APIs, logs, and UI
-    defaults are English.
+    defaults are English. Owner-facing Admin Web chrome and README documentation may
+    provide explicit, persisted translations without translating owner-authored Task
+    content, Agent conversation history, protocol values, or durable state.
 21. **Desktop control is a separate runtime plane.** The always-on daemon does not
     impersonate a logged-in desktop. A per-user session helper advertises and owns
     Computer Use readiness.

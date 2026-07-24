@@ -556,6 +556,12 @@ Deliver the required visual setup, Device specification, and operational surface
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.
+- Keep English as the canonical Admin default and add complete, typed Korean,
+  Japanese, French, Spanish, and Simplified Chinese presentation catalogs with an
+  explicit pre-authentication and authenticated language selector.
+- Persist the owner choice, update document metadata and locale-sensitive formatting
+  immediately, translate deterministic presentation state at render time, and keep
+  owner-authored and Agent-authored content unchanged.
 - Add responsive layouts and keyboard accessibility.
 
 ### Exit gate
@@ -566,6 +572,8 @@ Deliver the required visual setup, Device specification, and operational surface
 - A configuration change can be proposed conversationally, previewed, policy-checked,
   applied, audited, and rolled back.
 - Discord outage still permits inspection and emergency control.
+- All six Admin locales pass catalog completeness, locale persistence, accessibility,
+  untranslated-owner-content, date-formatting, and desktop/mobile overflow tests.
 
 ## Phase 9 — Local Markdown Knowledge
 

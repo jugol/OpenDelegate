@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
-import { firstRunDevice, type DeviceOverviewViewModel } from "./view-model";
+import {
+  firstRunDevice,
+  presentationTextFallback,
+  type DeviceOverviewViewModel,
+} from "./view-model";
 
 function renderApp(device: DeviceOverviewViewModel = firstRunDevice) {
   const user = userEvent.setup();
@@ -94,7 +98,7 @@ const windowsWorker = {
     {
       capabilityId: "claude-code",
       label: "Claude",
-      state: "Verified",
+      state: "verified",
       tone: "success",
     },
   ],
@@ -304,18 +308,20 @@ describe("first-run Device overview", () => {
   it("shows the exact Role and Capability diff when the proposal is reviewed", async () => {
     const user = renderApp();
 
-    expect(firstRunDevice.roles).not.toContain("Computer Use");
+    expect(firstRunDevice.roles.map(presentationTextFallback)).not.toContain("Computer Use");
     expect(
       firstRunDevice.capabilities.find((capability) => capability.capabilityId === "computer-use")
         ?.state,
-    ).toBe("Detected");
+    ).toBe("detected");
 
     await user.click(screen.getByRole("button", { name: "Review change" }));
 
     const proposal = screen.getByRole("region", { name: "Proposed change" });
     expect(within(proposal).getByTestId("role-diff").textContent).toBe("+Computer Use");
     expect(
-      within(proposal).getByText("Detected to Verified", { selector: ".sr-only" }),
+      within(proposal).getByText("Change from Detected to Verified", {
+        selector: ".sr-only",
+      }),
     ).toBeTruthy();
     expect(
       within(proposal).getByTestId("capability-diff").querySelector("[aria-hidden='true']")

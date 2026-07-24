@@ -383,3 +383,28 @@ tree label a bundle as another tree.
 **Consequence:** Local changes must be committed or removed before packaging.
 Candidate-only A-to-B attestation restrictions still apply only to a supported
 release candidate; an incomplete preview remains explicitly unsupported.
+
+## D-041 — Explicit owner-facing localization
+
+**Decision:** English remains the canonical repository, product, API, log, protocol,
+and UI-default language. Admin Web and README documentation also provide Korean,
+Japanese, French, Spanish, and Simplified Chinese presentation translations. With no
+stored owner choice, Admin Web starts in English; it does not silently replace the
+product default from browser preferences. A selector remains available before and
+after authentication, and an explicit choice is persisted locally.
+
+Admin Web translates deterministic product chrome, built-in state labels,
+accessibility names, tooltips, metadata, and locale-sensitive dates at render time.
+It does not machine-translate Device names, custom Roles, Task objectives, completion
+criteria, constraints, or historical owner and Agent messages. Domain codes, API
+fields, schemas, durable events, source identifiers, and logs stay English.
+
+**Rationale:** Personal operation benefits from a familiar interface, while an
+English canonical source keeps open-source collaboration and machine contracts
+stable. Keeping dynamic content verbatim prevents semantic drift, cross-Task
+contamination, and false claims that Agent output was authored in another language.
+
+**Consequence:** Every supported locale must satisfy the complete English catalog,
+language switching must update already-loaded views without a refetch or reload, and
+desktop/mobile browser tests must cover text expansion, CJK typography,
+accessibility, persistence, and owner-content preservation.

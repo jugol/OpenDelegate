@@ -18,6 +18,7 @@ import {
   type TaskState,
   type TaskSummary,
 } from "./admin-api";
+import { formatAdminDate, formatMessage, type Messages, useAdminI18n } from "./i18n";
 import { useMediaQuery } from "./use-media-query";
 
 interface TaskSurfaceProps {
@@ -27,24 +28,26 @@ interface TaskSurfaceProps {
 }
 
 type TaskFilter = "all" | "active" | "waiting" | "completed";
+type TaskMessageKey = keyof Messages["task"];
 
 export function TaskSurface({
   api,
   discordConfigured = false,
   executionAvailable = false,
 }: TaskSurfaceProps): React.JSX.Element {
+  const { locale, messages } = useAdminI18n();
   const [tasks, setTasks] = useState<readonly TaskSummary[]>([]);
   const [selected, setSelected] = useState<TaskDetail | null>(null);
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errorKey, setErrorKey] = useState<TaskMessageKey | null>(null);
   const [creating, setCreating] = useState(false);
   const compactInspector = useMediaQuery("(max-width: 819px)");
 
   async function refresh(preferredTaskId?: string): Promise<void> {
     setLoading(true);
-    setError(null);
+    setErrorKey(null);
     try {
       const nextTasks = await api.listTasks();
       setTasks(nextTasks);
@@ -55,7 +58,7 @@ export function TaskSurface({
         await selectTask(targetId, false);
       }
     } catch (cause) {
-      setError(messageFor(cause, "Tasks could not be loaded."));
+      setErrorKey(errorKeyFor(cause, "loadFailed"));
     } finally {
       setLoading(false);
     }
@@ -65,11 +68,11 @@ export function TaskSurface({
     if (showLoading) {
       setDetailLoading(true);
     }
-    setError(null);
+    setErrorKey(null);
     try {
       setSelected(await api.getTask(taskId));
     } catch (cause) {
-      setError(messageFor(cause, "The Task details could not be loaded."));
+      setErrorKey(errorKeyFor(cause, "detailsLoadFailed"));
     } finally {
       setDetailLoading(false);
     }
@@ -94,7 +97,7 @@ export function TaskSurface({
       })
       .catch((cause: unknown) => {
         if (active) {
-          setError(messageFor(cause, "Tasks could not be loaded."));
+          setErrorKey(errorKeyFor(cause, "loadFailed"));
         }
       })
       .finally(() => {
@@ -123,13 +126,13 @@ export function TaskSurface({
       return;
     }
     setDetailLoading(true);
-    setError(null);
+    setErrorKey(null);
     try {
       const detail = await api.commandTask(selected.taskId, command);
       setSelected(detail);
       setTasks((current) => current.map((task) => (task.taskId === detail.taskId ? detail : task)));
     } catch (cause) {
-      setError(messageFor(cause, "The Task action could not be completed."));
+      setErrorKey(errorKeyFor(cause, "actionFailed"));
     } finally {
       setDetailLoading(false);
     }
@@ -139,86 +142,87 @@ export function TaskSurface({
     <main className={`task-main ${selected === null ? "" : "task-main--inspector"}`}>
       <section className="task-workspace">
         <header className="task-header">
-          <h1>Tasks</h1>
+          <h1>{messages.task.title}</h1>
           <div className="task-toolbar">
             <button
+              aria-description={executionAvailable ? undefined : messages.task.executionUnavailable}
               className="primary-button"
               disabled={!executionAvailable}
               onClick={() => setCreating(true)}
-              title={
-                executionAvailable ? undefined : "Task execution is not connected in this build."
-              }
+              title={executionAvailable ? undefined : messages.task.executionUnavailable}
               type="button"
             >
               <Plus aria-hidden="true" />
-              New task
+              {messages.task.newTask}
             </button>
             <label className="task-filter">
               <ListFilter aria-hidden="true" />
-              <span className="sr-only">Filter Tasks</span>
+              <span className="sr-only">{messages.task.filter}</span>
               <select
-                aria-label="Filter Tasks"
+                aria-label={messages.task.filter}
                 onChange={(event) => setFilter(event.currentTarget.value as TaskFilter)}
                 value={filter}
               >
-                <option value="all">All tasks</option>
-                <option value="active">Active</option>
-                <option value="waiting">Waiting for you</option>
-                <option value="completed">Completed</option>
+                <option value="all">{messages.task.allTasks}</option>
+                <option value="active">{messages.task.active}</option>
+                <option value="waiting">{messages.task.waitingForYou}</option>
+                <option value="completed">{messages.task.completed}</option>
               </select>
             </label>
           </div>
           {!discordConfigured ? (
             <p className="integration-notice">
               <CircleAlert aria-hidden="true" />
-              Discord is not configured. Task control remains available here.
+              {messages.task.discordNotice}
             </p>
           ) : null}
           {!executionAvailable ? (
             <p className="integration-notice integration-notice--blocked">
               <CircleAlert aria-hidden="true" />
-              Agent execution is not connected. Existing Task records remain inspectable, but new
-              work cannot start.
+              {messages.task.executionNotice}
             </p>
           ) : null}
         </header>
 
         <div aria-live="polite" className="task-error">
-          {error === null ? null : (
+          {errorKey === null ? null : (
             <>
-              <span>{error}</span>
+              <span>{messages.task[errorKey]}</span>
               <button className="text-button" onClick={() => void refresh()} type="button">
-                Try again
+                {messages.common.tryAgain}
               </button>
             </>
           )}
         </div>
 
         {loading ? (
-          <div aria-label="Loading Tasks" className="task-loading" role="status">
-            Loading Tasks…
+          <div aria-label={messages.task.loading} className="task-loading" role="status">
+            {messages.task.loadingProgress}
           </div>
         ) : visibleTasks.length === 0 ? (
           <div className="task-empty">
-            <h2>{tasks.length === 0 ? "No Tasks yet" : "No Tasks match this filter"}</h2>
+            <h2>{tasks.length === 0 ? messages.task.noTasks : messages.task.noMatches}</h2>
             <p>
               {tasks.length === 0
                 ? executionAvailable
                   ? discordConfigured
-                    ? "Create a Task here or from the configured Discord Forum."
-                    : "Create a Task here. Discord intake is not configured."
-                  : "Task execution must be connected before new work can start."
-                : "Choose another filter to see the remaining Tasks."}
+                    ? messages.task.emptyDiscord
+                    : messages.task.emptyLocal
+                  : messages.task.emptyExecution
+                : messages.task.emptyFilter}
             </p>
             {tasks.length === 0 ? (
               <button
+                aria-description={
+                  executionAvailable ? undefined : messages.task.executionUnavailable
+                }
                 className="secondary-button"
                 disabled={!executionAvailable}
                 onClick={() => setCreating(true)}
                 type="button"
               >
                 <Plus aria-hidden="true" />
-                Create the first Task
+                {messages.task.createFirst}
               </button>
             ) : null}
           </div>
@@ -227,11 +231,11 @@ export function TaskSurface({
             <table className="task-table">
               <thead>
                 <tr>
-                  <th scope="col">Task</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Updated</th>
+                  <th scope="col">{messages.task.columnTask}</th>
+                  <th scope="col">{messages.task.columnStatus}</th>
+                  <th scope="col">{messages.task.columnUpdated}</th>
                   <th className="task-action-column" scope="col">
-                    Actions
+                    {messages.task.columnActions}
                   </th>
                 </tr>
               </thead>
@@ -254,11 +258,15 @@ export function TaskSurface({
                       <TaskStateLabel state={task.state} />
                     </td>
                     <td>
-                      <time dateTime={task.updatedAt}>{formatDate(task.updatedAt)}</time>
+                      <time dateTime={task.updatedAt}>
+                        {formatAdminDate(task.updatedAt, locale)}
+                      </time>
                     </td>
                     <td>
                       <button
-                        aria-label={`Inspect ${task.objective}`}
+                        aria-label={formatMessage(messages.task.inspect, {
+                          objective: task.objective,
+                        })}
                         className="icon-button"
                         onClick={() => void selectTask(task.taskId)}
                         type="button"
@@ -307,15 +315,20 @@ function TaskInspector({
   readonly onCommand: (command: "pause" | "resume" | "cancel" | "retry") => void;
   readonly task: TaskDetail;
 }): React.JSX.Element {
+  const { locale, messages } = useAdminI18n();
+
   return (
-    <aside aria-label={`Task details: ${task.objective}`} className="task-inspector">
+    <aside
+      aria-label={formatMessage(messages.task.details, { objective: task.objective })}
+      className="task-inspector"
+    >
       <header>
         <div>
           <TaskStateLabel state={task.state} />
           <h2>{task.objective}</h2>
         </div>
         <button
-          aria-label="Close Task details"
+          aria-label={messages.task.closeDetails}
           className="icon-button"
           onClick={onClose}
           type="button"
@@ -325,10 +338,10 @@ function TaskInspector({
       </header>
 
       <div className="task-inspector-scroll">
-        <DetailBlock title="Objective">
+        <DetailBlock title={messages.task.objective}>
           <p>{task.objective}</p>
         </DetailBlock>
-        <DetailBlock title="Completion criteria">
+        <DetailBlock title={messages.task.completionCriteria}>
           <ul>
             {task.completionCriteria.map((criterion) => (
               <li key={criterion}>{criterion}</li>
@@ -336,7 +349,7 @@ function TaskInspector({
           </ul>
         </DetailBlock>
         {task.constraints.length > 0 ? (
-          <DetailBlock title="Constraints">
+          <DetailBlock title={messages.task.constraints}>
             <ul>
               {task.constraints.map((constraint) => (
                 <li key={constraint}>{constraint}</li>
@@ -344,13 +357,13 @@ function TaskInspector({
             </ul>
           </DetailBlock>
         ) : null}
-        <DetailBlock title="Event timeline">
+        <DetailBlock title={messages.task.eventTimeline}>
           <ol className="event-timeline">
             {task.events.map((event) => (
               <li key={event.eventId}>
                 <span aria-hidden="true" />
-                <strong>{eventLabel(event.type)}</strong>
-                <time dateTime={event.occurredAt}>{formatDate(event.occurredAt)}</time>
+                <strong>{eventLabel(event.type, messages)}</strong>
+                <time dateTime={event.occurredAt}>{formatAdminDate(event.occurredAt, locale)}</time>
               </li>
             ))}
           </ol>
@@ -360,29 +373,27 @@ function TaskInspector({
       <div className="task-inspector-actions">
         {task.state === "paused" ? (
           <button
+            aria-description={executionAvailable ? undefined : messages.task.executionUnavailable}
             className="secondary-button"
             disabled={busy || !executionAvailable}
             onClick={() => onCommand("resume")}
-            title={
-              executionAvailable ? undefined : "Task execution is not connected in this build."
-            }
+            title={executionAvailable ? undefined : messages.task.executionUnavailable}
             type="button"
           >
             <CirclePlay aria-hidden="true" />
-            Resume
+            {messages.task.resume}
           </button>
         ) : isTerminal(task.state) ? (
           <button
+            aria-description={executionAvailable ? undefined : messages.task.executionUnavailable}
             className="secondary-button"
             disabled={busy || !executionAvailable}
             onClick={() => onCommand("retry")}
-            title={
-              executionAvailable ? undefined : "Task execution is not connected in this build."
-            }
+            title={executionAvailable ? undefined : messages.task.executionUnavailable}
             type="button"
           >
             <RotateCcw aria-hidden="true" />
-            Retry
+            {messages.task.retry}
           </button>
         ) : (
           <button
@@ -392,7 +403,7 @@ function TaskInspector({
             type="button"
           >
             <CirclePause aria-hidden="true" />
-            Pause
+            {messages.task.pause}
           </button>
         )}
         {!isTerminal(task.state) ? (
@@ -403,7 +414,7 @@ function TaskInspector({
             type="button"
           >
             <X aria-hidden="true" />
-            Cancel
+            {messages.task.cancel}
           </button>
         ) : null}
       </div>
@@ -433,10 +444,11 @@ function NewTaskDialog({
   readonly onClose: () => void;
   readonly onCreated: (input: CreateTaskInput) => Promise<void>;
 }): React.JSX.Element {
+  const { messages } = useAdminI18n();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const objectiveRef = useRef<HTMLTextAreaElement | null>(null);
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errorKey, setErrorKey] = useState<TaskMessageKey | null>(null);
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -453,11 +465,11 @@ function NewTaskDialog({
       mode: data.get("mode") === "manual" ? "manual" : "auto",
     };
     setPending(true);
-    setError(null);
+    setErrorKey(null);
     try {
       await onCreated(input);
     } catch (cause) {
-      setError(messageFor(cause, "The Task could not be created."));
+      setErrorKey(errorKeyFor(cause, "createFailed"));
       setPending(false);
     }
   }
@@ -476,11 +488,11 @@ function NewTaskDialog({
     >
       <header>
         <div>
-          <p>New Task</p>
-          <h2 id="new-task-heading">What should OpenDelegate accomplish?</h2>
+          <p>{messages.task.dialogEyebrow}</p>
+          <h2 id="new-task-heading">{messages.task.dialogTitle}</h2>
         </div>
         <button
-          aria-label="Close new Task"
+          aria-label={messages.task.closeNew}
           className="icon-button"
           disabled={pending}
           onClick={onClose}
@@ -490,43 +502,43 @@ function NewTaskDialog({
         </button>
       </header>
       <form onSubmit={(event) => void submit(event)}>
-        <label htmlFor="task-objective">Objective</label>
+        <label htmlFor="task-objective">{messages.task.objective}</label>
         <textarea
           autoFocus
           id="task-objective"
           maxLength={8192}
           name="objective"
-          placeholder="Describe the outcome, not just the first step."
+          placeholder={messages.task.objectivePlaceholder}
           ref={objectiveRef}
           required
           rows={4}
         />
-        <label htmlFor="task-criteria">Completion criteria</label>
+        <label htmlFor="task-criteria">{messages.task.completionCriteria}</label>
         <textarea
           id="task-criteria"
           name="completionCriteria"
-          placeholder={"One verifiable result per line\nFor example: All tests pass"}
+          placeholder={messages.task.criteriaPlaceholder}
           required
           rows={4}
         />
         <label htmlFor="task-constraints">
-          Constraints <span>Optional, one per line</span>
+          {messages.task.constraints} <span>{messages.task.optionalLines}</span>
         </label>
         <textarea id="task-constraints" name="constraints" rows={3} />
-        <label htmlFor="task-mode">Mode</label>
+        <label htmlFor="task-mode">{messages.task.mode}</label>
         <select defaultValue="auto" id="task-mode" name="mode">
-          <option value="auto">Auto — continue within policy</option>
-          <option value="manual">Manual — wait between delegated steps</option>
+          <option value="auto">{messages.task.autoMode}</option>
+          <option value="manual">{messages.task.manualMode}</option>
         </select>
-        <p aria-live="polite" className="form-error" role={error === null ? undefined : "alert"}>
-          {error ?? ""}
+        <p aria-live="polite" className="form-error" role={errorKey === null ? undefined : "alert"}>
+          {errorKey === null ? "" : messages.task[errorKey]}
         </p>
         <div className="task-dialog-actions">
           <button className="secondary-button" disabled={pending} onClick={onClose} type="button">
-            Cancel
+            {messages.common.cancel}
           </button>
           <button className="primary-button" disabled={pending} type="submit">
-            {pending ? "Creating…" : "Create Task"}
+            {pending ? messages.task.creating : messages.task.create}
           </button>
         </div>
       </form>
@@ -535,28 +547,30 @@ function NewTaskDialog({
 }
 
 function TaskStateLabel({ state }: { readonly state: TaskState }): React.JSX.Element {
+  const { messages } = useAdminI18n();
+
   return (
     <span className={`task-state task-state--${state}`}>
       <span aria-hidden="true" />
-      {stateLabel(state)}
+      {stateLabel(state, messages)}
     </span>
   );
 }
 
-function stateLabel(state: TaskState): string {
-  const labels: Record<TaskState, string> = {
-    cancelled: "Cancelled",
-    completed: "Completed",
-    failed: "Failed",
-    intake: "Intake",
-    paused: "Paused",
-    queued: "Queued",
-    review: "In review",
-    running: "Running",
-    waiting_resource: "Waiting for resource",
-    waiting_user: "Waiting for you",
+function stateLabel(state: TaskState, messages: Messages): string {
+  const labels: Record<TaskState, keyof Messages["taskState"]> = {
+    cancelled: "cancelled",
+    completed: "completed",
+    failed: "failed",
+    intake: "intake",
+    paused: "paused",
+    queued: "queued",
+    review: "review",
+    running: "running",
+    waiting_resource: "waitingResource",
+    waiting_user: "waitingUser",
   };
-  return labels[state];
+  return messages.taskState[labels[state]];
 }
 
 function matchesFilter(task: TaskSummary, filter: TaskFilter): boolean {
@@ -587,31 +601,42 @@ function lines(value: string): readonly string[] {
   ];
 }
 
-function formatDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return value;
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+function eventLabel(type: string, messages: Messages): string {
+  const suffix = type.split(".").at(-1) ?? type;
+  const labels: Readonly<Record<string, TaskMessageKey>> = {
+    bound: "eventBound",
+    cancelled: "eventCancelled",
+    "clarification-requested": "eventClarificationRequested",
+    "clarification-resolved": "eventClarificationResolved",
+    commanded: "eventCommanded",
+    completed: "eventCompleted",
+    created: "eventCreated",
+    failed: "eventFailed",
+    "intake-recorded": "eventIntakeRecorded",
+    paused: "eventPaused",
+    published: "eventPublished",
+    queued: "eventQueued",
+    recorded: "eventRecorded",
+    "review-approved": "eventReviewApproved",
+    "review-requested": "eventReviewRequested",
+    requested: "eventRequested",
+    resumed: "eventResumed",
+    review: "eventReview",
+    running: "eventRunning",
+    "state-changed": "eventStateChanged",
+    "synthesis-recorded": "eventSynthesisRecorded",
+  };
+  const key = labels[suffix];
+  return key === undefined
+    ? suffix.replaceAll("-", " ").replace(/\b\w/gu, (character) => character.toUpperCase())
+    : messages.task[key];
 }
 
-function eventLabel(type: string): string {
-  return type
-    .split(".")
-    .at(-1)!
-    .replaceAll("-", " ")
-    .replace(/\b\w/gu, (character) => character.toUpperCase());
-}
-
-function messageFor(cause: unknown, fallback: string): string {
+function errorKeyFor(cause: unknown, fallback: TaskMessageKey): TaskMessageKey {
   if (cause instanceof AdminApiError) {
     if (cause.status === 401) {
-      return "Your owner session expired. Reload to sign in again.";
+      return "sessionExpired";
     }
-    return cause.message;
   }
   return fallback;
 }

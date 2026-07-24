@@ -2,6 +2,10 @@ import { Network } from "lucide-react";
 import { useState } from "react";
 
 import { AdminApiError, type AdminApi, type RecoveryResult } from "./admin-api";
+import { type Messages, useAdminI18n } from "./i18n";
+import { LanguageSelector } from "./LanguageSelector";
+
+type AuthMessageKey = keyof Messages["auth"];
 
 interface LoginScreenProps {
   readonly api: AdminApi;
@@ -9,9 +13,10 @@ interface LoginScreenProps {
 }
 
 export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.JSX.Element {
+  const { messages } = useAdminI18n();
   const [mode, setMode] = useState<"login" | "recovery">("login");
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errorKey, setErrorKey] = useState<AuthMessageKey | null>(null);
   const [recoveryResult, setRecoveryResult] = useState<RecoveryResult | null>(null);
 
   async function submitLogin(event: React.FormEvent<HTMLFormElement>): Promise<void> {
@@ -19,12 +24,12 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
     const data = new FormData(event.currentTarget);
     const passphrase = String(data.get("passphrase") ?? "");
     setPending(true);
-    setError(null);
+    setErrorKey(null);
     try {
       await api.login(passphrase);
       onAuthenticated();
     } catch (cause) {
-      setError(messageFor(cause, "The owner passphrase was not accepted."));
+      setErrorKey(messageKeyFor(cause, "passphraseRejected"));
     } finally {
       setPending(false);
     }
@@ -37,17 +42,17 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
     const newPassphrase = String(data.get("newPassphrase") ?? "");
     const confirmation = String(data.get("passphraseConfirmation") ?? "");
     if (newPassphrase !== confirmation) {
-      setError("The new passphrases do not match.");
+      setErrorKey("passphraseMismatch");
       return;
     }
 
     setPending(true);
-    setError(null);
+    setErrorKey(null);
     try {
       const challenge = await api.beginRecovery(recoveryCode);
       setRecoveryResult(await api.completeRecovery(challenge.recoveryToken, newPassphrase));
     } catch (cause) {
-      setError(messageFor(cause, "Recovery could not be completed with that code."));
+      setErrorKey(messageKeyFor(cause, "recoveryFailed"));
     } finally {
       setPending(false);
     }
@@ -56,7 +61,7 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
   function returnToLogin(): void {
     setMode("login");
     setRecoveryResult(null);
-    setError(null);
+    setErrorKey(null);
   }
 
   return (
@@ -66,17 +71,16 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
         <span>OpenDelegate</span>
       </aside>
       <main className="auth-main">
+        <LanguageSelector placement="utility" />
         <section aria-labelledby="auth-heading" className="auth-card">
-          <p className="auth-release-note">
-            Pre-release software · No supported release is published.
-          </p>
+          <p className="auth-release-note">{messages.auth.releaseNote}</p>
           {recoveryResult === null ? (
             mode === "login" ? (
               <>
-                <h1 id="auth-heading">Sign in to OpenDelegate</h1>
-                <p className="auth-intro">Use the owner passphrase created on this Main.</p>
+                <h1 id="auth-heading">{messages.auth.signInTitle}</h1>
+                <p className="auth-intro">{messages.auth.signInIntro}</p>
                 <form className="auth-form" onSubmit={(event) => void submitLogin(event)}>
-                  <label htmlFor="owner-passphrase">Owner passphrase</label>
+                  <label htmlFor="owner-passphrase">{messages.auth.ownerPassphrase}</label>
                   <input
                     autoComplete="current-password"
                     autoFocus
@@ -87,14 +91,14 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                     required
                     type="password"
                   />
-                  <FormError message={error} />
+                  <FormError message={errorKey === null ? null : messages.auth[errorKey]} />
                   <button className="primary-button auth-submit" disabled={pending} type="submit">
-                    {pending ? "Signing in…" : "Sign in"}
+                    {pending ? messages.auth.signingIn : messages.auth.signIn}
                   </button>
                 </form>
                 <div aria-hidden="true" className="auth-divider">
                   <span />
-                  <span>or</span>
+                  <span>{messages.auth.or}</span>
                   <span />
                 </div>
                 <button
@@ -102,22 +106,20 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                   disabled={pending}
                   onClick={() => {
                     setMode("recovery");
-                    setError(null);
+                    setErrorKey(null);
                   }}
                   type="button"
                 >
-                  Use a recovery code
+                  {messages.auth.useRecoveryCode}
                 </button>
-                <p className="auth-footnote">Discord is not required for Admin recovery.</p>
+                <p className="auth-footnote">{messages.auth.discordRecoveryNote}</p>
               </>
             ) : (
               <>
-                <h1 id="auth-heading">Recover owner access</h1>
-                <p className="auth-intro">
-                  A recovery code is single-use. Completing recovery signs out every browser.
-                </p>
+                <h1 id="auth-heading">{messages.auth.recoveryTitle}</h1>
+                <p className="auth-intro">{messages.auth.recoveryIntro}</p>
                 <form className="auth-form" onSubmit={(event) => void submitRecovery(event)}>
-                  <label htmlFor="recovery-code">Recovery code</label>
+                  <label htmlFor="recovery-code">{messages.auth.recoveryCode}</label>
                   <input
                     autoComplete="off"
                     autoFocus
@@ -130,7 +132,7 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                     spellCheck={false}
                     type="text"
                   />
-                  <label htmlFor="new-owner-passphrase">New owner passphrase</label>
+                  <label htmlFor="new-owner-passphrase">{messages.auth.newPassphrase}</label>
                   <input
                     autoComplete="new-password"
                     disabled={pending}
@@ -140,7 +142,9 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                     required
                     type="password"
                   />
-                  <label htmlFor="confirm-owner-passphrase">Confirm new passphrase</label>
+                  <label htmlFor="confirm-owner-passphrase">
+                    {messages.auth.confirmPassphrase}
+                  </label>
                   <input
                     autoComplete="new-password"
                     disabled={pending}
@@ -150,9 +154,9 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                     required
                     type="password"
                   />
-                  <FormError message={error} />
+                  <FormError message={errorKey === null ? null : messages.auth[errorKey]} />
                   <button className="primary-button auth-submit" disabled={pending} type="submit">
-                    {pending ? "Recovering…" : "Recover access"}
+                    {pending ? messages.auth.recovering : messages.auth.recoverAccess}
                   </button>
                 </form>
                 <button
@@ -161,17 +165,15 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                   onClick={returnToLogin}
                   type="button"
                 >
-                  Back to sign in
+                  {messages.auth.backToSignIn}
                 </button>
               </>
             )
           ) : (
             <>
-              <h1 id="auth-heading">Save your new recovery codes</h1>
-              <p className="auth-intro">
-                These codes are shown once. Store them outside this Main before continuing.
-              </p>
-              <ol aria-label="New recovery codes" className="recovery-codes">
+              <h1 id="auth-heading">{messages.auth.saveCodesTitle}</h1>
+              <p className="auth-intro">{messages.auth.saveCodesIntro}</p>
+              <ol aria-label={messages.auth.newRecoveryCodes} className="recovery-codes">
                 {recoveryResult.recoveryCodes.map((code) => (
                   <li key={code}>
                     <code>{code}</code>
@@ -179,12 +181,12 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                 ))}
               </ol>
               <button className="primary-button auth-submit" onClick={returnToLogin} type="button">
-                I saved the codes
+                {messages.auth.savedCodes}
               </button>
             </>
           )}
         </section>
-        <footer>Personal, self-hosted control plane</footer>
+        <footer>{messages.auth.footer}</footer>
       </main>
     </div>
   );
@@ -198,12 +200,14 @@ function FormError({ message }: { readonly message: string | null }): React.JSX.
   );
 }
 
-function messageFor(cause: unknown, fallback: string): string {
+function messageKeyFor(cause: unknown, fallback: AuthMessageKey): AuthMessageKey {
   if (cause instanceof AdminApiError) {
-    if (cause.status >= 500) {
-      return "OpenDelegate Main is not ready. Try again after checking its service status.";
+    if (cause.code === "RATE_LIMITED") {
+      return "rateLimited";
     }
-    return cause.message;
+    if (cause.status >= 500) {
+      return "mainNotReady";
+    }
   }
   return fallback;
 }

@@ -6,7 +6,7 @@ Intended license: **Apache License 2.0**
 
 Default product and repository language: **English**
 
-Last updated: **2026-07-24**
+Last updated: **2026-07-25**
 
 ## Document contract
 
@@ -146,8 +146,10 @@ inspectable result without manually operating every machine.
    can add machines without exchanging permanent credentials manually.
 9. As an owner, I want to complete setup on a headless Linux NAS, so that a graphical
    desktop is not required for Worker participation.
-10. As an owner, I want all default terminology and documentation in English, so
-    that the repository is accessible to a broad open-source community.
+10. As an owner, I want all default terminology and documentation in English, with
+    optional Korean, Japanese, French, Spanish, and Simplified Chinese translations
+    for the README and owner-facing Admin Web chrome, so that the repository remains
+    broadly accessible without forcing one language on personal operation.
 11. As an owner, I want to give every Device a memorable name, so that assignments
     and reports are understandable.
 12. As an owner, I want to see each Device's OS and observed hardware, so that I can
@@ -694,6 +696,18 @@ may request a transition but cannot manufacture a state outside the transition r
     Task work.
 15. Admin Web does not attempt to reproduce the complete Discord Task chat in the
     first release.
+16. English is the canonical fallback and the initial locale when no explicit owner
+    choice has been stored. Admin Web exposes a language selector before and after
+    authentication for Korean, Japanese, French, Spanish, and Simplified Chinese.
+17. The explicit locale choice persists locally, updates the document language,
+    accessibility names, tooltips, status labels, and locale-sensitive dates without
+    requiring a reload, and is included as `Accept-Language` on Admin requests.
+18. Owner-authored Device names, Roles, Task objectives, criteria, constraints, and
+    historical owner or Agent conversation content are never machine-translated.
+    Stable product chrome and deterministic built-in state labels are translated at
+    render time.
+19. Domain codes, API fields, durable events, schemas, logs, and source defaults
+    remain English regardless of the selected presentation locale.
 
 ### FR-16 — Policy and approvals
 
@@ -1036,7 +1050,9 @@ transport, and Computer Use adapters, then against platform-specific real adapte
 9. **Artifact tests** — upload, checksum, resume, native presentation selection,
    exposure precedence, signed-link expiry, public mode, isolated HTML, and cleanup.
 10. **Admin Web tests** — onboarding, Device navigation, profile diffs, configuration
-    chat proposals, approval, Task inspection, and emergency controls.
+    chat proposals, approval, Task inspection, emergency controls, complete six-locale
+    catalog coverage, persisted switching, translated accessibility names and dates,
+    untranslated owner content, and responsive no-overflow browser proof.
 11. **Failure tests** — Main restart, Worker restart, route loss, duplicate dispatch,
     provider session loss, stale lock, Discord outage, database outage, and Artifact
     Store outage, plus Workspace mismatch, unsafe worktree cleanup, concurrent native

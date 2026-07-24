@@ -1,6 +1,14 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
+import { englishMessages } from "../src/i18n/messages.en";
+import { spanishMessages } from "../src/i18n/messages.es";
+import { frenchMessages } from "../src/i18n/messages.fr";
+import { japaneseMessages } from "../src/i18n/messages.ja";
+import { koreanMessages } from "../src/i18n/messages.ko";
+import { simplifiedChineseMessages } from "../src/i18n/messages.zh-CN";
+import type { Messages, SupportedLocale } from "../src/i18n/types";
+
 const session = {
   csrfToken: "c".repeat(43),
   session: {
@@ -47,6 +55,18 @@ const runningTask = {
   ],
 };
 
+const localeFixtures: ReadonlyArray<{
+  readonly catalog: Messages;
+  readonly locale: SupportedLocale;
+}> = [
+  { catalog: englishMessages, locale: "en" },
+  { catalog: koreanMessages, locale: "ko" },
+  { catalog: japaneseMessages, locale: "ja" },
+  { catalog: frenchMessages, locale: "fr" },
+  { catalog: spanishMessages, locale: "es" },
+  { catalog: simplifiedChineseMessages, locale: "zh-CN" },
+];
+
 test("signed-out Admin is a focused, Discord-independent recovery boundary", async ({ page }) => {
   await installApi(page, { signedIn: false });
   await page.goto("/");
@@ -59,6 +79,109 @@ test("signed-out Admin is a focused, Discord-independent recovery boundary", asy
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("an explicit signed-out language choice persists without replacing the English default", async ({
+  page,
+}) => {
+  await installApi(page, { signedIn: false });
+  await page.goto("/");
+
+  const languageSelector = page.locator(".language-selector select");
+  await expect(languageSelector).toHaveValue("en");
+  await languageSelector.selectOption("ko");
+  await expect(page.locator("html")).toHaveAttribute("lang", "ko");
+  await expect(page.getByRole("heading", { name: koreanMessages.auth.signInTitle })).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator(".language-selector select")).toHaveValue("ko");
+  await expect(page.getByRole("heading", { name: koreanMessages.auth.signInTitle })).toBeVisible();
+
+  await page.locator(".language-selector select").selectOption("fr");
+  await page.getByRole("button", { name: frenchMessages.auth.useRecoveryCode }).click();
+  await expect(
+    page.getByRole("heading", { name: frenchMessages.auth.recoveryTitle }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test("all Admin locales update loaded chrome while preserving owner content", async ({
+  page,
+}, testInfo) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await installApi(page, { signedIn: true });
+  await page.goto("/");
+
+  for (const { catalog, locale } of localeFixtures) {
+    await page.locator(".language-selector select").selectOption(locale);
+    await expect(page.locator("html")).toHaveAttribute("lang", locale);
+    await expect(page.getByRole("heading", { name: catalog.device.facts })).toBeVisible();
+    await expect(page.getByRole("heading", { name: mainDevice.name })).toBeVisible();
+
+    await page.getByRole("button", { name: catalog.navigation.tasks }).click();
+    await expect(page.getByRole("heading", { name: catalog.task.title })).toBeVisible();
+    const objective = page.getByRole("button", {
+      name: runningTask.objective,
+      exact: true,
+    });
+    await expect(objective).toBeVisible();
+    if ((page.viewportSize()?.width ?? 0) <= 819) {
+      await objective.click();
+    }
+    await expect(page.getByRole("heading", { name: runningTask.objective })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: catalog.task.completionCriteria }),
+    ).toBeVisible();
+    const expectedDate = await page.evaluate(
+      ({ dateValue, dateLocale }) =>
+        new Intl.DateTimeFormat(dateLocale, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(new Date(dateValue)),
+      { dateLocale: locale, dateValue: runningTask.updatedAt },
+    );
+    await expect(page.locator(".task-table time").first()).toHaveText(expectedDate);
+    if ((page.viewportSize()?.width ?? 0) <= 819) {
+      await page.getByRole("button", { name: catalog.task.closeDetails }).click();
+    }
+
+    await page.getByRole("button", { name: catalog.task.newTask }).click();
+    const taskDialog = page.getByRole("dialog", { name: catalog.task.dialogTitle });
+    await expect(taskDialog).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await taskDialog.getByRole("button", { name: catalog.task.closeNew }).click();
+
+    await page.locator(".device-selector").click();
+    await page.getByRole("button", { name: catalog.device.configure, exact: true }).click();
+    const configurationDialog = page.getByRole("dialog", { name: catalog.chat.title });
+    await expect(configurationDialog).toBeVisible();
+    await expect(configurationDialog.getByText(catalog.chat.subtitle)).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await page.keyboard.press("Escape");
+  }
+
+  await page.locator(".language-selector select").selectOption("ko");
+  await page.getByRole("button", { name: koreanMessages.navigation.tasks }).click();
+  await expect(
+    page.getByRole("button", { name: runningTask.objective, exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(koreanMessages.task.discordNotice)).toBeVisible();
+
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+
+  if (
+    process.env["OPENDELEGATE_CAPTURE_LOCALIZATION"] === "1" &&
+    page.viewportSize()?.width === 1600
+  ) {
+    await page.screenshot({
+      fullPage: true,
+      path: testInfo.outputPath("admin-localization-ko.png"),
+    });
+  }
 });
 
 test("authenticated Admin lists and controls canonical Tasks without Discord", async ({ page }) => {
@@ -252,4 +375,10 @@ function collectConsoleErrors(page: Page): string[] {
     }
   });
   return errors;
+}
+
+async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBe(true);
 }

@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminApiError, BrowserAdminApi, type AdminApi, type RuntimeFeatures } from "./admin-api";
 import { App } from "./App";
 import { mapMainDeviceOverview } from "./device-overview";
+import { useAdminI18n } from "./i18n";
+import { LanguageSelector } from "./LanguageSelector";
 import { LoginScreen } from "./LoginScreen";
 import type { DeviceOverviewViewModel } from "./view-model";
 
@@ -14,15 +16,16 @@ export function AdminApplication({
 }: {
   readonly api?: AdminApi;
 }): React.JSX.Element {
+  const { messages } = useAdminI18n();
   const browserApi = useMemo(() => suppliedApi ?? new BrowserAdminApi(), [suppliedApi]);
   const [state, setState] = useState<AuthenticationState>("checking");
-  const [failure, setFailure] = useState<string | null>(null);
+  const [failureCode, setFailureCode] = useState<string | null>(null);
   const [device, setDevice] = useState<DeviceOverviewViewModel | null>(null);
   const [features, setFeatures] = useState<RuntimeFeatures | null>(null);
 
   async function enterAdmin(checkSession: boolean): Promise<void> {
     setState("checking");
-    setFailure(null);
+    setFailureCode(null);
     try {
       if (checkSession) {
         await browserApi.session();
@@ -48,9 +51,7 @@ export function AdminApplication({
         setState("signed-out");
         return;
       }
-      setFailure(
-        cause instanceof AdminApiError ? cause.message : "OpenDelegate Main could not be reached.",
-      );
+      setFailureCode(cause instanceof AdminApiError ? cause.code : "MAIN_UNAVAILABLE");
       setState("unavailable");
     }
   }
@@ -61,9 +62,10 @@ export function AdminApplication({
 
   if (state === "checking") {
     return (
-      <main aria-label="Checking owner session" className="startup-state">
+      <main aria-label={messages.startup.checkingSession} className="startup-state">
+        <LanguageSelector placement="utility" />
         <span aria-hidden="true" className="startup-spinner" />
-        <p>Connecting to OpenDelegate Main…</p>
+        <p>{messages.startup.connecting}</p>
       </main>
     );
   }
@@ -82,11 +84,16 @@ export function AdminApplication({
   if (state === "unavailable") {
     return (
       <main className="startup-state startup-state--error">
-        <h1>Admin is temporarily unavailable</h1>
-        <p>{failure}</p>
+        <LanguageSelector placement="utility" />
+        <h1>{messages.startup.unavailableTitle}</h1>
+        <p>
+          {failureCode === "MAIN_DEVICE_UNAVAILABLE"
+            ? messages.startup.invalidMainDevice
+            : messages.startup.mainUnavailable}
+        </p>
         <button className="secondary-button" onClick={() => void enterAdmin(true)} type="button">
           <RotateCcw aria-hidden="true" />
-          Try again
+          {messages.common.tryAgain}
         </button>
       </main>
     );
@@ -95,8 +102,9 @@ export function AdminApplication({
   if (device === null || features === null) {
     return (
       <main className="startup-state startup-state--error">
-        <h1>Admin is temporarily unavailable</h1>
-        <p>OpenDelegate Main did not return its fixed Device and runtime feature state.</p>
+        <LanguageSelector placement="utility" />
+        <h1>{messages.startup.unavailableTitle}</h1>
+        <p>{messages.startup.missingRuntimeState}</p>
       </main>
     );
   }

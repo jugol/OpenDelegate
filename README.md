@@ -1,5 +1,8 @@
 # OpenDelegate
 
+Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](README.ja.md) ·
+[Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md)
+
 OpenDelegate is a personal, self-hosted control plane for coordinating AI agents across one fixed
 Main Device and multiple macOS, Windows, and Linux Devices.
 
@@ -56,7 +59,7 @@ release-valid external systems.
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Main and persistence | Bundled `opendelegate` CLI with `init`, `serve`, and `status`; Main composition; Control Plane health; authenticated Task inspection/emergency-control APIs; embedded SQLite; PostgreSQL configuration and equivalent storage contracts | Connected orchestration/execution, clean-host and restart proof on every supported OS, backup/restore proof, and complete runtime reconciliation      |
 | Owner access         | Loopback-only initial claim, passphrase login, recovery codes, session revocation, CSRF protection, and SQL persistence                                                                                       | Release-valid remote-route, restart, theft-revocation, and recovery evidence                                                                          |
-| Admin Web            | Authenticated login/recovery; durable Task inspection; pause/cancel emergency controls; responsive Device and read-only Configuration Chat surfaces. Creation/resume/retry fixtures exist but packaged Main gates them while execution is unavailable | Connected Task execution and Configuration Agent messaging, real Device projections, approvals/audit inspectors, and live outage acceptance           |
+| Admin Web            | Authenticated login/recovery; durable Task inspection; pause/cancel emergency controls; responsive Device and read-only Configuration Chat surfaces; persisted English, Korean, Japanese, French, Spanish, and Simplified Chinese UI. Creation/resume/retry fixtures exist but packaged Main gates them while execution is unavailable | Connected Task execution and Configuration Agent messaging, real Device projections, approvals/audit inspectors, and live outage acceptance           |
 | Device runtime       | Device identity and single-use enrollment contracts, Worker durable inbox/outbox and Run supervision contracts, discovery, transport, locks, and local Knowledge                                              | Authenticated end-to-end Main–Worker channel, enrolled real Devices, service installation, and disconnect/restart proof                               |
 | Agents and Discord   | Codex CLI, Claude CLI, and generic command adapter lifecycle packages; durable Discord Forum mapping, authorization, reconciliation, controls, and projection contracts                                       | Authenticated live provider sessions; production Discord HTTP/Gateway driver; dedicated Community Server, Forum, bot, token, intents, and permissions |
 | Artifacts            | Local Artifact Store and isolated Artifact Gateway contracts with hostile-content tests                                                                                                                       | Resumable Worker upload, live Discord presentation, owner-route exposure, and cross-network acceptance                                                |
@@ -84,6 +87,9 @@ No `released` artifact currently exists.
 The screenshots below show the current Admin Web implementation. They were captured from the browser
 suite using deterministic API fixtures. The UI calls the authenticated Admin API contract, but these
 images are not evidence of a live Discord binding, real Worker enrollment, or three-OS acceptance.
+English is the default. The language control also switches the complete owner-facing surface to
+Korean, Japanese, French, Spanish, or Simplified Chinese without translating owner-authored Task
+content or Agent conversation history.
 
 ![Implemented OpenDelegate Task operations](docs/design/admin-tasks-implemented.png)
 
@@ -210,4 +216,5 @@ Contributor workflow is documented in [CONTRIBUTING.md](CONTRIBUTING.md). Securi
 the verified private vulnerability-reporting route are in [SECURITY.md](SECURITY.md).
 
 OpenDelegate is licensed under the [Apache License 2.0](LICENSE). Repository content, domain terms,
-APIs, logs, and UI defaults use English.
+APIs, logs, and UI defaults use English. This README and owner-facing Admin UI are also available in
+the five translations linked at the top.

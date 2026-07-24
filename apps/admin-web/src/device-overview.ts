@@ -1,29 +1,34 @@
 import type { DeviceSummary } from "./admin-api";
-import type { CapabilityView, DeviceOverviewViewModel, RuntimeStatusView } from "./view-model";
+import {
+  builtInText,
+  type CapabilityView,
+  type DeviceOverviewViewModel,
+  type RuntimeStatusView,
+} from "./view-model";
 
 const unassessedCapabilities = Object.freeze([
   {
     capabilityId: "codex",
     label: "Codex",
-    state: "Not assessed",
+    state: "not_assessed",
     tone: "muted",
   },
   {
     capabilityId: "claude-code",
     label: "Claude",
-    state: "Not assessed",
+    state: "not_assessed",
     tone: "muted",
   },
   {
     capabilityId: "computer-use",
     label: "Computer Use",
-    state: "Not assessed",
+    state: "not_assessed",
     tone: "muted",
   },
   {
     capabilityId: "browser-automation",
-    label: "Browser automation",
-    state: "Not assessed",
+    label: builtInText("Browser automation", "browserAutomation"),
+    state: "not_assessed",
     tone: "muted",
   },
 ] as const satisfies readonly CapabilityView[]);
@@ -39,35 +44,38 @@ export function mapMainDeviceOverview(device: DeviceSummary): DeviceOverviewView
   return {
     deviceId: device.deviceId,
     name: device.name,
-    roleLabel: "Main",
-    deviceTypeLabel: "Main computer",
+    roleLabel: builtInText("Main", "main"),
+    deviceTypeLabel: builtInText("Main computer", "mainComputer"),
     operatingSystem,
     connection: {
-      label: connectionOnline ? "Online" : "Offline",
+      label: connectionOnline ? builtInText("Online", "online") : builtInText("Offline", "offline"),
       tone: connectionOnline ? "success" : "muted",
     },
     facts: [
-      { label: "Operating system", value: operatingSystem },
-      { label: "Architecture", value: device.architecture },
+      {
+        label: builtInText("Operating system", "operatingSystem"),
+        value: operatingSystem,
+      },
+      { label: builtInText("Architecture", "architecture"), value: device.architecture },
     ],
     runtimeStatuses: [runtimeStatus(device.runtime), serviceStatus(device.serviceMode)],
-    roles: ["Main Coordinator"],
+    roles: [builtInText("Main Coordinator", "mainCoordinator")],
     capabilities: unassessedCapabilities,
     routes: [
       {
         order: 1,
-        label: "Loopback",
-        summary: "Active · Main-local",
+        label: builtInText("Loopback", "loopback"),
+        summary: builtInText("Active · Main-local", "activeMainLocal"),
         tone: "success",
       },
     ],
     currentWork: {
       activeRunCount: 0,
-      summary: "Run projection not connected",
+      summary: builtInText("Run projection not connected", "projectionDisconnected"),
     },
     knowledge: {
-      label: "Local Knowledge",
-      status: "Not assessed",
+      label: builtInText("Local Knowledge", "localKnowledge"),
+      status: builtInText("Not assessed", "notAssessed"),
       tone: "muted",
     },
     configurationSession: {
@@ -92,11 +100,23 @@ function osFamilyLabel(osFamily: DeviceSummary["osFamily"]): string {
 function runtimeStatus(runtime: DeviceSummary["runtime"]): RuntimeStatusView {
   switch (runtime) {
     case "healthy":
-      return { label: "Main runtime", value: "Healthy", tone: "success" };
+      return {
+        label: builtInText("Main runtime", "mainRuntime"),
+        value: builtInText("Healthy", "healthy"),
+        tone: "success",
+      };
     case "degraded":
-      return { label: "Main runtime", value: "Degraded", tone: "warning" };
+      return {
+        label: builtInText("Main runtime", "mainRuntime"),
+        value: builtInText("Degraded", "degraded"),
+        tone: "warning",
+      };
     case "unavailable":
-      return { label: "Main runtime", value: "Unavailable", tone: "danger" };
+      return {
+        label: builtInText("Main runtime", "mainRuntime"),
+        value: builtInText("Unavailable", "unavailable"),
+        tone: "danger",
+      };
   }
 }
 
@@ -104,20 +124,20 @@ function serviceStatus(serviceMode: DeviceSummary["serviceMode"]): RuntimeStatus
   switch (serviceMode) {
     case "foreground":
       return {
-        label: "Service supervision",
-        value: "Not configured (foreground)",
+        label: builtInText("Service supervision", "serviceSupervision"),
+        value: builtInText("Not configured (foreground)", "foreground"),
         tone: "muted",
       };
     case "system-service":
       return {
-        label: "Service supervision",
-        value: "Configured (system service)",
+        label: builtInText("Service supervision", "serviceSupervision"),
+        value: builtInText("Configured (system service)", "systemService"),
         tone: "success",
       };
     case "user-service":
       return {
-        label: "Service supervision",
-        value: "Configured (user service)",
+        label: builtInText("Service supervision", "serviceSupervision"),
+        value: builtInText("Configured (user service)", "userService"),
         tone: "success",
       };
   }
