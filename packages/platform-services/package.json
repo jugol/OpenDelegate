@@ -1,0 +1,14 @@
+{
+  "name": "@opendelegate/platform-services",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "validate:windows-host": "node --experimental-strip-types src/windows-host-validation-cli.ts"
+  }
+}
