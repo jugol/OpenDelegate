@@ -431,7 +431,7 @@ function validateStatePath(options: SqliteWorkspaceRegistryOptions): string {
     throw statePathUnsafe();
   }
   const filename = resolve(options.filename);
-  const checkout = realpathSync(options.sourceCheckoutDirectory);
+  const checkout = realpathSync.native(options.sourceCheckoutDirectory);
   if (isWithin(checkout, filename) || checkout === filename) {
     throw statePathUnsafe();
   }
@@ -441,7 +441,7 @@ function validateStatePath(options: SqliteWorkspaceRegistryOptions): string {
   if (!parentMetadata.isDirectory() || parentMetadata.isSymbolicLink()) {
     throw statePathUnsafe();
   }
-  const canonicalFilename = join(realpathSync(parent), basename(filename));
+  const canonicalFilename = join(realpathSync.native(parent), basename(filename));
   if (isWithin(checkout, canonicalFilename) || checkout === canonicalFilename) {
     throw statePathUnsafe();
   }
@@ -488,7 +488,7 @@ function inspectWorkspacePath(path: string): WorkspacePathIdentity {
     if (!lexical.isDirectory() || lexical.isSymbolicLink()) {
       throw pathUnsafe();
     }
-    canonicalPath = realpathSync(path);
+    canonicalPath = realpathSync.native(path);
     canonical = statSync(canonicalPath);
   } catch (error) {
     if (error instanceof WorkspaceRegistryError) {

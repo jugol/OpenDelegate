@@ -685,6 +685,10 @@ test("the Windows DPAPI adapter never places Secret material in argv or environm
       protectRequest?.stdin.subarray(protectRequest.stdin.byteLength - secret.byteLength),
       secret,
     );
+    assert.equal(
+      runner.requests.every((request) => request.timeoutMs === 60_000),
+      true,
+    );
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }
@@ -763,6 +767,12 @@ test("a Windows service handoff moves a Secret into service-identity CurrentUser
       })),
     );
     assert.equal(metadata.includes(secret.toString("utf8")), false);
+    assert.equal(
+      runner.requests
+        .filter(({ executable }) => executable.endsWith("powershell.exe"))
+        .every((request) => request.timeoutMs === 60_000),
+      true,
+    );
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }
@@ -980,61 +990,11 @@ test(
         return value === undefined ? [] : [[name, value]];
       }),
     );
-    const stdinProbe = Buffer.from("bounded-stdin-probe", "utf8");
-    process.stderr.write("[DEBUG-dpapi-stage] stdin-probe start\n");
-    try {
-      const probeResult = await nativeRunner.run({
-        args: [
-          "-NoLogo",
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          [
-            "$ErrorActionPreference='Stop'",
-            "$memory=New-Object IO.MemoryStream",
-            "[Console]::OpenStandardInput().CopyTo($memory)",
-            "if($memory.Length -le 0){exit 47}",
-            "[Console]::OpenStandardOutput().Write([Text.Encoding]::ASCII.GetBytes('ready'),0,5)",
-          ].join(";"),
-        ],
-        environment: nativeEnvironment,
-        executable: powershellPath,
-        maximumStdoutBytes: 5,
-        stdin: stdinProbe,
-        timeoutMs: 30_000,
-      });
-      assert.equal(probeResult.exitCode, 0);
-      assert.deepEqual(probeResult.stdout, Buffer.from("ready"));
-      probeResult.stdout.fill(0);
-      process.stderr.write("[DEBUG-dpapi-stage] stdin-probe complete\n");
-    } finally {
-      stdinProbe.fill(0);
-    }
-    let nativeCall = 0;
     const store = new WindowsDpapiSecretStore({
       deviceId: "device-windows-live",
       environment: nativeEnvironment,
       powershellPath,
-      runner: {
-        async run(request) {
-          nativeCall += 1;
-          const call = nativeCall;
-          process.stderr.write(
-            `[DEBUG-dpapi-stage] call=${call} maxOutput=${request.maximumStdoutBytes} start\n`,
-          );
-          try {
-            const result = await nativeRunner.run(request);
-            process.stderr.write(
-              `[DEBUG-dpapi-stage] call=${call} exit=${result.exitCode} complete\n`,
-            );
-            return result;
-          } catch (error) {
-            const code = error instanceof SecretError ? error.code : "UNCLASSIFIED_NATIVE_FAILURE";
-            process.stderr.write(`[DEBUG-dpapi-stage] call=${call} error=${code}\n`);
-            throw error;
-          }
-        },
-      },
+      runner: nativeRunner,
       sourceCheckoutRoot,
       vaultRoot,
     });

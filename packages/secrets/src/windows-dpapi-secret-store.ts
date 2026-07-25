@@ -18,7 +18,7 @@ import { assertSecretIdentifier } from "./secret-validation.ts";
 const DEFAULT_MAXIMUM_SECRET_BYTES = 1_048_576;
 const ENTROPY_BYTES = 32;
 const NATIVE_OVERHEAD_BYTES = 8_192;
-const COMMAND_TIMEOUT_MS = 30_000;
+const COMMAND_TIMEOUT_MS = 60_000;
 const ALLOWED_WINDOWS_ENVIRONMENT = new Set(["COMSPEC", "SYSTEMROOT", "WINDIR"]);
 
 export class WindowsDpapiSecretStore implements ManagedSecretStore {

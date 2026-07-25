@@ -20,7 +20,7 @@ import { WindowsDpapiSecretStore } from "./windows-dpapi-secret-store.ts";
 
 const DEFAULT_MAXIMUM_SECRET_BYTES = 1_048_576;
 const NATIVE_OVERHEAD_BYTES = 65_536;
-const COMMAND_TIMEOUT_MS = 30_000;
+const COMMAND_TIMEOUT_MS = 60_000;
 const BINDING_BYTES = 32;
 const ALLOWED_WINDOWS_ENVIRONMENT = new Set(["COMSPEC", "SYSTEMROOT", "WINDIR"]);
 

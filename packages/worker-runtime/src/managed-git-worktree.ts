@@ -435,7 +435,7 @@ export class ManagedGitWorktreeManager {
   async #assertRepositoryRoot(repositoryRoot: string): Promise<void> {
     try {
       const result = await this.#runGit(["-C", repositoryRoot, "rev-parse", "--show-toplevel"]);
-      const canonical = realpathSync(result.stdout.trim());
+      const canonical = realpathSync.native(result.stdout.trim());
       if (canonical !== repositoryRoot) {
         throw repositoryInvalid();
       }
@@ -453,7 +453,7 @@ export class ManagedGitWorktreeManager {
         "rev-parse",
         "--show-toplevel",
       ]);
-      const canonical = realpathSync(topLevel.stdout.trim());
+      const canonical = realpathSync.native(topLevel.stdout.trim());
       const [repositoryCommonDirectory, worktreeCommonDirectory] = await Promise.all([
         this.#readGitCommonDirectory(record.repositoryRoot),
         this.#readGitCommonDirectory(record.worktreePath),
@@ -487,7 +487,7 @@ export class ManagedGitWorktreeManager {
     if (!lexical.isDirectory() || lexical.isSymbolicLink()) {
       throw pathChanged();
     }
-    return realpathSync(candidate);
+    return realpathSync.native(candidate);
   }
 
   async #readCommit(repository: string, reference: "HEAD"): Promise<string> {
@@ -964,7 +964,7 @@ function inspectRealDirectory(
     if (!lexical.isDirectory() || lexical.isSymbolicLink()) {
       throw new Error("invalid");
     }
-    const canonicalPath = realpathSync(path);
+    const canonicalPath = realpathSync.native(path);
     const canonical = statSync(canonicalPath);
     if (!canonical.isDirectory()) {
       throw new Error("invalid");

@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -362,7 +372,7 @@ test("managed Git worktrees are isolated, durable, and based on the registered r
 
   assert.equal(created.state, "active");
   assert.equal(created.baseCommit, fixture.initialCommit);
-  assert.equal(created.worktreePath, join(fixture.managedRoot, "task-one"));
+  assert.equal(created.worktreePath, await realpath(join(fixture.managedRoot, "task-one")));
   assert.equal(
     (await readFile(join(created.worktreePath, "README.md"), "utf8")).replaceAll("\r\n", "\n"),
     "initial\n",
