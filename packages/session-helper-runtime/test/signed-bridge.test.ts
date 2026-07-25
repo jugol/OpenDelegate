@@ -22,14 +22,23 @@ import {
 } from "../src/index.ts";
 
 describe("signed two-plane runtime", () => {
-  it("keeps the headless core alive across helper loss and fences a replacement helper", async () => {
+  it("keeps the headless core alive across helper loss and fences a replacement helper", async (t) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-signed-bridge-")));
     const checkout = join(root, "checkout");
-    const runtimeRoot = join(root, "run");
+    const separateRuntimeRoot = process.platform !== "win32";
+    const runtimeRoot = separateRuntimeRoot
+      ? await realpath(await mkdtemp(join("/tmp", "ods-ipc-")))
+      : join(root, "run");
     const authorityRoot = join(root, "authority");
+    t.after(async () => {
+      await rm(root, { recursive: true, force: true });
+      if (separateRuntimeRoot) {
+        await rm(runtimeRoot, { recursive: true, force: true });
+      }
+    });
     await Promise.all([
       mkdir(checkout),
-      mkdir(runtimeRoot, { mode: 0o700 }),
+      ...(separateRuntimeRoot ? [] : [mkdir(runtimeRoot, { mode: 0o700 })]),
       mkdir(authorityRoot, { mode: 0o700 }),
     ]);
     const coreKey = signingFixture();
@@ -106,7 +115,6 @@ describe("signed two-plane runtime", () => {
       await helper?.close().catch(() => undefined);
       await replacement?.close().catch(() => undefined);
       await bridge.close().catch(() => undefined);
-      await rm(root, { recursive: true, force: true });
     }
   });
 });
