@@ -41,6 +41,42 @@ const mainDevice = {
   connection: "online",
   runtime: "healthy",
   serviceMode: "foreground",
+  policies: [
+    {
+      policyId: "policy-browser-network",
+      actionCategory: "os-network-change",
+      decision: "require-approval",
+      source: "configuration",
+      effectiveScope: "device",
+    },
+  ],
+  agentAdapters: [
+    {
+      provider: "codex",
+      adapterId: "codex-app-server",
+      readiness: "ready",
+      compatibility: "tested",
+      version: "0.145.0",
+      observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+    },
+  ],
+  currentRuns: [
+    {
+      taskId: "task_prepare_release",
+      workOrderId: "work_order_browser_release",
+      runId: "run_browser_release",
+      state: "running",
+      acceptedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+      leaseExpiresAtMs: Date.parse("2026-07-25T00:05:00.000Z"),
+    },
+  ],
+  capacity: {
+    activeRuns: 1,
+    maximumConcurrentRuns: 2,
+    acceptingWork: true,
+    maxOutboxEntries: 10_000,
+    outboxDepth: 1,
+  },
 };
 
 const workerDevices = [
@@ -313,6 +349,24 @@ test("all Admin locales update loaded chrome while preserving owner content", as
     await expect(page.getByRole("heading", { name: catalog.device.facts })).toBeVisible();
     await expect(page.getByRole("heading", { name: mainDevice.name })).toBeVisible();
 
+    await page.getByRole("tab", { name: catalog.device.authority }).click();
+    await expect(page.getByText(catalog.approvalCategory.osNetworkChange)).toBeVisible();
+    await expect(
+      page.getByText(`${catalog.device.configuredPolicy} · ${catalog.device.policyScopeDevice}`),
+    ).toBeVisible();
+    await expect(
+      page.getByText(
+        `${catalog.device.adapterReadinessReady} · ${catalog.device.adapterCompatibilityTested}`,
+      ),
+    ).toBeVisible();
+
+    await page.getByRole("tab", { name: catalog.device.runs }).click();
+    await expect(
+      page.getByText(
+        new RegExp(`^${escapeRegularExpression(catalog.device.runStateRunning)} ·`, "u"),
+      ),
+    ).toBeVisible();
+
     await page.getByRole("button", { name: catalog.navigation.tasks }).click();
     await expect(
       page.getByRole("heading", { name: catalog.task.title, exact: true }),
@@ -360,6 +414,8 @@ test("all Admin locales update loaded chrome while preserving owner content", as
       page.getByRole("heading", { level: 1, name: catalog.artifact.title }),
     ).toBeVisible();
     await expect(page.getByText(catalog.artifact.isolatedNotice)).toBeVisible();
+    await expect(page.getByText(catalog.artifact.exposureAuthenticated)).toBeVisible();
+    await expect(page.getByText(catalog.artifact.presentationStaticHtml)).toBeVisible();
     if ((page.viewportSize()?.width ?? 0) <= 819) {
       await page.getByRole("button", { name: catalog.artifact.closeDetails }).click();
     }
@@ -522,7 +578,8 @@ test("Device configuration remains isolated from Task conversations", async ({ p
     page.getByRole("region", { name: "Device facts" }).getByText("Windows 10.0.26200"),
   ).toBeVisible();
   await expect(page.getByText("Not configured (foreground)")).toBeVisible();
-  await expect(page.getByText("Run projection not connected")).toBeVisible();
+  await expect(page.getByText("1 of 2 Run slots active")).toBeVisible();
+  await expect(page.getByText("Run run_browser_release")).toBeVisible();
   await expect(page.getByText("Mac Studio")).toHaveCount(0);
   await expect(page.getByRole("dialog", { name: "Configuration Chat" })).toHaveCount(0);
 
@@ -866,6 +923,10 @@ function summary(task: TaskDetail) {
   void messages;
   void selectedInputRefs;
   return taskSummary;
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function collectConsoleErrors(page: Page): string[] {

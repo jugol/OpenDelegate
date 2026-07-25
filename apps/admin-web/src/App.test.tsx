@@ -326,14 +326,17 @@ describe("first-run Device overview", () => {
 
     expect(screen.getByText(/Verified · Authenticated heartbeat/)).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Authority & resources" }));
-    expect(screen.getByText("os-network-change")).toBeTruthy();
+    expect(screen.getByText("Operating system network change")).toBeTruthy();
+    expect(screen.getByText("Configured · Device")).toBeTruthy();
     expect(screen.getByText("Owner approval required")).toBeTruthy();
     expect(screen.getByText("codex-app-server · 0.145.0")).toBeTruthy();
+    expect(screen.getByText("Ready · Tested")).toBeTruthy();
     expect(screen.getByText("desktop-session")).toBeTruthy();
 
     await user.click(screen.getByRole("tab", { name: "Runs" }));
     expect(screen.getByText("Run run-1")).toBeTruthy();
     expect(screen.getByText("Task task-1 · Work Order work-order-1")).toBeTruthy();
+    expect(screen.getByText(/^Running · lease until/u)).toBeTruthy();
     expect(screen.getByText("1 of 4 Run slots active")).toBeTruthy();
     expect(screen.getByText("2 of 10000 buffered events")).toBeTruthy();
   });

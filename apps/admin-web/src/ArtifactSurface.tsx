@@ -2,7 +2,13 @@ import { ExternalLink, FileArchive, RefreshCw, ShieldCheck, X } from "lucide-rea
 import { useEffect, useState } from "react";
 
 import type { AdminApi, ArtifactDetail, ArtifactOpenInstruction } from "./admin-api";
-import { formatAdminDate, formatMessage, useAdminI18n } from "./i18n";
+import {
+  formatAdminDate,
+  formatMessage,
+  localizeArtifactExposure,
+  localizeArtifactPresentation,
+  useAdminI18n,
+} from "./i18n";
 
 export type ArtifactSurfaceApi = Pick<AdminApi, "listArtifacts" | "getArtifact" | "openArtifact">;
 
@@ -208,9 +214,11 @@ export function ArtifactSurface({
                   {retentionLabel(selected, locale, messages.artifact)}
                 </Metadata>
                 <Metadata label={messages.artifact.exposure}>
-                  {selected.exposurePolicy.mode}
+                  {localizeArtifactExposure(selected.exposurePolicy.mode, messages)}
                 </Metadata>
-                <Metadata label={messages.artifact.presentation}>{selected.presentation}</Metadata>
+                <Metadata label={messages.artifact.presentation}>
+                  {localizeArtifactPresentation(selected.presentation, messages)}
+                </Metadata>
                 <div className="metadata-grid--wide">
                   <dt>{messages.artifact.checksum}</dt>
                   <dd className="code-value">{selected.checksum.value}</dd>

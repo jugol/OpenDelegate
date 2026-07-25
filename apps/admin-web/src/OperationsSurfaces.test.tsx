@@ -12,6 +12,8 @@ import type {
 import { ArtifactSurface } from "./ArtifactSurface";
 import { AuditSurface } from "./AuditSurface";
 import { JoinSurface } from "./JoinSurface";
+import { AdminI18nProvider } from "./i18n";
+import { koreanMessages } from "./i18n/messages.ko";
 
 const NOW = "2026-07-25T00:00:00.000Z";
 
@@ -178,6 +180,25 @@ describe("owner operations surfaces", () => {
 
     await user.click(within(inspector).getByRole("button", { name: "Open Artifact" }));
     await waitFor(() => expect(api.openArtifact).toHaveBeenCalledWith(artifact.artifactId));
+  });
+
+  it("localizes deterministic Artifact exposure and presentation values", async () => {
+    const api = {
+      listArtifacts: vi.fn().mockResolvedValue([artifact]),
+      getArtifact: vi.fn().mockResolvedValue(artifact),
+      openArtifact: vi.fn(),
+    } satisfies Pick<AdminApi, "listArtifacts" | "getArtifact" | "openArtifact">;
+
+    render(
+      <AdminI18nProvider initialLocale="ko">
+        <ArtifactSurface api={api} />
+      </AdminI18nProvider>,
+    );
+
+    expect(await screen.findByText(koreanMessages.artifact.exposureAuthenticated)).toBeTruthy();
+    expect(screen.getByText(koreanMessages.artifact.presentationStaticHtml)).toBeTruthy();
+    expect(screen.queryByText("authenticated")).toBeNull();
+    expect(screen.queryByText("static-html")).toBeNull();
   });
 
   it("focuses the Artifact selected by a credential-free Discord deep link", async () => {

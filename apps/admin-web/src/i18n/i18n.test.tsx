@@ -11,6 +11,7 @@ import {
   AdminI18nProvider,
   formatAdminDate,
   formatMessage,
+  localizeApprovalActionCategory,
   normalizeLocale,
   readStoredLocale,
   supportedLocales,
@@ -142,11 +143,46 @@ describe("Admin language selection", () => {
     meta.name = "description";
     document.head.append(meta);
     const user = userEvent.setup();
+    const deviceWithOperationalStates = {
+      ...firstRunDevice,
+      policies: [
+        {
+          policyId: "policy-network",
+          actionCategory: "os-network-change",
+          decision: "require-approval",
+          source: "configuration",
+          effectiveScope: "device",
+        },
+      ],
+      agentAdapters: [
+        {
+          provider: "codex",
+          adapterId: "codex-app-server",
+          readiness: "ready",
+          compatibility: "tested",
+          observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+        },
+      ],
+      currentRuns: [
+        {
+          taskId: "task-1",
+          workOrderId: "work-order-1",
+          runId: "run-1",
+          state: "running",
+          acceptedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+          leaseExpiresAtMs: Date.parse("2026-07-25T00:05:00.000Z"),
+        },
+      ],
+    } satisfies DeviceOverviewViewModel;
 
     render(
       <AdminI18nProvider initialLocale="en">
         <LanguageSelector placement="utility" />
-        <DeviceSurface chatOpen={false} device={firstRunDevice} onConfigure={() => undefined} />
+        <DeviceSurface
+          chatOpen={false}
+          device={deviceWithOperationalStates}
+          onConfigure={() => undefined}
+        />
       </AdminI18nProvider>,
     );
 
@@ -161,6 +197,24 @@ describe("Admin language selection", () => {
     expect(document.documentElement.lang).toBe("ko");
     expect(meta.content).toBe(koreanMessages.common.metaDescription);
     expect(window.localStorage.getItem(ADMIN_LOCALE_STORAGE_KEY)).toBe("ko");
+
+    await user.click(screen.getByRole("tab", { name: koreanMessages.device.authority }));
+    expect(screen.getByText(koreanMessages.approvalCategory.osNetworkChange)).toBeTruthy();
+    expect(
+      screen.getByText(
+        `${koreanMessages.device.configuredPolicy} · ${koreanMessages.device.policyScopeDevice}`,
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        `${koreanMessages.device.adapterReadinessReady} · ${koreanMessages.device.adapterCompatibilityTested}`,
+      ),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: koreanMessages.device.runs }));
+    expect(
+      screen.getByText(new RegExp(`^${koreanMessages.device.runStateRunning} ·`, "u")),
+    ).toBeTruthy();
   });
 
   it("never translates owner-authored text even when it matches a built-in English label", () => {
@@ -178,6 +232,9 @@ describe("Admin language selection", () => {
 
     expect(screen.getByRole("heading", { name: "Development" })).toBeTruthy();
     expect(screen.getByText("Development", { selector: ".role-list li" })).toBeTruthy();
+    expect(localizeApprovalActionCategory("owner-custom-action", koreanMessages)).toBe(
+      "owner-custom-action",
+    );
   });
 
   it("re-renders deterministic chat failures while preserving Agent and owner history", async () => {

@@ -24,7 +24,12 @@ import { useRef, useState, type KeyboardEvent } from "react";
 import {
   formatAdminDate,
   formatMessage,
+  localizeAdapterCompatibility,
+  localizeAdapterReadiness,
+  localizeApprovalActionCategory,
   localizeCapabilityState,
+  localizeCurrentRunState,
+  localizePolicyScope,
   localizePresentationText,
   useAdminI18n,
 } from "./i18n";
@@ -644,7 +649,7 @@ function CurrentWork({ device }: { readonly device: DeviceOverviewViewModel }): 
               </span>
               <span>
                 {formatMessage(messages.device.runLease, {
-                  state: run.state,
+                  state: localizeCurrentRunState(run.state, messages),
                   time: formatAdminDate(new Date(run.leaseExpiresAtMs).toISOString(), locale),
                 })}
               </span>
@@ -671,12 +676,12 @@ function PolicyList({
         <li key={policy.policyId}>
           <ShieldCheck aria-hidden="true" />
           <span>
-            <strong>{policy.actionCategory}</strong>
+            <strong>{localizeApprovalActionCategory(policy.actionCategory, messages)}</strong>
             <small>
               {policy.source === "built-in"
                 ? messages.device.builtInPolicy
                 : messages.device.configuredPolicy}{" "}
-              · {policy.effectiveScope}
+              · {localizePolicyScope(policy.effectiveScope, messages)}
             </small>
           </span>
           <span
@@ -731,7 +736,8 @@ function AgentAdapterList({
             }`}
             title={formatAdminDate(new Date(adapter.observedAtMs).toISOString(), locale)}
           >
-            {adapter.readiness} · {adapter.compatibility}
+            {localizeAdapterReadiness(adapter.readiness, messages)} ·{" "}
+            {localizeAdapterCompatibility(adapter.compatibility, messages)}
           </span>
         </li>
       ))}

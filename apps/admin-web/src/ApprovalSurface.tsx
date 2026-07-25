@@ -12,7 +12,6 @@ import { useMemo, useState, useEffect } from "react";
 
 import type {
   AdminApi,
-  ApprovalActionCategory,
   ApprovalDecisionInput,
   ApprovalDetail,
   ApprovalExecutionStatus,
@@ -21,7 +20,13 @@ import type {
   ApprovalState,
   ApprovalValuePreview,
 } from "./admin-api";
-import { formatAdminDate, formatMessage, useAdminI18n, type Messages } from "./i18n";
+import {
+  formatAdminDate,
+  formatMessage,
+  localizeApprovalActionCategory,
+  useAdminI18n,
+  type Messages,
+} from "./i18n";
 
 export type ApprovalSurfaceApi = Pick<AdminApi, "listApprovals" | "getApproval" | "decideApproval">;
 
@@ -225,7 +230,7 @@ export function ApprovalSurface({ api }: { readonly api: ApprovalSurfaceApi }): 
                     <RiskBadge risk={approval.risk} />
                   </span>
                   <strong>{approval.action.type}</strong>
-                  <span>{categoryLabel(approval.action.category, messages)}</span>
+                  <span>{localizeApprovalActionCategory(approval.action.category, messages)}</span>
                   <time dateTime={approval.requestedAt}>
                     {formatAdminDate(approval.requestedAt, locale)}
                   </time>
@@ -288,7 +293,7 @@ function ApprovalInspector({
             <RiskBadge risk={approval.risk} />
           </div>
           <h2>{approval.action.type}</h2>
-          <p>{categoryLabel(approval.action.category, messages)}</p>
+          <p>{localizeApprovalActionCategory(approval.action.category, messages)}</p>
         </div>
         <button
           aria-label={messages.approval.closeDetails}
@@ -661,28 +666,4 @@ function approveLabel(scope: ApprovalGrantScope, messages: Messages): string {
     policy: messages.approval.approvePolicy,
     task: messages.approval.approveTask,
   }[scope];
-}
-
-function categoryLabel(category: ApprovalActionCategory, messages: Messages): string {
-  return {
-    "computer-use-input": messages.approvalCategory.computerUseInput,
-    "configured-official-package-install":
-      messages.approvalCategory.configuredOfficialPackageInstall,
-    "cross-device-knowledge-transfer": messages.approvalCategory.crossDeviceKnowledgeTransfer,
-    "driver-installation": messages.approvalCategory.driverInstallation,
-    "firewall-change": messages.approvalCategory.firewallChange,
-    "kernel-extension-installation": messages.approvalCategory.kernelExtensionInstallation,
-    "opendelegate-process-restart": messages.approvalCategory.opendelegateProcessRestart,
-    "opendelegate-process-retry": messages.approvalCategory.opendelegateProcessRetry,
-    "os-network-change": messages.approvalCategory.osNetworkChange,
-    "package-repository-addition": messages.approvalCategory.packageRepositoryAddition,
-    "policy-bypass-attempt": messages.approvalCategory.policyBypassAttempt,
-    "policy-relaxation": messages.approvalCategory.policyRelaxation,
-    "project-dependency-install": messages.approvalCategory.projectDependencyInstall,
-    "read-only-observation": messages.approvalCategory.readOnlyObservation,
-    "remote-installer-script": messages.approvalCategory.remoteInstallerScript,
-    "secret-export": messages.approvalCategory.secretExport,
-    "untrusted-installer": messages.approvalCategory.untrustedInstaller,
-    "vpn-change": messages.approvalCategory.vpnChange,
-  }[category];
 }
