@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const IMPLEMENTATION_STATUSES = new Set(["missing", "partial", "verified"]);
 const LIVE_PROOF_STATUSES = new Set(["not-run", "blocked-external", "verified"]);
-const RELEASE_STATUSES = new Set(["blocked", "candidate", "released"]);
+const RELEASE_STATUSES = new Set(["blocked", "candidate"]);
 const CRITERION_COUNT = 36;
 const TOP_LEVEL_KEYS = new Set([
   "$schema",
@@ -147,11 +147,13 @@ export async function auditReleaseEvidence(repositoryRoot, ledger) {
     (criterion) =>
       criterion.implementationStatus === "verified" && criterion.liveProofStatus === "verified",
   );
-  if (complete && ledger.releaseStatus === "blocked") {
-    errors.push("A complete evidence ledger cannot remain blocked.");
+  if (complete && ledger.releaseStatus !== "candidate") {
+    errors.push("A complete evidence ledger must declare candidate.");
   }
-  if (!complete && ledger.releaseStatus !== "blocked") {
-    errors.push("A candidate or released ledger requires all 36 criteria to be verified.");
+  if (!complete && ledger.releaseStatus === "candidate") {
+    errors.push("A candidate ledger requires all 36 criteria to be verified.");
+  } else if (!complete && ledger.releaseStatus !== "blocked") {
+    errors.push("An incomplete ledger must remain blocked.");
   }
   await auditCandidateAttestation(canonicalRepositoryRoot, ledger, complete, errors);
 
