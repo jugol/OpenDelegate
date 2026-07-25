@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -45,7 +55,7 @@ class StaticKeyProvider implements SecretKeyProvider {
 }
 
 test("the headless Linux vault stores only ciphertext and scopes binary Secret access", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-secret-test-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-secret-test-");
   const sourceCheckoutRoot = join(fixtureRoot, "checkout");
   const vaultRoot = join(fixtureRoot, "runtime", "secrets");
   const first = Uint8Array.from([0, 1, 2, 3, 254, 255]);
@@ -112,7 +122,7 @@ test("the headless Linux vault stores only ciphertext and scopes binary Secret a
 });
 
 test("an immutable release-path change does not orphan Device-local Secret records", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-secret-upgrade-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-secret-upgrade-");
   const vaultRoot = join(fixtureRoot, "runtime", "secrets");
   const keyProvider = new StaticKeyProvider(new Uint8Array(32).fill(64));
   const secret = Buffer.from("survives-release-upgrade", "utf8");
@@ -143,7 +153,7 @@ test("an immutable release-path change does not orphan Device-local Secret recor
 });
 
 test("authenticated local-vault corruption fails closed and scoped plaintext is zeroed", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-secret-corrupt-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-secret-corrupt-");
   const vaultRoot = join(fixtureRoot, "runtime", "secrets");
   const secret = Buffer.from("zero-after-callback-secret", "utf8");
   const store = new SystemdCredentialVaultSecretStore({
@@ -192,7 +202,7 @@ test("authenticated local-vault corruption fails closed and scoped plaintext is 
 });
 
 test("Secret vault paths fail closed inside the source checkout or through a link", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-secret-path-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-secret-path-");
   const sourceCheckoutRoot = join(fixtureRoot, "checkout");
   const keyProvider = new StaticKeyProvider(new Uint8Array(32).fill(33));
 
@@ -477,7 +487,7 @@ class SecretToolFixtureRunner implements NativeSecretCommandRunner {
 }
 
 test("the graphical Linux Secret Service adapter uses secret-tool stdin without inherited environment", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-secret-tool-shape-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-secret-tool-shape-");
   const secretToolPath = join(fixtureRoot, "secret-tool");
   await writeFile(secretToolPath, "fixture", { mode: 0o700 });
   const secret = Buffer.from([0, 1, 2, 3, 127, 128, 254, 255]);
@@ -524,7 +534,7 @@ test("the graphical Linux Secret Service adapter uses secret-tool stdin without 
 });
 
 test("platform adapters reject caller-defined credential-shaped child environments", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-secret-env-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-secret-env-");
   const helperPath = join(fixtureRoot, "helper");
   await writeFile(helperPath, "fixture", { mode: 0o700 });
   const expectedHelperSha256 = `sha256:${createHash("sha256").update("fixture").digest("hex")}`;
@@ -588,7 +598,7 @@ test("platform adapters reject caller-defined credential-shaped child environmen
 });
 
 test("the signed macOS Keychain helper receives Secret bytes only through stdin", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-keychain-shape-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-keychain-shape-");
   const helperPath = join(fixtureRoot, "opendelegate-keychain-helper");
   await writeFile(helperPath, "fixture", { mode: 0o700 });
   const expectedHelperSha256 = `sha256:${createHash("sha256").update("fixture").digest("hex")}`;
@@ -637,7 +647,7 @@ test("the signed macOS Keychain helper receives Secret bytes only through stdin"
 });
 
 test("the Windows DPAPI adapter never places Secret material in argv or environment", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-dpapi-shape-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-dpapi-shape-");
   const sourceCheckoutRoot = join(fixtureRoot, "checkout");
   const vaultRoot = join(fixtureRoot, "runtime", "secrets");
   const secret = Buffer.from("dpapi-command-shape-secret", "utf8");
@@ -680,7 +690,7 @@ test("the Windows DPAPI adapter never places Secret material in argv or environm
 });
 
 test("a Windows service handoff moves a Secret into service-identity CurrentUser DPAPI", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-service-dpapi-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-dpapi-");
   const sourceCheckoutRoot = join(fixtureRoot, "checkout");
   const ownerVaultRoot = join(fixtureRoot, "owner-secrets");
   const handoffRoot = join(fixtureRoot, "service-handoff");
@@ -758,7 +768,7 @@ test("a Windows service handoff moves a Secret into service-identity CurrentUser
 });
 
 test("a restarted Windows service keeps its CurrentUser DPAPI record over a stale handoff", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-service-dpapi-restart-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-dpapi-restart-");
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
   const alias = "identity-p256.service-restart-key";
   const secret = Buffer.from("service-restart-private-key", "utf8");
@@ -794,7 +804,7 @@ test("a restarted Windows service keeps its CurrentUser DPAPI record over a stal
 });
 
 test("a corrupt service DPAPI destination fails closed without deleting its recoverable handoff", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-service-dpapi-corrupt-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-dpapi-corrupt-");
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
   const alias = "identity-p256.service-corrupt-key";
   const secret = Buffer.from("service-corrupt-private-key", "utf8");
@@ -829,7 +839,7 @@ test("a corrupt service DPAPI destination fails closed without deleting its reco
 });
 
 test("the Windows service DPAPI backend fails closed outside its configured service SID", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-service-dpapi-identity-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-dpapi-identity-");
   const secret = Buffer.from("must-remain-in-handoff", "utf8");
   const runner = new WindowsServiceDpapiFixtureRunner(secret);
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
@@ -915,7 +925,7 @@ test("Windows service SID resolution uses fixed sc.exe argv and parses only the 
 });
 
 test("native backend output and failures cannot echo a Secret into diagnostics", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-native-redaction-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-native-redaction-");
   const secret = "hostile-native-output-secret";
   const store = new WindowsDpapiSecretStore({
     deviceId: "device-windows",
@@ -946,7 +956,7 @@ test(
   "Windows DPAPI protects and restores a Device-local binary Secret",
   { skip: process.platform !== "win32" },
   async () => {
-    const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-dpapi-live-"));
+    const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-dpapi-live-");
     const sourceCheckoutRoot = join(fixtureRoot, "checkout");
     const vaultRoot = join(fixtureRoot, "runtime", "secrets");
     const first = Uint8Array.from([0, 17, 34, 51, 68, 85, 102, 255]);
@@ -991,7 +1001,7 @@ test(
 );
 
 test("the systemd key provider accepts only a scoped 256-bit runtime credential", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-credential-test-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-credential-test-");
   const credentialRoot = join(fixtureRoot, "run", "credentials");
   const credentialDirectory = join(credentialRoot, "opendelegate.service");
   const credentialPath = join(credentialDirectory, "opendelegate-vault-key");
@@ -1035,7 +1045,7 @@ test("the systemd key provider accepts only a scoped 256-bit runtime credential"
 });
 
 test("Device identity P-256 keys survive restart as encrypted bytes and re-enter WebCrypto non-extractable", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-identity-secret-"));
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-identity-secret-");
   const sourceCheckoutRoot = join(fixtureRoot, "checkout");
   const vaultRoot = join(fixtureRoot, "runtime", "secrets");
   const managed = new SystemdCredentialVaultSecretStore({
@@ -1082,3 +1092,7 @@ test("Device identity P-256 keys survive restart as encrypted bytes and re-enter
     await rm(fixtureRoot, { force: true, recursive: true });
   }
 });
+
+async function canonicalTemporaryDirectory(prefix: string): Promise<string> {
+  return await realpath(await mkdtemp(join(tmpdir(), prefix)));
+}
