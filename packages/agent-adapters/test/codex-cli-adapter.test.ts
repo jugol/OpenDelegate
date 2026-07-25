@@ -27,7 +27,7 @@ const limits: AgentRunLimits = {
 const temporaryCodexHomes: string[] = [];
 
 async function createCodexHome(): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), "opendelegate-codex-cli-home-"));
+  const home = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-cli-home-")));
   temporaryCodexHomes.push(home);
   return home;
 }

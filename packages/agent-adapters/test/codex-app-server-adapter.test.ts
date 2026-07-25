@@ -26,7 +26,7 @@ const limits: AgentRunLimits = {
 };
 
 test("Codex App Server preserves native threads and consumes exact Main authorization", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
   try {
     const cwd = await realpath(process.cwd());
     const authorizations: AgentActionAuthorizationRequest[] = [];
@@ -117,7 +117,7 @@ test("Codex App Server preserves native threads and consumes exact Main authoriz
 });
 
 test("Codex App Server fails before launch without the exact action authorization port", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
   try {
     const adapter = new CodexAppServerAdapter({
       codexHome: join(root, "codex-home"),
@@ -175,7 +175,9 @@ test("Codex App Server fails before launch without the exact action authorizatio
 });
 
 test("Codex App Server steers only the exact active Run and idempotently binds expectedTurnId", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-steer-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-steer-")),
+  );
   try {
     const adapter = new CodexAppServerAdapter({
       codexHome: join(root, "codex-home"),

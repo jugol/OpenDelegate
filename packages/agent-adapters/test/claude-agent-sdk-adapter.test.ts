@@ -30,7 +30,7 @@ const limits: AgentRunLimits = {
 const temporaryClaudeHomes: string[] = [];
 
 async function createClaudeHome(): Promise<string> {
-  const home = await mkdtemp(join(tmpdir(), "opendelegate-claude-sdk-home-"));
+  const home = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-claude-sdk-home-")));
   temporaryClaudeHomes.push(home);
   return home;
 }
