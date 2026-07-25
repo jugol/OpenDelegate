@@ -1,7 +1,7 @@
 import { createHash, createPublicKey } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import { invokePinnedReleaseSigner } from "./external-release-signer.mjs";
 
@@ -88,6 +88,27 @@ export function getPinnedReleaseSigningTrust(policy) {
     },
     role: details.role,
   });
+}
+
+export function assertPinnedReleaseSigningPolicyExternal(policy, prohibitedRoots) {
+  const details = requirePolicyHandle(policy);
+  if (!Array.isArray(prohibitedRoots) || prohibitedRoots.length === 0) {
+    throw new Error("At least one prohibited release-signing root is required.");
+  }
+  const paths = [
+    details.policy.path,
+    details.publicKey.path,
+    details.signer.executable.path,
+    ...details.signer.invocationArtifacts.map((artifact) => artifact.path),
+  ];
+  for (const root of prohibitedRoots) {
+    assertAbsolutePath(root, "prohibited release-signing root");
+    if (paths.some((path) => isSameOrDescendant(root, path))) {
+      throw new Error(
+        "Release-signing policies, trust roots, and tools must remain outside candidate and output roots.",
+      );
+    }
+  }
 }
 
 export async function signWithPinnedReleasePolicy(input) {
@@ -316,6 +337,14 @@ function sameFile(left, right) {
 
 function comparablePath(path) {
   return process.platform === "win32" ? path.toLowerCase() : path;
+}
+
+function isSameOrDescendant(root, path) {
+  const difference = relative(resolve(root), resolve(path));
+  return (
+    difference === "" ||
+    (difference !== ".." && !difference.startsWith(`..${sep}`) && !isAbsolute(difference))
+  );
 }
 
 function sha256(bytes) {

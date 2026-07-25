@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  assertPinnedReleaseSigningPolicyExternal,
   describePinnedReleaseSigningPolicy,
   getPinnedReleaseSigningTrust,
   readPinnedReleaseSigningPolicy,
@@ -31,6 +32,13 @@ test("a pinned release policy signs through an opaque handle without exposing pa
   assert.equal(
     JSON.stringify(describePinnedReleaseSigningPolicy(policy)).includes(fixture.root),
     false,
+  );
+  assert.throws(
+    () => assertPinnedReleaseSigningPolicyExternal(policy, [fixture.root]),
+    /must remain outside candidate and output roots/u,
+  );
+  assert.doesNotThrow(() =>
+    assertPinnedReleaseSigningPolicyExternal(policy, [join(fixture.root, "unrelated-output")]),
   );
   const trust = getPinnedReleaseSigningTrust(policy);
   assert.equal(trust.keyId, fixture.keyId);
