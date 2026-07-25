@@ -467,6 +467,8 @@ importers:
         specifier: 1.3.6
         version: 1.3.6
 
+  packages/release-integrity: {}
+
   packages/resource-locks: {}
 
   packages/run-capability-broker: {}

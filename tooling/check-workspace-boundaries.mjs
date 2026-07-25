@@ -77,6 +77,7 @@ export const EXPECTED_WORKSPACE_DEPENDENCIES = Object.freeze({
   "@opendelegate/policy": Object.freeze([]),
   "@opendelegate/platform-services": Object.freeze([]),
   "@opendelegate/protocol": Object.freeze(["@opendelegate/domain"]),
+  "@opendelegate/release-integrity": Object.freeze([]),
   "@opendelegate/resource-locks": Object.freeze([]),
   "@opendelegate/run-capability-broker": Object.freeze([]),
   "@opendelegate/scheduler": Object.freeze(["@opendelegate/domain"]),
