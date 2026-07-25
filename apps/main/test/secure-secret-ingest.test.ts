@@ -238,31 +238,34 @@ test("secure ingest recovers a crash between atomic publication and temporary-li
   const temporaryPath = join(ledgerDirectory, `${operationId}.${"a".repeat(32)}.create.tmp`);
   try {
     await mkdir(ledgerDirectory, { mode: 0o700 });
-    await writeFile(
-      finalPath,
-      `${JSON.stringify({
-        schemaVersion: 1,
-        state: "pending",
-        purpose: "database-uri",
-        secretRef: "secret://main/crash_recovery",
-      })}\n`,
-      { mode: 0o600 },
-    );
-    await link(finalPath, temporaryPath);
-    assert.equal((await lstat(finalPath)).nlink, 2);
+    const service = await (async () => {
+      const pendingHandle = await open(finalPath, "wx+", 0o600);
+      try {
+        await pendingHandle.writeFile(
+          `${JSON.stringify({
+            schemaVersion: 1,
+            state: "pending",
+            purpose: "database-uri",
+            secretRef: "secret://main/crash_recovery",
+          })}\n`,
+          "utf8",
+        );
+        await pendingHandle.sync();
+        await link(finalPath, temporaryPath);
+        assert.equal((await pendingHandle.stat()).nlink, 2);
 
-    const service = await MainSecureSecretIngestService.open({
-      mainDeviceId: "device_main",
-      ledgerDirectory,
-      secretStore: store,
-    });
-    const recoveredHandle = await open(finalPath, "r");
-    try {
-      assert.equal((await recoveredHandle.stat()).nlink, 1);
-    } finally {
-      await recoveredHandle.close();
-    }
-    await assert.rejects(lstat(temporaryPath), { code: "ENOENT" });
+        const opened = await MainSecureSecretIngestService.open({
+          mainDeviceId: "device_main",
+          ledgerDirectory,
+          secretStore: store,
+        });
+        assert.equal((await pendingHandle.stat()).nlink, 1);
+        await assert.rejects(lstat(temporaryPath), { code: "ENOENT" });
+        return opened;
+      } finally {
+        await pendingHandle.close();
+      }
+    })();
 
     const receipt = await service.ingest({
       principalId,
@@ -271,16 +274,19 @@ test("secure ingest recovers a crash between atomic publication and temporary-li
       secret: Buffer.from("postgresql://owner:recovered@database.test/main"),
     });
     assert.equal(receipt.secretRef, "secret://main/crash_recovery");
-    const completedHandle = await open(finalPath, "r");
-    let record: { readonly state: string };
-    try {
-      record = JSON.parse(await completedHandle.readFile("utf8")) as {
-        readonly state: string;
-      };
-    } finally {
-      await completedHandle.close();
-    }
-    assert.equal(record.state, "completed");
+    const restarted = await MainSecureSecretIngestService.open({
+      mainDeviceId: "device_main",
+      ledgerDirectory,
+      secretStore: store,
+    });
+    const replay = await restarted.ingest({
+      principalId,
+      idempotencyKey,
+      purpose: "database-uri",
+      secret: Buffer.from("postgresql://owner:recovered@database.test/main"),
+    });
+    assert.deepEqual(replay, receipt);
+    assert.equal(store.observedStoreInputs.length, 1);
   } finally {
     for (const value of store.values.values()) {
       value.fill(0);
