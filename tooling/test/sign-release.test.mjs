@@ -54,13 +54,24 @@ test("publisher signing arguments require explicit absolute paths", () => {
   );
 });
 
-test("publisher signing verifies a complete candidate and emits detached trust material", async (t) => {
-  const fixture = await createSigningFixture(t, "release-candidate");
+test("legacy publisher signing rejects candidates and signs only acknowledged previews", async (t) => {
+  const candidate = await createSigningFixture(t, "release-candidate");
+  await assert.rejects(
+    signReleaseBundle({
+      bundle: candidate.bundle,
+      privateKey: candidate.privateKeyPath,
+      publicKeyDestination: candidate.publicKeyPath,
+      allowUnsupportedPreview: false,
+    }),
+    /legacy publisher signer.*unsupported previews/u,
+  );
+
+  const fixture = await createSigningFixture(t, "internal-preview-complete");
   const result = await signReleaseBundle({
     bundle: fixture.bundle,
     privateKey: fixture.privateKeyPath,
     publicKeyDestination: fixture.publicKeyPath,
-    allowUnsupportedPreview: false,
+    allowUnsupportedPreview: true,
   });
 
   assert.equal(
@@ -68,7 +79,7 @@ test("publisher signing verifies a complete candidate and emits detached trust m
     await realpath(`${fixture.bundle}.publisher-attestation.json`),
   );
   assert.equal(result.publicKeyPath, await realpath(fixture.publicKeyPath));
-  assert.equal(result.supportStatus, "release-candidate");
+  assert.equal(result.supportStatus, "internal-preview-complete");
   const attestation = JSON.parse(await readFile(result.attestationPath, "utf8"));
   const publicKey = createPublicKey(await readFile(fixture.publicKeyPath));
   assert.equal(attestation.schemaVersion, 1);
@@ -105,57 +116,47 @@ test("unsupported previews require an explicit signing acknowledgement", async (
   assert.equal(inspection.supportStatus, "internal-preview-blocked");
 });
 
-test("publisher signing rejects tampering, missing service hosts, and incomplete candidates", async (t) => {
-  const tampered = await createSigningFixture(t, "release-candidate");
+test("publisher signing rejects tampering and missing service hosts", async (t) => {
+  const tampered = await createSigningFixture(t, "internal-preview-complete");
   await writeFile(join(tampered.bundle, "payload.txt"), "tampered\n", "utf8");
   await assert.rejects(
     inspectBundleForPublisherSigning(tampered.bundle, {
-      allowUnsupportedPreview: false,
+      allowUnsupportedPreview: true,
     }),
     /manifest/u,
   );
 
-  const missingHost = await createSigningFixture(t, "release-candidate", {
+  const missingHost = await createSigningFixture(t, "internal-preview-complete", {
     includeHelper: false,
   });
   await assert.rejects(
     inspectBundleForPublisherSigning(missingHost.bundle, {
-      allowUnsupportedPreview: false,
+      allowUnsupportedPreview: true,
     }),
     /session-helper/u,
-  );
-
-  const incomplete = await createSigningFixture(t, "release-candidate", {
-    complete: false,
-  });
-  await assert.rejects(
-    inspectBundleForPublisherSigning(incomplete.bundle, {
-      allowUnsupportedPreview: false,
-    }),
-    /complete release evidence/u,
   );
 });
 
 test("publisher signing never overwrites detached outputs or writes trust material into payload", async (t) => {
-  const fixture = await createSigningFixture(t, "release-candidate");
+  const fixture = await createSigningFixture(t, "internal-preview-complete");
   await writeFile(fixture.publicKeyPath, "occupied\n", "utf8");
   await assert.rejects(
     signReleaseBundle({
       bundle: fixture.bundle,
       privateKey: fixture.privateKeyPath,
       publicKeyDestination: fixture.publicKeyPath,
-      allowUnsupportedPreview: false,
+      allowUnsupportedPreview: true,
     }),
     /already exists/u,
   );
 
-  const second = await createSigningFixture(t, "release-candidate");
+  const second = await createSigningFixture(t, "internal-preview-complete");
   await assert.rejects(
     signReleaseBundle({
       bundle: second.bundle,
       privateKey: second.privateKeyPath,
       publicKeyDestination: join(second.bundle, "publisher.pem"),
-      allowUnsupportedPreview: false,
+      allowUnsupportedPreview: true,
     }),
     /outside the signed bundle/u,
   );

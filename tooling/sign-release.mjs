@@ -153,11 +153,10 @@ export async function inspectBundleForPublisherSigning(bundle, { allowUnsupporte
   ) {
     throw new Error("The release metadata does not identify a supported target bundle.");
   }
-  if (
-    supportStatus === candidateStatus &&
-    (!isObject(metadata.releaseEvidence) || metadata.releaseEvidence.complete !== true)
-  ) {
-    throw new Error("A release candidate requires complete release evidence before signing.");
+  if (supportStatus === candidateStatus) {
+    throw new Error(
+      "The legacy publisher signer is restricted to unsupported previews; release candidates require the external final-archive signer and promotion trust path.",
+    );
   }
   if (previewStatuses.has(supportStatus) && allowUnsupportedPreview !== true) {
     throw new Error("Signing an unsupported preview requires --allow-unsupported-preview.");
@@ -443,17 +442,19 @@ function isObject(value) {
 }
 
 function printHelp() {
-  process.stdout.write(`Sign a verified OpenDelegate platform bundle.
+  process.stdout.write(`Sign an unsupported OpenDelegate platform-lab preview.
 
 Usage:
   node tooling/sign-release.mjs --bundle ABSOLUTE_BUNDLE_PATH \\
     --private-key ABSOLUTE_ED25519_PRIVATE_KEY_PATH \\
     --public-key-destination ABSOLUTE_NEW_PUBLIC_KEY_PATH
 
-Unsupported internal previews additionally require --allow-unsupported-preview.
+Every invocation requires an internal-preview bundle and
+--allow-unsupported-preview. Release candidates are rejected; use the external
+final-archive publisher and promotion workflow for support-eligible releases.
 The detached attestation is written beside the bundle. Existing files are never
-overwritten, private keys are never copied, and signing does not promote a candidate
-to a released channel.
+overwritten, private keys are never copied, and this legacy signature never promotes
+an artifact to a released channel.
 `);
 }
 
