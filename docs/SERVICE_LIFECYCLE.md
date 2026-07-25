@@ -232,11 +232,12 @@ A preflight failure returns, without a host mutation:
 }
 ```
 
-Current unsupported preview bundles do not yet ship the two native service host
-executables or a detached publisher attestation. Therefore the production executor
-correctly refuses to install those previews. Rendering and planning remain
-available for implementation and platform-lab preparation; this refusal must not be
-weakened into a support claim.
+Current unsupported preview bundles include both native service host executables,
+but they do not include a detached publisher attestation by default. The production
+executor correctly refuses an unsigned preview. After the publisher explicitly
+signs it with `--allow-unsupported-preview`, the bundle may be installed only for
+unsupported platform-lab work; neither signing nor installation is support proof or
+permission to publish it as a supported release.
 
 After preflight, the filesystem adapter stages a link-free regular-file tree,
 re-verifies it, promotes it by same-volume rename, atomically swaps the `current`
