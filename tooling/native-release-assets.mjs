@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -45,18 +44,12 @@ export async function stageNativeReleaseAssets(options) {
               sourceRoot,
               stagingRoot,
             });
-    const result = Object.freeze({
+    return Object.freeze({
       schemaVersion: 1,
       platform,
       architecture,
       components: Object.freeze(components),
     });
-    await writeFile(
-      join(stagingRoot, "native-components.json"),
-      `${JSON.stringify(result, null, 2)}\n`,
-      "utf8",
-    );
-    return result;
   } finally {
     await rm(buildRoot, { force: true, recursive: true });
   }
@@ -247,7 +240,6 @@ async function copyComponents(input, entries) {
       return Object.freeze({
         kind: entry.kind,
         path: entry.path,
-        sha256: `sha256:${createHash("sha256").update(stagedBytes).digest("hex")}`,
       });
     }),
   );

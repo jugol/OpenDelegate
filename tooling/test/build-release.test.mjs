@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  access,
   copyFile,
   mkdtemp,
   mkdir,
@@ -60,6 +61,7 @@ import {
   writeThirdPartyNotices,
 } from "../build-release.mjs";
 import { stageNativeReleaseAssets } from "../native-release-assets.mjs";
+import { withLinuxReleaseSmokeSecretFixture } from "../release-smoke-secret.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 const execFile = promisify(execFileCallback);
@@ -71,7 +73,7 @@ test("release bundles carry both agent-facing installation skills", () => {
   assert.deepEqual(RELEASE_SKILL_DIRECTORIES, ["opendelegate-init", "opendelegate-join"]);
 });
 
-test("target-native release assets use stable production paths and content hashes", async (t) => {
+test("target-native release assets stage stable production paths without freezing hashes", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-native-release-assets-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   const sourceRoot = join(root, "source");
@@ -159,7 +161,7 @@ test("target-native release assets use stable production paths and content hashe
     assert.equal(result.platform, platform);
     assert.equal(result.architecture, "x64");
     assert.equal(
-      result.components.every((component) => /^sha256:[0-9a-f]{64}$/u.test(component.sha256)),
+      result.components.every((component) => !("sha256" in component)),
       true,
     );
     assert.equal(
@@ -190,15 +192,11 @@ test("target-native release assets use stable production paths and content hashe
                         ? "mac-helper\n"
                         : "mac-fixture\n",
       );
-      assert.equal(
-        component.sha256,
-        `sha256:${createHash("sha256").update(stagedBytes).digest("hex")}`,
-      );
     }
-    const manifest = JSON.parse(
-      await readFile(join(stagingRoot, "native-components.json"), "utf8"),
+    await assert.rejects(
+      access(join(stagingRoot, "native-components.json")),
+      (error) => error?.code === "ENOENT",
     );
-    assert.deepEqual(manifest, result);
   }
 });
 
@@ -347,14 +345,68 @@ async function git(root, arguments_) {
 }
 
 test("release arguments require an explicit absolute destination", () => {
+  const signingPolicy = resolve("platform-signing-policy.json");
+  const signingPolicySha256 = "a".repeat(64);
   assert.throws(() => parseReleaseArguments([]), /--destination is required/);
   assert.deepEqual(
-    parseReleaseArguments(["--destination", resolve("release"), "--internal-preview"]),
+    parseReleaseArguments([
+      "--destination",
+      resolve("release"),
+      "--internal-preview",
+      "--platform-signing-policy",
+      signingPolicy,
+      "--platform-signing-policy-sha256",
+      signingPolicySha256,
+    ]),
     {
       destination: resolve("release"),
       help: false,
       internalPreview: true,
+      platformSigningPolicy: signingPolicy,
+      platformSigningPolicySha256: signingPolicySha256,
     },
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--platform-signing-policy",
+        "relative-policy.json",
+      ]),
+    /platform-signing-policy must be an absolute path/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--platform-signing-policy",
+        signingPolicy,
+      ]),
+    /policy path and lowercase SHA-256 must be provided together/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--platform-signing-policy-sha256",
+        signingPolicySha256,
+      ]),
+    /policy path and lowercase SHA-256 must be provided together/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--platform-signing-policy",
+        signingPolicy,
+        "--platform-signing-policy-sha256",
+        signingPolicySha256.toUpperCase(),
+      ]),
+    /must be a lowercase SHA-256/u,
   );
   assert.throws(() => parseReleaseArguments(["--wat"]), /Unknown release-build option/);
 });
@@ -375,6 +427,50 @@ test("release CLI detection follows canonical filesystem paths", async (t) => {
   );
   assert.equal(await isDirectReleaseInvocation(undefined, modulePath), false);
   assert.equal(await isDirectReleaseInvocation(join(root, "missing.mjs"), modulePath), false);
+});
+
+test("Linux packaged smoke credentials stay outside the bundle and are always removed", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-linux-smoke-secret-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const staging = join(root, "staging");
+  await mkdir(staging);
+  await writeFile(join(staging, "payload.txt"), "safe payload\n", "utf8");
+  let fixtureRoot;
+
+  const value = await withLinuxReleaseSmokeSecretFixture(staging, async (fixture) => {
+    assert.deepEqual(fixture.initArguments.slice(0, 1), ["--secret-backend-config"]);
+    const configPath = fixture.initArguments[1];
+    fixtureRoot = resolve(configPath, "..");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    assert.deepEqual(Object.keys(config), ["backend", "credentialName", "vaultRoot"]);
+    assert.equal(config.backend, "linux-systemd-credential-vault");
+    assert.equal(config.credentialName, "opendelegate-release-smoke-vault-key");
+    assert.equal(config.vaultRoot.startsWith(fixtureRoot), true);
+    assert.equal(fixture.environment.CREDENTIALS_DIRECTORY.startsWith(fixtureRoot), true);
+    const credential = await readFile(
+      join(fixture.environment.CREDENTIALS_DIRECTORY, config.credentialName),
+    );
+    assert.equal(credential.byteLength, 32);
+    return {
+      observedOutput: ["safe stdout", "safe stderr"],
+      value: "completed",
+    };
+  });
+
+  assert.equal(value, "completed");
+  await assert.rejects(access(fixtureRoot), (error) => error?.code === "ENOENT");
+
+  await assert.rejects(
+    withLinuxReleaseSmokeSecretFixture(staging, async (fixture) => {
+      const config = JSON.parse(await readFile(fixture.initArguments[1], "utf8"));
+      const credential = await readFile(
+        join(fixture.environment.CREDENTIALS_DIRECTORY, config.credentialName),
+      );
+      await writeFile(join(staging, "leaked-key.bin"), credential);
+      return { observedOutput: [], value: undefined };
+    }),
+    /credential material entered the release payload/u,
+  );
 });
 
 test("workspace bin entrypoints are committed executable before pnpm links them", async () => {

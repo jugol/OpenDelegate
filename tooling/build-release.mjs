@@ -22,6 +22,13 @@ import { fileURLToPath } from "node:url";
 
 import { auditReleaseEvidence, summarizeReleaseEvidence } from "./check-release-evidence.mjs";
 import { stageNativeReleaseAssets } from "./native-release-assets.mjs";
+import {
+  finalizePlatformNativeAuthenticity,
+  readPlatformAuthenticityPolicy,
+  verifyFinalPlatformNativeAuthenticity,
+} from "./platform-native-authenticity.mjs";
+import { captureFrozenPayload, verifyFrozenPayload } from "./release-smoke-payload-seal.mjs";
+import { withLinuxReleaseSmokeSecretFixture } from "./release-smoke-secret.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const releaseToolRoot = resolve(dirname(currentFile), "..");
@@ -38,7 +45,15 @@ export const PINNED_PNPM_ARCHIVE_INTEGRITY =
 const pinnedPnpmArchiveUrl = `https://registry.npmjs.org/pnpm/-/pnpm-${PINNED_PNPM_VERSION}.tgz`;
 const maximumPnpmArchiveBytes = 25 * 1024 * 1024;
 const maximumNodeArchiveBytes = 128 * 1024 * 1024;
-const runningReleaseToolPaths = ["tooling/build-release.mjs", "tooling/check-release-evidence.mjs"];
+const runningReleaseToolPaths = [
+  "tooling/build-release.mjs",
+  "tooling/check-release-evidence.mjs",
+  "tooling/native-release-assets.mjs",
+  "tooling/native-payload-inventory.mjs",
+  "tooling/platform-native-authenticity.mjs",
+  "tooling/release-smoke-payload-seal.mjs",
+  "tooling/release-smoke-secret.mjs",
+];
 const nodeDistributionRoot = `https://nodejs.org/dist/v${REQUIRED_RELEASE_NODE_VERSION}`;
 const nodeShasumsUrl = `${nodeDistributionRoot}/SHASUMS256.txt`;
 const officialRuntimeArchives = new Map([
@@ -149,11 +164,43 @@ export function officialRuntimeArchiveFor(platform, architecture) {
 export function parseReleaseArguments(values) {
   let destination;
   let internalPreview = false;
+  let platformSigningPolicy;
+  let platformSigningPolicySha256;
 
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
     if (value === "--internal-preview") {
       internalPreview = true;
+      continue;
+    }
+    if (value === "--platform-signing-policy") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || candidate.startsWith("--")) {
+        throw new Error("--platform-signing-policy requires an absolute path.");
+      }
+      if (!isAbsolute(candidate)) {
+        throw new Error("--platform-signing-policy must be an absolute path.");
+      }
+      if (platformSigningPolicy !== undefined) {
+        throw new Error("--platform-signing-policy may be specified only once.");
+      }
+      platformSigningPolicy = resolve(candidate);
+      index += 1;
+      continue;
+    }
+    if (value === "--platform-signing-policy-sha256") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || candidate.startsWith("--")) {
+        throw new Error("--platform-signing-policy-sha256 requires a lowercase SHA-256.");
+      }
+      if (!/^[0-9a-f]{64}$/u.test(candidate)) {
+        throw new Error("--platform-signing-policy-sha256 must be a lowercase SHA-256.");
+      }
+      if (platformSigningPolicySha256 !== undefined) {
+        throw new Error("--platform-signing-policy-sha256 may be specified only once.");
+      }
+      platformSigningPolicySha256 = candidate;
+      index += 1;
       continue;
     }
     if (value === "--destination") {
@@ -174,7 +221,18 @@ export function parseReleaseArguments(values) {
   if (destination === undefined) {
     throw new Error("--destination is required.");
   }
-  return { destination, help: false, internalPreview };
+  if ((platformSigningPolicy === undefined) !== (platformSigningPolicySha256 === undefined)) {
+    throw new Error(
+      "The platform-signing policy path and lowercase SHA-256 must be provided together.",
+    );
+  }
+  return {
+    destination,
+    help: false,
+    internalPreview,
+    ...(platformSigningPolicy === undefined ? {} : { platformSigningPolicy }),
+    ...(platformSigningPolicySha256 === undefined ? {} : { platformSigningPolicySha256 }),
+  };
 }
 
 const bundleReadmeLanguages = Object.freeze([
@@ -422,6 +480,24 @@ export function validateReleaseDestination(sourceRoot, destination) {
     throw new Error("Release artifacts must be written outside the source checkout.");
   }
   return normalizedDestination;
+}
+
+async function validateExternalReleaseInput(sourceRoot, input, label) {
+  if (!isAbsolute(input)) {
+    throw new Error(`The ${label} must use an absolute path.`);
+  }
+  const [normalizedSource, normalizedInput] = await Promise.all([
+    realpath(sourceRoot),
+    realpath(input),
+  ]);
+  const relationship = relative(normalizedSource, normalizedInput);
+  if (
+    relationship === "" ||
+    (!isAbsolute(relationship) && relationship !== ".." && !relationship.startsWith(`..${sep}`))
+  ) {
+    throw new Error(`The ${label} must remain outside the source checkout.`);
+  }
+  return normalizedInput;
 }
 
 export function validateReleaseDestinationName(destination, internalPreview) {
@@ -936,6 +1012,17 @@ export async function buildRelease(options) {
   const summary = summarizeReleaseEvidence(ledger);
   const supportStatus = determineSupportStatus(summary, options.internalPreview);
   assertSupportMatrixTarget(process.platform, process.arch, supportStatus);
+  const platformAuthenticityPolicyInput =
+    options.platformSigningPolicy === undefined
+      ? undefined
+      : await readPlatformAuthenticityPolicy(
+          await validateExternalReleaseInput(
+            repositoryRoot,
+            options.platformSigningPolicy,
+            "platform-signing policy",
+          ),
+          options.platformSigningPolicySha256,
+        );
   const provenance =
     supportStatus === "release-candidate"
       ? await inspectReleaseCandidateProvenance(repositoryRoot, ledger, source)
@@ -991,11 +1078,13 @@ export async function buildRelease(options) {
             staging,
             summary,
             supportStatus,
+            platformAuthenticityPolicyInput,
           });
         },
       );
     });
 
+    await platformAuthenticityPolicyInput?.verifyStable();
     const finalSource = await readSourceIdentity();
     if (finalSource.dirty || finalSource.commit !== source.commit) {
       throw new Error("The source checkout changed while the bundle was assembled.");
@@ -1104,6 +1193,7 @@ async function assembleRelease({
   staging,
   summary,
   supportStatus,
+  platformAuthenticityPolicyInput,
 }) {
   const assemblyRequire = createRequire(join(assemblySourceRoot, "package.json"));
   const assemblyPnpmCli = join(dirname(assemblyRequire.resolve("pnpm")), "bin", "pnpm.cjs");
@@ -1200,7 +1290,7 @@ async function assembleRelease({
     recursive: true,
   });
 
-  const nativeComponents = await stageNativeReleaseAssets({
+  const stagedNativeComponents = await stageNativeReleaseAssets({
     platform: process.platform,
     architecture: process.arch,
     sourceRoot: assemblySourceRoot,
@@ -1220,6 +1310,15 @@ async function assembleRelease({
 
   const buildId = createBuildId(source, supportStatus);
   await writeLaunchers(staging);
+  const finalizedNativeAuthenticity = await finalizePlatformNativeAuthenticity({
+    platform: process.platform,
+    architecture: process.arch,
+    nativeComponents: stagedNativeComponents,
+    policyInput: platformAuthenticityPolicyInput,
+    stagingRoot: staging,
+    supportStatus,
+  });
+  const { nativeComponents } = finalizedNativeAuthenticity;
   await assertPortableTree(staging);
 
   const metadata = {
@@ -1297,12 +1396,20 @@ Run \`opendelegate help\` for the deterministic CLI surface. Review
   }
 
   await writeIntegrityManifests(staging);
+  const frozenPayload = await captureFrozenPayload(staging);
   const smokeEvidence = await smokeBundle(staging, buildId, productVersion);
+  await verifyFrozenPayload(staging, frozenPayload);
   await writeFile(
     join(staging, "smoke-evidence.json"),
     `${JSON.stringify(smokeEvidence, null, 2)}\n`,
     "utf8",
   );
+  await verifyFinalPlatformNativeAuthenticity({
+    ...finalizedNativeAuthenticity,
+    policyInput: platformAuthenticityPolicyInput,
+    stagingRoot: staging,
+  });
+  await assertPortableTree(staging);
   await writeIntegrityManifests(staging);
 }
 
@@ -2131,13 +2238,79 @@ async function smokeBundle(staging, buildId, productVersion) {
     await rm(workerSmokeHome, { force: true, recursive: true });
   }
 
+  const runMainSmoke = (fixture) =>
+    runPackagedMainSmoke({
+      buildId,
+      entrypoint,
+      fixture,
+      productVersion,
+      releaseEnvironment,
+      runtime,
+      staging,
+    });
+  const mainSmoke =
+    process.platform === "linux"
+      ? await withLinuxReleaseSmokeSecretFixture(staging, runMainSmoke)
+      : (await runMainSmoke({ environment: {}, initArguments: [] })).value;
+  const { recoveryCodeCount, shutdownEvaluation } = mainSmoke;
+  return {
+    schemaVersion: 1,
+    platform: process.platform,
+    architecture: process.arch,
+    bundledNodeVersion: process.versions.node,
+    buildId,
+    productVersion,
+    checks: {
+      cliHelp: "passed",
+      backupCliHelp: "passed",
+      serviceCliHelp: "passed",
+      workerCliHelp: "passed",
+      workerCliVersion: "passed",
+      workerUnenrolledStatus: "passed",
+      cleanHomeInitialization: "passed",
+      mainHealth: "passed",
+      adminStaticApp: "passed",
+      loopbackOwnerClaim: "passed",
+      ownerLogin: "passed",
+      ownerSessionCookieContract: "passed",
+      ownerSessionRoundTrip: "passed",
+      recoveryCredentialsIssued: recoveryCodeCount,
+      cleanShutdown: {
+        status: "passed",
+        markerObserved: shutdownEvaluation.markerObserved,
+        naturalExit: shutdownEvaluation.naturalExit,
+        exitCode: shutdownEvaluation.exitCode,
+        signal: shutdownEvaluation.signal,
+        shutdownTimedOut: shutdownEvaluation.shutdownTimedOut,
+        forcedTermination: shutdownEvaluation.forcedTermination,
+      },
+    },
+  };
+}
+
+async function runPackagedMainSmoke({
+  buildId,
+  entrypoint,
+  fixture,
+  productVersion,
+  releaseEnvironment,
+  runtime,
+  staging,
+}) {
   const smokeHome = await mkdtemp(join(dirname(staging), ".od-home-"));
-  const child = spawn(runtime, [entrypoint, "init", "--home", smokeHome], {
-    cwd: staging,
-    env: releaseEnvironment,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-  });
+  const child = spawn(
+    runtime,
+    [entrypoint, "init", "--home", smokeHome, ...fixture.initArguments],
+    {
+      cwd: staging,
+      env: {
+        ...releaseEnvironment,
+        ...fixture.environment,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
@@ -2159,9 +2332,7 @@ async function smokeBundle(staging, buildId, productVersion) {
       20_000,
     );
     if (hasChildExited(child) || !stdout.includes('"event":"owner.claim.ready"')) {
-      throw new Error(
-        `The packaged init smoke test exited before readiness.${stderr === "" ? "" : `\n${stderr}`}`,
-      );
+      throw new Error("The packaged init smoke test exited before readiness.");
     }
 
     const [health, admin, claim] = await Promise.all([
@@ -2287,36 +2458,10 @@ async function smokeBundle(staging, buildId, productVersion) {
     );
   }
   return {
-    schemaVersion: 1,
-    platform: process.platform,
-    architecture: process.arch,
-    bundledNodeVersion: process.versions.node,
-    buildId,
-    productVersion,
-    checks: {
-      cliHelp: "passed",
-      backupCliHelp: "passed",
-      serviceCliHelp: "passed",
-      workerCliHelp: "passed",
-      workerCliVersion: "passed",
-      workerUnenrolledStatus: "passed",
-      cleanHomeInitialization: "passed",
-      mainHealth: "passed",
-      adminStaticApp: "passed",
-      loopbackOwnerClaim: "passed",
-      ownerLogin: "passed",
-      ownerSessionCookieContract: "passed",
-      ownerSessionRoundTrip: "passed",
-      recoveryCredentialsIssued: recoveryCodeCount,
-      cleanShutdown: {
-        status: "passed",
-        markerObserved: shutdownEvaluation.markerObserved,
-        naturalExit: shutdownEvaluation.naturalExit,
-        exitCode: shutdownEvaluation.exitCode,
-        signal: shutdownEvaluation.signal,
-        shutdownTimedOut: shutdownEvaluation.shutdownTimedOut,
-        forcedTermination: shutdownEvaluation.forcedTermination,
-      },
+    observedOutput: [stdout, stderr],
+    value: {
+      recoveryCodeCount,
+      shutdownEvaluation,
     },
   };
 }
@@ -2497,6 +2642,8 @@ async function listFiles(directory) {
       paths.push(...(await listFiles(path)));
     } else if (entry.isFile()) {
       paths.push(path);
+    } else {
+      throw new Error("Release integrity manifests reject non-regular filesystem entries.");
     }
   }
   return paths.sort(compareCodeUnits);
@@ -2521,6 +2668,7 @@ function printHelp() {
 Usage:
   node tooling/build-release.mjs --destination ABSOLUTE_PATH
   node tooling/build-release.mjs --destination ABSOLUTE_PATH --internal-preview
+  node tooling/build-release.mjs --destination ABSOLUTE_PATH --platform-signing-policy ABSOLUTE_PATH --platform-signing-policy-sha256 LOWERCASE_SHA256
 
 An incomplete first-milestone ledger can only produce a clearly marked unsupported
 internal preview. Existing destinations and paths inside the source checkout are
