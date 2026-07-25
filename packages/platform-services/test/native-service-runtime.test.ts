@@ -1218,6 +1218,186 @@ test("release verification rejects an unlisted link entry even with a valid mani
   );
 });
 
+test("release preflight accepts only each platform's exact native component contract", async () => {
+  for (const base of [windowsConfiguration(), macOsConfiguration(), linuxConfiguration()]) {
+    const fileSystem = new FakeFileSystem();
+    const prepared = prepareSignedBundle(fileSystem, base);
+    const configuration = {
+      ...base,
+      bundle: {
+        ...base.bundle,
+        checksum: `sha256:${prepared.manifestSha256}`,
+      },
+    } as PlatformServiceConfiguration;
+
+    const verified = await createNativeReleaseVerifier(fileSystem, {
+      architecture: "x64",
+    }).preflight(configuration);
+
+    assert.equal(verified.manifestSha256, prepared.manifestSha256);
+  }
+});
+
+test("release preflight requires native-components.json as a signed payload file", async () => {
+  const fileSystem = new FakeFileSystem();
+  const base = linuxConfiguration();
+  const prepared = prepareSignedBundle(fileSystem, base);
+  const configuration = linuxConfiguration({
+    bundle: {
+      ...base.bundle,
+      checksum: `sha256:${prepared.manifestSha256}`,
+    },
+  });
+  fileSystem.files.delete(`${base.bundle.sourceDirectory}/native-components.json`);
+
+  await assert.rejects(
+    createNativeReleaseVerifier(fileSystem, { architecture: "x64" }).preflight(configuration),
+    isPreflightFailure,
+  );
+});
+
+test("release preflight rejects divergent metadata and native component manifests", async () => {
+  const fileSystem = new FakeFileSystem();
+  const base = linuxConfiguration();
+  const prepared = prepareSignedBundle(fileSystem, base, {
+    mutateMetadata(metadata) {
+      metadata.nativeComponents.components[0]!.sha256 = `sha256:${"f".repeat(64)}`;
+    },
+  });
+  const configuration = linuxConfiguration({
+    bundle: {
+      ...base.bundle,
+      checksum: `sha256:${prepared.manifestSha256}`,
+    },
+  });
+
+  await assert.rejects(
+    createNativeReleaseVerifier(fileSystem, { architecture: "x64" }).preflight(configuration),
+    (error) =>
+      isPreflightFailure(error) &&
+      error.message.includes("nativeComponents does not match native-components.json"),
+  );
+});
+
+test("release preflight rejects a self-consistent forged component digest", async () => {
+  const fileSystem = new FakeFileSystem();
+  const base = linuxConfiguration();
+  const componentPath = "bin/opendelegate-service-host";
+  const forgedDigest = "f".repeat(64);
+  const prepared = prepareSignedBundle(fileSystem, base, {
+    mutateNativeComponents(manifest) {
+      manifest.components[0]!.sha256 = `sha256:${forgedDigest}`;
+    },
+    payloadDigestOverrides: {
+      [componentPath]: forgedDigest,
+    },
+  });
+  const configuration = linuxConfiguration({
+    bundle: {
+      ...base.bundle,
+      checksum: `sha256:${prepared.manifestSha256}`,
+    },
+  });
+
+  await assert.rejects(
+    createNativeReleaseVerifier(fileSystem, { architecture: "x64" }).preflight(configuration),
+    (error) =>
+      isPreflightFailure(error) &&
+      error.message.includes(`release payload digest is invalid for ${componentPath}`),
+  );
+});
+
+test("release preflight rejects invalid native component shape, order, target, and digest format", async () => {
+  const mutations: readonly ((manifest: MutableNativeComponentsManifest) => void)[] = [
+    (manifest) => {
+      manifest.components.pop();
+    },
+    (manifest) => {
+      manifest.components.reverse();
+    },
+    (manifest) => {
+      manifest.components[0]!.path = "bin/forged-service-host";
+    },
+    (manifest) => {
+      manifest.platform = "win32";
+    },
+    (manifest) => {
+      manifest.architecture = "arm64";
+    },
+    (manifest) => {
+      manifest.components[0]!.sha256 = "f".repeat(64);
+    },
+  ];
+  for (const mutateNativeComponents of mutations) {
+    const fileSystem = new FakeFileSystem();
+    const base = linuxConfiguration();
+    const prepared = prepareSignedBundle(fileSystem, base, { mutateNativeComponents });
+    const configuration = linuxConfiguration({
+      bundle: {
+        ...base.bundle,
+        checksum: `sha256:${prepared.manifestSha256}`,
+      },
+    });
+
+    await assert.rejects(
+      createNativeReleaseVerifier(fileSystem, { architecture: "x64" }).preflight(configuration),
+      isPreflightFailure,
+    );
+  }
+});
+
+test("release preflight requires the exact ordered Main and Worker launcher set", async () => {
+  const validEntrypoints = [...releaseEntrypoints("linux")];
+  const invalidEntrypoints = [
+    validEntrypoints.filter((entrypoint) => !entrypoint.includes("worker")),
+    [...validEntrypoints].reverse(),
+    [...validEntrypoints, "opendelegate-extra"],
+  ];
+  for (const entrypoints of invalidEntrypoints) {
+    const fileSystem = new FakeFileSystem();
+    const base = linuxConfiguration();
+    const prepared = prepareSignedBundle(fileSystem, base, {
+      mutateMetadata(metadata) {
+        metadata.entrypoints = entrypoints;
+      },
+    });
+    const configuration = linuxConfiguration({
+      bundle: {
+        ...base.bundle,
+        checksum: `sha256:${prepared.manifestSha256}`,
+      },
+    });
+
+    await assert.rejects(
+      createNativeReleaseVerifier(fileSystem, { architecture: "x64" }).preflight(configuration),
+      (error) => isPreflightFailure(error) && error.message.includes("entrypoints do not match"),
+    );
+  }
+});
+
+test("release preflight rejects self-consistent bundles with a missing or empty launcher", async () => {
+  const cases: readonly PrepareSignedBundleOptions[] = [
+    { omittedLaunchers: ["opendelegate-worker"] },
+    { emptyLaunchers: ["opendelegate-worker.cmd"] },
+  ];
+  for (const options of cases) {
+    const fileSystem = new FakeFileSystem();
+    const base = linuxConfiguration();
+    const prepared = prepareSignedBundle(fileSystem, base, options);
+    const configuration = linuxConfiguration({
+      bundle: {
+        ...base.bundle,
+        checksum: `sha256:${prepared.manifestSha256}`,
+      },
+    });
+
+    await assert.rejects(
+      createNativeReleaseVerifier(fileSystem, { architecture: "x64" }).preflight(configuration),
+      (error) => isPreflightFailure(error) && error.message.includes("required launcher"),
+    );
+  }
+});
+
 function fakeBoundaries(input: {
   readonly platform: PlatformFamily;
   readonly elevated: boolean;
@@ -1313,48 +1493,79 @@ function trustedRelease(onPreflight?: () => void): NativeReleaseVerifier {
 function prepareSignedBundle(
   fileSystem: FakeFileSystem,
   configuration: PlatformServiceConfiguration,
+  options: PrepareSignedBundleOptions = {},
 ): {
   readonly manifestSha256: string;
   readonly publisherKeyId: string;
 } {
   const source = configuration.bundle.sourceDirectory;
-  const serviceHost = Buffer.from("service-host", "utf8");
-  const sessionHelper = Buffer.from("session-helper", "utf8");
-  const metadata = Buffer.from(
-    `${JSON.stringify({
-      schemaVersion: 2,
-      product: "OpenDelegate",
-      productVersion: configuration.bundle.version,
-      protocolVersion: "v1",
-      buildId: "internal-preview-blocked-000000000000-linux-x64",
-      createdAt: "2026-07-25T00:00:00.000Z",
-      timestampPolicy: "wall-clock",
-      platform: "linux",
-      architecture: "x64",
-      bundledNodeVersion: "24.18.0",
-      bundledRuntime: {},
-      toolchain: {},
-      dependencyLockSha256: "a".repeat(64),
-      sourcePackageManifestSha256: "b".repeat(64),
-      runtimeExternals: [],
-      buildCommit: "c".repeat(40),
-      auditedSourceCommit: "d".repeat(40),
-      changedAttestationPaths: null,
-      buildSourceDirty: false,
-      supportStatus: "internal-preview-blocked",
-      buildMode: "internal-preview",
-      releaseEvidence: {},
-      entrypoints: ["opendelegate"],
-      fileManifest: "payload-manifest.json",
-      checksumManifest: "SHA256SUMS",
-    })}\n`,
-    "utf8",
+  const expectedEntrypoints = releaseEntrypoints(configuration.platform);
+  const launcherFiles = expectedEntrypoints
+    .filter((path) => !options.omittedLaunchers?.includes(path))
+    .map((path, index) => ({
+      path,
+      bytes: options.emptyLaunchers?.includes(path)
+        ? Buffer.alloc(0)
+        : Buffer.from(`launcher-${String(index + 1)}`, "utf8"),
+    }));
+  const nativeComponentFiles = nativeComponentDefinitions(configuration.platform).map(
+    (component, index) => {
+      const bytes = Buffer.from(`native-component-${String(index + 1)}`, "utf8");
+      return {
+        ...component,
+        bytes,
+        sha256: `sha256:${sha256(bytes)}`,
+      };
+    },
   );
+  const nativeComponents: MutableNativeComponentsManifest = {
+    schemaVersion: 1,
+    platform: releasePlatform(configuration.platform),
+    architecture: "x64",
+    components: nativeComponentFiles.map(({ bytes: _bytes, ...component }) => component),
+  };
+  options.mutateNativeComponents?.(nativeComponents);
+  const nativeManifest = Buffer.from(`${JSON.stringify(nativeComponents)}\n`, "utf8");
+  const metadataValue: MutableReleaseMetadata = {
+    schemaVersion: 2,
+    product: "OpenDelegate",
+    productVersion: configuration.bundle.version,
+    protocolVersion: "v1",
+    buildId: `internal-preview-blocked-000000000000-${releasePlatform(configuration.platform)}-x64`,
+    createdAt: "2026-07-25T00:00:00.000Z",
+    timestampPolicy: "wall-clock",
+    platform: releasePlatform(configuration.platform),
+    architecture: "x64",
+    bundledNodeVersion: "24.18.0",
+    bundledRuntime: {},
+    toolchain: {},
+    dependencyLockSha256: "a".repeat(64),
+    sourcePackageManifestSha256: "b".repeat(64),
+    runtimeExternals: [],
+    nativeComponents: cloneNativeComponents(nativeComponents),
+    buildCommit: "c".repeat(40),
+    auditedSourceCommit: "d".repeat(40),
+    changedAttestationPaths: null,
+    buildSourceDirty: false,
+    supportStatus: "internal-preview-blocked",
+    buildMode: "internal-preview",
+    releaseEvidence: {},
+    entrypoints: [...expectedEntrypoints],
+    fileManifest: "payload-manifest.json",
+    checksumManifest: "SHA256SUMS",
+  };
+  options.mutateMetadata?.(metadataValue);
+  const metadata = Buffer.from(`${JSON.stringify(metadataValue)}\n`, "utf8");
   const payloadEntries = [
-    payloadEntry("bin/opendelegate-service-host", serviceHost),
-    payloadEntry("bin/opendelegate-session-helper", sessionHelper),
+    ...launcherFiles.map((launcher) => payloadEntry(launcher.path, launcher.bytes)),
+    ...nativeComponentFiles.map((component) => {
+      const entry = payloadEntry(component.path, component.bytes);
+      const override = options.payloadDigestOverrides?.[component.path];
+      return override === undefined ? entry : { ...entry, sha256: override };
+    }),
+    payloadEntry("native-components.json", nativeManifest),
     payloadEntry("release-metadata.json", metadata),
-  ];
+  ].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
   const payloadManifest = Buffer.from(
     `${JSON.stringify({
       schemaVersion: 1,
@@ -1395,14 +1606,25 @@ function prepareSignedBundle(
     "utf8",
   );
   const paths = new Map<string, Buffer>([
-    [`${source}/bin/opendelegate-service-host`, serviceHost],
-    [`${source}/bin/opendelegate-session-helper`, sessionHelper],
-    [`${source}/release-metadata.json`, metadata],
-    [`${source}/payload-manifest.json`, payloadManifest],
-    [`${source}/SHA256SUMS`, checksumManifest],
+    ...launcherFiles.map(
+      (launcher) =>
+        [fixturePath(configuration.platform, source, launcher.path), launcher.bytes] as const,
+    ),
+    ...nativeComponentFiles.map(
+      (component) =>
+        [fixturePath(configuration.platform, source, component.path), component.bytes] as const,
+    ),
+    [fixturePath(configuration.platform, source, "native-components.json"), nativeManifest],
+    [fixturePath(configuration.platform, source, "release-metadata.json"), metadata],
+    [fixturePath(configuration.platform, source, "payload-manifest.json"), payloadManifest],
+    [fixturePath(configuration.platform, source, "SHA256SUMS"), checksumManifest],
     [`${source}.publisher-attestation.json`, attestation],
     [
-      `${configuration.paths.stateRoot}/trust/publisher-ed25519.pem`,
+      fixturePath(
+        configuration.platform,
+        configuration.paths.stateRoot,
+        "trust/publisher-ed25519.pem",
+      ),
       Buffer.from(publicKey.export({ format: "pem", type: "spki" })),
     ],
   ]);
@@ -1411,18 +1633,131 @@ function prepareSignedBundle(
     fileSystem.kinds.set(path, "regular-file");
   }
   fileSystem.kinds.set(source, "directory");
-  fileSystem.kinds.set(`${source}/bin`, "directory");
-  fileSystem.directories.set(source, [
-    { name: "SHA256SUMS", kind: "regular-file" },
-    { name: "bin", kind: "directory" },
-    { name: "payload-manifest.json", kind: "regular-file" },
-    { name: "release-metadata.json", kind: "regular-file" },
-  ]);
-  fileSystem.directories.set(`${source}/bin`, [
-    { name: "opendelegate-service-host", kind: "regular-file" },
-    { name: "opendelegate-session-helper", kind: "regular-file" },
-  ]);
+  for (const path of [
+    ...launcherFiles.map((launcher) => launcher.path),
+    ...nativeComponentFiles.map((component) => component.path),
+    "native-components.json",
+    "release-metadata.json",
+    "payload-manifest.json",
+    "SHA256SUMS",
+  ]) {
+    addFixtureDirectoryEntry(fileSystem, configuration.platform, source, path);
+  }
   return { manifestSha256, publisherKeyId };
+}
+
+interface PrepareSignedBundleOptions {
+  readonly mutateNativeComponents?: (manifest: MutableNativeComponentsManifest) => void;
+  readonly mutateMetadata?: (metadata: MutableReleaseMetadata) => void;
+  readonly payloadDigestOverrides?: Readonly<Record<string, string>>;
+  readonly omittedLaunchers?: readonly string[];
+  readonly emptyLaunchers?: readonly string[];
+}
+
+interface MutableNativeComponentsManifest {
+  schemaVersion: number;
+  platform: string;
+  architecture: string;
+  components: {
+    kind: string;
+    path: string;
+    sha256: string;
+  }[];
+}
+
+interface MutableReleaseMetadata extends Record<string, unknown> {
+  nativeComponents: MutableNativeComponentsManifest;
+  entrypoints: string[];
+}
+
+function cloneNativeComponents(
+  manifest: MutableNativeComponentsManifest,
+): MutableNativeComponentsManifest {
+  return {
+    schemaVersion: manifest.schemaVersion,
+    platform: manifest.platform,
+    architecture: manifest.architecture,
+    components: manifest.components.map((component) => ({ ...component })),
+  };
+}
+
+function nativeComponentDefinitions(
+  platform: PlatformFamily,
+): readonly { readonly kind: string; readonly path: string }[] {
+  if (platform === "windows") {
+    return [
+      { kind: "core-service-host", path: "bin/opendelegate-service-host.exe" },
+      { kind: "session-helper-host", path: "bin/opendelegate-session-helper.exe" },
+      {
+        kind: "computer-use-helper",
+        path: "libexec/opendelegate-windows-computer-use-helper.exe",
+      },
+      {
+        kind: "computer-use-fixture",
+        path: "libexec/opendelegate-windows-computer-use-fixture.exe",
+      },
+    ];
+  }
+  if (platform === "macos") {
+    return [
+      { kind: "core-service-host", path: "bin/opendelegate-service-host" },
+      { kind: "session-helper-host", path: "bin/opendelegate-session-helper" },
+      { kind: "computer-use-helper", path: "libexec/opendelegate-macos-computer-use" },
+      {
+        kind: "computer-use-fixture",
+        path: "libexec/opendelegate-macos-computer-use-fixture",
+      },
+      {
+        kind: "secret-store-helper",
+        path: "runtime/native/opendelegate-keychain-helper",
+      },
+    ];
+  }
+  return [
+    { kind: "core-service-host", path: "bin/opendelegate-service-host" },
+    { kind: "session-helper-host", path: "bin/opendelegate-session-helper" },
+    { kind: "computer-use-helper", path: "libexec/opendelegate-linux-computer-use" },
+    {
+      kind: "computer-use-fixture",
+      path: "libexec/opendelegate-linux-computer-use-fixture",
+    },
+  ];
+}
+
+function releaseEntrypoints(platform: PlatformFamily): readonly string[] {
+  return platform === "windows"
+    ? ["opendelegate.cmd", "opendelegate-worker.cmd"]
+    : ["opendelegate", "opendelegate-worker", "opendelegate.cmd", "opendelegate-worker.cmd"];
+}
+
+function releasePlatform(platform: PlatformFamily): "darwin" | "linux" | "win32" {
+  return platform === "windows" ? "win32" : platform === "macos" ? "darwin" : "linux";
+}
+
+function fixturePath(platform: PlatformFamily, root: string, relativePath: string): string {
+  const separator = platform === "windows" ? "\\" : "/";
+  return [root, ...relativePath.split("/")].join(separator);
+}
+
+function addFixtureDirectoryEntry(
+  fileSystem: FakeFileSystem,
+  platform: PlatformFamily,
+  root: string,
+  relativePath: string,
+): void {
+  const segments = relativePath.split("/");
+  let parent = root;
+  for (const [index, segment] of segments.entries()) {
+    const kind = index === segments.length - 1 ? "regular-file" : "directory";
+    const entries = fileSystem.directories.get(parent) ?? [];
+    if (!entries.some((entry) => entry.name === segment)) {
+      fileSystem.directories.set(parent, [...entries, { name: segment, kind }]);
+    }
+    if (kind === "directory") {
+      parent = fixturePath(platform, parent, segment);
+      fileSystem.kinds.set(parent, "directory");
+    }
+  }
 }
 
 function payloadEntry(

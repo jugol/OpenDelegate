@@ -11,8 +11,18 @@ const auditedCommit = "a".repeat(40);
 const buildCommit = "b".repeat(40);
 const proofPath = "docs/release/evidence/release-proof.txt";
 const ledgerPath = "docs/release/acceptance-evidence.json";
+const nativeComponentsPath = "native-components.json";
 const smokeEvidencePath = "smoke-evidence.json";
 const timestamp = "2026-07-24T00:00:00Z";
+
+interface NativeComponentsFixture {
+  platform: string;
+  components: {
+    kind: string;
+    path: string;
+    sha256: string;
+  }[];
+}
 
 test("source-checkout identity is fixed development data despite caller environment", async (t) => {
   const previousBuildId = process.env["OPENDELEGATE_BUILD_ID"];
@@ -51,6 +61,143 @@ test("valid blocked and complete previews remain internal previews", async (t) =
 
   assert.equal((await resolveBundle(blocked)).releaseChannel, "internal-preview");
   assert.equal((await resolveBundle(complete)).releaseChannel, "internal-preview");
+});
+
+test("release-builder native metadata and Main plus Worker launchers form a valid identity", async (t) => {
+  const root = await createBundleFixture(t, {
+    complete: false,
+    supportStatus: "internal-preview-blocked",
+  });
+  const metadataPath = join(root, "release-metadata.json");
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
+  const nativeComponents = JSON.parse(
+    await readFile(join(root, nativeComponentsPath), "utf8"),
+  ) as Record<string, unknown>;
+
+  assert.deepEqual(metadata["nativeComponents"], nativeComponents);
+  assert.deepEqual(metadata["entrypoints"], releaseEntrypoints());
+  assert.equal((await resolveBundle(root)).releaseChannel, "internal-preview");
+});
+
+test("native metadata must match its manifest and the packaged component bytes", async (t) => {
+  const metadataMismatch = await createBundleFixture(t, {
+    complete: false,
+    supportStatus: "internal-preview-blocked",
+  });
+  const metadataPath = join(metadataMismatch, "release-metadata.json");
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
+    nativeComponents: { components: { sha256: string }[] };
+  };
+  metadata.nativeComponents.components[0]!.sha256 = `sha256:${"f".repeat(64)}`;
+  await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+  await writeIntegrityFiles(metadataMismatch);
+  await assertInvalid(
+    resolveBundle(metadataMismatch),
+    /nativeComponents does not match native-components\.json/u,
+  );
+
+  const payloadMismatch = await createBundleFixture(t, {
+    complete: false,
+    supportStatus: "internal-preview-blocked",
+  });
+  const nativeManifestPath = join(payloadMismatch, nativeComponentsPath);
+  const nativeManifest = JSON.parse(await readFile(nativeManifestPath, "utf8")) as {
+    components: { sha256: string }[];
+  };
+  nativeManifest.components[0]!.sha256 = `sha256:${"e".repeat(64)}`;
+  await writeFile(nativeManifestPath, `${JSON.stringify(nativeManifest, null, 2)}\n`);
+  const payloadMetadataPath = join(payloadMismatch, "release-metadata.json");
+  const payloadMetadata = JSON.parse(await readFile(payloadMetadataPath, "utf8")) as {
+    nativeComponents: unknown;
+  };
+  payloadMetadata.nativeComponents = nativeManifest;
+  await writeFile(payloadMetadataPath, `${JSON.stringify(payloadMetadata, null, 2)}\n`);
+  await writeIntegrityFiles(payloadMismatch);
+  await assertInvalid(resolveBundle(payloadMismatch), /digest does not match the payload/u);
+});
+
+test("native component shape and order fail closed even after manifest rehashing", async (t) => {
+  const mutations: readonly ((manifest: NativeComponentsFixture) => void)[] = [
+    (manifest) => {
+      manifest.components.splice(1, 1);
+    },
+    (manifest) => {
+      [manifest.components[0], manifest.components[1]] = [
+        manifest.components[1]!,
+        manifest.components[0]!,
+      ];
+    },
+    (manifest) => {
+      manifest.components[0]!.path = "bin/forged-service-host";
+    },
+    (manifest) => {
+      manifest.platform = "freebsd";
+    },
+  ];
+  for (const mutate of mutations) {
+    const root = await createBundleFixture(t, {
+      complete: false,
+      supportStatus: "internal-preview-blocked",
+    });
+    const nativeManifestPath = join(root, nativeComponentsPath);
+    const nativeManifest = JSON.parse(
+      await readFile(nativeManifestPath, "utf8"),
+    ) as NativeComponentsFixture;
+    mutate(nativeManifest);
+    await writeFile(nativeManifestPath, `${JSON.stringify(nativeManifest, null, 2)}\n`);
+    const metadataPath = join(root, "release-metadata.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      nativeComponents: unknown;
+    };
+    metadata.nativeComponents = nativeManifest;
+    await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    await writeIntegrityFiles(root);
+
+    await assertInvalid(resolveBundle(root), /Native component manifest/u);
+  }
+});
+
+test("release entrypoints require the exact ordered Main and Worker launcher set", async (t) => {
+  const valid = releaseEntrypoints();
+  const invalidEntrypoints = [
+    valid.filter((entrypoint) => !entrypoint.includes("worker")),
+    [...valid].reverse(),
+    [...valid, "opendelegate-extra"],
+  ];
+  for (const entrypoints of invalidEntrypoints) {
+    const root = await createBundleFixture(t, {
+      complete: false,
+      supportStatus: "internal-preview-blocked",
+    });
+    const metadataPath = join(root, "release-metadata.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
+      entrypoints: readonly string[];
+    };
+    metadata.entrypoints = entrypoints;
+    await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+    await writeIntegrityFiles(root);
+
+    await assertInvalid(resolveBundle(root), /entrypoints do not match/u);
+  }
+});
+
+test("every declared Main and Worker launcher must be present and non-empty", async (t) => {
+  const missing = await createBundleFixture(t, {
+    complete: false,
+    supportStatus: "internal-preview-blocked",
+  });
+  const missingEntrypoint = releaseEntrypoints().at(-1)!;
+  await rm(join(missing, missingEntrypoint));
+  await writeIntegrityFiles(missing, [], [missingEntrypoint]);
+  await assertInvalid(resolveBundle(missing), /Release entrypoint is missing or empty/u);
+
+  const empty = await createBundleFixture(t, {
+    complete: false,
+    supportStatus: "internal-preview-blocked",
+  });
+  await writeFile(join(empty, releaseEntrypoints()[0]!), "");
+  await writeIntegrityFiles(empty);
+  await assertInvalid(resolveBundle(empty), /Release entrypoint is missing or empty/u);
 });
 
 test("a complete, clean, internally consistent candidate reports metadata version", async (t) => {
@@ -228,6 +375,8 @@ async function createBundleFixture(
   const root = await mkdtemp(join(tmpdir(), "opendelegate-release-identity-"));
   t.after(() => rm(root, { force: true, recursive: true }));
   await mkdir(join(root, "docs", "release", "evidence"), { recursive: true });
+  const nativeComponents = await writeNativeComponentsFixture(root);
+  await writeLauncherFixtures(root);
   const proofBytes = Buffer.from("durable release proof\n");
   await writeFile(join(root, ...proofPath.split("/")), proofBytes);
   await writeFile(
@@ -310,6 +459,7 @@ async function createBundleFixture(
     dependencyLockSha256: "4".repeat(64),
     sourcePackageManifestSha256: "5".repeat(64),
     runtimeExternals: [{ name: "better-sqlite3", version: "13.0.1" }],
+    nativeComponents,
     buildCommit,
     auditedSourceCommit: auditedCommit,
     changedAttestationPaths:
@@ -326,8 +476,7 @@ async function createBundleFixture(
       liveProof,
       complete: input.complete,
     },
-    entrypoints:
-      process.platform === "win32" ? ["opendelegate.cmd"] : ["opendelegate", "opendelegate.cmd"],
+    entrypoints: releaseEntrypoints(),
     fileManifest: "payload-manifest.json",
     checksumManifest: "SHA256SUMS",
   };
@@ -339,14 +488,21 @@ async function createBundleFixture(
 async function writeIntegrityFiles(
   root: string,
   additionalPaths: readonly string[] = [],
+  omittedPaths: readonly string[] = [],
 ): Promise<void> {
+  const omitted = new Set(omittedPaths);
   const paths = [
     ledgerPath,
+    nativeComponentsPath,
     proofPath,
     "release-metadata.json",
     smokeEvidencePath,
+    ...nativeComponentDefinitions().map((component) => component.path),
+    ...releaseEntrypoints(),
     ...additionalPaths,
-  ].sort(compareCodeUnits);
+  ]
+    .filter((path) => !omitted.has(path))
+    .sort(compareCodeUnits);
   const files = await Promise.all(
     paths.map(async (path) => {
       const bytes = await readFile(join(root, ...path.split("/")));
@@ -375,6 +531,82 @@ async function writeIntegrityFiles(
     join(root, "SHA256SUMS"),
     `${checksums.map((entry) => `${entry.sha256}  ${entry.path}`).join("\n")}\n`,
   );
+}
+
+function nativeComponentDefinitions(): readonly { readonly kind: string; readonly path: string }[] {
+  const executableSuffix = process.platform === "win32" ? ".exe" : "";
+  const computerUsePlatform =
+    process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
+  const components = [
+    {
+      kind: "core-service-host",
+      path: `bin/opendelegate-service-host${executableSuffix}`,
+    },
+    {
+      kind: "session-helper-host",
+      path: `bin/opendelegate-session-helper${executableSuffix}`,
+    },
+    {
+      kind: "computer-use-helper",
+      path:
+        process.platform === "win32"
+          ? "libexec/opendelegate-windows-computer-use-helper.exe"
+          : `libexec/opendelegate-${computerUsePlatform}-computer-use`,
+    },
+    {
+      kind: "computer-use-fixture",
+      path:
+        process.platform === "win32"
+          ? "libexec/opendelegate-windows-computer-use-fixture.exe"
+          : `libexec/opendelegate-${computerUsePlatform}-computer-use-fixture`,
+    },
+  ];
+  if (process.platform === "darwin") {
+    components.push({
+      kind: "secret-store-helper",
+      path: "runtime/native/opendelegate-keychain-helper",
+    });
+  }
+  return components;
+}
+
+async function writeNativeComponentsFixture(root: string): Promise<Record<string, unknown>> {
+  const components = await Promise.all(
+    nativeComponentDefinitions().map(async (component, index) => {
+      const bytes = Buffer.from(`native component ${String(index + 1)}\n`);
+      const path = join(root, ...component.path.split("/"));
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, bytes);
+      return {
+        ...component,
+        sha256: `sha256:${sha256(bytes)}`,
+      };
+    }),
+  );
+  const manifest = {
+    schemaVersion: 1,
+    platform: process.platform,
+    architecture: process.arch,
+    components,
+  };
+  await writeFile(join(root, nativeComponentsPath), `${JSON.stringify(manifest, null, 2)}\n`);
+  return {
+    ...manifest,
+  };
+}
+
+async function writeLauncherFixtures(root: string): Promise<void> {
+  await Promise.all(
+    releaseEntrypoints().map((entrypoint) =>
+      writeFile(join(root, entrypoint), `launcher ${entrypoint}\n`),
+    ),
+  );
+}
+
+function releaseEntrypoints(): readonly string[] {
+  return process.platform === "win32"
+    ? ["opendelegate.cmd", "opendelegate-worker.cmd"]
+    : ["opendelegate", "opendelegate-worker", "opendelegate.cmd", "opendelegate-worker.cmd"];
 }
 
 async function resolveBundle(root: string) {

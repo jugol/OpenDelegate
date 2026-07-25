@@ -14,6 +14,7 @@ const MAXIMUM_KEY_BYTES = 64 * 1024;
 const MAXIMUM_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MAXIMUM_METADATA_BYTES = 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const QUALIFIED_SHA256_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const BASE64_URL_PATTERN = /^[A-Za-z0-9_-]{80,96}$/u;
 const SEMVER_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
 
@@ -21,6 +22,19 @@ interface PayloadEntry {
   readonly path: string;
   readonly size: number;
   readonly sha256: string;
+}
+
+interface NativeComponent {
+  readonly kind: string;
+  readonly path: string;
+  readonly sha256: string;
+}
+
+interface NativeComponentsManifest {
+  readonly schemaVersion: 1;
+  readonly platform: "darwin" | "linux" | "win32";
+  readonly architecture: string;
+  readonly components: readonly NativeComponent[];
 }
 
 export interface NativeReleaseVerification {
@@ -146,7 +160,7 @@ async function verifyPayload(
     failPreflight("The release source must be a regular directory, not a link or special file.");
   }
   const rootRealPath = await fileSystem.realPath(root);
-  const [checksumBytes, manifestBytes, metadataBytes] = await Promise.all([
+  const [checksumBytes, manifestBytes, metadataBytes, nativeComponentsBytes] = await Promise.all([
     readRequiredRegularFile(
       fileSystem,
       pathJoin(configuration.platform, root, "SHA256SUMS"),
@@ -164,6 +178,12 @@ async function verifyPayload(
       pathJoin(configuration.platform, root, "release-metadata.json"),
       MAXIMUM_METADATA_BYTES,
       "release metadata",
+    ),
+    readRequiredRegularFile(
+      fileSystem,
+      pathJoin(configuration.platform, root, "native-components.json"),
+      MAXIMUM_METADATA_BYTES,
+      "native component manifest",
     ),
   ]);
   const checksums = parseChecksumManifest(checksumBytes);
@@ -185,6 +205,7 @@ async function verifyPayload(
   if (discovered.length !== expected.size || discovered.some((path) => !expected.has(path))) {
     failPreflight("The release contains an unlisted, missing, linked, or special payload path.");
   }
+  const verifiedPayload = new Map<string, PayloadEntry>();
   for (const path of discovered) {
     if (path === "SHA256SUMS") {
       continue;
@@ -194,12 +215,14 @@ async function verifyPayload(
         ? manifestBytes
         : path === "release-metadata.json"
           ? metadataBytes
-          : await readRequiredRegularFile(
-              fileSystem,
-              pathJoin(configuration.platform, root, ...path.split("/")),
-              payload.get(path)?.size ?? 0,
-              `payload file ${path}`,
-            );
+          : path === "native-components.json"
+            ? nativeComponentsBytes
+            : await readRequiredRegularFile(
+                fileSystem,
+                pathJoin(configuration.platform, root, ...path.split("/")),
+                payload.get(path)?.size ?? 0,
+                `payload file ${path}`,
+              );
     if (path === "payload-manifest.json") {
       if (checksums.get(path) !== sha256(bytes)) {
         failPreflight("The checksum manifest does not bind payload-manifest.json.");
@@ -216,6 +239,7 @@ async function verifyPayload(
     ) {
       failPreflight(`The release payload digest is invalid for ${path}.`);
     }
+    verifiedPayload.set(path, { path, size: bytes.length, sha256: digest });
   }
 
   createPlatformServiceDefinition(configuration);
@@ -250,6 +274,7 @@ async function verifyPayload(
       "dependencyLockSha256",
       "sourcePackageManifestSha256",
       "runtimeExternals",
+      "nativeComponents",
       "buildCommit",
       "auditedSourceCommit",
       "changedAttestationPaths",
@@ -269,6 +294,23 @@ async function verifyPayload(
       : configuration.platform === "macos"
         ? "darwin"
         : "linux";
+  const nativeComponents = parseNativeComponents(
+    parseJsonRecord(nativeComponentsBytes, "native component manifest"),
+    expectedPlatform,
+    expectedArchitecture,
+    "native component manifest",
+  );
+  const metadataNativeComponents = parseNativeComponents(
+    metadata["nativeComponents"],
+    expectedPlatform,
+    expectedArchitecture,
+    "release metadata nativeComponents",
+  );
+  if (JSON.stringify(metadataNativeComponents) !== JSON.stringify(nativeComponents)) {
+    failPreflight("The release metadata nativeComponents does not match native-components.json.");
+  }
+  validateNativeComponentPayloadBindings(nativeComponents, payload, verifiedPayload);
+
   const productVersion = requireString(metadata["productVersion"], "product version");
   const supportStatus = metadata["supportStatus"];
   if (
@@ -288,11 +330,145 @@ async function verifyPayload(
   ) {
     failPreflight("The release metadata does not match this Device service configuration.");
   }
+  const expectedEntrypoints =
+    configuration.platform === "windows"
+      ? ["opendelegate.cmd", "opendelegate-worker.cmd"]
+      : ["opendelegate", "opendelegate-worker", "opendelegate.cmd", "opendelegate-worker.cmd"];
+  if (
+    !Array.isArray(metadata["entrypoints"]) ||
+    metadata["entrypoints"].length !== expectedEntrypoints.length ||
+    metadata["entrypoints"].some((value, index) => value !== expectedEntrypoints[index])
+  ) {
+    failPreflight("The release metadata entrypoints do not match this platform.");
+  }
+  for (const path of expectedEntrypoints) {
+    const entry = payload.get(path);
+    const actual = verifiedPayload.get(path);
+    if (
+      entry === undefined ||
+      entry.size <= 0 ||
+      actual === undefined ||
+      actual.size <= 0 ||
+      entry.size !== actual.size ||
+      entry.sha256 !== actual.sha256
+    ) {
+      failPreflight(`The release payload is missing required launcher ${path}.`);
+    }
+  }
   return {
     checksumBytes,
     productVersion,
     supportStatus,
   };
+}
+
+function parseNativeComponents(
+  value: unknown,
+  expectedPlatform: NativeComponentsManifest["platform"],
+  expectedArchitecture: string,
+  label: string,
+): NativeComponentsManifest {
+  const manifest = requireRecord(value, label);
+  assertExactKeys(manifest, ["schemaVersion", "platform", "architecture", "components"], label);
+  if (
+    manifest["schemaVersion"] !== 1 ||
+    manifest["platform"] !== expectedPlatform ||
+    manifest["architecture"] !== expectedArchitecture ||
+    !Array.isArray(manifest["components"])
+  ) {
+    failPreflight(`The ${label} does not match this Device platform.`);
+  }
+  const expectedComponents = expectedNativeComponents(expectedPlatform);
+  if (manifest["components"].length !== expectedComponents.length) {
+    failPreflight(`The ${label} does not contain the exact required native components.`);
+  }
+  const components = manifest["components"].map((value, index) => {
+    const component = requireRecord(value, `${label} component`);
+    assertExactKeys(component, ["kind", "path", "sha256"], `${label} component`);
+    const expected = expectedComponents[index]!;
+    if (
+      component["kind"] !== expected.kind ||
+      component["path"] !== expected.path ||
+      typeof component["sha256"] !== "string" ||
+      !QUALIFIED_SHA256_PATTERN.test(component["sha256"])
+    ) {
+      failPreflight(`The ${label} component order, path, or digest is invalid.`);
+    }
+    return {
+      kind: expected.kind,
+      path: expected.path,
+      sha256: component["sha256"],
+    };
+  });
+  return {
+    schemaVersion: 1,
+    platform: expectedPlatform,
+    architecture: expectedArchitecture,
+    components,
+  };
+}
+
+function validateNativeComponentPayloadBindings(
+  manifest: NativeComponentsManifest,
+  payload: ReadonlyMap<string, PayloadEntry>,
+  verifiedPayload: ReadonlyMap<string, PayloadEntry>,
+): void {
+  for (const component of manifest.components) {
+    const entry = payload.get(component.path);
+    const actual = verifiedPayload.get(component.path);
+    if (
+      entry === undefined ||
+      actual === undefined ||
+      component.sha256 !== `sha256:${entry.sha256}` ||
+      component.sha256 !== `sha256:${actual.sha256}` ||
+      entry.size !== actual.size
+    ) {
+      failPreflight(`The native component digest does not match the payload: ${component.path}.`);
+    }
+  }
+}
+
+function expectedNativeComponents(
+  platform: NativeComponentsManifest["platform"],
+): readonly { readonly kind: string; readonly path: string }[] {
+  if (platform === "win32") {
+    return [
+      { kind: "core-service-host", path: "bin/opendelegate-service-host.exe" },
+      { kind: "session-helper-host", path: "bin/opendelegate-session-helper.exe" },
+      {
+        kind: "computer-use-helper",
+        path: "libexec/opendelegate-windows-computer-use-helper.exe",
+      },
+      {
+        kind: "computer-use-fixture",
+        path: "libexec/opendelegate-windows-computer-use-fixture.exe",
+      },
+    ];
+  }
+  if (platform === "darwin") {
+    return [
+      { kind: "core-service-host", path: "bin/opendelegate-service-host" },
+      { kind: "session-helper-host", path: "bin/opendelegate-session-helper" },
+      { kind: "computer-use-helper", path: "libexec/opendelegate-macos-computer-use" },
+      {
+        kind: "computer-use-fixture",
+        path: "libexec/opendelegate-macos-computer-use-fixture",
+      },
+      {
+        kind: "secret-store-helper",
+        path: "runtime/native/opendelegate-keychain-helper",
+      },
+    ];
+  }
+  return [
+    { kind: "core-service-host", path: "bin/opendelegate-service-host" },
+    { kind: "session-helper-host", path: "bin/opendelegate-session-helper" },
+    { kind: "computer-use-helper", path: "libexec/opendelegate-linux-computer-use" },
+    {
+      kind: "computer-use-fixture",
+      path: "libexec/opendelegate-linux-computer-use-fixture",
+    },
+  ];
 }
 
 function parseChecksumManifest(bytes: Buffer): ReadonlyMap<string, string> {
