@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
@@ -190,35 +190,32 @@ export class MacOsKeychainSecretStore implements ManagedSecretStore {
     let handle;
     let helperBytes: Buffer | undefined;
     try {
-      const metadata = await lstat(this.#helperPath);
-      const canonical = await realpath(this.#helperPath);
-      if (
-        !metadata.isFile() ||
-        metadata.isSymbolicLink() ||
-        metadata.nlink !== 1 ||
-        metadata.size <= 0 ||
-        metadata.size > MAXIMUM_HELPER_BYTES ||
-        canonical !== resolve(this.#helperPath) ||
-        (process.platform !== "win32" && (metadata.mode & 0o111) === 0)
-      ) {
-        throw backendUnavailable();
-      }
       const flags =
         process.platform === "win32"
           ? constants.O_RDONLY
           : constants.O_RDONLY | constants.O_NOFOLLOW;
       handle = await open(this.#helperPath, flags);
-      const openedMetadata = await handle.stat();
+      const metadata = await handle.stat({ bigint: true });
+      const pathMetadata = await lstat(this.#helperPath, { bigint: true });
+      const canonical = await realpath(this.#helperPath);
       if (
-        (process.platform !== "win32" &&
-          (openedMetadata.dev !== metadata.dev || openedMetadata.ino !== metadata.ino)) ||
-        openedMetadata.size !== metadata.size
+        !metadata.isFile() ||
+        metadata.nlink !== 1n ||
+        metadata.size <= 0n ||
+        metadata.size > BigInt(MAXIMUM_HELPER_BYTES) ||
+        !pathMetadata.isFile() ||
+        pathMetadata.isSymbolicLink() ||
+        canonical !== resolve(this.#helperPath) ||
+        (process.platform !== "win32" && (metadata.mode & 0o111n) === 0n) ||
+        !sameHelperSnapshot(metadata, pathMetadata)
       ) {
         throw backendUnavailable();
       }
       helperBytes = await handle.readFile();
+      const afterRead = await handle.stat({ bigint: true });
       if (
-        helperBytes.byteLength !== metadata.size ||
+        BigInt(helperBytes.byteLength) !== metadata.size ||
+        !sameHelperSnapshot(metadata, afterRead) ||
         `sha256:${createHash("sha256").update(helperBytes).digest("hex")}` !==
           this.#expectedHelperSha256
       ) {
@@ -234,6 +231,14 @@ export class MacOsKeychainSecretStore implements ManagedSecretStore {
       });
       result.stdout.fill(0);
       if (result.exitCode !== 0) {
+        throw backendUnavailable();
+      }
+      const afterVerify = await lstat(this.#helperPath, { bigint: true });
+      if (
+        !afterVerify.isFile() ||
+        afterVerify.isSymbolicLink() ||
+        !sameHelperSnapshot(metadata, afterVerify)
+      ) {
         throw backendUnavailable();
       }
     } catch (error) {
@@ -273,6 +278,26 @@ export class MacOsKeychainSecretStore implements ManagedSecretStore {
       throw storeAccessFailed();
     }
   }
+}
+
+function sameHelperSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameHelperFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function sameHelperFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
+  );
 }
 
 function validateExecutablePath(value: string): string {

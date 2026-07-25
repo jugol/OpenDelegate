@@ -1,4 +1,4 @@
-import { lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
@@ -15,6 +15,7 @@ import {
 
 import type { AgentBackedConfigurationAgentOptions } from "./agent-configuration-agent.ts";
 import type { AgentBackedTaskExecutorOptions } from "./agent-task-executor.ts";
+import { readStableRegularFile } from "./stable-file.ts";
 
 export type MainAgentProviderPreference = "auto" | "codex" | "claude" | "disabled";
 export type SelectedMainAgentProvider = Exclude<MainAgentProviderPreference, "auto">;
@@ -330,28 +331,26 @@ function unavailableCode(outcome: {
 async function readSelectedAgentConfiguration(
   path: string,
 ): Promise<SelectedAgentConfiguration | undefined> {
-  let metadata;
+  let bytes: Buffer;
   try {
-    metadata = await lstat(path);
+    bytes = await readStableRegularFile(path, maximumSelectionBytes);
   } catch (error) {
     if (isErrno(error, "ENOENT")) {
       return undefined;
     }
     throw corruptSelection();
   }
-  if (
-    !metadata.isFile() ||
-    metadata.isSymbolicLink() ||
-    metadata.size < 1 ||
-    metadata.size > maximumSelectionBytes
-  ) {
+  if (bytes.byteLength < 1) {
+    bytes.fill(0);
     throw corruptSelection();
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readFile(path, "utf8"));
+    parsed = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw corruptSelection();
+  } finally {
+    bytes.fill(0);
   }
   if (
     !isRecord(parsed) ||

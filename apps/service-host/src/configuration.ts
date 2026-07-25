@@ -603,7 +603,7 @@ function pathsOverlap(
   right: string,
 ): boolean {
   const normalize = (value: string) =>
-    (platform === "windows" ? value.toLowerCase() : value).replace(/[\\/]+$/u, "");
+    stripTrailingPathSeparators(platform === "windows" ? value.toLowerCase() : value);
   const first = normalize(left);
   const second = normalize(right);
   const separator = platform === "windows" ? "\\" : "/";
@@ -620,11 +620,19 @@ function isDescendantPath(
   child: string,
 ): boolean {
   const normalize = (value: string) =>
-    (platform === "windows" ? value.toLowerCase() : value).replace(/[\\/]+$/u, "");
+    stripTrailingPathSeparators(platform === "windows" ? value.toLowerCase() : value);
   const normalizedParent = normalize(parent);
   const normalizedChild = normalize(child);
   const separator = platform === "windows" ? "\\" : "/";
   return normalizedChild.startsWith(`${normalizedParent}${separator}`);
+}
+
+function stripTrailingPathSeparators(value: string): string {
+  let end = value.length;
+  while (end > 0 && (value[end - 1] === "/" || value[end - 1] === "\\")) {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

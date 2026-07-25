@@ -358,42 +358,45 @@ export class NodeLinuxNativeHelperBinaryVerifier implements LinuxNativeHelperBin
     if (canonical !== request.executablePath) {
       throw new Error("Native helper path is not canonical.");
     }
-    const before = await lstat(canonical);
-    const currentUid = typeof process.getuid === "function" ? process.getuid() : undefined;
-    if (
-      !before.isFile() ||
-      before.isSymbolicLink() ||
-      before.size <= 0 ||
-      before.size > MAX_EXECUTABLE_BYTES ||
-      (before.mode & 0o111) === 0 ||
-      (request.requireOwnerOnlyMutation && (before.mode & 0o022) !== 0) ||
-      (currentUid !== undefined && before.uid !== currentUid && before.uid !== 0)
-    ) {
-      throw new Error("Native helper metadata is unsafe.");
-    }
     const handle = await open(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    let bytes: Buffer;
+    let bytes: Buffer | undefined;
     try {
+      const before = await handle.stat();
+      const currentUid = typeof process.getuid === "function" ? process.getuid() : undefined;
+      if (
+        !before.isFile() ||
+        before.size <= 0 ||
+        before.size > MAX_EXECUTABLE_BYTES ||
+        (before.mode & 0o111) === 0 ||
+        (request.requireOwnerOnlyMutation && (before.mode & 0o022) !== 0) ||
+        (currentUid !== undefined && before.uid !== currentUid && before.uid !== 0)
+      ) {
+        throw new Error("Native helper metadata is unsafe.");
+      }
       bytes = await handle.readFile();
-    } finally {
-      await handle.close();
-    }
-    try {
+      const after = await handle.stat();
+      const pathMetadata = await lstat(canonical);
+      if (
+        !pathMetadata.isFile() ||
+        pathMetadata.isSymbolicLink() ||
+        before.dev !== after.dev ||
+        before.ino !== after.ino ||
+        before.size !== after.size ||
+        before.mtimeMs !== after.mtimeMs ||
+        before.dev !== pathMetadata.dev ||
+        before.ino !== pathMetadata.ino ||
+        before.size !== pathMetadata.size ||
+        before.mtimeMs !== pathMetadata.mtimeMs
+      ) {
+        throw new Error("Native helper changed during verification.");
+      }
       const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
       if (digest !== request.expectedSha256) {
         throw new Error("Native helper digest mismatch.");
       }
     } finally {
-      bytes.fill(0);
-    }
-    const after = await lstat(canonical);
-    if (
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs
-    ) {
-      throw new Error("Native helper changed during verification.");
+      bytes?.fill(0);
+      await handle.close();
     }
   }
 }

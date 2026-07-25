@@ -25,6 +25,7 @@ import {
   runServiceLifecycleCommand,
   type ServiceLifecycleAdapters,
 } from "../src/service-lifecycle.ts";
+import { createMainProcessTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -240,10 +241,14 @@ test("packaged Main render replaces stale template auto-open with durable Config
     '<!doctype html><title>OpenDelegate test shell</title><div id="root"></div>',
   );
   await writeFile(join(adminRoot, "assets", "app.js"), "console.log('test');");
+  const mainSecrets = await createMainProcessTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot,
     sourceCheckout: process.cwd(),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+    environment: mainSecrets.environment,
   });
   const runtime = await createMainRuntime({
     configuration: initialized.configuration,
@@ -251,6 +256,8 @@ test("packaged Main render replaces stale template auto-open with durable Config
     build: { version: "0.1.0-test", buildId: "service-effective-configuration" },
     releaseChannel: "development",
     sourceCheckout: process.cwd(),
+    managedSecretStore: mainSecrets.store,
+    environment: mainSecrets.environment,
     initialAdminAutoOpen: true,
   });
   await runtime.close();
@@ -281,7 +288,13 @@ test("packaged Main render replaces stale template auto-open with durable Config
       "--home",
       home,
     ],
-    { windowsHide: true },
+    {
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ...mainSecrets.environment,
+      },
+    },
   );
   const result = JSON.parse(execution.stdout) as {
     readonly artifacts: {

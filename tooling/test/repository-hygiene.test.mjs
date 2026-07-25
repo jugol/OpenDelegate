@@ -81,6 +81,11 @@ test("secret scanning verifies a pinned Gitleaks binary against the full Git his
     new URL("../../.github/workflows/security.yml", import.meta.url),
     "utf8",
   );
+  const ignoreFile = await readFile(new URL("../../.gitleaksignore", import.meta.url), "utf8");
+  const ignoredFingerprints = ignoreFile
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"));
 
   assert.match(workflow, /fetch-depth:\s*0/u);
   assert.match(workflow, /GITLEAKS_VERSION:\s*8\.30\.1/u);
@@ -91,6 +96,14 @@ test("secret scanning verifies a pinned Gitleaks binary against the full Git his
   assert.match(workflow, /sha256sum --check/u);
   assert.match(workflow, /gitleaks" git --no-banner --redact --log-opts="--all" \./u);
   assert.doesNotMatch(workflow, /gitleaks\/gitleaks-action@/u);
+  assert.equal(ignoredFingerprints.length, 26);
+  assert.equal(new Set(ignoredFingerprints).size, ignoredFingerprints.length);
+  for (const fingerprint of ignoredFingerprints) {
+    assert.match(
+      fingerprint,
+      /^a5ba2c415d8444471c6a554384e2af5f852b31fa:[^:]+:(?:generic-api-key|private-key):[1-9]\d*$/u,
+    );
+  }
 });
 
 test("dependency review and audit reject moderate or higher advisories", async () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { lstat, readFile, unlink } from "node:fs/promises";
+import { constants, type BigIntStats } from "node:fs";
+import { lstat, open, unlink } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 
 import {
@@ -51,21 +52,45 @@ export async function consumeRunCapabilityFile(input: {
 }): Promise<RunCapabilityClient> {
   const expectedCapability = requireIdentifier(input.expectedCapability, 128);
   const hostPlatform = input.hostPlatform ?? process.platform;
+  let handle;
   let bytes: Buffer | undefined;
   try {
-    const metadata = await lstat(input.filename);
+    const flags =
+      process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
+    handle = await open(input.filename, flags);
+    const metadata = await handle.stat({ bigint: true });
+    const pathMetadata = await lstat(input.filename, { bigint: true });
     if (
       !metadata.isFile() ||
-      metadata.isSymbolicLink() ||
-      metadata.size <= 0 ||
-      metadata.size > MAXIMUM_CAPABILITY_FILE_BYTES ||
+      !pathMetadata.isFile() ||
+      pathMetadata.isSymbolicLink() ||
+      metadata.size <= 0n ||
+      metadata.size > BigInt(MAXIMUM_CAPABILITY_FILE_BYTES) ||
+      !sameCapabilitySnapshot(metadata, pathMetadata) ||
       (hostPlatform !== "win32" &&
-        ((metadata.mode & 0o077) !== 0 ||
-          (typeof process.getuid === "function" && metadata.uid !== process.getuid())))
+        ((metadata.mode & 0o077n) !== 0n ||
+          (typeof process.getuid === "function" && metadata.uid !== BigInt(process.getuid()))))
     ) {
       throw new RunCapabilityBrokerError("CAPABILITY_FILE_UNSAFE");
     }
-    bytes = await readFile(input.filename);
+    bytes = await handle.readFile();
+    const afterRead = await handle.stat({ bigint: true });
+    if (
+      BigInt(bytes.byteLength) !== metadata.size ||
+      !sameCapabilitySnapshot(metadata, afterRead)
+    ) {
+      throw new RunCapabilityBrokerError("CAPABILITY_FILE_UNSAFE");
+    }
+    const pathAfterRead = await lstat(input.filename, { bigint: true });
+    if (
+      !pathAfterRead.isFile() ||
+      pathAfterRead.isSymbolicLink() ||
+      !sameCapabilitySnapshot(metadata, pathAfterRead)
+    ) {
+      throw new RunCapabilityBrokerError("CAPABILITY_FILE_UNSAFE");
+    }
+    await handle.close();
+    handle = undefined;
     await unlink(input.filename);
     const descriptor = parseDescriptor(JSON.parse(bytes.toString("utf8")));
     if (descriptor.capability !== expectedCapability) {
@@ -83,14 +108,34 @@ export async function consumeRunCapabilityFile(input: {
     }
     return await LocalRunCapabilityClient.connect(descriptor, input.signal);
   } catch (error) {
-    await unlink(input.filename).catch(() => undefined);
     if (error instanceof RunCapabilityBrokerError) {
       throw error;
     }
     throw new RunCapabilityBrokerError("CAPABILITY_FILE_INVALID");
   } finally {
     bytes?.fill(0);
+    await handle?.close().catch(() => undefined);
   }
+}
+
+function sameCapabilitySnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameCapabilityFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function sameCapabilityFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
+  );
 }
 
 class LocalRunCapabilityClient implements RunCapabilityClient {

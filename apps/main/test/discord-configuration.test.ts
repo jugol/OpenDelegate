@@ -23,6 +23,7 @@ import {
   type MainDiscordSecretBackendConfiguration,
 } from "../src/discord-configuration.ts";
 import { initializeMainHome, loadMainConfiguration } from "../src/index.ts";
+import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 
 test("a stable owner-selected Discord file persists only IDs, backend metadata, and an alias", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-discord-config-"));
@@ -110,12 +111,15 @@ test("Main initialization persists the validated binding while disabled remains 
   await mkdir(adminRoot);
   await writeFile(join(adminRoot, "index.html"), "<!doctype html><title>OpenDelegate</title>");
   const discord = configuration(home);
+  const mainSecrets = createMainTestSecretContext(home);
 
   const initialized = await initializeMainHome({
     home,
     adminRoot,
     sourceCheckout: resolve("."),
     discord,
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   assert.deepEqual(initialized.configuration.discord, discord);
   assert.deepEqual(

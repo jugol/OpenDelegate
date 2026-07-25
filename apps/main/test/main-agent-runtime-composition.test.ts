@@ -13,6 +13,7 @@ import type {
 } from "@opendelegate/agent-adapters";
 
 import { createMainRuntime, initializeMainHome } from "../src/index.ts";
+import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 
 const limits = {
   wallTimeoutMs: 5_000,
@@ -32,10 +33,13 @@ test("a ready Main Agent executes local Tasks with the durable production Budget
     await cleanup.runtime?.close();
     await rm(home, { force: true, recursive: true });
   });
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot: await createAdminFixture(home),
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   const adapter = new WaitingAgentAdapter();
   const runtime = await createMainRuntime({
@@ -44,6 +48,7 @@ test("a ready Main Agent executes local Tasks with the durable production Budget
     build: { version: "0.1.0-test", buildId: "main-agent-budget-composition" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     agentExecution: {
       adapter,
       workspace: {

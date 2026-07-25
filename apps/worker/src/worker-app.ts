@@ -6,10 +6,12 @@ import {
   randomBytes,
   randomUUID,
 } from "node:crypto";
+import { constants as fileConstants, type BigIntStats } from "node:fs";
 import {
   chmod,
   lstat,
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
@@ -568,14 +570,9 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
 export async function loadWorkerConfiguration(
   paths: WorkerPaths,
 ): Promise<WorkerConfigurationDocument> {
-  let metadata;
   let bytes: Buffer;
   try {
-    metadata = await lstat(paths.configFile);
-    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > MAXIMUM_CONFIG_BYTES) {
-      throw new Error("unsafe");
-    }
-    bytes = await readFile(paths.configFile);
+    bytes = await readStableWorkerFile(paths.configFile, MAXIMUM_CONFIG_BYTES);
   } catch {
     throw appError("CONFIG_MISSING", "Worker is not enrolled. Run worker join first.");
   }
@@ -583,6 +580,8 @@ export async function loadWorkerConfiguration(
     return validateWorkerConfigurationDocument(JSON.parse(bytes.toString("utf8")));
   } catch {
     throw appError("CONFIG_INVALID", "Worker configuration is invalid.");
+  } finally {
+    bytes.fill(0);
   }
 }
 
@@ -1666,19 +1665,12 @@ export async function loadWorkerSecretBackendConfiguration(
     sourceCheckoutRoot,
     "Secret backend descriptor",
   );
-  let metadata;
   let bytes: Buffer;
   try {
-    metadata = await lstat(filename);
-    if (
-      !metadata.isFile() ||
-      metadata.isSymbolicLink() ||
-      metadata.size <= 0 ||
-      metadata.size > MAXIMUM_SECRET_BACKEND_CONFIG_BYTES
-    ) {
+    bytes = await readStableWorkerFile(filename, MAXIMUM_SECRET_BACKEND_CONFIG_BYTES);
+    if (bytes.byteLength === 0) {
       throw new Error("unsafe");
     }
-    bytes = await readFile(filename);
   } catch {
     throw appError("CONFIG_PATH_UNSAFE", "The Secret backend descriptor is missing or unsafe.");
   }
@@ -1692,6 +1684,73 @@ export async function loadWorkerSecretBackendConfiguration(
   } finally {
     bytes.fill(0);
   }
+}
+
+async function readStableWorkerFile(path: string, maximumBytes: number): Promise<Buffer> {
+  const noFollow = fileConstants.O_NOFOLLOW ?? 0;
+  const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
+  const handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking);
+  let bytes: Buffer | undefined;
+  try {
+    const opened = await handle.stat({ bigint: true });
+    const named = await lstat(path, { bigint: true });
+    if (
+      !opened.isFile() ||
+      named.isSymbolicLink() ||
+      !named.isFile() ||
+      !sameWorkerFile(opened, named) ||
+      opened.size > BigInt(maximumBytes)
+    ) {
+      throw new Error("unsafe");
+    }
+    bytes = Buffer.allocUnsafe(Number(opened.size));
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const result = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+      if (result.bytesRead === 0) {
+        throw new Error("unsafe");
+      }
+      offset += result.bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    const afterNamed = await lstat(path, { bigint: true });
+    if (
+      afterNamed.isSymbolicLink() ||
+      !afterNamed.isFile() ||
+      !sameWorkerSnapshot(opened, after) ||
+      !sameWorkerSnapshot(after, afterNamed)
+    ) {
+      throw new Error("unsafe");
+    }
+    const result = bytes;
+    bytes = undefined;
+    return result;
+  } catch (error) {
+    bytes?.fill(0);
+    throw error;
+  } finally {
+    await handle.close();
+  }
+}
+
+function sameWorkerFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
+  );
+}
+
+function sameWorkerSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameWorkerFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
 }
 
 function createWorkerTransportResolver(input: {

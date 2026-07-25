@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import type { Stats } from "node:fs";
+import { constants as fileConstants, type BigIntStats, type Stats } from "node:fs";
 import {
   chmod,
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   readlink,
@@ -879,25 +880,74 @@ function recoveryPathFor(recoveryRoot: string, commandId: string, targetName: st
 }
 
 async function fileBytesEqual(path: string, expected: Buffer): Promise<boolean> {
-  const before = await lstat(path).catch(() => undefined);
-  if (
-    before === undefined ||
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.nlink !== 1 ||
-    before.size !== expected.byteLength
-  ) {
+  const noFollow = fileConstants.O_NOFOLLOW ?? 0;
+  const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
+  const handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking).catch(
+    () => undefined,
+  );
+  if (handle === undefined) {
     return false;
   }
-  const bytes = await readFile(path);
+  let bytes: Buffer | undefined;
   try {
-    const after = await lstat(path).catch(() => undefined);
+    const opened = await handle.stat({ bigint: true });
+    const named = await lstat(path, { bigint: true }).catch(() => undefined);
+    if (
+      named === undefined ||
+      !opened.isFile() ||
+      opened.nlink !== 1n ||
+      opened.size !== BigInt(expected.byteLength) ||
+      named.isSymbolicLink() ||
+      !named.isFile() ||
+      named.nlink !== 1n ||
+      !sameStableFileSnapshot(opened, named)
+    ) {
+      return false;
+    }
+    bytes = Buffer.allocUnsafe(expected.byteLength);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const result = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+      if (result.bytesRead === 0) {
+        return false;
+      }
+      offset += result.bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    const afterNamed = await lstat(path, { bigint: true }).catch(() => undefined);
     return (
-      after !== undefined && fileIdentity(before) === fileIdentity(after) && bytes.equals(expected)
+      afterNamed !== undefined &&
+      !afterNamed.isSymbolicLink() &&
+      afterNamed.isFile() &&
+      afterNamed.nlink === 1n &&
+      sameStableFileSnapshot(opened, after) &&
+      sameStableFileSnapshot(after, afterNamed) &&
+      bytes.equals(expected)
     );
   } finally {
-    bytes.fill(0);
+    bytes?.fill(0);
+    await handle.close();
   }
+}
+
+function sameStableFileSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameStableFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function sameStableFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
+  );
 }
 
 function processRequestDigest(request: PlatformMutationProcessRequest): string {

@@ -27,6 +27,7 @@ import {
   resolveRuntimePaths,
   type MainSingletonOwnership,
 } from "../src/index.ts";
+import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 
 const postgresUri = process.env["OPENDELEGATE_TEST_POSTGRES_URI"];
 const execFileAsync = promisify(execFile);
@@ -240,11 +241,14 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
   const home = await mkdtemp(join(tmpdir(), "opendelegate-main-init-"));
   t.after(() => rm(home, { force: true, recursive: true }));
   const adminRoot = await createAdminFixture(home);
+  const mainSecrets = createMainTestSecretContext(home);
 
   const initialized = await initializeMainHome({
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   await assertWindowsRuntimeOwnership(home);
 
@@ -263,6 +267,7 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   assert.equal(second.created, false);
   assert.deepEqual(second.configuration, initialized.configuration);
@@ -275,6 +280,7 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
         uriRef: "secret://main/database-primary",
       },
       sourceCheckout: resolve("."),
+      managedSecretStore: mainSecrets.store,
     }),
     (error: unknown) => error instanceof MainRuntimeError && error.code === "CONFIG_EXISTS",
   );
@@ -284,6 +290,7 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   assert.equal(resumed.created, false);
   assert.equal(await readFile(resumed.paths.sqliteFile).then(Boolean), true);
@@ -318,10 +325,13 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     await rm(home, { force: true, recursive: true });
   });
   const adminRoot = await createAdminFixture(home);
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
 
   const runtime = await createMainRuntime({
@@ -330,6 +340,7 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     build: { version: "0.1.0-test", buildId: "release-candidate-spoof" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   if (process.platform === "win32") {
     const stateEntries = await readdir(initialized.paths.stateDirectory);
@@ -525,6 +536,7 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     build: { version: "0.1.0-test", buildId: "test-build-0001" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   cleanup.runtime = restarted;
   const restoredLogin = await restarted.ownerAuth.login({
@@ -545,6 +557,7 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
 
 test("one Main owns an installation and restart reconciliation begins only after release", async (t) => {
   const home = await mkdtemp(join(tmpdir(), "opendelegate-main-singleton-runtime-"));
+  const mainSecrets = createMainTestSecretContext(home);
   const runtimes: Array<Awaited<ReturnType<typeof createMainRuntime>>> = [];
   t.after(async () => {
     await Promise.allSettled(runtimes.map(async (runtime) => runtime.close()));
@@ -554,6 +567,8 @@ test("one Main owns an installation and restart reconciliation begins only after
     home,
     adminRoot: await createAdminFixture(home),
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   const first = await createMainRuntime({
     configuration: initialized.configuration,
@@ -561,6 +576,7 @@ test("one Main owns an installation and restart reconciliation begins only after
     build: { version: "0.1.0-test", buildId: "singleton-first" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   runtimes.push(first);
   await first.tasks.create({
@@ -580,6 +596,7 @@ test("one Main owns an installation and restart reconciliation begins only after
       build: { version: "0.1.0-test", buildId: "singleton-rejected" },
       releaseChannel: "development",
       sourceCheckout: resolve("."),
+      managedSecretStore: mainSecrets.store,
       taskExecution: {
         executor: {
           async execute(request) {
@@ -603,6 +620,7 @@ test("one Main owns an installation and restart reconciliation begins only after
     build: { version: "0.1.0-test", buildId: "singleton-restarted" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     taskExecution: {
       retryDelayMs: 0,
       executor: {
@@ -624,10 +642,13 @@ test("one Main owns an installation and restart reconciliation begins only after
 test("losing singleton authority closes Main and prevents a listener from starting", async (t) => {
   const home = await mkdtemp(join(tmpdir(), "opendelegate-main-singleton-loss-"));
   t.after(() => rm(home, { force: true, recursive: true }));
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot: await createAdminFixture(home),
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   const ownership = new ControllableMainSingletonOwnership();
   const runtime = await createMainRuntime({
@@ -636,6 +657,7 @@ test("losing singleton authority closes Main and prevents a listener from starti
     build: { version: "0.1.0-test", buildId: "singleton-loss" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     mainSingletonOwnershipFactory: async () => ownership,
   });
 
@@ -656,10 +678,13 @@ test("an injected production Task executor makes the authenticated Task API exec
     await cleanup.runtime?.close();
     await rm(home, { force: true, recursive: true });
   });
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot: await createAdminFixture(home),
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   const runtime = await createMainRuntime({
     configuration: initialized.configuration,
@@ -667,6 +692,7 @@ test("an injected production Task executor makes the authenticated Task API exec
     build: { version: "0.1.0-test", buildId: "task-executor-composition" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     taskExecution: {
       retryDelayMs: 0,
       executor: {
@@ -737,10 +763,13 @@ test("an injected Configuration Agent is exposed only through the authenticated 
     await cleanup.runtime?.close();
     await rm(home, { force: true, recursive: true });
   });
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot: await createAdminFixture(home),
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   const calls: unknown[] = [];
   const runtime = await createMainRuntime({
@@ -749,6 +778,7 @@ test("an injected Configuration Agent is exposed only through the authenticated 
     build: { version: "0.1.0-test", buildId: "configuration-agent-composition" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     configurationAgent: {
       async sendMessage(input) {
         calls.push(input);
@@ -835,7 +865,10 @@ test(
       }
     });
     const adminRoot = await createAdminFixture(home);
-    const secretStore = new RuntimeManagedSecretStore("device_postgres", postgresUri!);
+    const mainSecrets = createMainTestSecretContext(home, {
+      deviceId: "device_postgres",
+    });
+    const secretStore = mainSecrets.store;
     const initialized = await initializeMainHome({
       home,
       adminRoot,
@@ -846,6 +879,7 @@ test(
         schema,
       },
       databaseSecret: Buffer.from(postgresUri!, "utf8"),
+      secretBackend: mainSecrets.configuration,
       managedSecretStore: secretStore,
     });
     const serialized = await readFile(initialized.paths.configurationFile, "utf8");

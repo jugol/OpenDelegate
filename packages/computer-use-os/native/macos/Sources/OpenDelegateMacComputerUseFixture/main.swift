@@ -254,7 +254,7 @@ guard let arguments = parseArguments() else {
 }
 let application = NSApplication.shared
 application.setActivationPolicy(.regular)
-let delegate = FixtureApplicationDelegate(arguments: arguments)
+private let delegate = FixtureApplicationDelegate(arguments: arguments)
 application.delegate = delegate
 withExtendedLifetime(delegate) {
   application.run()

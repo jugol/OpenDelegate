@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import type {
@@ -156,10 +156,10 @@ function checksum(bytes: Uint8Array): string {
 }
 
 test("default Artifact configuration is private, loopback-only, and uses distinct origins", async () => {
-  const home = "C:\\OpenDelegateRuntime";
+  const home = resolve(tmpdir(), "OpenDelegateRuntime");
   const configuration = await defaultMainArtifactConfiguration({
     home,
-    installationRoot: "C:\\OpenDelegateRelease",
+    installationRoot: resolve(tmpdir(), "OpenDelegateRelease"),
     mainListener: {
       host: "127.0.0.1",
       port: 4380,
@@ -222,7 +222,7 @@ test("default Artifact configuration is private, loopback-only, and uses distinc
 });
 
 test("Main Artifact runtime isolates hostile content, authorization, and signed links across restart", async () => {
-  const sourceCheckout = "C:\\CodexProjects\\OpenDelegate";
+  const sourceCheckout = resolve(".");
   const home = await mkdtemp(join(tmpdir(), "opendelegate-main-artifacts-"));
   const secretStore = new TestManagedSecretStore("device-main");
   secretStore.seed("artifact.owner.bearer", "owner-artifact-token");
@@ -589,7 +589,7 @@ test("external Artifact origins start only after an explicit reverse-proxy trust
       createProductionMainArtifactRuntime({
         configuration,
         home,
-        sourceCheckout: "C:\\CodexProjects\\OpenDelegate",
+        sourceCheckout: resolve("."),
         deviceId: "device-main",
         adminListeners: [
           {
@@ -607,7 +607,7 @@ test("external Artifact origins start only after an explicit reverse-proxy trust
     runtime = await createProductionMainArtifactRuntime({
       configuration,
       home,
-      sourceCheckout: "C:\\CodexProjects\\OpenDelegate",
+      sourceCheckout: resolve("."),
       deviceId: "device-main",
       adminListeners: [
         {
@@ -671,7 +671,7 @@ test("Artifact startup closes the first listener when the isolated second listen
       createProductionMainArtifactRuntime({
         configuration,
         home,
-        sourceCheckout: "C:\\CodexProjects\\OpenDelegate",
+        sourceCheckout: resolve("."),
         deviceId: "device-main",
         adminListeners: [
           {

@@ -5,6 +5,7 @@ import {
   TASK_CONTINUATION_CHECKPOINT_LIMITS,
   TASK_CONTINUATION_CHECKPOINT_MAX_BYTES,
   createTaskContinuationCheckpoint,
+  sanitizeTaskContinuationText,
   serializeTaskContinuationCheckpoint,
   validateTaskContinuationCheckpoint,
   type TaskContinuationCheckpointBodyV1,
@@ -86,6 +87,48 @@ test("continuation checkpoints reject excess items, bytes, private fields, and l
     /unexpected shape/u,
   );
 });
+
+test("continuation text redacts private-key blocks with a bounded marker parser", () => {
+  assert.equal(
+    sanitizeTaskContinuationText(
+      [
+        "before",
+        privateKeyBoundary("BEGIN", "PRIVATE KEY"),
+        "synthetic-key-material",
+        privateKeyBoundary("END", "PRIVATE KEY"),
+        "between",
+        privateKeyBoundary("BEGIN", "OPENSSH PRIVATE KEY"),
+        "synthetic-openssh-material",
+        privateKeyBoundary("END", "OPENSSH PRIVATE KEY"),
+        "after",
+      ].join("\n"),
+    ),
+    ["before", "[credential-redacted]", "between", "[credential-redacted]", "after"].join("\n"),
+  );
+  const unmatched = `${privateKeyBoundary("BEGIN", "PRIVATE KEY").repeat(2_048)}secret-material`;
+  assert.equal(sanitizeTaskContinuationText(unmatched), "[credential-redacted]");
+  assert.equal(
+    sanitizeTaskContinuationText(
+      [
+        "before",
+        privateKeyBoundary("BEGIN", "PRIVATE KEY"),
+        "secret-material",
+        privateKeyBoundary("END", "RSA PRIVATE KEY"),
+        "still-secret",
+        privateKeyBoundary("END", "PRIVATE KEY"),
+        "after",
+      ].join("\n"),
+    ),
+    ["before", "[credential-redacted]", "after"].join("\n"),
+  );
+});
+
+function privateKeyBoundary(
+  direction: "BEGIN" | "END",
+  label: "PRIVATE KEY" | "OPENSSH PRIVATE KEY" | "RSA PRIVATE KEY",
+): string {
+  return ["-----", direction, " ", label, "-----"].join("");
+}
 
 function checkpointBody(): TaskContinuationCheckpointBodyV1 {
   return {

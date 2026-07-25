@@ -36,6 +36,7 @@ import {
   ManagedDiscordInteractionTokenVault,
 } from "../src/discord-runtime.ts";
 import { createMainRuntime, initializeMainHome } from "../src/index.ts";
+import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 
 const NOW = "2026-07-25T12:00:00.000Z";
 const APPLICATION_ID = "100000000000000001";
@@ -325,10 +326,13 @@ test("Main process owns production Discord startup, dynamic feature state, and s
   const adminRoot = join(home, "admin");
   await mkdir(adminRoot);
   await writeFile(join(adminRoot, "index.html"), "<!doctype html><title>OpenDelegate</title>");
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   const api = new TestDiscordApi();
   const gateway = new TestDiscordGateway();
@@ -342,6 +346,7 @@ test("Main process owns production Discord startup, dynamic feature state, and s
     build: { version: "0.1.0-test", buildId: "discord-runtime-composition" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     discord: {
       config: discordConfiguration(),
       botTokenAlias: "discord-bot-token",
@@ -377,10 +382,13 @@ test("Main finishes Discord reconciliation before dispatching recovered Forum Ta
   const adminRoot = join(home, "admin");
   await mkdir(adminRoot);
   await writeFile(join(adminRoot, "index.html"), "<!doctype html><title>OpenDelegate</title>");
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   const api = new TestDiscordApi();
   const gateway = new TestDiscordGateway();
@@ -391,6 +399,7 @@ test("Main finishes Discord reconciliation before dispatching recovered Forum Ta
     build: { version: "0.1.0-test", buildId: "discord-before-dispatch" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     taskExecution: {
       retryDelayMs: 0,
       executor: {

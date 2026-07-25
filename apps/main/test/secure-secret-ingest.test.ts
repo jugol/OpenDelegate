@@ -6,6 +6,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   rm,
@@ -255,7 +256,12 @@ test("secure ingest recovers a crash between atomic publication and temporary-li
       ledgerDirectory,
       secretStore: store,
     });
-    assert.equal((await lstat(finalPath)).nlink, 1);
+    const recoveredHandle = await open(finalPath, "r");
+    try {
+      assert.equal((await recoveredHandle.stat()).nlink, 1);
+    } finally {
+      await recoveredHandle.close();
+    }
     await assert.rejects(lstat(temporaryPath), { code: "ENOENT" });
 
     const receipt = await service.ingest({
@@ -265,9 +271,15 @@ test("secure ingest recovers a crash between atomic publication and temporary-li
       secret: Buffer.from("postgresql://owner:recovered@database.test/main"),
     });
     assert.equal(receipt.secretRef, "secret://main/crash_recovery");
-    const record = JSON.parse(await readFile(finalPath, "utf8")) as {
-      readonly state: string;
-    };
+    const completedHandle = await open(finalPath, "r");
+    let record: { readonly state: string };
+    try {
+      record = JSON.parse(await completedHandle.readFile("utf8")) as {
+        readonly state: string;
+      };
+    } finally {
+      await completedHandle.close();
+    }
     assert.equal(record.state, "completed");
   } finally {
     for (const value of store.values.values()) {

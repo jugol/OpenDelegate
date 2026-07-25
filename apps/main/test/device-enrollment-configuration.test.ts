@@ -136,7 +136,7 @@ test("persisted Device enrollment composition is idempotent and never overwrites
   t.after(() => rm(root, { force: true, recursive: true }));
   const checkout = join(root, "checkout");
   const runtime = join(root, "runtime");
-  await Promise.all([mkdir(checkout), mkdir(runtime)]);
+  await Promise.all([mkdir(checkout), mkdir(runtime, { mode: 0o700 })]);
   const target = join(runtime, "device-enrollment.json");
   const configuration = fixtureDocument(runtime, {
     backend: "windows-dpapi",

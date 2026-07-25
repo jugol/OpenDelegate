@@ -163,10 +163,7 @@ export class LocalArtifactStore implements ArtifactStore {
       });
       const next = appendAudit(
         copyIndex(this.index, {
-          artifacts: {
-            ...this.index.artifacts,
-            [artifact.artifactId]: artifact,
-          },
+          artifacts: recordWithEntry(this.index.artifacts, artifact.artifactId, artifact),
         }),
         "artifact.stored",
         artifact.artifactId,
@@ -212,10 +209,7 @@ export class LocalArtifactStore implements ArtifactStore {
         });
         const next = appendAudit(
           copyIndex(this.index, {
-            artifacts: {
-              ...this.index.artifacts,
-              [artifact.artifactId]: artifact,
-            },
+            artifacts: recordWithEntry(this.index.artifacts, artifact.artifactId, artifact),
           }),
           "artifact.stored",
           artifact.artifactId,
@@ -366,10 +360,7 @@ export class LocalArtifactStore implements ArtifactStore {
           expiredAtMs: nowMs,
         };
         next = copyIndex(next, {
-          artifacts: {
-            ...next.artifacts,
-            [artifact.artifactId]: changed,
-          },
+          artifacts: recordWithEntry(next.artifacts, artifact.artifactId, changed),
         });
         next = appendAudit(
           next,
@@ -429,10 +420,7 @@ export class LocalArtifactStore implements ArtifactStore {
         useCount: 0,
       };
       let next = copyIndex(this.index, {
-        signedTokens: {
-          ...this.index.signedTokens,
-          [tokenId]: record,
-        },
+        signedTokens: recordWithEntry(this.index.signedTokens, tokenId, record),
       });
       next = appendAudit(
         next,
@@ -485,10 +473,7 @@ export class LocalArtifactStore implements ArtifactStore {
         lastUsedAtMs: nowMs,
       };
       let next = copyIndex(this.index, {
-        signedTokens: {
-          ...this.index.signedTokens,
-          [record.tokenId]: nextRecord,
-        },
+        signedTokens: recordWithEntry(this.index.signedTokens, record.tokenId, nextRecord),
       });
       next = appendAudit(next, "artifact.access-granted", record.artifactId, context, nowMs, {
         mode: "signed-link",
@@ -513,10 +498,7 @@ export class LocalArtifactStore implements ArtifactStore {
       const nowMs = validClockNow(this.clock);
       const changed = { ...record, revokedAtMs: nowMs };
       let next = copyIndex(this.index, {
-        signedTokens: {
-          ...this.index.signedTokens,
-          [tokenId]: changed,
-        },
+        signedTokens: recordWithEntry(this.index.signedTokens, tokenId, changed),
       });
       next = appendAudit(
         next,
@@ -600,10 +582,7 @@ export class LocalArtifactStore implements ArtifactStore {
         expiredAtMs: nowMs,
       };
       let next = copyIndex(this.index, {
-        artifacts: {
-          ...this.index.artifacts,
-          [artifactId]: changed,
-        },
+        artifacts: recordWithEntry(this.index.artifacts, artifactId, changed),
       });
       next = appendAudit(next, "artifact.expired", artifactId, context, nowMs, {});
       await this.commit(next);
@@ -637,10 +616,7 @@ export class LocalArtifactStore implements ArtifactStore {
         return freezeMetadata(artifact);
       }
       let next = copyIndex(this.index, {
-        artifacts: {
-          ...this.index.artifacts,
-          [artifactId]: result.artifact,
-        },
+        artifacts: recordWithEntry(this.index.artifacts, artifactId, result.artifact),
       });
       next = appendAudit(next, result.eventType, artifactId, normalizedContext, nowMs, {});
       await this.commit(next);
@@ -1413,6 +1389,14 @@ function copyIndex(
     ...index,
     ...changes,
   });
+}
+
+function recordWithEntry<T>(
+  source: Readonly<Record<string, T>>,
+  key: string,
+  value: T,
+): Readonly<Record<string, T>> {
+  return Object.freeze(Object.fromEntries([...Object.entries(source), [key, value]]));
 }
 
 function appendAudit(

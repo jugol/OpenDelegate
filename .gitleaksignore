@@ -1,0 +1,30 @@
+# Exact false-positive fingerprints from the reviewed initial implementation commit.
+# These are deterministic protocol identifiers, synthetic API-key fixtures, and
+# test-only private keys. New commits, locations, rules, or line numbers remain
+# unignored and fail the full-history scan.
+a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:964
+a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:973
+a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:993
+a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:999
+a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/main/test/device-channel-runtime.test.ts:private-key:249
+a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/service-host/test/service-host.test.ts:generic-api-key:132
+a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/service-host/src/configuration.ts:generic-api-key:64
+a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/service-host/src/configuration.ts:generic-api-key:471
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/device-channel/test/enrollment-flow.test.ts:private-key:180
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/discord-adapter/test/task-port-adapter.test.ts:generic-api-key:55
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/discord-adapter/test/task-port-adapter.test.ts:generic-api-key:70
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/discord-adapter/test/task-port-adapter.test.ts:generic-api-key:91
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/discord-adapter/test/task-port-adapter.test.ts:generic-api-key:111
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/platform-services/test/renderers.test.ts:generic-api-key:22
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/platform-services/src/render-macos.ts:generic-api-key:35
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/platform-services/src/render-linux.ts:generic-api-key:30
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/platform-services/src/render-windows.ts:generic-api-key:33
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/device-channel/test/inbound-effect-delivery.test.ts:private-key:798
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/device-channel/test/mtls-device-channel.test.ts:private-key:470
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/platform-services/src/types.ts:generic-api-key:189
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/device-channel/test/protocol.test.ts:generic-api-key:395
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/policy/test/approval-service.test.ts:generic-api-key:192
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/policy/test/approval-service.test.ts:generic-api-key:201
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/task-service/test/task-service.test.ts:generic-api-key:360
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/task-service/test/task-service.test.ts:generic-api-key:369
+a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/task-service/test/task-service.test.ts:generic-api-key:379

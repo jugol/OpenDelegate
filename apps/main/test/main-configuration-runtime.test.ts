@@ -30,6 +30,10 @@ import {
   initializeMainHome,
   inspectPersistedMainConfiguration,
 } from "../src/index.ts";
+import {
+  createMainTestSecretContext,
+  mainTestSecretBackendConfiguration,
+} from "../test-fixtures/main-test-secrets.ts";
 
 const limits = {
   wallTimeoutMs: 5_000,
@@ -49,10 +53,13 @@ test("production Main auto-applies only Device profile tools through durable SQL
     await cleanup.runtime?.close();
     await rm(home, { force: true, recursive: true });
   });
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot: await createAdminFixture(home),
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
   const runtime = await createMainRuntime({
     configuration: initialized.configuration,
@@ -60,6 +67,7 @@ test("production Main auto-applies only Device profile tools through durable SQL
     build: { version: "0.1.0-test", buildId: "configuration-sql-composition" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     initialAdminAutoOpen: true,
     agentConfiguration: {
       adapter: new DynamicConfigurationAdapter(),
@@ -119,6 +127,7 @@ test("production Main auto-applies only Device profile tools through durable SQL
     configuration: initialized.configuration,
     home,
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   assert.equal(persistedValues["admin.open-on-login"]?.value, true);
   const resumed = await createMainRuntime({
@@ -127,6 +136,7 @@ test("production Main auto-applies only Device profile tools through durable SQL
     build: { version: "0.1.0-test", buildId: "configuration-sql-composition" },
     releaseChannel: "development",
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
     initialAdminAutoOpen: true,
   });
   await resumed.close();
@@ -137,6 +147,7 @@ test("production Main auto-applies only Device profile tools through durable SQL
       build: { version: "0.1.0-test", buildId: "configuration-sql-composition" },
       releaseChannel: "development",
       sourceCheckout: resolve("."),
+      managedSecretStore: mainSecrets.store,
       initialAdminAutoOpen: false,
     }),
     (error: unknown) =>
@@ -189,6 +200,12 @@ test("production Main secure ingest makes an exact Main-scoped database referenc
   const home = await mkdtemp(join(tmpdir(), "opendelegate-main-secret-runtime-"));
   const cleanup: { runtime?: Awaited<ReturnType<typeof createMainRuntime>> } = {};
   const storeValues = new Map<string, Buffer>();
+  const secretBackend = mainTestSecretBackendConfiguration(home);
+  const store = new RuntimeTestManagedSecretStore(
+    "device_main_secret_runtime",
+    storeValues,
+    secretBackend.backend,
+  );
   t.after(async () => {
     await cleanup.runtime?.close();
     for (const value of storeValues.values()) {
@@ -200,8 +217,9 @@ test("production Main secure ingest makes an exact Main-scoped database referenc
     home,
     adminRoot: await createAdminFixture(home),
     sourceCheckout: resolve("."),
+    secretBackend,
+    managedSecretStore: store,
   });
-  const store = new RuntimeTestManagedSecretStore(initialized.configuration.deviceId, storeValues);
   const adapter = new DatabaseReferenceConfigurationAdapter();
   const runtime = await createMainRuntime({
     configuration: initialized.configuration,
@@ -279,13 +297,18 @@ test("production Main secure ingest makes an exact Main-scoped database referenc
 });
 
 class RuntimeTestManagedSecretStore implements ManagedSecretStore {
-  public readonly backend = "windows-dpapi" as const;
+  public readonly backend: ManagedSecretStore["backend"];
   public readonly deviceId: string;
   private readonly values: Map<string, Buffer>;
 
-  public constructor(deviceId: string, values: Map<string, Buffer>) {
+  public constructor(
+    deviceId: string,
+    values: Map<string, Buffer>,
+    backend: ManagedSecretStore["backend"],
+  ) {
     this.deviceId = deviceId;
     this.values = values;
+    this.backend = backend;
   }
 
   public async health(): Promise<ManagedSecretStoreHealth> {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { lstat, mkdir, open, readdir, realpath, rename, rm } from "node:fs/promises";
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 import { SecretError } from "./secret-error.ts";
@@ -268,34 +268,29 @@ export class SecureFileVault {
     let handle;
     let value: Buffer | undefined;
     try {
-      const pathMetadata = await lstat(markerPath);
-      if (
-        !pathMetadata.isFile() ||
-        pathMetadata.isSymbolicLink() ||
-        pathMetadata.nlink !== 1 ||
-        pathMetadata.size !== this.#markerValue.byteLength ||
-        (process.platform !== "win32" && (pathMetadata.mode & 0o077) !== 0)
-      ) {
-        throw vaultAccessFailed();
-      }
       const flags =
         process.platform === "win32"
           ? constants.O_RDONLY
           : constants.O_RDONLY | constants.O_NOFOLLOW;
       handle = await open(markerPath, flags);
-      const metadata = await handle.stat();
+      const metadata = await handle.stat({ bigint: true });
+      const pathMetadata = await lstat(markerPath, { bigint: true });
       if (
         !metadata.isFile() ||
-        metadata.nlink !== 1 ||
-        metadata.size !== this.#markerValue.byteLength ||
+        metadata.nlink !== 1n ||
+        metadata.size !== BigInt(this.#markerValue.byteLength) ||
+        !pathMetadata.isFile() ||
+        pathMetadata.isSymbolicLink() ||
+        pathMetadata.nlink !== 1n ||
+        !sameMarkerSnapshot(metadata, pathMetadata) ||
         (process.platform !== "win32" &&
-          (metadata.dev !== pathMetadata.dev || metadata.ino !== pathMetadata.ino)) ||
-        (process.platform !== "win32" && (metadata.mode & 0o077) !== 0)
+          ((metadata.mode & 0o077n) !== 0n || (pathMetadata.mode & 0o077n) !== 0n))
       ) {
         throw vaultAccessFailed();
       }
       value = await handle.readFile();
-      if (!value.equals(this.#markerValue)) {
+      const afterRead = await handle.stat({ bigint: true });
+      if (!sameMarkerSnapshot(metadata, afterRead) || !value.equals(this.#markerValue)) {
         throw vaultAccessFailed();
       }
     } finally {
@@ -303,6 +298,26 @@ export class SecureFileVault {
       await handle?.close().catch(() => undefined);
     }
   }
+}
+
+function sameMarkerSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameMarkerFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function sameMarkerFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
+  );
 }
 
 async function assertNoExistingPathLink(path: string): Promise<void> {

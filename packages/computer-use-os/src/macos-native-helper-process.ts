@@ -370,42 +370,53 @@ export class NodeMacOsNativeHelperBinaryVerifier implements MacOsNativeHelperBin
 
   public async verify(request: MacOsNativeHelperBinaryVerificationRequest): Promise<void> {
     const path = validateAbsolutePath(request.executablePath, "native helper executable");
-    const metadata = await lstat(path);
-    const canonical = await realpath(path);
-    if (
-      !metadata.isFile() ||
-      metadata.isSymbolicLink() ||
-      metadata.nlink !== 1 ||
-      metadata.uid !== 0 ||
-      (metadata.mode & 0o022) !== 0 ||
-      metadata.size <= 0 ||
-      metadata.size > MAX_EXECUTABLE_BYTES ||
-      (metadata.mode & 0o111) === 0 ||
-      canonical !== path
-    ) {
-      throw new Error("Native helper file identity is invalid.");
-    }
-    await verifyImmutableParentDirectories(path);
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    let bytes: Buffer | undefined;
     try {
-      const opened = await handle.stat();
+      const metadata = await handle.stat();
+      const canonical = await realpath(path);
+      const pathMetadata = await lstat(path);
       if (
-        opened.dev !== metadata.dev ||
-        opened.ino !== metadata.ino ||
-        opened.size !== metadata.size
+        !metadata.isFile() ||
+        metadata.nlink !== 1 ||
+        metadata.uid !== 0 ||
+        (metadata.mode & 0o022) !== 0 ||
+        metadata.size <= 0 ||
+        metadata.size > MAX_EXECUTABLE_BYTES ||
+        (metadata.mode & 0o111) === 0 ||
+        canonical !== path ||
+        !pathMetadata.isFile() ||
+        pathMetadata.isSymbolicLink() ||
+        pathMetadata.dev !== metadata.dev ||
+        pathMetadata.ino !== metadata.ino ||
+        pathMetadata.size !== metadata.size ||
+        pathMetadata.mtimeMs !== metadata.mtimeMs
       ) {
-        throw new Error("Native helper file identity changed during verification.");
+        throw new Error("Native helper file identity is invalid.");
       }
-      const bytes = await handle.readFile();
+      await verifyImmutableParentDirectories(path);
+      bytes = await handle.readFile();
       const { createHash } = await import("node:crypto");
       const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
       if (digest !== request.expectedSha256) {
         throw new Error("Native helper digest mismatch.");
       }
+      await runCodeSignVerify(this.#codesignPath, path, this.#timeoutMs);
+      const after = await lstat(path);
+      if (
+        !after.isFile() ||
+        after.isSymbolicLink() ||
+        after.dev !== metadata.dev ||
+        after.ino !== metadata.ino ||
+        after.size !== metadata.size ||
+        after.mtimeMs !== metadata.mtimeMs
+      ) {
+        throw new Error("Native helper file identity changed during verification.");
+      }
     } finally {
+      bytes?.fill(0);
       await handle.close();
     }
-    await runCodeSignVerify(this.#codesignPath, path, this.#timeoutMs);
   }
 }
 

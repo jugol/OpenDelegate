@@ -241,7 +241,6 @@ function platformConfiguration(input: {
         environment: selectEnvironment(input.environment, [
           "DBUS_SESSION_BUS_ADDRESS",
           "XDG_RUNTIME_DIR",
-          "PATH",
         ]),
       };
     case "linux-systemd-credential-vault": {

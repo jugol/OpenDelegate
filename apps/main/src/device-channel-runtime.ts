@@ -313,7 +313,6 @@ const NODE_LISTENER_FACTORY: MainDeviceChannelListenerFactory = Object.freeze({
         minVersion: "TLSv1.3",
         maxVersion: "TLSv1.3",
         requestCert: false,
-        rejectUnauthorized: false,
       },
       input.requestListener,
     );

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fileConstants, createReadStream } from "node:fs";
+import { constants as fileConstants, type BigIntStats } from "node:fs";
 import {
   copyFile,
   lstat,
@@ -1437,17 +1437,26 @@ async function fileRecord(filename: string, path: string): Promise<BackupFileRec
 async function hashStableRegularFile(
   filename: string,
 ): Promise<{ readonly bytes: number; readonly sha256: string }> {
-  const pathStat = await lstat(filename);
-  if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
-    throw new MainBackupError("BACKUP_CORRUPT", "A Main backup path is not a regular file.");
-  }
-  const handle = await open(filename, "r");
+  const noFollow = fileConstants.O_NOFOLLOW ?? 0;
+  const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
+  const handle = await open(filename, fileConstants.O_RDONLY | noFollow | nonBlocking).catch(
+    (error: unknown) => {
+      throw new MainBackupError(
+        "BACKUP_CORRUPT",
+        "A Main backup path could not be opened safely.",
+        { cause: error },
+      );
+    },
+  );
   try {
-    const openedStat = await handle.stat();
+    const openedStat = await handle.stat({ bigint: true });
+    const pathStat = await lstat(filename, { bigint: true });
     if (
       !openedStat.isFile() ||
-      openedStat.ino !== pathStat.ino ||
-      (openedStat.dev !== 0 && pathStat.dev !== 0 && openedStat.dev !== pathStat.dev)
+      pathStat.isSymbolicLink() ||
+      !pathStat.isFile() ||
+      !sameBackupFile(openedStat, pathStat) ||
+      openedStat.size > BigInt(Number.MAX_SAFE_INTEGER)
     ) {
       throw new MainBackupError(
         "BACKUP_CORRUPT",
@@ -1455,19 +1464,24 @@ async function hashStableRegularFile(
       );
     }
     const sha256 = createHash("sha256");
-    const stream = createReadStream(filename, {
+    let bytes = 0n;
+    const stream = handle.createReadStream({
       autoClose: false,
-      fd: handle.fd,
       start: 0,
     });
     for await (const chunk of stream) {
-      sha256.update(chunk as Buffer);
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += BigInt(buffer.byteLength);
+      sha256.update(buffer);
     }
-    const finalStat = await handle.stat();
+    const finalStat = await handle.stat({ bigint: true });
+    const finalPathStat = await lstat(filename, { bigint: true });
     if (
-      finalStat.size !== openedStat.size ||
-      finalStat.mtimeMs !== openedStat.mtimeMs ||
-      finalStat.ctimeMs !== openedStat.ctimeMs
+      finalPathStat.isSymbolicLink() ||
+      !finalPathStat.isFile() ||
+      !sameBackupSnapshot(openedStat, finalStat) ||
+      !sameBackupSnapshot(finalStat, finalPathStat) ||
+      bytes !== finalStat.size
     ) {
       throw new MainBackupError(
         "BACKUP_CORRUPT",
@@ -1475,12 +1489,32 @@ async function hashStableRegularFile(
       );
     }
     return {
-      bytes: finalStat.size,
+      bytes: Number(finalStat.size),
       sha256: sha256.digest("hex"),
     };
   } finally {
     await handle.close();
   }
+}
+
+function sameBackupFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
+  );
+}
+
+function sameBackupSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameBackupFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
 }
 
 async function readBoundedRegularFile(

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, realpath, rm, writeFile } from "node:fs/promises";
 import { release, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -349,8 +349,12 @@ function wait(milliseconds) {
 }
 
 async function sha256File(path) {
-  await access(path);
-  return sha256(await readFile(path));
+  const handle = await open(path, "r");
+  try {
+    return sha256(await handle.readFile());
+  } finally {
+    await handle.close();
+  }
 }
 
 function sha256(bytes) {

@@ -1,7 +1,9 @@
 // Executable child-process fixture; intentionally outside test discovery.
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 
 const [, , provider, ...args] = process.argv;
+const fixtureFilename = fileURLToPath(import.meta.url);
 
 if (
   provider === "codex" &&
@@ -294,7 +296,7 @@ if (provider === "codex") {
     const requiredConfiguration = [
       `mcp_servers.opendelegate.command=${JSON.stringify(process.execPath)}`,
       `mcp_servers.opendelegate.args=${JSON.stringify([
-        new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/u, "$1").replaceAll("/", "\\"),
+        fixtureFilename,
         "mcp-bridge",
         "--capability-file",
         "C:\\runtime\\grant.json",
@@ -314,9 +316,6 @@ if (provider === "codex") {
     }
   }
   if (process.env.FIXTURE_REQUIRE_CODEX_KNOWLEDGE_TOOL_SERVER === "1") {
-    const fixtureFilename = new URL(import.meta.url).pathname
-      .replace(/^\/([A-Za-z]:)/u, "$1")
-      .replaceAll("/", "\\");
     const requiredConfiguration = [
       `mcp_servers.opendelegate-knowledge.command=${JSON.stringify(process.execPath)}`,
       `mcp_servers.opendelegate-knowledge.args=${JSON.stringify([
@@ -425,7 +424,7 @@ if (provider === "claude") {
       server.command !== process.execPath ||
       JSON.stringify(server.args) !==
         JSON.stringify([
-          new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/u, "$1").replaceAll("/", "\\"),
+          fixtureFilename,
           "knowledge-mcp-bridge",
           "--capability-file",
           "/runtime/knowledge-capability.json",

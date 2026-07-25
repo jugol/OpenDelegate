@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { createMainProcessTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
+
 test("an unclaimed Main can reopen its local claim listener immediately after a crash", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-owner-claim-restart-"));
   const home = join(root, "home");
@@ -19,6 +21,13 @@ test("an unclaimed Main can reopen its local claim listener immediately after a 
     "utf8",
   );
   await writeFile(join(adminRoot, "assets", "app.js"), "console.log('test');", "utf8");
+  const mainSecrets = await createMainProcessTestSecretContext(root);
+  const secretBackendConfigurationFile = join(root, "main-secret-backend.json");
+  await writeFile(
+    secretBackendConfigurationFile,
+    `${JSON.stringify(mainSecrets.configuration)}\n`,
+    { mode: 0o600 },
+  );
   const port = await reserveAdjacentPortPair();
   const children = new Set<ChildProcessWithoutNullStreams>();
 
@@ -27,14 +36,26 @@ test("an unclaimed Main can reopen its local claim listener immediately after a 
     await rm(root, { force: true, recursive: true });
   });
 
-  const first = startInit({ home, adminRoot, port });
+  const first = startInit({
+    home,
+    adminRoot,
+    port,
+    secretBackendConfigurationFile,
+    environment: mainSecrets.environment,
+  });
   children.add(first.child);
   await waitForEvent(first, ["owner.claim.ready"]);
   const originalClaimToken = await readClaimToken(port + 1);
   await stopChild(first.child);
   children.delete(first.child);
 
-  const restarted = startInit({ home, adminRoot, port });
+  const restarted = startInit({
+    home,
+    adminRoot,
+    port,
+    secretBackendConfigurationFile,
+    environment: mainSecrets.environment,
+  });
   children.add(restarted.child);
   const event = await waitForEvent(restarted, ["owner.claim.ready", "owner.claim.pending"]);
 
@@ -60,6 +81,8 @@ function startInit(input: {
   readonly home: string;
   readonly adminRoot: string;
   readonly port: number;
+  readonly secretBackendConfigurationFile: string;
+  readonly environment: Readonly<Record<string, string>>;
 }): {
   readonly child: ChildProcessWithoutNullStreams;
   readonly output: () => string;
@@ -74,6 +97,8 @@ function startInit(input: {
       input.home,
       "--admin-root",
       input.adminRoot,
+      "--secret-backend-config",
+      input.secretBackendConfigurationFile,
       "--listen-host",
       "127.0.0.1",
       "--listen-port",
@@ -83,6 +108,10 @@ function startInit(input: {
     ],
     {
       cwd: process.cwd(),
+      env: {
+        ...process.env,
+        ...input.environment,
+      },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     },

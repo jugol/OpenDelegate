@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,8 +8,10 @@ import test from "node:test";
 
 import {
   buildGitChildEnvironment,
+  type GitCommandRunner,
   ManagedGitWorktreeError,
   ManagedGitWorktreeManager,
+  SpawnGitCommandRunner,
 } from "../src/index.ts";
 
 const run = promisify(execFile);
@@ -42,28 +44,303 @@ test("Git child environments preserve only platform essentials and fixed noninte
     COMSPEC: "C:\\Windows\\System32\\cmd.exe",
     TEMP: "C:\\safe\\temp",
     TMP: "C:\\safe\\tmp",
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "NUL",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: "NUL",
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "",
+    GIT_PROTOCOL_FROM_USER: "0",
     GIT_TERMINAL_PROMPT: "0",
     LANG: "C",
     LC_ALL: "C",
+    PAGER: "",
   });
   assert.deepEqual(buildGitChildEnvironment("linux", ambient), {
     PATH: "/safe/bin",
     TMPDIR: "/safe/tmpdir",
     TEMP: "C:\\safe\\temp",
     TMP: "C:\\safe\\tmp",
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "",
+    GIT_PROTOCOL_FROM_USER: "0",
     GIT_TERMINAL_PROMPT: "0",
     LANG: "C",
     LC_ALL: "C",
+    PAGER: "",
   });
   assert.deepEqual(buildGitChildEnvironment("darwin", ambient), {
     PATH: "/safe/bin",
     TMPDIR: "/safe/tmpdir",
     TEMP: "C:\\safe\\temp",
     TMP: "C:\\safe\\tmp",
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_PAGER: "",
+    GIT_PROTOCOL_FROM_USER: "0",
     GIT_TERMINAL_PROMPT: "0",
     LANG: "C",
     LC_ALL: "C",
+    PAGER: "",
   });
+});
+
+test("the production Git runner rejects commands outside the managed worktree grammar", async () => {
+  const runner = new SpawnGitCommandRunner();
+  await assert.rejects(
+    runner.run({
+      arguments: [
+        "-C",
+        process.cwd(),
+        "ls-remote",
+        "--upload-pack=malicious-helper",
+        "https://example.invalid/repository.git",
+      ],
+      timeoutMs: 1_000,
+    }),
+    (error: unknown) =>
+      error instanceof ManagedGitWorktreeError && error.code === "WORKTREE_COMMAND_FAILED",
+  );
+});
+
+test("managed Git disables repository fsmonitor and post-checkout executables", async (t) => {
+  const fixture = await gitFixture();
+  const marker = join(fixture.root, "git-execution-marker.txt");
+  const fsmonitor = join(fixture.root, "hostile-fsmonitor");
+  const hooks = join(fixture.root, "hostile-hooks");
+  await mkdir(hooks);
+  await Promise.all([
+    writeMarkerExecutable(fsmonitor, marker, "fsmonitor"),
+    writeMarkerExecutable(join(hooks, "post-checkout"), marker, "post-checkout"),
+  ]);
+  await git(["-C", fixture.repository, "config", "core.fsmonitor", portablePath(fsmonitor)]);
+  await git(["-C", fixture.repository, "config", "core.hooksPath", portablePath(hooks)]);
+
+  const manager = createManager(fixture);
+  t.after(async () => {
+    manager.close();
+    await rm(fixture.root, { recursive: true, force: true });
+  });
+
+  const created = await manager.create({
+    worktreeId: "hostile-hooks",
+    workspaceId: "workspace-repository",
+    repositoryRoot: fixture.repository,
+  });
+  await manager.inspect(created.worktreeId);
+  await assertMissing(marker);
+});
+
+test("managed Git rejects repository checkout filters before an external process can start", async (t) => {
+  for (const filterKind of ["smudge", "process"] as const) {
+    await t.test(filterKind, async () => {
+      const fixture = await gitFixture();
+      const marker = join(fixture.root, `${filterKind}-execution-marker.txt`);
+      const executable = join(fixture.root, `hostile-${filterKind}`);
+      await writeMarkerExecutable(executable, marker, filterKind);
+      await writeFile(
+        join(fixture.repository, ".gitattributes"),
+        "README.md filter=opendelegate-hostile\n",
+        "utf8",
+      );
+      await git(["-C", fixture.repository, "add", "--", ".gitattributes"]);
+      await git(["-C", fixture.repository, "commit", "-m", `add ${filterKind} attributes`]);
+      await git([
+        "-C",
+        fixture.repository,
+        "config",
+        `filter.opendelegate-hostile.${filterKind}`,
+        portablePath(executable),
+      ]);
+
+      const manager = createManager(fixture);
+      try {
+        await assert.rejects(
+          manager.create({
+            worktreeId: `hostile-${filterKind}`,
+            workspaceId: "workspace-repository",
+            repositoryRoot: fixture.repository,
+          }),
+          (error: unknown) =>
+            error instanceof ManagedGitWorktreeError &&
+            error.code === "WORKTREE_REPOSITORY_INVALID",
+        );
+        await assertMissing(marker);
+      } finally {
+        manager.close();
+        await rm(fixture.root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("managed Git rejects a filter enabled only for the future linked worktree", async (t) => {
+  const fixture = await gitFixture();
+  const worktreeId = "target-only-filter";
+  const worktreePath = join(fixture.managedRoot, worktreeId);
+  const marker = join(fixture.root, "target-only-filter-execution-marker.txt");
+  const executable = join(fixture.root, "hostile-target-only-filter");
+  const includedConfiguration = join(fixture.root, "target-only-filter.gitconfig");
+  await writeMarkerExecutable(executable, marker, "target-only-filter");
+  await writeFile(
+    join(fixture.repository, ".gitattributes"),
+    "README.md filter=opendelegate-target-only\n",
+    "utf8",
+  );
+  await git(["-C", fixture.repository, "add", "--", ".gitattributes"]);
+  await git(["-C", fixture.repository, "commit", "-m", "add target-only filter attributes"]);
+  await writeFile(
+    includedConfiguration,
+    ['[filter "opendelegate-target-only"]', `\tsmudge = ${portablePath(executable)}`, ""].join(
+      "\n",
+    ),
+    "utf8",
+  );
+  await git([
+    "-C",
+    fixture.repository,
+    "config",
+    `includeIf.gitdir:**/worktrees/${worktreeId}.path`,
+    portablePath(includedConfiguration),
+  ]);
+
+  const manager = createManager(fixture);
+  t.after(async () => {
+    manager.close();
+    await rm(fixture.root, { recursive: true, force: true });
+  });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      manager.create({
+        worktreeId,
+        workspaceId: "workspace-repository",
+        repositoryRoot: fixture.repository,
+      }),
+      (error: unknown) => error instanceof ManagedGitWorktreeError,
+    );
+    await access(worktreePath);
+    await assertMissing(marker);
+    await assert.rejects(
+      manager.inspect(worktreeId),
+      (error: unknown) =>
+        error instanceof ManagedGitWorktreeError && error.code === "WORKTREE_NOT_FOUND",
+    );
+  }
+});
+
+test("creating recovery materializes an existing no-checkout worktree before activation", async (t) => {
+  const fixture = await gitFixture();
+  const productionRunner = new SpawnGitCommandRunner();
+  let failedBeforeMaterialization = false;
+  const interruptingRunner: GitCommandRunner = {
+    async run(request) {
+      if (!failedBeforeMaterialization && request.arguments[2] === "reset") {
+        failedBeforeMaterialization = true;
+        throw new Error("Simulated interruption before materialization.");
+      }
+      return productionRunner.run(request);
+    },
+  };
+  const interrupted = createManager(fixture, interruptingRunner);
+  const openManagers = [interrupted];
+  t.after(async () => {
+    for (const manager of openManagers) {
+      manager.close();
+    }
+    await rm(fixture.root, { recursive: true, force: true });
+  });
+
+  await assert.rejects(
+    interrupted.create({
+      worktreeId: "recover-no-checkout",
+      workspaceId: "workspace-repository",
+      repositoryRoot: fixture.repository,
+    }),
+    (error: unknown) =>
+      error instanceof ManagedGitWorktreeError && error.code === "WORKTREE_COMMAND_FAILED",
+  );
+  assert.equal(failedBeforeMaterialization, true);
+  const worktreePath = join(fixture.managedRoot, "recover-no-checkout");
+  await access(worktreePath);
+  await assertMissing(join(worktreePath, "README.md"));
+  await assert.rejects(
+    interrupted.inspect("recover-no-checkout"),
+    (error: unknown) =>
+      error instanceof ManagedGitWorktreeError && error.code === "WORKTREE_NOT_FOUND",
+  );
+  interrupted.close();
+
+  const recoveredManager = createManager(fixture);
+  openManagers.push(recoveredManager);
+  const recovered = await recoveredManager.create({
+    worktreeId: "recover-no-checkout",
+    workspaceId: "workspace-repository",
+    repositoryRoot: fixture.repository,
+  });
+  assert.equal(recovered.state, "active");
+  assert.equal(recovered.revision, 2);
+  assert.equal(await readFile(join(worktreePath, "README.md"), "utf8"), "initial\n");
+  assert.equal((await recoveredManager.inspect(recovered.worktreeId)).hasUncommittedChanges, false);
+});
+
+test("managed Git ignores executable filters from ambient system and global configuration", async (t) => {
+  const fixture = await gitFixture();
+  const marker = join(fixture.root, "ambient-filter-execution-marker.txt");
+  const executable = join(fixture.root, "hostile-ambient-filter");
+  const ambientConfiguration = join(fixture.root, "hostile-ambient.gitconfig");
+  await writeMarkerExecutable(executable, marker, "ambient-filter");
+  await writeFile(
+    join(fixture.repository, ".gitattributes"),
+    "README.md filter=opendelegate-ambient-hostile\n",
+    "utf8",
+  );
+  await git(["-C", fixture.repository, "add", "--", ".gitattributes"]);
+  await git(["-C", fixture.repository, "commit", "-m", "add ambient filter attributes"]);
+  await writeFile(
+    ambientConfiguration,
+    [
+      '[filter "opendelegate-ambient-hostile"]',
+      `\tsmudge = ${portablePath(executable)}`,
+      `\tprocess = ${portablePath(executable)}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const previousSystem = process.env.GIT_CONFIG_SYSTEM;
+  const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  process.env.GIT_CONFIG_GLOBAL = ambientConfiguration;
+  process.env.GIT_CONFIG_SYSTEM = ambientConfiguration;
+  process.env.GIT_CONFIG_NOSYSTEM = "0";
+
+  const manager = createManager(fixture);
+  t.after(async () => {
+    manager.close();
+    restoreEnvironmentVariable("GIT_CONFIG_GLOBAL", previousGlobal);
+    restoreEnvironmentVariable("GIT_CONFIG_SYSTEM", previousSystem);
+    restoreEnvironmentVariable("GIT_CONFIG_NOSYSTEM", previousNoSystem);
+    await rm(fixture.root, { recursive: true, force: true });
+  });
+
+  const created = await manager.create({
+    worktreeId: "ambient-filters",
+    workspaceId: "workspace-repository",
+    repositoryRoot: fixture.repository,
+  });
+  await manager.inspect(created.worktreeId);
+  await assertMissing(marker);
 });
 
 test("managed Git worktrees are isolated, durable, and based on the registered repository HEAD", async (t) => {
@@ -227,11 +504,15 @@ interface GitFixture {
   readonly initialCommit: string;
 }
 
-function createManager(fixture: GitFixture): ManagedGitWorktreeManager {
+function createManager(
+  fixture: GitFixture,
+  commandRunner?: GitCommandRunner,
+): ManagedGitWorktreeManager {
   return new ManagedGitWorktreeManager({
     filename: fixture.database,
     managedRootDirectory: fixture.managedRoot,
     sourceCheckoutDirectory: fixture.checkout,
+    ...(commandRunner === undefined ? {} : { commandRunner }),
   });
 }
 
@@ -270,4 +551,43 @@ async function git(arguments_: readonly string[]): Promise<string> {
     maxBuffer: 1024 * 1024,
   });
   return result.stdout;
+}
+
+async function writeMarkerExecutable(
+  filename: string,
+  marker: string,
+  label: string,
+): Promise<void> {
+  await writeFile(
+    filename,
+    `#!/bin/sh\nprintf '%s\\n' ${shellQuote(label)} >> ${shellQuote(portablePath(marker))}\nexit 1\n`,
+    {
+      encoding: "utf8",
+      mode: 0o755,
+    },
+  );
+  await chmod(filename, 0o755);
+}
+
+function portablePath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+async function assertMissing(path: string): Promise<void> {
+  await assert.rejects(
+    access(path),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
+  );
+}
+
+function restoreEnvironmentVariable(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
 }

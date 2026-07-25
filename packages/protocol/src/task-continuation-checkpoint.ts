@@ -157,8 +157,10 @@ const WINDOWS_LOCAL_PATH =
   /(^|[\s("'`])(?:[a-z]:[\\/]|(?:\\\\|\/\/)(?:localhost|127(?:\.\d{1,3}){3}|[a-z0-9._-]+)[\\/])[^\s"'`<>]*/giu;
 const POSIX_LOCAL_PATH =
   /(^|[\s("'`])\/(?:Users|home|root|var|tmp|private|etc|opt|srv|mnt|Volumes)\/[^\s"'`<>]*/gu;
-const PRIVATE_KEY_BLOCK =
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gu;
+const PRIVATE_KEY_MARKER = "-----";
+const PRIVATE_KEY_BEGIN = "-----BEGIN ";
+const PRIVATE_KEY_END = "-----END ";
+const MAXIMUM_PRIVATE_KEY_LABEL_CHARACTERS = 64;
 const BEARER_CREDENTIAL = /\bBearer\s+[A-Za-z0-9._~+/-]{8,}/giu;
 const CONTEXTUAL_CREDENTIAL =
   /((?:api[-_ ]?key|authorization|credential|password|passwd|private[-_ ]?key|secret|token)\s*(?::|=|\bis\b)\s*)(?:"[^"\r\n]{8,}"|'[^'\r\n]{8,}'|[^\s,;}]{8,})/giu;
@@ -231,8 +233,7 @@ export function serializeTaskContinuationCheckpoint(input: TaskContinuationCheck
  * upstream; this function is a last boundary, not a Secret Store.
  */
 export function sanitizeTaskContinuationText(input: string): string {
-  let output = input;
-  output = output.replace(PRIVATE_KEY_BLOCK, "[credential-redacted]");
+  let output = redactPrivateKeyBlocks(input);
   output = output.replace(BEARER_CREDENTIAL, "Bearer [credential-redacted]");
   output = output.replace(CONTEXTUAL_CREDENTIAL, "$1[credential-redacted]");
   output = output.replace(URL_CREDENTIAL, "[credential-redacted-url]");
@@ -240,6 +241,93 @@ export function sanitizeTaskContinuationText(input: string): string {
   output = output.replace(WINDOWS_LOCAL_PATH, "$1[local-path-redacted]");
   output = output.replace(POSIX_LOCAL_PATH, "$1[local-path-redacted]");
   return output;
+}
+
+function redactPrivateKeyBlocks(input: string): string {
+  let scanFrom = 0;
+  let outputFrom = 0;
+  let pendingBegin: { readonly index: number; readonly label: string } | undefined;
+  let output = "";
+  while (scanFrom < input.length) {
+    const marker = input.indexOf(PRIVATE_KEY_MARKER, scanFrom);
+    if (marker === -1) {
+      break;
+    }
+    const boundary = parsePrivateKeyBoundary(input, marker);
+    if (boundary === undefined) {
+      scanFrom = marker + PRIVATE_KEY_MARKER.length;
+      continue;
+    }
+    if (boundary.kind === "begin" && pendingBegin === undefined) {
+      pendingBegin = { index: marker, label: boundary.label };
+    } else if (
+      boundary.kind === "end" &&
+      pendingBegin !== undefined &&
+      boundary.label === pendingBegin.label
+    ) {
+      output += `${input.slice(outputFrom, pendingBegin.index)}[credential-redacted]`;
+      outputFrom = boundary.end;
+      pendingBegin = undefined;
+    }
+    scanFrom = boundary.end;
+  }
+  if (pendingBegin !== undefined) {
+    return `${output}${input.slice(outputFrom, pendingBegin.index)}[credential-redacted]`;
+  }
+  return `${output}${input.slice(outputFrom)}`;
+}
+
+function parsePrivateKeyBoundary(
+  input: string,
+  marker: number,
+): { readonly kind: "begin" | "end"; readonly end: number; readonly label: string } | undefined {
+  const kind = input.startsWith(PRIVATE_KEY_BEGIN, marker)
+    ? "begin"
+    : input.startsWith(PRIVATE_KEY_END, marker)
+      ? "end"
+      : undefined;
+  if (kind === undefined) {
+    return undefined;
+  }
+  const labelStart =
+    marker + (kind === "begin" ? PRIVATE_KEY_BEGIN.length : PRIVATE_KEY_END.length);
+  const maximumEnd = Math.min(
+    input.length - PRIVATE_KEY_MARKER.length,
+    labelStart + MAXIMUM_PRIVATE_KEY_LABEL_CHARACTERS,
+  );
+  let labelEnd = -1;
+  for (let index = labelStart; index <= maximumEnd; index += 1) {
+    if (input.startsWith(PRIVATE_KEY_MARKER, index)) {
+      labelEnd = index;
+      break;
+    }
+  }
+  const label = labelEnd === -1 ? "" : input.slice(labelStart, labelEnd);
+  if (!isPrivateKeyLabel(label)) {
+    return undefined;
+  }
+  return {
+    kind,
+    end: labelEnd + PRIVATE_KEY_MARKER.length,
+    label,
+  };
+}
+
+function isPrivateKeyLabel(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value.length > MAXIMUM_PRIVATE_KEY_LABEL_CHARACTERS ||
+    !value.endsWith("PRIVATE KEY")
+  ) {
+    return false;
+  }
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (character !== " " && !(code >= 0x30 && code <= 0x39) && !(code >= 0x41 && code <= 0x5a)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function validateBody(input: TaskContinuationCheckpointBodyV1): TaskContinuationCheckpointBodyV1 {

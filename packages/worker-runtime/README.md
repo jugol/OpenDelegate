@@ -97,7 +97,11 @@ never removes a directory directly. Cleanup inspects tracked changes, untracked
 files, and commits made after the base commit. Any such work is preserved unless the
 owner explicitly approves `discard`; `preserve` records the decision and leaves the
 worktree intact. Removed identities remain tombstoned so a stale native session
-cannot silently reuse them.
+cannot silently reuse them. Effective repository or linked-worktree configuration,
+including conditional includes that activate only for a new worktree, fails closed
+before content materialization or activation when it defines an executable Git
+`clean`, `smudge`, or `process` filter. Materialize that content outside the managed
+worktree boundary.
 
 ## Agent Run bridge
 

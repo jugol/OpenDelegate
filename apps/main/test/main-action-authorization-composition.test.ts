@@ -34,6 +34,7 @@ import type {
   MainDeviceChannelConfiguration,
   ProductionMainDeviceChannelRuntime,
 } from "../src/device-channel-runtime.ts";
+import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 
 const WORKER_DEVICE_ID = "device-worker-action";
 const WORKER_ID = "worker-action";
@@ -92,11 +93,14 @@ test(
     t.after(() => rm(home, { recursive: true, force: true }));
     const adminRoot = await createAdminFixture(home);
     const deviceChannel = await deviceChannelConfiguration(home);
+    const mainSecrets = createMainTestSecretContext(home);
     const initialized = await initializeMainHome({
       home,
       adminRoot,
       sourceCheckout: resolve("."),
       deviceChannel,
+      secretBackend: mainSecrets.configuration,
+      managedSecretStore: mainSecrets.store,
     });
     const assignments: WorkerRunAssignmentV1[] = [];
     let callbacks: CreateProductionMainDeviceChannelRuntimeOptions | undefined;
@@ -116,6 +120,7 @@ test(
       build: { version: "0.1.0-test", buildId: "worker-action-composition" },
       releaseChannel: "development",
       sourceCheckout: resolve("."),
+      managedSecretStore: mainSecrets.store,
       deviceChannel: {
         identitySecrets: new InMemoryDeviceIdentitySecretStore(),
         runtimeFactory,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createPublicKey, generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -63,7 +63,11 @@ test("publisher signing verifies a complete candidate and emits detached trust m
     allowUnsupportedPreview: false,
   });
 
-  assert.equal(result.attestationPath, `${fixture.bundle}.publisher-attestation.json`);
+  assert.equal(
+    result.attestationPath,
+    await realpath(`${fixture.bundle}.publisher-attestation.json`),
+  );
+  assert.equal(result.publicKeyPath, await realpath(fixture.publicKeyPath));
   assert.equal(result.supportStatus, "release-candidate");
   const attestation = JSON.parse(await readFile(result.attestationPath, "utf8"));
   const publicKey = createPublicKey(await readFile(fixture.publicKeyPath));

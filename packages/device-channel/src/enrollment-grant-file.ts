@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { lstat, open, realpath, rm } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
@@ -62,55 +62,28 @@ export async function executeWithEnrollmentGrantFile<TResult>(
   const now = readClock(options.clock ?? { now: () => Date.now() });
   let handle;
   let bytes: Buffer | undefined;
-  let before:
-    | {
-        readonly dev: number;
-        readonly ino: number;
-        readonly pathDev: number;
-        readonly pathIno: number;
-        readonly size: number;
-        readonly mtimeMs: number;
-      }
-    | undefined;
+  let before: BigIntStats | undefined;
   try {
-    const pathMetadata = await lstat(grantPath);
-    if (!isRestrictedRegularFile(pathMetadata)) {
-      throw grantError("GRANT_FILE_UNSAFE", "The Enrollment Grant file is not safe to open.");
-    }
-    const canonical = await realpath(grantPath);
-    if (!pathsEqual(canonical, grantPath)) {
-      throw grantError("GRANT_FILE_UNSAFE", "The Enrollment Grant file path is not canonical.");
-    }
     const flags =
       process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
     handle = await open(grantPath, flags);
-    const metadata = await handle.stat();
+    const metadata = await handle.stat({ bigint: true });
+    const pathMetadata = await lstat(grantPath, { bigint: true });
+    const canonical = await realpath(grantPath);
     if (
       !isRestrictedRegularFile(metadata) ||
-      metadata.size <= 0 ||
-      metadata.size > MAXIMUM_GRANT_FILE_BYTES ||
-      (process.platform !== "win32" &&
-        (metadata.dev !== pathMetadata.dev || metadata.ino !== pathMetadata.ino))
+      !isRestrictedRegularFile(pathMetadata) ||
+      metadata.size <= 0n ||
+      metadata.size > BigInt(MAXIMUM_GRANT_FILE_BYTES) ||
+      !sameGrantSnapshot(metadata, pathMetadata) ||
+      !pathsEqual(canonical, grantPath)
     ) {
       throw grantError("GRANT_FILE_UNSAFE", "The Enrollment Grant file changed while opening.");
     }
-    before = {
-      dev: metadata.dev,
-      ino: metadata.ino,
-      pathDev: pathMetadata.dev,
-      pathIno: pathMetadata.ino,
-      size: metadata.size,
-      mtimeMs: metadata.mtimeMs,
-    };
+    before = pathMetadata;
     bytes = await handle.readFile();
-    const afterRead = await handle.stat();
-    if (
-      bytes.byteLength !== before.size ||
-      afterRead.dev !== before.dev ||
-      afterRead.ino !== before.ino ||
-      afterRead.size !== before.size ||
-      afterRead.mtimeMs !== before.mtimeMs
-    ) {
+    const afterRead = await handle.stat({ bigint: true });
+    if (BigInt(bytes.byteLength) !== metadata.size || !sameGrantSnapshot(metadata, afterRead)) {
       throw grantError("GRANT_FILE_UNSAFE", "The Enrollment Grant file changed while reading.");
     }
   } catch (error) {
@@ -143,14 +116,11 @@ export async function executeWithEnrollmentGrantFile<TResult>(
   }
 
   try {
-    const metadata = await lstat(grantPath);
+    const metadata = await lstat(grantPath, { bigint: true });
     if (
       before === undefined ||
       !isRestrictedRegularFile(metadata) ||
-      metadata.dev !== before.pathDev ||
-      metadata.ino !== before.pathIno ||
-      metadata.size !== before.size ||
-      metadata.mtimeMs !== before.mtimeMs
+      !sameGrantSnapshot(before, metadata)
     ) {
       throw grantError(
         "GRANT_FILE_UNSAFE",
@@ -365,17 +335,32 @@ function readClock(clock: { now(): number }): number {
   return readTimestamp(now);
 }
 
-function isRestrictedRegularFile(metadata: {
-  isFile(): boolean;
-  isSymbolicLink(): boolean;
-  mode: number;
-  nlink: number;
-}): boolean {
+function isRestrictedRegularFile(metadata: BigIntStats): boolean {
   return (
     metadata.isFile() &&
     !metadata.isSymbolicLink() &&
-    metadata.nlink === 1 &&
-    (process.platform === "win32" || (metadata.mode & 0o077) === 0)
+    metadata.nlink === 1n &&
+    (process.platform === "win32" || (metadata.mode & 0o077n) === 0n)
+  );
+}
+
+function sameGrantSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameGrantFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function sameGrantFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
   );
 }
 

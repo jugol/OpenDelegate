@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants as fileConstants, type BigIntStats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
@@ -108,28 +109,38 @@ export class WorkerArtifactUploader {
     const grant = parseArtifactUploadGrant(input.grant);
     requireActiveGrant(grant, this.#clock);
     const path = requireSafeAbsolutePath(input.sourcePath);
-    const pathInfo = await lstat(path).catch((error: unknown) => {
-      throw new WorkerArtifactUploadError("SOURCE_UNSAFE", "Artifact source is unavailable.", {
-        cause: error,
-      });
-    });
-    if (pathInfo.isSymbolicLink() || !pathInfo.isFile()) {
-      throw new WorkerArtifactUploadError(
-        "SOURCE_UNSAFE",
-        "Artifact source must be a regular file, not a link.",
-      );
-    }
-
-    const handle = await open(path, "r").catch((error: unknown) => {
-      throw new WorkerArtifactUploadError(
-        "SOURCE_UNSAFE",
-        "Artifact source could not be opened safely.",
-        { cause: error },
-      );
-    });
+    const noFollow = fileConstants.O_NOFOLLOW ?? 0;
+    const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
+    const handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking).catch(
+      (error: unknown) => {
+        throw new WorkerArtifactUploadError(
+          "SOURCE_UNSAFE",
+          "Artifact source could not be opened safely.",
+          { cause: error },
+        );
+      },
+    );
     try {
-      const openedInfo = await handle.stat();
-      if (!openedInfo.isFile() || openedInfo.size !== grant.declaredSizeBytes) {
+      const openedInfo = await handle.stat({ bigint: true });
+      const pathInfo = await lstat(path, { bigint: true }).catch((error: unknown) => {
+        throw new WorkerArtifactUploadError(
+          "SOURCE_UNSAFE",
+          "Artifact source changed while it was opened.",
+          { cause: error },
+        );
+      });
+      if (
+        !openedInfo.isFile() ||
+        pathInfo.isSymbolicLink() ||
+        !pathInfo.isFile() ||
+        !sameArtifactFile(openedInfo, pathInfo)
+      ) {
+        throw new WorkerArtifactUploadError(
+          "SOURCE_UNSAFE",
+          "Artifact source must be a stable regular file, not a link.",
+        );
+      }
+      if (openedInfo.size !== BigInt(grant.declaredSizeBytes)) {
         throw new WorkerArtifactUploadError(
           "SOURCE_SIZE_MISMATCH",
           "Artifact source size does not match the Main-issued grant.",
@@ -202,12 +213,8 @@ export class WorkerArtifactUploader {
           validateProgress(progress, grant);
         }
       }
-      const finalInfo = await handle.stat();
-      if (
-        finalInfo.size !== openedInfo.size ||
-        finalInfo.mtimeMs !== openedInfo.mtimeMs ||
-        finalInfo.ctimeMs !== openedInfo.ctimeMs
-      ) {
+      const finalInfo = await handle.stat({ bigint: true });
+      if (!sameArtifactSnapshot(openedInfo, finalInfo)) {
         throw new WorkerArtifactUploadError(
           "SOURCE_UNSAFE",
           "Artifact source changed during upload.",
@@ -243,6 +250,26 @@ export class WorkerArtifactUploader {
       }
     }
   }
+}
+
+function sameArtifactFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.ino === right.ino &&
+    (left.dev === right.dev ||
+      (process.platform === "win32" &&
+        (left.dev === 0n || right.dev === 0n) &&
+        left.birthtimeNs === right.birthtimeNs))
+  );
+}
+
+function sameArtifactSnapshot(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    sameArtifactFile(left, right) &&
+    left.size === right.size &&
+    left.mode === right.mode &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
 }
 
 export class FetchWorkerArtifactUploadTransport implements WorkerArtifactUploadTransport {

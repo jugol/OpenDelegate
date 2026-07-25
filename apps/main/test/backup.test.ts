@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -345,12 +345,17 @@ test("PostgreSQL tools receive credentials only through the injected boundary", 
   const tools: MainBackupToolRunner = {
     async dumpPostgres(input) {
       observations.dump = input;
-      const metadata = await stat(input.connection.serviceFile);
-      assert.equal(metadata.isFile(), true);
-      if (process.platform !== "win32") {
-        assert.equal(metadata.mode & 0o077, 0);
+      const serviceHandle = await open(input.connection.serviceFile, "r");
+      try {
+        const metadata = await serviceHandle.stat();
+        assert.equal(metadata.isFile(), true);
+        if (process.platform !== "win32") {
+          assert.equal(metadata.mode & 0o077, 0);
+        }
+        observations.dumpServiceContents = await serviceHandle.readFile("utf8");
+      } finally {
+        await serviceHandle.close();
       }
-      observations.dumpServiceContents = await readFile(input.connection.serviceFile, "utf8");
       await writeFile(input.destination, Buffer.from("postgres-custom-archive", "utf8"), {
         flag: "wx",
         mode: 0o600,
@@ -361,7 +366,12 @@ test("PostgreSQL tools receive credentials only through the injected boundary", 
     },
     async assertPostgresTargetEmpty(input) {
       observations.preflight = input;
-      observations.preflightServiceContents = await readFile(input.connection.serviceFile, "utf8");
+      const serviceHandle = await open(input.connection.serviceFile, "r");
+      try {
+        observations.preflightServiceContents = await serviceHandle.readFile("utf8");
+      } finally {
+        await serviceHandle.close();
+      }
     },
     async restorePostgres(input) {
       observations.restore = input;

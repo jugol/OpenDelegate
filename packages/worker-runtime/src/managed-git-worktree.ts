@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 
 import Database from "better-sqlite3";
 
@@ -122,6 +123,19 @@ const COMMIT_PATTERN = /^[0-9a-f]{40,64}$/u;
 const MAX_IDENTIFIER_BYTES = 256;
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+const EXTERNAL_CHECKOUT_FILTER_PATTERN = "^filter\\..*\\.(clean|smudge|process)$";
+const TRUSTED_GIT_CONFIGURATION_ARGUMENTS = Object.freeze([
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "hook.post-checkout.enabled=false",
+  "-c",
+  "core.attributesFile=/dev/null",
+  "-c",
+  "submodule.recurse=false",
+] as const);
 
 export class ManagedGitWorktreeManager {
   readonly #database: Database.Database;
@@ -251,8 +265,7 @@ export class ManagedGitWorktreeManager {
       await this.#runGit(["-C", record.repositoryRoot, "worktree", "prune", "--expire", "now"]);
       return this.#provision(record);
     }
-    const identity = inspectRealDirectory(record.worktreePath, "WORKTREE_PATH_CHANGED");
-    await this.#assertWorktreeBinding(record);
+    const identity = await this.#materializeCreating(record);
     return this.#activate(row, record, identity);
   }
 
@@ -263,12 +276,13 @@ export class ManagedGitWorktreeManager {
         record.repositoryRoot,
         "worktree",
         "add",
+        "--no-checkout",
         "--detach",
+        "--",
         record.worktreePath,
         record.baseCommit,
       ]);
-      const identity = inspectRealDirectory(record.worktreePath, "WORKTREE_PATH_CHANGED");
-      await this.#assertWorktreeBinding(record);
+      const identity = await this.#materializeCreating(record);
       const row = this.#selectRequiredRow(record.worktreeId);
       return this.#activate(row, record, identity);
     } catch (error) {
@@ -277,6 +291,26 @@ export class ManagedGitWorktreeManager {
       }
       throw commandFailed();
     }
+  }
+
+  async #materializeCreating(record: ManagedGitWorktreeRecord): Promise<PathIdentity> {
+    if (record.state !== "creating") {
+      throw stateCorrupt();
+    }
+    const initialIdentity = inspectRealDirectory(record.worktreePath, "WORKTREE_PATH_CHANGED");
+    await this.#assertWorktreeBinding(record);
+    await this.#runGit([
+      "-C",
+      record.worktreePath,
+      "reset",
+      "--hard",
+      "--no-recurse-submodules",
+      record.baseCommit,
+    ]);
+    const materializedIdentity = inspectRealDirectory(record.worktreePath, "WORKTREE_PATH_CHANGED");
+    assertSamePathIdentity(initialIdentity, materializedIdentity);
+    await this.#assertWorktreeBinding(record);
+    return materializedIdentity;
   }
 
   #activate(
@@ -327,6 +361,7 @@ export class ManagedGitWorktreeManager {
       "rev-list",
       "--count",
       `${record.baseCommit}..HEAD`,
+      "--",
     ]);
     const commitCount = Number.parseInt(commitCountOutput.stdout.trim(), 10);
     if (!Number.isSafeInteger(commitCount) || commitCount < 0) {
@@ -380,6 +415,7 @@ export class ManagedGitWorktreeManager {
       "worktree",
       "remove",
       ...(isDirty && disposition === "discard" ? ["--force"] : []),
+      "--",
       current.worktreePath,
     ]);
     if (existsSync(current.worktreePath)) {
@@ -460,6 +496,7 @@ export class ManagedGitWorktreeManager {
       repository,
       "rev-parse",
       "--verify",
+      "--end-of-options",
       `${reference}^{commit}`,
     ]);
     const commit = result.stdout.trim().toLowerCase();
@@ -586,60 +623,242 @@ export class SpawnGitCommandRunner implements GitCommandRunner {
     ) {
       throw commandFailed();
     }
-    return new Promise<GitCommandResult>((resolveCommand, rejectCommand) => {
-      const child = spawn("git", request.arguments, {
-        shell: false,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: buildGitChildEnvironment(process.platform, process.env),
-      });
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      let outputBytes = 0;
-      let settled = false;
-      const timer = setTimeout(() => {
+    const arguments_ = withTrustedGitConfiguration(request.arguments);
+    if (!isManagedGitCommand(arguments_)) {
+      throw commandFailed();
+    }
+    const environment = buildGitChildEnvironment(process.platform, process.env);
+    const deadlineMs = performance.now() + request.timeoutMs;
+    const outputBudget = { bytes: 0 };
+    const repositoryRoot = request.arguments[1] as string;
+    const filterInspection = await executeTrustedGitCommand({
+      arguments: filterInspectionArguments(repositoryRoot),
+      environment,
+      outputBudget,
+      timeoutMs: remainingCommandTime(deadlineMs),
+    });
+    if (filterInspection.exitCode !== 1 || filterInspection.stdout.length !== 0) {
+      throw commandFailed();
+    }
+    const result = await executeTrustedGitCommand({
+      arguments: arguments_,
+      environment,
+      outputBudget,
+      timeoutMs: remainingCommandTime(deadlineMs),
+    });
+    if (result.exitCode !== 0) {
+      throw commandFailed();
+    }
+    return Object.freeze({ stdout: result.stdout });
+  }
+}
+
+interface TrustedGitExecutionResult {
+  readonly exitCode: number;
+  readonly stdout: string;
+}
+
+async function executeTrustedGitCommand(input: {
+  readonly arguments: readonly string[];
+  readonly environment: NodeJS.ProcessEnv;
+  readonly outputBudget: { bytes: number };
+  readonly timeoutMs: number;
+}): Promise<TrustedGitExecutionResult> {
+  if (!isTrustedGitInvocation(input.arguments)) {
+    throw commandFailed();
+  }
+  return new Promise<TrustedGitExecutionResult>((resolveCommand, rejectCommand) => {
+    // Both accepted grammars require the exact trusted configuration prefix, one
+    // safe absolute -C path, and fixed local-only commands with no remote or
+    // external-command option slot. Worktree creation is --no-checkout only;
+    // materialization is the fixed target-local reset after this runner has
+    // inspected effective filter configuration in that exact linked context.
+    // A same-privilege process racing configuration after inspection is the
+    // Device-compromise boundary defined by docs/THREAT_MODEL.md.
+    // codeql[js/second-order-command-line-injection]
+    const child = spawn("git", input.arguments, {
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: input.environment,
+    });
+    const stdout: Buffer[] = [];
+    let settled = false;
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(commandFailed());
+    }, input.timeoutMs);
+    timer.unref();
+    const finish = (error?: Error, result?: TrustedGitExecutionResult): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (error !== undefined) {
+        rejectCommand(error);
+      } else {
+        resolveCommand(result ?? { exitCode: -1, stdout: "" });
+      }
+    };
+    const collect = (chunk: Buffer, retain: boolean): void => {
+      if (settled) {
+        return;
+      }
+      input.outputBudget.bytes += chunk.byteLength;
+      if (input.outputBudget.bytes > MAX_COMMAND_OUTPUT_BYTES) {
         child.kill();
-        if (!settled) {
-          settled = true;
-          rejectCommand(commandFailed());
-        }
-      }, request.timeoutMs);
-      timer.unref();
-      const finish = (error?: Error, result?: GitCommandResult): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        if (error !== undefined) {
-          rejectCommand(error);
-        } else {
-          resolveCommand(result ?? { stdout: "" });
-        }
-      };
-      const collect = (target: Buffer[], chunk: Buffer): void => {
-        outputBytes += chunk.byteLength;
-        if (outputBytes > MAX_COMMAND_OUTPUT_BYTES) {
-          child.kill();
-          finish(commandFailed());
-          return;
-        }
-        target.push(chunk);
-      };
-      child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
-      child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
-      child.once("error", () => finish(commandFailed()));
-      child.once("close", (code) => {
-        if (code !== 0) {
-          finish(commandFailed());
-          return;
-        }
-        finish(undefined, {
-          stdout: Buffer.concat(stdout).toString("utf8"),
-        });
+        finish(commandFailed());
+        return;
+      }
+      if (retain) {
+        stdout.push(chunk);
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(chunk, true));
+    child.stderr.on("data", (chunk: Buffer) => collect(chunk, false));
+    child.once("error", () => finish(commandFailed()));
+    child.once("close", (code) => {
+      if (code === null || code < 0) {
+        finish(commandFailed());
+        return;
+      }
+      finish(undefined, {
+        exitCode: code,
+        stdout: Buffer.concat(stdout).toString("utf8"),
       });
     });
+  });
+}
+
+function remainingCommandTime(deadlineMs: number): number {
+  const remaining = Math.ceil(deadlineMs - performance.now());
+  if (!Number.isSafeInteger(remaining) || remaining <= 0) {
+    throw commandFailed();
   }
+  return remaining;
+}
+
+function withTrustedGitConfiguration(arguments_: readonly string[]): readonly string[] {
+  return Object.freeze([...TRUSTED_GIT_CONFIGURATION_ARGUMENTS, ...arguments_]);
+}
+
+function filterInspectionArguments(repositoryRoot: string): readonly string[] {
+  return Object.freeze([
+    ...TRUSTED_GIT_CONFIGURATION_ARGUMENTS,
+    "-C",
+    repositoryRoot,
+    "config",
+    "--null",
+    "--includes",
+    "--get-regexp",
+    EXTERNAL_CHECKOUT_FILTER_PATTERN,
+  ]);
+}
+
+function isTrustedGitInvocation(arguments_: readonly string[]): boolean {
+  return isManagedGitCommand(arguments_) || isFilterInspectionCommand(arguments_);
+}
+
+function isManagedGitCommand(arguments_: readonly string[]): boolean {
+  if (!hasTrustedGitConfiguration(arguments_)) {
+    return false;
+  }
+  const offset = TRUSTED_GIT_CONFIGURATION_ARGUMENTS.length;
+  if (
+    arguments_.length < offset + 4 ||
+    arguments_[offset] !== "-C" ||
+    !safeAbsoluteGitPath(arguments_[offset + 1])
+  ) {
+    return false;
+  }
+  const command = arguments_.slice(offset + 2);
+  if (
+    sameArguments(command, ["worktree", "prune", "--expire", "now"]) ||
+    sameArguments(command, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]) ||
+    sameArguments(command, ["rev-parse", "--show-toplevel"]) ||
+    sameArguments(command, ["rev-parse", "--path-format=absolute", "--git-common-dir"]) ||
+    sameArguments(command, ["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"])
+  ) {
+    return true;
+  }
+  if (
+    command.length === 7 &&
+    sameArguments(command.slice(0, 5), ["worktree", "add", "--no-checkout", "--detach", "--"])
+  ) {
+    return safeAbsoluteGitPath(command[5]) && COMMIT_PATTERN.test(command[6] ?? "");
+  }
+  if (
+    command.length === 4 &&
+    sameArguments(command.slice(0, 3), ["reset", "--hard", "--no-recurse-submodules"])
+  ) {
+    return COMMIT_PATTERN.test(command[3] ?? "");
+  }
+  if (
+    command.length === 4 &&
+    sameArguments(command.slice(0, 2), ["rev-list", "--count"]) &&
+    command[3] === "--"
+  ) {
+    const range = command[2] ?? "";
+    return range.endsWith("..HEAD") && COMMIT_PATTERN.test(range.slice(0, -6));
+  }
+  if (
+    (command.length === 4 || command.length === 5) &&
+    command[0] === "worktree" &&
+    command[1] === "remove"
+  ) {
+    const forceOffset = command[2] === "--force" ? 1 : 0;
+    return (
+      command.length === 4 + forceOffset &&
+      command[2 + forceOffset] === "--" &&
+      safeAbsoluteGitPath(command[3 + forceOffset])
+    );
+  }
+  return false;
+}
+
+function isFilterInspectionCommand(arguments_: readonly string[]): boolean {
+  if (!hasTrustedGitConfiguration(arguments_)) {
+    return false;
+  }
+  const offset = TRUSTED_GIT_CONFIGURATION_ARGUMENTS.length;
+  return (
+    arguments_.length === offset + 7 &&
+    arguments_[offset] === "-C" &&
+    safeAbsoluteGitPath(arguments_[offset + 1]) &&
+    sameArguments(arguments_.slice(offset + 2), [
+      "config",
+      "--null",
+      "--includes",
+      "--get-regexp",
+      EXTERNAL_CHECKOUT_FILTER_PATTERN,
+    ])
+  );
+}
+
+function hasTrustedGitConfiguration(arguments_: readonly string[]): boolean {
+  return (
+    arguments_.length >= TRUSTED_GIT_CONFIGURATION_ARGUMENTS.length &&
+    TRUSTED_GIT_CONFIGURATION_ARGUMENTS.every((argument, index) => arguments_[index] === argument)
+  );
+}
+
+function sameArguments(actual: readonly string[], expected: readonly string[]): boolean {
+  return (
+    actual.length === expected.length &&
+    actual.every((argument, index) => argument === expected[index])
+  );
+}
+
+function safeAbsoluteGitPath(value: string | undefined): value is string {
+  return (
+    typeof value === "string" &&
+    isAbsolute(value) &&
+    !value.includes("\0") &&
+    !value.includes("\r") &&
+    !value.includes("\n") &&
+    !basename(value).startsWith("-")
+  );
 }
 
 export function buildGitChildEnvironment(
@@ -670,9 +889,19 @@ export function buildGitChildEnvironment(
   copyFirstPresent("TEMP", ["TEMP"]);
   copyFirstPresent("TMP", ["TMP"]);
 
+  const nullDevice = hostPlatform === "win32" ? "NUL" : "/dev/null";
+  environment.GIT_ATTR_NOSYSTEM = "1";
+  environment.GIT_CONFIG_GLOBAL = nullDevice;
+  environment.GIT_CONFIG_NOSYSTEM = "1";
+  environment.GIT_CONFIG_SYSTEM = nullDevice;
+  environment.GIT_NO_LAZY_FETCH = "1";
+  environment.GIT_OPTIONAL_LOCKS = "0";
+  environment.GIT_PAGER = "";
+  environment.GIT_PROTOCOL_FROM_USER = "0";
   environment.GIT_TERMINAL_PROMPT = "0";
   environment.LANG = "C";
   environment.LC_ALL = "C";
+  environment.PAGER = "";
   return environment;
 }
 
@@ -768,13 +997,21 @@ function assertPathIdentity(row: WorktreeRow): void {
     throw stateCorrupt();
   }
   const current = inspectRealDirectory(row.worktree_path, "WORKTREE_PATH_CHANGED");
+  const recorded = Object.freeze({
+    canonicalPath: row.worktree_path,
+    device: row.path_device,
+    inode: row.path_inode,
+    birthtimeMs: row.path_birthtime_ms,
+  });
+  assertSamePathIdentity(recorded, current);
+}
+
+function assertSamePathIdentity(expected: PathIdentity, actual: PathIdentity): void {
   if (
-    current.canonicalPath !== row.worktree_path ||
-    current.device !== row.path_device ||
-    current.inode !== row.path_inode ||
-    (current.device === "0" &&
-      current.inode === "0" &&
-      current.birthtimeMs !== row.path_birthtime_ms)
+    actual.canonicalPath !== expected.canonicalPath ||
+    actual.device !== expected.device ||
+    actual.inode !== expected.inode ||
+    (actual.device === "0" && actual.inode === "0" && actual.birthtimeMs !== expected.birthtimeMs)
   ) {
     throw pathChanged();
   }
