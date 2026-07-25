@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -23,7 +23,7 @@ import {
 
 describe("signed two-plane runtime", () => {
   it("keeps the headless core alive across helper loss and fences a replacement helper", async () => {
-    const root = await mkdtemp(join(tmpdir(), "opendelegate-signed-bridge-"));
+    const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-signed-bridge-")));
     const checkout = join(root, "checkout");
     const runtimeRoot = join(root, "run");
     const authorityRoot = join(root, "authority");

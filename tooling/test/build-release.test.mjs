@@ -377,6 +377,17 @@ test("release CLI detection follows canonical filesystem paths", async (t) => {
   assert.equal(await isDirectReleaseInvocation(join(root, "missing.mjs"), modulePath), false);
 });
 
+test("workspace bin entrypoints are committed executable before pnpm links them", async () => {
+  const { stdout } = await execFile(
+    "git",
+    ["ls-files", "--stage", "--", "apps/main/src/cli.ts", "apps/worker/src/cli.ts"],
+    { cwd: repositoryRoot },
+  );
+
+  assert.match(stdout, /^100755 [0-9a-f]+ 0\tapps\/main\/src\/cli\.ts$/mu);
+  assert.match(stdout, /^100755 [0-9a-f]+ 0\tapps\/worker\/src\/cli\.ts$/mu);
+});
+
 test("the release runtime pin matches local and hosted build configuration", async () => {
   assert.equal(
     (await readFile(join(repositoryRoot, ".node-version"), "utf8")).trim(),

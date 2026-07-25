@@ -954,7 +954,9 @@ test("native backend output and failures cannot echo a Secret into diagnostics",
 
 test(
   "Windows DPAPI protects and restores a Device-local binary Secret",
-  { skip: process.platform !== "win32" },
+  {
+    skip: process.platform !== "win32" || process.env["OPENDELEGATE_TEST_SKIP_LIVE_DPAPI"] === "1",
+  },
   async () => {
     const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-dpapi-live-");
     const sourceCheckoutRoot = join(fixtureRoot, "checkout");

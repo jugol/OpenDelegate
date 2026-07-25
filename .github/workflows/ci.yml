@@ -48,6 +48,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify live Windows DPAPI Secret Store
+        if: runner.os == 'Windows'
+        run: >-
+          pnpm --filter @opendelegate/secrets exec node --experimental-strip-types --test
+          --test-name-pattern "Windows DPAPI protects and restores"
+          test/managed-secret-store.test.ts
+
       - name: Compile and test the native macOS Computer Use helper
         if: runner.os == 'macOS'
         run: |
@@ -86,6 +93,8 @@ jobs:
 
       - name: Run acceptance and unit harness
         run: pnpm test
+        env:
+          OPENDELEGATE_TEST_SKIP_LIVE_DPAPI: ${{ runner.os == 'Windows' && '1' || '0' }}
 
       - name: Build applications
         run: pnpm build
