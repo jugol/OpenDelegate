@@ -1,13 +1,11 @@
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 
 import type { SecretKeyProvider, SystemdCredentialKeyProviderConfig } from "./contracts.ts";
 import { SecretError } from "./secret-error.ts";
 
 const KEY_BYTES = 32;
-const DEFAULT_CREDENTIAL_ROOT = "/run/credentials";
-
 export class SystemdCredentialKeyProvider implements SecretKeyProvider {
   readonly #allowedCredentialRoot: string;
   readonly #credentialDirectory: string;
@@ -18,10 +16,17 @@ export class SystemdCredentialKeyProvider implements SecretKeyProvider {
     if ((config.hostPlatform ?? process.platform) !== "linux") {
       throw configurationInvalid();
     }
-    this.#allowedCredentialRoot = validateAbsolutePath(
-      config.allowedCredentialRoot ?? DEFAULT_CREDENTIAL_ROOT,
-    );
     this.#credentialDirectory = validateAbsolutePath(config.credentialDirectory);
+    const serviceManagerCredentialRoot = dirname(this.#credentialDirectory);
+    if (
+      config.allowedCredentialRoot === undefined &&
+      serviceManagerCredentialRoot === parse(serviceManagerCredentialRoot).root
+    ) {
+      throw configurationInvalid();
+    }
+    this.#allowedCredentialRoot = validateAbsolutePath(
+      config.allowedCredentialRoot ?? serviceManagerCredentialRoot,
+    );
     this.#sourceCheckoutRoot = validateAbsolutePath(config.sourceCheckoutRoot);
     if (
       typeof config.credentialName !== "string" ||
