@@ -23,9 +23,9 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+          - ubuntu-24.04
+          - windows-2025
+          - macos-26
 
     steps:
       - name: Check out repository
@@ -47,6 +47,27 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Compile and test the native macOS Computer Use helper
+        if: runner.os == 'macOS'
+        run: |
+          swift test \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-tests"
+          swift build \
+            --configuration release \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-release" \
+            --product opendelegate-macos-computer-use
+          swift build \
+            --configuration release \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-release" \
+            --product opendelegate-computer-use-fixture
+
+      - name: Compile and self-test the native Windows Computer Use helper
+        if: runner.os == 'Windows'
+        run: pnpm --filter @opendelegate/computer-use-os native:windows:build
 
       - name: Verify canonical planning-document links
         run: pnpm docs:check
@@ -116,7 +137,7 @@ jobs:
 
   node-22-compatibility:
     name: Verify temporary Node 22 floor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -148,7 +169,7 @@ jobs:
 
   postgres-integration:
     name: Verify PostgreSQL persistence
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     services:

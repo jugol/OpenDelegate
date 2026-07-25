@@ -194,7 +194,11 @@ export function localizeCapabilityState(state: CapabilityState, messages: Messag
 }
 
 export function localizePresentationText(value: PresentationText, messages: Messages): string {
-  return typeof value === "string" ? value : messages.known[value.messageKey];
+  if (typeof value === "string") {
+    return value;
+  }
+  const message = messages.known[value.messageKey];
+  return value.values === undefined ? message : formatMessage(message, value.values);
 }
 
 function browserStorage(): Pick<Storage, "getItem"> | undefined {

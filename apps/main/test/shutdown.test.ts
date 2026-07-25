@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { reportCliFailure, shutdownMainRuntime } from "../src/cli.ts";
 import { MainRuntimeError } from "../src/index.ts";
-import { cleanupFailureFor, closeAfterPrimaryFailure, MainShutdownError } from "../src/shutdown.ts";
+import {
+  cleanupFailureFor,
+  closeAfterPrimaryFailure,
+  closeMainResources,
+  MainShutdownError,
+} from "../src/shutdown.ts";
 
 test("shutdown listeners release a real child process after success and failure", async () => {
   const successful = await runShutdownChild("success");
@@ -80,6 +85,63 @@ test("one shutdown failure still settles the remaining closer and omits main.sto
 
   assert.equal(claimClosed, true);
   assert.doesNotMatch(output, /"event":"main\.stopped"/u);
+});
+
+test("cleanup preserves dependency order instead of closing repositories concurrently", async () => {
+  let releaseIngress!: () => void;
+  const ingressReleased = new Promise<void>((resolve) => {
+    releaseIngress = resolve;
+  });
+  let repositoryCloseStarted = false;
+  const closing = closeMainResources([
+    {
+      operation: "ingress",
+      close: async () => {
+        await ingressReleased;
+      },
+    },
+    {
+      operation: "repository",
+      close: async () => {
+        repositoryCloseStarted = true;
+      },
+    },
+  ]);
+
+  await Promise.resolve();
+  assert.equal(repositoryCloseStarted, false);
+  releaseIngress();
+  await closing;
+  assert.equal(repositoryCloseStarted, true);
+});
+
+test("sequential cleanup continues after a failed dependency close", async () => {
+  const ingressFailure = new Error("private ingress close detail");
+  const closed: string[] = [];
+  await assert.rejects(
+    closeMainResources([
+      {
+        operation: "ingress",
+        close: async () => {
+          closed.push("ingress");
+          throw ingressFailure;
+        },
+      },
+      {
+        operation: "repository",
+        close: async () => {
+          closed.push("repository");
+        },
+      },
+    ]),
+    (error: unknown) => {
+      assert.ok(error instanceof MainShutdownError);
+      assert.deepEqual(error.operations, ["ingress"]);
+      assert.deepEqual(error.errors, [ingressFailure]);
+      return true;
+    },
+  );
+  assert.deepEqual(closed, ["ingress", "repository"]);
 });
 
 test("multiple shutdown failures are aggregated and reported without private details", async () => {

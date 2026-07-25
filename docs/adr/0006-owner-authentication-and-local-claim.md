@@ -50,7 +50,13 @@ Argon2id implementation plus Node.js cryptographic primitives.
 4. Owner creation, claim consumption, passphrase hash creation, and recovery-code
    hash creation commit atomically. A replay, expired token, pre-existing owner, or
    remote request fails closed.
-5. Main removes the loopback claim listener after successful claim. Creating a new
+5. If an unclaimed Main process exits after persisting a claim, the raw token is
+   intentionally unrecoverable from its digest. A later local `init` process may
+   atomically invalidate that claim and issue a replacement only after it has
+   acquired exclusive Main singleton ownership. The old token fails immediately,
+   the replacement is audited distinctly, and this path never resets an existing
+   owner.
+6. Main removes the loopback claim listener after successful claim. Creating a new
    claim after initialization requires an explicit local recovery command and does
    not erase the existing owner automatically.
 
@@ -154,6 +160,8 @@ required.
 - Remote listeners have no claim route, and forwarded headers cannot turn a remote
   peer into loopback.
 - Concurrent or replayed claim and recovery requests produce exactly one winner.
+- Killing an unclaimed Main after claim issuance and restarting local `init`
+  immediately opens a replacement listener; the abandoned token no longer works.
 - Database inspection finds only password PHC strings and token/code digests.
 - Origin, content type, cookie flags, CSRF, expiry, rate-limit, logout, individual
   revocation, and revoke-all contract tests pass.

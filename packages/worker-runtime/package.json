@@ -11,6 +11,7 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@opendelegate/agent-adapters": "workspace:*",
     "@opendelegate/protocol": "workspace:*",
     "@opendelegate/transport": "workspace:*",
     "better-sqlite3": "13.0.1"

@@ -9,6 +9,15 @@ import {
   type SecureRandomSource,
 } from "@opendelegate/owner-auth";
 import { InMemoryEventStore } from "@opendelegate/event-store";
+import type {
+  ApprovalDetailV1,
+  ArtifactDetailV1,
+  AuditEventSummaryV1,
+  DeviceEnrollmentOverviewV1,
+  DeviceSummaryV1,
+  IssueEnrollmentGrantResponseV1,
+  TaskBudgetSnapshotV1,
+} from "@opendelegate/protocol";
 import { TaskService } from "@opendelegate/task-service";
 
 import {
@@ -16,6 +25,9 @@ import {
   createMainControlPlaneApp,
   OWNER_SESSION_COOKIE_NAME,
 } from "../src/index.ts";
+import type { ApprovalPort, SecureSecretIngestInput } from "../src/index.ts";
+import type { ArtifactAdminPort, AuditAdminPort, DeviceEnrollmentAdminPort } from "../src/index.ts";
+import type { TaskBudgetAdminPort } from "../src/index.ts";
 
 const ADMIN_ORIGIN = "https://admin.test";
 const ADMIN_HOST = "admin.test";
@@ -750,6 +762,456 @@ test("HTTP ingress rate limiting returns a sanitized problem", async () => {
   }
 });
 
+test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound", async () => {
+  const { ownerAuth } = createAuthFixture();
+  const owner = await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const calls: unknown[] = [];
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+    devices: [MAIN_DEVICE],
+    runtimeFeatures: {
+      releaseChannel: "development",
+      taskExecution: { status: "unavailable", code: "TEST_TASK_UNAVAILABLE" },
+      configurationAgent: { status: "ready", code: "TEST_CONFIGURATION_AGENT_READY" },
+      discord: { status: "unavailable", code: "TEST_DISCORD_UNAVAILABLE" },
+    },
+    configurationAgent: {
+      async sendMessage(input) {
+        calls.push(input);
+        return {
+          messageId: "configuration_message_001",
+          sessionId: "configuration_session_device_main",
+          content: "I prepared a reviewable Device-scoped proposal.",
+          occurredAt: "2026-07-24T00:00:00.000Z",
+        };
+      },
+    },
+  });
+
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "configuration-message-1",
+      },
+      payload: {
+        message: "Inspect this Device and recommend a safe setup.",
+      },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), {
+      messageId: "configuration_message_001",
+      sessionId: "configuration_session_device_main",
+      content: "I prepared a reviewable Device-scoped proposal.",
+      occurredAt: "2026-07-24T00:00:00.000Z",
+    });
+    assert.deepEqual(calls, [
+      {
+        deviceId: MAIN_DEVICE.deviceId,
+        principalId: owner.ownerId,
+        idempotencyKey: "configuration-message-1",
+        message: "Inspect this Device and recommend a safe setup.",
+      },
+    ]);
+
+    const unknownDevice = await app.inject({
+      method: "POST",
+      url: "/api/v1/devices/device_unknown/configuration/messages",
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "configuration-message-2",
+      },
+      payload: { message: "Inspect an unknown Device." },
+    });
+    assert.equal(unknownDevice.statusCode, 404);
+    assert.equal(unknownDevice.json().code, "DEVICE_NOT_FOUND");
+    assert.equal(calls.length, 1);
+
+    const secretShapedField = await app.inject({
+      method: "POST",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "configuration-message-3",
+      },
+      payload: {
+        message: "Configure a credential reference.",
+        secretValue: "must-not-cross-this-contract",
+      },
+    });
+    assert.equal(secretShapedField.statusCode, 400);
+    assert.doesNotMatch(secretShapedField.body, /must-not-cross|secretValue/i);
+    assert.equal(calls.length, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Approval routes require owner auth, CSRF, and idempotency for exact decisions", async () => {
+  const { ownerAuth } = createAuthFixture();
+  const owner = await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const projected: ApprovalDetailV1 = {
+    approvalId: "approval_001",
+    state: "pending" as const,
+    executionStatus: "waiting" as const,
+    requestedAt: "2026-07-24T00:00:00.000Z",
+    expiresAt: "2026-07-25T00:00:00.000Z",
+    action: {
+      category: "policy-relaxation" as const,
+      type: "configuration.apply",
+      fingerprint: `sha256:${"a".repeat(64)}`,
+      targetDeviceId: "device_main",
+      resource: "configuration-proposal:proposal_001",
+    },
+    reason: "Allow automatic network changes.",
+    target: "device_main",
+    risk: "high" as const,
+    evidence: ["policy.network-change at Device scope"],
+    configuration: {
+      proposalId: "proposal_001",
+      baseRevision: 4,
+      changes: [
+        {
+          key: "policy.network-change",
+          scope: { kind: "device" as const, id: "device_main" },
+          before: { present: true as const, valueJson: '"require-approval"' },
+          after: { present: true as const, valueJson: '"allow"' },
+        },
+      ],
+    },
+  };
+  const calls: unknown[] = [];
+  const decisions = new Map<string, ApprovalDetailV1>();
+  const approvals: ApprovalPort = {
+    list: async () => [projected],
+    get: async (approvalId) => {
+      assert.equal(approvalId, projected.approvalId);
+      return projected;
+    },
+    decide: async (input) => {
+      calls.push(input);
+      const existing = decisions.get(input.idempotencyKey);
+      if (existing !== undefined) {
+        return existing;
+      }
+      assert.deepEqual(input.decision, { decision: "approve", scope: "once" });
+      const result = {
+        ...projected,
+        state: "approved" as const,
+        executionStatus: "succeeded" as const,
+        decision: {
+          decision: "approve" as const,
+          scope: "once" as const,
+          decidedBy: input.principalId,
+          decidedAt: "2026-07-24T00:01:00.000Z",
+        },
+      };
+      decisions.set(input.idempotencyKey, result);
+      return result;
+    },
+  };
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+    approvals,
+  });
+
+  try {
+    const anonymous = await app.inject({
+      method: "GET",
+      url: "/api/v1/approvals",
+      headers: { host: ADMIN_HOST },
+    });
+    assert.equal(anonymous.statusCode, 401);
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/v1/approvals",
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.equal(listed.statusCode, 200);
+    assert.deepEqual(listed.json(), { approvals: [projected] });
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/v1/approvals/${projected.approvalId}`,
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.equal(preview.statusCode, 200);
+    assert.deepEqual(preview.json(), projected);
+
+    const missingCsrf = await app.inject({
+      method: "POST",
+      url: `/api/v1/approvals/${projected.approvalId}/decision`,
+      headers: {
+        host: ADMIN_HOST,
+        cookie: authenticated.cookie,
+        origin: ADMIN_ORIGIN,
+        "content-type": "application/json",
+        "idempotency-key": "approval-decision-001",
+      },
+      payload: { decision: "approve", scope: "once" },
+    });
+    assert.equal(missingCsrf.statusCode, 403);
+    assert.equal(calls.length, 0);
+
+    const headers = {
+      ...authenticatedMutationHeaders(authenticated),
+      "idempotency-key": "approval-decision-001",
+    };
+    const approved = await app.inject({
+      method: "POST",
+      url: `/api/v1/approvals/${projected.approvalId}/decision`,
+      headers,
+      payload: { decision: "approve", scope: "once" },
+    });
+    const replay = await app.inject({
+      method: "POST",
+      url: `/api/v1/approvals/${projected.approvalId}/decision`,
+      headers,
+      payload: { decision: "approve", scope: "once" },
+    });
+    assert.equal(approved.statusCode, 200);
+    assert.deepEqual(replay.json(), approved.json());
+    assert.deepEqual(calls, [
+      {
+        approvalId: projected.approvalId,
+        principalId: owner.ownerId,
+        idempotencyKey: "approval-decision-001",
+        decision: { decision: "approve", scope: "once" },
+      },
+      {
+        approvalId: projected.approvalId,
+        principalId: owner.ownerId,
+        idempotencyKey: "approval-decision-001",
+        decision: { decision: "approve", scope: "once" },
+      },
+    ]);
+
+    const leaked = await app.inject({
+      method: "POST",
+      url: `/api/v1/approvals/${projected.approvalId}/decision`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "approval-decision-leaked",
+      },
+      payload: {
+        decision: "approve",
+        scope: "once",
+        secretValue: "must-not-cross-the-approval-boundary",
+      },
+    });
+    assert.equal(leaked.statusCode, 400);
+    assert.doesNotMatch(leaked.body, /must-not-cross|secretValue/i);
+  } finally {
+    await app.close();
+  }
+});
+
+test("owner operations routes expose Device enrollment, Artifact metadata, and redacted Audit diagnostics", async () => {
+  const { ownerAuth } = createAuthFixture();
+  const owner = await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const NOW = "2026-07-25T00:00:00.000Z";
+  const enrollmentOverview: DeviceEnrollmentOverviewV1 = {
+    available: true,
+    mainDeviceId: MAIN_DEVICE.deviceId,
+    expectedMainSpkiSha256: "a".repeat(64),
+    enrollmentUrl: "https://main.test:9443/api/v1/device/enroll",
+    channelEndpoints: [
+      {
+        endpointId: "main-worker-channel",
+        label: "Main Worker channel",
+        kind: "wss",
+        url: "wss://main.test:9444/api/v1/device/channel",
+      },
+    ],
+    grants: [],
+  };
+  const issued: IssueEnrollmentGrantResponseV1 = {
+    summary: {
+      grantId: "grant_001",
+      deviceId: "device_worker",
+      status: "active",
+      allowedBootstrapRoles: ["worker"],
+      createdAt: NOW,
+      expiresAt: "2026-07-25T00:05:00.000Z",
+    },
+    suggestedFilename: "opendelegate-device_worker-grant.json",
+    document: {
+      schemaVersion: 1,
+      grantId: "grant_001",
+      token: "g".repeat(43),
+      deviceId: "device_worker",
+      mainDeviceId: MAIN_DEVICE.deviceId,
+      expectedMainSpkiSha256: "a".repeat(64),
+      certificateAuthorityPem: `-----BEGIN CERTIFICATE-----\n${"A".repeat(96)}\n-----END CERTIFICATE-----\n`,
+      enrollmentUrl: "https://main.test:9443/api/v1/device/enroll",
+      channelEndpoints: enrollmentOverview.channelEndpoints ?? [],
+      protocolRange: { minimum: 1, maximum: 1 },
+      expiresAt: Date.parse("2026-07-25T00:05:00.000Z"),
+    },
+  };
+  const artifact: ArtifactDetailV1 = {
+    artifactId: "artifact_report",
+    taskId: "task_release",
+    producingRunId: "run_worker",
+    mediaType: "text/html",
+    originalFilename: "release-report.html",
+    sizeBytes: 4096,
+    checksum: { algorithm: "sha256", value: "b".repeat(64) },
+    createdAt: NOW,
+    retentionPolicy: {
+      kind: "temporary",
+      expiresAt: "2026-07-26T00:00:00.000Z",
+    },
+    exposurePolicy: { mode: "authenticated" },
+    provenance: {
+      deviceId: "device_worker",
+      source: "worker-upload",
+    },
+    presentation: "static-html",
+    state: "available",
+  };
+  const auditEvent: AuditEventSummaryV1 = {
+    auditId: "audit_001",
+    source: "device-identity",
+    type: "device.enrolled",
+    occurredAt: NOW,
+    outcome: "succeeded",
+    subjectId: "device_worker",
+    deviceId: "device_worker",
+  };
+  const calls: unknown[] = [];
+  const enrollment: DeviceEnrollmentAdminPort = {
+    overview: async () => enrollmentOverview,
+    issue: async (input) => {
+      calls.push(input);
+      return issued;
+    },
+  };
+  const artifacts: ArtifactAdminPort = {
+    list: async () => [artifact],
+    get: async (artifactId) => {
+      assert.equal(artifactId, artifact.artifactId);
+      return artifact;
+    },
+    open: async (input) => {
+      calls.push(input);
+      return {
+        method: "POST",
+        actionUrl: "https://static.artifacts.test/artifacts/artifact_report",
+        fieldName: "grant",
+        fieldValue: "x".repeat(43),
+        artifactId: artifact.artifactId,
+        expiresAt: "2026-07-25T00:01:00.000Z",
+      };
+    },
+  };
+  const audit: AuditAdminPort = {
+    list: async () => [auditEvent],
+  };
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+    enrollment,
+    artifacts,
+    audit,
+  });
+
+  try {
+    for (const url of ["/api/v1/device-enrollment", "/api/v1/artifacts", "/api/v1/audit-events"]) {
+      const anonymous = await app.inject({ method: "GET", url, headers: { host: ADMIN_HOST } });
+      assert.equal(anonymous.statusCode, 401);
+    }
+
+    const overview = await app.inject({
+      method: "GET",
+      url: "/api/v1/device-enrollment",
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.deepEqual(overview.json(), enrollmentOverview);
+
+    const grant = await app.inject({
+      method: "POST",
+      url: "/api/v1/device-enrollment/grants",
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "enrollment-grant-001",
+      },
+      payload: { deviceId: "device_worker", expiresInSeconds: 300 },
+    });
+    assert.equal(grant.statusCode, 201);
+    assert.deepEqual(grant.json(), issued);
+    assert.match(grant.headers["cache-control"] ?? "", /no-store/u);
+
+    const artifactList = await app.inject({
+      method: "GET",
+      url: "/api/v1/artifacts",
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.deepEqual(artifactList.json(), { artifacts: [artifact] });
+    const artifactDetail = await app.inject({
+      method: "GET",
+      url: `/api/v1/artifacts/${artifact.artifactId}`,
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.deepEqual(artifactDetail.json(), artifact);
+    const opened = await app.inject({
+      method: "POST",
+      url: `/api/v1/artifacts/${artifact.artifactId}/open`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "artifact-open-001",
+      },
+      payload: {},
+    });
+    assert.equal(opened.statusCode, 200);
+    assert.equal(opened.json().method, "POST");
+
+    const auditResponse = await app.inject({
+      method: "GET",
+      url: "/api/v1/audit-events",
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.deepEqual(auditResponse.json(), { events: [auditEvent] });
+    assert.doesNotMatch(auditResponse.body, /knowledge|secret|payload/iu);
+
+    assert.deepEqual(calls, [
+      {
+        deviceId: "device_worker",
+        expiresInSeconds: 300,
+        principalId: owner.ownerId,
+        idempotencyKey: "enrollment-grant-001",
+      },
+      {
+        artifactId: artifact.artifactId,
+        principalId: owner.ownerId,
+        idempotencyKey: "artifact-open-001",
+      },
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
 test("authenticated Task routes provide idempotent Discord-independent emergency control", async () => {
   const { ownerAuth, clock } = createAuthFixture();
   await claimOwner(ownerAuth);
@@ -854,6 +1316,235 @@ test("authenticated Task routes provide idempotent Discord-independent emergency
   }
 });
 
+test("Task Budget routes require owner auth, CSRF, exact limits, and an idempotency identity", async () => {
+  const { ownerAuth } = createAuthFixture();
+  const claimed = await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const snapshot = taskBudgetSnapshot();
+  const extensionInputs: Parameters<TaskBudgetAdminPort["extend"]>[0][] = [];
+  const budgets: TaskBudgetAdminPort = {
+    async get(taskId) {
+      assert.equal(taskId, snapshot.taskId);
+      return snapshot;
+    },
+    async extend(input) {
+      extensionInputs.push(structuredClone(input));
+      return {
+        ...snapshot,
+        revision: snapshot.revision + 1,
+      };
+    },
+  };
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-budget",
+    },
+    budgets,
+  });
+
+  try {
+    const anonymous = await app.inject({
+      method: "GET",
+      url: `/api/v1/tasks/${snapshot.taskId}/budget`,
+      headers: { host: ADMIN_HOST },
+    });
+    assert.equal(anonymous.statusCode, 401);
+
+    const read = await app.inject({
+      method: "GET",
+      url: `/api/v1/tasks/${snapshot.taskId}/budget`,
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.equal(read.statusCode, 200);
+    assert.deepEqual(read.json(), snapshot);
+
+    const invalidCsrf = await app.inject({
+      method: "POST",
+      url: `/api/v1/tasks/${snapshot.taskId}/budget/extensions`,
+      headers: {
+        ...authenticatedMutationHeaders({
+          ...authenticated,
+          csrfToken: "x".repeat(43),
+        }),
+        "idempotency-key": "extend-budget-invalid-csrf",
+      },
+      payload: {
+        baseRevision: snapshot.revision,
+        limits: snapshot.limits,
+      },
+    });
+    assert.equal(invalidCsrf.statusCode, 403);
+    assert.equal(extensionInputs.length, 0);
+
+    const incomplete = await app.inject({
+      method: "POST",
+      url: `/api/v1/tasks/${snapshot.taskId}/budget/extensions`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "extend-budget-incomplete",
+      },
+      payload: {
+        baseRevision: snapshot.revision,
+        limits: { tokens: { hard: 2_000 } },
+      },
+    });
+    assert.equal(incomplete.statusCode, 400);
+    assert.equal(incomplete.json().code, "INVALID_REQUEST");
+    assert.equal(extensionInputs.length, 0);
+
+    const missingIdempotency = await app.inject({
+      method: "POST",
+      url: `/api/v1/tasks/${snapshot.taskId}/budget/extensions`,
+      headers: authenticatedMutationHeaders(authenticated),
+      payload: {
+        baseRevision: snapshot.revision,
+        limits: snapshot.limits,
+      },
+    });
+    assert.equal(missingIdempotency.statusCode, 400);
+    assert.equal(missingIdempotency.json().code, "IDEMPOTENCY_KEY_INVALID");
+
+    const extended = await app.inject({
+      method: "POST",
+      url: `/api/v1/tasks/${snapshot.taskId}/budget/extensions`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "extend-budget-release",
+      },
+      payload: {
+        baseRevision: snapshot.revision,
+        limits: snapshot.limits,
+      },
+    });
+    assert.equal(extended.statusCode, 200);
+    assert.equal(extended.json().revision, snapshot.revision + 1);
+    assert.deepEqual(extensionInputs, [
+      {
+        taskId: snapshot.taskId,
+        principalId: claimed.ownerId,
+        idempotencyKey: "extend-budget-release",
+        baseRevision: snapshot.revision,
+        limits: snapshot.limits,
+      },
+    ]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("secure Secret ingest requires owner auth and CSRF, forwards bounded bytes, and zeroizes them", async () => {
+  const { ownerAuth } = createAuthFixture();
+  const owner = await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const calls: SecureSecretIngestInput[] = [];
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+    secretIngest: {
+      ingest: async (input) => {
+        assert.equal(
+          Buffer.from(input.secret).toString("utf8"),
+          "postgresql://owner:secure-only@database.test/main",
+        );
+        calls.push(input);
+        return {
+          schemaVersion: 1,
+          secretRef: "secret://main/database_test",
+          availability: "ready",
+        };
+      },
+    },
+  });
+  const material = Buffer.from("postgresql://owner:secure-only@database.test/main", "utf8");
+  const payload = {
+    purpose: "database-uri",
+    secretBase64: material.toString("base64"),
+  };
+
+  try {
+    const anonymous = await app.inject({
+      method: "POST",
+      url: "/api/v1/secrets/ingest",
+      headers: {
+        ...publicMutationHeaders(),
+        "idempotency-key": "secret-ingest-anonymous",
+      },
+      payload,
+    });
+    assert.equal(anonymous.statusCode, 401);
+    assert.equal(anonymous.json().code, "AUTHENTICATION_REQUIRED");
+    assert.equal(calls.length, 0);
+
+    const invalidCsrf = await app.inject({
+      method: "POST",
+      url: "/api/v1/secrets/ingest",
+      headers: {
+        ...authenticatedMutationHeaders({
+          ...authenticated,
+          csrfToken: "x".repeat(43),
+        }),
+        "idempotency-key": "secret-ingest-invalid-csrf",
+      },
+      payload,
+    });
+    assert.equal(invalidCsrf.statusCode, 403);
+    assert.equal(invalidCsrf.json().code, "CSRF_INVALID");
+    assert.equal(calls.length, 0);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/secrets/ingest",
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "secret-ingest-database-1",
+      },
+      payload,
+    });
+    assert.equal(response.statusCode, 201);
+    assert.deepEqual(response.json(), {
+      schemaVersion: 1,
+      secretRef: "secret://main/database_test",
+      availability: "ready",
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.principalId, owner.ownerId);
+    assert.equal(calls[0]?.idempotencyKey, "secret-ingest-database-1");
+    assert.equal(calls[0]?.purpose, "database-uri");
+    assert.ok(calls[0]?.secret.every((byte) => byte === 0));
+    assert.equal(response.body.includes(payload.secretBase64), false);
+    assert.equal(response.body.includes("secure-only"), false);
+
+    const oversized = Buffer.alloc(65_537, 0x61);
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/v1/secrets/ingest",
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "secret-ingest-oversized",
+      },
+      payload: {
+        purpose: "service-credential",
+        secretBase64: oversized.toString("base64"),
+      },
+    });
+    oversized.fill(0);
+    assert.equal(rejected.statusCode, 400);
+    assert.equal(rejected.json().code, "SECRET_INGEST_INVALID");
+    assert.equal(calls.length, 1);
+    assert.equal(rejected.body.includes("YWFhYWFh"), false);
+  } finally {
+    material.fill(0);
+    await app.close();
+  }
+});
+
 test("authenticated Device route returns exactly the supplied Device and no inferred state", async () => {
   const { ownerAuth } = createAuthFixture();
   await claimOwner(ownerAuth);
@@ -904,3 +1595,99 @@ test("authenticated Device route returns exactly the supplied Device and no infe
     await app.close();
   }
 });
+
+test("authenticated Device routes read the current durable fleet projection", async () => {
+  const { ownerAuth } = createAuthFixture();
+  await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  let devices: DeviceSummaryV1[] = [MAIN_DEVICE];
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+    deviceDirectory: {
+      list: async () => devices,
+    },
+  });
+
+  try {
+    devices = [
+      MAIN_DEVICE,
+      {
+        ...MAIN_DEVICE,
+        deviceId: "device-worker-1",
+        name: "Worker",
+        role: "worker",
+      },
+    ];
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/devices",
+      headers: {
+        host: ADMIN_HOST,
+        cookie: authenticated.cookie,
+      },
+    });
+    assert.deepEqual(
+      response.json().devices.map((device: { deviceId: string }) => device.deviceId),
+      ["device_main", "device-worker-1"],
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+function taskBudgetSnapshot(): TaskBudgetSnapshotV1 {
+  const limits = {
+    wallTimeMs: { soft: 50_000, hard: 60_000 },
+    idleTimeMs: { soft: 5_000, hard: 10_000 },
+    retries: { soft: 1, hard: 2 },
+    childWorkOrders: { soft: 1, hard: 2 },
+    concurrentRuns: { soft: 1, hard: 2 },
+    nativeTurns: { soft: 3, hard: 4 },
+    tokens: { soft: 800, hard: 1_000 },
+    costUsdMicros: { soft: 8_000, hard: 10_000 },
+  };
+  return {
+    schemaVersion: 1,
+    taskId: "task_budget_release",
+    kind: "requested",
+    revision: 1,
+    createdAt: "2026-07-25T00:00:00.000Z",
+    lastActivityAt: "2026-07-25T00:00:01.000Z",
+    limits,
+    usage: {
+      wallTimeMs: 1_000,
+      idleTimeMs: 100,
+      retries: 0,
+      childWorkOrders: 1,
+      concurrentRuns: 1,
+      nativeTurns: 1,
+      tokens: 850,
+      costUsdMicros: 5_000,
+    },
+    workOrders: [],
+    activeRunIds: ["run_budget_release"],
+    limitEvents: [
+      {
+        eventId: "event_budget_soft_tokens",
+        metric: "tokens",
+        state: "soft-limit",
+        current: 850,
+        hard: 1_000,
+        attempted: 850,
+        occurredAt: "2026-07-25T00:00:01.000Z",
+      },
+    ],
+    extensions: [],
+    omitted: {
+      workOrders: 0,
+      activeRunIds: 0,
+      limitEvents: 0,
+      extensions: 0,
+    },
+  };
+}

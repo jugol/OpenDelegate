@@ -1,5 +1,8 @@
 export { validateSupervisorCommands } from "./command-validation.ts";
-export { createPlatformServiceDefinition } from "./configuration.ts";
+export {
+  createPlatformServiceDefinition,
+  parsePlatformServiceConfiguration,
+} from "./configuration.ts";
 export {
   createServiceDiagnostic,
   type CreateServiceDiagnosticInput,
@@ -7,6 +10,12 @@ export {
   type ServiceDiagnostic,
   type SupervisorState,
 } from "./diagnostics.ts";
+export {
+  isRunningCoreHealthResponseV1,
+  type CoreHealthResponseV1,
+  type CoreHealthState,
+  type ExpectedCoreHealthIdentity,
+} from "./core-health-contract.ts";
 export {
   parseLaunchdPlist,
   parseSystemdUnit,
@@ -17,6 +26,7 @@ export {
 } from "./manifest-parsers.ts";
 export {
   executeServicePlan,
+  type PlanActionExecutionResult,
   type PlanExecutionAdapter,
   type RollbackFailure,
   type ServicePlanExecutionReport,
@@ -32,6 +42,37 @@ export {
   type ServicePlanStep,
   type SupervisorOperation,
 } from "./plans.ts";
+export {
+  PlatformMutationError,
+  createNodePlatformMutationProcessRunner,
+  createPlatformMutationExecutor,
+  type CreatePlatformMutationExecutorInput,
+  type PlatformMutationActionCategory,
+  type PlatformMutationAuthorizationPort,
+  type PlatformMutationAuthorizationRequest,
+  type PlatformMutationCommandJournal,
+  type PlatformMutationCommandJournalClaim,
+  type PlatformMutationCommandJournalEntry,
+  type PlatformMutationErrorCode,
+  type PlatformMutationExecutableId,
+  type PlatformMutationExecutor,
+  type PlatformMutationProcessPreflight,
+  type PlatformMutationProcessRequest,
+  type PlatformMutationProcessRunner,
+  type PlatformMutationReceipt,
+  type PlatformMutationRequest,
+  type PlatformPackageInstallRequest,
+  type PlatformPackageManager,
+  type PlatformProtectedCommandRequest,
+} from "./platform-mutation-executor.ts";
+export {
+  PlatformMutationJournalError,
+  createNativePlatformMutationJournal,
+  type CreateNativePlatformMutationJournalInput,
+  type NativePlatformMutationJournal,
+  type PlatformMutationJournalHealth,
+  type PlatformMutationJournalErrorCode,
+} from "./platform-mutation-journal.ts";
 export {
   evaluateSessionHelperReadiness,
   type DesktopPermissionState,
@@ -51,7 +92,31 @@ export {
   type SupervisorSubprocessRunner,
 } from "./supervisor-executor.ts";
 export {
+  ServiceCommandExecutionError,
+  executeIdempotentServicePlan,
+  fingerprintServiceValue,
+  servicePlanFingerprint,
+  type ExecuteIdempotentServicePlanInput,
+  type IdempotentServicePlanResult,
+  type ServiceCommandClaim,
+  type ServiceCommandExecutionErrorCode,
+  type ServiceCommandJournal,
+  type ServiceCommandJournalEntry,
+  type ServicePlanRunContext,
+  type ServicePlanRunner,
+} from "./service-command.ts";
+export {
+  createServicePlanRunner,
+  type CreateServicePlanRunnerInput,
+  type ServiceAccountAdapter,
+  type ServiceActionExecutionContext,
+  type ServiceFilesystemAdapter,
+  type ServiceHealthAdapter,
+  type ServiceSupervisorAdapter,
+} from "./service-plan-runner.ts";
+export {
   PlatformServiceError,
+  type AdminAutoOpenConfiguration,
   type CommandInvocation,
   type DeviceRuntimeRole,
   type ForegroundFallback,
@@ -73,6 +138,7 @@ export {
   type ServiceOperation,
   type ServicePlaneArtifact,
   type WindowsServiceConfiguration,
+  type WindowsServiceSecretBinding,
 } from "./types.ts";
 export {
   createReadOnlyCommandRunner,
@@ -81,3 +147,45 @@ export {
   type ReadOnlyCommandRunner,
   type WindowsHostValidationReport,
 } from "./windows-host-validation.ts";
+export {
+  NativeBoundaryError,
+  createNodeNativeServiceBoundaries,
+  type NativeClockBoundary,
+  type NativeDirectoryEntry,
+  type NativeFileSystemBoundary,
+  type NativeHttpBoundary,
+  type NativeHttpResponse,
+  type NativePathKind,
+  type NativePathMetadata,
+  type NativePrivilegeBoundary,
+  type NativeProcessBoundary,
+  type NativeProcessRequest,
+  type NativeProcessResult,
+  type NativeServiceBoundaries,
+  type NativeSessionBoundary,
+} from "./native-service-boundaries.ts";
+export {
+  createNativeReleaseVerifier,
+  type NativeReleaseVerification,
+  type NativeReleaseVerifier,
+} from "./native-release-verifier.ts";
+export {
+  createNativeServiceExecutor,
+  createNativeServiceInspector,
+  nativeServiceJournalRoot,
+  preflightNativeServiceOperation,
+  type NativeServiceCommandJournalFactory,
+  type NativeServiceExecutor,
+  type NativeServiceInspector,
+  type NativeServiceRuntimeOptions,
+} from "./native-service-runtime.ts";
+export {
+  NativeServiceCommandJournalError,
+  createNativeServiceCommandJournal,
+  type CreateNativeServiceCommandJournalInput,
+  type NativeServiceCommandJournal,
+  type NativeServiceCommandJournalErrorCode,
+  type NativeServiceCommandJournalLimits,
+  type NativeServiceJournalAtomicBoundary,
+} from "./native-service-journal.ts";
+export { createNodeNativeServiceJournalAtomicBoundary } from "./node-native-service-journal.ts";

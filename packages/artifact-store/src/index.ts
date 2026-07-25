@@ -6,6 +6,8 @@ export type {
   ArtifactClock,
   ArtifactExposureMode,
   ArtifactExposurePolicy,
+  ArtifactIndexRepository,
+  ArtifactIndexSnapshot,
   ArtifactMutationContext,
   ArtifactPresentation,
   ArtifactRandomSource,
@@ -15,6 +17,7 @@ export type {
   IssueSignedArtifactToken,
   IssuedSignedArtifactToken,
   PutArtifact,
+  PutArtifactStream,
   RecordArtifactAccess,
   StoredArtifactContent,
   StoredArtifactMetadata,
@@ -23,4 +26,19 @@ export type {
 } from "./contracts.ts";
 export { NodeArtifactRandomSource } from "./crypto.ts";
 export { ArtifactStoreError, type ArtifactStoreErrorCode } from "./error.ts";
+export {
+  ArtifactAccessError,
+  LocalArtifactAccessBroker,
+  type AppendArtifactUploadChunk,
+  type ArtifactAccessErrorCode,
+  type ArtifactGatewayPlane,
+  type ArtifactUploadProgress,
+  type ExchangedBrowserArtifactSession,
+  type IssueArtifactUploadGrant,
+  type IssueBrowserArtifactGrant,
+  type IssuedArtifactUploadGrant,
+  type IssuedBrowserArtifactGrant,
+  type LocalArtifactAccessBrokerOptions,
+  type ProbeArtifactUpload,
+} from "./local-artifact-access-broker.ts";
 export { LocalArtifactStore, type LocalArtifactStoreOptions } from "./local-artifact-store.ts";

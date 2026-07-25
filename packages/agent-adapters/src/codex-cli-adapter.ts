@@ -9,7 +9,13 @@ import {
   type AgentResumeRequest,
   type AgentRunHandle,
   type AgentStartRequest,
+  type AgentToolServer,
 } from "./contracts.ts";
+import {
+  assertProviderHomeNotInSecretEnvironment,
+  prepareControlledProviderHome,
+  resolveControlledProviderHome,
+} from "./controlled-provider-home.ts";
 import { probeCli } from "./cli-probe.ts";
 import { AgentAdapterError } from "./errors.ts";
 import { type SpawnCommand } from "./process-utils.ts";
@@ -18,6 +24,7 @@ import { processSessionLeaseStore, type SessionLeaseStore } from "./session-leas
 import {
   canonicalizeWorkspace,
   createNativeSessionReference,
+  rejectUnscopedProviderSecrets,
   validateAgentRequest,
   validateDangerousGrant,
   validateResumeReference,
@@ -26,11 +33,56 @@ import { startSubprocessTurn, type ProviderSignal } from "./subprocess-turn.ts";
 
 export const CODEX_CLI_TESTED_VERSIONS = ["0.145.0"] as const;
 
+const CODEX_DETERMINISTIC_EXECUTION_ARGS = [
+  "--ignore-user-config",
+  "--ignore-rules",
+  "--disable",
+  "apps",
+  "--disable",
+  "auth_elicitation",
+  "--disable",
+  "browser_use",
+  "--disable",
+  "browser_use_external",
+  "--disable",
+  "browser_use_full_cdp_access",
+  "--disable",
+  "code_mode_host",
+  "--disable",
+  "computer_use",
+  "--disable",
+  "external_agent_memory_import",
+  "--disable",
+  "hooks",
+  "--disable",
+  "image_generation",
+  "--disable",
+  "in_app_browser",
+  "--disable",
+  "multi_agent",
+  "--disable",
+  "network_proxy",
+  "--disable",
+  "plugin_sharing",
+  "--disable",
+  "request_permissions_tool",
+  "--disable",
+  "skill_mcp_dependency_install",
+  "--disable",
+  "tool_call_mcp_elicitation",
+  "--disable",
+  "tool_suggest",
+  "--disable",
+  "workspace_dependencies",
+] as const;
+
 export interface CodexCliAdapterOptions {
+  readonly codexHome: string;
   readonly executable?: string;
   readonly prefixArgs?: readonly string[];
   readonly testedVersions?: readonly string[];
   readonly allowUntestedVersion?: boolean;
+  readonly skipGitRepositoryCheck?: boolean;
   readonly leaseStore?: SessionLeaseStore;
   readonly now?: () => number;
   readonly lineageId?: () => string;
@@ -39,15 +91,18 @@ export interface CodexCliAdapterOptions {
 export class CodexCliAdapter implements AgentAdapter {
   readonly adapterId = "codex-cli";
   readonly provider = "codex" as const;
+  readonly #codexHome: string;
   readonly #executable: string;
   readonly #prefixArgs: readonly string[];
   readonly #testedVersions: readonly string[];
   readonly #allowUntestedVersion: boolean;
+  readonly #skipGitRepositoryCheck: boolean;
   readonly #leaseStore: SessionLeaseStore;
   readonly #now: () => number;
   readonly #lineageId: () => string;
 
-  constructor(options: CodexCliAdapterOptions = {}) {
+  constructor(options: CodexCliAdapterOptions) {
+    this.#codexHome = resolveControlledProviderHome(options.codexHome, "Codex");
     const command =
       options.executable === undefined && options.prefixArgs === undefined
         ? defaultCodexCommand()
@@ -59,12 +114,15 @@ export class CodexCliAdapter implements AgentAdapter {
     this.#prefixArgs = command.prefixArgs;
     this.#testedVersions = options.testedVersions ?? CODEX_CLI_TESTED_VERSIONS;
     this.#allowUntestedVersion = options.allowUntestedVersion ?? false;
+    this.#skipGitRepositoryCheck = options.skipGitRepositoryCheck ?? false;
     this.#leaseStore = options.leaseStore ?? processSessionLeaseStore;
     this.#now = options.now ?? Date.now;
     this.#lineageId = options.lineageId ?? randomUUID;
   }
 
   async probe(input: AgentAdapterProbeInput = {}): Promise<AgentAdapterProbe> {
+    assertProviderHomeNotInSecretEnvironment("CODEX_HOME", input.secretEnvironment);
+    await prepareControlledProviderHome(this.#codexHome, "Codex");
     const capabilities = {
       start: true,
       resume: true,
@@ -113,6 +171,7 @@ export class CodexCliAdapter implements AgentAdapter {
 
   async #launch(request: AgentStartRequest | AgentResumeRequest): Promise<AgentRunHandle> {
     validateAgentRequest(request);
+    rejectUnscopedProviderSecrets(request);
     const workspace = await canonicalizeWorkspace(request.workspace);
     const { cwd } = workspace;
     if (request.operation === "resume") {
@@ -184,10 +243,17 @@ export class CodexCliAdapter implements AgentAdapter {
     }
     const common = [
       "--json",
+      ...CODEX_DETERMINISTIC_EXECUTION_ARGS,
+      ...codexToolServerArguments(request.toolServers),
       "-c",
       `sandbox_mode="${request.sandbox === "provider-default" ? "read-only" : request.sandbox}"`,
     ];
-    if (request.permissions.mode === "bypass") {
+    if (this.#skipGitRepositoryCheck) {
+      common.push("--skip-git-repo-check");
+    }
+    if (request.permissions.mode === "deny") {
+      common.push("--disable", "shell_tool");
+    } else if (request.permissions.mode === "bypass") {
       validateDangerousGrant(request);
       if (request.sandbox !== "danger-full-access") {
         throw new AgentAdapterError(
@@ -196,7 +262,8 @@ export class CodexCliAdapter implements AgentAdapter {
         );
       }
       common.push("--dangerously-bypass-approvals-and-sandbox");
-    } else {
+    }
+    if (request.permissions.mode !== "bypass") {
       common.push("-c", 'approval_policy="never"');
     }
     if (request.operation === "start") {
@@ -211,14 +278,36 @@ export class CodexCliAdapter implements AgentAdapter {
     environment?: Readonly<Record<string, string>>,
     secretEnvironment?: Readonly<Record<string, string>>,
   ): SpawnCommand {
+    assertProviderHomeNotInSecretEnvironment("CODEX_HOME", secretEnvironment);
     return {
       executable: this.#executable,
       args,
       cwd,
-      ...(environment === undefined ? {} : { environment }),
+      environment: {
+        ...environment,
+        CODEX_HOME: this.#codexHome,
+      },
       ...(secretEnvironment === undefined ? {} : { secretEnvironment }),
     };
   }
+}
+
+function codexToolServerArguments(toolServers: readonly AgentToolServer[] | undefined): string[] {
+  return (toolServers ?? []).flatMap((server) => {
+    const prefix = `mcp_servers.${server.serverName}`;
+    return [
+      "-c",
+      `${prefix}.command=${JSON.stringify(server.command)}`,
+      "-c",
+      `${prefix}.args=${JSON.stringify(server.args)}`,
+      "-c",
+      `${prefix}.enabled_tools=${JSON.stringify(server.enabledTools)}`,
+      "-c",
+      `${prefix}.startup_timeout_sec=${String(Math.ceil(server.startupTimeoutMs / 1_000))}`,
+      "-c",
+      `${prefix}.tool_timeout_sec=${String(Math.ceil(server.toolTimeoutMs / 1_000))}`,
+    ];
+  });
 }
 
 function defaultCodexCommand(): {

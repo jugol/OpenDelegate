@@ -7,19 +7,23 @@ codes, enrollment grants, private network addresses, private hostnames, or priva
 Rendered service definitions, read-only probes, simulated adapters, WSL/WSLg, and hosted CI are
 engineering inputs. They do not count as live first-milestone proof.
 
+The exact OS families, versions, architectures, runtime pins, and hosted CI
+compatibility images are declared in [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md).
+Evidence from a different target does not silently satisfy this checklist.
+
 ## Current inventory
 
-Audited on 2026-07-24:
+Audited on 2026-07-25:
 
 | Target                          | Current reachability                                                                             | Repository assets now available                                                                                                                                                          | Missing release proof                                                                                                                                                                                            |
 | ------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows Main/Worker             | One owner-controlled Windows host is available for local engineering; no release run is recorded | Bundled Main/Control Plane path; authenticated Admin Task surface; Windows SCM and user-helper plans; read-only host validation; Codex/Claude/generic adapters; Computer Use OS contract | Build with pinned Node 24.18.0, native service installation, helper IPC, reboot/login/logout, upgrade rollback, signing policy, and real Computer Use backend                                                    |
-| macOS Main/Worker               | Owner-controlled hardware is identified; no approved public lab session is recorded              | macOS launchd/LaunchAgent plans and readiness contracts                                                                                                                                  | Approved local or remote lab access, macOS bundle, service/helper execution, logged-in test session, TCC grants, restart/upgrade proof, real Computer Use backend, and Developer ID signing/notarization identity |
-| Headless Linux Worker           | An owner-controlled headless target is identified; no approved public lab session is recorded    | systemd and foreground-fallback plans; headless readiness contract                                                                                                                       | Least-privilege lab access, distro/architecture/service-manager record, Linux bundle, service install/reboot/upgrade proof, Worker enrollment, route proof, and explicit Computer Use `unavailable` evidence     |
-| Graphical Linux Worker          | Not provisioned; WSLg is available only for engineering fixtures                                 | Linux graphical-helper and Computer Use driver contracts                                                                                                                                 | A separate real graphical Ubuntu-class Device or VM with a declared desktop/session/backend and login, lock, logout, reboot, cancellation, permission-denial, and screenshot proof                               |
-| Discord                         | No dedicated release laboratory is connected                                                     | Durable Forum authorization, Task mapping, reconciliation, projection, and control contracts                                                                                             | Community-enabled test server, Forum, dedicated bot, token, intents, least-privilege permissions, owner allowlist, production HTTP/Gateway driver, and desktop/mobile canonical journey                          |
-| Codex                           | A local engineering installation was observed; no pinned public lab attestation exists           | Codex CLI lifecycle adapter and fixtures                                                                                                                                                 | Pinned compatibility decision and live start/stream/resume/cancel/approval/restart/checkpoint tests on participating Devices                                                                                     |
-| Claude                          | A local engineering installation was observed; authentication has no public lab attestation      | Claude CLI lifecycle adapter and fixtures                                                                                                                                                | Owner authentication and live start/stream/resume/cancel/approval/restart/checkpoint tests on participating Devices                                                                                              |
+| Windows Main/Worker             | One owner-controlled Windows host is available for local engineering; one nonrelease direct-fixture Computer Use run passed, but no release run is recorded | Bundled Main plus co-located Worker; authenticated Admin operations; SCM core and owner-helper executors; controlled provider homes; native UI Automation, Windows.Graphics.Capture, SendInput, authenticated named-pipe, and Win32 fixture candidates | Build and attest the signed immutable bundle; install the real service/helper; prove owner-picker consent, reboot/login/logout, upgrade/rollback, lock/session/UAC/UIPI failure behavior, and the complete Windows Computer Use matrix |
+| macOS Main/Worker               | Owner-controlled hardware is identified; no approved public lab session is recorded              | Bundled Main/Worker composition; launchd/LaunchAgent executors; authenticated-helper/native-driver seam; Swift ScreenCaptureKit, AXUIElement, and CGEvent candidate; deterministic AppKit fixture; macOS CI compile path | Final-commit macOS compile result, signed/notarized immutable bundle, stable TCC grants, clean-host lifecycle and real Computer Use lab proof |
+| Headless Linux Worker           | An owner-controlled headless target is identified; no approved public lab session is recorded    | systemd and foreground-fallback executors; systemd credential-vault path; headless readiness contract; outbound enrolled Worker composition | Least-privilege lab access, distro/architecture/service-manager record, Linux bundle, service install/reboot/upgrade proof, Worker enrollment, route proof, and explicit Computer Use `unavailable` evidence |
+| Graphical Linux Worker          | Not provisioned; WSLg is available only for engineering fixtures                                 | Ubuntu 24.04 GNOME Wayland AT-SPI/RemoteDesktop/ScreenCast/PipeWire candidate, private-child boundary, GTK fixture, authenticated helper seam, and Worker readiness composition | Build the immutable Linux bundle, then use a separate real graphical Ubuntu Device or VM for login, lock, logout, reboot, portal revocation, monitor/suspend recovery, cancellation, permission-denial, and screenshot proof |
+| Discord                         | No dedicated release laboratory is connected                                                     | Production-composed HTTP and Gateway drivers; durable Forum authorization, Task mapping, reconciliation, projection, controls, restart state, and redaction contracts | Community-enabled test server, Forum, dedicated bot, token, intents, least-privilege permissions, owner allowlist, reconnect/rate-limit proof, and desktop/mobile canonical journey |
+| Codex                           | A local engineering installation was observed; no pinned public lab attestation exists           | First-class Codex App Server plus capability-reduced CLI fallback, controlled home, exact action authorization, native-session persistence, and deterministic fixtures | Authenticate the exact controlled home at the pinned version and run live start/stream/resume/cancel/approval/restart/checkpoint tests on participating Devices |
+| Claude                          | A local engineering installation was observed; authentication has no public lab attestation      | First-class Claude Agent SDK plus capability-reduced CLI fallback, controlled home, fail-closed sandbox contract, exact action authorization, native-session persistence, and deterministic fixtures | Authenticate the exact controlled home at the pinned version and run live start/stream/resume/cancel/approval/restart/checkpoint tests on supported participating Devices |
 | Network routes                  | Candidate private-network profiles are identified; no sanitized mixed-route proof exists         | Ordered Transport Profile and deterministic fallback contracts                                                                                                                           | One real mixed-route scenario, route failure/fallback evidence, and an Omada or equivalent routed private profile if selected                                                                                    |
 | Release inputs                  | No supported release has been built or published                                                 | Internal-preview builder, pinned-runtime policy, metadata, notices, checksums, and smoke harness                                                                                         | Platform bundles on all targets, clean provenance, signing/notarization policy and identities, publication path, and successful 36-criterion gate                                                                |
 | Private vulnerability reporting | GitHub's private reporting route was enabled and verified on 2026-07-24                           | Private draft security-advisory intake documented in `SECURITY.md`                                                                                                                      | Reverify the route and repository access immediately before any supported public release                                                                                                                          |
@@ -29,26 +33,77 @@ bundle construction is separate and requires exactly Node.js 24.18.0.
 
 ## What existing packages do and do not prove
 
-- `packages/platform-services` proves service configuration, lifecycle planning, readiness parsing,
-  upgrade/rollback planning, and selected read-only validation seams. It has not installed a
-  privileged native service on all three OS families.
-- `packages/agent-adapters` proves normalized Codex CLI, Claude CLI, and generic command lifecycle
-  behavior against deterministic subprocess fixtures. It does not prove authenticated provider
-  compatibility or native-session recovery.
-- `packages/discord-adapter` proves durable Forum-domain behavior. It does not prove a production
-  Gateway session, HTTP reconciliation, live interactions, intents, permissions, or rate-limit
-  behavior.
+- `packages/platform-services` and `apps/service-host` prove service configuration, journaled
+  lifecycle execution, exact-identity health checking, upgrade/rollback behavior, core and
+  owner-session process hosting, and Admin auto-open fixtures. They have not installed a privileged
+  native service on all three OS families.
+- `packages/agent-adapters` proves Codex App Server, Claude Agent SDK, Codex/Claude CLI fallback, and
+  generic-command lifecycle behavior against deterministic fixtures, including controlled provider
+  homes, exact action authorization, native-session binding, exact steering, and checkpoint
+  continuation. It does not prove authenticated live-provider compatibility or recovery at the
+  pinned versions.
+- `packages/discord-adapter` and Main composition prove durable Forum behavior plus production HTTP
+  and Gateway driver seams. They do not prove a credentialed Gateway session, live interactions,
+  intents, permissions, reconnect, mobile presentation, or real rate-limit behavior.
 - `packages/computer-use-os` and `packages/computer-use` prove contracts, readiness/permission
-  classification, locks, cancellation, and deterministic drivers. They do not prove real
-  pointer/keyboard input on any OS.
-- `tooling/build-release.mjs` creates and smokes a platform-specific marked internal preview. That
-  smoke does not prove service persistence, Worker orchestration, live providers, Discord, or
-  Computer Use.
+  classification, locks, cancellation, deterministic drivers, and strict native candidate
+  boundaries. The Windows candidate uses UI Automation, Windows.Graphics.Capture, guarded
+  `SendInput`, and authenticated local IPC; the macOS candidate uses ScreenCaptureKit,
+  AXUIElement, and CGEvent. Candidate source, compilation, and nonrelease fixture runs do not prove
+  signed clean-host service lifecycle, owner permission behavior, or a supported release.
+- `tooling/build-release.mjs` creates and smokes a platform-specific marked internal preview,
+  including Main, its co-located Worker command surface, Admin, owner claim/login, and clean
+  shutdown. That smoke does not prove privileged service persistence, enrolled remote Workers, live
+  providers, Discord, mixed routes, or Computer Use.
 
 ## Safe owner preparation
 
 Perform these actions only when the corresponding implementation is ready to test. Never paste a
 credential into chat, Discord, source control, Task context, a public log, or the evidence ledger.
+
+### Windows
+
+1. Use the exact Windows 11 25H2 build 26200.8875 `x64` target in
+   [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md), not WSL, Windows Server, a hosted runner, or a
+   remote-desktop-only substitute.
+2. Install only the publisher-signed immutable release candidate through the production
+   service/helper lifecycle. Do not run the user-session helper elevated and do not enable
+   interactive-services compatibility.
+3. Keep the owner session visible and unlocked only for the Computer Use run. Select the intended
+   fixture through the Windows capture picker; do not replace owner consent with the direct-window
+   engineering flag.
+4. Run higher-integrity and UAC secure-desktop cases only against disposable lab fixtures. The
+   expected result is fail-closed unavailability, never elevation or bypass.
+
+### Windows Computer Use candidate run
+
+Follow
+[`packages/computer-use-os/native/windows/README.md`](../../packages/computer-use-os/native/windows/README.md)
+for build prerequisites, authenticated helper boundaries, and the external evidence command.
+
+1. Build the exact final-commit `x64` helper and fixture with pinned Node 24.18.0 and the declared
+   Visual Studio/Windows SDK toolchain, then sign and package those exact binaries through the
+   detached publisher workflow.
+2. Launch the core through the SCM service and the helper through the production interactive-owner
+   session launcher. Supply the IPC Secret only through the inherited descriptor and verify the
+   configured service-account SID, helper identity, service epoch, and release version.
+3. Through the system capture picker, select the signed deterministic fixture and prove separate
+   readiness for the active/unlocked session, current frame, UI Automation controls,
+   same-or-lower-integrity input, local emergency stop, and authenticated helper.
+4. Complete the shared text/radio/submit workflow, record bounded PNG and result-file hashes, and
+   prove cancellation, emergency stop, and capacity-one desktop-lock contention.
+5. Repeat with picker cancellation and consent withdrawal; lock/unlock; login/logout; reboot;
+   service/helper restart and replacement; Fast User Switching; a higher-integrity target; UAC
+   secure desktop; partial `SendInput`; display/monitor/DPI changes; frame timeout; and helper
+   crash. During an active provider/tool fixture, force the service host to terminate and prove
+   its Windows Job Object removes the complete descendant process tree before any Workspace or
+   desktop side effect can continue.
+6. Inspect sanitized diagnostics to prove raw typed text, IPC keys, pipe identifiers, screenshots,
+   and native failure details did not enter logs, errors, audit, Discord, Admin, or the release
+   ledger.
+
+The explicit `--nonrelease-direct-fixture-capture` path is implementation evidence only. Its
+`supportClaim: false` record can never replace signed owner-picker or lifecycle proof.
 
 ### macOS
 
@@ -62,6 +117,41 @@ credential into chat, Discord, source control, Task context, a public log, or th
 5. Provide an Apple Developer ID signing and notarization workflow before distributing a
    downloadable macOS bundle. TCC behavior cannot be proven through headless SSH.
 
+### macOS Computer Use candidate run
+
+Follow
+[`packages/computer-use-os/native/macos/README.md`](../../packages/computer-use-os/native/macos/README.md)
+for external-scratch build commands, explicit permission-status/request commands, fixture
+identifiers, and the evidence boundary.
+
+1. Build both Swift products on the exact declared macOS version and architecture with SwiftPM
+   scratch output outside the checkout. Record the final-commit CI job and the local build identity
+   separately.
+2. Sign the installed helper and fixture through the release signing workflow and notarize the
+   distributable bundle. Verify the signature and Gatekeeper result before requesting TCC. An
+   ad-hoc build or a different path/signature does not establish the release candidate's TCC state.
+3. From the visible owner Aqua session, run the signed helper's non-mutating
+   `--permission-status`. Use `--request-permissions` only as an explicit owner onboarding action;
+   never edit or pre-seed the TCC database.
+4. Start the signed fixture with a unique safe `--run-id` and an empty result directory outside the
+   checkout. Do not launch the helper's `--stdio-child` mode manually: only the already
+   ADR-0011-authenticated owner session helper may own that private child.
+5. Through the production composition, prove a real bounded ScreenCaptureKit PNG, live
+   AXUIElement discovery of all fixture identifiers, authorized CGEvent text/radio/click actions,
+   the visible success state, and the matching atomic run-scoped JSON result.
+6. Repeat with Accessibility, Screen Recording, and input access denied and revoked; the session
+   locked; loginwindow/no Aqua session; Fast User Switching; sleep/wake; Secure Event Input;
+   display reconfiguration; helper replacement/crash; cancellation; emergency stop; and two Runs
+   contending for the capacity-one desktop lease. Force the LaunchDaemon and LaunchAgent to
+   terminate while a child tree is active and prove no descendant escapes the configured process
+   group; `AbandonProcessGroup=false` is not by itself live containment proof.
+7. Inspect sanitized diagnostics to prove raw typed text and native stderr did not enter logs,
+   errors, audit, Discord, Admin, Artifacts, or the evidence ledger.
+
+A successful Swift build, simulated transport test, permission preflight, or hosted CI run is
+partial engineering evidence. None may change criterion 19 or ADR-0014 to complete/accepted without
+the clean-host signed lifecycle and live fixture matrix.
+
 ### Headless Linux NAS
 
 1. Create a least-privilege OpenDelegate lab account.
@@ -72,6 +162,10 @@ credential into chat, Discord, source control, Task context, a public log, or th
    lab configuration.
 5. Keep the Device headless. Its required graphical result is explicit `unavailable` capability
    while non-desktop Work Orders remain functional.
+6. Kill the systemd service during an active bounded child fixture and prove
+   `KillMode=control-group` removes every descendant. If foreground fallback is selected, record
+   the external supervisor and prove that it supplies the equivalent process-tree containment;
+   foreground mode alone makes no such claim.
 
 ### Graphical Linux
 
@@ -82,6 +176,9 @@ serialization, cancellation, emergency stop, and screenshot evidence.
 
 WSL and WSLg do not count as the separate Linux Device, system service/reboot proof, or required
 graphical Linux release target.
+
+For the graphical systemd core and user helper, also terminate each supervisor
+during a bounded child fixture and prove no descendant survives its control group.
 
 ### Discord
 
@@ -118,8 +215,10 @@ Run the following sequence separately on every declared OS/architecture combinat
 2. Verify `SHA256SUMS`, `release-metadata.json`, notices, and `smoke-evidence.json`.
 3. Install Main and Worker roles through the native service executor when that executor is
    available; do not treat a rendered plan as installation.
-4. Prove start, stop, process restart, host reboot, login/logout, helper loss, diagnostics, upgrade,
-   failed-upgrade rollback, and uninstall.
+4. Prove start, stop, process restart, complete descendant-tree termination, host reboot,
+   login/logout, helper loss, diagnostics, upgrade, failed-upgrade rollback, and uninstall. For a
+   Main role, also prove the typed Admin auto-open preference disabled and enabled, exact canonical
+   origin selection, once-per-login launch, and rollback after a failed helper health check.
 5. Claim the owner locally, verify authenticated remote Admin access, revoke a browser session, and
    recover without Discord.
 6. Exercise SQLite and PostgreSQL composition without exposing the PostgreSQL URI.
@@ -128,7 +227,13 @@ Run the following sequence separately on every declared OS/architecture combinat
 9. Run real Computer Use and the headless-Linux negative case.
 10. Upload a Worker Artifact through Main and exercise private-network, authenticated, signed-link,
     and intentional public exposure.
-11. Inject route, Worker, Main, Discord, provider, service, database, and Artifact failures, then
+11. Prove npm project installation only through the sealed official-registry path. For every system
+    package manager proposed for support, record the existing source and privilege state, pin and
+    revalidate the exact configured manager executable, prove the manager-specific install-only
+    argument boundary, and show that repository additions and remote installers still require
+    approval. Do not claim candidate-source verification unless the target-platform evidence
+    independently proves it.
+12. Inject route, Worker, Main, Discord, provider, service, database, and Artifact failures, then
     verify deterministic reconciliation and no duplicate work.
 
 An internal-preview lab run may produce evidence, but it remains unsupported until all criteria pass

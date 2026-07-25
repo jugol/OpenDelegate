@@ -1,4 +1,10 @@
-import type { ArtifactStore } from "@opendelegate/artifact-store";
+import type {
+  AppendArtifactUploadChunk,
+  ArtifactUploadProgress,
+  ExchangedBrowserArtifactSession,
+  ProbeArtifactUpload,
+  ArtifactStore,
+} from "@opendelegate/artifact-store";
 
 export type ArtifactGatewayPlane = "static" | "interactive";
 
@@ -30,6 +36,18 @@ export interface ArtifactAuthorizationPort {
   authorizeCustom(input: CustomArtifactAuthorization): Promise<boolean>;
 }
 
+export interface ArtifactWorkerUploadPort {
+  probeUpload(input: ProbeArtifactUpload): Promise<ArtifactUploadProgress>;
+  appendUploadChunk(input: AppendArtifactUploadChunk): Promise<ArtifactUploadProgress>;
+}
+
+export interface ArtifactBrowserSessionPort {
+  exchangeBrowserGrant(input: {
+    readonly credential: string;
+    readonly plane: ArtifactGatewayPlane;
+  }): Promise<ExchangedBrowserArtifactSession>;
+}
+
 export interface ArtifactGatewayAppOptions {
   readonly plane: ArtifactGatewayPlane;
   readonly store: ArtifactStore;
@@ -37,4 +55,9 @@ export interface ArtifactGatewayAppOptions {
   readonly staticOrigin: string;
   readonly interactiveOrigin: string;
   readonly adminOrigins: readonly string[];
+  readonly workerUploads?: ArtifactWorkerUploadPort;
+  readonly browserSessions?: ArtifactBrowserSessionPort;
+  readonly maximumUploadChunkBytes?: number;
+  readonly trustProxyAddress?: (remoteAddress: string) => boolean;
+  readonly requireForwardedHttps?: boolean;
 }

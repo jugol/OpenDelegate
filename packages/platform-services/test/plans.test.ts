@@ -80,6 +80,97 @@ test("install/start/stop/restart plans are deterministic and supervise both plan
   }
 });
 
+test("Admin preference reconfiguration atomically rewrites runtime state and restarts only the owner helper", async () => {
+  const previousConfiguration = linuxConfiguration({ role: "main" });
+  const configuration = linuxConfiguration({
+    role: "main",
+    ownerSession: {
+      ...previousConfiguration.ownerSession,
+      adminAutoOpen: {
+        enabled: true,
+        url: "http://127.0.0.1:4380/",
+      },
+    },
+  });
+  const plan = createServicePlan({
+    operation: "reconfigure",
+    configuration,
+    previousConfiguration,
+    activeVersion: "1.2.3",
+  });
+
+  assert.equal(plan.operation, "reconfigure");
+  assert.deepEqual(
+    plan.steps.flatMap((step) =>
+      step.action.kind === "supervisor.invoke"
+        ? [`${step.action.command.plane}:${step.action.command.verb}`]
+        : [],
+    ),
+    ["session-helper:stop", "session-helper:start"],
+  );
+  const update = plan.steps.find((step) => step.id === "update-runtime-configuration");
+  assert.equal(update?.action.kind, "file.write");
+  assert.equal(update?.rollback?.kind, "file.write");
+  if (update?.action.kind === "file.write" && update.rollback?.kind === "file.write") {
+    assert.match(update.action.file.content, /"enabled": true/u);
+    assert.match(update.action.file.content, /"url": "http:\/\/127\.0\.0\.1:4380\/"/u);
+    assert.match(update.rollback.file.content, /"enabled": false/u);
+    assert.doesNotMatch(update.rollback.file.content, /"url"/u);
+  }
+
+  const rollbackActions: PlanAction[] = [];
+  const report = await executeServicePlan(plan, {
+    async perform(action, phase) {
+      if (phase === "rollback") {
+        rollbackActions.push(action);
+        return { disposition: "changed" };
+      }
+      if (action.kind === "health.check") {
+        throw new Error("Injected helper health failure");
+      }
+      return { disposition: "changed" };
+    },
+  });
+  assert.equal(report.outcome, "rolled-back");
+  assert.ok(
+    rollbackActions.some(
+      (action) =>
+        action.kind === "file.write" &&
+        action.file.purpose === "runtime-configuration" &&
+        action.file.content.includes('"enabled": false'),
+    ),
+  );
+});
+
+test("Admin preference reconfiguration rejects every unrelated topology change", () => {
+  const previousConfiguration = windowsConfiguration();
+  const configuration = windowsConfiguration({
+    ownerSession: {
+      ...previousConfiguration.ownerSession,
+      adminAutoOpen: {
+        enabled: true,
+        url: "http://127.0.0.1:4380/",
+      },
+    },
+  });
+  assert.throws(
+    () =>
+      createServicePlan({
+        operation: "reconfigure",
+        configuration,
+        previousConfiguration: {
+          ...previousConfiguration,
+          health: {
+            ...previousConfiguration.health,
+            timeoutMs: previousConfiguration.health.timeoutMs + 1,
+          },
+        },
+        activeVersion: "1.2.3",
+      }),
+    /only.*Admin auto-open/i,
+  );
+});
+
 test("upgrade atomically activates a staged release and rolls back after failed health", async () => {
   const plan = createServicePlan({
     operation: "upgrade",
@@ -118,6 +209,57 @@ test("upgrade atomically activates a staged release and rolls back after failed 
     ),
   );
   assert.match(report.diagnostic.summary, /rolled back/i);
+});
+
+test("failed install health removes newly registered supervisor planes", async () => {
+  const plan = createServicePlan({
+    operation: "install",
+    configuration: windowsConfiguration(),
+  });
+  const adapter = new RecordingAdapter("health.check");
+
+  const report = await executeServicePlan(plan, adapter);
+
+  assert.equal(report.outcome, "rolled-back");
+  const removedPlanes = adapter.rollbackActions.flatMap((action) =>
+    action.kind === "supervisor.invoke" && action.command.verb === "remove"
+      ? [action.command.plane]
+      : [],
+  );
+  assert.deepEqual(removedPlanes, ["session-helper", "core"]);
+});
+
+test("rollback never removes supervisor registrations reported as pre-existing", async () => {
+  const plan = createServicePlan({
+    operation: "install",
+    configuration: windowsConfiguration(),
+  });
+  const rollbackActions: PlanAction[] = [];
+  const report = await executeServicePlan(plan, {
+    async perform(action, phase) {
+      if (phase === "rollback") {
+        rollbackActions.push(action);
+        return { disposition: "changed" };
+      }
+      if (action.kind === "health.check") {
+        throw new Error("Injected health failure");
+      }
+      if (action.kind === "supervisor.invoke" && action.command.verb === "install") {
+        return { disposition: "unchanged" };
+      }
+      return { disposition: "changed" };
+    },
+  });
+
+  assert.equal(report.outcome, "rolled-back");
+  assert.ok(report.unchangedStepIds.includes("install-core"));
+  assert.ok(report.unchangedStepIds.includes("install-helper"));
+  assert.equal(
+    rollbackActions.some(
+      (action) => action.kind === "supervisor.invoke" && action.command.verb === "remove",
+    ),
+    false,
+  );
 });
 
 test("a rollback failure remains explicit and never reports success", async () => {
@@ -175,4 +317,16 @@ test("uninstall preserves state and logs unless purge is explicit", () => {
   );
   assert.ok(purged.includes(configuration.paths.stateRoot));
   assert.ok(purged.includes(configuration.paths.logRoot));
+});
+
+test("non-upgrade lifecycle commands reject a configuration that does not match the active release", () => {
+  assert.throws(
+    () =>
+      createServicePlan({
+        operation: "restart",
+        configuration: linuxConfiguration(),
+        activeVersion: "1.2.2",
+      }),
+    /configured bundle version.*active version/i,
+  );
 });

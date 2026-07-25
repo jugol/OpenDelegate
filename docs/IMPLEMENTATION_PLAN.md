@@ -485,11 +485,18 @@ Replace fake agents with resumable, observable first-class providers.
 - Implement generic command adapter with explicit lifecycle and output schema.
 - Add adapter version pinning, compatibility probes, capability degradation, and
   diagnostics.
+- Add an optional Work Order Agent requirement and copy it into each immutable Run
+  assignment. Require the named provider, optionally require one exact adapter and
+  allowed compatibility set, and use Device Auto only when the assignment omits the
+  requirement.
 - Map provider events into normalized public messages, tool/action requests, progress,
   usage, and completion.
 - Route provider approval mechanisms through OpenDelegate Policy.
 - Implement native-session registry with Device, provider, session ID, Workspace,
   working directory/worktree, adapter version, single-writer lease, and lineage.
+- Return a bounded safe session observation to Main on terminal Worker events and
+  persist it through event replay without returning cwd, worktree path, or the
+  Device-local session key.
 - Implement Task checkpoint and native continuation packages.
 - Add safe worktree lifecycle and garbage collection.
 
@@ -500,6 +507,10 @@ Replace fake agents with resumable, observable first-class providers.
 - Two unrelated Tasks never share a native session.
 - Related Worker follow-up resumes the correct native session.
 - Coordinator provider remains pinned while another provider participates as Worker.
+- Provider-bound Worker Runs fail closed when the required binding is unavailable;
+  exact retry and restart replay cannot widen or substitute that binding.
+- Main replay preserves the actual safe provider, adapter, native-session, and
+  lineage observation reported by the Worker.
 - Simulated session deletion continues from checkpoint with an explicit lineage
   change.
 

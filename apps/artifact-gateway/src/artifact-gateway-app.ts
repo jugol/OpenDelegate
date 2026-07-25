@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import rateLimit from "@fastify/rate-limit";
 
 import {
+  ArtifactAccessError,
   type ArtifactMutationContext,
   type ArtifactStore,
   type StoredArtifactMetadata,
@@ -73,6 +74,11 @@ const ARTIFACT_REQUEST_RATE_LIMIT = Object.freeze({
   max: 120,
   timeWindow: "1 minute",
 });
+const UPLOAD_REQUEST_RATE_LIMIT = Object.freeze({
+  max: 600,
+  timeWindow: "1 minute",
+});
+const DEFAULT_MAXIMUM_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
 
 export const ARTIFACT_SESSION_COOKIE_NAME = "__Host-opendelegate_artifact_session";
 
@@ -86,14 +92,42 @@ export async function createArtifactGatewayApp(
     options.plane === "static" ? origins.staticOrigin.host : origins.interactiveOrigin.host;
   const app = Fastify({
     logger: false,
-    trustProxy: false,
+    trustProxy:
+      options.trustProxyAddress === undefined
+        ? false
+        : (address: string) => options.trustProxyAddress?.(address) === true,
     bodyLimit: 16 * 1024,
   });
+  if (options.requireForwardedHttps === true && options.trustProxyAddress === undefined) {
+    throw new Error("Forwarded HTTPS requires an explicit trusted-proxy predicate.");
+  }
   await app.register(rateLimit, ARTIFACT_REQUEST_RATE_LIMIT);
+  if (options.workerUploads !== undefined && options.plane === "static") {
+    app.addContentTypeParser("application/octet-stream", (_request, payload, done) => {
+      done(null, payload);
+    });
+  }
+  if (options.browserSessions !== undefined) {
+    app.addContentTypeParser(
+      "application/x-www-form-urlencoded",
+      { parseAs: "string", bodyLimit: 4 * 1024 },
+      (_request, payload, done) => {
+        done(null, payload);
+      },
+    );
+  }
 
   app.addHook("onRequest", async (request) => {
     if (request.headers.host !== expectedHost) {
       throw new ArtifactGatewayHttpError(421, "ARTIFACT_HOST_REJECTED");
+    }
+    if (
+      options.requireForwardedHttps === true &&
+      (request.headers["x-forwarded-proto"] !== "https" ||
+        request.raw.socket.remoteAddress === undefined ||
+        options.trustProxyAddress?.(request.raw.socket.remoteAddress) !== true)
+    ) {
+      throw new ArtifactGatewayHttpError(421, "ARTIFACT_HTTPS_PROXY_REJECTED");
     }
   });
   app.addHook("onSend", async (request, reply, payload) => {
@@ -133,6 +167,124 @@ export async function createArtifactGatewayApp(
       service: `opendelegate-artifact-${options.plane}`,
     }),
   );
+
+  if (options.workerUploads !== undefined && options.plane === "static") {
+    const uploads = options.workerUploads;
+    const maximumUploadChunkBytes =
+      options.maximumUploadChunkBytes ?? DEFAULT_MAXIMUM_UPLOAD_CHUNK_BYTES;
+    if (
+      !Number.isSafeInteger(maximumUploadChunkBytes) ||
+      maximumUploadChunkBytes < 1 ||
+      maximumUploadChunkBytes > 1024 * 1024 * 1024
+    ) {
+      throw new Error("Artifact upload chunk limit is invalid.");
+    }
+
+    app.get<{ Params: { uploadId: string } }>(
+      "/worker-uploads/:uploadId",
+      {
+        config: {
+          rateLimit: UPLOAD_REQUEST_RATE_LIMIT,
+        },
+      },
+      async (request, reply) => {
+        const credential = parseBearer(request.headers.authorization);
+        if (credential === undefined) {
+          return reply.status(404).send(NOT_FOUND);
+        }
+        try {
+          const progress = await uploads.probeUpload({
+            uploadId: request.params.uploadId,
+            credential,
+          });
+          setUploadProgressHeaders(reply, progress.nextOffsetBytes, progress.complete);
+          return reply.send(uploadProgressBody(progress));
+        } catch (error) {
+          return sendUploadError(reply, error);
+        }
+      },
+    );
+
+    app.put<{ Params: { uploadId: string }; Body: unknown }>(
+      "/worker-uploads/:uploadId",
+      {
+        bodyLimit: maximumUploadChunkBytes,
+        config: {
+          rateLimit: UPLOAD_REQUEST_RATE_LIMIT,
+        },
+      },
+      async (request, reply) => {
+        const credential = parseBearer(request.headers.authorization);
+        const idempotencyKey = singleHeader(request.headers["idempotency-key"]);
+        const offsetBytes = parseUploadOffset(singleHeader(request.headers["upload-offset"]));
+        if (
+          credential === undefined ||
+          idempotencyKey === undefined ||
+          offsetBytes === undefined ||
+          request.headers["content-type"] !== "application/octet-stream" ||
+          !isAsyncByteStream(request.body)
+        ) {
+          return reply.status(404).send(NOT_FOUND);
+        }
+        try {
+          const progress = await uploads.appendUploadChunk({
+            uploadId: request.params.uploadId,
+            credential,
+            idempotencyKey,
+            offsetBytes,
+            bytes: request.body,
+            correlationId: `artifact-upload:${request.id}`,
+          });
+          setUploadProgressHeaders(reply, progress.nextOffsetBytes, progress.complete);
+          return reply.status(progress.complete ? 201 : 202).send(uploadProgressBody(progress));
+        } catch (error) {
+          return sendUploadError(reply, error);
+        }
+      },
+    );
+  }
+
+  if (options.browserSessions !== undefined) {
+    const browserSessions = options.browserSessions;
+    app.post<{ Body: unknown }>(
+      "/owner-session/exchange",
+      {
+        config: {
+          rateLimit: ARTIFACT_REQUEST_RATE_LIMIT,
+        },
+      },
+      async (request, reply) => {
+        if (
+          typeof request.headers.origin !== "string" ||
+          !origins.adminOrigins.has(request.headers.origin)
+        ) {
+          return reply.status(404).send(NOT_FOUND);
+        }
+        const credential = browserGrantFromForm(request.body);
+        if (credential === undefined) {
+          return reply.status(404).send(NOT_FOUND);
+        }
+        try {
+          const session = await browserSessions.exchangeBrowserGrant({
+            credential,
+            plane: options.plane,
+          });
+          reply.header(
+            "Set-Cookie",
+            `${ARTIFACT_SESSION_COOKIE_NAME}=${session.sessionCredential}; Path=/; Expires=${new Date(
+              session.expiresAtMs,
+            ).toUTCString()}; Secure; HttpOnly; SameSite=Strict`,
+          );
+          return reply
+            .header("Location", `/artifacts/${encodeURIComponent(session.artifactId)}`)
+            .status(303)
+            .send();
+        } catch {
+          return reply.status(404).send(NOT_FOUND);
+        }
+      },
+    );
+  }
 
   app.get<{
     Params: { artifactId: string };
@@ -372,6 +524,121 @@ function parseBearer(value: string | undefined): string | undefined {
   return match?.[1];
 }
 
+function singleHeader(value: string | readonly string[] | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseUploadOffset(value: string | undefined): number | undefined {
+  if (value === undefined || !/^(?:0|[1-9][0-9]{0,15})$/u.test(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function isAsyncByteStream(value: unknown): value is AsyncIterable<Uint8Array> {
+  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
+}
+
+function uploadProgressBody(input: {
+  readonly uploadId: string;
+  readonly artifactId: string;
+  readonly nextOffsetBytes: number;
+  readonly complete: boolean;
+  readonly replayed: boolean;
+}): Readonly<Record<string, string | number | boolean>> {
+  return Object.freeze({
+    protocolVersion: "v1",
+    uploadId: input.uploadId,
+    artifactId: input.artifactId,
+    nextOffsetBytes: input.nextOffsetBytes,
+    complete: input.complete,
+    replayed: input.replayed,
+  });
+}
+
+function setUploadProgressHeaders(
+  reply: FastifyReply,
+  nextOffsetBytes: number,
+  complete: boolean,
+): void {
+  reply.header("Upload-Offset", String(nextOffsetBytes));
+  reply.header("Upload-Complete", String(complete));
+}
+
+function sendUploadError(reply: FastifyReply, error: unknown): FastifyReply {
+  if (!(error instanceof ArtifactAccessError)) {
+    return reply.status(503).send({
+      type: "about:blank",
+      title: "Service Unavailable",
+      status: 503,
+      code: "ARTIFACT_UPLOAD_UNAVAILABLE",
+    });
+  }
+  switch (error.code) {
+    case "UPLOAD_GRANT_INVALID":
+    case "UPLOAD_GRANT_EXPIRED":
+      return reply.status(404).send(NOT_FOUND);
+    case "UPLOAD_OFFSET_MISMATCH":
+      if (error.expectedOffsetBytes !== undefined) {
+        reply.header("Upload-Offset", String(error.expectedOffsetBytes));
+      }
+      return reply.status(409).send({
+        type: "about:blank",
+        title: "Conflict",
+        status: 409,
+        code: error.code,
+      });
+    case "UPLOAD_IDEMPOTENCY_CONFLICT":
+    case "UPLOAD_PUBLICATION_CONFLICT":
+      return reply.status(409).send({
+        type: "about:blank",
+        title: "Conflict",
+        status: 409,
+        code: error.code,
+      });
+    case "UPLOAD_CHECKSUM_MISMATCH":
+      return reply.status(422).send({
+        type: "about:blank",
+        title: "Unprocessable Content",
+        status: 422,
+        code: error.code,
+      });
+    case "UPLOAD_CHUNK_INVALID":
+      return reply.status(400).send({
+        type: "about:blank",
+        title: "Bad Request",
+        status: 400,
+        code: error.code,
+      });
+    case "ACCESS_STORAGE_CORRUPT":
+    case "ACCESS_STORAGE_UNAVAILABLE":
+      return reply.status(503).send({
+        type: "about:blank",
+        title: "Service Unavailable",
+        status: 503,
+        code: "ARTIFACT_UPLOAD_UNAVAILABLE",
+      });
+    case "BROWSER_GRANT_INVALID":
+      return reply.status(404).send(NOT_FOUND);
+  }
+}
+
+function browserGrantFromForm(body: unknown): string | undefined {
+  if (typeof body !== "string" || body.length < 7 || body.length > 4 * 1024) {
+    return undefined;
+  }
+  const parameters = new URLSearchParams(body);
+  if ([...parameters.keys()].some((key) => key !== "grant")) {
+    return undefined;
+  }
+  const grants = parameters.getAll("grant");
+  const grant = grants.length === 1 ? grants[0] : undefined;
+  return grant !== undefined && grant.length >= 20 && grant.length <= 512 && !containsControl(grant)
+    ? grant
+    : undefined;
+}
+
 function ownerCredential(request: FastifyRequest):
   | {
       readonly kind: "bearer" | "artifact-session";
@@ -465,6 +732,7 @@ function parseRange(
 function validateOrigins(options: ArtifactGatewayAppOptions): {
   readonly staticOrigin: URL;
   readonly interactiveOrigin: URL;
+  readonly adminOrigins: ReadonlySet<string>;
 } {
   if (options.plane !== "static" && options.plane !== "interactive") {
     throw new Error("Artifact Gateway plane is invalid.");
@@ -485,7 +753,11 @@ function validateOrigins(options: ArtifactGatewayAppOptions): {
   if (new Set(all).size !== all.length || new Set(cookieHosts).size !== cookieHosts.length) {
     throw new Error("Artifact and Admin origins and cookie hosts must be distinct.");
   }
-  return { staticOrigin, interactiveOrigin };
+  return {
+    staticOrigin,
+    interactiveOrigin,
+    adminOrigins: new Set(adminOrigins.map((origin) => origin.origin)),
+  };
 }
 
 function parseOrigin(value: string): URL {

@@ -7,6 +7,9 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "native:linux:stage": "node native/linux/stage.mjs",
+    "native:windows:build": "node native/windows/build.mjs",
+    "native:windows:conformance": "node --experimental-strip-types native/windows/run-live-conformance.mjs",
     "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   }

@@ -9,5 +9,11 @@
   "scripts": {
     "test": "node --experimental-strip-types --test",
     "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "ws": "8.21.1"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.1"
   }
 }

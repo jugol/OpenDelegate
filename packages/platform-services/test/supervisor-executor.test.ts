@@ -10,7 +10,7 @@ import {
 } from "../src/index.ts";
 import { macOsConfiguration, windowsConfiguration } from "./fixtures.ts";
 
-test("an injected runner executes argv directly and honors declared exit codes", async () => {
+test("an injected runner executes fresh-install argv directly", async () => {
   const plan = createServicePlan({
     operation: "install",
     configuration: windowsConfiguration(),
@@ -28,7 +28,7 @@ test("an injected runner executes argv directly and honors declared exit codes",
     async run(invocation) {
       seen.push(invocation);
       return {
-        exitCode: invocation.arguments.includes("create") ? 1073 : 0,
+        exitCode: 0,
       };
     },
   };
@@ -42,6 +42,41 @@ test("an injected runner executes argv directly and honors declared exit codes",
   assert.equal(
     seen.every((invocation) => invocation.executable === "sc.exe"),
     true,
+  );
+});
+
+test("fresh Windows install rejects an existing SCM registration", async () => {
+  const plan = createServicePlan({
+    operation: "install",
+    configuration: windowsConfiguration(),
+  });
+  const operation = plan.steps.find(
+    (step) =>
+      step.action.kind === "supervisor.invoke" &&
+      step.action.command.plane === "core" &&
+      step.action.command.verb === "install",
+  );
+  assert.ok(operation);
+  assert.equal(operation.action.kind, "supervisor.invoke");
+
+  await assert.rejects(
+    executeSupervisorOperation(
+      operation.action.command,
+      {
+        async run() {
+          return { exitCode: 1073 };
+        },
+      },
+      {
+        async isLoggedIn() {
+          return true;
+        },
+      },
+    ),
+    (error: unknown) =>
+      error instanceof SupervisorInvocationError &&
+      error.code === "SUPERVISOR_COMMAND_FAILED" &&
+      error.exitCode === 1073,
   );
 });
 

@@ -144,7 +144,7 @@ export interface DiscordGatewayConnection {
 
 /**
  * Owns the Discord credential, WebSocket HELLO/heartbeat/ACK handling, Identify or
- * Resume exchange, reconnect backoff, and decompression. The adapter supplies only
+ * Resume exchange, reconnect backoff, and bounded JSON framing. The adapter supplies only
  * the persisted resume cursor and validated intents.
  */
 export interface DiscordGatewayPort {
@@ -323,6 +323,11 @@ export interface DiscordTaskPort {
 
 export interface TaskChannelProjection {
   readonly taskId: string;
+  /**
+   * Stable canonical event identity for this projection. It keeps two distinct
+   * Task updates idempotent without collapsing equal user-visible text.
+   */
+  readonly sourceEventId?: string;
   readonly state: DiscordTaskState;
   readonly objective: string;
   readonly summary: string;

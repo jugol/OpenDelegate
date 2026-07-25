@@ -24,23 +24,39 @@ represents a supported release or completed first milestone.
   inspection and emergency-control APIs.
 - Loopback-only initial owner claim, passphrase authentication, one-time recovery codes, session
   revocation, CSRF protection, and SQL-backed owner state.
-- Authenticated Admin Web login and recovery, durable Task inspection and pause/cancel emergency
-  controls, plus responsive Device and read-only Configuration Chat surfaces. Execution-starting
-  controls fail closed until their production runtime is connected.
-- Device identity and single-use enrollment contracts, Worker durable inbox/outbox and Run
-  supervision contracts, Device discovery, ordered Transport Profiles, and Device-local linked
-  Markdown Knowledge.
+- Authenticated Admin Web login and recovery; durable Task, Approval, Artifact, enrollment, audit,
+  and diagnostic operations; and responsive Device Configuration Chat in English, Korean, Japanese,
+  French, Spanish, and Simplified Chinese.
+- An authenticated, six-locale Task Budget inspector and exact owner extension flow with durable
+  revision checks, Instance ceilings, limit-event history, and fail-closed conflict handling.
+- Production Main-to-Worker enrollment HTTPS and mutual-TLS WSS composition, durable inbox/outbox
+  replay, exact Run dispatch and action authorization, Worker supervision, Device discovery, ordered
+  Transport Profiles, and a local-only Knowledge MCP boundary for linked Markdown.
+- SQLite and PostgreSQL repositories for authoritative Artifact metadata and append-only Device
+  observations, with bounded Admin projections that keep Device Knowledge and local paths outside
+  Main.
 - Local Artifact Store and isolated Artifact Gateway packages with exposure-policy, traversal, and
   hostile generated-content coverage.
-- Codex CLI, Claude CLI, and generic command Agent Adapter packages with normalized lifecycle,
-  cancellation, session affinity, and single-writer contract tests.
-- A durable Discord Forum adapter core covering authorization, one-post/one-Task mapping, idempotent
-  ingestion, reconciliation, status projection, controls, archive/reopen, deletion, and redaction
-  behavior.
-- Windows SCM, macOS launchd, and Linux systemd service plans, renderers, readiness contracts,
-  upgrade/rollback planning, and read-only validation seams.
-- OS-neutral Computer Use contracts plus OS-driver/readiness seams and deterministic conformance
-  fixtures for locking, cancellation, permission failure, and evidence.
+- Programmatic Codex App Server and Claude Agent SDK adapters, bounded CLI fallbacks, normalized
+  lifecycle, exact provider-tool authorization, cancellation, native-session affinity, checkpoint
+  continuation, and single-writer contract tests.
+- Provider-native steering with exact Task, Run, Device, turn, and native-session binding; durable
+  intent-before-send replay rules; and authenticated Main–Worker request and receipt delivery.
+- A production-composed Discord Forum adapter covering Device-local bot credentials, Gateway and
+  HTTP drivers, durable authorization, one-post/one-Task mapping, idempotent ingestion,
+  reconciliation, status projection, controls, archive/reopen, deletion, and redaction behavior.
+- Windows SCM, macOS launchd, and Linux systemd service plans plus a journaled native executor,
+  signed-bundle preflight, health-gated install/upgrade/rollback/uninstall, separate core and owner
+  session-helper hosts, and role-agnostic helper lifecycle.
+- A typed Main-scoped `admin.open-on-login` preference, one-shot health-gated browser launch from
+  the owner-session helper, and an explicit service reconfiguration flow that rolls back on failed
+  helper health.
+- Authenticated, signed Computer Use IPC; OS-neutral locking and authorization; native Windows,
+  macOS, and GNOME Wayland candidates; local emergency stop; and deterministic conformance fixtures
+  for capture, input, cancellation, permission failure, and evidence.
+- A fail-closed, journaled platform-mutation executor for existing official package sources, project
+  dependencies, protected package-source, installer, driver, kernel, network, VPN, and firewall
+  changes.
 - An agent-facing `opendelegate-init` skill that preserves release gating and keeps runtime state
   outside the checkout.
 - A platform-specific internal-preview bundle builder that downloads and verifies the exact official
@@ -53,6 +69,8 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Made the fixed Main computer a normal co-located Worker Device under the same service lifecycle
+  and Device policy instead of a control-only scheduling exception.
 - Replaced the Admin design-only fixture path with authenticated Task operations and explicit
   degraded behavior when Discord is not configured.
 - Unified Work Order and Worker Report validation in Protocol and moved deterministic eligibility,
@@ -61,6 +79,9 @@ represents a supported release or completed first milestone.
   fail-closed replay-tamper coverage.
 - Made the bundled Main runtime the internal-preview validation path instead of a development server
   or visible provider desktop application.
+- Bound native service health to the exact configured product, runtime plane, Instance, Device,
+  role, and release identity so a healthy response from the wrong process cannot satisfy
+  installation or upgrade readiness.
 - Pinned release construction to Node.js 24.18.0 while retaining Node.js 22.14 and later in the Node
   22 line as a contributor compatibility target.
 - Replaced the vulnerable pnpm 9 toolchain pin with pnpm 11.15.1 while preserving the exact frozen
@@ -81,6 +102,8 @@ represents a supported release or completed first milestone.
 - Canonicalized parsed X.509 certificate serials before durable lookup and rotation proof
   verification so valid 128-bit serials with DER-trimmed leading zeroes remain stable across
   platforms.
+- Overrode the Claude SDK's transitive Hono Node adapter to the compatible patched 2.0.10 release
+  and made dependency review and audit reject every moderate-or-higher advisory.
 
 ### Security
 
@@ -95,7 +118,9 @@ represents a supported release or completed first milestone.
   Dependabot vulnerability alerts, and Dependabot security updates for the public repository.
 - Upgraded to the patched pnpm 11 toolchain, enforced a strict dependency release-age hold, blocked
   exotic transitive sources, allowlisted only exact reviewed native build scripts, and removed all
-  known dependency advisories.
+  currently reported dependency advisories.
+- Prevented an approved action whose execution outcome became failed or unknown from retaining a
+  consumable Worker authorization after restart.
 - Added per-peer Artifact lookup and authorization rate limiting, replaced the Windows Task XML
   regular-expression scan with a bounded linear parser, and moved file-backed session lease keys to
   a `Map` so persisted input cannot reach prototype setters.
@@ -108,7 +133,9 @@ represents a supported release or completed first milestone.
   checkpoint-continuation smokes remain incomplete.
 - Native service installation, reboot/login/logout recovery, upgrade rollback, and
   signing/notarization remain unproven across macOS, Windows, and Linux.
-- Real Computer Use input and cancellation have not passed on macOS, Windows, or a supported
-  graphical Linux environment.
+- A non-release Windows direct-fixture run passed real capture, input, cancellation, and emergency
+  stop through exact parent-process authentication. Release-valid owner-picker, signed-service, and
+  clean-host proof is still missing on Windows, and real Computer Use remains unproven on macOS and
+  the supported graphical Linux target.
 - The owner-controlled three-Device, mixed-OS, mixed-route, and Artifact exposure acceptance
   scenarios have not run.

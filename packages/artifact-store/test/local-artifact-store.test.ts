@@ -9,6 +9,8 @@ import {
   ArtifactStoreError,
   LocalArtifactStore,
   type ArtifactClock,
+  type ArtifactIndexRepository,
+  type ArtifactIndexSnapshot,
   type ArtifactMutationContext,
   type ArtifactRandomSource,
 } from "../src/index.ts";
@@ -140,6 +142,36 @@ test("content-addressed bytes and complete metadata survive a store restart", as
   });
 });
 
+test("Artifact metadata can be listed without exposing stored bytes or access credentials", async () => {
+  await withStore(async ({ store }) => {
+    await store.put(
+      artifactInput({
+        artifactId: "artifact-older",
+        createdAtMs: 1_000,
+        originalFilename: "older.html",
+      }),
+    );
+    await store.put(
+      artifactInput({
+        artifactId: "artifact-newer",
+        createdAtMs: 2_000,
+        originalFilename: "newer.html",
+      }),
+    );
+
+    const listed = await store.listMetadata();
+
+    assert.deepEqual(
+      listed.map((artifact) => artifact.artifactId),
+      ["artifact-newer", "artifact-older"],
+    );
+    assert.equal("bytes" in listed[0]!, false);
+    assert.equal("token" in listed[0]!, false);
+    assert.equal(Object.isFrozen(listed), true);
+    assert.equal(Object.isFrozen(listed[0]), true);
+  });
+});
+
 test("checksum mismatch and configured byte limits fail before metadata publication", async () => {
   await withStore(async ({ store }) => {
     await assert.rejects(store.put(artifactInput({ unexpectedMetadata: "reject-me" })), {
@@ -179,6 +211,52 @@ test("checksum mismatch and configured byte limits fail before metadata publicat
         }),
       ),
       { code: "ARTIFACT_TOO_LARGE" },
+    );
+  });
+});
+
+test("streamed publication verifies the declared size and checksum without requiring one in-memory payload", async () => {
+  await withStore(async ({ store }) => {
+    const chunks = [
+      Buffer.alloc(300, 1),
+      Buffer.alloc(300, 2),
+      Buffer.alloc(300, 3),
+      Buffer.alloc(124, 4),
+    ];
+    const bytes = Buffer.concat(chunks);
+    let yielded = 0;
+    async function* stream(): AsyncIterable<Uint8Array> {
+      for (const chunk of chunks) {
+        yielded += 1;
+        yield chunk;
+      }
+    }
+
+    const metadata = await store.putStream({
+      ...artifactInput({
+        artifactId: "artifact-streamed",
+        expectedChecksum: { algorithm: "sha256", value: checksum(bytes) },
+      }),
+      declaredSizeBytes: bytes.byteLength,
+      bytes: stream(),
+    });
+
+    assert.equal(yielded, chunks.length);
+    assert.equal(metadata.sizeBytes, 1_024);
+    assert.deepEqual(Buffer.from((await store.read("artifact-streamed")).bytes), bytes);
+
+    await assert.rejects(
+      store.putStream({
+        ...artifactInput({
+          artifactId: "artifact-short-stream",
+          expectedChecksum: { algorithm: "sha256", value: checksum(Buffer.from("short")) },
+        }),
+        declaredSizeBytes: 6,
+        bytes: (async function* () {
+          yield Buffer.from("short");
+        })(),
+      }),
+      { code: "ARTIFACT_SIZE_MISMATCH" },
     );
   });
 });
@@ -358,4 +436,319 @@ test("signed-link bearers are Artifact-bound, hash-only, replayable, revocable, 
       await reopened.close();
     }
   });
+});
+
+interface MemoryArtifactIndexBackend {
+  snapshot?: ArtifactIndexSnapshot;
+}
+
+class MemoryArtifactIndexRepository implements ArtifactIndexRepository {
+  public closed = false;
+  public failAfterCommitOnce = false;
+  private readonly backend: MemoryArtifactIndexBackend;
+
+  public constructor(backend: MemoryArtifactIndexBackend) {
+    this.backend = backend;
+  }
+
+  public async load(): Promise<ArtifactIndexSnapshot | undefined> {
+    return this.backend.snapshot === undefined
+      ? undefined
+      : Object.freeze({ ...this.backend.snapshot });
+  }
+
+  public async initialize(initial: ArtifactIndexSnapshot): Promise<ArtifactIndexSnapshot> {
+    this.backend.snapshot ??= Object.freeze({ ...initial });
+    return Object.freeze({ ...this.backend.snapshot });
+  }
+
+  public async compareAndSet(
+    expectedGeneration: number,
+    next: ArtifactIndexSnapshot,
+  ): Promise<boolean> {
+    if (this.backend.snapshot?.generation !== expectedGeneration) {
+      return false;
+    }
+    this.backend.snapshot = Object.freeze({ ...next });
+    if (this.failAfterCommitOnce) {
+      this.failAfterCommitOnce = false;
+      throw new Error("synthetic lost commit acknowledgement");
+    }
+    return true;
+  }
+
+  public async close(): Promise<void> {
+    this.closed = true;
+  }
+}
+
+test("an injected durable index owns metadata, signed tokens, and audit while bytes stay local", async () => {
+  const rootDirectory = await mkdtemp(join(tmpdir(), "opendelegate-artifacts-repository-"));
+  const backend: MemoryArtifactIndexBackend = {};
+  const clock = new MutableClock(1_000);
+  const signingKey = Buffer.alloc(32, 7);
+  const firstRepository = new MemoryArtifactIndexRepository(backend);
+  let first: LocalArtifactStore | undefined;
+  let restarted: LocalArtifactStore | undefined;
+  try {
+    first = await LocalArtifactStore.open({
+      rootDirectory,
+      maxArtifactBytes: 1_024,
+      clock,
+      signingKey,
+      random: new DeterministicRandom(),
+      indexRepository: firstRepository,
+    });
+    await first.put(artifactInput());
+    const issued = await first.issueSignedToken({
+      artifactId: "artifact-report",
+      expiresAtMs: 5_000,
+      context,
+    });
+    await first.verifySignedToken({
+      artifactId: "artifact-report",
+      token: issued.token,
+      context,
+    });
+    assert.ok(backend.snapshot);
+    assert.equal(backend.snapshot.stateJson.includes(issued.token), false);
+    await assert.rejects(readFile(join(rootDirectory, "index.json"), "utf8"), {
+      code: "ENOENT",
+    });
+    assert.deepEqual(
+      await readdir(join(rootDirectory, "objects", checksum(artifactInput().bytes).slice(0, 2))),
+      [checksum(artifactInput().bytes)],
+    );
+
+    await first.close();
+    first = undefined;
+    assert.equal(firstRepository.closed, true);
+
+    restarted = await LocalArtifactStore.open({
+      rootDirectory,
+      maxArtifactBytes: 1_024,
+      clock,
+      signingKey,
+      random: new DeterministicRandom(),
+      indexRepository: new MemoryArtifactIndexRepository(backend),
+    });
+    assert.equal((await restarted.getMetadata("artifact-report")).state, "available");
+    await restarted.verifySignedToken({
+      artifactId: "artifact-report",
+      token: issued.token,
+      context,
+    });
+    assert.deepEqual(
+      (await restarted.listAuditEvents("artifact-report")).map((event) => event.eventType),
+      [
+        "artifact.stored",
+        "artifact.signed-token-issued",
+        "artifact.access-granted",
+        "artifact.access-granted",
+      ],
+    );
+  } finally {
+    await first?.close();
+    await restarted?.close();
+    await rm(rootDirectory, { recursive: true, force: true });
+  }
+});
+
+test("a pristine injected index imports one legacy local index through compare-and-set", async () => {
+  const rootDirectory = await mkdtemp(join(tmpdir(), "opendelegate-artifacts-legacy-index-"));
+  const clock = new MutableClock(1_000);
+  const signingKey = Buffer.alloc(32, 4);
+  let legacy: LocalArtifactStore | undefined;
+  let migrated: LocalArtifactStore | undefined;
+  try {
+    legacy = await LocalArtifactStore.open({
+      rootDirectory,
+      maxArtifactBytes: 1_024,
+      clock,
+      signingKey,
+      random: new DeterministicRandom(),
+    });
+    await legacy.put(artifactInput());
+    await legacy.close();
+    legacy = undefined;
+
+    const stateJson = JSON.stringify({
+      schemaVersion: 1,
+      generation: 0,
+      artifacts: {},
+      signedTokens: {},
+      auditEvents: [],
+      nextAuditSequence: 1,
+    });
+    const backend: MemoryArtifactIndexBackend = {
+      snapshot: {
+        schemaVersion: 1,
+        generation: 0,
+        stateJson,
+        stateSha256: checksum(Buffer.from(stateJson, "utf8")),
+      },
+    };
+    migrated = await LocalArtifactStore.open({
+      rootDirectory,
+      maxArtifactBytes: 1_024,
+      clock,
+      signingKey,
+      random: new DeterministicRandom(),
+      indexRepository: new MemoryArtifactIndexRepository(backend),
+    });
+    assert.equal((await migrated.getMetadata("artifact-report")).artifactId, "artifact-report");
+    assert.equal(backend.snapshot?.generation, 1);
+    assert.deepEqual(
+      Buffer.from((await migrated.read("artifact-report")).bytes),
+      artifactInput().bytes,
+    );
+  } finally {
+    await legacy?.close();
+    await migrated?.close();
+    await rm(rootDirectory, { recursive: true, force: true });
+  }
+});
+
+test("a stale injected index writer refreshes and fails closed without losing either publication", async () => {
+  const rootDirectory = await mkdtemp(join(tmpdir(), "opendelegate-artifacts-cas-"));
+  const backend: MemoryArtifactIndexBackend = {};
+  const clock = new MutableClock(1_000);
+  const signingKey = Buffer.alloc(32, 6);
+  const first = await LocalArtifactStore.open({
+    rootDirectory,
+    maxArtifactBytes: 1_024,
+    clock,
+    signingKey,
+    random: new DeterministicRandom(),
+    indexRepository: new MemoryArtifactIndexRepository(backend),
+  });
+  const second = await LocalArtifactStore.open({
+    rootDirectory,
+    maxArtifactBytes: 1_024,
+    clock,
+    signingKey,
+    random: new DeterministicRandom(),
+    indexRepository: new MemoryArtifactIndexRepository(backend),
+  });
+  try {
+    await first.put(artifactInput({ artifactId: "artifact-first" }));
+    await assert.rejects(
+      second.put(artifactInput({ artifactId: "artifact-second" })),
+      (error: unknown) =>
+        error instanceof ArtifactStoreError && error.code === "ARTIFACT_STORAGE_UNAVAILABLE",
+    );
+    await second.put(artifactInput({ artifactId: "artifact-second" }));
+
+    const restarted = await LocalArtifactStore.open({
+      rootDirectory,
+      maxArtifactBytes: 1_024,
+      clock,
+      signingKey,
+      random: new DeterministicRandom(),
+      indexRepository: new MemoryArtifactIndexRepository(backend),
+    });
+    try {
+      assert.deepEqual(
+        (await restarted.listMetadata()).map((metadata) => metadata.artifactId).sort(),
+        ["artifact-first", "artifact-second"],
+      );
+    } finally {
+      await restarted.close();
+    }
+  } finally {
+    await Promise.all([first.close(), second.close()]);
+    await rm(rootDirectory, { recursive: true, force: true });
+  }
+});
+
+test("an ambiguous repository response recovers an exactly committed generation without replay", async () => {
+  const rootDirectory = await mkdtemp(join(tmpdir(), "opendelegate-artifacts-ambiguous-"));
+  const backend: MemoryArtifactIndexBackend = {};
+  const repository = new MemoryArtifactIndexRepository(backend);
+  const store = await LocalArtifactStore.open({
+    rootDirectory,
+    maxArtifactBytes: 1_024,
+    clock: new MutableClock(1_000),
+    signingKey: Buffer.alloc(32, 8),
+    random: new DeterministicRandom(),
+    indexRepository: repository,
+  });
+  try {
+    repository.failAfterCommitOnce = true;
+    assert.equal((await store.put(artifactInput())).artifactId, "artifact-report");
+    assert.deepEqual(
+      (await store.listAuditEvents()).map((event) => event.eventType),
+      ["artifact.stored"],
+    );
+    assert.equal(backend.snapshot?.generation, 1);
+  } finally {
+    await store.close();
+    await rm(rootDirectory, { recursive: true, force: true });
+  }
+});
+
+test("an injected index with a mismatched integrity digest is rejected as corrupt", async () => {
+  const rootDirectory = await mkdtemp(join(tmpdir(), "opendelegate-artifacts-corrupt-"));
+  const backend: MemoryArtifactIndexBackend = {};
+  const repository = new MemoryArtifactIndexRepository(backend);
+  const clock = new MutableClock(1_000);
+  const signingKey = Buffer.alloc(32, 5);
+  const first = await LocalArtifactStore.open({
+    rootDirectory,
+    maxArtifactBytes: 1_024,
+    clock,
+    signingKey,
+    indexRepository: repository,
+  });
+  await first.close();
+  assert.ok(backend.snapshot);
+  backend.snapshot = { ...backend.snapshot, stateSha256: "0".repeat(64) };
+  try {
+    await assert.rejects(
+      LocalArtifactStore.open({
+        rootDirectory,
+        maxArtifactBytes: 1_024,
+        clock,
+        signingKey,
+        indexRepository: new MemoryArtifactIndexRepository(backend),
+      }),
+      (error: unknown) =>
+        error instanceof ArtifactStoreError && error.code === "ARTIFACT_STORAGE_CORRUPT",
+    );
+  } finally {
+    await rm(rootDirectory, { recursive: true, force: true });
+  }
+});
+
+test("a repository corruption failure is normalized at the Artifact Store boundary", async () => {
+  const rootDirectory = await mkdtemp(join(tmpdir(), "opendelegate-artifacts-repository-error-"));
+  let closed = false;
+  const repository: ArtifactIndexRepository = {
+    load: async () => {
+      throw Object.assign(new Error("synthetic SQL integrity failure"), {
+        code: "DATA_CORRUPT",
+      });
+    },
+    initialize: async (initial) => initial,
+    compareAndSet: async () => false,
+    close: async () => {
+      closed = true;
+    },
+  };
+  try {
+    await assert.rejects(
+      LocalArtifactStore.open({
+        rootDirectory,
+        maxArtifactBytes: 1_024,
+        clock: new MutableClock(1_000),
+        signingKey: Buffer.alloc(32, 3),
+        indexRepository: repository,
+      }),
+      (error: unknown) =>
+        error instanceof ArtifactStoreError && error.code === "ARTIFACT_STORAGE_CORRUPT",
+    );
+    assert.equal(closed, true);
+  } finally {
+    await rm(rootDirectory, { recursive: true, force: true });
+  }
 });

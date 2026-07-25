@@ -30,6 +30,61 @@ export interface AgentPermissionInput {
   readonly allowedTools?: readonly string[];
   readonly deniedTools?: readonly string[];
   readonly dangerousBypassGrant?: DangerousBypassGrant;
+  /**
+   * Device-local bridge to Main's exact-action Policy boundary. Programmatic
+   * adapters call this only when the provider is about to cross its sandbox or
+   * another protected boundary. The callback must durably consume an allow
+   * decision before it returns `allow`.
+   *
+   * The port is intentionally absent from serialized command envelopes.
+   */
+  readonly actionAuthorization?: AgentActionAuthorizationPort;
+}
+
+export type AgentActionCategory =
+  | "read-only-observation"
+  | "opendelegate-process-retry"
+  | "opendelegate-process-restart"
+  | "project-dependency-install"
+  | "configured-official-package-install"
+  | "computer-use-input"
+  | "sandbox-boundary-escalation"
+  | "package-repository-addition"
+  | "remote-installer-script"
+  | "untrusted-installer"
+  | "driver-installation"
+  | "kernel-extension-installation"
+  | "os-network-change"
+  | "vpn-change"
+  | "firewall-change"
+  | "policy-relaxation"
+  | "secret-export"
+  | "cross-device-knowledge-transfer"
+  | "policy-bypass-attempt";
+
+export interface AgentActionAuthorizationRequest {
+  readonly authorizationRequestId: string;
+  readonly actionCategory: AgentActionCategory;
+  readonly actionType: string;
+  readonly actionFingerprint: `sha256:${string}`;
+  /**
+   * Bounded, presentation-safe metadata. Exact provider input is represented by
+   * `actionFingerprint` and is never required to leave the Device.
+   */
+  readonly actionDescriptor: Readonly<Record<string, boolean | number | string | null>>;
+  readonly requestedAtMs: number;
+  readonly signal: AbortSignal;
+}
+
+export interface AgentActionAuthorizationDecision {
+  readonly decision: "allow" | "deny";
+  readonly reasonCode: string;
+}
+
+export interface AgentActionAuthorizationPort {
+  authorizeAndConsume(
+    request: AgentActionAuthorizationRequest,
+  ): Promise<AgentActionAuthorizationDecision>;
 }
 
 export interface AgentRunLimits {
@@ -41,6 +96,21 @@ export interface AgentRunLimits {
   readonly maxBufferedEvents: number;
   readonly maxLineBytes: number;
   readonly maxDiagnosticBytes: number;
+}
+
+/**
+ * A narrow, run-scoped tool server composed by OpenDelegate. Provider-native
+ * configuration remains ignored; only these explicit stdio servers are exposed.
+ * Secrets are not accepted here. A server that needs authority receives a path to
+ * an opaque, single-use capability file in `args`.
+ */
+export interface AgentToolServer {
+  readonly serverName: string;
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly enabledTools: readonly string[];
+  readonly startupTimeoutMs: number;
+  readonly toolTimeoutMs: number;
 }
 
 export interface SessionLineage {
@@ -77,6 +147,7 @@ interface AgentRunRequestFields {
   readonly workspace: WorkspaceBinding;
   readonly sandbox: AgentSandbox;
   readonly permissions: AgentPermissionInput;
+  readonly toolServers?: readonly AgentToolServer[];
   readonly limits: AgentRunLimits;
   readonly environment?: Readonly<Record<string, string>>;
   readonly secretEnvironment?: Readonly<Record<string, string>>;
@@ -142,6 +213,12 @@ export type NormalizedAgentEvent =
       readonly message: string;
     })
   | (AgentEventBase & {
+      readonly type: "steering_accepted";
+      readonly requestId: string;
+      readonly delivery: "live";
+      readonly requestedBy: "owner" | "main-agent";
+    })
+  | (AgentEventBase & {
       readonly type: "usage";
       readonly usage: AgentUsage;
     })
@@ -179,9 +256,53 @@ export interface AgentRunResult {
   readonly error?: AgentRunFailure;
 }
 
+/**
+ * The complete local identity of the one active provider turn that may receive a
+ * live steering instruction. `sessionKey` remains Device-local and must not be
+ * copied into Main audit records.
+ */
+export interface AgentSteeringScope {
+  readonly provider: AgentProvider;
+  readonly adapterId: string;
+  readonly runId: string;
+  readonly taskId: string;
+  readonly workstreamId: string;
+  readonly sessionKey: string;
+  readonly deviceId: string;
+  readonly workspaceId: string;
+  readonly nativeSessionId: string;
+}
+
+export interface AgentSteerRequest {
+  readonly schemaVersion: 1;
+  readonly requestId: string;
+  readonly scope: AgentSteeringScope;
+  readonly instruction: string;
+  readonly requestedBy: "owner" | "main-agent";
+}
+
+export interface AgentSteerReceipt {
+  readonly schemaVersion: 1;
+  readonly requestId: string;
+  readonly delivery: "live";
+  readonly status: "accepted" | "already-accepted";
+  readonly acceptedAt: string;
+  /**
+   * Opaque provider turn identity when the provider exposes one. This value is
+   * diagnostic evidence, never authority for selecting another Run or session.
+   */
+  readonly providerTurnId?: string;
+}
+
 export interface AgentRunHandle {
   readonly events: AsyncIterable<NormalizedAgentEvent>;
   readonly result: Promise<AgentRunResult>;
+  /**
+   * Present only when the probed adapter truthfully advertises live steering.
+   * The request must match this handle's exact active Run, Task, Device,
+   * Workspace, session key, and native session.
+   */
+  readonly steer?: (request: AgentSteerRequest) => Promise<AgentSteerReceipt>;
   cancel(reason?: string): Promise<void>;
 }
 

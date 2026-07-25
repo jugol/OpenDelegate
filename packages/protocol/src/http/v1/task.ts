@@ -103,6 +103,21 @@ export const TaskEventSummarySchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TaskConversationMessageSchema = Type.Object(
+  {
+    messageId: OpaqueIdSchema,
+    role: Type.Union([Type.Literal("owner"), Type.Literal("agent")]),
+    content: Type.String({ minLength: 1, maxLength: 32_768 }),
+    occurredAt: Rfc3339InstantSchema,
+  },
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateTaskConversationMessageV1",
+  },
+);
+
+export type TaskConversationMessageV1 = Type.Static<typeof TaskConversationMessageSchema>;
+
 export const TaskDetailSchema = Type.Object(
   {
     ...TaskSummaryProperties,
@@ -112,6 +127,7 @@ export const TaskDetailSchema = Type.Object(
       maxItems: 128,
       uniqueItems: true,
     }),
+    messages: Type.Array(TaskConversationMessageSchema, { maxItems: 10_000 }),
     events: Type.Array(TaskEventSummarySchema, { maxItems: 10_000 }),
   },
   {

@@ -6,7 +6,6 @@ import {
   SUPPORTED_GRAPHICAL_LINUX_TARGET,
   type AuthorizedComputerUseAction,
   type ClickInput,
-  type ComputerUseActionFingerprint,
   type ComputerUseActionSummary,
   type ComputerUseActionSummaryEvidence,
   type ComputerUseActionSummaryEntry,
@@ -25,6 +24,7 @@ import {
   type DesktopLeasePort,
   type NativeComputerUseAction,
   type NativeComputerUseDriver,
+  type NativeDriverAuthorizedInputContext,
   type NativeDriverControlContext,
   type NativeDriverExecutionContext,
   type NativeDriverProbe,
@@ -34,6 +34,7 @@ import {
   type StartComputerUseInput,
   type TypeTextInput,
 } from "./contracts.ts";
+import { createActionFingerprint, describeNativeComputerUseAction } from "./input-authorization.ts";
 
 const NATIVE_READINESS_CHECKS = [
   "interactive-session",
@@ -333,6 +334,14 @@ class ManagedComputerUseSession implements ComputerUseSession {
   private readonly summaryEntries: ComputerUseActionSummaryEntry[] = [];
   private currentStatus: ComputerUseSessionStatus = "active";
   private evidenceSequence = 0;
+  private inputAttemptSequence = 0;
+  private pendingInputAttempt:
+    | {
+        readonly fingerprint: `sha256:${string}`;
+        readonly request: ComputerUseInputAuthorizationRequest;
+      }
+    | undefined;
+  private inputTail: Promise<void> = Promise.resolve();
 
   public constructor(options: ManagedComputerUseSessionOptions) {
     this.executionHandleId = options.executionHandleId;
@@ -341,7 +350,9 @@ class ManagedComputerUseSession implements ComputerUseSession {
     if (!Number.isSafeInteger(requestedDeadline)) {
       throw new ComputerUseOsError("INVALID_INPUT", "The Computer Use deadline is invalid.");
     }
-    this.deadlineAtMs = Math.min(requestedDeadline, options.input.lease.expiresAtMs);
+    // The Run lease is renewable. The fixed session timeout remains a separate
+    // upper bound, while every operation revalidates the live DesktopLeasePort.
+    this.deadlineAtMs = requestedDeadline;
     this.initialDisplayFingerprint = options.initialDisplayFingerprint;
     this.driver = options.driver;
     this.authority = options.authority;
@@ -409,7 +420,7 @@ class ManagedComputerUseSession implements ComputerUseSession {
 
   public async click(input: ClickInput): Promise<void> {
     requireIdentifier(input.controlId, "control ID");
-    await this.executeInput({ kind: "click", controlId: input.controlId });
+    await this.queueInput({ kind: "click", controlId: input.controlId });
   }
 
   public async typeText(input: TypeTextInput): Promise<void> {
@@ -424,7 +435,7 @@ class ManagedComputerUseSession implements ComputerUseSession {
         "Computer Use text must be a non-empty bounded string.",
       );
     }
-    await this.executeInput({ kind: "type-text", controlId: input.controlId, text: input.text });
+    await this.queueInput({ kind: "type-text", controlId: input.controlId, text: input.text });
   }
 
   public actionSummary(): ComputerUseActionSummary {
@@ -515,23 +526,11 @@ class ManagedComputerUseSession implements ComputerUseSession {
 
   private async executeInput(action: NativeComputerUseAction): Promise<void> {
     await this.requireCurrentBoundary();
-    const requestedAtMs = readClock(this.clock);
     const authorizedAction = normalizeAction(action);
     const fingerprint = createActionFingerprint({
-      taskId: this.input.taskId,
-      deviceId: this.input.deviceId,
-      runId: this.input.runId,
       action: authorizedAction,
     });
-    const request: ComputerUseInputAuthorizationRequest = Object.freeze({
-      actionCategory: "computer-use-input",
-      taskId: this.input.taskId,
-      deviceId: this.input.deviceId,
-      runId: this.input.runId,
-      requestedAtMs,
-      action: authorizedAction,
-      fingerprint,
-    });
+    const request = this.authorizationRequest(authorizedAction, fingerprint);
     const proof = await this.authorizer.authorize(request);
     if (proof.fingerprint !== fingerprint || !isIdentifier(proof.authorizationId)) {
       throw new ComputerUseOsError(
@@ -539,10 +538,11 @@ class ManagedComputerUseSession implements ComputerUseSession {
         "The Computer Use authorization proof did not match the exact action fingerprint.",
       );
     }
-    if (proof.decision === "deny") {
-      throw new ComputerUseOsError("AUTHORIZATION_DENIED", "Computer Use input was denied.");
-    }
-    if (proof.decision === "require-approval") {
+    if (proof.decision !== "allow") {
+      if (proof.decision === "deny") {
+        this.clearPendingInputAttempt(request);
+        throw new ComputerUseOsError("AUTHORIZATION_DENIED", "Computer Use input was denied.");
+      }
       throw new ComputerUseOsError(
         "AUTHORIZATION_REQUIRED",
         "Computer Use input requires an exact Task-scoped grant.",
@@ -550,9 +550,28 @@ class ManagedComputerUseSession implements ComputerUseSession {
     }
 
     // D-035/D-037: revalidate both roots after authorization and immediately
-    // before crossing the mutating native driver boundary.
+    // before atomically consuming the permit.
     await this.requireCurrentBoundary();
-    const receipt = await this.invokeDriver(() => this.driver.act(this.driverContext(), action));
+    const consumption = await this.authorizer.consume(request, proof);
+    if (
+      consumption.decision !== "consumed" ||
+      consumption.authorizationRequestId !== request.authorizationRequestId ||
+      consumption.authorizationId !== proof.authorizationId ||
+      consumption.fingerprint !== fingerprint
+    ) {
+      throw new ComputerUseOsError(
+        "AUTHORIZATION_INVALID",
+        "The Computer Use authorization consumption did not match the exact mutation.",
+      );
+    }
+
+    // The final authority read happens after durable permit consumption and
+    // immediately before the native mutation. A permit may be safely wasted by
+    // revocation; it can never authorize stale input.
+    await this.requireCurrentBoundary();
+    const receipt = await this.invokeDriver(() =>
+      this.driver.act(this.authorizedDriverContext(proof, authorizedAction), action),
+    );
     this.requireActive();
     await this.requireDisplay(receipt.displayFingerprint);
     const executedAtMs = readClock(this.clock);
@@ -565,6 +584,7 @@ class ManagedComputerUseSession implements ComputerUseSession {
       executedAtMs,
     });
     this.summaryEntries.push(entry);
+    this.clearPendingInputAttempt(request);
     this.logger.write({
       name: "computer_use.input",
       taskId: this.input.taskId,
@@ -577,10 +597,54 @@ class ManagedComputerUseSession implements ComputerUseSession {
     });
   }
 
+  private authorizationRequest(
+    action: AuthorizedComputerUseAction,
+    fingerprint: `sha256:${string}`,
+  ): ComputerUseInputAuthorizationRequest {
+    if (this.pendingInputAttempt?.fingerprint === fingerprint) {
+      return this.pendingInputAttempt.request;
+    }
+    this.inputAttemptSequence += 1;
+    if (!Number.isSafeInteger(this.inputAttemptSequence)) {
+      throw new ComputerUseOsError(
+        "AUTHORIZATION_INVALID",
+        "The Computer Use input attempt sequence is exhausted.",
+      );
+    }
+    const request: ComputerUseInputAuthorizationRequest = Object.freeze({
+      authorizationRequestId: `${this.executionHandleId}:input:${String(
+        this.inputAttemptSequence,
+      )}`,
+      actionCategory: "computer-use-input",
+      taskId: this.input.taskId,
+      deviceId: this.input.deviceId,
+      runId: this.input.runId,
+      requestedAtMs: readClock(this.clock),
+      action,
+      fingerprint,
+    });
+    this.pendingInputAttempt = Object.freeze({ fingerprint, request });
+    return request;
+  }
+
+  private clearPendingInputAttempt(request: ComputerUseInputAuthorizationRequest): void {
+    if (
+      this.pendingInputAttempt?.request.authorizationRequestId === request.authorizationRequestId
+    ) {
+      this.pendingInputAttempt = undefined;
+    }
+  }
+
+  private queueInput(action: NativeComputerUseAction): Promise<void> {
+    const operation = this.inputTail.then(() => this.executeInput(action));
+    this.inputTail = operation.catch(() => undefined);
+    return operation;
+  }
+
   private async requireCurrentBoundary(): Promise<void> {
     this.requireActive();
     const now = readClock(this.clock);
-    if (now >= this.input.lease.expiresAtMs || now >= this.deadlineAtMs) {
+    if (now >= this.deadlineAtMs) {
       await this.failClosed("timeout");
       throw new ComputerUseOsError("SESSION_TIMEOUT", "The Computer Use session timed out.");
     }
@@ -823,6 +887,23 @@ class ManagedComputerUseSession implements ComputerUseSession {
     };
   }
 
+  private authorizedDriverContext(
+    proof: Extract<
+      Awaited<ReturnType<ComputerUseInputAuthorizer["authorize"]>>,
+      { readonly decision: "allow" }
+    >,
+    action: AuthorizedComputerUseAction,
+  ): NativeDriverAuthorizedInputContext {
+    return {
+      ...this.driverContext(),
+      authorization: Object.freeze({
+        authorizationId: proof.authorizationId,
+        fingerprint: proof.fingerprint,
+        action,
+      }),
+    };
+  }
+
   private controlContext(): NativeDriverControlContext {
     return {
       executionHandleId: this.executionHandleId,
@@ -851,32 +932,8 @@ class ManagedComputerUseSession implements ComputerUseSession {
   }
 }
 
-export function createActionFingerprint(input: {
-  readonly taskId: string;
-  readonly deviceId: string;
-  readonly runId: string;
-  readonly action: AuthorizedComputerUseAction;
-}): ComputerUseActionFingerprint {
-  return hashCanonical({
-    schemaVersion: 1,
-    actionCategory: "computer-use-input",
-    taskId: input.taskId,
-    deviceId: input.deviceId,
-    runId: input.runId,
-    action: input.action,
-  });
-}
-
 function normalizeAction(action: NativeComputerUseAction): AuthorizedComputerUseAction {
-  if (action.kind === "click") {
-    return Object.freeze({ kind: "click", controlId: action.controlId });
-  }
-  return Object.freeze({
-    kind: "type-text",
-    controlId: action.controlId,
-    textSha256: hashBytes(Buffer.from(action.text, "utf8")),
-    textLength: action.text.length,
-  });
+  return describeNativeComputerUseAction(action);
 }
 
 async function requireCurrentLease(

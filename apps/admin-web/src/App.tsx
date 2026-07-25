@@ -1,53 +1,77 @@
 import { MessageCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { AdminApi } from "./admin-api";
+import type { AdminApi, SecureSecretIngestPurpose, SecureSecretIngestReceipt } from "./admin-api";
+import { ArtifactSurface } from "./ArtifactSurface";
+import { ApprovalSurface } from "./ApprovalSurface";
+import { AuditSurface } from "./AuditSurface";
 import { ConfigurationChat } from "./ConfigurationChat";
 import { AdminRail, type AdminSection, DeviceSurface } from "./DeviceSurface";
 import { useAdminI18n } from "./i18n";
+import { JoinSurface } from "./JoinSurface";
 import { TaskSurface } from "./TaskSurface";
 import { useMediaQuery } from "./use-media-query";
-import type { DeviceOverviewViewModel } from "./view-model";
+import type { DeviceFleetViewModel, DeviceOverviewViewModel } from "./view-model";
 
 const compactChatQuery = "(max-width: 819px)";
 
 export interface AppProps {
   readonly api?: AdminApi;
   readonly configurationAgentAvailable?: boolean;
-  readonly device: DeviceOverviewViewModel;
+  readonly deviceFleet: DeviceFleetViewModel;
   readonly discordConfigured?: boolean;
   readonly executionAvailable?: boolean;
+  readonly initialArtifactId?: string;
   readonly initialChatOpen?: boolean;
   readonly initialSection?: AdminSection;
-  readonly onConfigurationMessage?: (message: string) => Promise<string>;
+  readonly onConfigurationMessage?: (deviceId: string, message: string) => Promise<string>;
+  readonly onSecureSecretIngest?: (
+    purpose: SecureSecretIngestPurpose,
+    secret: Uint8Array,
+  ) => Promise<SecureSecretIngestReceipt>;
   readonly releaseChannel?: "development" | "internal-preview" | "release-candidate" | "released";
 }
 
 export function App({
   api,
   configurationAgentAvailable = false,
-  device,
+  deviceFleet,
   discordConfigured = false,
   executionAvailable = false,
+  initialArtifactId,
   initialChatOpen = false,
   initialSection = "devices",
   onConfigurationMessage,
+  onSecureSecretIngest,
   releaseChannel = "development",
 }: AppProps): React.JSX.Element {
   const { messages } = useAdminI18n();
   const [activeSection, setActiveSection] = useState<AdminSection>(initialSection);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(deviceFleet.mainDeviceId);
   const [chatOpen, setChatOpen] = useState(initialChatOpen && initialSection === "devices");
   const [chatExpanded, setChatExpanded] = useState(false);
   const [chatFocusRequestId, setChatFocusRequestId] = useState(0);
+  const chatWasOpenRef = useRef(chatOpen);
   const launcherRef = useRef<HTMLButtonElement | null>(null);
   const lastChatTriggerRef = useRef<HTMLButtonElement | null>(null);
   const compactChat = useMediaQuery(compactChatQuery);
   const chatModal = chatOpen && (chatExpanded || compactChat);
   const configurationChatAvailable =
     configurationAgentAvailable && onConfigurationMessage !== undefined;
+  const mainDevice = resolveMainDevice(deviceFleet);
+  const device =
+    deviceFleet.devices.find((candidate) => candidate.deviceId === selectedDeviceId) ?? mainDevice;
 
   useEffect(() => {
-    if (chatOpen) {
+    if (!deviceFleet.devices.some((candidate) => candidate.deviceId === selectedDeviceId)) {
+      setSelectedDeviceId(deviceFleet.mainDeviceId);
+    }
+  }, [deviceFleet, selectedDeviceId]);
+
+  useEffect(() => {
+    const chatWasOpen = chatWasOpenRef.current;
+    chatWasOpenRef.current = chatOpen;
+    if (chatOpen || !chatWasOpen) {
       return;
     }
 
@@ -73,10 +97,18 @@ export function App({
 
   function selectSection(section: AdminSection): void {
     setActiveSection(section);
-    if (section === "tasks") {
+    if (section !== "devices") {
       setChatOpen(false);
       setChatExpanded(false);
     }
+  }
+
+  function selectDevice(deviceId: string): void {
+    if (!deviceFleet.devices.some((candidate) => candidate.deviceId === deviceId)) {
+      return;
+    }
+    setSelectedDeviceId(deviceId);
+    setActiveSection("devices");
   }
 
   return (
@@ -108,8 +140,14 @@ export function App({
       >
         <AdminRail
           activeSection={activeSection}
-          device={device}
+          approvalsEnabled={api !== undefined}
+          artifactsEnabled={api !== undefined}
+          auditEnabled={api !== undefined}
+          devices={deviceFleet.devices}
+          onSelectDevice={selectDevice}
           onSelectSection={selectSection}
+          selectedDeviceId={device.deviceId}
+          joinEnabled={api !== undefined}
           tasksEnabled={api !== undefined}
         />
         {activeSection === "tasks" && api !== undefined ? (
@@ -118,6 +156,17 @@ export function App({
             discordConfigured={discordConfigured}
             executionAvailable={executionAvailable}
           />
+        ) : activeSection === "approvals" && api !== undefined ? (
+          <ApprovalSurface api={api} />
+        ) : activeSection === "artifacts" && api !== undefined ? (
+          <ArtifactSurface
+            api={api}
+            {...(initialArtifactId === undefined ? {} : { initialArtifactId })}
+          />
+        ) : activeSection === "audit" && api !== undefined ? (
+          <AuditSurface api={api} />
+        ) : activeSection === "join" && api !== undefined ? (
+          <JoinSurface api={api} />
         ) : (
           <DeviceSurface chatOpen={chatOpen} device={device} onConfigure={openChat} />
         )}
@@ -131,7 +180,13 @@ export function App({
           modal={chatModal}
           onClose={closeChat}
           {...(configurationAgentAvailable && onConfigurationMessage !== undefined
-            ? { onSendMessage: onConfigurationMessage }
+            ? {
+                ...(onSecureSecretIngest === undefined
+                  ? {}
+                  : { onIngestSecret: onSecureSecretIngest }),
+                onSendMessage: (message: string) =>
+                  onConfigurationMessage(device.deviceId, message),
+              }
             : {})}
           onToggleExpanded={() => setChatExpanded((current) => !current)}
           open={chatOpen}
@@ -144,7 +199,13 @@ export function App({
           aria-controls="configuration-chat"
           aria-expanded="false"
           aria-label={messages.chat.open}
-          className={`chat-launcher ${activeSection === "tasks" ? "chat-launcher--tasks" : ""}`}
+          className={`chat-launcher ${
+            activeSection === "tasks"
+              ? "chat-launcher--tasks"
+              : activeSection === "approvals"
+                ? "chat-launcher--approvals"
+                : ""
+          }`}
           onClick={(event) => openChat(event.currentTarget)}
           ref={launcherRef}
           type="button"
@@ -154,4 +215,17 @@ export function App({
       ) : null}
     </div>
   );
+}
+
+function resolveMainDevice(deviceFleet: DeviceFleetViewModel): DeviceOverviewViewModel {
+  const mainDevices = deviceFleet.devices.filter((candidate) => candidate.role === "main");
+  const mainDevice = mainDevices[0];
+  if (
+    mainDevices.length !== 1 ||
+    mainDevice === undefined ||
+    mainDevice.deviceId !== deviceFleet.mainDeviceId
+  ) {
+    throw new Error("The Admin Device fleet must contain exactly one fixed Main Device.");
+  }
+  return mainDevice;
 }

@@ -53,7 +53,9 @@ implementations would duplicate the highest-risk state transitions.
 3. Enforce unique `event_id`, unique `(stream_id, stream_version)`, and unique
    `(sender_id, idempotency_key)` constraints as final correctness guards.
 4. Never persist Worker Knowledge content, Knowledge indexes, or Device Secret
-   values. Storage DTO validation rejects those fields before a transaction begins.
+   values. Discord bot and interaction tokens are also excluded: Discord outbox
+   actions may retain only an opaque Device-local token-vault reference. Storage DTO
+   validation rejects those fields before a transaction begins.
 
 ### Unit of work
 
@@ -155,6 +157,9 @@ instead provide the same observable contract with backend-appropriate mechanics.
 - Concurrent append, duplicate inbox, outbox claim, Run claim, lock fencing, lease
   renewal replay, busy/serialization retry, and migration-from-v1 fixtures pass on
   both databases.
+- The Discord state contract additionally proves monotonic Gateway cursors,
+  digest-idempotent inbox completion, one-to-one Forum bindings, terminal deletion,
+  restart-safe outbox leases, and exact replay of retry/completion acknowledgements.
 - A stale stream writer and a stale persistence generation fail closed.
 - Packet capture, schema inspection, logs, and diagnostics contain no Worker
   Knowledge, Knowledge index, Device Secret, or database credential outside Main.

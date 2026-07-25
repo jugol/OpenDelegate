@@ -155,6 +155,11 @@ export type AuthorizedComputerUseAction = AuthorizedClickDescriptor | Authorized
 export type ComputerUseActionFingerprint = `sha256:${string}`;
 
 export interface ComputerUseInputAuthorizationRequest {
+  /**
+   * Stable for retries of one pending native mutation. It advances only after
+   * the previous mutation reaches a terminal native result.
+   */
+  readonly authorizationRequestId: string;
   readonly actionCategory: "computer-use-input";
   readonly taskId: string;
   readonly deviceId: string;
@@ -177,10 +182,28 @@ export type ComputerUseInputAuthorizationProof =
       readonly reason?: string;
     };
 
+export interface ComputerUseInputConsumptionProof {
+  readonly decision: "consumed";
+  readonly authorizationRequestId: string;
+  readonly authorizationId: string;
+  readonly fingerprint: ComputerUseActionFingerprint;
+}
+
 export interface ComputerUseInputAuthorizer {
   authorize(
     request: ComputerUseInputAuthorizationRequest,
   ): Promise<ComputerUseInputAuthorizationProof> | ComputerUseInputAuthorizationProof;
+  /**
+   * Atomically consumes the exact executable permit. A caller may release native
+   * input only from the first authoritative consumption response. If that response
+   * is lost after durable consumption, a replay must fail closed instead of
+   * releasing the same input again. Every mismatched request or second mutation
+   * identity is also rejected.
+   */
+  consume(
+    request: ComputerUseInputAuthorizationRequest,
+    proof: Extract<ComputerUseInputAuthorizationProof, { readonly decision: "allow" }>,
+  ): Promise<ComputerUseInputConsumptionProof> | ComputerUseInputConsumptionProof;
 }
 
 export interface FixtureResultFile {
@@ -236,6 +259,22 @@ export interface NativeDriverExecutionContext {
   readonly signal: AbortSignal;
 }
 
+/**
+ * Exact authorization evidence produced by the deterministic Policy boundary.
+ * This record travels only with the final native mutation call. Native drivers
+ * must reject a binding whose fingerprint or normalized action does not match the
+ * plaintext action they are about to apply.
+ */
+export interface NativeInputAuthorizationBinding {
+  readonly authorizationId: string;
+  readonly fingerprint: ComputerUseActionFingerprint;
+  readonly action: AuthorizedComputerUseAction;
+}
+
+export interface NativeDriverAuthorizedInputContext extends NativeDriverExecutionContext {
+  readonly authorization: NativeInputAuthorizationBinding;
+}
+
 export interface NativeDriverControlContext {
   readonly executionHandleId: string;
   readonly taskId: string;
@@ -249,7 +288,7 @@ export interface NativeComputerUseDriver {
   observe(context: NativeDriverExecutionContext): Promise<NativeObservation>;
   capture(context: NativeDriverExecutionContext): Promise<NativeCapture>;
   act(
-    context: NativeDriverExecutionContext,
+    context: NativeDriverAuthorizedInputContext,
     action: NativeComputerUseAction,
   ): Promise<NativeActionReceipt>;
   cancel(context: NativeDriverControlContext): Promise<void>;

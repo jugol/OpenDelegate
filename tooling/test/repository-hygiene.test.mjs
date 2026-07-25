@@ -2,6 +2,26 @@ import assert from "node:assert/strict";
 import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 
+test("release scratch and accidentally rooted host paths stay outside the checkout", async () => {
+  const rootEntries = await readdir(new URL("../../", import.meta.url), {
+    withFileTypes: true,
+  });
+  const forbidden = rootEntries
+    .filter(
+      (entry) =>
+        entry.name === "Users" ||
+        entry.name === "home" ||
+        entry.name === "tmp" ||
+        entry.name === "var" ||
+        entry.name.startsWith(".od-") ||
+        entry.name.startsWith("odhoist-"),
+    )
+    .map((entry) => entry.name)
+    .sort();
+
+  assert.deepEqual(forbidden, []);
+});
+
 test("every remote GitHub Action is pinned to an immutable commit with a version comment", async () => {
   const workflowDirectory = new URL("../../.github/workflows/", import.meta.url);
   const workflowFiles = (await readdir(workflowDirectory))
@@ -29,6 +49,33 @@ test("every remote GitHub Action is pinned to an immutable commit with a version
   assert.deepEqual(mutableReferences, []);
 });
 
+test("hosted CI uses named OS images that match the declared compatibility matrix", async () => {
+  const workflowDirectory = new URL("../../.github/workflows/", import.meta.url);
+  const workflowFiles = (await readdir(workflowDirectory))
+    .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
+    .sort();
+  const mutableRunnerLabels = [];
+
+  for (const workflowFile of workflowFiles) {
+    const source = await readFile(new URL(workflowFile, workflowDirectory), "utf8");
+    for (const [index, line] of source.split(/\r?\n/u).entries()) {
+      if (/\b(?:ubuntu|windows|macos)-latest\b/u.test(line)) {
+        mutableRunnerLabels.push(`${workflowFile}:${index + 1} ${line.trim()}`);
+      }
+    }
+  }
+
+  assert.deepEqual(mutableRunnerLabels, []);
+
+  const supportMatrix = await readFile(
+    new URL("../../docs/release/SUPPORT_MATRIX.md", import.meta.url),
+    "utf8",
+  );
+  for (const image of ["ubuntu-24.04", "windows-2025", "macos-26"]) {
+    assert.equal(supportMatrix.includes(`\`${image}\``), true);
+  }
+});
+
 test("secret scanning verifies a pinned Gitleaks binary against the full Git history", async () => {
   const workflow = await readFile(
     new URL("../../.github/workflows/security.yml", import.meta.url),
@@ -44,6 +91,17 @@ test("secret scanning verifies a pinned Gitleaks binary against the full Git his
   assert.match(workflow, /sha256sum --check/u);
   assert.match(workflow, /gitleaks" git --no-banner --redact --log-opts="--all" \./u);
   assert.doesNotMatch(workflow, /gitleaks\/gitleaks-action@/u);
+});
+
+test("dependency review and audit reject moderate or higher advisories", async () => {
+  const workflow = await readFile(
+    new URL("../../.github/workflows/security.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(workflow, /fail-on-severity:\s*moderate/u);
+  assert.match(workflow, /pnpm audit --audit-level moderate/u);
+  assert.doesNotMatch(workflow, /(?:fail-on-severity|audit-level):?\s*high/u);
 });
 
 test("public issue intake directs vulnerabilities to the verified private reporting route", async () => {
@@ -94,6 +152,29 @@ test("public issue intake directs vulnerabilities to the verified private report
     false,
   );
   await assert.rejects(access(obsoletePublicForm), { code: "ENOENT" });
+});
+
+test("the canonical release ledger cannot omit the accepted six-locale Admin gate", async () => {
+  const ledger = JSON.parse(
+    await readFile(new URL("../../docs/release/acceptance-evidence.json", import.meta.url), "utf8"),
+  );
+  const byId = new Map(ledger.criteria.map((criterion) => [criterion.id, criterion]));
+  const adminOutage = byId.get(30);
+  const fullMatrix = byId.get(32);
+  const requiredEvidence = [
+    "apps/admin-web/src/i18n/i18n.test.tsx",
+    "apps/admin-web/e2e/admin-overview.spec.ts",
+  ];
+
+  assert.ok(adminOutage);
+  assert.ok(fullMatrix);
+  assert.match(adminOutage.nextGate, /six-locale/u);
+  assert.match(fullMatrix.title, /six-locale Admin/u);
+  assert.match(fullMatrix.nextGate, /six-locale Admin/u);
+  for (const evidence of requiredEvidence) {
+    assert.ok(adminOutage.evidence.includes(evidence));
+    assert.ok(fullMatrix.evidence.includes(evidence));
+  }
 });
 
 function hasExactTrimmedLine(text, expected) {

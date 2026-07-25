@@ -1,3 +1,4 @@
+import { createHash, createPublicKey } from "node:crypto";
 import { posix, win32 } from "node:path";
 
 import {
@@ -10,10 +11,13 @@ import {
 const BASE_KEYS = new Set([
   "platform",
   "instanceId",
+  "deviceId",
   "role",
   "bundle",
   "paths",
   "ownerSession",
+  "ipcTrust",
+  "helperSecretBinding",
   "secretReferences",
   "health",
   "retainPreviousVersions",
@@ -23,14 +27,30 @@ const PATH_KEYS = new Set([
   "sourceCheckoutDirectory",
   "installRoot",
   "stateRoot",
+  "authorityRoot",
   "runtimeRoot",
   "logRoot",
 ]);
-const SESSION_KEYS = new Set(["userName", "stableUserId", "uid", "homeDirectory"]);
+const SESSION_KEYS = new Set(["userName", "stableUserId", "uid", "homeDirectory", "adminAutoOpen"]);
+const ADMIN_AUTO_OPEN_DISABLED_KEYS = new Set(["enabled"]);
+const ADMIN_AUTO_OPEN_ENABLED_KEYS = new Set(["enabled", "url"]);
 const SERVICE_IDENTITY_KEYS = new Set(["userName", "groupName"]);
+const SYSTEMD_CREDENTIAL_KEYS = new Set(["credentialName", "encryptedSourcePath"]);
+const WINDOWS_SERVICE_SECRET_BINDING_KEYS = new Set([
+  "backend",
+  "handoffRoot",
+  "serviceName",
+  "serviceSid",
+  "vaultRoot",
+]);
+const WINDOWS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "vaultRoot"]);
+const MACOS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "helperPath", "expectedHelperSha256"]);
+const LINUX_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "secretToolPath"]);
 const HEALTH_KEYS = new Set(["endpoint", "timeoutMs"]);
+const IPC_TRUST_KEYS = new Set(["protocolVersion", "core", "helper"]);
+const IPC_PUBLIC_KEY_KEYS = new Set(["keyId", "publicKeySpkiBase64Url"]);
 const VERSION_PATTERN = /^[0-9]+(?:\.[0-9]+){2}(?:-[0-9A-Za-z.-]+)?$/;
-const INSTANCE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const INSTANCE_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$/;
 const SECRET_REFERENCE_PATTERN = /^secret:\/\/[A-Za-z0-9._~/-]+$/;
 const SECRET_REFERENCE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 
@@ -72,11 +92,24 @@ export function createPlatformServiceDefinition(
   };
 }
 
+export function parsePlatformServiceConfiguration(input: unknown): PlatformServiceConfiguration {
+  createPlatformServiceDefinition(input as PlatformServiceConfiguration);
+  return input as PlatformServiceConfiguration;
+}
+
 function validateConfiguration(input: PlatformServiceConfiguration): void {
   assertRecord(input, "configuration");
   const expectedKeys =
     input.platform === "windows" ? BASE_KEYS : new Set([...BASE_KEYS, "serviceIdentity"]);
-  assertExactKeys(input, expectedKeys);
+  assertExactKeys(
+    input,
+    expectedKeys,
+    input.platform === "linux"
+      ? new Set(["systemdCredential"])
+      : input.platform === "windows"
+        ? new Set(["serviceSecretBinding"])
+        : undefined,
+  );
 
   if (!["windows", "macos", "linux"].includes(input.platform)) {
     throw new PlatformServiceError("INVALID_CONFIGURATION", "Unsupported platform.");
@@ -84,9 +117,10 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
   if (!INSTANCE_PATTERN.test(input.instanceId)) {
     throw new PlatformServiceError(
       "INVALID_CONFIGURATION",
-      "Instance ID must be a lowercase service-safe slug.",
+      "Instance ID must be a lowercase service-safe identifier.",
     );
   }
+  assertNonEmpty(input.deviceId, "Device ID");
   if (input.role !== "main" && input.role !== "worker") {
     throw new PlatformServiceError("INVALID_CONFIGURATION", "Runtime role is invalid.");
   }
@@ -128,6 +162,43 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       );
     }
   }
+  const mutableRoots = [
+    ["installRoot", input.paths.installRoot],
+    ["stateRoot", input.paths.stateRoot],
+    ["authorityRoot", input.paths.authorityRoot],
+    ["runtimeRoot", input.paths.runtimeRoot],
+    ["logRoot", input.paths.logRoot],
+  ] as const;
+  for (let leftIndex = 0; leftIndex < mutableRoots.length; leftIndex += 1) {
+    const left = mutableRoots[leftIndex];
+    if (left === undefined) {
+      continue;
+    }
+    for (let rightIndex = leftIndex + 1; rightIndex < mutableRoots.length; rightIndex += 1) {
+      const right = mutableRoots[rightIndex];
+      if (
+        right !== undefined &&
+        (samePath(input.platform, left[1], right[1]) ||
+          isDescendantPath(input.platform, left[1], right[1]) ||
+          isDescendantPath(input.platform, right[1], left[1]))
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          `${left[0]} and ${right[0]} must be disjoint service roots.`,
+        );
+      }
+    }
+    if (
+      samePath(input.platform, left[1], input.bundle.sourceDirectory) ||
+      isDescendantPath(input.platform, left[1], input.bundle.sourceDirectory) ||
+      isDescendantPath(input.platform, input.bundle.sourceDirectory, left[1])
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        `bundle.sourceDirectory and ${left[0]} must not overlap.`,
+      );
+    }
+  }
   if (path.dirname(input.paths.installRoot) === input.paths.installRoot) {
     throw new PlatformServiceError("INVALID_PATH", "Install root cannot be a volume root.");
   }
@@ -136,6 +207,7 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
   assertExactKeys(input.ownerSession, SESSION_KEYS);
   assertNonEmpty(input.ownerSession.userName, "owner session user name");
   assertNonEmpty(input.ownerSession.stableUserId, "owner session stable ID");
+  validateAdminAutoOpen(input);
   if (input.platform === "windows") {
     if (!/^(?:[^\\/:*?"<>|\r\n]+\\)?[^\\/:*?"<>|\r\n]+$/.test(input.ownerSession.userName)) {
       throw new PlatformServiceError(
@@ -145,6 +217,84 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
     }
     if (!/^S-\d(?:-\d+)+$/.test(input.ownerSession.stableUserId)) {
       throw new PlatformServiceError("INVALID_IDENTITY", "Windows owner session requires a SID.");
+    }
+    assertRecord(input.helperSecretBinding, "helperSecretBinding");
+    assertExactKeys(input.helperSecretBinding, WINDOWS_HELPER_SECRET_BINDING_KEYS);
+    if (input.helperSecretBinding.backend !== "windows-dpapi") {
+      throw new PlatformServiceError(
+        "INVALID_CONFIGURATION",
+        "The Windows owner helper requires its own DPAPI binding.",
+      );
+    }
+    assertSafeAbsolutePath(
+      "windows",
+      input.helperSecretBinding.vaultRoot,
+      "helperSecretBinding.vaultRoot",
+    );
+    if (!isDescendantPath("windows", input.paths.stateRoot, input.helperSecretBinding.vaultRoot)) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The owner helper DPAPI vault must be a strict descendant of the state root.",
+      );
+    }
+    if (input.serviceSecretBinding !== undefined) {
+      assertRecord(input.serviceSecretBinding, "serviceSecretBinding");
+      assertExactKeys(input.serviceSecretBinding, WINDOWS_SERVICE_SECRET_BINDING_KEYS);
+      if (input.serviceSecretBinding.backend !== "windows-service-dpapi") {
+        throw new PlatformServiceError(
+          "INVALID_CONFIGURATION",
+          "The Windows service Secret backend is invalid.",
+        );
+      }
+      const expectedServiceName = `OpenDelegate-${input.instanceId}`;
+      if (input.serviceSecretBinding.serviceName !== expectedServiceName) {
+        throw new PlatformServiceError(
+          "INVALID_IDENTITY",
+          "The Windows service Secret binding must name the configured SCM service.",
+        );
+      }
+      if (
+        !/^S-1-5-80-(?:[0-9]{1,10}-){4}[0-9]{1,10}$/u.test(input.serviceSecretBinding.serviceSid)
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_IDENTITY",
+          "The Windows service Secret binding requires a virtual-service SID.",
+        );
+      }
+      for (const [name, value] of [
+        ["serviceSecretBinding.handoffRoot", input.serviceSecretBinding.handoffRoot],
+        ["serviceSecretBinding.vaultRoot", input.serviceSecretBinding.vaultRoot],
+      ] as const) {
+        assertSafeAbsolutePath("windows", value, name);
+        if (!isDescendantPath("windows", input.paths.stateRoot, value)) {
+          throw new PlatformServiceError(
+            "INVALID_PATH",
+            `${name} must be a strict descendant of the service state root.`,
+          );
+        }
+      }
+      if (
+        samePath(
+          "windows",
+          input.serviceSecretBinding.handoffRoot,
+          input.serviceSecretBinding.vaultRoot,
+        ) ||
+        isDescendantPath(
+          "windows",
+          input.serviceSecretBinding.handoffRoot,
+          input.serviceSecretBinding.vaultRoot,
+        ) ||
+        isDescendantPath(
+          "windows",
+          input.serviceSecretBinding.vaultRoot,
+          input.serviceSecretBinding.handoffRoot,
+        )
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          "The Windows service handoff and persistent Secret vault must be disjoint.",
+        );
+      }
     }
   } else {
     assertAccountName(input.ownerSession.userName, "owner session user");
@@ -184,13 +334,127 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
     if (input.serviceIdentity.userName === "root") {
       throw new PlatformServiceError("INVALID_IDENTITY", "The core service must not run as root.");
     }
+    assertRecord(input.helperSecretBinding, "helperSecretBinding");
+    if (input.platform === "macos") {
+      assertExactKeys(input.helperSecretBinding, MACOS_HELPER_SECRET_BINDING_KEYS);
+      if (
+        input.helperSecretBinding.backend !== "macos-keychain" ||
+        !/^sha256:[a-f0-9]{64}$/u.test(input.helperSecretBinding.expectedHelperSha256)
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_CONFIGURATION",
+          "The macOS owner helper Keychain binding is invalid.",
+        );
+      }
+      assertSafeAbsolutePath(
+        "macos",
+        input.helperSecretBinding.helperPath,
+        "helperSecretBinding.helperPath",
+      );
+      if (
+        !isDescendantPath("macos", input.paths.installRoot, input.helperSecretBinding.helperPath)
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          "The pinned macOS Keychain helper must be inside the immutable installation.",
+        );
+      }
+    } else {
+      assertExactKeys(input.helperSecretBinding, LINUX_HELPER_SECRET_BINDING_KEYS);
+      if (input.helperSecretBinding.backend !== "linux-secret-service") {
+        throw new PlatformServiceError(
+          "INVALID_CONFIGURATION",
+          "The Linux owner helper requires a graphical Secret Service binding.",
+        );
+      }
+      assertSafeAbsolutePath(
+        "linux",
+        input.helperSecretBinding.secretToolPath,
+        "helperSecretBinding.secretToolPath",
+      );
+    }
+    if (input.platform === "linux" && input.systemdCredential !== null) {
+      assertRecord(input.systemdCredential, "systemdCredential");
+      assertExactKeys(input.systemdCredential, SYSTEMD_CREDENTIAL_KEYS);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(input.systemdCredential.credentialName)) {
+        throw new PlatformServiceError(
+          "INVALID_SECRET_REFERENCE",
+          "The systemd credential name is invalid.",
+        );
+      }
+      assertSafeAbsolutePath(
+        "linux",
+        input.systemdCredential.encryptedSourcePath,
+        "systemdCredential.encryptedSourcePath",
+      );
+      if (
+        samePath(
+          "linux",
+          input.systemdCredential.encryptedSourcePath,
+          input.paths.sourceCheckoutDirectory,
+        ) ||
+        isDescendantPath(
+          "linux",
+          input.paths.sourceCheckoutDirectory,
+          input.systemdCredential.encryptedSourcePath,
+        )
+      ) {
+        throw new PlatformServiceError(
+          "PATH_INSIDE_CHECKOUT",
+          "The encrypted systemd credential must remain outside the source checkout.",
+        );
+      }
+      for (const [name, root] of [
+        ["bundle.sourceDirectory", input.bundle.sourceDirectory],
+        ["installRoot", input.paths.installRoot],
+        ["stateRoot", input.paths.stateRoot],
+        ["runtimeRoot", input.paths.runtimeRoot],
+        ["logRoot", input.paths.logRoot],
+      ] as const) {
+        if (
+          samePath("linux", root, input.systemdCredential.encryptedSourcePath) ||
+          isDescendantPath("linux", root, input.systemdCredential.encryptedSourcePath)
+        ) {
+          throw new PlatformServiceError(
+            "INVALID_PATH",
+            `The encrypted systemd credential must remain outside ${name}.`,
+          );
+        }
+      }
+    }
+  }
+
+  assertRecord(input.ipcTrust, "ipcTrust");
+  assertExactKeys(input.ipcTrust, IPC_TRUST_KEYS);
+  if (input.ipcTrust.protocolVersion !== 2) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Only the signed local IPC protocol v2 is accepted.",
+    );
+  }
+  validateIpcPublicKey(input.ipcTrust.core, "core");
+  validateIpcPublicKey(input.ipcTrust.helper, "helper");
+  if (input.ipcTrust.core.keyId === input.ipcTrust.helper.keyId) {
+    throw new PlatformServiceError(
+      "INVALID_IDENTITY",
+      "Core and helper must use distinct plane-local signing identities.",
+    );
   }
 
   assertRecord(input.secretReferences, "secretReferences");
-  if (!Object.hasOwn(input.secretReferences, "helperIpc")) {
+  if (
+    !Object.hasOwn(input.secretReferences, "coreIpcSigningKey") ||
+    !Object.hasOwn(input.secretReferences, "helperIpcSigningKey")
+  ) {
     throw new PlatformServiceError(
       "INVALID_SECRET_REFERENCE",
-      "An authenticated helper IPC Secret reference is required.",
+      "Distinct core and helper signing-key Secret references are required.",
+    );
+  }
+  if (Object.hasOwn(input.secretReferences, "helperIpc")) {
+    throw new PlatformServiceError(
+      "INVALID_SECRET_REFERENCE",
+      "The legacy shared helperIpc Secret is not accepted without an explicit migration.",
     );
   }
   for (const [name, reference] of Object.entries(input.secretReferences)) {
@@ -214,6 +478,97 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       "INVALID_CONFIGURATION",
       "Previous-version retention must be between one and five.",
     );
+  }
+}
+
+function validateAdminAutoOpen(input: PlatformServiceConfiguration): void {
+  const configuration = input.ownerSession.adminAutoOpen;
+  assertRecord(configuration, "ownerSession.adminAutoOpen");
+  assertExactKeys(
+    configuration,
+    configuration.enabled === true ? ADMIN_AUTO_OPEN_ENABLED_KEYS : ADMIN_AUTO_OPEN_DISABLED_KEYS,
+  );
+  if (configuration.enabled !== true && configuration.enabled !== false) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Admin auto-open requires an explicit boolean choice.",
+    );
+  }
+  if (!configuration.enabled) {
+    return;
+  }
+  if (input.role !== "main") {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Admin auto-open is available only to the fixed Main owner session.",
+    );
+  }
+  validateAdminUrl(configuration.url);
+}
+
+function validateAdminUrl(value: unknown): void {
+  if (typeof value !== "string" || value.length > 2_048) {
+    throw new PlatformServiceError("INVALID_CONFIGURATION", "Admin auto-open URL is invalid.");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new PlatformServiceError("INVALID_CONFIGURATION", "Admin auto-open URL is invalid.");
+  }
+  const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(parsed.hostname);
+  if (
+    !["http:", "https:"].includes(parsed.protocol) ||
+    (parsed.protocol === "http:" && !loopback) ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.pathname !== "/" ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    parsed.href !== value
+  ) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Admin auto-open accepts only a canonical HTTPS origin or loopback HTTP origin.",
+    );
+  }
+}
+
+function validateIpcPublicKey(value: unknown, plane: "core" | "helper"): void {
+  assertRecord(value, `${plane} IPC public key`);
+  assertExactKeys(value, IPC_PUBLIC_KEY_KEYS);
+  if (
+    typeof value.keyId !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/u.test(value.keyId) ||
+    typeof value.publicKeySpkiBase64Url !== "string" ||
+    !/^[A-Za-z0-9_-]+$/u.test(value.publicKeySpkiBase64Url)
+  ) {
+    throw new PlatformServiceError(
+      "INVALID_IDENTITY",
+      `The ${plane} IPC signing-key pin is invalid.`,
+    );
+  }
+  const spki = Buffer.from(value.publicKeySpkiBase64Url, "base64url");
+  try {
+    if (
+      spki.length === 0 ||
+      spki.length > 256 ||
+      spki.toString("base64url") !== value.publicKeySpkiBase64Url
+    ) {
+      throw new Error("encoding");
+    }
+    const publicKey = createPublicKey({ key: spki, format: "der", type: "spki" });
+    const keyId = `sha256:${createHash("sha256").update(spki).digest("hex")}`;
+    if (publicKey.asymmetricKeyType !== "ed25519" || keyId !== value.keyId) {
+      throw new Error("binding");
+    }
+  } catch {
+    throw new PlatformServiceError(
+      "INVALID_IDENTITY",
+      `The ${plane} IPC signing-key pin is invalid.`,
+    );
+  } finally {
+    spki.fill(0);
   }
 }
 
@@ -290,9 +645,13 @@ function assertRecord(value: unknown, name: string): asserts value is Record<str
   }
 }
 
-function assertExactKeys(value: object, expected: ReadonlySet<string>): void {
+function assertExactKeys(
+  value: object,
+  expected: ReadonlySet<string>,
+  optional: ReadonlySet<string> = new Set(),
+): void {
   for (const key of Object.keys(value)) {
-    if (!expected.has(key)) {
+    if (!expected.has(key) && !optional.has(key)) {
       throw new PlatformServiceError(
         "UNKNOWN_CONFIGURATION_FIELD",
         `Unknown service configuration field: ${key}.`,

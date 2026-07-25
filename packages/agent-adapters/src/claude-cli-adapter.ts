@@ -7,8 +7,14 @@ import {
   type AgentResumeRequest,
   type AgentRunHandle,
   type AgentStartRequest,
+  type AgentToolServer,
   type AgentUsage,
 } from "./contracts.ts";
+import {
+  assertProviderHomeNotInSecretEnvironment,
+  prepareControlledProviderHome,
+  resolveControlledProviderHome,
+} from "./controlled-provider-home.ts";
 import { probeCli } from "./cli-probe.ts";
 import { AgentAdapterError } from "./errors.ts";
 import { type SpawnCommand } from "./process-utils.ts";
@@ -17,6 +23,7 @@ import { processSessionLeaseStore, type SessionLeaseStore } from "./session-leas
 import {
   canonicalizeWorkspace,
   createNativeSessionReference,
+  rejectUnscopedProviderSecrets,
   validateAgentRequest,
   validateDangerousGrant,
   validateResumeReference,
@@ -26,6 +33,7 @@ import { startSubprocessTurn, type ProviderSignal } from "./subprocess-turn.ts";
 export const CLAUDE_CLI_TESTED_VERSIONS = ["2.1.205"] as const;
 
 export interface ClaudeCliAdapterOptions {
+  readonly claudeHome: string;
   readonly executable?: string;
   readonly prefixArgs?: readonly string[];
   readonly testedVersions?: readonly string[];
@@ -38,6 +46,7 @@ export interface ClaudeCliAdapterOptions {
 export class ClaudeCliAdapter implements AgentAdapter {
   readonly adapterId = "claude-cli";
   readonly provider = "claude" as const;
+  readonly #claudeHome: string;
   readonly #executable: string;
   readonly #prefixArgs: readonly string[];
   readonly #testedVersions: readonly string[];
@@ -46,7 +55,8 @@ export class ClaudeCliAdapter implements AgentAdapter {
   readonly #now: () => number;
   readonly #lineageId: () => string;
 
-  constructor(options: ClaudeCliAdapterOptions = {}) {
+  constructor(options: ClaudeCliAdapterOptions) {
+    this.#claudeHome = resolveControlledProviderHome(options.claudeHome, "Claude");
     this.#executable = options.executable ?? "claude";
     this.#prefixArgs = options.prefixArgs ?? [];
     this.#testedVersions = options.testedVersions ?? CLAUDE_CLI_TESTED_VERSIONS;
@@ -57,6 +67,8 @@ export class ClaudeCliAdapter implements AgentAdapter {
   }
 
   async probe(input: AgentAdapterProbeInput = {}): Promise<AgentAdapterProbe> {
+    assertProviderHomeNotInSecretEnvironment("CLAUDE_CONFIG_DIR", input.secretEnvironment);
+    await prepareControlledProviderHome(this.#claudeHome, "Claude");
     const capabilities = {
       start: true,
       resume: true,
@@ -105,6 +117,7 @@ export class ClaudeCliAdapter implements AgentAdapter {
 
   async #launch(request: AgentStartRequest | AgentResumeRequest): Promise<AgentRunHandle> {
     validateAgentRequest(request);
+    rejectUnscopedProviderSecrets(request);
     const workspace = await canonicalizeWorkspace(request.workspace);
     const { cwd } = workspace;
     if (request.operation === "resume") {
@@ -163,7 +176,7 @@ export class ClaudeCliAdapter implements AgentAdapter {
           lineageId: this.#lineageId,
           now: this.#now,
         }),
-      parseLine: parseClaudeSignals,
+      parseLine: createClaudeSignalParser(),
     });
   }
 
@@ -171,6 +184,12 @@ export class ClaudeCliAdapter implements AgentAdapter {
     const args = [
       ...this.#prefixArgs,
       "-p",
+      "--safe-mode",
+      "--strict-mcp-config",
+      "--no-chrome",
+      "--disable-slash-commands",
+      "--prompt-suggestions",
+      "false",
       "--input-format",
       "text",
       "--output-format",
@@ -178,13 +197,26 @@ export class ClaudeCliAdapter implements AgentAdapter {
       "--include-partial-messages",
       "--verbose",
     ];
+    const toolServerTools = claudeToolServerTools(request.toolServers);
+    if (request.toolServers !== undefined) {
+      args.push("--mcp-config", renderClaudeMcpConfiguration(request.toolServers));
+    }
     if (request.operation === "resume") {
       args.push("--resume", request.session.nativeSessionId);
     }
     if (request.permissions.mode === "deny") {
-      args.push("--permission-mode", "dontAsk", "--tools", "");
+      args.push(
+        "--permission-mode",
+        "dontAsk",
+        "--tools",
+        toolServerTools.join(","),
+        ...(toolServerTools.length === 0 ? [] : ["--allowedTools", toolServerTools.join(",")]),
+      );
     } else if (request.permissions.mode === "allow-listed") {
-      const allowedTools = normalizeTools(request.permissions.allowedTools);
+      const allowedTools = normalizeTools([
+        ...(request.permissions.allowedTools ?? []),
+        ...toolServerTools,
+      ]);
       if (allowedTools.length === 0) {
         throw new AgentAdapterError(
           "EMPTY_TOOL_ALLOWLIST",
@@ -216,14 +248,41 @@ export class ClaudeCliAdapter implements AgentAdapter {
     environment?: Readonly<Record<string, string>>,
     secretEnvironment?: Readonly<Record<string, string>>,
   ): SpawnCommand {
+    assertProviderHomeNotInSecretEnvironment("CLAUDE_CONFIG_DIR", secretEnvironment);
     return {
       executable: this.#executable,
       args,
       cwd,
-      ...(environment === undefined ? {} : { environment }),
+      environment: {
+        ...environment,
+        CLAUDE_CONFIG_DIR: this.#claudeHome,
+      },
       ...(secretEnvironment === undefined ? {} : { secretEnvironment }),
     };
   }
+}
+
+function renderClaudeMcpConfiguration(toolServers: readonly AgentToolServer[]): string {
+  return JSON.stringify({
+    mcpServers: Object.fromEntries(
+      toolServers.map((server) => [
+        server.serverName,
+        {
+          type: "stdio",
+          command: server.command,
+          args: [...server.args],
+        },
+      ]),
+    ),
+  });
+}
+
+function claudeToolServerTools(
+  toolServers: readonly AgentToolServer[] | undefined,
+): readonly string[] {
+  return (toolServers ?? []).flatMap((server) =>
+    server.enabledTools.map((tool) => `mcp__${server.serverName}__${tool}`),
+  );
 }
 
 function parseClaudeVersion(output: string): string {
@@ -237,7 +296,15 @@ function parseClaudeVersion(output: string): string {
   return match[1];
 }
 
-function parseClaudeSignals(value: unknown): readonly ProviderSignal[] {
+function createClaudeSignalParser(): (value: unknown) => readonly ProviderSignal[] {
+  const toolNamesByUseId = new Map<string, string>();
+  return (value) => parseClaudeSignals(value, toolNamesByUseId);
+}
+
+function parseClaudeSignals(
+  value: unknown,
+  toolNamesByUseId: Map<string, string>,
+): readonly ProviderSignal[] {
   if (!isRecord(value) || typeof value.type !== "string") {
     throw new AgentAdapterError(
       "MALFORMED_PROVIDER_OUTPUT",
@@ -288,10 +355,15 @@ function parseClaudeSignals(value: unknown): readonly ProviderSignal[] {
         typeof block.name === "string" &&
         block.name.length > 0
       ) {
+        if (typeof block.id === "string" && block.id.length > 0) {
+          toolNamesByUseId.set(block.id, block.name);
+        }
         signals.push({
           kind: "tool_request",
           toolName: block.name,
-          ...(block.input === undefined ? {} : { input: block.input }),
+          ...(block.input === undefined || isPrivateOpenDelegateTool(block.name)
+            ? {}
+            : { input: block.input }),
         });
       }
     }
@@ -307,15 +379,32 @@ function parseClaudeSignals(value: unknown): readonly ProviderSignal[] {
     const signals: ProviderSignal[] = [];
     for (const block of value.message.content) {
       if (isRecord(block) && block.type === "tool_result") {
-        const summary =
-          typeof block.content === "string"
+        const toolUseId =
+          typeof block.tool_use_id === "string" && block.tool_use_id.length > 0
+            ? block.tool_use_id
+            : undefined;
+        const correlatedToolName =
+          toolUseId === undefined ? undefined : toolNamesByUseId.get(toolUseId);
+        const toolName =
+          typeof block.tool_name === "string"
+            ? block.tool_name
+            : (correlatedToolName ?? "provider-tool");
+        const redactSummary =
+          isPrivateOpenDelegateTool(toolName) ||
+          (toolUseId !== undefined && correlatedToolName === undefined);
+        const summary = redactSummary
+          ? undefined
+          : typeof block.content === "string"
             ? block.content
             : Array.isArray(block.content)
               ? "[structured tool result]"
               : undefined;
+        if (toolUseId !== undefined) {
+          toolNamesByUseId.delete(toolUseId);
+        }
         signals.push({
           kind: "tool_result",
-          toolName: typeof block.tool_name === "string" ? block.tool_name : "provider-tool",
+          toolName,
           status: block.is_error === true ? "failed" : "succeeded",
           ...(summary === undefined ? {} : { summary }),
         });
@@ -352,6 +441,10 @@ function parseClaudeSignals(value: unknown): readonly ProviderSignal[] {
     ];
   }
   return [];
+}
+
+function isPrivateOpenDelegateTool(toolName: string): boolean {
+  return /^mcp__opendelegate(?:-[A-Za-z0-9_-]+)?__(?:knowledge_|computer_use_)/u.test(toolName);
 }
 
 function parseClaudeUsage(value: unknown, cost: unknown): AgentUsage | undefined {

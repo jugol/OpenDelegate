@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type TransportEndpointKind = "https" | "wss";
 
 export interface TransportEndpoint {
@@ -11,6 +13,26 @@ export interface TransportEndpoint {
 export interface TransportProfile {
   readonly deviceId: string;
   readonly endpoints: readonly TransportEndpoint[];
+}
+
+/**
+ * Stable opaque revision for one exact Transport Profile. The digest can cross
+ * the Device boundary; endpoint labels, URLs, hosts, ports, and credential
+ * references cannot.
+ */
+export function transportProfileRevision(profile: TransportProfile): `sha256:${string}` {
+  const validated = validateTransportProfile(profile);
+  const canonical = JSON.stringify([
+    validated.deviceId,
+    validated.endpoints.map((endpoint) => [
+      endpoint.endpointId,
+      endpoint.label,
+      endpoint.kind,
+      endpoint.url,
+      endpoint.credentialRef,
+    ]),
+  ]);
+  return `sha256:${createHash("sha256").update(canonical, "utf8").digest("hex")}`;
 }
 
 export interface TransportBoundaryRequest {

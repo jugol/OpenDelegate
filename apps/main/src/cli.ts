@@ -6,18 +6,46 @@ import { fileURLToPath } from "node:url";
 
 import { createLocalClaimApp } from "@opendelegate/control-plane";
 import { OwnerAuthError } from "@opendelegate/owner-auth";
+import {
+  PlatformServiceError,
+  ServiceCommandExecutionError,
+} from "@opendelegate/platform-services";
 
 import {
+  createMainManagedSecretStore,
   createMainRuntime,
+  createMainServiceReadyMessage,
   initializeMainHome,
+  inspectPersistedMainConfiguration,
   listenMainRuntime,
+  loadMainArtifactConfigurationSource,
+  loadMainDiscordConfigurationSource,
   loadMainConfiguration,
+  loadMainSecretBackendConfigurationSource,
+  MainDiscordConfigurationError,
   MainRuntimeError,
+  MainSecretBackendConfigurationError,
+  provisionMainDiscordBotCredential,
   resolveRuntimePaths,
+  validateMainSecretReference,
   type MainDatabaseConfiguration,
   type MainListenerConfiguration,
   type MainRuntime,
+  type MainSecretBackendConfiguration,
 } from "./index.ts";
+import {
+  MainAgentRuntimeError,
+  resolveMainAgentComposition,
+  type MainAgentProviderPreference,
+} from "./agent-runtime.ts";
+import {
+  BackupCliError,
+  backupHelpText,
+  parseBackupArguments,
+  runBackupLifecycleCommand,
+  type ParsedBackupArguments,
+} from "./backup-cli.ts";
+import { MainBackupError } from "./backup.ts";
 import {
   ReleaseIdentityError,
   resolveRuntimeIdentity,
@@ -29,6 +57,35 @@ import {
   closeMainResources,
   MainShutdownError,
 } from "./shutdown.ts";
+import {
+  createDefaultServiceLifecycleAdapters,
+  parseServiceLifecycleArguments,
+  runServiceLifecycleCommand,
+  serviceLifecycleHelpText,
+  ServiceLifecycleCliError,
+  type ParsedServiceLifecycleArguments,
+} from "./service-lifecycle.ts";
+import { resolveEffectiveMainServiceConfiguration } from "./main-service-configuration.ts";
+import {
+  assertCompositionMatchesMain,
+  DeviceEnrollmentCliError,
+  executeWithMainDeviceChannelDatabase,
+  mainDeviceEnrollmentConfigurationPath,
+  parseDeviceEnrollmentArguments,
+  runDeviceEnrollmentCommand,
+  type ParsedDeviceEnrollmentArguments,
+} from "./device-enrollment-cli.ts";
+import {
+  createMainDeviceIdentitySecretStore,
+  loadMainDeviceEnrollmentConfigurationSource,
+  loadPersistedMainDeviceEnrollmentConfiguration,
+  MainDeviceEnrollmentConfigurationError,
+  persistMainDeviceEnrollmentConfiguration,
+} from "./device-enrollment-configuration.ts";
+import {
+  MainDeviceEnrollmentLifecycleError,
+  provisionMainDeviceListenerTls,
+} from "./device-enrollment-lifecycle.ts";
 
 const cliPath = fileURLToPath(import.meta.url);
 const cliDirectory = dirname(cliPath);
@@ -41,24 +98,35 @@ const defaultAdminRoot = bundledRelease
   : resolve(cliDirectory, "../../admin-web/dist");
 
 async function run(arguments_: readonly string[]): Promise<void> {
-  const identity = await resolveRuntimeIdentity({
-    installationRoot,
-    bundled: bundledRelease,
-  });
   const parsed = parseArguments(arguments_);
   switch (parsed.command) {
-    case "init":
+    case "backup":
+      await runBackupLifecycleFromCli(parsed);
+      return;
+    case "device":
+      await runDeviceEnrollmentFromCli(parsed);
+      return;
+    case "init": {
+      const identity = await runtimeIdentity();
       await runInit(parsed, identity);
       return;
-    case "serve":
+    }
+    case "serve": {
+      const identity = await runtimeIdentity();
       await runServe(parsed, identity);
       return;
+    }
     case "status":
       await runStatus(parsed);
       return;
-    case "version":
+    case "service":
+      await runServiceLifecycleFromCli(parsed);
+      return;
+    case "version": {
+      const identity = await runtimeIdentity();
       printVersion(identity);
       return;
+    }
     case "help":
       printHelp();
       return;
@@ -66,16 +134,49 @@ async function run(arguments_: readonly string[]): Promise<void> {
 }
 
 export interface ParsedArguments {
-  readonly command: "help" | "init" | "serve" | "status" | "version";
+  readonly command:
+    "backup" | "device" | "help" | "init" | "serve" | "service" | "status" | "version";
   readonly home?: string;
   readonly adminRoot?: string;
+  readonly backup?: ParsedBackupArguments;
+  readonly device?: ParsedDeviceEnrollmentArguments;
   readonly database?: MainDatabaseConfiguration;
   readonly listener?: MainListenerConfiguration;
+  readonly agentProvider?: MainAgentProviderPreference;
+  readonly adminAutoOpen?: boolean;
+  readonly artifactConfigurationFile?: string;
+  readonly discordConfigurationFile?: string;
+  readonly discordTokenStdin?: true;
+  readonly databaseUriStdin?: true;
+  readonly secretBackendConfigurationFile?: string;
+  readonly deviceEnrollmentConfigurationFile?: string;
+  readonly service?: ParsedServiceLifecycleArguments;
   readonly open: boolean;
 }
 
 export function parseArguments(values: readonly string[]): ParsedArguments {
   const commandValue = values[0] ?? "help";
+  if (commandValue === "backup") {
+    return {
+      command: "backup",
+      backup: parseBackupArguments(values.slice(1)),
+      open: false,
+    };
+  }
+  if (commandValue === "device") {
+    return {
+      command: "device",
+      device: parseDeviceEnrollmentArguments(values.slice(1)),
+      open: false,
+    };
+  }
+  if (commandValue === "service") {
+    return {
+      command: "service",
+      service: parseServiceLifecycleArguments(values.slice(1)),
+      open: false,
+    };
+  }
   const command =
     commandValue === "init" || commandValue === "serve" || commandValue === "status"
       ? commandValue
@@ -91,13 +192,21 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   let home: string | undefined;
   let adminRoot: string | undefined;
   let databaseAdapter: "sqlite" | "postgresql" | undefined;
-  let databaseUriEnvironment: string | undefined;
+  let databaseUriRef: string | undefined;
+  let databaseUriStdin = false;
   let databaseSchema: string | undefined;
   let listenHost: string | undefined;
   let listenPort: number | undefined;
   let listenOrigin: string | undefined;
   let tlsCertificatePath: string | undefined;
   let tlsPrivateKeyPath: string | undefined;
+  let agentProvider: MainAgentProviderPreference | undefined;
+  let adminAutoOpen: boolean | undefined;
+  let artifactConfigurationFile: string | undefined;
+  let discordConfigurationFile: string | undefined;
+  let discordTokenStdin = false;
+  let secretBackendConfigurationFile: string | undefined;
+  let deviceEnrollmentConfigurationFile: string | undefined;
   let open = false;
   for (let index = 1; index < values.length; index += 1) {
     const value = values[index];
@@ -105,12 +214,32 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       open = true;
       continue;
     }
+    if (value === "--database-uri-stdin") {
+      databaseUriStdin = true;
+      continue;
+    }
+    if (value === "--discord-token-stdin") {
+      discordTokenStdin = true;
+      continue;
+    }
+    if (value === "--database-uri-environment" || value === "--discord-token-environment") {
+      throw new MainRuntimeError(
+        "CONFIG_MIGRATION_REQUIRED",
+        `${value} was retired because process environments are not a Secret transport. Use --database-uri-ref with --database-uri-stdin, or --discord-token-stdin.`,
+      );
+    }
     if (
       value === "--home" ||
       value === "--admin-root" ||
       value === "--database" ||
-      value === "--database-uri-environment" ||
+      value === "--database-uri-ref" ||
       value === "--database-schema" ||
+      value === "--secret-backend-config" ||
+      value === "--agent" ||
+      value === "--admin-auto-open" ||
+      value === "--artifact-config" ||
+      value === "--discord-config" ||
+      value === "--device-channel-config" ||
       value === "--listen-host" ||
       value === "--listen-port" ||
       value === "--listen-origin" ||
@@ -137,11 +266,53 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
           }
           databaseAdapter = target;
           break;
-        case "--database-uri-environment":
-          databaseUriEnvironment = target;
+        case "--database-uri-ref":
+          try {
+            databaseUriRef = validateMainSecretReference(target);
+          } catch {
+            throw new MainRuntimeError(
+              "CONFIG_INVALID",
+              "--database-uri-ref must be a canonical secret://main/ALIAS reference.",
+            );
+          }
           break;
         case "--database-schema":
           databaseSchema = target;
+          break;
+        case "--secret-backend-config":
+          secretBackendConfigurationFile = resolve(target);
+          break;
+        case "--agent":
+          if (
+            target !== "auto" &&
+            target !== "codex" &&
+            target !== "claude" &&
+            target !== "disabled"
+          ) {
+            throw new MainRuntimeError(
+              "CONFIG_INVALID",
+              "--agent must be auto, codex, claude, or disabled.",
+            );
+          }
+          agentProvider = target;
+          break;
+        case "--admin-auto-open":
+          if (target !== "enabled" && target !== "disabled") {
+            throw new MainRuntimeError(
+              "CONFIG_INVALID",
+              "--admin-auto-open must be enabled or disabled.",
+            );
+          }
+          adminAutoOpen = target === "enabled";
+          break;
+        case "--artifact-config":
+          artifactConfigurationFile = resolve(target);
+          break;
+        case "--discord-config":
+          discordConfigurationFile = resolve(target);
+          break;
+        case "--device-channel-config":
+          deviceEnrollmentConfigurationFile = resolve(target);
           break;
         case "--listen-host":
           listenHost = target;
@@ -175,7 +346,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   const database = parseDatabaseOptions({
     databaseAdapter,
     databaseSchema,
-    databaseUriEnvironment,
+    databaseUriRef,
   });
   const listener = parseListenerOptions({
     listenHost,
@@ -186,11 +357,39 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   });
   if (
     command !== "init" &&
-    (adminRoot !== undefined || database !== undefined || listener !== undefined)
+    (adminRoot !== undefined ||
+      database !== undefined ||
+      listener !== undefined ||
+      agentProvider !== undefined ||
+      adminAutoOpen !== undefined ||
+      artifactConfigurationFile !== undefined ||
+      discordConfigurationFile !== undefined ||
+      discordTokenStdin ||
+      databaseUriStdin ||
+      secretBackendConfigurationFile !== undefined ||
+      deviceEnrollmentConfigurationFile !== undefined)
   ) {
     throw new MainRuntimeError(
       "CONFIG_INVALID",
-      "Database, listener, TLS, and Admin bundle options are available only with init.",
+      "Agent, Admin auto-open, Artifact, Device channel, Discord, database, listener, TLS, and Admin bundle options are available only with init.",
+    );
+  }
+  if (discordTokenStdin && discordConfigurationFile === undefined) {
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      "--discord-token-stdin requires --discord-config.",
+    );
+  }
+  if (databaseUriStdin && database?.adapter !== "postgresql") {
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      "--database-uri-stdin requires --database postgresql and --database-uri-ref.",
+    );
+  }
+  if (databaseUriStdin && discordTokenStdin) {
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      "Provision one bounded stdin Secret per init invocation.",
     );
   }
   if (command !== "init" && command !== "serve" && open) {
@@ -199,49 +398,65 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   return {
     command,
     open,
+    ...(databaseUriStdin ? { databaseUriStdin: true as const } : {}),
+    ...(discordTokenStdin ? { discordTokenStdin: true as const } : {}),
     ...(home === undefined ? {} : { home }),
     ...(adminRoot === undefined ? {} : { adminRoot }),
     ...(database === undefined ? {} : { database }),
     ...(listener === undefined ? {} : { listener }),
+    ...(agentProvider === undefined ? {} : { agentProvider }),
+    ...(adminAutoOpen === undefined ? {} : { adminAutoOpen }),
+    ...(artifactConfigurationFile === undefined ? {} : { artifactConfigurationFile }),
+    ...(discordConfigurationFile === undefined ? {} : { discordConfigurationFile }),
+    ...(secretBackendConfigurationFile === undefined ? {} : { secretBackendConfigurationFile }),
+    ...(deviceEnrollmentConfigurationFile === undefined
+      ? {}
+      : { deviceEnrollmentConfigurationFile }),
   };
+}
+
+async function runtimeIdentity(): Promise<RuntimeIdentity> {
+  return resolveRuntimeIdentity({
+    installationRoot,
+    bundled: bundledRelease,
+  });
 }
 
 function parseDatabaseOptions(input: {
   readonly databaseAdapter: "sqlite" | "postgresql" | undefined;
   readonly databaseSchema: string | undefined;
-  readonly databaseUriEnvironment: string | undefined;
+  readonly databaseUriRef: string | undefined;
 }): MainDatabaseConfiguration | undefined {
   if (
     input.databaseAdapter === undefined &&
     input.databaseSchema === undefined &&
-    input.databaseUriEnvironment === undefined
+    input.databaseUriRef === undefined
   ) {
     return undefined;
   }
   if (input.databaseAdapter === "sqlite") {
-    if (input.databaseSchema !== undefined || input.databaseUriEnvironment !== undefined) {
+    if (input.databaseSchema !== undefined || input.databaseUriRef !== undefined) {
       throw new MainRuntimeError(
         "CONFIG_INVALID",
-        "SQLite does not accept PostgreSQL environment or schema options.",
+        "SQLite does not accept PostgreSQL Secret-reference or schema options.",
       );
     }
     return { adapter: "sqlite" };
   }
   if (
     input.databaseAdapter !== "postgresql" ||
-    input.databaseUriEnvironment === undefined ||
-    !/^[A-Z][A-Z0-9_]{0,127}$/.test(input.databaseUriEnvironment) ||
+    input.databaseUriRef === undefined ||
     (input.databaseSchema !== undefined &&
       !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(input.databaseSchema))
   ) {
     throw new MainRuntimeError(
       "CONFIG_INVALID",
-      "PostgreSQL requires --database postgresql and a valid --database-uri-environment name.",
+      "PostgreSQL requires --database postgresql and a canonical --database-uri-ref.",
     );
   }
   return {
     adapter: "postgresql",
-    uriEnvironment: input.databaseUriEnvironment,
+    uriRef: input.databaseUriRef,
     ...(input.databaseSchema === undefined ? {} : { schema: input.databaseSchema }),
   };
 }
@@ -288,24 +503,117 @@ function parseListenerOptions(input: {
 }
 
 async function runInit(options: ParsedArguments, identity: RuntimeIdentity): Promise<void> {
-  const initialized = await initializeMainHome({
-    ...(options.home === undefined ? {} : { home: options.home }),
-    adminRoot: options.adminRoot ?? defaultAdminRoot,
-    ...(options.adminRoot === undefined ? {} : { expectedAdminRoot: options.adminRoot }),
-    ...(options.database === undefined ? {} : { database: options.database }),
-    ...(options.listener === undefined ? {} : { listener: options.listener }),
-    sourceCheckout: installationRoot,
-  });
-  writeEvent("main.initialized", {
-    created: initialized.created,
-    configurationFile: initialized.paths.configurationFile,
-    origin: initialized.configuration.main.origin,
-  });
+  const secretBackend: MainSecretBackendConfiguration | undefined =
+    options.secretBackendConfigurationFile === undefined
+      ? undefined
+      : await loadMainSecretBackendConfigurationSource(options.secretBackendConfigurationFile);
+  const artifacts =
+    options.artifactConfigurationFile === undefined
+      ? undefined
+      : await loadMainArtifactConfigurationSource(options.artifactConfigurationFile);
+  const discord =
+    options.discordConfigurationFile === undefined
+      ? undefined
+      : await loadMainDiscordConfigurationSource(options.discordConfigurationFile);
+  const deviceEnrollment =
+    options.deviceEnrollmentConfigurationFile === undefined
+      ? undefined
+      : await loadMainDeviceEnrollmentConfigurationSource(
+          options.deviceEnrollmentConfigurationFile,
+          { sourceCheckout: installationRoot },
+        );
+  const stdinSecret =
+    options.databaseUriStdin === true
+      ? await readBoundedSecretFromStdin(8 * 1024, "PostgreSQL URI")
+      : options.discordTokenStdin === true
+        ? await readBoundedSecretFromStdin(4 * 1024, "Discord bot token")
+        : undefined;
+  let initialized: Awaited<ReturnType<typeof initializeMainHome>>;
+  try {
+    initialized = await initializeMainHome({
+      ...(options.home === undefined ? {} : { home: options.home }),
+      adminRoot: options.adminRoot ?? defaultAdminRoot,
+      ...(options.adminRoot === undefined ? {} : { expectedAdminRoot: options.adminRoot }),
+      ...(options.database === undefined ? {} : { database: options.database }),
+      ...(secretBackend === undefined ? {} : { secretBackend }),
+      ...(options.databaseUriStdin !== true || stdinSecret === undefined
+        ? {}
+        : { databaseSecret: stdinSecret }),
+      ...(options.listener === undefined ? {} : { listener: options.listener }),
+      ...(discord === undefined ? {} : { discord }),
+      ...(artifacts === undefined ? {} : { artifacts }),
+      ...(deviceEnrollment === undefined
+        ? {}
+        : {
+            deviceChannel: {
+              enrollment: deviceEnrollment.enrollment,
+              workerChannel: deviceEnrollment.workerChannel,
+            },
+          }),
+      sourceCheckout: installationRoot,
+    });
+  } catch (error) {
+    stdinSecret?.fill(0);
+    throw error;
+  }
+  try {
+    if (deviceEnrollment !== undefined) {
+      const persistence = await persistMainDeviceEnrollmentConfiguration(
+        mainDeviceEnrollmentConfigurationPath(initialized.paths.configDirectory),
+        deviceEnrollment,
+        { sourceCheckout: installationRoot },
+      );
+      writeEvent("main.device-enrollment.configured", {
+        status: persistence,
+        enrollmentUrl: deviceEnrollment.enrollment.advertisedUrl,
+        workerChannelUrl: deviceEnrollment.workerChannel.advertisedUrl,
+      });
+    }
+    writeEvent("main.initialized", {
+      created: initialized.created,
+      configurationFile: initialized.paths.configurationFile,
+      origin: initialized.configuration.main.origin,
+    });
+  } catch (error) {
+    stdinSecret?.fill(0);
+    throw error;
+  }
+  if (initialized.configuration.discord !== undefined && options.discordTokenStdin === true) {
+    if (stdinSecret === undefined) {
+      throw new MainRuntimeError(
+        "DATABASE_SECRET_UNAVAILABLE",
+        "The bounded Discord credential input is unavailable.",
+      );
+    }
+    try {
+      const secretStore = createMainManagedSecretStore({
+        configuration: initialized.configuration.secretBackend,
+        deviceId: initialized.configuration.deviceId,
+        sourceCheckout: installationRoot,
+        environment: process.env,
+      });
+      await provisionMainDiscordBotCredential({
+        composition: {
+          config: initialized.configuration.discord.forum,
+          botTokenAlias: initialized.configuration.discord.botTokenAlias,
+          secretStore,
+        },
+        secret: stdinSecret,
+      });
+    } finally {
+      stdinSecret.fill(0);
+    }
+    writeEvent("main.discord.credential-provisioned", {
+      alias: initialized.configuration.discord.botTokenAlias,
+    });
+  }
 
   const runtime = await createAndListen(
     initialized.configuration,
     initialized.paths.home,
     identity,
+    options.agentProvider,
+    options.adminAutoOpen,
   );
   let claimListener: Awaited<ReturnType<typeof startClaimListener>>;
   try {
@@ -328,10 +636,38 @@ async function runServe(options: ParsedArguments, identity: RuntimeIdentity): Pr
   });
   const configuration = await loadMainConfiguration(paths.configurationFile);
   const runtime = await createAndListen(configuration, paths.home, identity);
+  await reportMainServiceReadiness(runtime, identity);
   if (options.open) {
     openBrowser(configuration.main.origin);
   }
   await waitForShutdown(runtime);
+}
+
+async function reportMainServiceReadiness(
+  runtime: MainRuntime,
+  identity: RuntimeIdentity,
+): Promise<void> {
+  const readiness = await runtime.readiness();
+  const message = createMainServiceReadyMessage({
+    instanceId: runtime.configuration.instanceId,
+    deviceId: runtime.configuration.deviceId,
+    releaseVersion: identity.build.version,
+    buildId: identity.build.buildId,
+    origin: runtime.configuration.main.origin,
+    readiness,
+  });
+  if (typeof process.send !== "function" || !process.connected) {
+    return;
+  }
+  await new Promise<void>((resolveSend, rejectSend) => {
+    process.send!(message, (error) => {
+      if (error === null) {
+        resolveSend();
+      } else {
+        rejectSend(error);
+      }
+    });
+  });
 }
 
 async function runStatus(options: ParsedArguments): Promise<void> {
@@ -356,17 +692,286 @@ async function runStatus(options: ParsedArguments): Promise<void> {
   }
 }
 
+async function runBackupLifecycleFromCli(options: ParsedArguments): Promise<void> {
+  const parsed = options.backup;
+  if (parsed === undefined) {
+    throw new BackupCliError("BACKUP_ARGUMENT_INVALID", "The backup command is missing.");
+  }
+  if (parsed.command === "help") {
+    process.stdout.write(backupHelpText());
+    return;
+  }
+  const restoreSecretBackend =
+    parsed.secretBackendConfigurationFile === undefined
+      ? undefined
+      : await loadMainSecretBackendConfigurationSource(parsed.secretBackendConfigurationFile);
+  const postgresSecret =
+    parsed.databaseUriStdin === true
+      ? await readBoundedSecretFromStdin(8 * 1024, "PostgreSQL URI")
+      : undefined;
+  try {
+    const result = await runBackupLifecycleCommand(parsed, {
+      sourceCheckout: installationRoot,
+      loadSource: async (home) => {
+        const paths = resolveRuntimePaths({
+          ...(home === undefined ? {} : { home }),
+          sourceCheckout: installationRoot,
+        });
+        const configuration = await loadMainConfiguration(paths.configurationFile);
+        return {
+          home: paths.home,
+          configurationFile: paths.configurationFile,
+          agentConfigurationFile: resolve(paths.configDirectory, "agent.json"),
+          deviceEnrollmentConfigurationFile: mainDeviceEnrollmentConfigurationPath(
+            paths.configDirectory,
+          ),
+          sqliteFile: paths.sqliteFile,
+          configuration,
+          sourceCheckout: installationRoot,
+        };
+      },
+      ...(postgresSecret === undefined ? {} : { postgresSecret }),
+      ...(restoreSecretBackend === undefined ? {} : { restoreSecretBackend }),
+    });
+    process.stdout.write(`${JSON.stringify(result, undefined, 2)}\n`);
+  } finally {
+    postgresSecret?.fill(0);
+  }
+}
+
+async function runServiceLifecycleFromCli(options: ParsedArguments): Promise<void> {
+  const parsed = options.service;
+  if (parsed === undefined) {
+    throw new ServiceLifecycleCliError(
+      "SERVICE_ARGUMENT_INVALID",
+      "The service command is missing.",
+    );
+  }
+  if (parsed.command === "help") {
+    process.stdout.write(serviceLifecycleHelpText());
+    return;
+  }
+  const baseAdapters = createDefaultServiceLifecycleAdapters();
+  let resolvedConfiguration:
+    | Promise<{
+        readonly configuration: Awaited<ReturnType<typeof baseAdapters.configurationReader.read>>;
+        readonly previousConfiguration?: Awaited<
+          ReturnType<typeof baseAdapters.configurationReader.read>
+        >;
+      }>
+    | undefined;
+  const resolveConfiguration = () => {
+    resolvedConfiguration ??= (async () => {
+      if (parsed.configurationPath === undefined) {
+        throw new ServiceLifecycleCliError(
+          "SERVICE_ARGUMENT_INVALID",
+          "The service configuration path is missing.",
+        );
+      }
+      const template = await baseAdapters.configurationReader.read(parsed.configurationPath);
+      if (template.role !== "main") {
+        return { configuration: template };
+      }
+      if (parsed.home === undefined) {
+        throw new ServiceLifecycleCliError(
+          "SERVICE_CONFIGURATION_INVALID",
+          "Main service commands require --home so the effective durable Admin preference can be rendered.",
+        );
+      }
+      try {
+        const paths = resolveRuntimePaths({
+          home: parsed.home,
+          sourceCheckout: installationRoot,
+        });
+        const main = await loadMainConfiguration(paths.configurationFile);
+        const values = await inspectPersistedMainConfiguration({
+          configuration: main,
+          home: paths.home,
+          sourceCheckout: installationRoot,
+          environment: process.env,
+        });
+        const effective = await resolveEffectiveMainServiceConfiguration({
+          service: {
+            inspect: async () => values,
+          },
+          main,
+          template,
+        });
+        return {
+          configuration: effective.configuration,
+          previousConfiguration: effective.alternateConfiguration,
+        };
+      } catch (error) {
+        if (error instanceof ServiceLifecycleCliError) {
+          throw error;
+        }
+        throw new ServiceLifecycleCliError(
+          "SERVICE_CONFIGURATION_INVALID",
+          "The effective persisted Main service configuration could not be resolved.",
+          { cause: error },
+        );
+      }
+    })();
+    return resolvedConfiguration;
+  };
+  const result = await runServiceLifecycleCommand(parsed, {
+    ...baseAdapters,
+    configurationReader: {
+      async read() {
+        return (await resolveConfiguration()).configuration;
+      },
+    },
+    reconfigurationReader: {
+      async readPrevious() {
+        const previous = (await resolveConfiguration()).previousConfiguration;
+        if (previous === undefined) {
+          throw new ServiceLifecycleCliError(
+            "SERVICE_CONFIGURATION_INVALID",
+            "Only the fixed Main Admin auto-open preference can be reconfigured.",
+          );
+        }
+        return previous;
+      },
+    },
+  });
+  process.stdout.write(`${JSON.stringify(result, undefined, 2)}\n`);
+  if (result.kind === "operation" && result.report.outcome !== "succeeded") {
+    process.exitCode = 1;
+  }
+}
+
+async function runDeviceEnrollmentFromCli(options: ParsedArguments): Promise<void> {
+  const command = options.device;
+  if (command === undefined) {
+    throw new DeviceEnrollmentCliError("DEVICE_ARGUMENT_INVALID", "The Device command is missing.");
+  }
+  const result = await runDeviceEnrollmentCommand(command, {
+    sourceCheckout: installationRoot,
+    environment: process.env,
+    loadSource: async (home) => {
+      const paths = resolveRuntimePaths({
+        ...(home === undefined ? {} : { home }),
+        sourceCheckout: installationRoot,
+      });
+      return {
+        configuration: await loadMainConfiguration(paths.configurationFile),
+        configDirectory: paths.configDirectory,
+        sqliteFile: paths.sqliteFile,
+      };
+    },
+  });
+  if (result.status === "help") {
+    process.stdout.write(result.text);
+    return;
+  }
+  process.stdout.write(`${JSON.stringify(result, undefined, 2)}\n`);
+}
+
 async function createAndListen(
   configuration: Awaited<ReturnType<typeof loadMainConfiguration>>,
   home: string,
   identity: RuntimeIdentity,
+  requestedAgentProvider?: MainAgentProviderPreference,
+  initialAdminAutoOpen?: boolean,
 ): Promise<MainRuntime> {
+  const paths = resolveRuntimePaths({
+    home,
+    sourceCheckout: installationRoot,
+  });
+  const agent = await resolveMainAgentComposition({
+    paths,
+    ...(requestedAgentProvider === undefined ? {} : { requestedProvider: requestedAgentProvider }),
+  });
+  if (agent.status === "ready") {
+    writeEvent("main.agent.ready", {
+      provider: agent.provider,
+      adapterId: agent.probe.adapterId,
+      version: agent.probe.version,
+    });
+  } else {
+    writeEvent("main.agent.unavailable", {
+      code: agent.code,
+      ...(agent.provider === undefined ? {} : { provider: agent.provider }),
+      diagnosticCodes: agent.diagnostics.map((diagnostic) => diagnostic.code),
+    });
+  }
+  const managedSecretStore = createMainManagedSecretStore({
+    configuration: configuration.secretBackend,
+    deviceId: configuration.deviceId,
+    sourceCheckout: installationRoot,
+    environment: process.env,
+  });
+  const discord =
+    configuration.discord === undefined
+      ? undefined
+      : {
+          config: configuration.discord.forum,
+          botTokenAlias: configuration.discord.botTokenAlias,
+          secretStore: managedSecretStore,
+        };
+  let deviceChannel:
+    | {
+        readonly identitySecrets: ReturnType<typeof createMainDeviceIdentitySecretStore>;
+      }
+    | undefined;
+  if (configuration.deviceChannel !== undefined) {
+    const composition = await loadPersistedMainDeviceEnrollmentConfiguration(
+      mainDeviceEnrollmentConfigurationPath(paths.configDirectory),
+      { sourceCheckout: installationRoot },
+    );
+    assertCompositionMatchesMain(composition, configuration.deviceChannel);
+    const identitySecrets = createMainDeviceIdentitySecretStore({
+      configuration: composition,
+      deviceId: configuration.deviceId,
+      sourceCheckout: installationRoot,
+      environment: process.env,
+    });
+    let tls: Awaited<ReturnType<typeof provisionMainDeviceListenerTls>> | undefined;
+    await executeWithMainDeviceChannelDatabase(
+      configuration.database,
+      paths.sqliteFile,
+      managedSecretStore,
+      async (database) => {
+        tls = await provisionMainDeviceListenerTls({
+          configuration: configuration.deviceChannel!,
+          database,
+          identitySecrets,
+          instanceId: configuration.instanceId,
+          sourceCheckout: installationRoot,
+        });
+      },
+    );
+    if (tls === undefined) {
+      throw new DeviceEnrollmentCliError(
+        "DATABASE_SECRET_UNAVAILABLE",
+        "The Device channel database could not be opened for TLS provisioning.",
+      );
+    }
+    writeEvent("main.device-enrollment.tls", {
+      status: tls.status,
+      listeners: tls.listenerIdentities.map((listener) => ({
+        hostnames: listener.hostnames,
+        notAfter: new Date(listener.notAfter).toISOString(),
+      })),
+    });
+    deviceChannel = { identitySecrets };
+  }
   const runtime = await createMainRuntime({
     configuration,
     home,
     build: identity.build,
     releaseChannel: identity.releaseChannel,
     sourceCheckout: installationRoot,
+    managedSecretStore,
+    ...(initialAdminAutoOpen === undefined ? {} : { initialAdminAutoOpen }),
+    ...(agent.status === "ready"
+      ? {
+          agentExecution: agent.taskExecution,
+          agentConfiguration: agent.configurationAgent,
+        }
+      : {}),
+    ...(discord === undefined ? {} : { discord }),
+    ...(deviceChannel === undefined ? {} : { deviceChannel }),
   });
   try {
     const listening = await listenMainRuntime(runtime);
@@ -379,6 +984,56 @@ async function createAndListen(
     return closeAfterPrimaryFailure(error, [
       { operation: "main-runtime", close: () => runtime.close() },
     ]);
+  }
+}
+
+async function readBoundedSecretFromStdin(maximumBytes: number, label: string): Promise<Buffer> {
+  if (process.stdin.isTTY === true) {
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      `${label} input must be piped through stdin so it is not exposed by terminal echo, argv, or process environment.`,
+    );
+  }
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    for await (const chunk of process.stdin) {
+      const bytes = Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(String(chunk));
+      chunks.push(bytes);
+      totalBytes += bytes.byteLength;
+      if (totalBytes > maximumBytes + 2) {
+        throw new MainRuntimeError(
+          "CONFIG_INVALID",
+          `${label} input exceeds its bounded stdin limit.`,
+        );
+      }
+    }
+    const combined = Buffer.concat(chunks, totalBytes);
+    try {
+      const hasCrLf =
+        combined.byteLength >= 2 &&
+        combined[combined.byteLength - 2] === 0x0d &&
+        combined[combined.byteLength - 1] === 0x0a;
+      const hasLf = combined.byteLength >= 1 && combined[combined.byteLength - 1] === 0x0a;
+      const contentBytes = hasCrLf
+        ? combined.byteLength - 2
+        : hasLf
+          ? combined.byteLength - 1
+          : combined.byteLength;
+      if (contentBytes < 1 || contentBytes > maximumBytes) {
+        throw new MainRuntimeError(
+          "CONFIG_INVALID",
+          `${label} input is empty or exceeds its bounded stdin limit.`,
+        );
+      }
+      return Buffer.from(combined.subarray(0, contentBytes));
+    } finally {
+      combined.fill(0);
+    }
+  } finally {
+    for (const chunk of chunks) {
+      chunk.fill(0);
+    }
   }
 }
 
@@ -400,13 +1055,15 @@ async function startClaimListener(runtime: MainRuntime): Promise<
       return undefined;
     }
     if (error instanceof OwnerAuthError && error.code === "CLAIM_ALREADY_ACTIVE") {
-      writeEvent("owner.claim.pending", {
-        reason: "an-unexpired-local-claim-already-exists",
-        retryAfter: "at-most-10-minutes",
+      issued = await runtime.ownerAuth.replaceInitialClaim({
+        channel: "local-bootstrap",
       });
-      return undefined;
+      writeEvent("owner.claim.replaced", {
+        reason: "unclaimed-local-bootstrap-restarted",
+      });
+    } else {
+      throw error;
     }
-    throw error;
   }
 
   const port = runtime.configuration.main.port + 1;
@@ -556,22 +1213,79 @@ export async function shutdownMainRuntime(
   writeEvent("main.stopped", {});
 }
 
-function openBrowser(url: string): void {
-  const command =
-    process.platform === "win32"
-      ? {
-          file: "powershell.exe",
-          arguments: ["-NoProfile", "-Command", "Start-Process -LiteralPath $args[0]", url],
-        }
-      : process.platform === "darwin"
-        ? { file: "open", arguments: [url] }
-        : { file: "xdg-open", arguments: [url] };
-  const child = spawn(command.file, command.arguments, {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
+export function browserOpenCommand(
+  hostPlatform: NodeJS.Platform,
+  url: string,
+): {
+  readonly file: string;
+  readonly arguments: readonly string[];
+} {
+  return hostPlatform === "win32"
+    ? {
+        file: "powershell.exe",
+        arguments: ["-NoProfile", "-Command", "Start-Process -FilePath $args[0]", url],
+      }
+    : hostPlatform === "darwin"
+      ? { file: "open", arguments: [url] }
+      : { file: "xdg-open", arguments: [url] };
+}
+
+export interface BrowserOpenChild {
+  once(event: "error", listener: (error: Error) => void): BrowserOpenChild;
+  unref(): void;
+}
+
+export interface BrowserOpenRuntime {
+  readonly hostPlatform?: NodeJS.Platform;
+  readonly spawnProcess?: (
+    file: string,
+    arguments_: readonly string[],
+    options: {
+      readonly detached: true;
+      readonly stdio: "ignore";
+      readonly windowsHide: true;
+    },
+  ) => BrowserOpenChild;
+  readonly recordEvent?: (event: string, fields: Readonly<Record<string, unknown>>) => void;
+}
+
+export function openBrowser(url: string, runtime: BrowserOpenRuntime = {}): void {
+  const hostPlatform = runtime.hostPlatform ?? process.platform;
+  const command = browserOpenCommand(hostPlatform, url);
+  const spawnProcess =
+    runtime.spawnProcess ?? ((file, arguments_, options) => spawn(file, [...arguments_], options));
+  const recordEvent = runtime.recordEvent ?? writeEvent;
+  let child: BrowserOpenChild;
+  try {
+    child = spawnProcess(command.file, command.arguments, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  } catch {
+    recordBrowserOpenFailure(recordEvent, hostPlatform, "spawn-threw");
+    return;
+  }
+  child.once("error", () => {
+    recordBrowserOpenFailure(recordEvent, hostPlatform, "child-error");
   });
   child.unref();
+}
+
+function recordBrowserOpenFailure(
+  recordEvent: (event: string, fields: Readonly<Record<string, unknown>>) => void,
+  hostPlatform: NodeJS.Platform,
+  phase: "child-error" | "spawn-threw",
+): void {
+  try {
+    recordEvent("main.admin-browser.open-failed", {
+      code: "BROWSER_OPEN_UNAVAILABLE",
+      hostPlatform,
+      phase,
+    });
+  } catch {
+    // Browser availability and its diagnostic sink never own the Main lifecycle.
+  }
 }
 
 function writeEvent(event: string, fields: Readonly<Record<string, unknown>>): void {
@@ -589,9 +1303,53 @@ function sanitizeCliError(error: unknown): {
   readonly level: "error";
   readonly code: string;
   readonly message: string;
+  readonly mutationMayHaveOccurred?: boolean;
+  readonly requiresElevation?: boolean;
 } {
+  if (error instanceof BackupCliError || error instanceof MainBackupError) {
+    return {
+      level: "error",
+      code: error.code,
+      message: error.message,
+      mutationMayHaveOccurred: false,
+      requiresElevation: false,
+    };
+  }
+  if (error instanceof ServiceLifecycleCliError) {
+    return {
+      level: "error",
+      code: error.code,
+      message: error.message,
+      mutationMayHaveOccurred: error.mutationMayHaveOccurred,
+      requiresElevation: error.requiresElevation,
+    };
+  }
+  if (error instanceof ServiceCommandExecutionError) {
+    return {
+      level: "error",
+      code: error.code,
+      message: error.message,
+      mutationMayHaveOccurred: error.mutationMayHaveOccurred,
+      requiresElevation: true,
+    };
+  }
+  if (error instanceof PlatformServiceError) {
+    return {
+      level: "error",
+      code: error.code,
+      message: error.message,
+      mutationMayHaveOccurred: false,
+      requiresElevation: false,
+    };
+  }
   if (
     error instanceof MainRuntimeError ||
+    error instanceof MainDiscordConfigurationError ||
+    error instanceof MainSecretBackendConfigurationError ||
+    error instanceof DeviceEnrollmentCliError ||
+    error instanceof MainDeviceEnrollmentConfigurationError ||
+    error instanceof MainDeviceEnrollmentLifecycleError ||
+    error instanceof MainAgentRuntimeError ||
     error instanceof OwnerAuthError ||
     error instanceof MainShutdownError ||
     error instanceof ReleaseIdentityError
@@ -631,16 +1389,44 @@ function printHelp(): void {
   process.stdout.write(`OpenDelegate
 
 Usage:
+  opendelegate backup help
+  opendelegate backup create --destination ABSOLUTE_PATH [--home PATH]
+  opendelegate backup verify --source ABSOLUTE_PATH
+  opendelegate backup restore --source ABSOLUTE_PATH --home NEW_ABSOLUTE_PATH
+  opendelegate device help
+  opendelegate device grant --device-id DEVICE_ID --output ABSOLUTE_PATH
+    [--home PATH] [--expires-seconds 30..1800] [--role ROLE ...]
   opendelegate init [--home PATH] [--admin-root PATH] [--open]
+    [--agent auto|codex|claude|disabled]
+    [--admin-auto-open enabled|disabled]
+    [--artifact-config ABSOLUTE_PATH]
+    [--discord-config ABSOLUTE_PATH [--discord-token-stdin]]
+    [--device-channel-config ABSOLUTE_PATH]
+    [--secret-backend-config ABSOLUTE_PATH]
     [--database sqlite]
-    [--database postgresql --database-uri-environment ENV_NAME [--database-schema NAME]]
+    [--database postgresql --database-uri-ref secret://main/ALIAS
+      [--database-uri-stdin] [--database-schema NAME]]
     [--listen-host HOST --listen-port PORT --listen-origin ORIGIN]
     [--tls-certificate PATH --tls-private-key PATH]
   opendelegate serve [--home PATH] [--open]
   opendelegate status [--home PATH]
+  opendelegate service help
+  opendelegate service render --config PATH [--home MAIN_HOME]
+  opendelegate service plan OPERATION --config PATH [--home MAIN_HOME]
+    [--active-version VERSION]
+  opendelegate service install|reconfigure|start|stop|restart|uninstall ...
+  opendelegate service status|diagnose --config PATH [--home MAIN_HOME]
   opendelegate version
 
 Runtime state and credentials are never written into the source checkout.
+Bounded stdin Secret provisioning accepts one Secret per init invocation and never
+uses argv or the process environment.
+Artifact configuration contains listener, exposure, and Secret Store aliases only.
+Discord configuration contains IDs, tag bindings, backend paths, and a Secret Store alias only.
+Device channel configuration contains listener paths and a managed Secret Store backend only.
+Run "opendelegate backup help" for metadata scope, integrity, and fresh-target restore details.
+Run "opendelegate service help" for privilege, idempotency, and two-plane service details.
+Run "opendelegate device help" for single-use enrollment Grant details.
 `);
 }
 

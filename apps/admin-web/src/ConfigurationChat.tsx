@@ -1,4 +1,15 @@
-import { Check, Expand, Minimize2, Network, Send, ShieldCheck, UserRound, X } from "lucide-react";
+import {
+  Check,
+  Database,
+  Expand,
+  LockKeyhole,
+  Minimize2,
+  Network,
+  Send,
+  ShieldCheck,
+  UserRound,
+  X,
+} from "lucide-react";
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -14,11 +25,12 @@ import {
   localizePresentationText,
   useAdminI18n,
 } from "./i18n";
+import type { SecureSecretIngestPurpose, SecureSecretIngestReceipt } from "./admin-api";
 import type { ConfigurationSessionView } from "./view-model";
 
 type ProposalState = "proposed" | "reviewing" | "dismissed";
 
-type SystemChatMessageKey = "failedMessage" | "unavailableMessage";
+type SystemChatMessageKey = "failedMessage" | "secureStoreFailed" | "unavailableMessage";
 
 type ChatMessage = {
   readonly id: string;
@@ -39,6 +51,10 @@ interface ConfigurationChatProps {
   readonly focusRequestId: number;
   readonly modal: boolean;
   readonly onClose: () => void;
+  readonly onIngestSecret?: (
+    purpose: SecureSecretIngestPurpose,
+    secret: Uint8Array,
+  ) => Promise<SecureSecretIngestReceipt>;
   readonly onSendMessage?: (message: string) => Promise<string>;
   readonly onToggleExpanded: () => void;
   readonly open: boolean;
@@ -50,6 +66,7 @@ export function ConfigurationChat({
   focusRequestId,
   modal,
   onClose,
+  onIngestSecret,
   onSendMessage,
   onToggleExpanded,
   open,
@@ -58,6 +75,8 @@ export function ConfigurationChat({
   const { messages: copy } = useAdminI18n();
   const [proposalState, setProposalState] = useState<ProposalState>("proposed");
   const [draft, setDraft] = useState("");
+  const [databaseUri, setDatabaseUri] = useState("");
+  const [storedReference, setStoredReference] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [conversationMessages, setConversationMessages] = useState<readonly ChatMessage[]>(() => [
     onSendMessage === undefined
@@ -152,6 +171,71 @@ export function ConfigurationChat({
         },
       ]);
     } finally {
+      setPending(false);
+    }
+  }
+
+  async function submitDatabaseSecret(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (
+      onIngestSecret === undefined ||
+      onSendMessage === undefined ||
+      pending ||
+      databaseUri.length === 0
+    ) {
+      return;
+    }
+
+    const material = new TextEncoder().encode(databaseUri);
+    setDatabaseUri("");
+    setStoredReference(null);
+    setPending(true);
+    const sequence = conversationMessages.length;
+    try {
+      const receipt = await onIngestSecret("database-uri", material);
+      const referenceMessage = formatMessage(copy.chat.secureReferenceMessage, {
+        reference: receipt.secretRef,
+      });
+      setStoredReference(receipt.secretRef);
+      setConversationMessages((current) => [
+        ...current,
+        {
+          id: `message-owner-secure-reference-${sequence}`,
+          author: "owner",
+          content: referenceMessage,
+        },
+      ]);
+      try {
+        const response = await onSendMessage(referenceMessage);
+        setConversationMessages((current) => [
+          ...current,
+          {
+            id: `message-agent-secure-reference-${sequence + 1}`,
+            author: "agent",
+            content: response,
+          },
+        ]);
+      } catch {
+        setConversationMessages((current) => [
+          ...current,
+          {
+            id: `message-agent-secure-reference-${sequence + 1}`,
+            author: "agent",
+            systemMessageKey: "failedMessage",
+          },
+        ]);
+      }
+    } catch {
+      setConversationMessages((current) => [
+        ...current,
+        {
+          id: `message-agent-secure-store-${sequence}`,
+          author: "agent",
+          systemMessageKey: "secureStoreFailed",
+        },
+      ]);
+    } finally {
+      material.fill(0);
       setPending(false);
     }
   }
@@ -261,6 +345,58 @@ export function ConfigurationChat({
               </article>
             ))}
           </div>
+
+          {onIngestSecret !== undefined && onSendMessage !== undefined ? (
+            <section aria-labelledby="configuration-secret-title" className="secure-secret-panel">
+              <div className="secure-secret-heading">
+                <span aria-hidden="true">
+                  <Database />
+                </span>
+                <div>
+                  <h3 id="configuration-secret-title">{copy.chat.secureTitle}</h3>
+                  <p>{copy.chat.secureIntro}</p>
+                </div>
+              </div>
+              <form
+                className="secure-secret-form"
+                onSubmit={(event) => void submitDatabaseSecret(event)}
+              >
+                <label htmlFor="configuration-database-uri">{copy.chat.databaseUriLabel}</label>
+                <div>
+                  <input
+                    aria-describedby="configuration-database-uri-notice"
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    data-1p-ignore="true"
+                    disabled={pending}
+                    id="configuration-database-uri"
+                    onChange={(event) => setDatabaseUri(event.target.value)}
+                    placeholder={copy.chat.databaseUriPlaceholder}
+                    spellCheck={false}
+                    type="password"
+                    value={databaseUri}
+                  />
+                  <button
+                    className="secondary-button"
+                    disabled={pending || databaseUri.length === 0}
+                    type="submit"
+                  >
+                    <LockKeyhole aria-hidden="true" />
+                    {pending ? copy.chat.secureStoring : copy.chat.secureStore}
+                  </button>
+                </div>
+                <p id="configuration-database-uri-notice">{copy.chat.secureNotice}</p>
+                {storedReference === null ? null : (
+                  <p className="secure-secret-receipt" role="status">
+                    <Check aria-hidden="true" />
+                    {formatMessage(copy.chat.secureStored, {
+                      reference: storedReference,
+                    })}
+                  </p>
+                )}
+              </form>
+            </section>
+          ) : null}
 
           {session.proposal !== null && proposalState !== "dismissed" ? (
             <div className="proposal-stack">

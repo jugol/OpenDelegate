@@ -408,3 +408,117 @@ contamination, and false claims that Agent output was authored in another langua
 language switching must update already-loaded views without a refetch or reload, and
 desktop/mobile browser tests must cover text expansion, CJK typography,
 accessibility, persistence, and owner-content preservation.
+
+## D-042 — Provider-native sessions through programmatic adapters
+
+**Decision:** Codex App Server and Claude Agent SDK are the first-class session
+surfaces. Each Task workstream keeps its own provider-native session, while
+OpenDelegate remains authoritative for durable state, capabilities, action Policy,
+and execution lifecycle. CLI adapters are reduced-capability fallbacks, not the
+source of truth.
+
+Main coordinator turns are reasoning-only. Worker turns may use explicitly composed
+tools, but protected provider actions cross an exact, durable OpenDelegate
+authorization boundary immediately before execution. Device-local Knowledge calls
+remain inside the Device capability boundary and never require their inputs to be
+presented to Main.
+
+**Rationale:** Native sessions preserve useful provider context without merging
+unrelated Tasks or surrendering orchestration and permission enforcement to a
+vendor UI.
+
+**Consequence:** Provider compatibility is version-pinned and fail-closed.
+OpenDelegate-owned provider homes and strict settings isolation are part of setup.
+Native Windows Claude SDK execution is not advertised until its required sandbox is
+enforceable; Codex, WSL2, or a configured container is used instead.
+
+## D-043 — Asymmetric trust between core and owner-session helper
+
+**Decision:** ADR-0011 production IPC uses separate Ed25519 identities for the core
+service and logged-in owner helper. Each private key remains in that plane's
+OS-scoped Secret Store; configuration pins only the peer SPKI and key ID. Both sides
+sign a nonce-, transcript-, release-, session-, and service-epoch-bound handshake,
+and every capability frame is independently signed and sequenced. Legacy
+single-Secret `helperIpc` configuration fails closed.
+
+**Rationale:** A shared HMAC key would need to be readable by two intentionally
+separate OS identities. Compromise of either plane would therefore disclose the
+other plane's bearer authenticator and undermine the two-plane boundary.
+
+**Consequence:** Enrollment and rotation provision two keys and explicitly update
+peer pins. OS endpoint ACLs remain defense in depth, while signature verification is
+the application authentication decision. A missing helper key removes graphical
+readiness without taking down the headless core.
+
+## D-044 — Durable Main-authoritative Worker Run lease renewal
+
+**Decision:** A current Worker Run may extend its lease only through an exact,
+durable renewal command decided by Main. The command binds the complete Task, Work
+Order, Device, Worker, route, Run, lease, fencing token, renewal ID, and prior
+expiry. Exact replay returns the recorded outcome; concurrent, stale, late,
+mismatched, or terminal renewal attempts are rejected and cannot resurrect a Run.
+Main's clock is authoritative for the decision and every successful renewal grants
+one configured lease duration from the decision time.
+
+Worker calibrates Main wall time during every Device-channel handshake, converts
+Main expiries to conservative monotonic deadlines, and renews before
+`max(30 seconds, 20% of the lease duration)`. The calibration rejects handshake RTT
+above 5 seconds or absolute clock uncertainty above 60 seconds. Renewal retry is
+bounded exponential backoff with jitter and never crosses the current conservative
+deadline. A wall-clock jump or regression beyond the calibrated threshold fails
+closed. Disconnect does not revoke a still-current local lease, but prevents
+renewal; reconnect requires fresh calibration before dispatch or a durable renewal
+response is applied.
+
+**Rationale:** Fixed five-minute Run authority interrupts valid long-running work,
+while trusting Worker wall time, refreshing implicitly on heartbeat, or treating a
+reconnect as authority can extend stale execution or create split-brain side
+effects.
+
+**Consequence:** Artifact, device-local Knowledge, platform mutation, Computer Use,
+and protected action authorization resolve the current lease dynamically while
+preserving immutable Run identity and fencing. A capability claimed before renewal
+may continue under the renewed expiry, but any identity change, expiry regression,
+Main rejection, or conservative deadline loss revokes it fail-closed.
+
+## D-045 — Security-current macOS release target
+
+**Decision:** The first-milestone Apple-silicon target advances from macOS Tahoe
+26.5.1 to 26.5.2, the current generally available security release when the
+release-readiness audit was performed. Prior fixture or hosted-CI results remain
+engineering evidence only and do not carry live support proof to the new patch.
+
+**Rationale:** The support matrix must not direct owners to validate a superseded
+security patch when no release-bound live evidence has yet been collected.
+
+**Consequence:** The macOS platform lab, signing/notarization run, native service
+lifecycle, provider, networking, and Computer Use evidence must all record 26.5.2
+and its exact build. A later patch requires the same explicit matrix decision and
+fresh affected evidence.
+
+## D-046 — Immutable Worker Agent requirements and safe session observations
+
+**Decision:** A Work Order may require one Agent provider and may additionally name
+an exact adapter ID and a non-empty allowed compatibility set. Main copies that
+requirement into the immutable Worker Run assignment and preserves it through
+dispatch retry and restart. Device-level Auto selection is used only when the
+assignment has no Agent requirement. A required binding that is absent, unready,
+incompatible with the assignment policy, or blocked by stricter Device policy fails
+closed; Worker never substitutes another provider or adapter.
+
+Terminal Worker events may carry a safe actual session observation consisting of
+provider, adapter ID and version, native session ID, workstream ID, Workspace ID,
+and lineage. Main validates it against the assignment and persists it in the
+accepted event and authoritative report. Device-local cwd, worktree path, and
+session key never cross this boundary.
+
+**Rationale:** Capability-only scheduling cannot prove which installed native
+provider actually executed a Work Order, and Device Auto could otherwise silently
+change provider context. Durable, bounded lineage is also required for trustworthy
+restart replay and future checkpoint continuation without uploading local execution
+paths.
+
+**Consequence:** Omitting an allowed compatibility set means tested-only. Allowing
+compatible or untested versions is explicit in the assignment and remains subject
+to stricter Device policy. A successful provider-bound Run without a matching safe
+session observation is invalid.

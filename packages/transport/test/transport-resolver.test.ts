@@ -5,8 +5,39 @@ import {
   TransportConfigurationError,
   TransportRoutesExhaustedError,
   createTransportResolver,
+  transportProfileRevision,
   type TransportProfile,
 } from "../src/index.ts";
+
+test("Transport Profile revisions are stable, opaque, and change with exact route configuration", () => {
+  const profile: TransportProfile = {
+    deviceId: "device-studio",
+    endpoints: [
+      {
+        endpointId: "route-private-wss",
+        label: "Preferred private route",
+        kind: "wss",
+        url: "wss://studio.private.test/control",
+        credentialRef: "secret://transport/studio",
+      },
+    ],
+  };
+  const revision = transportProfileRevision(profile);
+  assert.match(revision, /^sha256:[0-9a-f]{64}$/u);
+  assert.equal(transportProfileRevision(structuredClone(profile)), revision);
+  assert.notEqual(
+    transportProfileRevision({
+      ...profile,
+      endpoints: profile.endpoints.map((endpoint) => ({
+        ...endpoint,
+        url: "wss://changed.example.test/device",
+      })),
+    }),
+    revision,
+  );
+  assert.equal(revision.includes("example.test"), false);
+  assert.equal(revision.includes("credential"), false);
+});
 
 test("ordered routing connects through the first healthy authenticated endpoint", async () => {
   const probed: string[] = [];

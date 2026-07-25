@@ -4,7 +4,12 @@ import { OwnerAuthError } from "@opendelegate/owner-auth";
 import type { ProblemDetailsV1 } from "@opendelegate/protocol";
 import { TaskServiceError } from "@opendelegate/task-service";
 
+import { ApprovalPortError } from "./approval-port.ts";
+import { AdminOperationsPortError } from "./admin-operations-port-error.ts";
+import { ConfigurationAgentPortError } from "./configuration-agent-port.ts";
 import { PublicHttpError } from "./http-security.ts";
+import { SecureSecretIngestPortError } from "./secure-secret-ingest-port.ts";
+import { TaskBudgetAdminPortError } from "./task-budget-admin-port.ts";
 
 const PROBLEM_BASE = "https://opendelegate.dev/problems/";
 
@@ -55,6 +60,70 @@ function mapError(error: unknown): MappedProblem {
   if (error instanceof TaskServiceError) {
     return mapTaskServiceError(error);
   }
+  if (error instanceof ConfigurationAgentPortError) {
+    switch (error.code) {
+      case "SECRET_MATERIAL_REQUIRES_SECURE_INGEST":
+        return publicProblem(400, error.code);
+      case "IDEMPOTENCY_CONFLICT":
+        return publicProblem(409, error.code);
+      case "CONFIGURATION_AGENT_UNAVAILABLE":
+        return publicProblem(503, error.code);
+    }
+  }
+  if (error instanceof SecureSecretIngestPortError) {
+    switch (error.code) {
+      case "SECRET_INGEST_INVALID":
+        return publicProblem(400, error.code);
+      case "SECRET_INGEST_IDEMPOTENCY_CONFLICT":
+        return publicProblem(409, error.code);
+      case "SECRET_INGEST_UNAVAILABLE":
+        return publicProblem(503, error.code);
+    }
+  }
+  if (error instanceof ApprovalPortError) {
+    switch (error.code) {
+      case "APPROVAL_NOT_FOUND":
+        return publicProblem(404, error.code);
+      case "APPROVAL_EXPIRED":
+      case "APPROVAL_IDEMPOTENCY_CONFLICT":
+      case "APPROVAL_DECISION_CONFLICT":
+      case "APPROVAL_SCOPE_INVALID":
+        return publicProblem(409, error.code);
+      case "APPROVAL_EXECUTION_FAILED":
+      case "APPROVAL_UNAVAILABLE":
+        return publicProblem(503, error.code);
+    }
+  }
+  if (error instanceof AdminOperationsPortError) {
+    switch (error.code) {
+      case "ARTIFACT_NOT_FOUND":
+        return publicProblem(404, error.code);
+      case "ARTIFACT_IDEMPOTENCY_CONFLICT":
+      case "ARTIFACT_POLICY_UNAVAILABLE":
+      case "ENROLLMENT_IDEMPOTENCY_CONFLICT":
+      case "ENROLLMENT_IDEMPOTENCY_INDETERMINATE":
+        return publicProblem(409, error.code);
+      case "ARTIFACT_OPEN_UNAVAILABLE":
+      case "AUDIT_UNAVAILABLE":
+      case "ENROLLMENT_UNAVAILABLE":
+        return publicProblem(503, error.code);
+    }
+  }
+  if (error instanceof TaskBudgetAdminPortError) {
+    switch (error.code) {
+      case "TASK_BUDGET_NOT_FOUND":
+        return publicProblem(404, error.code);
+      case "TASK_BUDGET_INVALID":
+        return publicProblem(400, error.code);
+      case "TASK_BUDGET_IDEMPOTENCY_CONFLICT":
+      case "TASK_BUDGET_LIMIT_INVALID":
+      case "TASK_BUDGET_PARENT_LIMIT_EXCEEDED":
+      case "TASK_BUDGET_REVISION_CONFLICT":
+        return publicProblem(409, error.code);
+      case "TASK_BUDGET_UNAVAILABLE":
+        return publicProblem(503, error.code);
+    }
+  }
 
   const fastifyError = error as FastifyError;
   if (
@@ -75,6 +144,8 @@ function mapError(error: unknown): MappedProblem {
 
 function mapTaskServiceError(error: TaskServiceError): MappedProblem {
   switch (error.code) {
+    case "CONFIGURATION_UNAVAILABLE":
+      return publicProblem(503, "TASK_CONFIGURATION_UNAVAILABLE");
     case "INPUT_INVALID":
       return publicProblem(400, "INVALID_REQUEST");
     case "TASK_NOT_FOUND":
@@ -130,13 +201,29 @@ function titleFor(code: string): string {
     AUTHENTICATION_REQUIRED: "Authentication required",
     AUTHENTICATION_STALE: "Fresh authentication required",
     AUTHENTICATION_UNAVAILABLE: "Authentication unavailable",
+    APPROVAL_DECISION_CONFLICT: "Approval decision conflict",
+    APPROVAL_EXECUTION_FAILED: "Approved action failed",
+    APPROVAL_EXPIRED: "Approval expired",
+    APPROVAL_IDEMPOTENCY_CONFLICT: "Approval idempotency conflict",
+    APPROVAL_NOT_FOUND: "Approval not found",
+    APPROVAL_SCOPE_INVALID: "Approval scope invalid",
+    APPROVAL_UNAVAILABLE: "Approval service unavailable",
+    ARTIFACT_IDEMPOTENCY_CONFLICT: "Artifact idempotency conflict",
+    ARTIFACT_NOT_FOUND: "Artifact not found",
+    ARTIFACT_OPEN_UNAVAILABLE: "Artifact access unavailable",
+    ARTIFACT_POLICY_UNAVAILABLE: "Artifact policy unavailable",
+    AUDIT_UNAVAILABLE: "Audit unavailable",
     CLAIM_ALREADY_ACTIVE: "Owner claim already active",
     CLAIM_INVALID: "Owner claim invalid",
+    CONFIGURATION_AGENT_UNAVAILABLE: "Configuration Agent unavailable",
     CORRELATION_ID_INVALID: "Correlation ID invalid",
     CSRF_INVALID: "Request origin validation failed",
     HOST_NOT_ALLOWED: "Host not allowed",
     IDEMPOTENCY_CONFLICT: "Idempotency conflict",
     IDEMPOTENCY_KEY_INVALID: "Idempotency key invalid",
+    ENROLLMENT_IDEMPOTENCY_CONFLICT: "Enrollment idempotency conflict",
+    ENROLLMENT_IDEMPOTENCY_INDETERMINATE: "Enrollment outcome indeterminate",
+    ENROLLMENT_UNAVAILABLE: "Device enrollment unavailable",
     INTERNAL_ERROR: "Internal server error",
     INVALID_REQUEST: "Invalid request",
     LOCAL_ACCESS_REQUIRED: "Local access required",
@@ -145,7 +232,19 @@ function titleFor(code: string): string {
     RECOVERY_INVALID: "Recovery credential invalid",
     REQUEST_BODY_TOO_LARGE: "Request body too large",
     ROUTE_NOT_FOUND: "Route not found",
+    SECRET_MATERIAL_REQUIRES_SECURE_INGEST: "Use secure Secret ingest",
+    SECRET_INGEST_IDEMPOTENCY_CONFLICT: "Secret ingest idempotency conflict",
+    SECRET_INGEST_INVALID: "Secret material is invalid",
+    SECRET_INGEST_UNAVAILABLE: "Secure Secret ingest unavailable",
     TASK_NOT_FOUND: "Task not found",
+    TASK_CONFIGURATION_UNAVAILABLE: "Task configuration unavailable",
+    TASK_BUDGET_IDEMPOTENCY_CONFLICT: "Task Budget idempotency conflict",
+    TASK_BUDGET_INVALID: "Task Budget request invalid",
+    TASK_BUDGET_LIMIT_INVALID: "Task Budget limit invalid",
+    TASK_BUDGET_NOT_FOUND: "Task Budget not found",
+    TASK_BUDGET_PARENT_LIMIT_EXCEEDED: "Instance Budget ceiling exceeded",
+    TASK_BUDGET_REVISION_CONFLICT: "Task Budget revision conflict",
+    TASK_BUDGET_UNAVAILABLE: "Task Budget unavailable",
     TASK_EXECUTION_UNAVAILABLE: "Task execution unavailable",
     TASK_STORAGE_UNAVAILABLE: "Task storage unavailable",
     TASK_TRANSITION_INVALID: "Task transition invalid",

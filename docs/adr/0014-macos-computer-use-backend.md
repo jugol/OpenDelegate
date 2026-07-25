@@ -12,9 +12,10 @@ Consent, and Control (TCC) separately governs Accessibility and screen recording
 OpenDelegate must surface those grants as owner setup, not attempt to bypass or
 silently infer them.
 
-This proposal selects the native interfaces to implement and validate. No production
-macOS native driver or complete live TCC evidence exists yet, so this ADR does not
-declare macOS Computer Use supported.
+This proposal selects the native interfaces to implement and validate. Candidate
+native source now exists, but no final-commit macOS build result, distributed signed
+identity, authenticated installed composition, or complete live TCC evidence exists
+yet. This ADR therefore does not declare macOS Computer Use supported.
 
 ## Proposed decision
 
@@ -43,10 +44,38 @@ declare macOS Computer Use supported.
 7. Display reconfiguration, sleep/wake, Fast User Switching, helper replacement,
    permission change, or lost ScreenCaptureKit stream invalidates the controller
    until readiness and authority are re-established.
-8. The native driver implements ADR-0012's exact lease, fence, Policy, service-epoch,
-   cancellation, timeout, and emergency-stop behavior. It never attempts to modify
-   TCC databases, bypass privacy prompts, unlock the Mac, or act across user
-   sessions.
+8. The deterministic TypeScript controller implements ADR-0012's exact lease, fence,
+   Policy, service-epoch, timeout, and authority behavior. The native boundary
+   consumes that authority, rechecks its helper/session/epoch and display binding,
+   and implements sticky cancellation and emergency stop. It never mints authority,
+   modifies TCC databases, bypasses privacy prompts, unlocks the Mac, or acts across
+   user sessions.
+
+## Implementation checkpoint
+
+As of 2026-07-25, the repository contains a code-review candidate, not accepted
+platform proof:
+
+- `packages/computer-use-os/src/macos-native-driver.ts` binds the public native
+  driver contract to one ADR-0011 authenticated helper receipt.
+- `packages/computer-use-os/src/macos-native-helper-process.ts` verifies the target
+  executable's exact SHA-256 and code signature, starts it only as a private inherited
+  stdio child, validates every response frame and result, and fails closed on abort,
+  malformed output, helper replacement, sequence mismatch, or oversized data.
+- `packages/computer-use-os/native/macos` contains the Swift private wire protocol,
+  active-Aqua and lock monitor, TCC and Secure Event Input readiness checks,
+  ScreenCaptureKit capture, AXUIElement observation/targeting, CGEvent input, and a
+  visible deterministic AppKit fixture.
+- Protocol/parser tests run in the current contributor environment with all SwiftPM
+  scratch state outside the checkout. The macOS CI lane is configured to compile both
+  Apple-framework executables and run tests, but only an actual green final-commit
+  macOS job may be cited as that build evidence.
+
+The Swift executable is deliberately not a second ADR-0011 server. It is a private
+child whose lifetime, helper identity, owner OS-session identity, release, and epoch
+must be supplied by the already mutually authenticated user-session helper. The
+outer Unix-domain-socket service composition and its clean-host installation remain
+release work.
 
 ## Alternatives considered
 

@@ -1,4 +1,6 @@
-import { lstat, mkdir, open, readFile, realpath, rename, unlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type {
@@ -6,6 +8,8 @@ import type {
   ArtifactAuditEventType,
   ArtifactClock,
   ArtifactExposurePolicy,
+  ArtifactIndexRepository,
+  ArtifactIndexSnapshot,
   ArtifactMutationContext,
   ArtifactPresentation,
   ArtifactRandomSource,
@@ -14,6 +18,7 @@ import type {
   IssueSignedArtifactToken,
   IssuedSignedArtifactToken,
   PutArtifact,
+  PutArtifactStream,
   RecordArtifactAccess,
   StoredArtifactContent,
   StoredArtifactMetadata,
@@ -67,6 +72,12 @@ export interface LocalArtifactStoreOptions {
   readonly clock: ArtifactClock;
   readonly signingKey: Uint8Array;
   readonly random?: ArtifactRandomSource;
+  /**
+   * Production Main injects its configured SQL repository here. Ownership transfers
+   * to the Store and `close()` closes the repository. Omitting this option retains
+   * the safe local-file index for standalone use and backward-compatible tests.
+   */
+  readonly indexRepository?: ArtifactIndexRepository;
 }
 
 export class LocalArtifactStore implements ArtifactStore {
@@ -78,6 +89,7 @@ export class LocalArtifactStore implements ArtifactStore {
   private readonly clock: ArtifactClock;
   private readonly signingKey: Uint8Array;
   private readonly random: ArtifactRandomSource;
+  private readonly indexRepository: ArtifactIndexRepository | undefined;
   private index: PersistedIndex;
   private pending: Promise<void> = Promise.resolve();
   private closed = false;
@@ -91,38 +103,42 @@ export class LocalArtifactStore implements ArtifactStore {
     this.clock = options.clock;
     this.signingKey = Buffer.from(options.signingKey);
     this.random = options.random ?? new NodeArtifactRandomSource();
+    this.indexRepository = options.indexRepository;
     this.index = index;
   }
 
   public static async open(options: LocalArtifactStoreOptions): Promise<LocalArtifactStore> {
     validateOptions(options);
-    const configuredRootDirectory = resolve(options.rootDirectory);
-    await mkdir(configuredRootDirectory, { recursive: true, mode: 0o700 });
-    await assertSafeDirectory(configuredRootDirectory);
-    const rootDirectory = resolve(await realpath(configuredRootDirectory));
-    await assertSafeDirectory(rootDirectory);
-    const objectsDirectory = join(rootDirectory, "objects");
-    const temporaryDirectory = join(rootDirectory, "tmp");
-    await mkdir(objectsDirectory, { recursive: true, mode: 0o700 });
-    await mkdir(temporaryDirectory, { recursive: true, mode: 0o700 });
-    await assertSafeDirectory(objectsDirectory);
-    await assertSafeDirectory(temporaryDirectory);
-
-    const indexPath = join(rootDirectory, "index.json");
-    let index: PersistedIndex;
     try {
-      await assertSafeRegularFile(indexPath);
-      const serialized = await readFile(indexPath, "utf8");
-      index = parseIndex(serialized);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw asStorageError(error);
-      }
-      index = emptyIndex();
-      await persistIndex(indexPath, temporaryDirectory, index, options.random);
-    }
+      const configuredRootDirectory = resolve(options.rootDirectory);
+      await mkdir(configuredRootDirectory, { recursive: true, mode: 0o700 });
+      await assertSafeDirectory(configuredRootDirectory);
+      const rootDirectory = resolve(await realpath(configuredRootDirectory));
+      await assertSafeDirectory(rootDirectory);
+      const objectsDirectory = join(rootDirectory, "objects");
+      const temporaryDirectory = join(rootDirectory, "tmp");
+      await mkdir(objectsDirectory, { recursive: true, mode: 0o700 });
+      await mkdir(temporaryDirectory, { recursive: true, mode: 0o700 });
+      await assertSafeDirectory(objectsDirectory);
+      await assertSafeDirectory(temporaryDirectory);
 
-    return new LocalArtifactStore({ ...options, rootDirectory }, index);
+      const indexPath = join(rootDirectory, "index.json");
+      let index: PersistedIndex;
+      if (options.indexRepository === undefined) {
+        index = await loadOrCreateFileIndex(indexPath, temporaryDirectory, options.random);
+      } else {
+        index = await loadRepositoryIndex(options.indexRepository, indexPath);
+      }
+
+      return new LocalArtifactStore({ ...options, rootDirectory }, index);
+    } catch (error) {
+      try {
+        await options.indexRepository?.close();
+      } catch {
+        // Preserve the primary startup failure.
+      }
+      throw asRepositoryStorageError(error);
+    }
   }
 
   public async put(input: PutArtifact): Promise<StoredArtifactMetadata> {
@@ -166,6 +182,70 @@ export class LocalArtifactStore implements ArtifactStore {
       await this.commit(next);
       return freezeMetadata(artifact);
     });
+  }
+
+  public async putStream(input: PutArtifactStream): Promise<StoredArtifactMetadata> {
+    this.requireOpen();
+    const normalized = normalizePutArtifactStream(input, this.maxArtifactBytes);
+    const staged = await this.stageStream(
+      normalized.bytes,
+      normalized.metadata.sizeBytes,
+      normalized.digest,
+    );
+    try {
+      return await this.serialize(async () => {
+        const existing = ownValue(this.index.artifacts, normalized.metadata.artifactId);
+        if (existing !== undefined) {
+          if (samePublication(existing, normalized.metadata)) {
+            return freezeMetadata(existing);
+          }
+          throw new ArtifactStoreError(
+            "ARTIFACT_CONFLICT",
+            "The Artifact identifier already belongs to different content or metadata.",
+          );
+        }
+
+        await this.publishStagedObject(staged.path, staged.digest, staged.sizeBytes);
+        const artifact: PersistedArtifact = Object.freeze({
+          ...normalized.metadata,
+          objectDigest: normalized.digest,
+        });
+        const next = appendAudit(
+          copyIndex(this.index, {
+            artifacts: {
+              ...this.index.artifacts,
+              [artifact.artifactId]: artifact,
+            },
+          }),
+          "artifact.stored",
+          artifact.artifactId,
+          normalized.context,
+          validClockNow(this.clock),
+          {
+            exposureMode: artifact.exposurePolicy.mode,
+            mediaType: artifact.mediaType,
+            presentation: artifact.presentation,
+            sizeBytes: artifact.sizeBytes,
+          },
+        );
+        await this.commit(next);
+        return freezeMetadata(artifact);
+      });
+    } finally {
+      await unlink(staged.path).catch(() => undefined);
+    }
+  }
+
+  public async listMetadata(): Promise<readonly StoredArtifactMetadata[]> {
+    this.requireOpen();
+    return Object.freeze(
+      Object.values(this.index.artifacts)
+        .sort(
+          (left, right) =>
+            right.createdAtMs - left.createdAtMs || left.artifactId.localeCompare(right.artifactId),
+        )
+        .map((artifact) => freezeMetadata(artifact)),
+    );
   }
 
   public async getMetadata(artifactId: string): Promise<StoredArtifactMetadata> {
@@ -491,6 +571,7 @@ export class LocalArtifactStore implements ArtifactStore {
     this.closed = true;
     await this.pending;
     this.signingKey.fill(0);
+    await this.indexRepository?.close();
   }
 
   private async expireOneIfDue(artifactId: string): Promise<void> {
@@ -611,6 +692,106 @@ export class LocalArtifactStore implements ArtifactStore {
     await assertSafeRegularFile(target);
   }
 
+  private async stageStream(
+    bytes: AsyncIterable<Uint8Array>,
+    declaredSizeBytes: number,
+    expectedDigest: string,
+  ): Promise<{ readonly path: string; readonly digest: string; readonly sizeBytes: number }> {
+    await assertSafeDirectory(this.temporaryDirectory);
+    const temporaryPath = join(
+      this.temporaryDirectory,
+      `stream-${secureRandomBase64Url(this.random, 12)}.tmp`,
+    );
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    const hash = createHash("sha256");
+    let sizeBytes = 0;
+    try {
+      handle = await open(temporaryPath, "wx", 0o600);
+      for await (const chunk of bytes) {
+        if (!(chunk instanceof Uint8Array)) {
+          throw new ArtifactStoreError(
+            "ARTIFACT_METADATA_INVALID",
+            "Artifact stream chunks must be Uint8Array values.",
+          );
+        }
+        if (chunk.byteLength === 0) {
+          continue;
+        }
+        sizeBytes += chunk.byteLength;
+        if (sizeBytes > this.maxArtifactBytes) {
+          throw new ArtifactStoreError(
+            "ARTIFACT_TOO_LARGE",
+            "Artifact exceeds the configured local byte limit.",
+          );
+        }
+        if (sizeBytes > declaredSizeBytes) {
+          throw new ArtifactStoreError(
+            "ARTIFACT_SIZE_MISMATCH",
+            "Artifact bytes exceed the declared size.",
+          );
+        }
+        hash.update(chunk);
+        await handle.writeFile(chunk);
+      }
+      if (sizeBytes !== declaredSizeBytes) {
+        throw new ArtifactStoreError(
+          "ARTIFACT_SIZE_MISMATCH",
+          "Artifact bytes do not match the declared size.",
+        );
+      }
+      const digest = hash.digest("hex");
+      if (!constantTimeTextEqual(digest, expectedDigest)) {
+        throw new ArtifactStoreError(
+          "CHECKSUM_MISMATCH",
+          "Artifact bytes do not match the expected checksum.",
+        );
+      }
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await assertSafeRegularFile(temporaryPath);
+      return Object.freeze({ path: temporaryPath, digest, sizeBytes });
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      await unlink(temporaryPath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async publishStagedObject(
+    stagedPath: string,
+    digest: string,
+    sizeBytes: number,
+  ): Promise<void> {
+    await assertSafeDirectory(this.objectsDirectory);
+    await assertSafeDirectory(this.temporaryDirectory);
+    await assertSafeRegularFile(stagedPath);
+    const prefixDirectory = join(this.objectsDirectory, digest.slice(0, 2));
+    await mkdir(prefixDirectory, { recursive: true, mode: 0o700 });
+    await this.assertObjectDirectories(digest);
+    const target = this.objectPath(digest);
+    try {
+      await assertSafeRegularFile(target);
+      if ((await stat(target)).size !== sizeBytes || (await sha256File(target)) !== digest) {
+        throw new ArtifactStoreError(
+          "ARTIFACT_STORAGE_CORRUPT",
+          "A content-addressed object conflicts with its checksum.",
+        );
+      }
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw asStorageError(error);
+      }
+    }
+    try {
+      await rename(stagedPath, target);
+      await assertSafeRegularFile(target);
+    } catch (error) {
+      throw asStorageError(error);
+    }
+  }
+
   private async assertObjectDirectories(digest: string): Promise<void> {
     await assertSafeDirectory(this.objectsDirectory);
     await assertSafeDirectory(join(this.objectsDirectory, digest.slice(0, 2)));
@@ -639,7 +820,66 @@ export class LocalArtifactStore implements ArtifactStore {
       ...index,
       generation: this.index.generation + 1,
     });
-    await persistIndex(this.indexPath, this.temporaryDirectory, next, this.random);
+    if (this.indexRepository === undefined) {
+      await persistIndex(this.indexPath, this.temporaryDirectory, next, this.random);
+    } else {
+      const nextSnapshot = createRepositorySnapshot(next);
+      let committed: boolean;
+      try {
+        committed = await this.indexRepository.compareAndSet(this.index.generation, nextSnapshot);
+      } catch (error) {
+        try {
+          const observed = await this.indexRepository.load();
+          if (observed !== undefined) {
+            const recovered = parseRepositorySnapshot(observed);
+            if (
+              observed.generation === nextSnapshot.generation &&
+              constantTimeTextEqual(observed.stateSha256, nextSnapshot.stateSha256) &&
+              observed.stateJson === nextSnapshot.stateJson
+            ) {
+              this.index = recovered;
+              return;
+            }
+          }
+        } catch (recoveryError) {
+          if (
+            recoveryError instanceof ArtifactStoreError ||
+            (typeof recoveryError === "object" &&
+              recoveryError !== null &&
+              Reflect.get(recoveryError, "code") === "DATA_CORRUPT")
+          ) {
+            throw asRepositoryStorageError(recoveryError);
+          }
+        }
+        throw asRepositoryStorageError(error);
+      }
+      if (!committed) {
+        let latest: ArtifactIndexSnapshot | undefined;
+        try {
+          latest = await this.indexRepository.load();
+        } catch (error) {
+          throw asRepositoryStorageError(error);
+        }
+        if (latest === undefined) {
+          throw new ArtifactStoreError(
+            "ARTIFACT_STORAGE_CORRUPT",
+            "The durable Artifact index disappeared during a commit.",
+          );
+        }
+        const refreshed = parseRepositorySnapshot(latest);
+        if (refreshed.generation <= this.index.generation) {
+          throw new ArtifactStoreError(
+            "ARTIFACT_STORAGE_CORRUPT",
+            "The durable Artifact index rejected a current generation.",
+          );
+        }
+        this.index = refreshed;
+        throw new ArtifactStoreError(
+          "ARTIFACT_STORAGE_UNAVAILABLE",
+          "The durable Artifact index changed concurrently; retry the operation.",
+        );
+      }
+    }
     this.index = next;
   }
 
@@ -760,6 +1000,115 @@ function normalizePutArtifact(
   return { metadata, bytes, digest, context };
 }
 
+function normalizePutArtifactStream(
+  input: PutArtifactStream,
+  maxArtifactBytes: number,
+): {
+  readonly metadata: StoredArtifactMetadata;
+  readonly bytes: AsyncIterable<Uint8Array>;
+  readonly digest: string;
+  readonly context: ArtifactMutationContext;
+} {
+  assertMetadataKeys(
+    input,
+    [
+      "artifactId",
+      "taskId",
+      "producingRunId",
+      "mediaType",
+      "originalFilename",
+      "declaredSizeBytes",
+      "bytes",
+      "expectedChecksum",
+      "createdAtMs",
+      "retentionPolicy",
+      "exposurePolicy",
+      "provenance",
+      "presentation",
+      "context",
+    ],
+    ["presentation"],
+    "Artifact stream publication",
+  );
+  assertMetadataKeys(
+    input.provenance,
+    ["deviceId", "source", "workspaceId"],
+    ["workspaceId"],
+    "Artifact provenance",
+  );
+  assertMetadataKeys(input.expectedChecksum, ["algorithm", "value"], [], "Artifact checksum");
+  assertIdentifier(input.artifactId, "Artifact ID");
+  assertIdentifier(input.taskId, "Task ID");
+  assertIdentifier(input.producingRunId, "producing Run ID");
+  assertIdentifier(input.provenance.deviceId, "provenance Device ID");
+  if (input.provenance.workspaceId !== undefined) {
+    assertIdentifier(input.provenance.workspaceId, "provenance Workspace ID");
+  }
+  assertSafeText(input.provenance.source, "provenance source", 256);
+  assertSafeFilename(input.originalFilename);
+  const mediaType = normalizeMediaType(input.mediaType);
+  const context = freezeContext(input.context);
+  if (
+    typeof input.bytes !== "object" ||
+    input.bytes === null ||
+    !(Symbol.asyncIterator in input.bytes)
+  ) {
+    throw metadataInvalid("Artifact bytes must be an asynchronous byte stream.");
+  }
+  if (!Number.isSafeInteger(input.declaredSizeBytes) || input.declaredSizeBytes < 0) {
+    throw metadataInvalid("Declared Artifact size must be a non-negative safe integer.");
+  }
+  if (input.declaredSizeBytes > maxArtifactBytes) {
+    throw new ArtifactStoreError(
+      "ARTIFACT_TOO_LARGE",
+      "Artifact exceeds the configured local byte limit.",
+    );
+  }
+  if (!Number.isSafeInteger(input.createdAtMs) || input.createdAtMs < 0) {
+    throw metadataInvalid("Artifact creation time must be a non-negative safe integer.");
+  }
+  const retentionPolicy = normalizeRetention(input.retentionPolicy, input.createdAtMs);
+  const exposurePolicy = normalizeExposure(input.exposurePolicy);
+  const presentation = normalizePresentation(input.presentation, mediaType);
+  if (
+    input.expectedChecksum.algorithm !== "sha256" ||
+    !SHA256_PATTERN.test(input.expectedChecksum.value)
+  ) {
+    throw metadataInvalid("Expected checksum must be a lowercase SHA-256 digest.");
+  }
+  const provenance: StoredArtifactProvenance = Object.freeze({
+    deviceId: input.provenance.deviceId,
+    source: input.provenance.source,
+    ...(input.provenance.workspaceId === undefined
+      ? {}
+      : { workspaceId: input.provenance.workspaceId }),
+  });
+  const metadata: StoredArtifactMetadata = Object.freeze({
+    artifactId: input.artifactId,
+    taskId: input.taskId,
+    producingRunId: input.producingRunId,
+    mediaType,
+    originalFilename: input.originalFilename,
+    sizeBytes: input.declaredSizeBytes,
+    checksum: Object.freeze({
+      algorithm: "sha256",
+      value: input.expectedChecksum.value,
+    }),
+    createdAtMs: input.createdAtMs,
+    retentionPolicy,
+    exposurePolicy,
+    provenance,
+    presentation,
+    state: "available",
+  });
+  return {
+    metadata,
+    bytes: input.bytes,
+    digest: input.expectedChecksum.value,
+    context,
+  };
+}
+
 function normalizePresentation(
   requested: ArtifactPresentation | undefined,
   mediaType: string,
@@ -866,6 +1215,20 @@ function validateOptions(options: LocalArtifactStoreOptions): void {
     throw new ArtifactStoreError(
       "ARTIFACT_STORAGE_UNAVAILABLE",
       "Artifact signing key must contain at least 256 bits.",
+    );
+  }
+  if (
+    options.indexRepository !== undefined &&
+    (typeof options.indexRepository !== "object" ||
+      options.indexRepository === null ||
+      typeof options.indexRepository.load !== "function" ||
+      typeof options.indexRepository.initialize !== "function" ||
+      typeof options.indexRepository.compareAndSet !== "function" ||
+      typeof options.indexRepository.close !== "function")
+  ) {
+    throw new ArtifactStoreError(
+      "ARTIFACT_STORAGE_UNAVAILABLE",
+      "Artifact index repository is invalid.",
     );
   }
   validClockNow(options.clock);
@@ -1107,10 +1470,152 @@ function freezeMetadata(
 }
 
 function samePublication(existing: PersistedArtifact, candidate: StoredArtifactMetadata): boolean {
+  const existingMetadata = freezeMetadata(existing);
+  // A retry may receive a fresh grant after Main committed the Artifact but its
+  // completion response was lost. Preserve the first publication timestamp while
+  // comparing every immutable owner-declared field.
   return (
     existing.state === "available" &&
-    JSON.stringify(freezeMetadata(existing)) === JSON.stringify(candidate)
+    JSON.stringify({ ...existingMetadata, createdAtMs: 0 }) ===
+      JSON.stringify({ ...candidate, createdAtMs: 0 })
   );
+}
+
+async function loadOrCreateFileIndex(
+  indexPath: string,
+  temporaryDirectory: string,
+  random: ArtifactRandomSource | undefined,
+): Promise<PersistedIndex> {
+  const existing = await loadFileIndexIfPresent(indexPath);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const index = emptyIndex();
+  await persistIndex(indexPath, temporaryDirectory, index, random);
+  return index;
+}
+
+async function loadRepositoryIndex(
+  repository: ArtifactIndexRepository,
+  legacyIndexPath: string,
+): Promise<PersistedIndex> {
+  let snapshot = await repository.load();
+  if (snapshot === undefined) {
+    const legacyOrEmpty = await loadFileIndexIfPresent(legacyIndexPath);
+    snapshot = await repository.initialize(createRepositorySnapshot(legacyOrEmpty ?? emptyIndex()));
+    return parseRepositorySnapshot(snapshot);
+  }
+
+  const current = parseRepositorySnapshot(snapshot);
+  if (!isPristineEmptyIndex(current)) {
+    return current;
+  }
+  const legacy = await loadFileIndexIfPresent(legacyIndexPath);
+  if (legacy === undefined || isPristineEmptyIndex(legacy)) {
+    return current;
+  }
+
+  const migrated = Object.freeze({
+    ...legacy,
+    generation: current.generation + 1,
+  });
+  const migratedSnapshot = createRepositorySnapshot(migrated);
+  try {
+    if (await repository.compareAndSet(current.generation, migratedSnapshot)) {
+      return migrated;
+    }
+  } catch (error) {
+    const observed = await recoverExactRepositoryCommit(repository, migratedSnapshot);
+    if (observed !== undefined) {
+      return observed;
+    }
+    throw error;
+  }
+  const winner = await repository.load();
+  if (winner === undefined) {
+    throw new ArtifactStoreError(
+      "ARTIFACT_STORAGE_CORRUPT",
+      "The durable Artifact index disappeared during legacy migration.",
+    );
+  }
+  return parseRepositorySnapshot(winner);
+}
+
+async function recoverExactRepositoryCommit(
+  repository: ArtifactIndexRepository,
+  expected: ArtifactIndexSnapshot,
+): Promise<PersistedIndex | undefined> {
+  const observed = await repository.load();
+  if (observed === undefined) {
+    return undefined;
+  }
+  const recovered = parseRepositorySnapshot(observed);
+  return sameRepositorySnapshot(observed, expected) ? recovered : undefined;
+}
+
+function sameRepositorySnapshot(
+  left: ArtifactIndexSnapshot,
+  right: ArtifactIndexSnapshot,
+): boolean {
+  return (
+    left.generation === right.generation &&
+    constantTimeTextEqual(left.stateSha256, right.stateSha256) &&
+    left.stateJson === right.stateJson
+  );
+}
+
+function isPristineEmptyIndex(index: PersistedIndex): boolean {
+  return (
+    index.generation === 0 &&
+    Object.keys(index.artifacts).length === 0 &&
+    Object.keys(index.signedTokens).length === 0 &&
+    index.auditEvents.length === 0 &&
+    index.nextAuditSequence === 1
+  );
+}
+
+async function loadFileIndexIfPresent(indexPath: string): Promise<PersistedIndex | undefined> {
+  try {
+    await assertSafeRegularFile(indexPath);
+    return parseIndex(await readFile(indexPath, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw asStorageError(error);
+  }
+}
+
+function createRepositorySnapshot(index: PersistedIndex): ArtifactIndexSnapshot {
+  const stateJson = JSON.stringify(index);
+  return Object.freeze({
+    schemaVersion: 1 as const,
+    generation: index.generation,
+    stateJson,
+    stateSha256: sha256Hex(stateJson),
+  });
+}
+
+function parseRepositorySnapshot(snapshot: ArtifactIndexSnapshot): PersistedIndex {
+  if (!isRecord(snapshot)) {
+    throw corruptIndex();
+  }
+  assertExactKeys(snapshot, ["schemaVersion", "generation", "stateJson", "stateSha256"]);
+  if (
+    snapshot["schemaVersion"] !== 1 ||
+    !isNonNegativeSafeInteger(snapshot["generation"]) ||
+    typeof snapshot["stateJson"] !== "string" ||
+    typeof snapshot["stateSha256"] !== "string" ||
+    !SHA256_PATTERN.test(snapshot["stateSha256"]) ||
+    !constantTimeTextEqual(sha256Hex(snapshot["stateJson"]), snapshot["stateSha256"])
+  ) {
+    throw corruptIndex();
+  }
+  const index = parseIndex(snapshot["stateJson"]);
+  if (index.generation !== snapshot["generation"]) {
+    throw corruptIndex();
+  }
+  return index;
 }
 
 async function persistIndex(
@@ -1152,6 +1657,14 @@ async function writeAtomicFile(
     await unlink(temporaryPath).catch(() => undefined);
     throw asStorageError(error);
   }
+}
+
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
 }
 
 async function assertSafeDirectory(path: string): Promise<void> {
@@ -1561,4 +2074,21 @@ function asStorageError(error: unknown): ArtifactStoreError {
     "ARTIFACT_STORAGE_UNAVAILABLE",
     "Artifact storage operation failed.",
   );
+}
+
+function asRepositoryStorageError(error: unknown): ArtifactStoreError {
+  if (error instanceof ArtifactStoreError) {
+    return error;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    Reflect.get(error, "code") === "DATA_CORRUPT"
+  ) {
+    return new ArtifactStoreError(
+      "ARTIFACT_STORAGE_CORRUPT",
+      "The durable Artifact index failed integrity validation.",
+    );
+  }
+  return asStorageError(error);
 }

@@ -71,17 +71,14 @@ export async function closeAfterPrimaryFailure(
 async function collectCleanupFailures(
   operations: readonly MainCleanupOperation[],
 ): Promise<readonly MainCleanupFailure[]> {
-  const outcomes = await Promise.allSettled(operations.map(async (operation) => operation.close()));
   const failures: MainCleanupFailure[] = [];
-  for (const [index, outcome] of outcomes.entries()) {
-    if (outcome.status === "fulfilled") {
-      continue;
-    }
-    const operation = operations[index];
-    if (operation !== undefined) {
+  for (const operation of operations) {
+    try {
+      await operation.close();
+    } catch (error) {
       failures.push({
         operation: operation.operation,
-        error: outcome.reason as unknown,
+        error,
       });
     }
   }

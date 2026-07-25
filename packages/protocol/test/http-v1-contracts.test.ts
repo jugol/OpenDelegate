@@ -4,7 +4,10 @@ import test from "node:test";
 import Value from "typebox/value";
 
 import {
+  AuditEventListResponseSchema,
   BrowserSessionSchema,
+  ConfigurationAgentMessageRequestSchema,
+  ConfigurationAgentMessageResponseSchema,
   CreateTaskRequestSchema,
   DeviceListResponseSchema,
   LiveHealthSchema,
@@ -17,6 +20,37 @@ import {
 } from "../src/index.ts";
 
 const NOW = "2026-07-24T00:00:00.000Z";
+
+test("Configuration Agent messages are bounded and never carry raw configuration patches", () => {
+  assert.equal(
+    Value.Check(ConfigurationAgentMessageRequestSchema, {
+      message: "Help me configure the selected Device.",
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(ConfigurationAgentMessageRequestSchema, {
+      message: "Store this credential.",
+      secretValue: "must-not-cross-the-browser-boundary",
+    }),
+    false,
+  );
+
+  const response = {
+    messageId: "configuration_message_001",
+    sessionId: "configuration_session_device_main",
+    content: "I can inspect the Device and prepare a reviewable proposal.",
+    occurredAt: NOW,
+  };
+  assert.equal(Value.Check(ConfigurationAgentMessageResponseSchema, response), true);
+  assert.equal(
+    Value.Check(ConfigurationAgentMessageResponseSchema, {
+      ...response,
+      configurationPatch: [{ operation: "set", key: "policy.network-change" }],
+    }),
+    false,
+  );
+});
 
 test("owner response contracts expose only browser-safe fields", () => {
   const session = {
@@ -44,6 +78,51 @@ test("owner response contracts expose only browser-safe fields", () => {
     { recoveryCodes: ["raw-code"] },
   ]) {
     assert.equal(Value.Check(BrowserSessionSchema, { ...session, ...leakedField }), false);
+  }
+});
+
+test("Audit exposes only the bounded route-diagnosis presentation contract", () => {
+  const routeIncident = {
+    incidentId: `sha256:${"a".repeat(64)}`,
+    fingerprint: `sha256:${"b".repeat(64)}`,
+    profileRevision: `sha256:${"c".repeat(64)}`,
+    recommendation: "Check whether the private route is reachable from this Device.",
+    ownerQuestion: "Should OpenDelegate keep using the next configured route?",
+    source: "agent",
+    reasonCode: "AGENT_COMPLETED",
+  };
+  const response = {
+    events: [
+      {
+        auditId: "route_diagnosis_1",
+        source: "runtime",
+        type: "transport.route-incident.diagnosis-completed.v1",
+        occurredAt: NOW,
+        outcome: "succeeded",
+        subjectId: "device_worker",
+        deviceId: "device_worker",
+        routeIncident,
+      },
+    ],
+  };
+
+  assert.equal(Value.Check(AuditEventListResponseSchema, response), true);
+  for (const leakedField of [
+    { endpointUrl: "wss://private-main.example.test" },
+    { credentialRef: "secret://device-certificate" },
+    { attempts: [{ diagnostic: "private provider output" }] },
+  ]) {
+    assert.equal(
+      Value.Check(AuditEventListResponseSchema, {
+        events: [
+          {
+            ...response.events[0],
+            routeIncident: { ...routeIncident, ...leakedField },
+          },
+        ],
+      }),
+      false,
+    );
   }
 });
 
@@ -120,6 +199,110 @@ test("Device list exposes only explicit scheduling and runtime facts", () => {
         connection: "online",
         runtime: "healthy",
         serviceMode: "foreground",
+        lastObservation: {
+          observedAtMs: 2_000,
+          acceptedAtMs: 2_050,
+          source: "authenticated-heartbeat",
+        },
+        roles: ["main-coordinator"],
+        instructions: ["Keep release evidence immutable."],
+        facts: [
+          {
+            kind: "os-family",
+            value: "windows",
+            source: "enrollment",
+            observedAtMs: 1_000,
+            verification: "verified",
+          },
+          {
+            kind: "cpu-model",
+            value: "Example CPU",
+            source: "node-os",
+            observedAtMs: 2_000,
+            verification: "observed",
+          },
+          {
+            kind: "gpu-model",
+            value: "Example Vendor Example GPU",
+            source: "platform-probe",
+            observedAtMs: 2_000,
+            verification: "verified",
+          },
+        ],
+        capabilities: [
+          {
+            name: "codex",
+            verification: "verified",
+            observedAtMs: 2_000,
+            evidenceSource: "agent-adapter",
+            version: "0.145.0",
+          },
+        ],
+        policies: [
+          {
+            policyId: "policy_network",
+            actionCategory: "os-network-change",
+            decision: "require-approval",
+            source: "configuration",
+            effectiveScope: "device",
+          },
+        ],
+        agentAdapters: [
+          {
+            provider: "codex",
+            adapterId: "codex_app_server",
+            readiness: "ready",
+            compatibility: "tested",
+            version: "0.145.0",
+            observedAtMs: 2_000,
+          },
+        ],
+        routes: [
+          {
+            routeId: "main-local",
+            label: "Main-local",
+            priority: 0,
+            kind: "wss",
+            profileRevision: `sha256:${"a".repeat(64)}`,
+            health: "healthy",
+            lastAttempt: {
+              probeSource: "live",
+              outcome: "connected",
+              observedAtMs: 2_000,
+            },
+          },
+        ],
+        resourceLocks: [
+          {
+            resourceName: "desktop-session",
+            capacity: 1,
+            holders: [
+              {
+                taskId: "task_1",
+                runId: "run_1",
+                expiresAtMs: 10_000,
+              },
+            ],
+          },
+        ],
+        currentRuns: [
+          {
+            taskId: "task_1",
+            workOrderId: "work_order_1",
+            runId: "run_1",
+            state: "running",
+            acceptedAtMs: 2_000,
+            leaseExpiresAtMs: 10_000,
+          },
+        ],
+        capacity: {
+          activeRuns: 1,
+          maximumConcurrentRuns: 4,
+          acceptingWork: true,
+          maxOutboxEntries: 10_000,
+          outboxDepth: 2,
+        },
+        knowledgeHealth: "healthy",
       },
     ],
   };
@@ -142,6 +325,17 @@ test("Device list exposes only explicit scheduling and runtime facts", () => {
         {
           ...response.devices[0],
           capabilities: ["computer-use"],
+        },
+      ],
+    }),
+    false,
+  );
+  assert.equal(
+    Value.Check(DeviceListResponseSchema, {
+      devices: [
+        {
+          ...response.devices[0],
+          knowledgeFiles: ["private-note.md"],
         },
       ],
     }),
@@ -196,6 +390,14 @@ test("Task detail carries a bounded public timeline without event payloads", () 
     completionCriteria: ["Every gate passes."],
     constraints: [],
     selectedInputRefs: [],
+    messages: [
+      {
+        messageId: "event_message_001",
+        role: "agent",
+        content: "The release is ready for review.",
+        occurredAt: NOW,
+      },
+    ],
     events: [
       {
         eventId: "event_001",
@@ -211,6 +413,13 @@ test("Task detail carries a bounded public timeline without event payloads", () 
     Value.Check(TaskDetailSchema, {
       ...detail,
       events: [{ ...detail.events[0], payload: { password: "secret" } }],
+    }),
+    false,
+  );
+  assert.equal(
+    Value.Check(TaskDetailSchema, {
+      ...detail,
+      messages: [{ ...detail.messages[0], token: "secret" }],
     }),
     false,
   );

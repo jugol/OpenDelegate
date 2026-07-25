@@ -1,6 +1,7 @@
 import type { RedactedDiagnostic } from "@opendelegate/transport";
 
 const SAFE_CODES = new Set([
+  "AGENT_REQUIREMENT_UNAVAILABLE",
   "LEASE_EXPIRED",
   "PROCESS_CANCELLED",
   "PROCESS_FAILED",

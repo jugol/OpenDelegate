@@ -12,12 +12,15 @@ import {
   PINNED_PNPM_ARCHIVE_INTEGRITY,
   PINNED_PNPM_VERSION,
   REQUIRED_RELEASE_NODE_VERSION,
+  RELEASE_SKILL_DIRECTORIES,
   assertCleanBundleSource,
   assertPortableTree,
+  assertSupportMatrixTarget,
   collectShaBoundAttestationPaths,
   createCommittedSourceSnapshot,
   createChecksumManifest,
   createMainDeployArguments,
+  createWorkerDeployArguments,
   createPayloadManifest,
   determineSupportStatus,
   evaluateSmokeShutdown,
@@ -34,6 +37,7 @@ import {
   renderBundleReadme,
   renderUnixLauncher,
   renderWindowsLauncher,
+  renderReleaseRouter,
   resolvePackageLegalFiles,
   validateReleaseDestination,
   validateReleaseDestinationName,
@@ -41,15 +45,147 @@ import {
   verifyPinnedPnpmArchive,
   verifyRunningReleaseToolFiles,
   withCommittedSourceSnapshot,
+  writeBundleReadmes,
   writeIntegrityManifests,
   writeThirdPartyNotices,
 } from "../build-release.mjs";
+import { stageNativeReleaseAssets } from "../native-release-assets.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 const execFile = promisify(execFileCallback);
 const auditedCommit = "a".repeat(40);
 const zeroObject = "0".repeat(40);
 const changedObject = "b".repeat(40);
+
+test("release bundles carry both agent-facing installation skills", () => {
+  assert.deepEqual(RELEASE_SKILL_DIRECTORIES, ["opendelegate-init", "opendelegate-join"]);
+});
+
+test("target-native release assets use stable production paths and content hashes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-release-assets-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const sourceRoot = join(root, "source");
+  await mkdir(sourceRoot);
+
+  for (const platform of ["win32", "linux", "darwin"]) {
+    const stagingRoot = join(root, `staging-${platform}`);
+    await mkdir(stagingRoot);
+    const writeNative = async (outputRoot, filename, content) => {
+      await mkdir(outputRoot, { recursive: true });
+      const path = join(outputRoot, filename);
+      await writeFile(path, content, "utf8");
+      return path;
+    };
+    const result = await stageNativeReleaseAssets({
+      platform,
+      architecture: "x64",
+      sourceRoot,
+      stagingRoot,
+      builders: {
+        async linux({ outputRoot }) {
+          const directory = join(outputRoot, "libexec");
+          await mkdir(directory, { recursive: true });
+          const helperExecutable = join(directory, "opendelegate-linux-computer-use");
+          const fixtureExecutable = join(directory, "opendelegate-linux-computer-use-fixture");
+          await writeFile(helperExecutable, "linux-helper\n", "utf8");
+          await writeFile(fixtureExecutable, "linux-fixture\n", "utf8");
+          return { helperExecutable, fixtureExecutable };
+        },
+        async macosComputerUse({ outputRoot }) {
+          return {
+            helperExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-macos-computer-use",
+              "mac-helper\n",
+            ),
+            fixtureExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-computer-use-fixture",
+              "mac-fixture\n",
+            ),
+          };
+        },
+        async macosKeychain({ outputRoot }) {
+          return {
+            helperExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-keychain-helper",
+              "keychain-helper\n",
+            ),
+          };
+        },
+        async windows({ outputRoot }) {
+          return {
+            helperExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-windows-computer-use-helper.exe",
+              "windows-helper\n",
+            ),
+            fixtureExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-windows-computer-use-fixture.exe",
+              "windows-fixture\n",
+            ),
+          };
+        },
+        async serviceHost({ outputRoot, hostPlatform }) {
+          const suffix = hostPlatform === "win32" ? ".exe" : "";
+          return {
+            coreExecutable: await writeNative(
+              outputRoot,
+              `opendelegate-service-host${suffix}`,
+              `${hostPlatform}-core-host\n`,
+            ),
+            helperExecutable: await writeNative(
+              outputRoot,
+              `opendelegate-session-helper${suffix}`,
+              `${hostPlatform}-session-helper\n`,
+            ),
+          };
+        },
+      },
+    });
+
+    assert.equal(result.platform, platform);
+    assert.equal(result.architecture, "x64");
+    assert.equal(
+      result.components.every((component) => /^sha256:[0-9a-f]{64}$/u.test(component.sha256)),
+      true,
+    );
+    assert.equal(
+      result.components.every(
+        (component) => !component.path.includes("\\") && !component.path.startsWith("/"),
+      ),
+      true,
+    );
+    for (const component of result.components) {
+      assert.equal(
+        await readFile(join(stagingRoot, ...component.path.split("/")), "utf8"),
+        component.kind === "core-service-host"
+          ? `${platform}-core-host\n`
+          : component.kind === "session-helper-host"
+            ? `${platform}-session-helper\n`
+            : platform === "darwin" && component.kind === "secret-store-helper"
+              ? "keychain-helper\n"
+              : platform === "win32" && component.kind === "computer-use-helper"
+                ? "windows-helper\n"
+                : platform === "win32"
+                  ? "windows-fixture\n"
+                  : platform === "linux" && component.kind === "computer-use-helper"
+                    ? "linux-helper\n"
+                    : platform === "linux"
+                      ? "linux-fixture\n"
+                      : component.kind === "computer-use-helper"
+                        ? "mac-helper\n"
+                        : "mac-fixture\n",
+      );
+    }
+    const manifest = JSON.parse(
+      await readFile(join(stagingRoot, "native-components.json"), "utf8"),
+    );
+    assert.deepEqual(manifest, result);
+  }
+});
 
 function attestationLedger() {
   const reference = (path, character) => ({ path, sha256: character.repeat(64) });
@@ -238,6 +374,18 @@ test("Main deployment opts into pnpm's pinned non-injected workspace behavior", 
   ]);
 });
 
+test("Worker deployment uses the same pinned portable production layout", () => {
+  assert.deepEqual(createWorkerDeployArguments("release/apps/worker"), [
+    "--config.node-linker=hoisted",
+    "--filter",
+    "@opendelegate/worker",
+    "deploy",
+    "--legacy",
+    "--prod",
+    "release/apps/worker",
+  ]);
+});
+
 test("release deployment removes package-manager bins without following their links", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-deploy-bin-"));
   t.after(() => rm(root, { force: true, recursive: true }));
@@ -382,6 +530,31 @@ test("an incomplete ledger can only create an explicitly unsupported preview", (
     () => determineSupportStatus({ complete: false, releaseStatus: "candidate" }, true),
     /inconsistent/,
   );
+});
+
+test("release candidates are limited to the exact declared support-matrix targets", () => {
+  for (const [platform, architecture] of [
+    ["darwin", "arm64"],
+    ["linux", "x64"],
+    ["win32", "x64"],
+  ]) {
+    assert.doesNotThrow(() =>
+      assertSupportMatrixTarget(platform, architecture, "release-candidate"),
+    );
+  }
+  for (const [platform, architecture] of [
+    ["darwin", "x64"],
+    ["linux", "arm64"],
+    ["win32", "arm64"],
+  ]) {
+    assert.throws(
+      () => assertSupportMatrixTarget(platform, architecture, "release-candidate"),
+      /may create an internal preview only/,
+    );
+    assert.doesNotThrow(() =>
+      assertSupportMatrixTarget(platform, architecture, "internal-preview-complete"),
+    );
+  }
 });
 
 test("attestation diff permits only the ledger and SHA-bound verification artifacts", () => {
@@ -779,6 +952,134 @@ test("bundle guidance is launcher-first and never presents source-checkout comma
   assert.doesNotMatch(readme, /CONTRIBUTING\.md/u);
 });
 
+test("assembled bundle documentation includes complete localized launcher guidance", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-bundle-readmes-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const summary = {
+    implementation: { partial: 36 },
+    liveProof: { "blocked-external": 15, "not-run": 21 },
+  };
+  const readmes = [
+    {
+      activeLanguage: "English",
+      filename: "README.md",
+      locale: "en",
+      unsupported: /This bundle is unsupported and must not be published under a release tag/u,
+      candidate:
+        /This candidate is not a supported release until it is promoted through the documented release channel/u,
+    },
+    {
+      activeLanguage: "한국어",
+      filename: "README.ko.md",
+      locale: "ko",
+      unsupported: /이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다/u,
+      candidate: /이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다/u,
+    },
+    {
+      activeLanguage: "日本語",
+      filename: "README.ja.md",
+      locale: "ja",
+      unsupported: /このバンドルはサポート対象外であり、リリースタグで公開してはいけません/u,
+      candidate:
+        /この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません/u,
+    },
+    {
+      activeLanguage: "Français",
+      filename: "README.fr.md",
+      locale: "fr",
+      unsupported:
+        /Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release/u,
+      candidate:
+        /Ce candidat n’est pas une version prise en charge tant qu’il n’a pas été promu par le canal de publication documenté/u,
+    },
+    {
+      activeLanguage: "Español",
+      filename: "README.es.md",
+      locale: "es",
+      unsupported:
+        /Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release/u,
+      candidate:
+        /Este candidato no es una versión con soporte hasta que se promocione mediante el canal de publicación documentado/u,
+    },
+    {
+      activeLanguage: "简体中文",
+      filename: "README.zh-CN.md",
+      locale: "zh-CN",
+      unsupported: /此捆绑包不受支持，且不得在 Release tag 下发布/u,
+      candidate: /在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release/u,
+    },
+  ];
+
+  await writeBundleReadmes(
+    root,
+    "internal-preview-blocked",
+    summary,
+    "win32",
+    "arm64",
+    "0.1.0-alpha.1",
+  );
+  await writeIntegrityManifests(root);
+
+  const payload = JSON.parse(await readFile(join(root, "payload-manifest.json"), "utf8"));
+  const checksums = await readFile(join(root, "SHA256SUMS"), "utf8");
+  for (const readme of readmes) {
+    const content = await readFile(join(root, readme.filename), "utf8");
+    assert.match(
+      content,
+      new RegExp(
+        String.raw`\*\*\[${readme.activeLanguage}\]\(${readme.filename.replaceAll(".", String.raw`\.`)}\)\*\*`,
+        "u",
+      ),
+    );
+    for (const filename of readmes.map((entry) => entry.filename)) {
+      assert.match(content, new RegExp(filename.replaceAll(".", String.raw`\.`), "u"));
+    }
+    assert.match(content, readme.unsupported);
+    assert.match(content, /Support status: `internal-preview-blocked`/u);
+    assert.match(content, /opendelegate\.cmd init/u);
+    assert.match(content, /skills\/opendelegate-init\/SKILL\.md/u);
+    assert.match(content, /Implementation: partial=36/u);
+    assert.match(content, /Live proof: blocked-external=15, not-run=21/u);
+    assert.match(content, /docs\/release\/README\.md/u);
+    assert.match(content, /SECURITY\.md/u);
+    assert.match(content, /THIRD_PARTY_NOTICES\.json/u);
+    assert.equal(
+      payload.files.some((file) => file.path === readme.filename),
+      true,
+      `${readme.filename} is missing from payload-manifest.json`,
+    );
+    assert.match(
+      checksums,
+      new RegExp(String.raw`\s{2}${readme.filename.replaceAll(".", String.raw`\.`)}$`, "mu"),
+    );
+
+    const candidate = renderBundleReadme(
+      "release-candidate",
+      summary,
+      "linux",
+      "x64",
+      "0.1.0-alpha.1",
+      readme.locale,
+    );
+    assert.match(candidate, readme.candidate);
+    assert.match(candidate, /Support status: `release-candidate`/u);
+    assert.match(candidate, /\.\/opendelegate init/u);
+    assert.doesNotMatch(candidate, /INTERNAL_PREVIEW\.md/u);
+
+    const completePreview = renderBundleReadme(
+      "internal-preview-complete",
+      summary,
+      "darwin",
+      "arm64",
+      "0.1.0-alpha.1",
+      readme.locale,
+    );
+    assert.match(completePreview, readme.unsupported);
+    assert.match(completePreview, /Support status: `internal-preview-complete`/u);
+    assert.match(completePreview, /INTERNAL_PREVIEW\.md/u);
+  }
+});
+
 test("compiled Admin assets retain their complete production dependency licenses", async () => {
   const adminManifestPath = join(repositoryRoot, "apps", "admin-web", "package.json");
   const productionPackageDirectories = await listProductionPackageDirectories(adminManifestPath);
@@ -908,12 +1209,17 @@ test("integrity manifests can be regenerated after packaged smoke evidence", asy
 test("release launchers clear caller-controlled identity variables", () => {
   const windows = renderWindowsLauncher();
   const unix = renderUnixLauncher();
+  const router = renderReleaseRouter();
 
   assert.match(windows, /set "OPENDELEGATE_BUILD_ID="/u);
   assert.match(windows, /set "OPENDELEGATE_VERSION="/u);
   assert.doesNotMatch(windows, /release-candidate|0\.1\.0/u);
   assert.match(unix, /unset OPENDELEGATE_BUILD_ID OPENDELEGATE_VERSION/u);
   assert.doesNotMatch(unix, /export OPENDELEGATE_(?:BUILD_ID|VERSION)/u);
+  assert.match(windows, /apps\\launcher\\opendelegate\.mjs/u);
+  assert.match(unix, /apps\/launcher\/opendelegate\.mjs/u);
+  assert.match(router, /arguments_\[0\] === "worker"/u);
+  assert.match(router, /apps", "worker", "opendelegate-worker\.mjs/u);
 });
 
 test("release smoke accepts only a natural zero exit with the shutdown marker", () => {

@@ -217,6 +217,14 @@ function validateProjection(projection: TaskChannelProjection): void {
     throw invalidProjection();
   }
   if (
+    projection.sourceEventId !== undefined &&
+    (projection.sourceEventId.length === 0 ||
+      projection.sourceEventId.length > 160 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(projection.sourceEventId))
+  ) {
+    throw invalidProjection();
+  }
+  if (
     projection.artifact !== undefined &&
     (projection.artifact.label.trim().length === 0 ||
       projection.artifact.label.length > 38 ||

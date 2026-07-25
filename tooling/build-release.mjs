@@ -21,6 +21,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 
 import { auditReleaseEvidence, summarizeReleaseEvidence } from "./check-release-evidence.mjs";
+import { stageNativeReleaseAssets } from "./native-release-assets.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const releaseToolRoot = resolve(dirname(currentFile), "..");
@@ -86,6 +87,7 @@ const officialRuntimeArchives = new Map([
 ]);
 const supportedPlatforms = new Set(["darwin", "linux", "win32"]);
 const supportedArchitectures = new Set(["arm64", "x64"]);
+const releaseCandidateTargets = new Set(["darwin-arm64", "linux-x64", "win32-x64"]);
 const curatedRuntimeLicenseFiles = new Map([
   [
     "abstract-logging@2.0.1",
@@ -100,6 +102,7 @@ const attestationEvidencePrefix = "docs/release/evidence/";
 const fullGitCommitPattern = /^[0-9a-f]{40}$/;
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const regularFileMode = "100644";
+export const RELEASE_SKILL_DIRECTORIES = Object.freeze(["opendelegate-init", "opendelegate-join"]);
 
 export async function isDirectReleaseInvocation(invokedPath, modulePath = currentFile) {
   if (invokedPath === undefined) {
@@ -166,35 +169,191 @@ export function parseReleaseArguments(values) {
   return { destination, help: false, internalPreview };
 }
 
+const bundleReadmeLanguages = Object.freeze([
+  Object.freeze({ filename: "README.md", label: "English", locale: "en" }),
+  Object.freeze({ filename: "README.ko.md", label: "한국어", locale: "ko" }),
+  Object.freeze({ filename: "README.ja.md", label: "日本語", locale: "ja" }),
+  Object.freeze({ filename: "README.fr.md", label: "Français", locale: "fr" }),
+  Object.freeze({ filename: "README.es.md", label: "Español", locale: "es" }),
+  Object.freeze({ filename: "README.zh-CN.md", label: "简体中文", locale: "zh-CN" }),
+]);
+
+const bundleReadmeCopy = Object.freeze({
+  en: Object.freeze({
+    agentStep:
+      "Ask Codex, Claude, or another capable local agent to follow\n   `skills/opendelegate-init/SKILL.md`.",
+    candidateWarning:
+      "This candidate is not a supported release until it is promoted through the documented release channel.",
+    cliIntroduction: "For deterministic CLI inspection:",
+    documentation:
+      "See `docs/release/README.md` for release semantics, `SECURITY.md` for private\nvulnerability reporting, and `THIRD_PARTY_NOTICES.json` for the complete bundled\ndependency legal inventory.",
+    integrity:
+      "Verify `SHA256SUMS` against a digest obtained through a trusted publication channel\nbefore relying on the payload. The enclosed manifest proves only internal\nconsistency, not publisher identity.",
+    languageLabel: "Languages",
+    ledgerIntroduction: "The acceptance ledger state recorded during assembly was:",
+    packageDescription: (target) =>
+      `This directory is a self-contained, platform-specific OpenDelegate bundle for\n${target}. It includes its audited Node.js runtime; do not install pnpm or run\nsource-checkout commands here.`,
+    previewTitle: "unsupported internal preview",
+    previewWarning:
+      "Read `INTERNAL_PREVIEW.md`. This bundle is unsupported and must not be published under a release tag.",
+    candidateTitle: "unpublished release candidate",
+    startHeading: "Start with an agent",
+    stateStep:
+      "Keep runtime state, databases, credentials, logs, and generated Artifacts outside\n   this bundle.",
+  }),
+  ko: Object.freeze({
+    agentStep:
+      "Codex, Claude 또는 기능을 갖춘 다른 로컬 Agent에게\n   `skills/opendelegate-init/SKILL.md`를 따르도록 요청하세요.",
+    candidateWarning:
+      "이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다.",
+    cliIntroduction: "결정적인 CLI 인터페이스를 확인하려면 다음을 사용하세요.",
+    documentation:
+      "릴리스 의미는 `docs/release/README.md`, 비공개 취약점 신고 방법은 `SECURITY.md`,\n번들된 의존성의 전체 법적 목록은 `THIRD_PARTY_NOTICES.json`을 확인하세요.",
+    integrity:
+      "이 payload를 신뢰하기 전에 신뢰할 수 있는 배포 채널에서 얻은 digest와\n`SHA256SUMS`를 대조하세요. 포함된 manifest는 내부 일관성만 증명하며 게시자 신원은\n증명하지 않습니다.",
+    languageLabel: "언어",
+    ledgerIntroduction: "조립 시 기록된 acceptance ledger 상태는 다음과 같습니다.",
+    packageDescription: (target) =>
+      `이 디렉터리는 ${target}용 자체 완결형 플랫폼별 OpenDelegate 번들입니다.\n감사된 Node.js runtime이 포함되어 있으므로 여기에서 pnpm을 설치하거나 source checkout\n명령을 실행하지 마세요.`,
+    previewTitle: "지원되지 않는 내부 프리뷰",
+    previewWarning:
+      "`INTERNAL_PREVIEW.md`를 먼저 읽으세요. 이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다.",
+    candidateTitle: "게시되지 않은 릴리스 후보",
+    startHeading: "Agent로 시작하기",
+    stateStep:
+      "runtime 상태, 데이터베이스, 자격 증명, 로그 및 생성된 Artifact는 이 번들 밖에\n   보관하세요.",
+  }),
+  ja: Object.freeze({
+    agentStep:
+      "Codex、Claude、または対応可能な別のローカル Agent に\n   `skills/opendelegate-init/SKILL.md` の手順を実行するよう依頼してください。",
+    candidateWarning:
+      "この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません。",
+    cliIntroduction: "決定的な CLI インターフェースを確認するには、次を実行します。",
+    documentation:
+      "リリースの意味は `docs/release/README.md`、非公開の脆弱性報告は `SECURITY.md`、\nバンドルされた依存関係の完全な法的一覧は `THIRD_PARTY_NOTICES.json` を確認してください。",
+    integrity:
+      "この payload を信頼する前に、信頼できる公開チャネルから取得した digest と\n`SHA256SUMS` を照合してください。同梱の manifest が証明するのは内部整合性のみで、\n公開者の身元ではありません。",
+    languageLabel: "言語",
+    ledgerIntroduction: "アセンブリ時に記録された acceptance ledger の状態は次のとおりです。",
+    packageDescription: (target) =>
+      `このディレクトリは ${target} 向けの自己完結型プラットフォーム別 OpenDelegate\nバンドルです。監査済みの Node.js runtime が含まれているため、ここで pnpm をインストールしたり\nsource checkout 用のコマンドを実行したりしないでください。`,
+    previewTitle: "サポート対象外の内部プレビュー",
+    previewWarning:
+      "`INTERNAL_PREVIEW.md` を先に読んでください。このバンドルはサポート対象外であり、リリースタグで公開してはいけません。",
+    candidateTitle: "未公開のリリース候補",
+    startHeading: "Agent から始める",
+    stateStep:
+      "runtime 状態、データベース、認証情報、ログ、生成された Artifact はこのバンドルの\n   外に保存してください。",
+  }),
+  fr: Object.freeze({
+    agentStep:
+      "Demandez à Codex, Claude ou à un autre Agent local compatible de suivre\n   `skills/opendelegate-init/SKILL.md`.",
+    candidateWarning:
+      "Ce candidat n’est pas une version prise en charge tant qu’il n’a pas été promu par le canal de publication documenté.",
+    cliIntroduction: "Pour inspecter l’interface CLI déterministe :",
+    documentation:
+      "Consultez `docs/release/README.md` pour la sémantique des releases, `SECURITY.md`\npour signaler une vulnérabilité en privé et `THIRD_PARTY_NOTICES.json` pour\nl’inventaire juridique complet des dépendances incluses.",
+    integrity:
+      "Avant d’utiliser ce payload, comparez `SHA256SUMS` à un digest obtenu par un canal\nde publication fiable. Le manifest inclus prouve uniquement la cohérence interne,\npas l’identité de l’éditeur.",
+    languageLabel: "Langues",
+    ledgerIntroduction: "L’état de l’acceptance ledger enregistré pendant l’assemblage était :",
+    packageDescription: (target) =>
+      `Ce répertoire contient un bundle OpenDelegate autonome et propre à la plateforme\n${target}. Il inclut son runtime Node.js audité ; n’installez pas pnpm et n’exécutez\npas ici de commandes destinées au source checkout.`,
+    previewTitle: "aperçu interne non pris en charge",
+    previewWarning:
+      "Lisez d’abord `INTERNAL_PREVIEW.md`. Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release.",
+    candidateTitle: "candidat de version non publié",
+    startHeading: "Démarrer avec un Agent",
+    stateStep:
+      "Conservez l’état du runtime, les bases de données, les identifiants, les logs et les\n   Artifacts générés en dehors de ce bundle.",
+  }),
+  es: Object.freeze({
+    agentStep:
+      "Pide a Codex, Claude u otro Agent local compatible que siga\n   `skills/opendelegate-init/SKILL.md`.",
+    candidateWarning:
+      "Este candidato no es una versión con soporte hasta que se promocione mediante el canal de publicación documentado.",
+    cliIntroduction: "Para inspeccionar la interfaz CLI determinista:",
+    documentation:
+      "Consulta `docs/release/README.md` para conocer la semántica de las releases,\n`SECURITY.md` para informar de vulnerabilidades en privado y\n`THIRD_PARTY_NOTICES.json` para ver el inventario legal completo de las dependencias incluidas.",
+    integrity:
+      "Antes de confiar en este payload, compara `SHA256SUMS` con un digest obtenido por\nun canal de publicación fiable. El manifest incluido solo demuestra la coherencia\ninterna, no la identidad de quien lo publica.",
+    languageLabel: "Idiomas",
+    ledgerIntroduction: "El estado del acceptance ledger registrado durante el ensamblado fue:",
+    packageDescription: (target) =>
+      `Este directorio contiene un bundle OpenDelegate autónomo y específico para\n${target}. Incluye su runtime Node.js auditado; no instales pnpm ni ejecutes aquí\ncomandos propios del source checkout.`,
+    previewTitle: "vista previa interna sin soporte",
+    previewWarning:
+      "Lee primero `INTERNAL_PREVIEW.md`. Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release.",
+    candidateTitle: "candidato de versión no publicado",
+    startHeading: "Empezar con un Agent",
+    stateStep:
+      "Mantén el estado del runtime, las bases de datos, las credenciales, los logs y los\n   Artifacts generados fuera de este bundle.",
+  }),
+  "zh-CN": Object.freeze({
+    agentStep:
+      "请让 Codex、Claude 或其他具备相应能力的本地 Agent 按照\n   `skills/opendelegate-init/SKILL.md` 操作。",
+    candidateWarning: "在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release。",
+    cliIntroduction: "如需检查确定性的 CLI 界面，请运行：",
+    documentation:
+      "Release 语义请参阅 `docs/release/README.md`，私下报告安全漏洞请参阅\n`SECURITY.md`，随附依赖项的完整法律清单请参阅 `THIRD_PARTY_NOTICES.json`。",
+    integrity:
+      "在信任此 payload 之前，请使用从可信发布渠道获得的 digest 校验 `SHA256SUMS`。\n随附的 manifest 只能证明内部一致性，不能证明发布者身份。",
+    languageLabel: "语言",
+    ledgerIntroduction: "组装时记录的 acceptance ledger 状态如下：",
+    packageDescription: (target) =>
+      `此目录是面向 ${target} 的自包含 OpenDelegate 平台捆绑包，其中包含经过审计的\nNode.js runtime；请勿在此安装 pnpm，也不要运行面向 source checkout 的命令。`,
+    previewTitle: "不受支持的内部预览版",
+    previewWarning:
+      "请先阅读 `INTERNAL_PREVIEW.md`。此捆绑包不受支持，且不得在 Release tag 下发布。",
+    candidateTitle: "未发布的候选版本",
+    startHeading: "从 Agent 开始",
+    stateStep: "请将 runtime 状态、数据库、凭据、日志和生成的 Artifact 保存在此捆绑包之外。",
+  }),
+});
+
+function renderBundleReadmeLanguageNavigation(locale) {
+  const copy = bundleReadmeCopy[locale];
+  return `${copy.languageLabel}: ${bundleReadmeLanguages
+    .map((language) => {
+      const link = `[${language.label}](${language.filename})`;
+      return language.locale === locale ? `**${link}**` : link;
+    })
+    .join(" · ")}`;
+}
+
 export function renderBundleReadme(
   supportStatus,
   summary,
   platform = process.platform,
   architecture = process.arch,
   productVersion,
+  locale = "en",
 ) {
   assertProductVersion(productVersion);
+  const copy = bundleReadmeCopy[locale];
+  if (copy === undefined) {
+    throw new Error(`Unsupported bundle README locale: ${String(locale)}.`);
+  }
   const preview = supportStatus.startsWith("internal-preview");
   const launcher = platform === "win32" ? "opendelegate.cmd" : "./opendelegate";
-  const statusLabel = preview ? "unsupported internal preview" : "unpublished release candidate";
-  const previewStep = preview
-    ? "1. Read `INTERNAL_PREVIEW.md`. This bundle is unsupported and must not be published under a release tag.\n2."
-    : "1. This candidate is not a supported release until it is promoted through the documented release channel.\n2.";
+  const statusLabel = preview ? copy.previewTitle : copy.candidateTitle;
+  const firstStep = preview ? copy.previewWarning : copy.candidateWarning;
 
   return `# OpenDelegate ${productVersion} ${statusLabel}
 
-This directory is a self-contained, platform-specific OpenDelegate bundle for
-${platform}/${architecture}. It includes its audited Node.js runtime; do not install
-pnpm or run source-checkout commands here.
+${renderBundleReadmeLanguageNavigation(locale)}
 
-## Start with an agent
+${copy.packageDescription(`${platform}/${architecture}`)}
 
-${previewStep} Ask Codex, Claude, or another capable local agent to follow
-   \`skills/opendelegate-init/SKILL.md\`.
-3. Keep runtime state, databases, credentials, logs, and generated Artifacts outside
-   this bundle.
+Support status: \`${supportStatus}\`.
 
-For deterministic CLI inspection:
+## ${copy.startHeading}
+
+1. ${firstStep}
+2. ${copy.agentStep}
+3. ${copy.stateStep}
+
+${copy.cliIntroduction}
 
 \`\`\`text
 ${launcher} help
@@ -202,19 +361,41 @@ ${launcher} init
 ${launcher} status
 \`\`\`
 
-The acceptance ledger state recorded during assembly was:
+${copy.ledgerIntroduction}
 
 - Implementation: ${formatCounts(summary.implementation)}
 - Live proof: ${formatCounts(summary.liveProof)}
 
-Verify \`SHA256SUMS\` against a digest obtained through a trusted publication channel
-before relying on the payload. The enclosed manifest proves only internal
-consistency, not publisher identity.
+${copy.integrity}
 
-See \`docs/release/README.md\` for release semantics, \`SECURITY.md\` for private
-vulnerability reporting, and \`THIRD_PARTY_NOTICES.json\` for the complete bundled
-dependency legal inventory.
+${copy.documentation}
 `;
+}
+
+export async function writeBundleReadmes(
+  staging,
+  supportStatus,
+  summary,
+  platform = process.platform,
+  architecture = process.arch,
+  productVersion,
+) {
+  await Promise.all(
+    bundleReadmeLanguages.map((language) =>
+      writeFile(
+        join(staging, language.filename),
+        renderBundleReadme(
+          supportStatus,
+          summary,
+          platform,
+          architecture,
+          productVersion,
+          language.locale,
+        ),
+        "utf8",
+      ),
+    ),
+  );
 }
 
 export function validateReleaseDestination(sourceRoot, destination) {
@@ -262,6 +443,17 @@ export function determineSupportStatus(summary, internalPreview) {
     );
   }
   return "internal-preview-blocked";
+}
+
+export function assertSupportMatrixTarget(platform, architecture, supportStatus) {
+  if (
+    supportStatus === "release-candidate" &&
+    !releaseCandidateTargets.has(`${platform}-${architecture}`)
+  ) {
+    throw new Error(
+      `Release candidates are limited to the declared support-matrix targets; ${platform}-${architecture} may create an internal preview only.`,
+    );
+  }
 }
 
 export function collectShaBoundAttestationPaths(ledger) {
@@ -735,6 +927,7 @@ export async function buildRelease(options) {
   }
   const summary = summarizeReleaseEvidence(ledger);
   const supportStatus = determineSupportStatus(summary, options.internalPreview);
+  assertSupportMatrixTarget(process.platform, process.arch, supportStatus);
   const provenance =
     supportStatus === "release-candidate"
       ? await inspectReleaseCandidateProvenance(repositoryRoot, ledger, source)
@@ -917,6 +1110,12 @@ async function assembleRelease({
     pnpmCli: assemblyPnpmCli,
   });
   await removePackageManagerBinDirectories(join(mainDirectory, "node_modules"));
+  const workerDirectory = join(staging, "apps", "worker");
+  await mkdir(workerDirectory, { recursive: true });
+  await runCommand("pnpm", createWorkerDeployArguments(workerDirectory), assemblySourceRoot, {
+    pnpmCli: assemblyPnpmCli,
+  });
+  await removePackageManagerBinDirectories(join(workerDirectory, "node_modules"));
 
   await bundle({
     absWorkingDir: assemblySourceRoot,
@@ -932,6 +1131,56 @@ async function assembleRelease({
     platform: "node",
     target: "node24.18",
   });
+  await bundle({
+    absWorkingDir: assemblySourceRoot,
+    banner: {
+      js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    },
+    bundle: true,
+    entryPoints: ["apps/worker/src/cli.ts"],
+    external: ["better-sqlite3"],
+    format: "esm",
+    logLevel: "info",
+    outfile: join(workerDirectory, "opendelegate-worker.mjs"),
+    platform: "node",
+    target: "node24.18",
+  });
+  const serviceHostExternalDependencies = [
+    "@node-rs/argon2",
+    "@node-rs/argon2-*",
+    "better-sqlite3",
+    "pg",
+  ];
+  for (const directory of [mainDirectory, workerDirectory]) {
+    await bundle({
+      absWorkingDir: assemblySourceRoot,
+      banner: {
+        js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+      },
+      bundle: true,
+      entryPoints: ["apps/service-host/src/core-entry.ts"],
+      external: serviceHostExternalDependencies,
+      format: "esm",
+      logLevel: "info",
+      outfile: join(directory, "opendelegate-service-host.mjs"),
+      platform: "node",
+      target: "node24.18",
+    });
+    await bundle({
+      absWorkingDir: assemblySourceRoot,
+      banner: {
+        js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+      },
+      bundle: true,
+      entryPoints: ["apps/service-host/src/helper-entry.ts"],
+      external: serviceHostExternalDependencies,
+      format: "esm",
+      logLevel: "info",
+      outfile: join(directory, "opendelegate-session-helper.mjs"),
+      platform: "node",
+      target: "node24.18",
+    });
+  }
 
   const adminTarget = join(staging, "apps", "admin-web", "dist");
   await mkdir(dirname(adminTarget), { recursive: true });
@@ -939,13 +1188,22 @@ async function assembleRelease({
     recursive: true,
   });
 
+  const nativeComponents = await stageNativeReleaseAssets({
+    platform: process.platform,
+    architecture: process.arch,
+    sourceRoot: assemblySourceRoot,
+    stagingRoot: staging,
+  });
   await copyReleaseMaterials(staging, assemblySourceRoot);
   const runtimeProvenance = await copyRuntime(staging, assemblySourceRoot);
-  await writeThirdPartyNotices(staging, mainDirectory, assemblySourceRoot);
-  await writeFile(
-    join(staging, "README.md"),
-    renderBundleReadme(supportStatus, summary, process.platform, process.arch, productVersion),
-    "utf8",
+  await writeThirdPartyNotices(staging, mainDirectory, assemblySourceRoot, workerDirectory);
+  await writeBundleReadmes(
+    staging,
+    supportStatus,
+    summary,
+    process.platform,
+    process.arch,
+    productVersion,
   );
 
   const buildId = createBuildId(source, supportStatus);
@@ -976,6 +1234,7 @@ async function assembleRelease({
     dependencyLockSha256: await sha256File(join(assemblySourceRoot, "pnpm-lock.yaml")),
     sourcePackageManifestSha256: await sha256File(join(assemblySourceRoot, "package.json")),
     runtimeExternals: await readRuntimeExternalVersions(assemblySourceRoot),
+    nativeComponents,
     buildCommit: provenance.buildCommit,
     auditedSourceCommit: provenance.auditedSourceCommit,
     changedAttestationPaths: provenance.changedAttestationPaths,
@@ -993,7 +1252,9 @@ async function assembleRelease({
       complete: summary.complete,
     },
     entrypoints:
-      process.platform === "win32" ? ["opendelegate.cmd"] : ["opendelegate", "opendelegate.cmd"],
+      process.platform === "win32"
+        ? ["opendelegate.cmd", "opendelegate-worker.cmd"]
+        : ["opendelegate", "opendelegate-worker", "opendelegate.cmd", "opendelegate-worker.cmd"],
     fileManifest: "payload-manifest.json",
     checksumManifest: "SHA256SUMS",
   };
@@ -1042,6 +1303,18 @@ export function createMainDeployArguments(mainDirectory) {
     "--legacy",
     "--prod",
     mainDirectory,
+  ];
+}
+
+export function createWorkerDeployArguments(workerDirectory) {
+  return [
+    "--config.node-linker=hoisted",
+    "--filter",
+    "@opendelegate/worker",
+    "deploy",
+    "--legacy",
+    "--prod",
+    workerDirectory,
   ];
 }
 
@@ -1096,11 +1369,11 @@ async function copyReleaseMaterials(staging, sourceRoot) {
     await copyFile(join(sourceRoot, file), join(staging, file));
   }
   await cp(join(sourceRoot, "docs"), join(staging, "docs"), { recursive: true });
-  await cp(
-    join(sourceRoot, "skills", "opendelegate-init"),
-    join(staging, "skills", "opendelegate-init"),
-    { recursive: true },
-  );
+  for (const skill of RELEASE_SKILL_DIRECTORIES) {
+    await cp(join(sourceRoot, "skills", skill), join(staging, "skills", skill), {
+      recursive: true,
+    });
+  }
 }
 
 async function copyRuntime(staging, sourceRoot) {
@@ -1185,11 +1458,22 @@ ${input.shasumsUrl}
   }
 }
 
-export async function writeThirdPartyNotices(staging, mainDirectory, sourceRoot = repositoryRoot) {
+export async function writeThirdPartyNotices(
+  staging,
+  mainDirectory,
+  sourceRoot = repositoryRoot,
+  workerDirectory,
+) {
   const packages = [];
-  const nodeModules = join(mainDirectory, "node_modules");
-  for (const packageDirectory of await listRuntimePackageDirectories(nodeModules)) {
-    await addPackageNotice(packages, packageDirectory, staging);
+  const runtimeDirectories = [
+    mainDirectory,
+    ...(workerDirectory === undefined ? [] : [workerDirectory]),
+  ];
+  for (const runtimeDirectory of runtimeDirectories) {
+    const nodeModules = join(runtimeDirectory, "node_modules");
+    for (const packageDirectory of await listRuntimePackageDirectories(nodeModules)) {
+      await addPackageNotice(packages, packageDirectory, staging);
+    }
   }
   const adminManifestPath = join(sourceRoot, "apps", "admin-web", "package.json");
   for (const packageDirectory of await listProductionPackageDirectories(adminManifestPath)) {
@@ -1558,7 +1842,7 @@ export function renderWindowsLauncher() {
   return `@echo off\r
 set "OPENDELEGATE_BUILD_ID="\r
 set "OPENDELEGATE_VERSION="\r
-"%~dp0runtime\\node.exe" "%~dp0apps\\main\\opendelegate.mjs" %*\r
+"%~dp0runtime\\node.exe" "%~dp0apps\\launcher\\opendelegate.mjs" %*\r
 `;
 }
 
@@ -1566,17 +1850,53 @@ export function renderUnixLauncher() {
   return `#!/bin/sh
 unset OPENDELEGATE_BUILD_ID OPENDELEGATE_VERSION
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$ROOT_DIR/runtime/node" "$ROOT_DIR/apps/main/opendelegate.mjs" "$@"
+exec "$ROOT_DIR/runtime/node" "$ROOT_DIR/apps/launcher/opendelegate.mjs" "$@"
+`;
+}
+
+export function renderReleaseRouter() {
+  return `import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const arguments_ = process.argv.slice(2);
+const worker = arguments_[0] === "worker";
+const target = worker
+  ? join(root, "apps", "worker", "opendelegate-worker.mjs")
+  : join(root, "apps", "main", "opendelegate.mjs");
+process.argv = [process.execPath, target, ...(worker ? arguments_.slice(1) : arguments_)];
+await import(pathToFileURL(target).href);
 `;
 }
 
 async function writeLaunchers(staging) {
+  const launcherDirectory = join(staging, "apps", "launcher");
+  await mkdir(launcherDirectory, { recursive: true });
+  await writeFile(join(launcherDirectory, "opendelegate.mjs"), renderReleaseRouter(), "utf8");
   await writeFile(join(staging, "opendelegate.cmd"), renderWindowsLauncher(), "utf8");
+  await writeFile(
+    join(staging, "opendelegate-worker.cmd"),
+    renderWindowsLauncher().replace(
+      '"%~dp0apps\\launcher\\opendelegate.mjs" %*',
+      '"%~dp0apps\\launcher\\opendelegate.mjs" worker %*',
+    ),
+    "utf8",
+  );
 
   if (process.platform !== "win32") {
     const path = join(staging, "opendelegate");
     await writeFile(path, renderUnixLauncher(), "utf8");
     await chmod(path, 0o755);
+    const workerPath = join(staging, "opendelegate-worker");
+    await writeFile(
+      workerPath,
+      renderUnixLauncher().replace(
+        '"$ROOT_DIR/apps/launcher/opendelegate.mjs" "$@"',
+        '"$ROOT_DIR/apps/launcher/opendelegate.mjs" worker "$@"',
+      ),
+      "utf8",
+    );
+    await chmod(workerPath, 0o755);
   }
 }
 
@@ -1601,7 +1921,8 @@ export function evaluateSmokeShutdown(input) {
 async function smokeBundle(staging, buildId, productVersion) {
   assertProductVersion(productVersion);
   const runtime = join(staging, "runtime", process.platform === "win32" ? "node.exe" : "node");
-  const entrypoint = join(staging, "apps", "main", "opendelegate.mjs");
+  const entrypoint = join(staging, "apps", "launcher", "opendelegate.mjs");
+  const workerEntrypoint = join(staging, "apps", "worker", "opendelegate-worker.mjs");
   const releaseEnvironment = {
     ...process.env,
     OPENDELEGATE_BUILD_ID: "caller-controlled-release-candidate",
@@ -1615,12 +1936,67 @@ async function smokeBundle(staging, buildId, productVersion) {
   if (!result.stdout.includes("Runtime state and credentials are never written")) {
     throw new Error("The packaged CLI help smoke test returned an unexpected result.");
   }
+  const backupHelp = await runCommand(runtime, [entrypoint, "backup", "help"], staging, {
+    capture: true,
+    environment: releaseEnvironment,
+  });
+  if (
+    !backupHelp.stdout.includes("Main metadata backup") ||
+    !backupHelp.stdout.includes("new absent target home")
+  ) {
+    throw new Error("The packaged backup CLI help smoke test returned an unexpected result.");
+  }
+  const serviceHelp = await runCommand(runtime, [entrypoint, "service", "help"], staging, {
+    capture: true,
+    environment: releaseEnvironment,
+  });
+  if (
+    !serviceHelp.stdout.includes("native service lifecycle") ||
+    !serviceHelp.stdout.includes("require an approved platform-specific")
+  ) {
+    throw new Error("The packaged service CLI help smoke test returned an unexpected result.");
+  }
   const version = await runCommand(runtime, [entrypoint, "version"], staging, {
     capture: true,
     environment: releaseEnvironment,
   });
   if (version.stdout.trim() !== `OpenDelegate ${productVersion}`) {
     throw new Error("The packaged CLI version smoke returned an unexpected result.");
+  }
+  const workerHelp = await runCommand(runtime, [entrypoint, "worker", "help"], staging, {
+    capture: true,
+    environment: releaseEnvironment,
+  });
+  if (
+    !workerHelp.stdout.includes("opendelegate worker join --grant-file") ||
+    !workerHelp.stdout.includes("never accepted in argv")
+  ) {
+    throw new Error("The packaged Worker CLI help smoke returned an unexpected result.");
+  }
+  const workerVersion = await runCommand(runtime, [workerEntrypoint, "version"], staging, {
+    capture: true,
+    environment: releaseEnvironment,
+  });
+  if (workerVersion.stdout.trim() !== `OpenDelegate Worker ${productVersion}`) {
+    throw new Error("The packaged Worker CLI version smoke returned an unexpected result.");
+  }
+  const workerSmokeHome = await mkdtemp(join(dirname(staging), ".od-worker-home-"));
+  try {
+    const workerStatus = await runCommand(
+      runtime,
+      [entrypoint, "worker", "status", "--home", workerSmokeHome],
+      staging,
+      {
+        capture: true,
+        environment: releaseEnvironment,
+      },
+    );
+    const workerStatusBody = JSON.parse(workerStatus.stdout);
+    if (workerStatusBody?.enrolled !== false || workerStatusBody?.home !== workerSmokeHome) {
+      throw new Error("The packaged Worker unenrolled status smoke was invalid.");
+    }
+  } finally {
+    await rm(workerSmokeHome, { force: true, recursive: true });
   }
 
   const smokeHome = await mkdtemp(join(dirname(staging), ".od-home-"));
@@ -1787,6 +2163,11 @@ async function smokeBundle(staging, buildId, productVersion) {
     productVersion,
     checks: {
       cliHelp: "passed",
+      backupCliHelp: "passed",
+      serviceCliHelp: "passed",
+      workerCliHelp: "passed",
+      workerCliVersion: "passed",
+      workerUnenrolledStatus: "passed",
       cleanHomeInitialization: "passed",
       mainHealth: "passed",
       adminStaticApp: "passed",

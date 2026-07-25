@@ -107,7 +107,25 @@ export class OwnerAuth {
   public async issueInitialClaim(input: {
     readonly channel: LocalClaimChannel;
   }): Promise<IssuedInitialClaim> {
-    assertLocalClaimChannel(input.channel);
+    return this.createInitialClaim(input.channel, false);
+  }
+
+  /**
+   * Replaces an unconsumed claim after the caller has proved exclusive ownership
+   * of the local bootstrap runtime. This is only for pre-owner crash recovery:
+   * it never resets an existing owner.
+   */
+  public async replaceInitialClaim(input: {
+    readonly channel: LocalClaimChannel;
+  }): Promise<IssuedInitialClaim> {
+    return this.createInitialClaim(input.channel, true);
+  }
+
+  private async createInitialClaim(
+    channel: LocalClaimChannel,
+    replaceExisting: boolean,
+  ): Promise<IssuedInitialClaim> {
+    assertLocalClaimChannel(channel);
     const claimToken = randomToken(this.random, 32);
 
     const claim = await this.repository.transaction(async (transaction) => {
@@ -116,11 +134,15 @@ export class OwnerAuth {
         throw claimInvalid();
       }
       const current = await transaction.getInitialClaim();
-      if (current !== null && current.expiresAt > acceptedAt) {
+      const currentIsActive = current !== null && current.expiresAt > acceptedAt;
+      if (currentIsActive && !replaceExisting) {
         throw new OwnerAuthError(
           "CLAIM_ALREADY_ACTIVE",
           "An unexpired local owner claim is already active.",
         );
+      }
+      if (replaceExisting && current === null) {
+        throw claimInvalid();
       }
       const nextClaim = {
         tokenDigest: sha256Digest(claimToken),
@@ -128,7 +150,12 @@ export class OwnerAuth {
         expiresAt: acceptedAt + CLAIM_TTL_MS,
       };
       await transaction.setInitialClaim(nextClaim);
-      await transaction.appendAuditRecord(this.auditRecord("owner.auth.claim-issued", acceptedAt));
+      await transaction.appendAuditRecord(
+        this.auditRecord(
+          replaceExisting ? "owner.auth.claim-replaced" : "owner.auth.claim-issued",
+          acceptedAt,
+        ),
+      );
       return nextClaim;
     });
 

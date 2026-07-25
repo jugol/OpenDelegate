@@ -180,6 +180,40 @@ test("atomically creates and updates a qualifying durable Device-specific note",
   assert.deepEqual(await readdir(join(root, "procedures")), ["gpu-reset.md"]);
 });
 
+test("abandons an upsert when Run authority becomes stale immediately before commit", async (context) => {
+  const root = await createKnowledgeRoot(context);
+  const service = new LocalKnowledgeService({ root });
+  await service.rebuild();
+  let commitChecks = 0;
+
+  await assert.rejects(
+    service.upsertNote(
+      {
+        noteId: "procedures/revoked.md",
+        contentKind: "durable-device-knowledge",
+        content: "# Revoked\n\nThis note must never become visible.",
+        qualification: {
+          deviceSpecific: true,
+          repeatedlyUseful: true,
+          expensiveToRediscover: true,
+          actionable: true,
+        },
+      },
+      {
+        beforeCommit: async () => {
+          commitChecks += 1;
+          throw new Error("stale Run authority");
+        },
+      },
+    ),
+    /stale Run authority/u,
+  );
+
+  assert.equal(commitChecks, 1);
+  assert.deepEqual(await readdir(join(root, "procedures")), []);
+  assert.deepEqual(service.search("never become visible"), []);
+});
+
 test("rejects inadmissible Knowledge with stable admission codes", async (context) => {
   const root = await createKnowledgeRoot(context);
   const service = new LocalKnowledgeService({

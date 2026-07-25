@@ -82,6 +82,7 @@ class FakeTaskPort implements DiscordTaskPort {
 
 class FakeDiscordApi implements DiscordApiPort {
   public online = true;
+  public reconciliationError: DiscordApiError | undefined;
   public editDeferredError: DiscordApiError | undefined;
   public probe: DiscordInstallationProbe = {
     applicationId: "100000000000000006",
@@ -110,6 +111,7 @@ class FakeDiscordApi implements DiscordApiPort {
   public readonly archivedPages: DiscordThread[][] = [];
   public readonly operations: Array<Record<string, unknown>> = [];
   public readonly acknowledgedInteractions = new Set<string>();
+  public readonly missingStatusPanelMessageIds = new Set<string>();
   #nextMessage = 900;
 
   public async probeInstallation(): Promise<DiscordInstallationProbe> {
@@ -136,6 +138,9 @@ class FakeDiscordApi implements DiscordApiPort {
 
   public async listActiveThreads(): Promise<readonly DiscordThread[]> {
     this.#assertOnline();
+    if (this.reconciliationError !== undefined) {
+      throw this.reconciliationError;
+    }
     return [...this.threads.values()].filter((thread) => !thread.archived);
   }
 
@@ -181,8 +186,16 @@ class FakeDiscordApi implements DiscordApiPort {
     messageId?: string;
   }): Promise<{ messageId: string }> {
     this.#assertOnline();
+    if (input.messageId !== undefined && this.missingStatusPanelMessageIds.has(input.messageId)) {
+      throw new DiscordApiError("NOT_FOUND", "Discord status panel was not found.");
+    }
     const messageId = input.messageId ?? String(this.#nextMessage++);
-    this.operations.push({ kind: "panel", ...input, messageId });
+    this.operations.push({
+      kind: "panel",
+      ...input,
+      requestedMessageId: input.messageId,
+      messageId,
+    });
     return { messageId };
   }
 
@@ -209,7 +222,7 @@ class FakeDiscordApi implements DiscordApiPort {
       interactionId: input.interactionId,
       ephemeral: input.ephemeral,
     });
-    return { responseRef: `interaction-response:${input.interactionId}` };
+    return { responseRef: `discord-interaction-ref:${input.interactionId}` };
   }
 
   public async editDeferredInteraction(input: {
@@ -239,8 +252,10 @@ class FakeGateway implements DiscordGatewayPort {
       }
     | undefined;
   public closed = false;
+  public connections = 0;
 
   public async connect(options: Parameters<DiscordGatewayPort["connect"]>[0]) {
+    this.connections += 1;
     this.connected = {
       apiVersion: options.apiVersion,
       intentBitfield: options.intentBitfield,
@@ -332,6 +347,39 @@ test("live startup supplies the durable Resume cursor and pinned API contract to
   });
   await adapter.close();
   assert.equal(gateway.closed, true);
+});
+
+test("concurrent live startup owns exactly one Gateway connection", async () => {
+  const gateway = new FakeGateway();
+  const { adapter } = fixture({ gateway });
+
+  await Promise.all([adapter.start(), adapter.start()]);
+
+  assert.equal(gateway.connections, 1);
+  await adapter.close();
+});
+
+test("failed initial reconciliation closes its Gateway before a clean retry", async () => {
+  const api = new FakeDiscordApi();
+  api.reconciliationError = new DiscordApiError(
+    "INVALID_RESPONSE",
+    "Discord returned an invalid reconciliation page.",
+  );
+  const gateway = new FakeGateway();
+  const { adapter } = fixture({ api, gateway });
+
+  await assert.rejects(adapter.start(), {
+    code: "INVALID_RESPONSE",
+  });
+  assert.equal(gateway.closed, true);
+
+  api.reconciliationError = undefined;
+  gateway.closed = false;
+  await adapter.start();
+
+  assert.equal(gateway.connections, 2);
+  assert.equal(gateway.closed, false);
+  await adapter.close();
 });
 
 test("each approved Forum validates and projects its own channel-scoped workflow tags", async () => {
@@ -452,6 +500,34 @@ test("replies resume only their bound Task and unauthorized content never reache
   assert.equal(JSON.stringify(tasks.calls).includes("do-not-leak"), false);
 });
 
+test("an attachment-only owner reply remains valid Task input without persisting a CDN URL", async () => {
+  const { adapter, api, tasks } = fixture();
+  const thread = forumThread("300000000000000013");
+  const starter = ownerMessage(thread.id, thread.id, "Inspect the attached report");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  await adapter.handleGatewayDispatch(
+    messageDispatch(2, {
+      ...ownerMessage("300000000000000014", thread.id, ""),
+      attachments: [
+        {
+          id: "400000000000000001",
+          filename: "report.pdf",
+          size: 1_024,
+          mediaType: "application/pdf",
+        },
+      ],
+    }),
+  );
+
+  const append = tasks.calls.find((call) => call["kind"] === "append");
+  assert.equal(append?.["message"], "The owner attached 1 file through Discord.");
+  assert.deepEqual(append?.["selectedInputRefs"], ["discord-attachment:400000000000000001"]);
+  assert.doesNotMatch(JSON.stringify(append), /cdn\.discordapp|https?:\/\//);
+});
+
 test("restart reconciliation scans active and paged archived posts without duplicating work", async () => {
   const initial = fixture();
   const active = forumThread("300000000000000021");
@@ -533,6 +609,24 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
   assert.match(JSON.stringify(panelPayload), /32768/);
   assert.equal((await repository.getBindingByTask("task-1"))?.statusPanelMessageId, "900");
   assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+
+  api.missingStatusPanelMessageIds.add("900");
+  await adapter.publishTaskProjection({
+    ...projection,
+    state: "running",
+    summary: "The deleted status panel is being restored.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+  const restored = await repository.getBindingByTask("task-1");
+  assert.equal(restored?.statusPanelMessageId, "902");
+  assert.equal(restored?.externalState, "available");
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "panel").at(-1)?.[
+      "requestedMessageId"
+    ],
+    undefined,
+  );
 });
 
 test("a completed Task without links renders valid Components v2 without an empty action row", () => {

@@ -11,11 +11,13 @@ dirija esos Work Orders a los Devices aptos y recibe un único resultado durader
 sin tener que reabrir manualmente cada sesión de agente.
 
 > [!WARNING] Este repositorio genera actualmente una **vista previa interna sin soporte**, no una
-> versión de OpenDelegate con soporte. El runtime Main, la superficie Admin autenticada para Tasks y
-> muchos contratos con forma de producción ya existen, pero la integración de producción para la
-> ejecución de Worker/Discord/servicio/Agent/Computer Use y la matriz de aceptación real en tres
-> sistemas operativos están incompletas. OpenDelegate todavía no debe presentarse como completo ni
-> utilizarse como un plano de control de producción sin supervisión.
+> release de OpenDelegate con soporte. El código fuente ya incluye rutas con forma de producción
+> para la orquestación Main–Worker, los Agent Adapters programáticos, las aprobaciones de acciones
+> exactas, el Knowledge local al Device, la supervisión nativa de servicios y Computer Use. Una
+> implementación en el código fuente no constituye evidencia de release: aún faltan pruebas reales
+> de macOS, Windows, Linux, Discord, proveedores, redes privadas, reinicios, permisos y empaquetado.
+> No presentes OpenDelegate como publicado ni lo utilices todavía como plano de control de
+> producción sin supervisión.
 
 ## Por qué OpenDelegate
 
@@ -36,18 +38,18 @@ sin tener que reabrir manualmente cada sesión de agente.
 
 ```mermaid
 flowchart LR
-    owner["Owner<br/>phone or laptop"] --> discord["Discord Forum<br/>one post = one Task"]
-    owner --> admin["Admin Web<br/>setup and operations"]
-    discord --> main["Fixed Main Device<br/>Control Plane + Main Agent"]
+    owner["Owner<br/>teléfono u ordenador portátil"] --> discord["Discord Forum<br/>una publicación = una Task"]
+    owner --> admin["Admin Web<br/>configuración y operaciones"]
+    discord --> main["Main Device fijo<br/>Control Plane + Main Agent"]
     admin --> main
-    main --> database[("Main-owned SQLite or PostgreSQL")]
+    main --> database[("SQLite o PostgreSQL propiedad de Main")]
     main --> artifacts["Artifact Gateway"]
-    main <-->|"authenticated Device API<br/>configured route"| mac["macOS Worker"]
-    main <-->|"authenticated Device API<br/>configured route"| windows["Windows Worker"]
-    main <-->|"authenticated Device API<br/>configured route"| linux["Linux Worker / NAS"]
-    mac -. "local only" .-> macKnowledge["Markdown Knowledge"]
-    windows -. "local only" .-> windowsKnowledge["Markdown Knowledge"]
-    linux -. "local only" .-> linuxKnowledge["Markdown Knowledge"]
+    main <-->|"API de Device autenticada<br/>ruta configurada"| mac["macOS Worker"]
+    main <-->|"API de Device autenticada<br/>ruta configurada"| windows["Windows Worker"]
+    main <-->|"API de Device autenticada<br/>ruta configurada"| linux["Linux Worker / NAS"]
+    mac -. "solo en el Device" .-> macKnowledge["Markdown Knowledge"]
+    windows -. "solo en el Device" .-> windowsKnowledge["Markdown Knowledge"]
+    linux -. "solo en el Device" .-> linuxKnowledge["Markdown Knowledge"]
 ```
 
 Los Workers no se conectan a la base de datos ni entre sí como una malla de control de OpenDelegate.
@@ -56,19 +58,34 @@ Transport Profile entre el Main y cada Device.
 
 ## Estado actual del código fuente
 
-La tabla siguiente distingue el código ejecutable de los límites que todavía no están conectados a
-sistemas externos válidos para una release.
+La tabla siguiente distingue las rutas con forma de producción implementadas en el código fuente de
+la evidencia externa que aún se necesita antes de afirmar que existe soporte.
 
-| Área                    | Implementado y comprobable ahora                                                                                                                                                                                                                                                                                                                                                                                           | Aún necesario para el primer milestone                                                                                                                                        |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main y persistencia     | CLI `opendelegate` incluida con `init`, `serve` y `status`; composición del Main; estado de salud del Control Plane; API autenticada de inspección y control de emergencia de Tasks; SQLite integrado; configuración PostgreSQL y contratos de almacenamiento equivalentes                                                                                                                                                 | Orquestación/ejecución conectadas, pruebas en hosts limpios y tras reinicios para cada SO compatible, prueba de copia/restauración y reconciliación completa del runtime      |
-| Acceso del Owner        | Reclamación inicial limitada a loopback, inicio de sesión con frase de contraseña, códigos de recuperación, revocación de sesiones, protección CSRF y persistencia SQL                                                                                                                                                                                                                                                     | Evidencia válida para la release sobre rutas remotas, reinicios, revocación por robo y recuperación                                                                           |
-| Admin Web               | Inicio de sesión/recuperación autenticados; inspección duradera de Tasks; controles de emergencia para pausar/cancelar; superficies adaptables de Devices y Configuration Chat de solo lectura; interfaz persistente en inglés, coreano, japonés, francés, español y chino simplificado. Existen fixtures de creación/reanudación/reintento, pero el Main empaquetado las bloquea mientras la ejecución no esté disponible | Ejecución de Tasks y mensajería del Configuration Agent conectadas, proyecciones de Devices reales, inspectores de aprobaciones/auditoría y aceptación real de interrupciones |
-| Runtime de Devices      | Contratos de identidad de Device y de inscripción de un solo uso, inbox/outbox duraderos del Worker y contratos de supervisión de Runs, descubrimiento, transporte, locks y Knowledge local                                                                                                                                                                                                                                | Canal Main–Worker autenticado de extremo a extremo, Devices reales inscritos, instalación del servicio y pruebas de desconexión/reinicio                                      |
-| Agentes y Discord       | Paquetes de ciclo de vida para adapters de Codex CLI, Claude CLI y comandos genéricos; contratos duraderos de correspondencia de Discord Forum, autorización, reconciliación, controles y proyección                                                                                                                                                                                                                       | Sesiones reales y autenticadas de proveedores; driver HTTP/Gateway de Discord para producción; Community Server, Forum, bot, token, intents y permisos dedicados              |
-| Artifacts               | Artifact Store local y contratos aislados de Artifact Gateway con pruebas de contenido hostil                                                                                                                                                                                                                                                                                                                              | Carga reanudable desde Workers, presentación real en Discord, exposición por las rutas del Owner y aceptación entre redes                                                     |
-| Servicios de plataforma | Planes de servicio para Windows SCM, macOS launchd y Linux systemd, renderers, modelos de disponibilidad y límites de validación de solo lectura                                                                                                                                                                                                                                                                           | Instalación nativa con privilegios, ejecutores de servicio empaquetados, pruebas de reinicio/inicio/cierre de sesión, rollback de actualizaciones y firma/notarización        |
-| Computer Use            | Núcleo de Resource Lock, paquete de contratos de drivers del SO, sondas de permisos/disponibilidad y fixtures de conformidad deterministas                                                                                                                                                                                                                                                                                 | Backend real de entrada y workflow de referencia en macOS, Windows y Linux gráfico compatible, incluidas pruebas de cancelación y fallos de permisos                          |
+| Área                    | Implementado y comprobable en el código fuente                                                                                                                                                                                                                                                                            | Aún necesario para el primer milestone                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main y persistencia     | CLI `opendelegate` incluida; Control Plane compuesto; contratos de almacenamiento SQLite y PostgreSQL; servicios duraderos de Task, aprobación, auditoría, Artifact, inscripción, Discord y canal de Device; reconciliación de arranque que falla de forma segura si se desconoce el resultado de una acción interrumpida | Evidencia de instalación en host limpio, migración/restauración de base de datos, reinicio de servicio y reconciliación completa en cada plataforma Main declarada                                            |
+| Acceso del Owner        | Reclamación inicial limitada a loopback, inicio de sesión con frase de contraseña, códigos de recuperación, revocación de sesiones, protección CSRF y persistencia SQL                                                                                                                                                    | Evidencia válida para la release sobre rutas remotas, reinicios, revocación de navegador robado y recuperación independiente de Discord                                                                       |
+| Admin Web               | Superficies autenticadas de Devices, Tasks, aprobaciones, inscripción, Artifacts, auditoría, controles de emergencia y Configuration Chat; controles según las capacidades; interfaz adaptable con selección persistente en inglés, coreano, japonés, francés, español y chino simplificado                               | Recorridos de inscripción de Devices reales y de interrupciones, evidencia de accesibilidad y ausencia de desbordamiento en bundles de release y aceptación real por un operador                              |
+| Runtime de Devices      | Inscripción de un solo uso, identidad propia del Device, canal saliente Main–Worker autenticado, dispatch con lease, inbox/outbox duraderos, supervisión de Runs, Workspaces, ejecución local de Agents, MCP de Knowledge local, MCP de Computer Use y carga de Artifacts                                                 | Devices físicos inscritos, recuperación tras pérdida de ruta y reinicio, prueba de rutas mixtas de tipo Omada/Tailscale y de servicios persistentes en las tres familias de SO                                |
+| Agentes y Discord       | Codex App Server y Claude Agent SDK como adapters principales, fallbacks CLI de capacidad reducida, comandos genéricos, continuidad de sesiones nativas, un solo writer y autorización exacta de acciones; HTTP/Gateway de Discord, reconciliación del Forum, controles y composición del Main                            | Ejecuciones reales y autenticadas de Codex y Claude con versiones fijadas; pruebas de Community Server, Forum, bot, token, intents, permisos, reconexión, móvil e interrupciones                              |
+| Knowledge               | Descubrimiento de Markdown enlazado y local al Device, recuperación acotada, indexación determinista, controles de admisión y herramientas MCP para Agents cuyo contenido queda fuera de los contratos del Main                                                                                                           | Evidencia de ausencia de exfiltración a nivel de red y recorridos de creación/actualización/reconstrucción en cada familia de Devices reales                                                                  |
+| Artifacts               | Almacén local propiedad del Main, carga de Worker autenticada y reanudable, rutas Gateway estáticas e interactivas aisladas, acceso firmado, contratos de Exposure Policy e inspección en Admin                                                                                                                           | Presentación real en Discord, recorridos de retención/exposición, validación de contenido hostil en builds empaquetados y apertura entre redes desde un Device del Owner                                      |
+| Servicios de plataforma | Implementaciones de Windows SCM, macOS launchd y Linux systemd/primer plano; hosts separados para el núcleo y el helper de sesión del Owner; IPC local autenticado; comandos de instalación, inicio, parada, reinicio, actualización, rollback, diagnóstico y desinstalación                                              | Ejecución privilegiada en hosts limpios, persistencia tras reinicio/inicio/cierre de sesión, rollback ante fallos, configuración de permisos, firma/notarización según la plataforma y pruebas de laboratorio |
+| Computer Use            | Lock de escritorio por Device, autorización exacta de acciones, broker local de un solo uso, IPC del helper de sesión, código fuente de backends nativos Windows/macOS/Linux, sondas de disponibilidad/permisos y contratos/pruebas de captura, entrada, cancelación y parada de emergencia                               | Interacción de referencia en macOS y Windows físicos y el entorno Linux gráfico declarado, con pruebas de captura, exclusividad, cancelación, fallo de permisos, sesión bloqueada y Linux sin interfaz        |
+
+La ejecución del Claude SDK en Windows nativo no se anuncia deliberadamente hasta que se pueda
+aplicar el sandbox requerido; en Windows, utiliza Codex, WSL2 o un contenedor configurado. Un Worker
+en WSL2 o en un contenedor no sustituye los criterios de release del servicio Windows nativo,
+reinicio, permisos o Computer Use.
+
+La instalación automática de dependencias de proyecto admite actualmente solo npm, mediante un
+staging sin credenciales limitado al registro oficial y con los scripts desactivados. Los gestores
+de paquetes del sistema configurados explícitamente también pueden recibir solicitudes exclusivas de
+instalación: OpenDelegate fija y vuelve a validar el ejecutable del gestor, mientras que añadir
+repositorios o usar instaladores remotos sigue requiriendo aprobación. Esto solo constituye
+evidencia de implementación; ningún gestor del sistema cuenta con soporte de release hasta que su
+comportamiento con las fuentes existentes y los privilegios supere el laboratorio de host limpio de
+la plataforma de destino.
 
 El registro de release legible por máquinas está en
 [`docs/release/acceptance-evidence.json`](docs/release/acceptance-evidence.json).
@@ -98,9 +115,9 @@ el Owner ni el historial de conversaciones de los Agents.
 
 ![Operaciones de Task de OpenDelegate implementadas](docs/design/admin-tasks-implemented.png)
 
-_Fixture de diseño de operaciones de Task: datos autenticados de lista/detalle y controles. El Main
-empaquetado desactiva las acciones que inician la ejecución hasta que su runtime de orquestación
-esté conectado._
+_Fixture de diseño de operaciones de Task: datos autenticados de lista/detalle y controles. Cada
+control respeta el estado de capacidad comunicado por el Main; esta fixture no demuestra que un
+runtime externo real esté listo._
 
 ![Inicio de sesión del Owner de OpenDelegate implementado](docs/design/admin-login-implemented.png)
 
@@ -130,11 +147,12 @@ pnpm release:build --destination ABSOLUTE_PATH --internal-preview
 niega a sobrescribir un destino existente. Un launcher mínimo exporta el commit limpio y vuelve a
 ejecutar la lógica de release desde ese snapshot desechable antes del ensamblado. El builder crea un
 bundle específico para la plataforma descargando el archivo oficial de Node fijado y verificando su
-SHA-256 auditado. Incluye los assets de Admin, el skill de inicialización, los metadatos de release,
-un inventario legal de instancias de dependencias, checksums y evidencia de smoke test para la ayuda
-de la CLI, la inicialización con un directorio personal limpio, el estado de salud del Main, el
-servicio de Admin, la reclamación/inicio de sesión del Owner, el ciclo completo de la cookie de
-sesión y el cierre limpio.
+SHA-256 auditado. Incluye los launchers de Main y Worker, los assets de Admin, los skills de
+inicialización e inscripción, los metadatos de release, un inventario legal de instancias de
+dependencias, checksums y evidencia acotada de smoke test para los comandos CLI/servicio/Worker, la
+inicialización con un directorio personal limpio, el estado de salud del Main, el servicio de Admin,
+la reclamación/inicio de sesión del Owner, el ciclo completo de la cookie de sesión y el cierre
+limpio.
 
 El nombre del destino debe contener `internal-preview`. Los archivos generados `INTERNAL_PREVIEW.md`
 y `release-metadata.json` indican que el bundle no tiene soporte y conservan el estado exacto de la
@@ -159,8 +177,16 @@ pnpm release:gate
 pnpm release:build --destination ABSOLUTE_PATH
 ```
 
+Después de que un bundle de destino completo supere el smoke test empaquetado, `pnpm release:sign`
+puede crear su attestation Ed25519 separada del publicador y una raíz pública de confianza para
+distribuir por otro canal. La firma nunca convierte un `internal-preview-*` ni un
+`release-candidate` en una release con soporte; consulta el
+[procedimiento de attestation del publicador](docs/release/README.md#publisher-attestation-for-service-installation).
+
 Ambos comandos solo pueden completarse después de superar las 36 gates de implementación y de
-evidencia real. Consulta [la guía de evidencia de release](docs/release/README.md) y
+evidencia real. Consulta
+[la matriz exacta de soporte del primer hito](docs/release/SUPPORT_MATRIX.md),
+[la guía de evidencia de release](docs/release/README.md) y
 [la lista de comprobación del laboratorio de plataformas](docs/release/PLATFORM_LAB.md).
 
 ## Desarrollo
@@ -185,30 +211,46 @@ pnpm dev:admin
 Este servidor de desarrollo no es una ruta de instalación para el Owner. Utiliza el launcher
 `internal-preview` generado para validar el Main empaquetado.
 
+La autenticación de Codex y Claude se aísla por cada Device de OpenDelegate, de forma predeterminada
+en `state/providers/codex` y `state/providers/claude`. Después de la configuración, autentícate de
+forma interactiva en esos controlled homes exactos. OpenDelegate no copia ni hereda un inicio de
+sesión del provider home global del usuario, y los Runs first-class rechazan las variables de
+entorno con credenciales.
+
 ## Mapa del repositorio
 
-- `apps/main` — composición del Main y CLI determinista.
+- `apps/main` — composición del Main, CLI determinista, autorización de acciones, canal de Device,
+  Discord, Artifacts e integración del runtime de Agent.
+- `apps/worker` y `apps/service-host` — runtime del Worker inscrito y hosts persistentes de procesos
+  de núcleo/sesión usados por las definiciones de servicios de plataforma.
 - `apps/control-plane` — límites HTTP autenticados y de reclamación local.
-- `apps/admin-web` — inicio de sesión del Owner, operaciones de Tasks, superficie de Devices y
-  Configuration Chat.
+- `apps/admin-web` — inicio de sesión del Owner, Devices, Tasks, aprobaciones, inscripción,
+  Artifacts, auditoría, operaciones de emergencia y Configuration Chat.
 - `apps/artifact-gateway` — límite aislado de entrega de Artifacts.
 - `packages/domain`, `packages/policy` y `packages/scheduler` — mecánica determinista del dominio y
   Policy ejecutable.
 - `packages/storage-sql`, `packages/owner-auth`, `packages/task-service` y `packages/configuration`
   — persistencia y servicios de aplicación del Main.
-- `packages/device-identity`, `packages/worker-runtime`, `packages/transport` y
-  `packages/device-discovery` — inscripción de Devices y contratos del lado del Worker.
-- `packages/agent-adapters` y `packages/discord-adapter` — implementaciones de adapters de
-  proveedores y Forum que todavía necesitan pruebas de integración real.
+- `packages/device-identity`, `packages/device-channel`, `packages/worker-runtime`,
+  `packages/transport` y `packages/device-discovery` — inscripción de Devices, comunicación
+  Main–Worker autenticada y ejecución del Worker.
+- `packages/agent-adapters` y `packages/discord-adapter` — integraciones programáticas de
+  proveedores y Discord Forum que todavía necesitan pruebas reales con credenciales.
 - `packages/artifact-store` — límite de bytes y metadatos de Artifacts propiedad del Main.
-- `packages/platform-services` y `packages/computer-use-os` — contratos de servicios del SO y de
-  runtime gráfico; no demuestran servicios instalados ni un control real del escritorio.
-- `packages/knowledge` — descubrimiento Markdown local al Device, recuperación enlazada e
-  indexación.
+- `packages/platform-services` y `packages/computer-use-os` — implementaciones de servicios del SO y
+  runtime gráfico; el código fuente y las fixtures no demuestran servicios instalados con soporte ni
+  control del escritorio en tres SO.
+- `packages/session-helper-ipc`, `packages/session-helper-runtime`, `packages/computer-use-mcp` y
+  `packages/run-capability-broker` — capacidades de sesión del Owner autenticadas y acotadas por
+  Run.
+- `packages/knowledge` y `packages/knowledge-mcp` — descubrimiento Markdown local al Device,
+  recuperación enlazada, indexación y herramientas para Agents.
 - `packages/acceptance` y `packages/simulator` — recorridos deterministas de Tasks, casos de
   reinicio y fixtures de replay.
 - `skills/opendelegate-init` — workflow de inicialización para agentes con gate explícita de
   `internal-preview`.
+- `skills/opendelegate-join` — workflow de inscripción y recuperación de un Worker solo saliente sin
+  exponer credenciales.
 - `docs` — producto, arquitectura, seguridad, diseño, investigación y evidencia de release.
 
 ## Documentos canónicos del producto
@@ -227,7 +269,8 @@ Léelos en este orden antes de planificar o modificar el comportamiento del prod
 
 El workflow para colaboradores se documenta en [CONTRIBUTING.md](CONTRIBUTING.md). Los límites de
 seguridad y la vía privada verificada para notificar vulnerabilidades se encuentran en
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md). Las snapshots seguras de metadatos Main y la restauración en un destino
+nuevo se documentan en la [guía de copia de seguridad y restauración](docs/BACKUP_AND_RESTORE.md).
 
 OpenDelegate se distribuye bajo la [Apache License 2.0](LICENSE). El contenido del repositorio, los
 términos del dominio, las API, los logs y los valores predeterminados de la interfaz utilizan el

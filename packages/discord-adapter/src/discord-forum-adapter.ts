@@ -55,6 +55,8 @@ export class DiscordForumAdapter {
   readonly #threadWork = new Map<string, Promise<void>>();
   readonly #outboxOwner = `discord-adapter:${cryptoRandomSuffix()}`;
   #flushPromise: Promise<void> | undefined;
+  #startPromise: Promise<void> | undefined;
+  #closePromise: Promise<void> | undefined;
   #connection: DiscordGatewayConnection | undefined;
 
   constructor(options: DiscordForumAdapterOptions) {
@@ -133,6 +135,19 @@ export class DiscordForumAdapter {
   }
 
   async start(): Promise<void> {
+    if (this.#connection !== undefined) {
+      return;
+    }
+    if (this.#startPromise === undefined) {
+      this.#startPromise = this.#startLiveDelivery().finally(() => {
+        this.#startPromise = undefined;
+      });
+    }
+    return this.#startPromise;
+  }
+
+  async #startLiveDelivery(): Promise<void> {
+    await this.#closePromise;
     if (this.#gateway === undefined) {
       throw new DiscordAdapterError(
         "CONFIG_INVALID",
@@ -146,11 +161,8 @@ export class DiscordForumAdapter {
         `Discord installation is not ready: ${status.issues.join(" ")}`,
       );
     }
-    if (this.#connection !== undefined) {
-      return;
-    }
     const resume = await this.#repository.getGatewayCursor();
-    this.#connection = await this.#gateway.connect({
+    const connection = await this.#gateway.connect({
       apiVersion: DISCORD_API_VERSION,
       intentBitfield: DISCORD_GATEWAY_INTENTS,
       resume,
@@ -163,15 +175,33 @@ export class DiscordForumAdapter {
       },
       onReconcileRequired: async () => this.reconcile(),
     });
-    await this.reconcile();
+    try {
+      await this.reconcile();
+      this.#connection = connection;
+    } catch (error) {
+      try {
+        await connection.close();
+      } catch {
+        // Preserve the reconciliation failure that prevented safe startup.
+      }
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
+    if (this.#closePromise === undefined) {
+      this.#closePromise = this.#closeLiveDelivery().finally(() => {
+        this.#closePromise = undefined;
+      });
+    }
+    return this.#closePromise;
+  }
+
+  async #closeLiveDelivery(): Promise<void> {
+    await this.#startPromise?.catch(() => undefined);
     const connection = this.#connection;
     this.#connection = undefined;
-    if (connection !== undefined) {
-      await connection.close();
-    }
+    await connection?.close();
   }
 
   async handleGatewayDispatch(dispatch: DiscordGatewayDispatch): Promise<void> {
@@ -390,6 +420,13 @@ export class DiscordForumAdapter {
     ) {
       return;
     }
+    if (
+      message.id !== thread.id &&
+      message.content.trim().length === 0 &&
+      message.attachments.length === 0
+    ) {
+      return;
+    }
     const key = `discord-message:${message.id}`;
     const claim = await this.#repository.claimInbound({
       key,
@@ -439,7 +476,7 @@ export class DiscordForumAdapter {
         taskId: binding.taskId,
         principalId: `discord:${message.author.id}`,
         idempotencyKey: key,
-        message: message.content,
+        message: replyMessage(message),
         selectedInputRefs: attachmentReferences(message),
         source: taskSource(thread, message),
       });
@@ -696,14 +733,31 @@ export class DiscordForumAdapter {
       }
       case "upsert-status-panel": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        const result = await this.#api.upsertStatusPanel({
-          threadId: binding.threadId,
-          requestKey: item.id,
-          payload: renderStatusPanel(action.projection),
-          ...(binding.statusPanelMessageId === undefined
-            ? {}
-            : { messageId: binding.statusPanelMessageId }),
-        });
+        const payload = renderStatusPanel(action.projection);
+        let result: { readonly messageId: string };
+        try {
+          result = await this.#api.upsertStatusPanel({
+            threadId: binding.threadId,
+            requestKey: item.id,
+            payload,
+            ...(binding.statusPanelMessageId === undefined
+              ? {}
+              : { messageId: binding.statusPanelMessageId }),
+          });
+        } catch (error) {
+          if (
+            !(error instanceof DiscordApiError) ||
+            error.code !== "NOT_FOUND" ||
+            binding.statusPanelMessageId === undefined
+          ) {
+            throw error;
+          }
+          result = await this.#api.upsertStatusPanel({
+            threadId: binding.threadId,
+            requestKey: item.id,
+            payload,
+          });
+        }
         await this.#repository.updateBinding(binding.threadId, {
           statusPanelMessageId: result.messageId,
           externalState: "available",
@@ -988,6 +1042,14 @@ function attachmentReferences(message: DiscordMessage): readonly string[] {
   return Object.freeze(
     message.attachments.map((attachment) => `discord-attachment:${attachment.id}`),
   );
+}
+
+function replyMessage(message: DiscordMessage): string {
+  if (message.content.trim().length > 0) {
+    return message.content;
+  }
+  const count = message.attachments.length;
+  return `The owner attached ${count.toString()} ${count === 1 ? "file" : "files"} through Discord.`;
 }
 
 function digestValue(value: unknown): string {

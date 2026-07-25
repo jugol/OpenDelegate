@@ -66,6 +66,10 @@ export interface UpsertKnowledgeNote {
   readonly qualification: KnowledgeQualification;
 }
 
+export interface UpsertKnowledgeOptions {
+  beforeCommit(): void | Promise<void>;
+}
+
 export interface UpsertKnowledgeResult {
   readonly noteId: string;
   readonly operation: "created" | "updated";

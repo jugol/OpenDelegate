@@ -33,51 +33,99 @@ const unassessedCapabilities = Object.freeze([
   },
 ] as const satisfies readonly CapabilityView[]);
 
-export function mapMainDeviceOverview(device: DeviceSummary): DeviceOverviewViewModel {
-  if (device.role !== "main") {
-    throw new Error("The current Admin Device must have the fixed Main role.");
-  }
-
+export function mapDeviceOverview(device: DeviceSummary): DeviceOverviewViewModel {
   const operatingSystem = `${osFamilyLabel(device.osFamily)} ${device.platformRelease}`;
   const connectionOnline = device.connection === "online";
+  const main = device.role === "main";
 
   return {
     deviceId: device.deviceId,
     name: device.name,
-    roleLabel: builtInText("Main", "main"),
-    deviceTypeLabel: builtInText("Main computer", "mainComputer"),
+    osFamily: device.osFamily,
+    role: device.role,
+    roleLabel: main ? builtInText("Main", "main") : builtInText("Worker", "worker"),
+    deviceTypeLabel: main
+      ? builtInText("Main computer", "mainComputer")
+      : builtInText("Worker computer", "workerComputer"),
     operatingSystem,
     connection: {
       label: connectionOnline ? builtInText("Online", "online") : builtInText("Offline", "offline"),
       tone: connectionOnline ? "success" : "muted",
     },
-    facts: [
-      {
-        label: builtInText("Operating system", "operatingSystem"),
-        value: operatingSystem,
-      },
-      { label: builtInText("Architecture", "architecture"), value: device.architecture },
+    facts: mapFacts(device, operatingSystem),
+    runtimeStatuses: [
+      runtimeStatus(device.runtime, device.role),
+      serviceStatus(device.serviceMode),
     ],
-    runtimeStatuses: [runtimeStatus(device.runtime), serviceStatus(device.serviceMode)],
-    roles: [builtInText("Main Coordinator", "mainCoordinator")],
-    capabilities: unassessedCapabilities,
-    routes: [
-      {
-        order: 1,
-        label: builtInText("Loopback", "loopback"),
-        summary: builtInText("Active · Main-local", "activeMainLocal"),
-        tone: "success",
-      },
-    ],
+    ...(device.lastObservation === undefined
+      ? {}
+      : {
+          lastObservation: {
+            observedAtMs: device.lastObservation.observedAtMs,
+            acceptedAtMs: device.lastObservation.acceptedAtMs,
+          },
+        }),
+    roles: device.roles ?? (main ? [builtInText("Main Coordinator", "mainCoordinator")] : []),
+    instructions: device.instructions ?? [],
+    capabilities: mapCapabilities(device.capabilities),
+    policies: Object.freeze(
+      [...(device.policies ?? [])].sort(
+        (left, right) =>
+          left.actionCategory.localeCompare(right.actionCategory, "en") ||
+          left.policyId.localeCompare(right.policyId, "en"),
+      ),
+    ),
+    agentAdapters: Object.freeze(
+      [...(device.agentAdapters ?? [])].sort(
+        (left, right) =>
+          left.provider.localeCompare(right.provider, "en") ||
+          left.adapterId.localeCompare(right.adapterId, "en"),
+      ),
+    ),
+    routes: mapRoutes(device.routes, main),
+    resourceLocks: Object.freeze(
+      [...(device.resourceLocks ?? [])]
+        .sort((left, right) => left.resourceName.localeCompare(right.resourceName, "en"))
+        .map((lock) => ({
+          ...lock,
+          holders: Object.freeze(
+            [...lock.holders].sort(
+              (left, right) =>
+                left.expiresAtMs - right.expiresAtMs || left.runId.localeCompare(right.runId, "en"),
+            ),
+          ),
+        })),
+    ),
+    currentRuns: Object.freeze(
+      [...(device.currentRuns ?? [])].sort(
+        (left, right) =>
+          left.acceptedAtMs - right.acceptedAtMs || left.runId.localeCompare(right.runId, "en"),
+      ),
+    ),
     currentWork: {
-      activeRunCount: 0,
-      summary: builtInText("Run projection not connected", "projectionDisconnected"),
+      activeRunCount: device.capacity?.activeRuns ?? 0,
+      summary:
+        device.capacity === undefined
+          ? builtInText("Run projection not connected", "projectionDisconnected")
+          : device.capacity.activeRuns === 0
+            ? builtInText("No active runs", "noActiveRuns")
+            : builtInText(`${device.capacity.activeRuns} active Runs`, "activeRunCount", {
+                count: device.capacity.activeRuns,
+              }),
+      ...(device.capacity === undefined
+        ? {}
+        : {
+            maximumConcurrentRuns: device.capacity.maximumConcurrentRuns,
+            acceptingWork: device.capacity.acceptingWork,
+            ...(device.capacity.outboxDepth === undefined
+              ? {}
+              : { outboxDepth: device.capacity.outboxDepth }),
+            ...(device.capacity.maxOutboxEntries === undefined
+              ? {}
+              : { maxOutboxEntries: device.capacity.maxOutboxEntries }),
+          }),
     },
-    knowledge: {
-      label: builtInText("Local Knowledge", "localKnowledge"),
-      status: builtInText("Not assessed", "notAssessed"),
-      tone: "muted",
-    },
+    knowledge: knowledgeStatus(device.knowledgeHealth),
     configurationSession: {
       assistantMessage:
         "I have not assessed this Device yet. Ask me to detect agent tools, browser automation, Computer Use readiness, or local Knowledge health before I propose changes.",
@@ -86,7 +134,207 @@ export function mapMainDeviceOverview(device: DeviceSummary): DeviceOverviewView
   };
 }
 
-function osFamilyLabel(osFamily: DeviceSummary["osFamily"]): string {
+function mapFacts(
+  device: DeviceSummary,
+  operatingSystem: string,
+): DeviceOverviewViewModel["facts"] {
+  if (device.facts === undefined || device.facts.length === 0) {
+    return Object.freeze([
+      {
+        label: builtInText("Operating system", "operatingSystem"),
+        value: operatingSystem,
+      },
+      { label: builtInText("Architecture", "architecture"), value: device.architecture },
+    ]);
+  }
+  const labelByKind = {
+    "os-family": builtInText("Operating system", "operatingSystem"),
+    "platform-release": builtInText("Platform release", "platformRelease"),
+    architecture: builtInText("Architecture", "architecture"),
+    hostname: builtInText("Hostname", "hostname"),
+    "cpu-model": builtInText("CPU model", "cpuModel"),
+    "cpu-logical-cores": builtInText("Logical CPU cores", "logicalCpuCores"),
+    "memory-total-bytes": builtInText("Total memory (bytes)", "totalMemoryBytes"),
+    "gpu-model": builtInText("GPU model", "gpuModel"),
+  } as const;
+  const sourceByKind = {
+    enrollment: builtInText("Enrollment", "enrollment"),
+    "authenticated-heartbeat": builtInText("Authenticated heartbeat", "authenticatedHeartbeat"),
+    "node-os": builtInText("Node OS probe", "nodeOsProbe"),
+    "platform-probe": builtInText("Platform hardware probe", "platformHardwareProbe"),
+  } as const;
+  return Object.freeze(
+    [...device.facts]
+      .sort(
+        (left, right) =>
+          factOrder(left.kind) - factOrder(right.kind) ||
+          left.value.localeCompare(right.value, "en"),
+      )
+      .map((fact) => ({
+        label: labelByKind[fact.kind],
+        value:
+          fact.kind === "os-family"
+            ? osFamilyLabel(fact.value as DeviceSummary["osFamily"])
+            : fact.value,
+        evidence: {
+          source: sourceByKind[fact.source],
+          observedAtMs: fact.observedAtMs,
+          verification: fact.verification,
+        },
+      })),
+  );
+}
+
+function factOrder(kind: NonNullable<DeviceSummary["facts"]>[number]["kind"]): number {
+  switch (kind) {
+    case "os-family":
+      return 0;
+    case "platform-release":
+      return 1;
+    case "architecture":
+      return 2;
+    case "hostname":
+      return 3;
+    case "cpu-model":
+      return 4;
+    case "cpu-logical-cores":
+      return 5;
+    case "memory-total-bytes":
+      return 6;
+    case "gpu-model":
+      return 7;
+  }
+}
+
+function mapCapabilities(reported: DeviceSummary["capabilities"]): readonly CapabilityView[] {
+  if (reported === undefined || reported.length === 0) {
+    return unassessedCapabilities;
+  }
+  const reportedByName = new Map(reported.map((capability) => [capability.name, capability]));
+  const baseline = unassessedCapabilities.map((capability) => {
+    const report = reportedByName.get(capability.capabilityId);
+    if (report === undefined) {
+      return capability;
+    }
+    reportedByName.delete(capability.capabilityId);
+    return {
+      ...capability,
+      state: report.verification,
+      tone: capabilityTone(report.verification),
+    } satisfies CapabilityView;
+  });
+  const additional = [...reportedByName.values()]
+    .sort((left, right) => left.name.localeCompare(right.name, "en"))
+    .map((capability): CapabilityView => ({
+      capabilityId: capability.name,
+      label: capability.name,
+      state: capability.verification,
+      tone: capabilityTone(capability.verification),
+    }));
+  return Object.freeze([...baseline, ...additional]);
+}
+
+function capabilityTone(
+  verification: NonNullable<DeviceSummary["capabilities"]>[number]["verification"],
+): CapabilityView["tone"] {
+  switch (verification) {
+    case "verified":
+      return "success";
+    case "detected":
+      return "accent";
+    case "degraded":
+      return "warning";
+    case "unavailable":
+      return "danger";
+    case "disabled":
+      return "muted";
+  }
+}
+
+function mapRoutes(
+  reported: DeviceSummary["routes"],
+  main: boolean,
+): DeviceOverviewViewModel["routes"] {
+  if (reported === undefined) {
+    return main
+      ? [
+          {
+            order: 1,
+            label: builtInText("Loopback", "loopback"),
+            summary: builtInText("Active · Main-local", "activeMainLocal"),
+            tone: "success",
+          },
+        ]
+      : [];
+  }
+  return Object.freeze(
+    [...reported]
+      .sort(
+        (left, right) =>
+          left.priority - right.priority || left.routeId.localeCompare(right.routeId, "en"),
+      )
+      .map((route, index) => ({
+        order: index + 1,
+        label: route.label,
+        summary:
+          route.health === "healthy"
+            ? builtInText(`Healthy · Priority ${route.priority + 1}`, "healthyPriority", {
+                priority: route.priority + 1,
+              })
+            : route.health === "degraded"
+              ? builtInText(`Degraded · Priority ${route.priority + 1}`, "degradedPriority", {
+                  priority: route.priority + 1,
+                })
+              : route.health === "unknown"
+                ? builtInText(`Unknown · Priority ${route.priority + 1}`, "unknownPriority", {
+                    priority: route.priority + 1,
+                  })
+                : builtInText(`Unhealthy · Priority ${route.priority + 1}`, "unhealthyPriority", {
+                    priority: route.priority + 1,
+                  }),
+        tone:
+          route.health === "healthy"
+            ? ("success" as const)
+            : route.health === "degraded"
+              ? ("warning" as const)
+              : route.health === "unknown"
+                ? ("muted" as const)
+                : ("danger" as const),
+        ...(route.kind === undefined &&
+        route.profileRevision === undefined &&
+        route.lastAttempt === undefined
+          ? {}
+          : {
+              detail: [
+                route.kind?.toUpperCase(),
+                route.lastAttempt?.outcome,
+                route.profileRevision?.slice(0, 15),
+              ]
+                .filter((value): value is string => value !== undefined)
+                .join(" · "),
+            }),
+      })),
+  );
+}
+
+function knowledgeStatus(
+  health: DeviceSummary["knowledgeHealth"],
+): DeviceOverviewViewModel["knowledge"] {
+  const label = builtInText("Local Knowledge", "localKnowledge");
+  switch (health) {
+    case "healthy":
+      return { label, status: builtInText("Healthy", "healthy"), tone: "success" };
+    case "degraded":
+      return { label, status: builtInText("Degraded", "degraded"), tone: "warning" };
+    case "unavailable":
+      return { label, status: builtInText("Unavailable", "unavailable"), tone: "danger" };
+    case "unknown":
+    case undefined:
+      return { label, status: builtInText("Not assessed", "notAssessed"), tone: "muted" };
+  }
+}
+
+function osFamilyLabel(osFamily: DeviceSummary["osFamily"] | string): string {
   switch (osFamily) {
     case "macos":
       return "macOS";
@@ -94,26 +342,36 @@ function osFamilyLabel(osFamily: DeviceSummary["osFamily"]): string {
       return "Windows";
     case "linux":
       return "Linux";
+    default:
+      return osFamily;
   }
 }
 
-function runtimeStatus(runtime: DeviceSummary["runtime"]): RuntimeStatusView {
+function runtimeStatus(
+  runtime: DeviceSummary["runtime"],
+  role: DeviceSummary["role"],
+): RuntimeStatusView {
+  const label =
+    role === "main"
+      ? builtInText("Main runtime", "mainRuntime")
+      : builtInText("Worker service", "workerService");
+
   switch (runtime) {
     case "healthy":
       return {
-        label: builtInText("Main runtime", "mainRuntime"),
+        label,
         value: builtInText("Healthy", "healthy"),
         tone: "success",
       };
     case "degraded":
       return {
-        label: builtInText("Main runtime", "mainRuntime"),
+        label,
         value: builtInText("Degraded", "degraded"),
         tone: "warning",
       };
     case "unavailable":
       return {
-        label: builtInText("Main runtime", "mainRuntime"),
+        label,
         value: builtInText("Unavailable", "unavailable"),
         tone: "danger",
       };

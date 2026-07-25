@@ -16,8 +16,16 @@ import { promisify } from "node:util";
 
 import {
   createMainControlPlaneApp,
+  type ConfigurationAgentPort,
   type MainControlPlaneAppOptions,
 } from "@opendelegate/control-plane";
+import {
+  ConfigurationService,
+  STANDARD_CONFIGURATION_DEFINITIONS,
+  type ConfigurationChange,
+  type ConfigurationSecretReferenceAvailabilityInput,
+  type EffectiveConfigurationValue,
+} from "@opendelegate/configuration";
 import {
   Argon2idPasswordHasher,
   NodeCryptoRandomSource,
@@ -25,16 +33,292 @@ import {
   type OwnerAuthClock,
 } from "@opendelegate/owner-auth";
 import {
+  SqlActionAuthorizationRepository,
+  SqlApprovalRepository,
+  SqlArtifactIndexRepository,
+  SqlConfigurationRepository,
+  SqlDeviceObservationRepository,
   SqlEventStore,
   SqlOwnerAuthRepository,
   type SqlMigrationMode,
 } from "@opendelegate/storage-sql";
-import { TaskService } from "@opendelegate/task-service";
+import {
+  AuthoritativeWorkerTaskExecutor,
+  DEFAULT_AUTONOMOUS_TASK_BUDGET_LIMITS,
+  DEFAULT_INSTANCE_BUDGET_LIMITS,
+  DEFAULT_PROVIDER_USAGE_PROXY,
+  DEFAULT_REQUESTED_TASK_BUDGET_LIMITS,
+  DurableTaskContinuationCheckpointService,
+  DurableTaskBudgetEnforcer,
+  TaskExecutionCoordinator,
+  TaskService,
+  type TaskBudgetAdministrationPort,
+  type TaskExecutionCoordinatorOptions,
+  type TaskExecutor,
+} from "@opendelegate/task-service";
+import type { DeviceIdentitySecretStore } from "@opendelegate/device-identity";
+import type { ManagedSecretStore } from "@opendelegate/secrets";
 
 import type { RuntimeReleaseChannel } from "./release-identity.ts";
 
+import {
+  AgentBackedConfigurationAgent,
+  ConfigurationServiceAgentToolBroker,
+  ManagedSecretExactMatchGuard,
+  type AgentBackedConfigurationAgentOptions,
+} from "./agent-configuration-agent.ts";
+import {
+  LateBoundApprovalExecutionPort,
+  LateBoundMainActionRunAuthorityPort,
+} from "./action-authorization-composition.ts";
+import { MainActionAuthorizationRuntime } from "./action-authorization-runtime.ts";
+import { createMainAdminOperations } from "./admin-operations.ts";
+import {
+  AgentBackedTaskExecutor,
+  EventStoreMainNativeSessionRepository,
+  type AgentBackedTaskExecutorOptions,
+} from "./agent-task-executor.ts";
+import {
+  createProductionMainArtifactRuntime,
+  validateMainArtifactConfiguration,
+  type MainArtifactConfiguration,
+  type MainArtifactRuntime,
+} from "./artifact-runtime.ts";
+import { DiscordArtifactPresentation } from "./discord-artifact-presentation.ts";
+import {
+  MainArtifactPrepareService,
+  type MainArtifactPreparePolicyPort,
+} from "./artifact-prepare-service.ts";
+import {
+  createProductionDiscordRuntime,
+  type CreateProductionDiscordRuntimeOptions,
+  type DiscordMainRuntime,
+  type DiscordRuntimeStatus,
+} from "./discord-runtime.ts";
+import {
+  validateMainDiscordConfiguration,
+  type MainDiscordConfiguration,
+} from "./discord-configuration.ts";
+import {
+  createProductionMainDeviceChannelRuntime,
+  type MainDeviceChannelConfiguration,
+  type MainDeviceChannelListenerFactory,
+  type ProductionMainDeviceChannelRuntime,
+} from "./device-channel-runtime.ts";
+import { MainDeviceChannelWorkerRunDispatchPort } from "./device-worker-dispatch.ts";
+import { mergeMainDeviceSummary } from "./device-directory-projection.ts";
+import {
+  MainWorkerFleetProjection,
+  type MainOwnedDeviceProfile,
+} from "./worker-fleet-projection.ts";
+import { DeterministicWorkerTargetResolver } from "./worker-target-resolver.ts";
 import { closeAfterPrimaryFailure, closeMainResources } from "./shutdown.ts";
 import { readStableRegularFile, StableFileError } from "./stable-file.ts";
+import { createMainTaskBudgetAdmin } from "./task-budget-admin.ts";
+import { authorizeMainConfigurationMutation } from "./configuration-policy.ts";
+import {
+  MAIN_OWNER_TASK_DEFAULT_SCOPE_ID,
+  MainConfigurationRuntimePolicy,
+  createConfigurationControlledRouteDiagnosticAgent,
+  createConfigurationMainActionPolicy,
+  createConfigurationMainArtifactPreparePolicy,
+} from "./configuration-runtime-policy.ts";
+import { MainSecureSecretIngestService } from "./secure-secret-ingest.ts";
+import {
+  createMainManagedSecretStore,
+  defaultMainSecretBackendConfiguration,
+  validateMainSecretBackendConfiguration,
+  type MainSecretBackendConfiguration,
+} from "./main-secret-backend.ts";
+import {
+  MainDatabaseSecretError,
+  executeWithPostgresUri,
+  mainSecretAlias,
+  validateMainSecretReference,
+  validatePostgresSecretMaterial,
+} from "./database-secret.ts";
+import {
+  createConfigurationApprovalRuntime,
+  type ConfigurationApprovalRuntime,
+} from "./configuration-approval.ts";
+import {
+  AgentBackedRouteIncidentDiagnostic,
+  MainRouteIncidentDiagnosisService,
+} from "./route-incident-diagnosis.ts";
+import {
+  acquireMainSingletonOwnership,
+  MainSingletonOwnershipError,
+  type MainSingletonOwnership,
+  type MainSingletonOwnershipFactory,
+} from "./main-singleton-ownership.ts";
+
+export {
+  AgentBackedConfigurationAgent,
+  ManagedSecretExactMatchGuard,
+  type AgentBackedConfigurationAgentClock,
+  type AgentBackedConfigurationAgentOptions,
+  type ConfigurationAgentSecretLeakGuardPort,
+} from "./agent-configuration-agent.ts";
+export {
+  DEFAULT_MAIN_AGENT_LIMITS,
+  MainAgentRuntimeError,
+  resolveMainAgentComposition,
+  type MainAgentComposition,
+  type MainAgentCompositionReady,
+  type MainAgentCompositionUnavailable,
+  type MainAgentProviderPreference,
+  type MainAgentRuntimeErrorCode,
+  type MainAgentRuntimePaths,
+  type ResolveMainAgentCompositionOptions,
+  type SelectedMainAgentProvider,
+} from "./agent-runtime.ts";
+export {
+  AgentBackedTaskExecutor,
+  EventStoreMainNativeSessionRepository,
+} from "./agent-task-executor.ts";
+export type {
+  AgentBackedTaskExecutorOptions,
+  MainNativeSessionRepository,
+  NativeSessionEventStore,
+} from "./agent-task-executor.ts";
+export {
+  MainArtifactPrepareService,
+  createDefaultMainArtifactPreparePolicy,
+} from "./artifact-prepare-service.ts";
+export {
+  MAIN_OWNER_TASK_DEFAULT_SCOPE_ID,
+  MainConfigurationRuntimePolicy,
+  MainConfigurationRuntimePolicyError,
+  createConfigurationControlledRouteDiagnosticAgent,
+  createConfigurationMainActionPolicy,
+  createConfigurationMainArtifactPreparePolicy,
+} from "./configuration-runtime-policy.ts";
+export type {
+  MainArtifactExposureMode,
+  MainAutonomyProfile,
+  MainConfigurationRuntimePolicyOptions,
+  MainProactiveDisposition,
+  MainProactiveWorkKind,
+  MainRouteAgentEscalation,
+  MainTaskDefaultMode,
+} from "./configuration-runtime-policy.ts";
+export type {
+  DefaultMainArtifactPreparePolicyOptions,
+  MainArtifactGrantRuntimePort,
+  MainArtifactPreparePolicyDecision,
+  MainArtifactPreparePolicyPort,
+  MainArtifactPrepareServiceOptions,
+  MainArtifactRunAuthorityPort,
+} from "./artifact-prepare-service.ts";
+export {
+  MainArtifactRuntimeError,
+  createProductionMainArtifactRuntime,
+  defaultMainArtifactConfiguration,
+  loadMainArtifactConfigurationSource,
+  validateMainArtifactConfiguration,
+} from "./artifact-runtime.ts";
+export type {
+  ArtifactListenerConfiguration,
+  ArtifactListenerFactory,
+  ArtifactListenerHandle,
+  MainArtifactConfiguration,
+  MainArtifactRuntime,
+  MainArtifactRuntimeErrorCode,
+  MainArtifactRuntimeHealth,
+  MainArtifactSecretBackendConfiguration,
+} from "./artifact-runtime.ts";
+export {
+  DiscordMainRuntime,
+  ManagedDiscordBotCredentialProvider,
+  ManagedDiscordInteractionTokenVault,
+  createProductionDiscordRuntime,
+} from "./discord-runtime.ts";
+export {
+  DiscordArtifactPresentation,
+  type DiscordArtifactPresentationOptions,
+} from "./discord-artifact-presentation.ts";
+export { mergeMainDeviceSummary } from "./device-directory-projection.ts";
+export {
+  MainDiscordConfigurationError,
+  createMainDiscordComposition,
+  loadMainDiscordConfigurationSource,
+  provisionMainDiscordBotCredential,
+  validateMainDiscordConfiguration,
+} from "./discord-configuration.ts";
+export {
+  MainSecureSecretIngestService,
+  createDefaultMainManagedSecretStore,
+  type MainSecureSecretIngestServiceOptions,
+} from "./secure-secret-ingest.ts";
+export {
+  MainSecretBackendConfigurationError,
+  createMainManagedSecretStore,
+  defaultMainSecretBackendConfiguration,
+  loadMainSecretBackendConfigurationSource,
+  validateMainSecretBackendConfiguration,
+  type MainSecretBackendConfiguration,
+} from "./main-secret-backend.ts";
+export {
+  MainDatabaseSecretError,
+  executeWithPostgresUri,
+  mainSecretAlias,
+  validateMainSecretReference,
+} from "./database-secret.ts";
+export type {
+  MainDiscordComposition,
+  MainDiscordConfiguration,
+  MainDiscordSecretBackendConfiguration,
+} from "./discord-configuration.ts";
+export type {
+  CreateProductionDiscordRuntimeOptions,
+  DiscordMainRuntimeOptions,
+  DiscordProjectionTask,
+  DiscordProjectionTaskPort,
+  DiscordRuntimeDatabase,
+  DiscordRuntimeDiagnostic,
+  DiscordRuntimeScheduler,
+  DiscordRuntimeStatus,
+  DiscordRuntimeTaskServicePort,
+  ManagedDiscordBotCredentialProviderOptions,
+  ManagedDiscordInteractionTokenVaultOptions,
+} from "./discord-runtime.ts";
+export {
+  AgentBackedRouteIncidentDiagnostic,
+  MainRouteIncidentDiagnosisService,
+  ROUTE_INCIDENT_DIAGNOSIS_COMPLETED_EVENT_TYPE,
+  ROUTE_DIAGNOSTIC_AGENT_LIMITS,
+  parseStoredRouteIncidentDiagnosisResult,
+} from "./route-incident-diagnosis.ts";
+export {
+  acquireMainSingletonOwnership,
+  MainSingletonOwnershipError,
+} from "./main-singleton-ownership.ts";
+export {
+  MAIN_SERVICE_READY_MESSAGE_TYPE,
+  createMainServiceReadyMessage,
+  isMainServiceReadyMessage,
+  type ExpectedMainServiceReadyIdentity,
+  type MainServiceReadyMessageV1,
+} from "./service-readiness.ts";
+export type {
+  AcquireMainSingletonOwnershipInput,
+  MainSingletonOwnership,
+  MainSingletonOwnershipDatabase,
+  MainSingletonOwnershipDependencies,
+  MainSingletonOwnershipErrorCode,
+  MainSingletonOwnershipFactory,
+  PostgreSqlOwnershipClient,
+} from "./main-singleton-ownership.ts";
+export type {
+  AgentBackedRouteIncidentDiagnosticOptions,
+  MainRouteIncidentDiagnosisReceipt,
+  MainRouteIncidentDiagnosisServiceOptions,
+  RouteIncidentDiagnosisResult,
+  RouteIncidentDiagnosticAgentInput,
+  RouteIncidentDiagnosticAgentOutput,
+  RouteIncidentDiagnosticAgentPort,
+  RouteIncidentNotificationPort,
+} from "./route-incident-diagnosis.ts";
 
 const CONFIG_SCHEMA_VERSION = 1;
 const DEFAULT_MAIN_PORT = 4380;
@@ -59,7 +343,7 @@ export type MainDatabaseConfiguration =
     }
   | {
       readonly adapter: "postgresql";
-      readonly uriEnvironment: string;
+      readonly uriRef: string;
       readonly schema?: string;
     };
 
@@ -69,7 +353,11 @@ export interface MainConfiguration {
   readonly deviceId: string;
   readonly main: MainListenerConfiguration;
   readonly database: MainDatabaseConfiguration;
+  readonly secretBackend: MainSecretBackendConfiguration;
   readonly adminRoot: string;
+  readonly discord?: MainDiscordConfiguration;
+  readonly artifacts?: MainArtifactConfiguration;
+  readonly deviceChannel?: MainDeviceChannelConfiguration;
 }
 
 export interface RuntimePaths {
@@ -85,7 +373,11 @@ export type MainRuntimeErrorCode =
   | "ADMIN_ASSET_INVALID"
   | "CONFIG_EXISTS"
   | "CONFIG_INVALID"
-  | "DATABASE_URI_MISSING"
+  | "CONFIG_MIGRATION_REQUIRED"
+  | "DATABASE_SECRET_UNAVAILABLE"
+  | "MAIN_ALREADY_RUNNING"
+  | "MAIN_OWNERSHIP_LOST"
+  | "MAIN_OWNERSHIP_UNAVAILABLE"
   | "RUNTIME_PATH_UNSAFE";
 
 export class MainRuntimeError extends Error {
@@ -104,8 +396,14 @@ export interface InitializeMainHomeOptions {
   readonly expectedAdminRoot?: string;
   readonly sourceCheckout: string;
   readonly database?: MainDatabaseConfiguration;
+  readonly secretBackend?: MainSecretBackendConfiguration;
+  readonly databaseSecret?: Uint8Array;
   readonly listener?: MainListenerConfiguration;
+  readonly discord?: MainDiscordConfiguration;
+  readonly artifacts?: MainArtifactConfiguration;
+  readonly deviceChannel?: MainDeviceChannelConfiguration;
   readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly managedSecretStore?: ManagedSecretStore;
 }
 
 export interface InitializedMainHome {
@@ -120,7 +418,39 @@ export interface CreateMainRuntimeOptions {
   readonly build: MainControlPlaneAppOptions["build"];
   readonly releaseChannel: RuntimeReleaseChannel;
   readonly sourceCheckout: string;
+  readonly initialAdminAutoOpen?: boolean;
   readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly taskExecution?: {
+    readonly executor: TaskExecutor;
+    readonly maximumConcurrentTasks?: number;
+    readonly maximumAutomaticAttempts?: number;
+    readonly retryDelayMs?: number;
+  };
+  readonly agentExecution?: Omit<
+    AgentBackedTaskExecutorOptions,
+    "checkpoints" | "deviceId" | "sessionRepository"
+  > & {
+    readonly maximumConcurrentTasks?: number;
+    readonly maximumAutomaticAttempts?: number;
+    readonly retryDelayMs?: number;
+  };
+  readonly configurationAgent?: ConfigurationAgentPort;
+  readonly managedSecretStore?: ManagedSecretStore;
+  readonly mainSingletonOwnershipFactory?: MainSingletonOwnershipFactory;
+  readonly agentConfiguration?: Omit<
+    AgentBackedConfigurationAgentOptions,
+    "clock" | "eventStore" | "mainDeviceId" | "secretLeakGuard" | "sessionRepository" | "toolBroker"
+  >;
+  readonly discord?: Omit<
+    CreateProductionDiscordRuntimeOptions,
+    "artifactPresentation" | "database" | "mainDeviceId" | "productVersion" | "tasks"
+  >;
+  readonly artifactPreparePolicy?: MainArtifactPreparePolicyPort;
+  readonly deviceChannel?: {
+    readonly identitySecrets: DeviceIdentitySecretStore;
+    readonly listenerFactory?: MainDeviceChannelListenerFactory;
+    readonly runtimeFactory?: typeof createProductionMainDeviceChannelRuntime;
+  };
 }
 
 export interface MainRuntime {
@@ -128,13 +458,21 @@ export interface MainRuntime {
   readonly configuration: MainConfiguration;
   readonly ownerAuth: OwnerAuth;
   readonly paths: RuntimePaths;
-  readonly tasks: TaskService;
+  readonly tasks: TaskService | TaskExecutionCoordinator;
+  readonly taskExecution?: TaskExecutionCoordinator;
+  readonly discord?: DiscordMainRuntime;
+  readonly artifacts?: MainArtifactRuntime;
+  readonly deviceChannel?: ProductionMainDeviceChannelRuntime;
+  readonly budget?: TaskBudgetAdministrationPort;
+  readonly readiness: NonNullable<MainControlPlaneAppOptions["readiness"]>;
   close(): Promise<void>;
 }
 
 export interface ListeningMainRuntime extends MainRuntime {
   readonly address: string;
 }
+
+const singletonOwnershipByRuntime = new WeakMap<MainRuntime, MainSingletonOwnership>();
 
 export function resolveRuntimePaths(input: {
   readonly home?: string;
@@ -164,17 +502,39 @@ export function resolveRuntimePaths(input: {
 export async function initializeMainHome(
   options: InitializeMainHomeOptions,
 ): Promise<InitializedMainHome> {
+  try {
+    return await initializeMainHomeInternal(options);
+  } finally {
+    options.databaseSecret?.fill(0);
+  }
+}
+
+async function initializeMainHomeInternal(
+  options: InitializeMainHomeOptions,
+): Promise<InitializedMainHome> {
   const paths = resolveRuntimePaths(options);
+  const environment = options.environment ?? process.env;
   await ensureRuntimeDirectories(paths, options.sourceCheckout);
 
   if (await exists(paths.configurationFile)) {
     const configuration = await loadMainConfiguration(paths.configurationFile);
     assertExistingConfigurationMatches(configuration, options);
     await validateAdminRoot(configuration.adminRoot);
+    const managedSecretStore = resolveMainManagedSecretStore({
+      configuration,
+      sourceCheckout: options.sourceCheckout,
+      environment,
+      ...(options.managedSecretStore === undefined ? {} : { injected: options.managedSecretStore }),
+    });
+    await provisionDatabaseSecret(
+      configuration.database,
+      managedSecretStore,
+      options.databaseSecret,
+    );
     await applyInitialMigrations({
       configuration,
       paths,
-      environment: options.environment ?? process.env,
+      managedSecretStore,
     });
     await sealRuntimeState(paths);
     return {
@@ -184,10 +544,17 @@ export async function initializeMainHome(
     };
   }
 
+  const secretBackend =
+    options.secretBackend ??
+    (await defaultMainSecretBackendConfiguration({
+      home: paths.home,
+      sourceCheckout: options.sourceCheckout,
+      environment,
+    }));
   const configuration = validateMainConfiguration({
     schemaVersion: CONFIG_SCHEMA_VERSION,
     instanceId: `instance_${randomUUID()}`,
-    deviceId: `device_${randomUUID()}`,
+    deviceId: options.managedSecretStore?.deviceId ?? `device_${randomUUID()}`,
     main:
       options.listener ??
       ({
@@ -196,9 +563,20 @@ export async function initializeMainHome(
         origin: `http://127.0.0.1:${DEFAULT_MAIN_PORT}`,
       } satisfies MainListenerConfiguration),
     database: options.database ?? { adapter: "sqlite" },
+    secretBackend,
     adminRoot: resolve(options.adminRoot),
+    ...(options.discord === undefined ? {} : { discord: options.discord }),
+    ...(options.artifacts === undefined ? {} : { artifacts: options.artifacts }),
+    ...(options.deviceChannel === undefined ? {} : { deviceChannel: options.deviceChannel }),
   });
   await validateAdminRoot(configuration.adminRoot);
+  const managedSecretStore = resolveMainManagedSecretStore({
+    configuration,
+    sourceCheckout: options.sourceCheckout,
+    environment,
+    ...(options.managedSecretStore === undefined ? {} : { injected: options.managedSecretStore }),
+  });
+  await provisionDatabaseSecret(configuration.database, managedSecretStore, options.databaseSecret);
 
   await writeFile(paths.configurationFile, `${JSON.stringify(configuration, null, 2)}\n`, {
     encoding: "utf8",
@@ -208,7 +586,7 @@ export async function initializeMainHome(
   await applyInitialMigrations({
     configuration,
     paths,
-    environment: options.environment ?? process.env,
+    managedSecretStore,
   });
   await sealRuntimeState(paths);
 
@@ -227,6 +605,10 @@ function assertExistingConfigurationMatches(
     ...configuration,
     ...(options.listener === undefined ? {} : { main: options.listener }),
     ...(options.database === undefined ? {} : { database: options.database }),
+    ...(options.secretBackend === undefined ? {} : { secretBackend: options.secretBackend }),
+    ...(options.discord === undefined ? {} : { discord: options.discord }),
+    ...(options.artifacts === undefined ? {} : { artifacts: options.artifacts }),
+    ...(options.deviceChannel === undefined ? {} : { deviceChannel: options.deviceChannel }),
     ...(options.expectedAdminRoot === undefined
       ? {}
       : { adminRoot: resolve(options.expectedAdminRoot) }),
@@ -236,6 +618,14 @@ function assertExistingConfigurationMatches(
       JSON.stringify(requested.main) !== JSON.stringify(configuration.main)) ||
     (options.database !== undefined &&
       JSON.stringify(requested.database) !== JSON.stringify(configuration.database)) ||
+    (options.secretBackend !== undefined &&
+      JSON.stringify(requested.secretBackend) !== JSON.stringify(configuration.secretBackend)) ||
+    (options.discord !== undefined &&
+      JSON.stringify(requested.discord) !== JSON.stringify(configuration.discord)) ||
+    (options.artifacts !== undefined &&
+      JSON.stringify(requested.artifacts) !== JSON.stringify(configuration.artifacts)) ||
+    (options.deviceChannel !== undefined &&
+      JSON.stringify(requested.deviceChannel) !== JSON.stringify(configuration.deviceChannel)) ||
     (options.expectedAdminRoot !== undefined && requested.adminRoot !== configuration.adminRoot);
   if (conflicts) {
     throw new MainRuntimeError(
@@ -255,29 +645,120 @@ export async function loadMainConfiguration(path: string): Promise<MainConfigura
   return validateMainConfiguration(parsed);
 }
 
+export async function inspectPersistedMainConfiguration(input: {
+  readonly home?: string;
+  readonly configuration: MainConfiguration;
+  readonly sourceCheckout: string;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly managedSecretStore?: ManagedSecretStore;
+}): Promise<Readonly<Record<string, EffectiveConfigurationValue>>> {
+  const configuration = validateMainConfiguration(input.configuration);
+  const paths = resolveRuntimePaths(input);
+  const managedSecretStore = resolveMainManagedSecretStore({
+    configuration,
+    sourceCheckout: input.sourceCheckout,
+    environment: input.environment ?? process.env,
+    ...(input.managedSecretStore === undefined ? {} : { injected: input.managedSecretStore }),
+  });
+  const repository = await openConfigurationRepository(
+    configuration.database,
+    paths,
+    "verify",
+    managedSecretStore,
+  );
+  try {
+    const service = new ConfigurationService({
+      definitions: STANDARD_CONFIGURATION_DEFINITIONS,
+      repository,
+      idSource: () => `configuration_inspect_${randomUUID()}`,
+      clock: () => new Date().toISOString(),
+    });
+    return await service.inspect({
+      instanceId: configuration.instanceId,
+      mainId: configuration.deviceId,
+      deviceId: configuration.deviceId,
+    });
+  } finally {
+    await repository.close();
+  }
+}
+
 export async function createMainRuntime(options: CreateMainRuntimeOptions): Promise<MainRuntime> {
+  if (options.taskExecution !== undefined && options.agentExecution !== undefined) {
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      "Main accepts either a custom Task executor or an Agent-backed executor, not both.",
+    );
+  }
+  if (options.configurationAgent !== undefined && options.agentConfiguration !== undefined) {
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      "Main accepts either a custom Configuration Agent or an Agent-backed Configuration Agent, not both.",
+    );
+  }
   const configuration = validateMainConfiguration(options.configuration);
   const paths = resolveRuntimePaths(options);
   await ensureRuntimeDirectories(paths, options.sourceCheckout);
   await validateAdminRoot(configuration.adminRoot);
 
   const environment = options.environment ?? process.env;
+  const managedSecretStore = resolveMainManagedSecretStore({
+    configuration,
+    sourceCheckout: options.sourceCheckout,
+    environment,
+    ...(options.managedSecretStore === undefined ? {} : { injected: options.managedSecretStore }),
+  });
   const clock = new SystemClock();
   const eventStore = await openEventStore(
     configuration.database,
     paths,
     clock,
     "verify",
-    environment,
+    managedSecretStore,
   );
   let ownerRepository: SqlOwnerAuthRepository | undefined;
+  let approvalRepository: SqlApprovalRepository | undefined;
+  let actionAuthorizationRepository: SqlActionAuthorizationRepository | undefined;
+  let configurationRepository: SqlConfigurationRepository | undefined;
+  let deviceObservationRepository: SqlDeviceObservationRepository | undefined;
+  let approvalRuntime: ConfigurationApprovalRuntime | undefined;
+  let actionAuthorization: MainActionAuthorizationRuntime | undefined;
   let app: Awaited<ReturnType<typeof createMainControlPlaneApp>> | undefined;
+  let taskExecution: TaskExecutionCoordinator | undefined;
+  let discord: DiscordMainRuntime | undefined;
+  let artifacts: MainArtifactRuntime | undefined;
+  let artifactPrepare: MainArtifactPrepareService | undefined;
+  let deviceChannel: ProductionMainDeviceChannelRuntime | undefined;
+  let fleet: MainWorkerFleetProjection | undefined;
+  let authoritativeWorkerExecutor: AuthoritativeWorkerTaskExecutor | undefined;
+  let mainSingletonOwnership: MainSingletonOwnership | undefined;
+  let ownershipLossUnsubscribe: (() => void) | undefined;
+  let closeAfterOwnershipLoss: (() => Promise<void>) | undefined;
+  let ownershipLossPending = false;
   try {
+    try {
+      mainSingletonOwnership = validateMainSingletonOwnership(
+        await (options.mainSingletonOwnershipFactory ?? acquireMainSingletonOwnership)({
+          database: configuration.database,
+          stateDirectory: paths.stateDirectory,
+          secretStore: managedSecretStore,
+        }),
+      );
+    } catch (error) {
+      throw normalizeMainSingletonOwnershipError(error);
+    }
+    ownershipLossUnsubscribe = mainSingletonOwnership.onLost(() => {
+      ownershipLossPending = true;
+      if (closeAfterOwnershipLoss !== undefined) {
+        void closeAfterOwnershipLoss().catch(() => undefined);
+      }
+    });
+    assertMainSingletonOwnership(mainSingletonOwnership);
     ownerRepository = await openOwnerRepository(
       configuration.database,
       paths,
       "verify",
-      environment,
+      managedSecretStore,
     );
     const ownerAuth = new OwnerAuth({
       allowedOrigins: [configuration.main.origin],
@@ -286,7 +767,465 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       random: new NodeCryptoRandomSource(),
       repository: ownerRepository,
     });
-    const tasks = new TaskService({ clock: clock.asEventClock(), eventStore });
+    configurationRepository = await openConfigurationRepository(
+      configuration.database,
+      paths,
+      "verify",
+      managedSecretStore,
+    );
+    const secretIngest = await MainSecureSecretIngestService.open({
+      mainDeviceId: configuration.deviceId,
+      ledgerDirectory: join(paths.stateDirectory, "secure-secret-ingest"),
+      secretStore: managedSecretStore,
+    });
+    const configuredDatabaseReference =
+      configuration.database.adapter === "postgresql" ? configuration.database.uriRef : undefined;
+    const configurationService = new ConfigurationService({
+      definitions: STANDARD_CONFIGURATION_DEFINITIONS,
+      repository: configurationRepository,
+      idSource: () => `configuration_${randomUUID()}`,
+      clock: () => clock.asEventClock().now(),
+      secretReferenceAuthority: {
+        isAvailable(input: ConfigurationSecretReferenceAvailabilityInput): boolean {
+          return (
+            secretIngest.isAvailable(input) ||
+            (configuredDatabaseReference !== undefined &&
+              input.key === "database.uri-ref" &&
+              input.locality === "main" &&
+              input.scope.kind === "main" &&
+              input.scope.id === configuration.deviceId &&
+              input.secretRef === configuredDatabaseReference)
+          );
+        },
+      },
+    });
+    await seedInitialMainConfiguration(
+      configurationService,
+      configuration,
+      options.initialAdminAutoOpen,
+    );
+    const runtimePolicy = new MainConfigurationRuntimePolicy({
+      service: configurationService,
+      instanceId: configuration.instanceId,
+      mainDeviceId: configuration.deviceId,
+      taskDefaultId: MAIN_OWNER_TASK_DEFAULT_SCOPE_ID,
+    });
+    const taskService = new TaskService({
+      clock: clock.asEventClock(),
+      eventStore,
+      resolveDefaultMode: () => runtimePolicy.taskDefaultMode(),
+    });
+    const continuationCheckpoints = new DurableTaskContinuationCheckpointService({
+      eventStore,
+      tasks: taskService,
+    });
+    const budget = new DurableTaskBudgetEnforcer({
+      eventStore,
+      clock,
+      instanceLimits: DEFAULT_INSTANCE_BUDGET_LIMITS,
+      requestedTaskDefaults: DEFAULT_REQUESTED_TASK_BUDGET_LIMITS,
+      autonomousTaskDefaults: DEFAULT_AUTONOMOUS_TASK_BUDGET_LIMITS,
+      usageProxy: DEFAULT_PROVIDER_USAGE_PROXY,
+    });
+    const budgetAdmin = createMainTaskBudgetAdmin(budget);
+    approvalRepository = await openApprovalRepository(
+      configuration.database,
+      paths,
+      "verify",
+      managedSecretStore,
+    );
+    const actionApprovalExecutor = new LateBoundApprovalExecutionPort();
+    const actionRunAuthority = new LateBoundMainActionRunAuthorityPort();
+    approvalRuntime = createConfigurationApprovalRuntime({
+      configuration: configurationService,
+      repository: approvalRepository,
+      clock,
+      idSource: {
+        nextId: () => `approval_${randomUUID()}`,
+      },
+      ...(configuration.deviceChannel === undefined
+        ? {}
+        : {
+            additionalExecutors: [
+              {
+                kind: "worker-action.authorize",
+                executor: actionApprovalExecutor,
+              },
+            ],
+          }),
+    });
+    assertMainSingletonOwnership(mainSingletonOwnership);
+    await approvalRuntime.service.reconcileInterruptedExecutions();
+    assertMainSingletonOwnership(mainSingletonOwnership);
+    if (configuration.deviceChannel !== undefined) {
+      actionAuthorizationRepository = await openActionAuthorizationRepository(
+        configuration.database,
+        paths,
+        "verify",
+        managedSecretStore,
+      );
+      actionAuthorization = new MainActionAuthorizationRuntime({
+        repository: actionAuthorizationRepository,
+        runAuthority: actionRunAuthority,
+        clock,
+        configuredPolicy: createConfigurationMainActionPolicy(runtimePolicy),
+      });
+      actionAuthorization.attachApprovalService(approvalRuntime.service);
+      actionApprovalExecutor.bind(actionAuthorization);
+    }
+    const deviceProfiles = {
+      get: async (deviceId: string): Promise<MainOwnedDeviceProfile | undefined> =>
+        projectMainOwnedDeviceProfile(
+          await configurationService.inspect({
+            instanceId: configuration.instanceId,
+            mainId: configuration.deviceId,
+            deviceId,
+          }),
+        ),
+    };
+    let configurationToolBroker: ConfigurationServiceAgentToolBroker | undefined;
+    if (options.agentConfiguration !== undefined) {
+      configurationToolBroker = new ConfigurationServiceAgentToolBroker({
+        service: configurationService,
+        contextForDevice: (targetDeviceId) => ({
+          instanceId: configuration.instanceId,
+          mainId: configuration.deviceId,
+          deviceId: targetDeviceId,
+        }),
+        authorizeMutation: authorizeMainConfigurationMutation,
+        approvalRequester: approvalRuntime.requester,
+      });
+    }
+    const configuredConfigurationAgent =
+      options.configurationAgent ??
+      (options.agentConfiguration === undefined
+        ? undefined
+        : new AgentBackedConfigurationAgent({
+            adapter: options.agentConfiguration.adapter,
+            sessionRepository: new EventStoreMainNativeSessionRepository(eventStore),
+            eventStore,
+            mainDeviceId: configuration.deviceId,
+            workspace: options.agentConfiguration.workspace,
+            sandbox: options.agentConfiguration.sandbox,
+            permissions: options.agentConfiguration.permissions,
+            limits: options.agentConfiguration.limits,
+            toolBroker: configurationToolBroker!,
+            secretLeakGuard: new ManagedSecretExactMatchGuard({
+              secretStore: managedSecretStore,
+              aliases: () =>
+                Object.freeze([
+                  ...secretIngest.managedSecretAliases(),
+                  ...(configuration.database.adapter === "postgresql"
+                    ? [mainSecretAlias(configuration.database.uriRef)]
+                    : []),
+                  ...(configuration.discord === undefined
+                    ? []
+                    : [configuration.discord.botTokenAlias]),
+                ]),
+            }),
+            clock: clock.asEventClock(),
+            ...(options.agentConfiguration.maximumPromptBytes === undefined
+              ? {}
+              : { maximumPromptBytes: options.agentConfiguration.maximumPromptBytes }),
+            ...(options.agentConfiguration.maximumToolTurns === undefined
+              ? {}
+              : { maximumToolTurns: options.agentConfiguration.maximumToolTurns }),
+          }));
+    const agentReasoner =
+      options.agentExecution === undefined
+        ? undefined
+        : new AgentBackedTaskExecutor({
+            adapter: options.agentExecution.adapter,
+            sessionRepository: new EventStoreMainNativeSessionRepository(eventStore),
+            checkpoints: continuationCheckpoints,
+            deviceId: configuration.deviceId,
+            workspace: options.agentExecution.workspace,
+            sandbox: options.agentExecution.sandbox,
+            permissions: options.agentExecution.permissions,
+            limits: options.agentExecution.limits,
+            ...(options.agentExecution.maximumPromptBytes === undefined
+              ? {}
+              : { maximumPromptBytes: options.agentExecution.maximumPromptBytes }),
+          });
+    const routeIncidentDiagnosis =
+      configuration.deviceChannel === undefined
+        ? undefined
+        : new MainRouteIncidentDiagnosisService({
+            eventStore,
+            ...(options.agentExecution === undefined
+              ? {}
+              : {
+                  agent: createConfigurationControlledRouteDiagnosticAgent({
+                    runtime: runtimePolicy,
+                    agent: new AgentBackedRouteIncidentDiagnostic({
+                      adapter: options.agentExecution.adapter,
+                      deviceId: configuration.deviceId,
+                      workspace: options.agentExecution.workspace,
+                    }),
+                  }),
+                }),
+          });
+    assertMainSingletonOwnership(mainSingletonOwnership);
+    await routeIncidentDiagnosis?.recoverInterrupted();
+    assertMainSingletonOwnership(mainSingletonOwnership);
+    let configuredTaskExecution = options.taskExecution;
+    if (configuration.deviceChannel === undefined && agentReasoner !== undefined) {
+      configuredTaskExecution = {
+        executor: budgetedMainAgentExecutor(agentReasoner, budget),
+        ...(options.agentExecution?.maximumConcurrentTasks === undefined
+          ? {}
+          : { maximumConcurrentTasks: options.agentExecution.maximumConcurrentTasks }),
+        ...(options.agentExecution?.maximumAutomaticAttempts === undefined
+          ? {}
+          : {
+              maximumAutomaticAttempts: options.agentExecution.maximumAutomaticAttempts,
+            }),
+        ...(options.agentExecution?.retryDelayMs === undefined
+          ? {}
+          : { retryDelayMs: options.agentExecution.retryDelayMs }),
+      };
+    }
+    if (configuration.deviceChannel !== undefined) {
+      if (options.deviceChannel === undefined) {
+        throw new MainRuntimeError(
+          "CONFIG_INVALID",
+          "Configured Device channels require a Device identity Secret Store.",
+        );
+      }
+      if (actionAuthorization === undefined) {
+        throw new MainRuntimeError(
+          "CONFIG_INVALID",
+          "Configured Device channels require the Worker action authorization runtime.",
+        );
+      }
+      const activeActionAuthorization = actionAuthorization;
+      const channelReference: { current?: ProductionMainDeviceChannelRuntime } = {};
+      deviceObservationRepository = await openDeviceObservationRepository(
+        configuration.database,
+        paths,
+        "verify",
+        managedSecretStore,
+      );
+      fleet = new MainWorkerFleetProjection({
+        identities: {
+          list: async () => (await channelReference.current?.listDeviceIdentities()) ?? [],
+        },
+        observations: deviceObservationRepository,
+        profiles: deviceProfiles,
+        clock,
+      });
+      const runtimeFactory =
+        options.deviceChannel.runtimeFactory ?? createProductionMainDeviceChannelRuntime;
+      assertMainSingletonOwnership(mainSingletonOwnership);
+      deviceChannel = await createDeviceChannelRuntimeWithDatabase({
+        configuration: configuration.database,
+        paths,
+        secretStore: managedSecretStore,
+        create: (database) =>
+          runtimeFactory({
+            clock,
+            configuration: configuration.deviceChannel!,
+            database,
+            identitySecrets: options.deviceChannel!.identitySecrets,
+            instanceId: configuration.instanceId,
+            mainDeviceId: configuration.deviceId,
+            sourceCheckout: options.sourceCheckout,
+            ...(options.deviceChannel?.listenerFactory === undefined
+              ? {}
+              : { listenerFactory: options.deviceChannel.listenerFactory }),
+            onHeartbeat: (deviceId, heartbeat) => fleet!.observeHeartbeat(deviceId, heartbeat),
+            onEvents: async (deviceId, events) => {
+              if (authoritativeWorkerExecutor === undefined) {
+                throw new Error("The authoritative Worker executor is not ready.");
+              }
+              await authoritativeWorkerExecutor.acceptWorkerEvents(deviceId, events);
+            },
+            onArtifactPrepare: async (input) =>
+              artifactPrepare?.prepare(input) ?? {
+                status: "rejected",
+                code: "SERVICE_UNAVAILABLE",
+                retryable: true,
+              },
+            onActionAuthorize: (input) => activeActionAuthorization.authorize(input),
+            onActionConsume: (input) => activeActionAuthorization.consume(input),
+            onRunLeaseRenew: async (input) => {
+              if (authoritativeWorkerExecutor === undefined) {
+                throw new Error("The authoritative Worker executor is not ready.");
+              }
+              return await authoritativeWorkerExecutor.renewWorkerRunLease(
+                input.authenticatedDeviceId,
+                input.request,
+              );
+            },
+            onRouteIncident: async (input) => {
+              if (routeIncidentDiagnosis === undefined) {
+                throw new Error("The route incident diagnosis service is not ready.");
+              }
+              await routeIncidentDiagnosis.handle(input);
+            },
+          }),
+      });
+      assertMainSingletonOwnership(mainSingletonOwnership);
+      channelReference.current = deviceChannel;
+      if (agentReasoner !== undefined) {
+        authoritativeWorkerExecutor = new AuthoritativeWorkerTaskExecutor({
+          eventStore,
+          checkpoints: continuationCheckpoints,
+          planner: agentReasoner,
+          verifier: agentReasoner,
+          targetResolver: new DeterministicWorkerTargetResolver({ candidates: fleet }),
+          dispatch: new MainDeviceChannelWorkerRunDispatchPort(deviceChannel.workerChannel),
+          clock,
+          idSource: {
+            nextId: (kind) => `${kind}_${randomUUID()}`,
+          },
+          budget,
+        });
+        actionRunAuthority.bind(authoritativeWorkerExecutor);
+        configuredTaskExecution = {
+          executor: authoritativeWorkerExecutor,
+          ...(options.agentExecution?.maximumConcurrentTasks === undefined
+            ? {}
+            : { maximumConcurrentTasks: options.agentExecution.maximumConcurrentTasks }),
+          ...(options.agentExecution?.maximumAutomaticAttempts === undefined
+            ? {}
+            : {
+                maximumAutomaticAttempts: options.agentExecution.maximumAutomaticAttempts,
+              }),
+          ...(options.agentExecution?.retryDelayMs === undefined
+            ? {}
+            : { retryDelayMs: options.agentExecution.retryDelayMs }),
+        };
+      }
+    }
+    if (configuredTaskExecution !== undefined) {
+      const taskExecutionOptions: TaskExecutionCoordinatorOptions = {
+        taskService,
+        executor: configuredTaskExecution.executor,
+        budget,
+        deferExecutionUntilStart: true,
+        ...(configuredTaskExecution.maximumConcurrentTasks === undefined
+          ? {}
+          : { maximumConcurrentTasks: configuredTaskExecution.maximumConcurrentTasks }),
+        ...(configuredTaskExecution.maximumAutomaticAttempts === undefined
+          ? {}
+          : { maximumAutomaticAttempts: configuredTaskExecution.maximumAutomaticAttempts }),
+        ...(configuredTaskExecution.retryDelayMs === undefined
+          ? {}
+          : { retryDelayMs: configuredTaskExecution.retryDelayMs }),
+      };
+      taskExecution = new TaskExecutionCoordinator(taskExecutionOptions);
+    }
+    const tasks = taskExecution ?? taskService;
+    const runtimeFeatures: {
+      releaseChannel: RuntimeReleaseChannel;
+      taskExecution: { status: "ready" | "unavailable"; code: string };
+      configurationAgent: { status: "ready" | "unavailable"; code: string };
+      discord: { status: "ready" | "unavailable"; code: string };
+    } = {
+      releaseChannel: options.releaseChannel,
+      taskExecution:
+        taskExecution === undefined
+          ? {
+              status: "unavailable" as const,
+              code: "ORCHESTRATION_NOT_CONNECTED",
+            }
+          : {
+              status: "ready" as const,
+              code: "TASK_EXECUTION_READY",
+            },
+      configurationAgent:
+        configuredConfigurationAgent === undefined
+          ? {
+              status: "unavailable" as const,
+              code: "CONFIGURATION_AGENT_NOT_CONNECTED",
+            }
+          : {
+              status: "ready" as const,
+              code: "CONFIGURATION_AGENT_READY",
+            },
+      discord: {
+        status: "unavailable" as const,
+        code: "DISCORD_NOT_CONFIGURED",
+      },
+    };
+    if (configuration.artifacts !== undefined) {
+      assertMainSingletonOwnership(mainSingletonOwnership);
+      artifacts = await createProductionMainArtifactRuntime({
+        configuration: configuration.artifacts,
+        home: paths.home,
+        sourceCheckout: options.sourceCheckout,
+        deviceId: configuration.deviceId,
+        adminListeners: [
+          {
+            host: configuration.main.host,
+            port: configuration.main.port,
+            origin: configuration.main.origin,
+          },
+        ],
+        environment,
+        indexRepositoryFactory: () =>
+          openArtifactIndexRepository(configuration.database, paths, "verify", managedSecretStore),
+      });
+      assertMainSingletonOwnership(mainSingletonOwnership);
+      if (authoritativeWorkerExecutor !== undefined) {
+        artifactPrepare = new MainArtifactPrepareService({
+          runAuthority: authoritativeWorkerExecutor,
+          artifactRuntime: artifacts,
+          policy:
+            options.artifactPreparePolicy ??
+            createConfigurationMainArtifactPreparePolicy(runtimePolicy),
+          clock: { nowMs: () => clock.now() },
+        });
+      }
+    }
+    if (options.discord !== undefined) {
+      const ownerStatusObserver = options.discord.onStatusChange;
+      try {
+        assertMainSingletonOwnership(mainSingletonOwnership);
+        discord = await createDiscordRuntimeWithDatabase({
+          configuration: configuration.database,
+          paths,
+          secretStore: managedSecretStore,
+          create: (database) =>
+            createProductionDiscordRuntime({
+              ...options.discord!,
+              mainDeviceId: configuration.deviceId,
+              productVersion: options.build.version,
+              database,
+              tasks,
+              ...(artifacts === undefined
+                ? {}
+                : {
+                    artifactPresentation: new DiscordArtifactPresentation({
+                      adminOrigin: configuration.main.origin,
+                      configuration: artifacts.configuration,
+                      store: artifacts.store,
+                    }),
+                  }),
+              onStatusChange: (status) => {
+                runtimeFeatures.discord = runtimeFeatureForDiscord(status);
+                ownerStatusObserver?.(status);
+              },
+            }),
+        });
+        runtimeFeatures.discord = runtimeFeatureForDiscord(await discord.start());
+        assertMainSingletonOwnership(mainSingletonOwnership);
+      } catch (error) {
+        if (isMainSingletonOwnershipFailure(error)) {
+          throw mapMainSingletonOwnershipError(error);
+        }
+        runtimeFeatures.discord = {
+          status: "unavailable",
+          code: "DISCORD_COMPOSITION_UNAVAILABLE",
+        };
+      }
+    }
+    if (taskExecution !== undefined) {
+      assertMainSingletonOwnership(mainSingletonOwnership);
+      await taskExecution.start();
+      assertMainSingletonOwnership(mainSingletonOwnership);
+    }
     const tls =
       configuration.main.tls === undefined
         ? undefined
@@ -294,78 +1233,231 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             certificate: await readFile(configuration.main.tls.certificatePath),
             privateKey: await readFile(configuration.main.tls.privateKeyPath),
           };
+    const adminOperations = createMainAdminOperations({
+      mainDeviceId: configuration.deviceId,
+      idempotencyDirectory: join(paths.stateDirectory, "admin-operation-idempotency"),
+      eventStore,
+      clock,
+      ownerAuthAudits: ownerRepository,
+      ...(actionAuthorization === undefined
+        ? {}
+        : { actionAuthorizationAudits: actionAuthorization }),
+      configurationAudits: configurationService,
+      approvalAudits: approvalRuntime.service,
+      ...(deviceChannel === undefined ? {} : { deviceChannel }),
+      ...(configuration.deviceChannel === undefined
+        ? {}
+        : { deviceChannelConfiguration: configuration.deviceChannel }),
+      ...(artifacts === undefined ? {} : { artifacts }),
+    });
+    assertMainSingletonOwnership(mainSingletonOwnership);
+    const readiness: NonNullable<MainControlPlaneAppOptions["readiness"]> = async () => {
+      try {
+        assertMainSingletonOwnership(mainSingletonOwnership);
+      } catch (error) {
+        const ownershipError = normalizeMainSingletonOwnershipError(error);
+        return {
+          status: "not-ready" as const,
+          checks: [
+            {
+              status: "not-ready" as const,
+              code: ownershipError.code,
+            },
+          ],
+        };
+      }
+      await eventStore.streamVersion("opendelegate:readiness");
+      const artifactHealth = await artifacts?.health();
+      const artifactReady = artifactHealth === undefined || artifactHealth.status === "ready";
+      return {
+        status: artifactReady ? ("ready" as const) : ("not-ready" as const),
+        checks: [
+          { status: "ready" as const, code: "DATABASE_READY" },
+          { status: "ready" as const, code: "CONTROL_PLANE_READY" },
+          ...(deviceChannel === undefined
+            ? []
+            : [{ status: "ready" as const, code: "DEVICE_CHANNEL_READY" }]),
+          ...(artifactHealth === undefined
+            ? []
+            : [
+                {
+                  status: artifactReady ? ("ready" as const) : ("not-ready" as const),
+                  code: artifactHealth.code,
+                },
+              ]),
+        ],
+      };
+    };
     app = await createMainControlPlaneApp({
       ownerAuth,
       allowedOrigins: [configuration.main.origin],
       build: options.build,
-      runtimeFeatures: {
-        releaseChannel: options.releaseChannel,
-        taskExecution: {
-          status: "unavailable",
-          code: "ORCHESTRATION_NOT_CONNECTED",
-        },
-        configurationAgent: {
-          status: "unavailable",
-          code: "CONFIGURATION_AGENT_NOT_CONNECTED",
-        },
-        discord: {
-          status: "unavailable",
-          code: "DISCORD_NOT_CONFIGURED",
+      runtimeFeatures,
+      deviceDirectory: {
+        list: async () => {
+          const mainProfile = await deviceProfiles.get(configuration.deviceId);
+          return mergeMainDeviceSummary(
+            {
+              deviceId: configuration.deviceId,
+              name: mainProfile?.displayName ?? hostname(),
+              osFamily: currentOsFamily(),
+              platformRelease: release(),
+              architecture: arch(),
+              role: "main",
+              connection: "online",
+              runtime: "healthy",
+              serviceMode: "foreground",
+              roles: [...(mainProfile?.roles ?? ["main-coordinator"])],
+              instructions: [...(mainProfile?.instructions ?? [])],
+              policies: [...(mainProfile?.policies ?? [])],
+              routes: [
+                {
+                  routeId: `main-local:${configuration.deviceId}`,
+                  label: "Main-local",
+                  priority: 0,
+                  health: "healthy" as const,
+                },
+              ],
+              knowledgeHealth: "unknown" as const,
+            },
+            (await fleet?.deviceSummaries()) ?? [],
+          );
         },
       },
-      devices: [
-        {
-          deviceId: configuration.deviceId,
-          name: hostname(),
-          osFamily: currentOsFamily(),
-          platformRelease: release(),
-          architecture: arch(),
-          role: "main",
-          connection: "online",
-          runtime: "healthy",
-          serviceMode: "foreground",
-        },
-      ],
       tasks,
+      budgets: budgetAdmin,
+      approvals: approvalRuntime.controlPlane,
+      enrollment: adminOperations.enrollment,
+      artifacts: adminOperations.artifacts,
+      audit: adminOperations.audit,
+      ...(secretIngest === undefined ? {} : { secretIngest }),
+      ...(configuredConfigurationAgent === undefined
+        ? {}
+        : { configurationAgent: configuredConfigurationAgent }),
       ...(tls === undefined ? {} : { tls }),
-      readiness: async () => {
-        await eventStore.streamVersion("opendelegate:readiness");
-        return {
-          status: "ready",
-          checks: [
-            { status: "ready", code: "DATABASE_READY" },
-            { status: "ready", code: "CONTROL_PLANE_READY" },
-          ],
-        };
-      },
+      readiness,
     });
+    assertMainSingletonOwnership(mainSingletonOwnership);
     await registerAdminAssets(app, configuration.adminRoot);
     await app.ready();
+    assertMainSingletonOwnership(mainSingletonOwnership);
     await sealRuntimeState(paths);
+    assertMainSingletonOwnership(mainSingletonOwnership);
 
+    const activeMainSingletonOwnership = requireMainSingletonOwnership(mainSingletonOwnership);
+    const cleanupOperations = (): Parameters<typeof closeMainResources>[0] => [
+      { operation: "control-plane", close: () => app?.close() },
+      { operation: "artifacts", close: () => artifacts?.close() },
+      { operation: "discord", close: () => discord?.close() },
+      { operation: "task-execution", close: () => taskExecution?.close() },
+      {
+        operation: "device-channel-and-action-authorization",
+        close: async () => {
+          try {
+            await deviceChannel?.close();
+          } finally {
+            if (actionAuthorization === undefined) {
+              await actionAuthorizationRepository?.close();
+            } else {
+              await actionAuthorization.close();
+            }
+          }
+        },
+      },
+      {
+        operation: "approval-repository",
+        close: () => approvalRepository?.close(),
+      },
+      {
+        operation: "device-observation-repository",
+        close: () => deviceObservationRepository?.close(),
+      },
+      {
+        operation: "configuration-repository",
+        close: () => configurationRepository?.close(),
+      },
+      { operation: "event-store", close: () => eventStore.close() },
+      { operation: "owner-auth-repository", close: () => ownerRepository?.close() },
+    ];
     let closePromise: Promise<void> | undefined;
-    return {
+    const close = (): Promise<void> => {
+      closePromise ??= closeMainSingletonOwnedResources(
+        activeMainSingletonOwnership,
+        ownershipLossUnsubscribe,
+        cleanupOperations(),
+      );
+      return closePromise;
+    };
+    closeAfterOwnershipLoss = close;
+    const runtime: MainRuntime = {
       app,
       configuration,
       ownerAuth,
       paths,
       tasks,
-      close: () => {
-        if (closePromise === undefined) {
-          closePromise = closeMainResources([
-            { operation: "control-plane", close: () => app?.close() },
-            { operation: "event-store", close: () => eventStore.close() },
-            { operation: "owner-auth-repository", close: () => ownerRepository?.close() },
-          ]);
-        }
-        return closePromise;
-      },
+      ...(taskExecution === undefined ? {} : { taskExecution }),
+      ...(discord === undefined ? {} : { discord }),
+      ...(artifacts === undefined ? {} : { artifacts }),
+      ...(deviceChannel === undefined ? {} : { deviceChannel }),
+      budget,
+      readiness,
+      close,
     };
+    singletonOwnershipByRuntime.set(runtime, activeMainSingletonOwnership);
+    if (ownershipLossPending) {
+      void close().catch(() => undefined);
+    }
+    return runtime;
   } catch (error) {
-    return closeAfterPrimaryFailure(error, [
+    const primaryError = mapMainSingletonOwnershipError(error);
+    const cleanupOperations: Parameters<typeof closeMainResources>[0] = [
       { operation: "control-plane", close: () => app?.close() },
+      { operation: "artifacts", close: () => artifacts?.close() },
+      { operation: "discord", close: () => discord?.close() },
+      { operation: "task-execution", close: () => taskExecution?.close() },
+      {
+        operation: "device-channel-and-action-authorization",
+        close: async () => {
+          try {
+            await deviceChannel?.close();
+          } finally {
+            if (actionAuthorization === undefined) {
+              await actionAuthorizationRepository?.close();
+            } else {
+              await actionAuthorization.close();
+            }
+          }
+        },
+      },
+      {
+        operation: "approval-repository",
+        close: () => approvalRepository?.close(),
+      },
+      {
+        operation: "device-observation-repository",
+        close: () => deviceObservationRepository?.close(),
+      },
+      {
+        operation: "configuration-repository",
+        close: () => configurationRepository?.close(),
+      },
       { operation: "event-store", close: () => eventStore.close() },
       { operation: "owner-auth-repository", close: () => ownerRepository?.close() },
+    ];
+    if (mainSingletonOwnership === undefined) {
+      return closeAfterPrimaryFailure(primaryError, cleanupOperations);
+    }
+    const activeMainSingletonOwnership = mainSingletonOwnership;
+    return closeAfterPrimaryFailure(primaryError, [
+      {
+        operation: "singleton-owned-main-runtime",
+        close: () =>
+          closeMainSingletonOwnedResources(
+            activeMainSingletonOwnership,
+            ownershipLossUnsubscribe,
+            cleanupOperations,
+          ),
+      },
     ]);
   }
 }
@@ -386,19 +1478,293 @@ function currentOsFamily(): "macos" | "windows" | "linux" {
   }
 }
 
-export async function listenMainRuntime(runtime: MainRuntime): Promise<ListeningMainRuntime> {
-  const address = await runtime.app.listen({
-    host: runtime.configuration.main.host,
-    port: runtime.configuration.main.port,
-    listenTextResolver: (value) => value,
+function budgetedMainAgentExecutor(
+  executor: AgentBackedTaskExecutor,
+  budget: TaskBudgetAdministrationPort,
+): TaskExecutor {
+  const wrapped: TaskExecutor = {
+    execute: async (request) => {
+      await budget.beginNativeTurn({
+        taskId: request.task.taskId,
+        operationId: `${request.executionKey}:main-agent-native-turn`,
+        source: "main-planner",
+      });
+      return executor.execute(request);
+    },
+    cancel: (request) => executor.cancel(request),
+  };
+  return Object.freeze(wrapped);
+}
+
+export function projectMainOwnedDeviceProfile(
+  values: Readonly<Record<string, EffectiveConfigurationValue>>,
+): MainOwnedDeviceProfile | undefined {
+  const displayName = explicitConfigurationValue(values, "device.display-name");
+  const roles = explicitConfigurationValue(values, "device.roles");
+  const instructions = explicitConfigurationValue(values, "device.instructions");
+  const policies: NonNullable<MainOwnedDeviceProfile["policies"]> = Object.freeze([
+    effectiveDevicePolicy(
+      values,
+      "policy.official-package-install",
+      "configured-official-package-install",
+      "allow",
+    ),
+    effectiveDevicePolicy(values, "policy.network-change", "os-network-change", "require-approval"),
+    Object.freeze({
+      policyId: "built-in-secret-export",
+      actionCategory: "secret-export",
+      decision: "deny" as const,
+      source: "built-in" as const,
+      effectiveScope: "instance" as const,
+    }),
+    Object.freeze({
+      policyId: "built-in-cross-device-knowledge-transfer",
+      actionCategory: "cross-device-knowledge-transfer",
+      decision: "deny" as const,
+      source: "built-in" as const,
+      effectiveScope: "instance" as const,
+    }),
+    Object.freeze({
+      policyId: "built-in-policy-bypass-attempt",
+      actionCategory: "policy-bypass-attempt",
+      decision: "deny" as const,
+      source: "built-in" as const,
+      effectiveScope: "instance" as const,
+    }),
+  ]);
+  return Object.freeze({
+    ...(displayName === null || displayName === undefined
+      ? {}
+      : { displayName: requireProfileString(displayName, "Device display name") }),
+    ...(roles === undefined ? {} : { roles: requireProfileStringList(roles, "Device roles") }),
+    ...(instructions === undefined
+      ? {}
+      : {
+          instructions: requireProfileStringList(instructions, "Device instructions"),
+        }),
+    policies,
   });
-  return Object.assign(runtime, { address });
+}
+
+function effectiveDevicePolicy(
+  values: Readonly<Record<string, EffectiveConfigurationValue>>,
+  key: string,
+  actionCategory: string,
+  defaultDecision: "allow" | "require-approval" | "deny",
+): NonNullable<MainOwnedDeviceProfile["policies"]>[number] {
+  const effective = values[key];
+  const decision = effective?.value ?? defaultDecision;
+  if (decision !== "allow" && decision !== "require-approval" && decision !== "deny") {
+    throw new MainRuntimeError("CONFIG_INVALID", `${key} is invalid.`);
+  }
+  const source = effective?.source;
+  const effectiveScope =
+    source === undefined || source === "default"
+      ? "instance"
+      : source.kind === "instance" || source.kind === "main" || source.kind === "device"
+        ? source.kind
+        : "instance";
+  return Object.freeze({
+    policyId: key,
+    actionCategory,
+    decision,
+    source: source === undefined || source === "default" ? "built-in" : "configuration",
+    effectiveScope,
+  });
+}
+
+function explicitConfigurationValue(
+  values: Readonly<Record<string, EffectiveConfigurationValue>>,
+  key: string,
+): unknown | undefined {
+  const value = values[key];
+  return value === undefined || value.source === "default" ? undefined : value.value;
+}
+
+function requireProfileString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new MainRuntimeError("CONFIG_INVALID", `${label} is invalid.`);
+  }
+  return value;
+}
+
+function requireProfileStringList(value: unknown, label: string): readonly string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    throw new MainRuntimeError("CONFIG_INVALID", `${label} are invalid.`);
+  }
+  return Object.freeze([...value] as string[]);
+}
+
+export async function listenMainRuntime(runtime: MainRuntime): Promise<ListeningMainRuntime> {
+  try {
+    const ownership = requireMainSingletonOwnership(singletonOwnershipByRuntime.get(runtime));
+    assertMainSingletonOwnership(ownership);
+    const address = await runtime.app.listen({
+      host: runtime.configuration.main.host,
+      port: runtime.configuration.main.port,
+      listenTextResolver: (value) => value,
+    });
+    assertMainSingletonOwnership(ownership);
+    return Object.assign(runtime, { address });
+  } catch (error) {
+    return closeAfterPrimaryFailure(mapMainSingletonOwnershipError(error), [
+      {
+        operation: "main-runtime",
+        close: () => runtime.close(),
+      },
+    ]);
+  }
+}
+
+function validateMainSingletonOwnership(value: unknown): MainSingletonOwnership {
+  if (
+    !isRecord(value) ||
+    (value["backend"] !== "sqlite" && value["backend"] !== "postgresql") ||
+    typeof value["assertCurrent"] !== "function" ||
+    typeof value["onLost"] !== "function" ||
+    typeof value["release"] !== "function"
+  ) {
+    throw new MainRuntimeError(
+      "MAIN_OWNERSHIP_UNAVAILABLE",
+      "The Main singleton ownership provider returned an invalid authority.",
+    );
+  }
+  return value as unknown as MainSingletonOwnership;
+}
+
+function requireMainSingletonOwnership(
+  ownership: MainSingletonOwnership | undefined,
+): MainSingletonOwnership {
+  if (ownership === undefined) {
+    throw new MainRuntimeError(
+      "MAIN_OWNERSHIP_UNAVAILABLE",
+      "Main has no exclusive singleton authority.",
+    );
+  }
+  return ownership;
+}
+
+function assertMainSingletonOwnership(ownership: MainSingletonOwnership | undefined): void {
+  try {
+    requireMainSingletonOwnership(ownership).assertCurrent();
+  } catch (error) {
+    throw normalizeMainSingletonOwnershipError(error);
+  }
+}
+
+function isMainSingletonOwnershipFailure(error: unknown): boolean {
+  return (
+    error instanceof MainSingletonOwnershipError ||
+    (error instanceof MainRuntimeError &&
+      (error.code === "MAIN_ALREADY_RUNNING" ||
+        error.code === "MAIN_OWNERSHIP_LOST" ||
+        error.code === "MAIN_OWNERSHIP_UNAVAILABLE"))
+  );
+}
+
+function mapMainSingletonOwnershipError(error: unknown): unknown {
+  if (error instanceof MainSingletonOwnershipError) {
+    return new MainRuntimeError(error.code, error.message, { cause: error });
+  }
+  return error;
+}
+
+function normalizeMainSingletonOwnershipError(error: unknown): MainRuntimeError {
+  const mapped = mapMainSingletonOwnershipError(error);
+  if (mapped instanceof MainRuntimeError && isMainSingletonOwnershipFailure(mapped)) {
+    return mapped;
+  }
+  return new MainRuntimeError(
+    "MAIN_OWNERSHIP_UNAVAILABLE",
+    "Main could not verify its exclusive singleton authority.",
+    { cause: error },
+  );
+}
+
+async function closeMainSingletonOwnedResources(
+  ownership: MainSingletonOwnership,
+  unsubscribe: (() => void) | undefined,
+  operations: Parameters<typeof closeMainResources>[0],
+): Promise<void> {
+  await closeMainResources(operations);
+  unsubscribe?.();
+  await ownership.release();
+}
+
+function runtimeFeatureForDiscord(status: DiscordRuntimeStatus): {
+  status: "ready" | "unavailable";
+  code: string;
+} {
+  return Object.freeze({
+    status: status.status,
+    code: status.code,
+  });
+}
+
+async function createDiscordRuntimeWithDatabase(input: {
+  readonly configuration: MainDatabaseConfiguration;
+  readonly paths: RuntimePaths;
+  readonly secretStore: ManagedSecretStore;
+  readonly create: (
+    database: CreateProductionDiscordRuntimeOptions["database"],
+  ) => Promise<DiscordMainRuntime>;
+}): Promise<DiscordMainRuntime> {
+  if (input.configuration.adapter === "sqlite") {
+    return input.create({
+      adapter: "sqlite",
+      filename: input.paths.sqliteFile,
+      migrationMode: "verify",
+    });
+  }
+  const postgresql = input.configuration;
+  let runtime: DiscordMainRuntime | undefined;
+  await executeMainWithPostgresUri(input.secretStore, postgresql.uriRef, async (uri) => {
+    runtime = await input.create({
+      adapter: "postgresql",
+      connectionString: uri,
+      migrationMode: "verify",
+      ...(postgresql.schema === undefined ? {} : { schema: postgresql.schema }),
+    });
+  });
+  if (runtime === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return runtime;
+}
+
+async function createDeviceChannelRuntimeWithDatabase(input: {
+  readonly configuration: MainDatabaseConfiguration;
+  readonly paths: RuntimePaths;
+  readonly secretStore: ManagedSecretStore;
+  readonly create: (
+    database: Parameters<typeof createProductionMainDeviceChannelRuntime>[0]["database"],
+  ) => Promise<ProductionMainDeviceChannelRuntime>;
+}): Promise<ProductionMainDeviceChannelRuntime> {
+  if (input.configuration.adapter === "sqlite") {
+    return input.create({
+      adapter: "sqlite",
+      filename: input.paths.sqliteFile,
+    });
+  }
+  const postgresql = input.configuration;
+  let runtime: ProductionMainDeviceChannelRuntime | undefined;
+  await executeMainWithPostgresUri(input.secretStore, postgresql.uriRef, async (uri) => {
+    runtime = await input.create({
+      adapter: "postgresql",
+      connectionString: uri,
+      ...(postgresql.schema === undefined ? {} : { schema: postgresql.schema }),
+    });
+  });
+  if (runtime === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return runtime;
 }
 
 async function applyInitialMigrations(input: {
   readonly configuration: MainConfiguration;
   readonly paths: RuntimePaths;
-  readonly environment: Readonly<Record<string, string | undefined>>;
+  readonly managedSecretStore: ManagedSecretStore;
 }): Promise<void> {
   const clock = new SystemClock();
   const store = await openEventStore(
@@ -406,7 +1772,7 @@ async function applyInitialMigrations(input: {
     input.paths,
     clock,
     "apply",
-    input.environment,
+    input.managedSecretStore,
   );
   await store.close();
 }
@@ -416,7 +1782,7 @@ async function openEventStore(
   paths: RuntimePaths,
   clock: SystemClock,
   migrationMode: SqlMigrationMode,
-  environment: Readonly<Record<string, string | undefined>>,
+  secretStore: ManagedSecretStore,
 ): Promise<SqlEventStore> {
   if (configuration.adapter === "sqlite") {
     return SqlEventStore.openSqlite({
@@ -425,19 +1791,26 @@ async function openEventStore(
       migrationMode,
     });
   }
-  return SqlEventStore.openPostgres({
-    clock: clock.asEventClock(),
-    connectionString: requireDatabaseUri(configuration, environment),
-    migrationMode,
-    ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+  let repository: SqlEventStore | undefined;
+  await executeMainWithPostgresUri(secretStore, configuration.uriRef, async (uri) => {
+    repository = await SqlEventStore.openPostgres({
+      clock: clock.asEventClock(),
+      connectionString: uri,
+      migrationMode,
+      ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+    });
   });
+  if (repository === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return repository;
 }
 
 async function openOwnerRepository(
   configuration: MainDatabaseConfiguration,
   paths: RuntimePaths,
   migrationMode: SqlMigrationMode,
-  environment: Readonly<Record<string, string | undefined>>,
+  secretStore: ManagedSecretStore,
 ): Promise<SqlOwnerAuthRepository> {
   if (configuration.adapter === "sqlite") {
     return SqlOwnerAuthRepository.openSqlite({
@@ -445,25 +1818,301 @@ async function openOwnerRepository(
       migrationMode,
     });
   }
-  return SqlOwnerAuthRepository.openPostgres({
-    connectionString: requireDatabaseUri(configuration, environment),
-    migrationMode,
-    ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+  let repository: SqlOwnerAuthRepository | undefined;
+  await executeMainWithPostgresUri(secretStore, configuration.uriRef, async (uri) => {
+    repository = await SqlOwnerAuthRepository.openPostgres({
+      connectionString: uri,
+      migrationMode,
+      ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+    });
+  });
+  if (repository === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return repository;
+}
+
+async function openConfigurationRepository(
+  configuration: MainDatabaseConfiguration,
+  paths: RuntimePaths,
+  migrationMode: SqlMigrationMode,
+  secretStore: ManagedSecretStore,
+): Promise<SqlConfigurationRepository> {
+  if (configuration.adapter === "sqlite") {
+    return SqlConfigurationRepository.openSqlite({
+      filename: paths.sqliteFile,
+      migrationMode,
+    });
+  }
+  let repository: SqlConfigurationRepository | undefined;
+  await executeMainWithPostgresUri(secretStore, configuration.uriRef, async (uri) => {
+    repository = await SqlConfigurationRepository.openPostgres({
+      connectionString: uri,
+      migrationMode,
+      ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+    });
+  });
+  if (repository === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return repository;
+}
+
+async function openDeviceObservationRepository(
+  configuration: MainDatabaseConfiguration,
+  paths: RuntimePaths,
+  migrationMode: SqlMigrationMode,
+  secretStore: ManagedSecretStore,
+): Promise<SqlDeviceObservationRepository> {
+  if (configuration.adapter === "sqlite") {
+    return SqlDeviceObservationRepository.openSqlite({
+      filename: paths.sqliteFile,
+      migrationMode,
+    });
+  }
+  let repository: SqlDeviceObservationRepository | undefined;
+  await executeMainWithPostgresUri(secretStore, configuration.uriRef, async (uri) => {
+    repository = await SqlDeviceObservationRepository.openPostgres({
+      connectionString: uri,
+      migrationMode,
+      ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+    });
+  });
+  if (repository === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return repository;
+}
+
+async function openApprovalRepository(
+  configuration: MainDatabaseConfiguration,
+  paths: RuntimePaths,
+  migrationMode: SqlMigrationMode,
+  secretStore: ManagedSecretStore,
+): Promise<SqlApprovalRepository> {
+  if (configuration.adapter === "sqlite") {
+    return SqlApprovalRepository.openSqlite({
+      filename: paths.sqliteFile,
+      migrationMode,
+    });
+  }
+  let repository: SqlApprovalRepository | undefined;
+  await executeMainWithPostgresUri(secretStore, configuration.uriRef, async (uri) => {
+    repository = await SqlApprovalRepository.openPostgres({
+      connectionString: uri,
+      migrationMode,
+      ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+    });
+  });
+  if (repository === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return repository;
+}
+
+async function openActionAuthorizationRepository(
+  configuration: MainDatabaseConfiguration,
+  paths: RuntimePaths,
+  migrationMode: SqlMigrationMode,
+  secretStore: ManagedSecretStore,
+): Promise<SqlActionAuthorizationRepository> {
+  if (configuration.adapter === "sqlite") {
+    return SqlActionAuthorizationRepository.openSqlite({
+      filename: paths.sqliteFile,
+      migrationMode,
+    });
+  }
+  let repository: SqlActionAuthorizationRepository | undefined;
+  await executeMainWithPostgresUri(secretStore, configuration.uriRef, async (uri) => {
+    repository = await SqlActionAuthorizationRepository.openPostgres({
+      connectionString: uri,
+      migrationMode,
+      ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+    });
+  });
+  if (repository === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return repository;
+}
+
+async function openArtifactIndexRepository(
+  configuration: MainDatabaseConfiguration,
+  paths: RuntimePaths,
+  migrationMode: SqlMigrationMode,
+  secretStore: ManagedSecretStore,
+): Promise<SqlArtifactIndexRepository> {
+  if (configuration.adapter === "sqlite") {
+    return SqlArtifactIndexRepository.openSqlite({
+      filename: paths.sqliteFile,
+      migrationMode,
+    });
+  }
+  let repository: SqlArtifactIndexRepository | undefined;
+  await executeMainWithPostgresUri(secretStore, configuration.uriRef, async (uri) => {
+    repository = await SqlArtifactIndexRepository.openPostgres({
+      connectionString: uri,
+      migrationMode,
+      ...(configuration.schema === undefined ? {} : { schema: configuration.schema }),
+    });
+  });
+  if (repository === undefined) {
+    throw databaseSecretUnavailable();
+  }
+  return repository;
+}
+
+async function seedInitialMainConfiguration(
+  service: ConfigurationService,
+  configuration: MainConfiguration,
+  initialAdminAutoOpen?: boolean,
+): Promise<void> {
+  if ((await service.getRevision()) !== 0) {
+    if (initialAdminAutoOpen !== undefined) {
+      const effective = await service.inspect({
+        instanceId: configuration.instanceId,
+        mainId: configuration.deviceId,
+        deviceId: configuration.deviceId,
+      });
+      if (effective["admin.open-on-login"]?.value !== initialAdminAutoOpen) {
+        throw new MainRuntimeError(
+          "CONFIG_EXISTS",
+          "Main already has a different durable Admin auto-open preference. Change it through Configuration Chat and the explicit service reconfigure flow.",
+        );
+      }
+    }
+    return;
+  }
+  const changes: ConfigurationChange[] = [
+    {
+      operation: "set",
+      key: "database.adapter",
+      scope: { kind: "main", id: configuration.deviceId },
+      value: configuration.database.adapter,
+    },
+    ...(initialAdminAutoOpen === undefined
+      ? []
+      : [
+          {
+            operation: "set" as const,
+            key: "admin.open-on-login",
+            scope: { kind: "main" as const, id: configuration.deviceId },
+            value: initialAdminAutoOpen,
+          },
+        ]),
+    ...(configuration.database.adapter === "postgresql"
+      ? [
+          {
+            operation: "set" as const,
+            key: "database.uri-ref",
+            scope: { kind: "main" as const, id: configuration.deviceId },
+            value: { secretRef: configuration.database.uriRef },
+          },
+        ]
+      : []),
+    ...(configuration.artifacts === undefined
+      ? []
+      : [
+          {
+            operation: "set" as const,
+            key: "artifact.exposure",
+            scope: { kind: "instance" as const, id: configuration.instanceId },
+            value: configuration.artifacts.exposure.defaultMode,
+          },
+        ]),
+  ];
+  const proposal = await service.propose({
+    actor: "opendelegate-init",
+    reason: "Record the owner-selected installation settings as runtime Configuration.",
+    changes,
+  });
+  await service.apply({
+    proposalId: proposal.id,
+    expectedRevision: 0,
+    actor: "opendelegate-init",
   });
 }
 
-function requireDatabaseUri(
-  configuration: Extract<MainDatabaseConfiguration, { adapter: "postgresql" }>,
-  environment: Readonly<Record<string, string | undefined>>,
-): string {
-  const value = environment[configuration.uriEnvironment];
-  if (value === undefined || value.trim().length === 0) {
+function resolveMainManagedSecretStore(input: {
+  readonly configuration: MainConfiguration;
+  readonly sourceCheckout: string;
+  environment: Readonly<Record<string, string | undefined>>;
+  readonly injected?: ManagedSecretStore;
+}): ManagedSecretStore {
+  const store =
+    input.injected ??
+    createMainManagedSecretStore({
+      configuration: input.configuration.secretBackend,
+      deviceId: input.configuration.deviceId,
+      sourceCheckout: input.sourceCheckout,
+      environment: input.environment,
+    });
+  if (store.deviceId !== input.configuration.deviceId) {
     throw new MainRuntimeError(
-      "DATABASE_URI_MISSING",
-      `PostgreSQL requires the ${configuration.uriEnvironment} environment variable.`,
+      "DATABASE_SECRET_UNAVAILABLE",
+      "The configured Main Secret Store belongs to another Device.",
     );
   }
-  return value;
+  return store;
+}
+
+async function executeMainWithPostgresUri(
+  store: ManagedSecretStore,
+  reference: string,
+  executor: (uri: string) => void | Promise<void>,
+): Promise<void> {
+  try {
+    await executeWithPostgresUri(store, reference, executor);
+  } catch (error) {
+    throw databaseSecretUnavailable(error);
+  }
+}
+
+async function provisionDatabaseSecret(
+  configuration: MainDatabaseConfiguration,
+  store: ManagedSecretStore,
+  secret: Uint8Array | undefined,
+): Promise<void> {
+  if (secret === undefined) {
+    return;
+  }
+  if (configuration.adapter !== "postgresql") {
+    secret.fill(0);
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      "A database Secret can be provisioned only for PostgreSQL.",
+    );
+  }
+  let material: Buffer | undefined;
+  try {
+    validatePostgresSecretMaterial(secret);
+    const alias = mainSecretAlias(configuration.uriRef);
+    material = Buffer.from(secret);
+    const availability = await store.availability(alias);
+    if (availability.alias !== alias) {
+      throw new MainDatabaseSecretError("The managed Secret Store returned an invalid alias.");
+    }
+    if (availability.ready) {
+      await store.rotate(alias, material);
+    } else {
+      await store.store(alias, material);
+    }
+  } catch (error) {
+    throw databaseSecretUnavailable(error);
+  } finally {
+    material?.fill(0);
+    secret.fill(0);
+  }
+}
+
+function databaseSecretUnavailable(cause?: unknown): MainRuntimeError {
+  const source =
+    cause instanceof MainDatabaseSecretError
+      ? cause
+      : new MainDatabaseSecretError("The PostgreSQL Secret is unavailable.", {
+          cause,
+        });
+  return new MainRuntimeError("DATABASE_SECRET_UNAVAILABLE", source.message, { cause: source });
 }
 
 async function registerAdminAssets(
@@ -720,6 +2369,7 @@ async function enforceWindowsRuntimeAcl(root: string): Promise<void> {
   try {
     const result = await execFileAsync("whoami.exe", ["/user", "/fo", "csv", "/nh"], {
       encoding: "utf8",
+      env: runtimeNativeToolEnvironment(),
       windowsHide: true,
     });
     identityOutput = result.stdout;
@@ -778,6 +2428,7 @@ foreach ($item in $items) {
     ]) {
       await execFileAsync("icacls.exe", arguments_, {
         encoding: "utf8",
+        env: runtimeNativeToolEnvironment(),
         maxBuffer: 1024 * 1024,
         windowsHide: true,
       });
@@ -788,7 +2439,7 @@ foreach ($item in $items) {
       {
         encoding: "utf8",
         env: {
-          ...process.env,
+          ...runtimeNativeToolEnvironment(),
           OPENDELEGATE_ACL_ROOT: root,
           OPENDELEGATE_ACL_USER_SID: userSid,
         },
@@ -805,19 +2456,59 @@ foreach ($item in $items) {
   }
 }
 
+function runtimeNativeToolEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const key of ["PATH", "Path", "PATHEXT", "SystemRoot", "SYSTEMROOT", "WINDIR"]) {
+    const value = process.env[key];
+    if (value !== undefined) {
+      environment[key] = value;
+    }
+  }
+  return environment;
+}
+
 function isAlreadyExists(error: unknown): boolean {
   return error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST";
 }
 
 function validateMainConfiguration(input: unknown): MainConfiguration {
+  if (isRecord(input)) {
+    const database = input["database"];
+    if (
+      isRecord(database) &&
+      database["adapter"] === "postgresql" &&
+      "uriEnvironment" in database
+    ) {
+      throw legacyDatabaseConfiguration();
+    }
+    if (!("secretBackend" in input)) {
+      throw new MainRuntimeError(
+        "CONFIG_MIGRATION_REQUIRED",
+        "This Main configuration predates the required persisted secretBackend descriptor. Run init again with --secret-backend-config before serving it.",
+      );
+    }
+  }
   if (
     !isRecord(input) ||
-    !hasExactKeys(input, [
+    !hasAllowedKeys(input, [
       "schemaVersion",
       "instanceId",
       "deviceId",
       "main",
       "database",
+      "secretBackend",
+      "adminRoot",
+      "discord",
+      "artifacts",
+      "deviceChannel",
+    ]) ||
+    !hasRequiredKeys(input, [
+      "schemaVersion",
+      "instanceId",
+      "deviceId",
+      "main",
+      "database",
+      "secretBackend",
       "adminRoot",
     ]) ||
     input["schemaVersion"] !== CONFIG_SCHEMA_VERSION ||
@@ -834,13 +2525,33 @@ function validateMainConfiguration(input: unknown): MainConfiguration {
 
   const main = validateListener(input["main"]);
   const database = validateDatabase(input["database"]);
+  let secretBackend: MainSecretBackendConfiguration;
+  try {
+    secretBackend = validateMainSecretBackendConfiguration(input["secretBackend"]);
+  } catch (error) {
+    throw configInvalid(error);
+  }
+  const discord =
+    input["discord"] === undefined ? undefined : validateMainDiscordConfiguration(input["discord"]);
+  const artifacts =
+    input["artifacts"] === undefined
+      ? undefined
+      : validateMainArtifactConfiguration(input["artifacts"]);
+  const deviceChannel =
+    input["deviceChannel"] === undefined
+      ? undefined
+      : validateStoredDeviceChannelConfiguration(input["deviceChannel"]);
   return Object.freeze({
     schemaVersion: 1,
     instanceId: input["instanceId"],
     deviceId: input["deviceId"],
     main,
     database,
+    secretBackend,
     adminRoot: resolve(input["adminRoot"]),
+    ...(discord === undefined ? {} : { discord }),
+    ...(artifacts === undefined ? {} : { artifacts }),
+    ...(deviceChannel === undefined ? {} : { deviceChannel }),
   });
 }
 
@@ -901,6 +2612,111 @@ function validateListener(input: unknown): MainListenerConfiguration {
   });
 }
 
+function validateStoredDeviceChannelConfiguration(input: unknown): MainDeviceChannelConfiguration {
+  if (
+    !isRecord(input) ||
+    !hasAllowedKeys(input, ["enrollment", "workerChannel"]) ||
+    !hasRequiredKeys(input, ["enrollment", "workerChannel"])
+  ) {
+    throw configInvalid();
+  }
+  const enrollment = validateStoredDeviceListener(
+    input["enrollment"],
+    "https:",
+    "/api/v1/device/enroll",
+    false,
+  );
+  const workerInput = input["workerChannel"];
+  if (!isRecord(workerInput)) {
+    throw configInvalid();
+  }
+  const path =
+    workerInput["path"] === undefined
+      ? "/api/v1/device/channel"
+      : validateDeviceChannelPath(workerInput["path"]);
+  const workerChannel = {
+    ...validateStoredDeviceListener(workerInput, "wss:", path, true),
+    ...(workerInput["path"] === undefined ? {} : { path }),
+  };
+  if (
+    (enrollment.host === workerChannel.host && enrollment.port === workerChannel.port) ||
+    enrollment.advertisedUrl === workerChannel.advertisedUrl
+  ) {
+    throw configInvalid();
+  }
+  return Object.freeze({ enrollment, workerChannel });
+}
+
+function validateStoredDeviceListener(
+  input: unknown,
+  protocol: "https:" | "wss:",
+  requiredPath: string,
+  acceptsPath: boolean,
+): MainDeviceChannelConfiguration["enrollment"] {
+  if (
+    !isRecord(input) ||
+    !hasAllowedKeys(
+      input,
+      acceptsPath
+        ? ["advertisedUrl", "host", "port", "tlsCertificatePath", "tlsPrivateKeyPath", "path"]
+        : ["advertisedUrl", "host", "port", "tlsCertificatePath", "tlsPrivateKeyPath"],
+    ) ||
+    !hasRequiredKeys(input, [
+      "advertisedUrl",
+      "host",
+      "port",
+      "tlsCertificatePath",
+      "tlsPrivateKeyPath",
+    ]) ||
+    typeof input["advertisedUrl"] !== "string" ||
+    typeof input["host"] !== "string" ||
+    input["host"].trim() !== input["host"] ||
+    input["host"].length === 0 ||
+    input["host"].length > 253 ||
+    typeof input["port"] !== "number" ||
+    !Number.isSafeInteger(input["port"]) ||
+    input["port"] < 1 ||
+    input["port"] > 65_535 ||
+    typeof input["tlsCertificatePath"] !== "string" ||
+    !isAbsolute(input["tlsCertificatePath"]) ||
+    typeof input["tlsPrivateKeyPath"] !== "string" ||
+    !isAbsolute(input["tlsPrivateKeyPath"])
+  ) {
+    throw configInvalid();
+  }
+  let advertised: URL;
+  try {
+    advertised = new URL(input["advertisedUrl"]);
+  } catch {
+    throw configInvalid();
+  }
+  if (
+    advertised.protocol !== protocol ||
+    advertised.username !== "" ||
+    advertised.password !== "" ||
+    advertised.search !== "" ||
+    advertised.hash !== "" ||
+    advertised.pathname !== requiredPath ||
+    Number(advertised.port || "443") !== input["port"]
+  ) {
+    throw configInvalid();
+  }
+  return Object.freeze({
+    advertisedUrl: advertised.toString(),
+    host: input["host"],
+    port: input["port"],
+    tlsCertificatePath: resolve(input["tlsCertificatePath"]),
+    tlsPrivateKeyPath: resolve(input["tlsPrivateKeyPath"]),
+  });
+}
+
+function validateDeviceChannelPath(input: unknown): string {
+  if (typeof input !== "string" || !/^\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{1,1023}$/u.test(input)) {
+    throw configInvalid();
+  }
+  return input;
+}
+
 function validateTls(input: unknown): MainListenerConfiguration["tls"] {
   if (input === undefined) {
     return undefined;
@@ -925,26 +2741,35 @@ function validateDatabase(input: unknown): MainDatabaseConfiguration {
   if (!isRecord(input) || typeof input["adapter"] !== "string") {
     throw configInvalid();
   }
+  if (input["adapter"] === "postgresql" && "uriEnvironment" in input) {
+    throw legacyDatabaseConfiguration();
+  }
   if (input["adapter"] === "sqlite" && hasExactKeys(input, ["adapter"])) {
     return Object.freeze({ adapter: "sqlite" });
   }
   if (
     input["adapter"] === "postgresql" &&
-    hasAllowedKeys(input, ["adapter", "uriEnvironment", "schema"]) &&
-    hasRequiredKeys(input, ["adapter", "uriEnvironment"]) &&
-    typeof input["uriEnvironment"] === "string" &&
-    /^[A-Z][A-Z0-9_]{0,127}$/.test(input["uriEnvironment"]) &&
+    hasAllowedKeys(input, ["adapter", "uriRef", "schema"]) &&
+    hasRequiredKeys(input, ["adapter", "uriRef"]) &&
+    typeof input["uriRef"] === "string" &&
     (input["schema"] === undefined ||
       (typeof input["schema"] === "string" &&
         /^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(input["schema"])))
   ) {
     return Object.freeze({
       adapter: "postgresql",
-      uriEnvironment: input["uriEnvironment"],
+      uriRef: validateMainSecretReference(input["uriRef"]),
       ...(input["schema"] === undefined ? {} : { schema: input["schema"] }),
     });
   }
   throw configInvalid();
+}
+
+function legacyDatabaseConfiguration(): MainRuntimeError {
+  return new MainRuntimeError(
+    "CONFIG_MIGRATION_REQUIRED",
+    "This Main configuration uses the retired PostgreSQL uriEnvironment field. Provision the URI in the Device-local Secret Store and replace it with a canonical uriRef such as secret://main/database-primary.",
+  );
 }
 
 function defaultRuntimeHome(environment: Readonly<Record<string, string | undefined>>): string {
@@ -1022,10 +2847,11 @@ function hasRequiredKeys(value: Record<string, unknown>, keys: readonly string[]
   return keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
-function configInvalid(): MainRuntimeError {
+function configInvalid(cause?: unknown): MainRuntimeError {
   return new MainRuntimeError(
     "CONFIG_INVALID",
     "Main configuration does not match schema version 1.",
+    cause === undefined ? undefined : { cause },
   );
 }
 
@@ -1053,3 +2879,60 @@ class SystemClock implements OwnerAuthClock {
 export function mainConfigurationDirectory(configurationFile: string): string {
   return dirname(configurationFile);
 }
+
+export {
+  BackupCliError,
+  backupHelpText,
+  parseBackupArguments,
+  runBackupLifecycleCommand,
+  type BackupCliErrorCode,
+  type BackupLifecycleAdapters,
+  type BackupLifecycleCommand,
+  type BackupLifecycleResult,
+  type ParsedBackupArguments,
+} from "./backup-cli.ts";
+export {
+  MainBackupError,
+  createMainBackup,
+  defaultMainBackupToolRunner,
+  restoreMainBackup,
+  verifyMainBackup,
+  type BackupFileRecord,
+  type CreateMainBackupOptions,
+  type MainBackupConfiguration,
+  type MainBackupDatabaseConfiguration,
+  type MainBackupErrorCode,
+  type MainBackupManifest,
+  type MainBackupSource,
+  type MainBackupToolRunner,
+  type RestoreMainBackupOptions,
+  type VerifyMainBackupOptions,
+} from "./backup.ts";
+export {
+  ServiceLifecycleCliError,
+  createDefaultServiceLifecycleAdapters,
+  loadServiceConfigurationFile,
+  parseServiceLifecycleArguments,
+  runServiceLifecycleCommand,
+  serviceLifecycleHelpText,
+  type ParsedServiceLifecycleArguments,
+  type ServiceConfigurationReader,
+  type ServiceReconfigurationReader,
+  type ServiceLifecycleAdapters,
+  type ServiceLifecycleCliErrorCode,
+  type ServiceLifecycleCommand,
+  type ServiceLifecycleExecutor,
+  type ServiceLifecycleInspector,
+  type ServiceLifecycleResult,
+  type ServiceMutationObserver,
+} from "./service-lifecycle.ts";
+export {
+  resolveEffectiveMainServiceConfiguration,
+  type EffectiveMainServiceConfiguration,
+  type EffectiveMainServiceConfigurationInput,
+} from "./main-service-configuration.ts";
+export {
+  MainActionAuthorizationRuntime,
+  type MainActionAuthorizationRuntimeOptions,
+  type MainActionRunAuthorityPort,
+} from "./action-authorization-runtime.ts";

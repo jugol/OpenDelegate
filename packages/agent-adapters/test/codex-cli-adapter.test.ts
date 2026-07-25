@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { realpath } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { after } from "node:test";
 
 import {
   AgentAdapterError,
@@ -22,10 +24,23 @@ const limits: AgentRunLimits = {
   maxLineBytes: 64 * 1024,
   maxDiagnosticBytes: 64 * 1024,
 };
+const temporaryCodexHomes: string[] = [];
+
+async function createCodexHome(): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-codex-cli-home-"));
+  temporaryCodexHomes.push(home);
+  return home;
+}
+
+after(async () => {
+  await Promise.all(temporaryCodexHomes.map((home) => rm(home, { force: true, recursive: true })));
+});
 
 test("Codex CLI starts through JSONL, streams public output, and returns a durable session reference", async () => {
   const cwd = await realpath(process.cwd());
+  const codexHome = await createCodexHome();
   const adapter = new CodexCliAdapter({
+    codexHome,
     executable: process.execPath,
     prefixArgs: [fixturePath, "codex"],
     leaseStore: new InMemorySessionLeaseStore(),
@@ -47,7 +62,22 @@ test("Codex CLI starts through JSONL, streams public output, and returns a durab
     },
     sandbox: "workspace-write",
     permissions: { mode: "deny" },
+    toolServers: [
+      {
+        serverName: "opendelegate",
+        command: process.execPath,
+        args: [fixturePath, "mcp-bridge", "--capability-file", "C:\\runtime\\grant.json"],
+        enabledTools: ["computer_use_capture", "computer_use_click"],
+        startupTimeoutMs: 5_000,
+        toolTimeoutMs: 30_000,
+      },
+    ],
     limits,
+    environment: {
+      CODEX_HOME: "ambient-home-must-not-win",
+      FIXTURE_EXPECT_CODEX_HOME: codexHome,
+      FIXTURE_REQUIRE_CODEX_TOOL_SERVER: "1",
+    },
   });
 
   const events: NormalizedAgentEvent[] = [];
@@ -74,23 +104,144 @@ test("Codex CLI starts through JSONL, streams public output, and returns a durab
 });
 
 test("Codex CLI probes installed version and authentication without running a model turn", async () => {
+  const codexHome = await createCodexHome();
   const adapter = new CodexCliAdapter({
+    codexHome,
     executable: process.execPath,
     prefixArgs: [fixturePath, "codex"],
   });
 
-  const probe = await adapter.probe();
+  const probe = await adapter.probe({
+    environment: {
+      CODEX_HOME: "ambient-home-must-not-win",
+      FIXTURE_EXPECT_CODEX_HOME: codexHome,
+    },
+  });
 
   assert.equal(probe.installed, true);
   assert.equal(probe.version, "0.145.0");
   assert.equal(probe.compatibility, "tested");
   assert.equal(probe.auth.state, "ready");
   assert.equal(probe.capabilities.approvalBridge, false);
+  assert.equal(probe.capabilities.steering, false);
+});
+
+test("Codex exposes only the Run-scoped Knowledge server and never normalizes local payloads", async () => {
+  const cwd = await realpath(process.cwd());
+  const codexHome = await createCodexHome();
+  const adapter = new CodexCliAdapter({
+    codexHome,
+    executable: process.execPath,
+    prefixArgs: [fixturePath, "codex"],
+    leaseStore: new InMemorySessionLeaseStore(),
+  });
+  const handle = await adapter.start({
+    operation: "start",
+    requestId: "request-codex-knowledge",
+    runId: "run-codex-knowledge",
+    taskId: "task-codex-knowledge",
+    workstreamId: "implementation",
+    sessionKey: "task-codex-knowledge/implementation",
+    deviceId: "device-worker",
+    prompt: "inspect local guidance",
+    workspace: {
+      workspaceId: "workspace-open-delegate",
+      cwd,
+      isolation: "agent-native-worktree",
+    },
+    sandbox: "workspace-write",
+    permissions: { mode: "deny" },
+    toolServers: [
+      {
+        serverName: "opendelegate-knowledge",
+        command: process.execPath,
+        args: [
+          fixturePath,
+          "knowledge-mcp-bridge",
+          "--capability-file",
+          "/runtime/knowledge-capability.json",
+        ],
+        enabledTools: [
+          "knowledge_search",
+          "knowledge_open",
+          "knowledge_relationships",
+          "knowledge_upsert",
+        ],
+        startupTimeoutMs: 15_000,
+        toolTimeoutMs: 30_000,
+      },
+    ],
+    limits,
+    environment: {
+      FIXTURE_REQUIRE_CODEX_KNOWLEDGE_TOOL_SERVER: "1",
+      FIXTURE_EMIT_KNOWLEDGE_TOOL_EVENTS: "1",
+    },
+  });
+
+  const events: NormalizedAgentEvent[] = [];
+  for await (const event of handle.events) {
+    events.push(event);
+  }
+  assert.equal((await handle.result).status, "succeeded");
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "tool_result" &&
+        event.toolName === "knowledge_search" &&
+        event.status === "succeeded",
+    ),
+  );
+  const normalized = JSON.stringify(events);
+  for (const privateValue of ["private-query", "private-note.md", "private-Knowledge-content"]) {
+    assert.equal(normalized.includes(privateValue), false);
+  }
+});
+
+test("Codex CLI can explicitly allow a coordinator workspace outside Git", async () => {
+  const cwd = await realpath(process.cwd());
+  const codexHome = await createCodexHome();
+  const adapter = new CodexCliAdapter({
+    codexHome,
+    executable: process.execPath,
+    prefixArgs: [fixturePath, "codex"],
+    skipGitRepositoryCheck: true,
+    leaseStore: new InMemorySessionLeaseStore(),
+  });
+
+  const handle = await adapter.start({
+    operation: "start",
+    requestId: "request-non-git",
+    runId: "run-non-git",
+    taskId: "task-non-git",
+    workstreamId: "coordinator",
+    sessionKey: "task-non-git/coordinator",
+    deviceId: "device-main",
+    prompt: "inspect configuration",
+    workspace: {
+      workspaceId: "workspace-main-runtime",
+      cwd,
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+    environment: {
+      PATH: process.env.PATH ?? "",
+      FIXTURE_REQUIRE_DENY_ISOLATION: "1",
+      FIXTURE_REQUIRE_SKIP_GIT: "1",
+    },
+  });
+  for await (const event of handle.events) {
+    void event;
+  }
+  assert.equal((await handle.result).status, "succeeded");
 });
 
 test("Codex CLI resumes only the exact Task, Device, Workspace, and cwd binding", async () => {
   const cwd = await realpath(process.cwd());
+  const codexHome = await createCodexHome();
   const adapter = new CodexCliAdapter({
+    codexHome,
     executable: process.execPath,
     prefixArgs: [fixturePath, "codex"],
   });

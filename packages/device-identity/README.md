@@ -3,6 +3,11 @@
 This package owns the persistence-neutral Device identity and enrollment core
 defined by ADR-0008.
 
+Storage implementations import the narrow
+`@opendelegate/device-identity/repository` subpath. That surface contains only the
+repository DTOs, transaction port, snapshot contract, and identity error; it does
+not expose the DOM/WebCrypto types required by local key-management adapters.
+
 ## Trust boundaries
 
 - Main creates one ECDSA P-256 instance CA. `DeviceIdentityRepository` persists

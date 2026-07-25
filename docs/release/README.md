@@ -20,11 +20,19 @@ pnpm release:status
 A zero process exit means the ledger is structurally valid. It does **not** mean the release is
 complete; read the returned `releaseStatus` and `complete` fields.
 
-The current audit remains `blocked`. Source packages cover a runnable bundled Main, authenticated
-Admin inspection/emergency controls, and production-shaped persistence, owner-auth, enrollment,
-Worker, Artifact, Discord, Agent Adapter, platform-service, and Computer Use contracts. Production
-orchestration composition and several external drivers remain incomplete, as does the required live
-three-OS acceptance matrix.
+The current audit remains `blocked`. Source packages now compose a runnable bundled Main with its
+co-located Worker, authenticated Admin operations, durable SQLite/PostgreSQL Task state,
+owner-auth, enrollment, mutual-TLS Device channels, Discord HTTP/Gateway handling, programmatic
+Agent Adapters, exact native-session steering, Device-local Knowledge, resumable Artifact transfer,
+SQL-backed Artifact metadata and Device observations, Task Budget inspection and extension,
+platform-service hosts and executors, and native Computer Use candidates. Main also holds a
+database-appropriate process-lifetime singleton authority, and its startup gate reconciles Discord
+and composes Device/Artifact prerequisites before automatic Task dispatch. The owner-session helper
+can open the canonical Admin origin once per login only when the typed Main preference is enabled.
+Source composition and deterministic tests are not release proof.
+Clean-host service privilege, signing/notarization, live provider and Discord credentials, mixed
+private routes, reboot/recovery, real Artifact opening, and the complete three-OS Computer Use
+matrix remain externally unproven.
 
 ## Status vocabulary
 
@@ -96,15 +104,18 @@ for the current OS and architecture, verifies its audited archive SHA-256, and w
   hashes, lockfile/package-manifest hashes, ledger summary, and exact `internal-preview-*` support
   status;
 - `INTERNAL_PREVIEW.md` with a prominent unsupported warning;
-- `smoke-evidence.json` for CLI help, clean-home initialization, Main health, Admin static serving,
-  loopback owner claim, owner login, host-only session-cookie contract/round-trip, recovery-code
-  issuance, and clean shutdown;
+- `smoke-evidence.json` for top-level, backup, and service CLI help; clean-home initialization;
+  Main health; Admin static serving; loopback owner claim; owner login; host-only session-cookie
+  contract/round-trip; recovery-code issuance; and clean shutdown;
 - `SHA256SUMS`;
 - the Node.js license and a complete legal inventory for runtime package instances and production
   dependencies compiled into Admin Web, including copied font/package terms, retained package
   license files, and explicit same-project or curated versioned sources where publishers omitted a
   standalone file;
-- the Admin assets, init skill, release documentation, and launchers; and
+- an English-default launcher-first `README.md` plus Korean, Japanese, French, Spanish, and
+  Simplified Chinese bundle READMEs, each with the exact support-status code, language navigation,
+  unsupported-preview or unpromoted-candidate warning, and platform launcher commands;
+- the Admin assets, init skill, remaining release documentation, and launchers; and
 - the bundled Main runtime and production dependencies.
 
 All bundle modes export the clean build commit into a disposable directory, run the frozen install
@@ -134,6 +145,40 @@ not install a service by itself, and must not be published under a release tag.
 Use `opendelegate.cmd` on Windows or `./opendelegate` on macOS/Linux. Runtime state, credentials,
 databases, logs, and generated Artifacts must remain outside both the source checkout and the
 release bundle.
+
+## Publisher attestation for service installation
+
+Native install and upgrade authenticate bundle bytes with a detached Ed25519 publisher
+attestation. This is distinct from release-channel promotion: signing an
+`internal-preview-*` bundle does not make it supported, and signing a `release-candidate` does not
+make it `released`.
+
+Keep the Ed25519 PKCS#8 private key outside the checkout, bundle, runtime home, logs, and Agent
+context. After a bundle contains both target-native service hosts and its packaged smoke has
+passed, sign it with:
+
+```sh
+pnpm release:sign --bundle ABSOLUTE_BUNDLE_PATH \
+  --private-key ABSOLUTE_PRIVATE_KEY_PEM \
+  --public-key-destination ABSOLUTE_NEW_PUBLIC_KEY_PEM
+```
+
+Signing an unsupported lab bundle additionally requires the exact
+`--allow-unsupported-preview` acknowledgement. The signer:
+
+- rejects linked or special paths and byte-compares the complete payload and checksum manifests;
+- requires the two target-native service executables and matching successful packaged smoke;
+- refuses an incomplete `release-candidate`;
+- derives the publisher key ID from the Ed25519 public key;
+- creates `BUNDLE_PATH.publisher-attestation.json` and the requested public-key file with
+  create-new semantics; and
+- never copies, prints, or overwrites the private key or an existing output.
+
+Provision the emitted public key through an owner-controlled channel as
+`STATE_ROOT/trust/publisher-ed25519.pem`. Configure `bundle.checksum` as
+`sha256:<manifestSha256>` from the signer result. Do not accept a public key delivered only inside
+the bundle it is expected to authenticate. Windows publisher-key ACL review and any platform code
+signing/notarization remain separate operator gates.
 
 ## Production gate
 
@@ -227,9 +272,17 @@ into the candidate.
 Keep raw credentials, bot tokens, owner claim/recovery data, private Task content, Device Knowledge,
 private hostnames, and sensitive network topology out of public evidence.
 
+Managed Secret Store callbacks bound plaintext exposure but do not create secure memory. A trusted
+long-lived Main client such as the PostgreSQL pool may retain parsed connection configuration until
+it closes. Release inspection must prove that credentials do not enter persisted configuration,
+argv, child environments, logs, diagnostics, Agent prompts, backups, or public evidence; it must not
+misstate in-process client retention as immediate erasure.
+
 ## Current blocking categories
 
-The exact resumable external checklist is in [`PLATFORM_LAB.md`](PLATFORM_LAB.md). At minimum,
+The declared first-milestone targets are fixed in
+[`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md), and the exact resumable external checklist is in
+[`PLATFORM_LAB.md`](PLATFORM_LAB.md). At minimum,
 supported release proof still needs:
 
 - owner-controlled Main and Worker runs on real macOS, Windows, and Linux;
@@ -241,6 +294,10 @@ supported release proof still needs:
   headless-Linux unavailability;
 - mixed-OS, mixed-route, Worker reconnect, Artifact upload, and exposure scenarios;
 - signing/notarization and publishing inputs appropriate to the distributed platform bundles.
+
+The safe metadata snapshot and fresh-target recovery contract is documented in
+[`BACKUP_AND_RESTORE.md`](../BACKUP_AND_RESTORE.md). Passing its deterministic
+checks does not replace the required live reconciliation proof.
 
 Until those proofs are linked in the ledger, the honest outcome is **internal preview built**, not
 **OpenDelegate deployed** or **first milestone released**.

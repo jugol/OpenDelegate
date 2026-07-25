@@ -32,6 +32,39 @@ const catalogs: Readonly<Record<SupportedLocale, Messages>> = {
   "zh-CN": simplifiedChineseMessages,
 };
 
+const intentionalCanonicalEnglishKeys: Readonly<
+  Record<Exclude<SupportedLocale, "en">, readonly string[]>
+> = {
+  es: [
+    "artifact.checksum",
+    "budget.metricTokens",
+    "device.roles",
+    "device.runIdentity",
+    "known.computerUse",
+  ],
+  fr: [
+    "artifact.checksum",
+    "artifact.source",
+    "audit.routeIncidentId",
+    "audit.source",
+    "device.instructions",
+    "device.routes",
+    "device.runIdentity",
+    "join.fifteenMinutes",
+    "join.fiveMinutes",
+    "join.thirtyMinutes",
+    "known.architecture",
+    "known.computerUse",
+    "navigation.audit",
+    "task.columnActions",
+    "task.conversation",
+    "task.mode",
+  ],
+  ja: ["artifact.checksum", "budget.workOrderReference", "device.runIdentity", "known.computerUse"],
+  ko: ["approval.fingerprint", "artifact.checksum", "known.computerUse"],
+  "zh-CN": ["artifact.checksum", "device.runIdentity", "known.computerUse"],
+};
+
 afterEach(() => {
   window.localStorage.clear();
   document.documentElement.lang = "en";
@@ -67,6 +100,15 @@ describe("Admin localization catalogs", () => {
         expect(value.split("\n").length, `${locale}.${key} line structure`).toBe(
           (englishValue ?? "").split("\n").length,
         );
+      }
+      if (locale !== "en") {
+        expect(
+          entries
+            .filter(([key, value]) => value === englishValues.get(key))
+            .map(([key]) => key)
+            .sort(),
+          `${locale} must not silently fall back to English`,
+        ).toEqual(intentionalCanonicalEnglishKeys[locale as Exclude<SupportedLocale, "en">]);
       }
     }
   });
@@ -144,7 +186,7 @@ describe("Admin language selection", () => {
       <AdminI18nProvider initialLocale="en">
         <App
           configurationAgentAvailable
-          device={firstRunDevice}
+          deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
           initialChatOpen
           onConfigurationMessage={async () => {
             throw new Error("fixture failure");

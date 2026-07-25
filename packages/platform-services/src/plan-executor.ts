@@ -1,7 +1,14 @@
 import type { PlanAction, ServicePlan } from "./plans.ts";
 
+export interface PlanActionExecutionResult {
+  readonly disposition: "changed" | "unchanged";
+}
+
 export interface PlanExecutionAdapter {
-  perform(action: PlanAction, phase: "forward" | "rollback"): Promise<void>;
+  perform(
+    action: PlanAction,
+    phase: "forward" | "rollback",
+  ): Promise<PlanActionExecutionResult | void>;
 }
 
 export interface RollbackFailure {
@@ -16,6 +23,7 @@ export interface ServicePlanExecutionReport {
   readonly platform: ServicePlan["platform"];
   readonly instanceId: string;
   readonly completedStepIds: readonly string[];
+  readonly unchangedStepIds: readonly string[];
   readonly failedStepId?: string;
   readonly rollback: {
     readonly attempted: boolean;
@@ -37,15 +45,25 @@ export async function executeServicePlan(
   adapter: PlanExecutionAdapter,
 ): Promise<ServicePlanExecutionReport> {
   const completedStepIds: string[] = [];
+  const unchangedStepIds: string[] = [];
   const rollbackStack: Array<{
     readonly stepId: string;
     readonly action: PlanAction;
   }> = [];
   for (const step of plan.steps) {
     try {
-      await adapter.perform(step.action, "forward");
+      const execution = await adapter.perform(step.action, "forward");
+      if (
+        execution !== undefined &&
+        execution.disposition !== "changed" &&
+        execution.disposition !== "unchanged"
+      ) {
+        throw new TypeError("Plan execution adapter returned an invalid disposition.");
+      }
       completedStepIds.push(step.id);
-      if (step.rollback !== undefined) {
+      if (execution?.disposition === "unchanged") {
+        unchangedStepIds.push(step.id);
+      } else if (step.rollback !== undefined) {
         rollbackStack.push({ stepId: step.id, action: step.rollback });
       }
     } catch (error) {
@@ -71,6 +89,7 @@ export async function executeServicePlan(
         platform: plan.platform,
         instanceId: plan.instanceId,
         completedStepIds,
+        unchangedStepIds,
         failedStepId: step.id,
         rollback: {
           attempted,
@@ -95,6 +114,7 @@ export async function executeServicePlan(
     platform: plan.platform,
     instanceId: plan.instanceId,
     completedStepIds,
+    unchangedStepIds,
     rollback: {
       attempted: false,
       completedStepIds: [],

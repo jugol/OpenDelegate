@@ -7,7 +7,9 @@ export class SecretRedactor {
 
   public constructor(registeredValues: Iterable<string>) {
     this.#registeredValues = [
-      ...new Set([...registeredValues].filter((value) => value.length > 0)),
+      ...new Set(
+        [...registeredValues].filter((value) => value.length > 0).flatMap(registeredSecretVariants),
+      ),
     ].sort((left, right) => right.length - left.length || compareStableString(left, right));
   }
 
@@ -161,11 +163,33 @@ function copyEnumerableProperties(
 }
 
 function redactString(value: string, registeredValues: readonly string[]): string {
-  return registeredValues.reduce(
+  const registeredRedacted = registeredValues.reduce(
     (redacted, secret) =>
       redacted.includes(secret) ? redacted.split(secret).join(REDACTED) : redacted,
     value,
   );
+  return registeredRedacted
+    .replace(
+      /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/giu,
+      (_match, scheme: string) => `${scheme} ${REDACTED}`,
+    )
+    .replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{10,}\b/gu, REDACTED)
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/gu, REDACTED)
+    .replace(/\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/gu, REDACTED);
+}
+
+function registeredSecretVariants(value: string): readonly string[] {
+  const variants = new Set([value]);
+  if (value.length < 6) {
+    return [...variants];
+  }
+  const bytes = Buffer.from(value, "utf8");
+  variants.add(bytes.toString("base64"));
+  variants.add(bytes.toString("base64url"));
+  variants.add(encodeURIComponent(value));
+  const json = JSON.stringify(value);
+  variants.add(json.slice(1, -1));
+  return [...variants].filter((entry) => entry.length >= 6);
 }
 
 function isSensitiveKey(key: string): boolean {

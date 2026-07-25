@@ -1,17 +1,17 @@
 import type { ConfigurationDefinition } from "./index.ts";
+import { isNullableCanonicalMainSecretReferenceValue } from "./secret-reference.ts";
 
 const isOneOf =
   <const T extends readonly unknown[]>(values: T) =>
   (value: unknown): value is T[number] =>
     values.includes(value);
 
-const isNullableSecretReference = (value: unknown): boolean =>
-  value === null ||
-  (typeof value === "object" &&
-    value !== null &&
-    Object.keys(value).length === 1 &&
-    typeof (value as { secretRef?: unknown }).secretRef === "string" &&
-    (value as { secretRef: string }).secretRef.trim().length > 0);
+const isNullableBoundedText = (value: unknown): boolean =>
+  value === null || isBoundedText(value, 253);
+
+const isRoleList = (value: unknown): boolean => isBoundedUniqueTextList(value, 128, 256);
+
+const isInstructionList = (value: unknown): boolean => isBoundedUniqueTextList(value, 128, 4_096);
 
 /**
  * Defaults that are product decisions rather than installation discoveries. Values
@@ -32,6 +32,24 @@ export const STANDARD_CONFIGURATION_DEFINITIONS = [
     validate: isOneOf(["reactive", "assisted", "autonomous"] as const),
   },
   {
+    key: "device.display-name",
+    defaultValue: null,
+    scopes: ["device"],
+    validate: isNullableBoundedText,
+  },
+  {
+    key: "device.roles",
+    defaultValue: [],
+    scopes: ["device"],
+    validate: isRoleList,
+  },
+  {
+    key: "device.instructions",
+    defaultValue: [],
+    scopes: ["device"],
+    validate: isInstructionList,
+  },
+  {
     key: "database.adapter",
     defaultValue: "sqlite",
     scopes: ["main"],
@@ -41,7 +59,16 @@ export const STANDARD_CONFIGURATION_DEFINITIONS = [
     key: "database.uri-ref",
     defaultValue: null,
     scopes: ["main"],
-    validate: isNullableSecretReference,
+    secretReference: {
+      locality: "main",
+    },
+    validate: isNullableCanonicalMainSecretReferenceValue,
+  },
+  {
+    key: "admin.open-on-login",
+    defaultValue: false,
+    scopes: ["main"],
+    validate: (value: unknown): value is boolean => typeof value === "boolean",
   },
   {
     key: "artifact.exposure",
@@ -80,3 +107,28 @@ export const STANDARD_CONFIGURATION_DEFINITIONS = [
     validate: isOneOf(["after-route-exhaustion", "disabled"] as const),
   },
 ] as const satisfies readonly ConfigurationDefinition[];
+
+function isBoundedUniqueTextList(
+  value: unknown,
+  maximumItems: number,
+  maximumLength: number,
+): boolean {
+  if (!Array.isArray(value) || value.length > maximumItems) {
+    return false;
+  }
+  const values = value.filter((entry): entry is string => isBoundedText(entry, maximumLength));
+  return values.length === value.length && new Set(values).size === values.length;
+}
+
+function isBoundedText(value: unknown, maximumLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maximumLength &&
+    value === value.trim() &&
+    ![...value].some((character) => {
+      const point = character.codePointAt(0);
+      return point !== undefined && (point <= 31 || point === 127);
+    })
+  );
+}

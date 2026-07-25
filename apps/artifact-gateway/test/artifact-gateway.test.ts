@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   LocalArtifactStore,
+  LocalArtifactAccessBroker,
   type ArtifactClock,
   type ArtifactMutationContext,
   type ArtifactRandomSource,
@@ -97,6 +98,7 @@ async function withGateway(
     store: LocalArtifactStore;
     staticApp: Awaited<ReturnType<typeof createArtifactGatewayApp>>;
     interactiveApp: Awaited<ReturnType<typeof createArtifactGatewayApp>>;
+    accessBroker: LocalArtifactAccessBroker;
     authorizationCalls: string[];
   }) => Promise<void>,
 ): Promise<void> {
@@ -110,13 +112,25 @@ async function withGateway(
     random: new DeterministicRandom(),
   });
   const authorizationCalls: string[] = [];
+  const accessBroker = await LocalArtifactAccessBroker.open({
+    rootDirectory: join(rootDirectory, "access"),
+    store,
+    clock,
+    random: new DeterministicRandom(),
+    maximumArtifactBytes: 64 * 1024,
+    maximumChunkBytes: 8,
+  });
   const authorization: ArtifactAuthorizationPort = {
     async authorizeOwner(input) {
       authorizationCalls.push(`owner:${input.credentialKind}:${input.credential}`);
       return (
         (input.credentialKind === "bearer" && input.credential === "owner-artifact-token") ||
         (input.credentialKind === "artifact-session" &&
-          input.credential === "artifact-session-token")
+          (input.credential === "artifact-session-token" ||
+            (await accessBroker.authorizeBrowserSession({
+              artifactId: input.artifactId,
+              credential: input.credential,
+            }))))
       );
     },
     async authorizePrivateNetwork(input) {
@@ -136,6 +150,9 @@ async function withGateway(
     staticOrigin: STATIC_ORIGIN,
     interactiveOrigin: INTERACTIVE_ORIGIN,
     adminOrigins: [ADMIN_ORIGIN],
+    workerUploads: accessBroker,
+    browserSessions: accessBroker,
+    maximumUploadChunkBytes: 8,
   } as const;
   const staticApp = await createArtifactGatewayApp({ ...common, plane: "static" });
   const interactiveApp = await createArtifactGatewayApp({
@@ -144,13 +161,146 @@ async function withGateway(
   });
 
   try {
-    await run({ clock, store, staticApp, interactiveApp, authorizationCalls });
+    await run({
+      clock,
+      store,
+      staticApp,
+      interactiveApp,
+      accessBroker,
+      authorizationCalls,
+    });
   } finally {
     await Promise.all([staticApp.close(), interactiveApp.close()]);
+    await accessBroker.close();
     await store.close();
     await rm(rootDirectory, { recursive: true, force: true });
   }
 }
+
+test("Worker upload endpoint resumes by durable offset and never accepts its grant in the URL", async () => {
+  await withGateway(async ({ accessBroker, staticApp, store }) => {
+    const bytes = Buffer.from("worker report");
+    const issued = await accessBroker.issueUploadGrant({
+      artifactId: "artifact-worker-upload",
+      taskId: "task-worker-upload",
+      producingRunId: "run-worker-upload",
+      mediaType: "text/plain",
+      originalFilename: "worker-report.txt",
+      declaredSizeBytes: bytes.byteLength,
+      expectedChecksum: { algorithm: "sha256", value: checksum(bytes) },
+      createdAtMs: 1_000,
+      retentionPolicy: { kind: "task" },
+      exposurePolicy: { mode: "authenticated" },
+      provenance: { deviceId: "device-worker", source: "worker-upload" },
+      expiresAtMs: 5_000,
+      context,
+    });
+
+    const denied = await staticApp.inject({
+      method: "GET",
+      url: `/worker-uploads/${issued.uploadId}?token=${encodeURIComponent(issued.credential)}`,
+      headers: { host: staticHost },
+    });
+    assert.equal(denied.statusCode, 404);
+
+    const first = await staticApp.inject({
+      method: "PUT",
+      url: `/worker-uploads/${issued.uploadId}`,
+      headers: {
+        host: staticHost,
+        authorization: `Bearer ${issued.credential}`,
+        "content-type": "application/octet-stream",
+        "idempotency-key": "gateway-chunk-1",
+        "upload-offset": "0",
+      },
+      payload: bytes.subarray(0, 8),
+    });
+    assert.equal(first.statusCode, 202);
+    assert.equal(first.headers["upload-offset"], "8");
+
+    const probe = await staticApp.inject({
+      method: "GET",
+      url: `/worker-uploads/${issued.uploadId}`,
+      headers: {
+        host: staticHost,
+        authorization: `Bearer ${issued.credential}`,
+      },
+    });
+    assert.equal(probe.statusCode, 200);
+    assert.equal(probe.json().nextOffsetBytes, 8);
+
+    const completed = await staticApp.inject({
+      method: "PUT",
+      url: `/worker-uploads/${issued.uploadId}`,
+      headers: {
+        host: staticHost,
+        authorization: `Bearer ${issued.credential}`,
+        "content-type": "application/octet-stream",
+        "idempotency-key": "gateway-chunk-2",
+        "upload-offset": "8",
+      },
+      payload: bytes.subarray(8),
+    });
+    assert.equal(completed.statusCode, 201);
+    assert.equal(completed.headers["upload-complete"], "true");
+    assert.deepEqual(Buffer.from((await store.read("artifact-worker-upload")).bytes), bytes);
+  });
+});
+
+test("owner exchanges an authenticated Artifact grant by POST for an HttpOnly scoped cookie", async () => {
+  await withGateway(async ({ accessBroker, staticApp, store }) => {
+    await putArtifact(store, {
+      artifactId: "artifact-browser-session",
+      bytes: Buffer.from("private browser report"),
+      exposureMode: "authenticated",
+    });
+    const grant = await accessBroker.issueBrowserGrant({
+      artifactId: "artifact-browser-session",
+      expiresAtMs: 5_000,
+      context,
+    });
+
+    const exchange = await staticApp.inject({
+      method: "POST",
+      url: "/owner-session/exchange",
+      headers: {
+        host: staticHost,
+        origin: ADMIN_ORIGIN,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      payload: `grant=${encodeURIComponent(grant.credential)}`,
+    });
+    assert.equal(exchange.statusCode, 303);
+    assert.equal(exchange.headers.location, "/artifacts/artifact-browser-session");
+    assert.equal(String(exchange.headers.location).includes(grant.credential), false);
+    const setCookie = String(exchange.headers["set-cookie"] ?? "");
+    assert.match(setCookie, new RegExp(`^${ARTIFACT_SESSION_COOKIE_NAME}=`));
+    assert.match(setCookie, /HttpOnly/);
+    assert.match(setCookie, /Secure/);
+    assert.match(setCookie, /SameSite=Strict/);
+    assert.equal(setCookie.includes(grant.credential), false);
+
+    const cookie = setCookie.split(";")[0] ?? "";
+    const opened = await staticApp.inject({
+      method: "GET",
+      url: "/artifacts/artifact-browser-session",
+      headers: { host: staticHost, cookie },
+    });
+    assert.equal(opened.statusCode, 200);
+
+    const replayedGrant = await staticApp.inject({
+      method: "POST",
+      url: "/owner-session/exchange",
+      headers: {
+        host: staticHost,
+        origin: ADMIN_ORIGIN,
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      payload: `grant=${encodeURIComponent(grant.credential)}`,
+    });
+    assert.equal(replayedGrant.statusCode, 404);
+  });
+});
 
 test("public Artifact supports bounded byte ranges and hardened non-CORS responses", async () => {
   await withGateway(async ({ staticApp, store }) => {
@@ -321,6 +471,78 @@ test("private-network and custom exposure use their dedicated authorization port
       "custom:policy-preview:",
       "custom:policy-preview:custom-artifact-token",
     ]);
+  });
+});
+
+test("reverse-proxy client and HTTPS headers are trusted only from the configured proxy source", async () => {
+  await withGateway(async ({ store }) => {
+    await putArtifact(store, {
+      artifactId: "artifact-proxied-private",
+      bytes: Buffer.from("proxied private report"),
+      exposureMode: "private-network",
+    });
+    const observedAddresses: string[] = [];
+    const app = await createArtifactGatewayApp({
+      plane: "static",
+      store,
+      authorization: {
+        async authorizeOwner() {
+          return false;
+        },
+        async authorizePrivateNetwork(input) {
+          observedAddresses.push(input.remoteAddress);
+          return input.remoteAddress === "100.64.0.10";
+        },
+        async authorizeCustom() {
+          return false;
+        },
+      },
+      staticOrigin: STATIC_ORIGIN,
+      interactiveOrigin: INTERACTIVE_ORIGIN,
+      adminOrigins: [ADMIN_ORIGIN],
+      trustProxyAddress: (address) => address === "127.0.0.1",
+      requireForwardedHttps: true,
+    });
+    try {
+      const allowed = await app.inject({
+        method: "GET",
+        url: "/artifacts/artifact-proxied-private",
+        remoteAddress: "127.0.0.1",
+        headers: {
+          host: staticHost,
+          "x-forwarded-for": "100.64.0.10",
+          "x-forwarded-proto": "https",
+        },
+      });
+      assert.equal(allowed.statusCode, 200);
+      assert.deepEqual(observedAddresses, ["100.64.0.10"]);
+
+      const missingHttpsProof = await app.inject({
+        method: "GET",
+        url: "/artifacts/artifact-proxied-private",
+        remoteAddress: "127.0.0.1",
+        headers: {
+          host: staticHost,
+          "x-forwarded-for": "100.64.0.10",
+        },
+      });
+      assert.equal(missingHttpsProof.statusCode, 421);
+
+      const untrustedProxy = await app.inject({
+        method: "GET",
+        url: "/artifacts/artifact-proxied-private",
+        remoteAddress: "192.0.2.10",
+        headers: {
+          host: staticHost,
+          "x-forwarded-for": "100.64.0.10",
+          "x-forwarded-proto": "https",
+        },
+      });
+      assert.equal(untrustedProxy.statusCode, 421);
+      assert.deepEqual(observedAddresses, ["100.64.0.10"]);
+    } finally {
+      await app.close();
+    }
   });
 });
 

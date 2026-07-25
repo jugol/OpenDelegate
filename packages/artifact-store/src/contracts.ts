@@ -17,6 +17,35 @@ export interface ArtifactRandomSource {
   bytes(length: number): Uint8Array;
 }
 
+/**
+ * Opaque, integrity-protected Artifact index state.
+ *
+ * Artifact bytes are deliberately not part of this record. Production Main stores
+ * this snapshot in its configured metadata database while the local Artifact Store
+ * keeps content-addressed bytes under its managed objects directory.
+ */
+export interface ArtifactIndexSnapshot {
+  readonly schemaVersion: 1;
+  readonly generation: number;
+  readonly stateJson: string;
+  readonly stateSha256: string;
+}
+
+/**
+ * Durable compare-and-set seam for Artifact metadata, signed-link records, and
+ * Artifact audit history.
+ *
+ * `initialize` must be idempotent and return the winning snapshot when another
+ * Main connection initialized the singleton first. `compareAndSet` must atomically
+ * replace exactly `expectedGeneration`, returning false for a stale writer.
+ */
+export interface ArtifactIndexRepository {
+  load(): Promise<ArtifactIndexSnapshot | undefined>;
+  initialize(initial: ArtifactIndexSnapshot): Promise<ArtifactIndexSnapshot>;
+  compareAndSet(expectedGeneration: number, next: ArtifactIndexSnapshot): Promise<boolean>;
+  close(): Promise<void>;
+}
+
 export interface ArtifactActor {
   readonly type: "owner" | "main-agent" | "worker-agent" | "system" | "device";
   readonly id: string;
@@ -73,6 +102,11 @@ export interface PutArtifact {
   readonly context: ArtifactMutationContext;
 }
 
+export interface PutArtifactStream extends Omit<PutArtifact, "bytes"> {
+  readonly declaredSizeBytes: number;
+  readonly bytes: AsyncIterable<Uint8Array>;
+}
+
 export interface StoredArtifactContent {
   readonly metadata: StoredArtifactMetadata;
   readonly bytes: Uint8Array;
@@ -126,6 +160,8 @@ export interface RecordArtifactAccess {
 
 export interface ArtifactStore {
   put(input: PutArtifact): Promise<StoredArtifactMetadata>;
+  putStream(input: PutArtifactStream): Promise<StoredArtifactMetadata>;
+  listMetadata(): Promise<readonly StoredArtifactMetadata[]>;
   getMetadata(artifactId: string): Promise<StoredArtifactMetadata>;
   getAvailableMetadata(artifactId: string): Promise<StoredArtifactMetadata>;
   read(artifactId: string): Promise<StoredArtifactContent>;

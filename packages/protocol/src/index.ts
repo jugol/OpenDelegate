@@ -1,26 +1,15 @@
 import type { OsFamily } from "@opendelegate/domain";
+import type { TaskContinuationCheckpointV1 } from "./task-continuation-checkpoint.ts";
+import { PROTOCOL_VERSION, ProtocolValidationError } from "./validation.ts";
 
 export * from "./http/v1/index.ts";
-
-export const PROTOCOL_VERSION = "v1" as const;
-
-export type ProtocolValidationErrorCode =
-  | "BLANK_IDENTIFIER"
-  | "INVALID_CONTRACT"
-  | "MALFORMED_CAPABILITY_ARRAY"
-  | "UNKNOWN_PROTOCOL_VERSION";
-
-export class ProtocolValidationError extends Error {
-  public readonly code: ProtocolValidationErrorCode;
-  public readonly path: string;
-
-  public constructor(code: ProtocolValidationErrorCode, path: string, message: string) {
-    super(message);
-    this.name = "ProtocolValidationError";
-    this.code = code;
-    this.path = path;
-  }
-}
+export * from "./artifact-upload.ts";
+export * from "./task-continuation-checkpoint.ts";
+export {
+  PROTOCOL_VERSION,
+  ProtocolValidationError,
+  type ProtocolValidationErrorCode,
+} from "./validation.ts";
 
 export interface ForumTaskIntakeV1 {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
@@ -43,6 +32,12 @@ export interface WorkOrderV1 {
   readonly schedulingHints: WorkOrderSchedulingHintsV1;
   readonly requiredCapabilities: readonly string[];
   readonly requiredSecretRefs: readonly string[];
+  /**
+   * Optional semantic requirement chosen by the Main coordinator. Main copies
+   * this value into the immutable Run assignment before dispatch.
+   */
+  readonly requiredAgent?: WorkerAgentRequirementV1;
+  readonly budgetLimits?: WorkOrderBudgetLimitsV1;
   readonly requiredOsFamily?: OsFamily;
   readonly workspaceId?: string;
 }
@@ -50,6 +45,123 @@ export interface WorkOrderV1 {
 export interface WorkOrderSchedulingHintsV1 {
   readonly preferredDeviceIds: readonly string[];
   readonly preferredRoles: readonly string[];
+}
+
+export type WorkOrderBudgetMetricV1 =
+  | "wallTimeMs"
+  | "idleTimeMs"
+  | "retries"
+  | "childWorkOrders"
+  | "concurrentRuns"
+  | "nativeTurns"
+  | "tokens"
+  | "costUsdMicros";
+
+export interface WorkOrderBudgetLimitV1 {
+  readonly soft?: number;
+  readonly hard: number;
+}
+
+export type WorkOrderBudgetLimitsV1 = Partial<
+  Record<WorkOrderBudgetMetricV1, WorkOrderBudgetLimitV1>
+>;
+
+export type RedactedDiagnosticV1 =
+  | boolean
+  | number
+  | string
+  | null
+  | readonly RedactedDiagnosticV1[]
+  | { readonly [key: string]: RedactedDiagnosticV1 };
+
+export type WorkerAgentProviderV1 = "claude" | "codex" | "generic";
+export type WorkerAgentCompatibilityV1 = "compatible" | "tested" | "untested";
+
+/**
+ * A deterministic provider constraint. Omitting `allowedCompatibilities`
+ * means tested-only; incompatible adapters can never be authorized.
+ */
+export interface WorkerAgentRequirementV1 {
+  readonly provider: WorkerAgentProviderV1;
+  readonly adapterId?: string;
+  readonly allowedCompatibilities?: readonly WorkerAgentCompatibilityV1[];
+}
+
+export interface WorkerRunAssignmentV1 {
+  readonly taskId: string;
+  readonly workOrder: WorkOrderV1;
+  readonly continuationCheckpoint?: TaskContinuationCheckpointV1;
+  readonly agentRequirement?: WorkerAgentRequirementV1;
+  readonly deviceId: string;
+  readonly workerId: string;
+  readonly routeId: string;
+  readonly runId: string;
+  readonly leaseId: string;
+  readonly fencingToken: number;
+  readonly leaseExpiresAtMs: number;
+}
+
+export interface WorkerRunIdentityV1 {
+  readonly taskId: string;
+  readonly workOrderId: string;
+  readonly deviceId: string;
+  readonly workerId: string;
+  readonly routeId: string;
+  readonly runId: string;
+  readonly leaseId: string;
+  readonly fencingToken: number;
+}
+
+export interface WorkerProviderUsageV1 {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly costUsdMicros?: number;
+}
+
+export interface WorkerAgentSessionObservationV1 {
+  readonly provider: WorkerAgentProviderV1;
+  readonly adapterId: string;
+  readonly adapterVersion: string;
+  readonly nativeSessionId: string;
+  readonly workstreamId: string;
+  readonly workspaceId: string;
+  /**
+   * Deliberately excludes Device-local cwd, worktreePath, and sessionKey.
+   */
+  readonly lineage: {
+    readonly lineageId: string;
+    readonly parentNativeSessionId?: string;
+    readonly continuationReason?: string;
+  };
+}
+
+export type WorkerOutboundEventTypeV1 =
+  | "worker.run.cancelled"
+  | "worker.run.claimed"
+  | "worker.run.failed"
+  | "worker.run.rejected"
+  | "worker.run.succeeded";
+
+export interface WorkerOutboundEventV1 {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly messageId: string;
+  readonly senderDeviceId: string;
+  readonly correlationId: string;
+  readonly createdAt: string;
+  readonly idempotencyKey: string;
+  readonly type: WorkerOutboundEventTypeV1;
+  readonly payload: WorkerRunIdentityV1 & {
+    readonly report?: string;
+    readonly artifactIds?: readonly string[];
+    readonly diagnostic?: RedactedDiagnosticV1;
+    readonly usage?: WorkerProviderUsageV1;
+    readonly agentSession?: WorkerAgentSessionObservationV1;
+  };
+}
+
+export interface SequencedWorkerEventV1 extends WorkerOutboundEventV1 {
+  readonly sequence: number;
 }
 
 export interface SemanticPlanningCandidateV1 {
@@ -159,6 +271,42 @@ function parseIdentifier(value: unknown, path: string): string {
   }
 
   return value;
+}
+
+function parseBoundedIdentifier(value: unknown, path: string, maximumLength = 512): string {
+  const identifier = parseIdentifier(value, path);
+  if (
+    identifier.length > maximumLength ||
+    [...identifier].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint !== undefined && (codePoint <= 31 || codePoint === 127);
+    })
+  ) {
+    throw new ProtocolValidationError(
+      "INVALID_CONTRACT",
+      path,
+      "Expected a bounded identifier without control characters.",
+    );
+  }
+  return identifier;
+}
+
+function parseBoundedText(value: unknown, path: string, maximumLength: number): string {
+  const text = parseNonBlankString(value, path);
+  if (
+    text.length > maximumLength ||
+    [...text].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint !== undefined && (codePoint <= 8 || codePoint === 11 || codePoint === 12);
+    })
+  ) {
+    throw new ProtocolValidationError(
+      "INVALID_CONTRACT",
+      path,
+      "Expected bounded text without unsafe control characters.",
+    );
+  }
+  return text;
 }
 
 function parseString(value: unknown, path: string): string {
@@ -287,6 +435,143 @@ function parseOsFamily(value: unknown, path: string): OsFamily {
   return value;
 }
 
+function requireExactObjectKeys(
+  input: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+  path: string,
+): Readonly<Record<string, unknown>> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new ProtocolValidationError("INVALID_CONTRACT", path, "Expected an object.");
+  }
+  const record = input as Readonly<Record<string, unknown>>;
+  const allowed = new Set([...required, ...optional]);
+  if (
+    required.some((key) => !Object.prototype.hasOwnProperty.call(record, key)) ||
+    Object.keys(record).some((key) => !allowed.has(key))
+  ) {
+    throw new ProtocolValidationError(
+      "INVALID_CONTRACT",
+      path,
+      "Expected an exact supported field set.",
+    );
+  }
+  return record;
+}
+
+function parseWorkerAgentProvider(value: unknown, path: string): WorkerAgentProviderV1 {
+  if (value !== "claude" && value !== "codex" && value !== "generic") {
+    throw new ProtocolValidationError(
+      "INVALID_CONTRACT",
+      path,
+      "Expected claude, codex, or generic.",
+    );
+  }
+  return value;
+}
+
+function parseWorkerAgentRequirementAt(input: unknown, prefix: string): WorkerAgentRequirementV1 {
+  const value = requireExactObjectKeys(
+    input,
+    ["provider"],
+    ["adapterId", "allowedCompatibilities"],
+    prefix,
+  );
+  const rawCompatibilities = value["allowedCompatibilities"];
+  let allowedCompatibilities: readonly WorkerAgentCompatibilityV1[] | undefined;
+  if (rawCompatibilities !== undefined) {
+    if (!Array.isArray(rawCompatibilities) || rawCompatibilities.length === 0) {
+      throw new ProtocolValidationError(
+        "INVALID_CONTRACT",
+        fieldPath(prefix, "allowedCompatibilities"),
+        "Expected at least one allowed compatibility.",
+      );
+    }
+    allowedCompatibilities = rawCompatibilities.map((entry, index) => {
+      if (entry !== "tested" && entry !== "compatible" && entry !== "untested") {
+        throw new ProtocolValidationError(
+          "INVALID_CONTRACT",
+          `${fieldPath(prefix, "allowedCompatibilities")}[${index}]`,
+          "Expected tested, compatible, or untested.",
+        );
+      }
+      return entry;
+    });
+    assertUnique(allowedCompatibilities, fieldPath(prefix, "allowedCompatibilities"));
+    allowedCompatibilities = Object.freeze([...allowedCompatibilities]);
+  }
+  return Object.freeze({
+    provider: parseWorkerAgentProvider(value["provider"], fieldPath(prefix, "provider")),
+    ...(value["adapterId"] === undefined
+      ? {}
+      : {
+          adapterId: parseBoundedIdentifier(value["adapterId"], fieldPath(prefix, "adapterId")),
+        }),
+    ...(allowedCompatibilities === undefined ? {} : { allowedCompatibilities }),
+  });
+}
+
+function parseWorkerAgentSessionObservationAt(
+  input: unknown,
+  prefix: string,
+): WorkerAgentSessionObservationV1 {
+  const value = requireExactObjectKeys(
+    input,
+    [
+      "provider",
+      "adapterId",
+      "adapterVersion",
+      "nativeSessionId",
+      "workstreamId",
+      "workspaceId",
+      "lineage",
+    ],
+    [],
+    prefix,
+  );
+  const lineagePath = fieldPath(prefix, "lineage");
+  const lineage = requireExactObjectKeys(
+    value["lineage"],
+    ["lineageId"],
+    ["parentNativeSessionId", "continuationReason"],
+    lineagePath,
+  );
+  return Object.freeze({
+    provider: parseWorkerAgentProvider(value["provider"], fieldPath(prefix, "provider")),
+    adapterId: parseBoundedIdentifier(value["adapterId"], fieldPath(prefix, "adapterId")),
+    adapterVersion: parseBoundedIdentifier(
+      value["adapterVersion"],
+      fieldPath(prefix, "adapterVersion"),
+    ),
+    nativeSessionId: parseBoundedIdentifier(
+      value["nativeSessionId"],
+      fieldPath(prefix, "nativeSessionId"),
+    ),
+    workstreamId: parseBoundedIdentifier(value["workstreamId"], fieldPath(prefix, "workstreamId")),
+    workspaceId: parseBoundedIdentifier(value["workspaceId"], fieldPath(prefix, "workspaceId")),
+    lineage: Object.freeze({
+      lineageId: parseBoundedIdentifier(lineage["lineageId"], fieldPath(lineagePath, "lineageId")),
+      ...(lineage["parentNativeSessionId"] === undefined
+        ? {}
+        : {
+            parentNativeSessionId: parseBoundedIdentifier(
+              lineage["parentNativeSessionId"],
+              fieldPath(lineagePath, "parentNativeSessionId"),
+            ),
+          }),
+      ...(lineage["continuationReason"] === undefined
+        ? {}
+        : {
+            continuationReason: parseBoundedText(
+              lineage["continuationReason"],
+              fieldPath(lineagePath, "continuationReason"),
+              1_024,
+            ),
+          }),
+    }),
+  });
+}
+
 function parseWorkOrderAt(input: unknown, prefix: string): WorkOrderV1 {
   assertProtocolVersion(input, fieldPath(prefix, "protocolVersion"));
   const value = input as WorkOrderV1;
@@ -318,6 +603,22 @@ function parseWorkOrderAt(input: unknown, prefix: string): WorkOrderV1 {
       value.requiredSecretRefs,
       fieldPath(prefix, "requiredSecretRefs"),
     ),
+    ...(value.requiredAgent === undefined
+      ? {}
+      : {
+          requiredAgent: parseWorkerAgentRequirementAt(
+            value.requiredAgent,
+            fieldPath(prefix, "requiredAgent"),
+          ),
+        }),
+    ...(value.budgetLimits === undefined
+      ? {}
+      : {
+          budgetLimits: parseWorkOrderBudgetLimitsAt(
+            value.budgetLimits,
+            fieldPath(prefix, "budgetLimits"),
+          ),
+        }),
     ...(value.requiredOsFamily === undefined
       ? {}
       : {
@@ -330,6 +631,84 @@ function parseWorkOrderAt(input: unknown, prefix: string): WorkOrderV1 {
       ? {}
       : { workspaceId: parseIdentifier(value.workspaceId, fieldPath(prefix, "workspaceId")) }),
   };
+}
+
+const workOrderBudgetMetrics = [
+  "wallTimeMs",
+  "idleTimeMs",
+  "retries",
+  "childWorkOrders",
+  "concurrentRuns",
+  "nativeTurns",
+  "tokens",
+  "costUsdMicros",
+] as const satisfies readonly WorkOrderBudgetMetricV1[];
+
+function parseWorkOrderBudgetLimitsAt(input: unknown, prefix: string): WorkOrderBudgetLimitsV1 {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new ProtocolValidationError(
+      "INVALID_CONTRACT",
+      prefix,
+      "Expected Work Order Budget limits.",
+    );
+  }
+  const record = input as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!(workOrderBudgetMetrics as readonly string[]).includes(key)) {
+      throw new ProtocolValidationError(
+        "INVALID_CONTRACT",
+        fieldPath(prefix, key),
+        "Unknown Work Order Budget metric.",
+      );
+    }
+  }
+  const limits: WorkOrderBudgetLimitsV1 = {};
+  for (const metric of workOrderBudgetMetrics) {
+    const value = record[metric];
+    if (value === undefined) {
+      continue;
+    }
+    const path = fieldPath(prefix, metric);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new ProtocolValidationError(
+        "INVALID_CONTRACT",
+        path,
+        "Expected a Work Order Budget limit.",
+      );
+    }
+    const limit = value as Record<string, unknown>;
+    if (
+      !Object.keys(limit).every((key) => key === "soft" || key === "hard") ||
+      !Object.prototype.hasOwnProperty.call(limit, "hard") ||
+      !isNonNegativeSafeInteger(limit["hard"])
+    ) {
+      throw new ProtocolValidationError(
+        "INVALID_CONTRACT",
+        fieldPath(path, "hard"),
+        "Expected a finite non-negative safe-integer hard limit.",
+      );
+    }
+    if (limit["soft"] !== undefined) {
+      if (!isNonNegativeSafeInteger(limit["soft"]) || limit["soft"] > limit["hard"]) {
+        throw new ProtocolValidationError(
+          "INVALID_CONTRACT",
+          fieldPath(path, "soft"),
+          "Expected a finite non-negative soft limit no greater than the hard limit.",
+        );
+      }
+      limits[metric] = {
+        soft: limit["soft"],
+        hard: limit["hard"],
+      };
+    } else {
+      limits[metric] = { hard: limit["hard"] };
+    }
+  }
+  return Object.freeze(limits);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
 function parseNonEmptyStringArray(value: unknown, path: string): readonly string[] {
@@ -569,6 +948,16 @@ export function parseSemanticDeviceSelectionResponse(
 
 export function parseWorkOrder(input: unknown): WorkOrderV1 {
   return parseWorkOrderAt(input, "");
+}
+
+export function parseWorkerAgentRequirement(input: unknown): WorkerAgentRequirementV1 {
+  return parseWorkerAgentRequirementAt(input, "agentRequirement");
+}
+
+export function parseWorkerAgentSessionObservation(
+  input: unknown,
+): WorkerAgentSessionObservationV1 {
+  return parseWorkerAgentSessionObservationAt(input, "agentSession");
 }
 
 export function parseArtifactReference(input: unknown): ArtifactReferenceV1 {

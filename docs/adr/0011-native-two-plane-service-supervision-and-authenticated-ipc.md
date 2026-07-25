@@ -75,20 +75,21 @@ acceptance has passed on any OS.
 1. Windows uses a local named pipe; macOS and Linux use a local Unix-domain socket.
    Endpoint ACLs limit who can connect, but ACLs are defense in depth rather than the
    application authentication decision.
-2. Core and helper perform a versioned, mutually authenticated HMAC-SHA-256
-   challenge-response handshake using a 256-bit per-installation local IPC key
-   obtained by opaque Secret reference. The key value is never written into a
-   service definition, command line, log, Task event, diagnostic bundle, or LLM
-   context.
-3. The handshake binds fresh nonces from both peers, protocol version, Device ID,
-   helper identity, OS session identity, core service epoch, and current release
-   version. Direction-specific labels prevent replaying a helper proof as a core
-   proof.
-4. The peers derive direction-specific connection keys from the authenticated
-   transcript with HKDF-SHA-256. Every subsequent frame is length-bounded,
-   schema-validated, sequence-numbered, and authenticated with HMAC-SHA-256. A
-   duplicate, gap, invalid MAC, stale epoch, unsupported version, or changed session
-   closes the channel and withdraws helper readiness.
+2. Core and helper each own a different Ed25519 private key in the Secret Store of
+   their own OS identity. Neither private key crosses the service/owner boundary.
+   Durable configuration contains only opaque private-key references and pinned
+   RFC 8410 SPKI public keys with `sha256:<lowercase SPKI digest>` key IDs.
+3. Protocol v2 uses a mutually signed three-message handshake. Its transcript binds
+   fresh nonces from both peers, protocol version, Device ID, helper identity, OS
+   session identity, core service epoch, release version, both signing-key IDs, and
+   transport-observed peer metadata. Direction-specific signature labels prevent
+   reflection.
+4. Every subsequent frame is length-bounded, exact-schema validated,
+   sequence-numbered, and Ed25519 signed. The signature binds direction, exact
+   sequence, service epoch, signer key ID, and the SHA-256 digest of the completed
+   handshake transcript. A duplicate, gap, invalid signature, stale epoch,
+   unsupported version, changed session, or changed peer pin closes the channel and
+   withdraws helper readiness.
 5. IPC exposes a narrow capability protocol: readiness snapshots, capture/observe,
    exact authorized input, cancellation, emergency stop, and bounded diagnostics.
    It is not a shell, arbitrary filesystem proxy, database channel, or general agent
@@ -97,9 +98,15 @@ acceptance has passed on any OS.
    Run, helper, service-epoch, persistence-generation, desktop-session lease, and
    fencing identity. Policy, lease, and monotonic desktop authority are revalidated
    at the execution boundary described by ADR-0012.
-7. Key rotation requires overlap bounded to one explicit migration handshake.
-   Failure to retrieve, authenticate, or rotate the IPC key fails Computer Use
+7. Key enrollment and rotation are explicit administrative operations. Rotation may
+   add one bounded migration public-key pin, consumed by one successful handshake;
+   it never copies a private key or creates a shared cross-plane credential.
+   Failure to retrieve, authenticate, or rotate either key fails Computer Use
    closed while preserving non-graphical daemon work.
+8. The former shared-HMAC protocol is not accepted by rendered service
+   configuration or production service hosts. Its compatibility API may remain
+   temporarily for isolated tests and migrations, but a legacy `helperIpc`
+   configuration fails closed.
 
 ## Alternatives considered
 
@@ -120,10 +127,12 @@ Rejected because endpoint squatting, configuration mistakes, inherited handles, 
 session confusion can cross the intended capability boundary. Protocol
 authentication and service-epoch binding are still required.
 
-### Put the IPC Secret in the service definition
+### Share one symmetric IPC Secret across both planes
 
-Rejected because service definitions and process command lines are commonly
-inspectable and included in diagnostics.
+Rejected because the core service identity and logged-in owner identity would both
+need access to the same bearer credential, defeating the intended OS trust
+separation. Service definitions and command lines are also commonly inspectable and
+included in diagnostics.
 
 ### Replace the active release in place
 

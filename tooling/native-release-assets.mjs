@@ -1,0 +1,320 @@
+import { createHash } from "node:crypto";
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const supportedPlatforms = new Set(["darwin", "linux", "win32"]);
+const supportedArchitectures = new Set(["arm64", "x64"]);
+
+export async function stageNativeReleaseAssets(options) {
+  const platform = options.platform ?? process.platform;
+  const architecture = options.architecture ?? process.arch;
+  if (!supportedPlatforms.has(platform) || !supportedArchitectures.has(architecture)) {
+    throw new Error(`Native release assets are unsupported for ${platform}/${architecture}.`);
+  }
+  const sourceRoot = requireAbsolutePath(options.sourceRoot, "source root");
+  const stagingRoot = requireAbsolutePath(options.stagingRoot, "staging root");
+  assertOutside(sourceRoot, stagingRoot, "Native release staging");
+  const builders = options.builders ?? {};
+  const buildRoot = await mkdtemp(join(dirname(stagingRoot), ".od-native-build-"));
+  try {
+    const components =
+      platform === "win32"
+        ? await stageWindows({
+            architecture,
+            buildRoot,
+            builders,
+            sourceRoot,
+            stagingRoot,
+          })
+        : platform === "darwin"
+          ? await stageMacOs({
+              architecture,
+              buildRoot,
+              builders,
+              sourceRoot,
+              stagingRoot,
+            })
+          : await stageLinux({
+              architecture,
+              buildRoot,
+              builders,
+              sourceRoot,
+              stagingRoot,
+            });
+    const result = Object.freeze({
+      schemaVersion: 1,
+      platform,
+      architecture,
+      components: Object.freeze(components),
+    });
+    await writeFile(
+      join(stagingRoot, "native-components.json"),
+      `${JSON.stringify(result, null, 2)}\n`,
+      "utf8",
+    );
+    return result;
+  } finally {
+    await rm(buildRoot, { force: true, recursive: true });
+  }
+}
+
+async function stageWindows(input) {
+  const computerUseBuilder =
+    input.builders.windows ??
+    (await importSourceBuilder(
+      input.sourceRoot,
+      "packages/computer-use-os/native/windows/build.mjs",
+      "buildWindowsComputerUseNative",
+    ));
+  const serviceHostBuilder =
+    input.builders.serviceHost ??
+    (await importSourceBuilder(
+      input.sourceRoot,
+      "packages/platform-services/native/service-host/build.mjs",
+      "buildNativeServiceHosts",
+    ));
+  const [result, serviceHosts] = await Promise.all([
+    computerUseBuilder({
+      architecture: input.architecture === "arm64" ? "ARM64" : "x64",
+      outputRoot: join(input.buildRoot, "computer-use"),
+    }),
+    serviceHostBuilder({
+      architecture: input.architecture,
+      hostPlatform: "win32",
+      outputRoot: join(input.buildRoot, "service-host"),
+    }),
+  ]);
+  return await copyComponents(input, [
+    {
+      kind: "core-service-host",
+      source: serviceHosts.coreExecutable,
+      path: "bin/opendelegate-service-host.exe",
+    },
+    {
+      kind: "session-helper-host",
+      source: serviceHosts.helperExecutable,
+      path: "bin/opendelegate-session-helper.exe",
+    },
+    {
+      kind: "computer-use-helper",
+      source: result.helperExecutable,
+      path: "libexec/opendelegate-windows-computer-use-helper.exe",
+    },
+    {
+      kind: "computer-use-fixture",
+      source: result.fixtureExecutable,
+      path: "libexec/opendelegate-windows-computer-use-fixture.exe",
+    },
+  ]);
+}
+
+async function stageLinux(input) {
+  const builder =
+    input.builders.linux ??
+    (await importSourceBuilder(
+      input.sourceRoot,
+      "packages/computer-use-os/native/linux/stage.mjs",
+      "stageLinuxComputerUseNative",
+    ));
+  const serviceHostBuilder =
+    input.builders.serviceHost ??
+    (await importSourceBuilder(
+      input.sourceRoot,
+      "packages/platform-services/native/service-host/build.mjs",
+      "buildNativeServiceHosts",
+    ));
+  const [result, serviceHosts] = await Promise.all([
+    builder({
+      hostPlatform: "linux",
+      outputRoot: join(input.buildRoot, "computer-use"),
+    }),
+    serviceHostBuilder({
+      architecture: input.architecture,
+      hostPlatform: "linux",
+      outputRoot: join(input.buildRoot, "service-host"),
+    }),
+  ]);
+  return await copyComponents(input, [
+    {
+      kind: "core-service-host",
+      source: serviceHosts.coreExecutable,
+      path: "bin/opendelegate-service-host",
+    },
+    {
+      kind: "session-helper-host",
+      source: serviceHosts.helperExecutable,
+      path: "bin/opendelegate-session-helper",
+    },
+    {
+      kind: "computer-use-helper",
+      source: result.helperExecutable,
+      path: "libexec/opendelegate-linux-computer-use",
+    },
+    {
+      kind: "computer-use-fixture",
+      source: result.fixtureExecutable,
+      path: "libexec/opendelegate-linux-computer-use-fixture",
+    },
+  ]);
+}
+
+async function stageMacOs(input) {
+  const computerUseBuilder =
+    input.builders.macosComputerUse ??
+    (await importSourceBuilder(
+      input.sourceRoot,
+      "packages/computer-use-os/native/macos/build.mjs",
+      "buildMacOsComputerUseNative",
+    ));
+  const keychainBuilder =
+    input.builders.macosKeychain ??
+    (await importSourceBuilder(
+      input.sourceRoot,
+      "packages/secrets/native/macos/build.mjs",
+      "buildMacOsKeychainHelper",
+    ));
+  const serviceHostBuilder =
+    input.builders.serviceHost ??
+    (await importSourceBuilder(
+      input.sourceRoot,
+      "packages/platform-services/native/service-host/build.mjs",
+      "buildNativeServiceHosts",
+    ));
+  const [computerUse, keychain, serviceHosts] = await Promise.all([
+    computerUseBuilder({
+      architecture: input.architecture,
+      outputRoot: join(input.buildRoot, "computer-use"),
+    }),
+    keychainBuilder({
+      architecture: input.architecture,
+      outputRoot: join(input.buildRoot, "keychain"),
+    }),
+    serviceHostBuilder({
+      architecture: input.architecture,
+      hostPlatform: "darwin",
+      outputRoot: join(input.buildRoot, "service-host"),
+    }),
+  ]);
+  return await copyComponents(input, [
+    {
+      kind: "core-service-host",
+      source: serviceHosts.coreExecutable,
+      path: "bin/opendelegate-service-host",
+    },
+    {
+      kind: "session-helper-host",
+      source: serviceHosts.helperExecutable,
+      path: "bin/opendelegate-session-helper",
+    },
+    {
+      kind: "computer-use-helper",
+      source: computerUse.helperExecutable,
+      path: "libexec/opendelegate-macos-computer-use",
+    },
+    {
+      kind: "computer-use-fixture",
+      source: computerUse.fixtureExecutable,
+      path: "libexec/opendelegate-macos-computer-use-fixture",
+    },
+    {
+      kind: "secret-store-helper",
+      source: keychain.helperExecutable,
+      path: "runtime/native/opendelegate-keychain-helper",
+    },
+  ]);
+}
+
+async function copyComponents(input, entries) {
+  return await Promise.all(
+    entries.map(async (entry) => {
+      const source = await requireSafeBuildOutput(entry.source, input.buildRoot);
+      const destination = join(input.stagingRoot, ...entry.path.split("/"));
+      await mkdir(dirname(destination), { recursive: true, mode: 0o755 });
+      await copyFile(source, destination);
+      if (process.platform !== "win32") {
+        await chmod(destination, 0o755);
+      }
+      return Object.freeze({
+        kind: entry.kind,
+        path: entry.path,
+        sha256: await sha256File(destination),
+      });
+    }),
+  );
+}
+
+async function requireSafeBuildOutput(value, buildRoot) {
+  const path = requireAbsolutePath(value, "native build output");
+  const [canonicalRoot, canonicalPath, metadata] = await Promise.all([
+    realpath(buildRoot),
+    realpath(path),
+    lstat(path),
+  ]);
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    !isStrictDescendant(canonicalRoot, canonicalPath)
+  ) {
+    throw new Error("A native build output escaped its isolated build root.");
+  }
+  return canonicalPath;
+}
+
+async function importSourceBuilder(sourceRoot, relativePath, exportName) {
+  const modulePath = join(sourceRoot, ...relativePath.split("/"));
+  const canonicalSource = await realpath(sourceRoot);
+  const canonicalModule = await realpath(modulePath);
+  if (!isStrictDescendant(canonicalSource, canonicalModule)) {
+    throw new Error("A native builder escaped the committed source snapshot.");
+  }
+  const module = await import(pathToFileURL(canonicalModule).href);
+  const builder = module[exportName];
+  if (typeof builder !== "function") {
+    throw new Error(`Native builder ${exportName} is unavailable.`);
+  }
+  return builder;
+}
+
+function requireAbsolutePath(value, label) {
+  if (typeof value !== "string" || !isAbsolute(value) || value.includes("\0")) {
+    throw new Error(`The native release ${label} must be an absolute path.`);
+  }
+  return resolve(value);
+}
+
+function assertOutside(parent, candidate, label) {
+  const relationship = relative(resolve(parent), resolve(candidate));
+  if (
+    relationship === "" ||
+    (!isAbsolute(relationship) && relationship !== ".." && !relationship.startsWith(`..${sep}`))
+  ) {
+    throw new Error(`${label} must remain outside the source checkout.`);
+  }
+}
+
+function isStrictDescendant(parent, candidate) {
+  const relationship = relative(resolve(parent), resolve(candidate));
+  return (
+    relationship !== "" &&
+    !isAbsolute(relationship) &&
+    relationship !== ".." &&
+    !relationship.startsWith(`..${sep}`)
+  );
+}
+
+async function sha256File(path) {
+  return `sha256:${createHash("sha256")
+    .update(await readFile(path))
+    .digest("hex")}`;
+}

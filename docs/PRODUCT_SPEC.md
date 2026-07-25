@@ -475,7 +475,9 @@ may request a transition but cannot manufacture a state outside the transition r
 ### FR-7 — Work Orders, Runs, and scheduling
 
 1. Each Work Order has a stable ID, explicit brief, completion criteria, constraints,
-   selected inputs, required Capabilities, and scheduling hints.
+   selected inputs, required Capabilities, scheduling hints, and an optional Agent
+   requirement naming a provider plus an optional exact adapter and allowed
+   compatibility set.
 2. A deterministic eligibility stage filters Devices by health, connection, Policy,
    Capability, Secret availability, resource capacity, and hard Task constraints.
 3. A deterministic score may rank workload, route cost, artifact locality, session
@@ -502,6 +504,12 @@ may request a transition but cannot manufacture a state outside the transition r
     is still live at the authoritative, monotonically non-decreasing journal
     acceptance instant; an expired or replaced Run cannot be credited with
     completion. Replay preserves and revalidates that original event instant.
+14. Main copies any Work Order Agent requirement into the immutable Run assignment.
+    Retry and restart replay preserve that exact requirement; they do not widen it.
+15. A terminal Worker event may return the actual provider, adapter ID and version,
+    native session ID, Workspace ID, workstream ID, and session lineage. This safe
+    observation excludes Device-local paths, worktree paths, and session keys and is
+    durably preserved by Main.
 
 ### FR-8 — Concurrency and resource locks
 
@@ -566,6 +574,13 @@ may request a transition but cannot manufacture a state outside the transition r
 13. A continuation receives a bounded package: Task Brief, rolling summary,
     decisions, pending Work Orders, selected Artifact index, relevant current
     messages, and explicit constraints.
+14. A Worker uses Device-level automatic adapter selection only when its Run has no
+    Agent requirement. When a requirement exists, the provider is mandatory, the
+    exact adapter and compatibility set are enforced when present, and an
+    unavailable binding fails closed without silently substituting another
+    provider. Omitting the compatibility set means tested-only.
+15. A successful provider-bound Run reports a safe native-session observation whose
+    provider and exact adapter, when required, match the durable assignment.
 
 ### FR-10 — Context isolation and compaction
 
@@ -1109,7 +1124,10 @@ The milestone is accepted only when all of the following are demonstrated:
 14. Codex and Claude start through programmatic adapters, return observable events,
     and resume native sessions by Task or workstream.
 15. Coordinator provider pinning and Worker provider participation behave as
-    specified.
+    specified: Main preserves an immutable per-Run provider requirement, Worker
+    never silently substitutes it, Device Auto applies only without a requirement,
+    and safe actual provider/adapter/native-session lineage survives Main and Worker
+    restart replay.
 16. A forced native-session loss continues from a durable checkpoint.
 17. A Worker uses relevant local Markdown Knowledge without uploading Knowledge
     content or index data to Main.

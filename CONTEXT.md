@@ -149,7 +149,9 @@ initially chosen provider and resumed across Forum replies and Worker reports.
 
 A scoped assignment created by Main for one outcome. Work Orders contain an explicit
 brief, completion criteria, selected inputs, constraints, and eligible capability
-requirements. A Task may have many Work Orders.
+requirements. They may also require one Agent provider, an exact adapter, and a
+bounded compatibility set; Main pins that requirement into every resulting Run. A
+Task may have many Work Orders.
 
 ### Workspace
 

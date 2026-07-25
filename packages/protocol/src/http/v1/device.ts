@@ -8,6 +8,175 @@ export const DeviceOsFamilySchema = Type.Union([
   Type.Literal("linux"),
 ]);
 
+const DeviceCapabilitySchema = Type.Object(
+  {
+    name: Type.String({ minLength: 1, maxLength: 256 }),
+    verification: Type.Union([
+      Type.Literal("detected"),
+      Type.Literal("verified"),
+      Type.Literal("degraded"),
+      Type.Literal("unavailable"),
+      Type.Literal("disabled"),
+    ]),
+    observedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    evidenceSource: Type.Optional(
+      Type.Union([
+        Type.Literal("agent-adapter"),
+        Type.Literal("capability-probe"),
+        Type.Literal("workspace-registry"),
+      ]),
+    ),
+    version: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  },
+  { additionalProperties: false },
+);
+
+const DeviceFactSchema = Type.Object(
+  {
+    kind: Type.Union([
+      Type.Literal("os-family"),
+      Type.Literal("platform-release"),
+      Type.Literal("architecture"),
+      Type.Literal("hostname"),
+      Type.Literal("cpu-model"),
+      Type.Literal("cpu-logical-cores"),
+      Type.Literal("memory-total-bytes"),
+      Type.Literal("gpu-model"),
+    ]),
+    value: Type.String({ minLength: 1, maxLength: 256 }),
+    source: Type.Union([
+      Type.Literal("enrollment"),
+      Type.Literal("authenticated-heartbeat"),
+      Type.Literal("node-os"),
+      Type.Literal("platform-probe"),
+    ]),
+    observedAtMs: Type.Integer({ minimum: 0 }),
+    verification: Type.Union([Type.Literal("observed"), Type.Literal("verified")]),
+  },
+  { additionalProperties: false },
+);
+
+const DeviceRouteSchema = Type.Object(
+  {
+    routeId: OpaqueIdSchema,
+    label: Type.String({ minLength: 1, maxLength: 256 }),
+    priority: Type.Integer({ minimum: 0, maximum: 65_535 }),
+    kind: Type.Optional(Type.Union([Type.Literal("https"), Type.Literal("wss")])),
+    profileRevision: Type.Optional(
+      Type.String({ pattern: "^sha256:[a-f0-9]{64}$", maxLength: 71 }),
+    ),
+    health: Type.Union([
+      Type.Literal("healthy"),
+      Type.Literal("degraded"),
+      Type.Literal("unhealthy"),
+      Type.Literal("unknown"),
+    ]),
+    lastAttempt: Type.Optional(
+      Type.Object(
+        {
+          probeSource: Type.Union([
+            Type.Literal("cache"),
+            Type.Literal("live"),
+            Type.Literal("not-run"),
+          ]),
+          outcome: Type.Union([
+            Type.Literal("authentication-rejected"),
+            Type.Literal("connect-failed"),
+            Type.Literal("connected"),
+            Type.Literal("identity-rejected"),
+            Type.Literal("probe-unhealthy"),
+            Type.Literal("skipped-incompatible"),
+          ]),
+          observedAtMs: Type.Integer({ minimum: 0 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const DevicePolicySchema = Type.Object(
+  {
+    policyId: OpaqueIdSchema,
+    actionCategory: Type.String({ minLength: 1, maxLength: 160 }),
+    decision: Type.Union([
+      Type.Literal("allow"),
+      Type.Literal("require-approval"),
+      Type.Literal("deny"),
+    ]),
+    source: Type.Union([Type.Literal("built-in"), Type.Literal("configuration")]),
+    effectiveScope: Type.Union([
+      Type.Literal("instance"),
+      Type.Literal("main"),
+      Type.Literal("device"),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+const DeviceAgentAdapterSchema = Type.Object(
+  {
+    provider: Type.Union([
+      Type.Literal("codex"),
+      Type.Literal("claude"),
+      Type.Literal("generic-command"),
+    ]),
+    adapterId: OpaqueIdSchema,
+    readiness: Type.Union([
+      Type.Literal("ready"),
+      Type.Literal("degraded"),
+      Type.Literal("unavailable"),
+    ]),
+    compatibility: Type.Union([
+      Type.Literal("tested"),
+      Type.Literal("compatible"),
+      Type.Literal("untested"),
+      Type.Literal("incompatible"),
+    ]),
+    version: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+    observedAtMs: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+const DeviceResourceLockHolderSchema = Type.Object(
+  {
+    taskId: OpaqueIdSchema,
+    runId: OpaqueIdSchema,
+    expiresAtMs: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+const DeviceResourceLockSchema = Type.Object(
+  {
+    resourceName: Type.String({ minLength: 1, maxLength: 160 }),
+    capacity: Type.Integer({ minimum: 1, maximum: 1_024 }),
+    holders: Type.Array(DeviceResourceLockHolderSchema, {
+      maxItems: 1_024,
+      uniqueItems: true,
+    }),
+  },
+  { additionalProperties: false },
+);
+
+const DeviceCurrentRunSchema = Type.Object(
+  {
+    taskId: OpaqueIdSchema,
+    workOrderId: OpaqueIdSchema,
+    runId: OpaqueIdSchema,
+    state: Type.Union([
+      Type.Literal("starting"),
+      Type.Literal("running"),
+      Type.Literal("cancelling"),
+    ]),
+    acceptedAtMs: Type.Integer({ minimum: 0 }),
+    leaseExpiresAtMs: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 export const DeviceSummarySchema = Type.Object(
   {
     deviceId: OpaqueIdSchema,
@@ -27,6 +196,88 @@ export const DeviceSummarySchema = Type.Object(
       Type.Literal("system-service"),
       Type.Literal("user-service"),
     ]),
+    lastObservation: Type.Optional(
+      Type.Object(
+        {
+          observedAtMs: Type.Integer({ minimum: 0 }),
+          acceptedAtMs: Type.Integer({ minimum: 0 }),
+          source: Type.Literal("authenticated-heartbeat"),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    roles: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 256 }), {
+        maxItems: 128,
+        uniqueItems: true,
+      }),
+    ),
+    instructions: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 4_096 }), {
+        maxItems: 128,
+        uniqueItems: true,
+      }),
+    ),
+    facts: Type.Optional(
+      Type.Array(DeviceFactSchema, {
+        maxItems: 128,
+        uniqueItems: true,
+      }),
+    ),
+    capabilities: Type.Optional(
+      Type.Array(DeviceCapabilitySchema, {
+        maxItems: 512,
+      }),
+    ),
+    policies: Type.Optional(
+      Type.Array(DevicePolicySchema, {
+        maxItems: 256,
+        uniqueItems: true,
+      }),
+    ),
+    agentAdapters: Type.Optional(
+      Type.Array(DeviceAgentAdapterSchema, {
+        maxItems: 64,
+        uniqueItems: true,
+      }),
+    ),
+    routes: Type.Optional(
+      Type.Array(DeviceRouteSchema, {
+        maxItems: 64,
+      }),
+    ),
+    resourceLocks: Type.Optional(
+      Type.Array(DeviceResourceLockSchema, {
+        maxItems: 128,
+        uniqueItems: true,
+      }),
+    ),
+    currentRuns: Type.Optional(
+      Type.Array(DeviceCurrentRunSchema, {
+        maxItems: 1_024,
+        uniqueItems: true,
+      }),
+    ),
+    capacity: Type.Optional(
+      Type.Object(
+        {
+          activeRuns: Type.Integer({ minimum: 0, maximum: 1_024 }),
+          maximumConcurrentRuns: Type.Integer({ minimum: 1, maximum: 1_024 }),
+          acceptingWork: Type.Boolean(),
+          maxOutboxEntries: Type.Optional(Type.Integer({ minimum: 2, maximum: 1_000_000 })),
+          outboxDepth: Type.Optional(Type.Integer({ minimum: 0, maximum: 1_000_000 })),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    knowledgeHealth: Type.Optional(
+      Type.Union([
+        Type.Literal("healthy"),
+        Type.Literal("degraded"),
+        Type.Literal("unavailable"),
+        Type.Literal("unknown"),
+      ]),
+    ),
   },
   {
     additionalProperties: false,

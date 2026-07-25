@@ -4,8 +4,11 @@ import { timingSafeEqual } from "node:crypto";
 
 import {
   BasicConstraintsExtension,
+  ExtendedKeyUsage,
+  ExtendedKeyUsageExtension,
   KeyUsageFlags,
   KeyUsagesExtension,
+  Pkcs10CertificateRequest,
   Pkcs10CertificateRequestGenerator,
   SubjectAlternativeNameExtension,
   X509Certificate,
@@ -57,6 +60,27 @@ export interface CreateRotationProof {
   readonly deviceId: string;
   readonly certificateSerial: string;
   readonly activationChallenge: string;
+}
+
+export interface VerifyIssuedDeviceIdentity {
+  readonly keyId: string;
+  readonly deviceId: string;
+  readonly generation: number;
+  readonly certificatePem: string;
+  readonly certificateAuthorityPem: string;
+  readonly certificateRequestPem: string;
+  readonly expectedMainSpkiSha256: string;
+}
+
+export interface VerifiedIssuedDeviceIdentity {
+  readonly keyId: string;
+  readonly deviceId: string;
+  readonly generation: number;
+  readonly certificatePem: string;
+  readonly certificateAuthorityPem: string;
+  readonly serialNumber: string;
+  readonly notBefore: number;
+  readonly notAfter: number;
 }
 
 export class WorkerDeviceIdentity {
@@ -114,7 +138,7 @@ export class WorkerDeviceIdentity {
     let selfSignatureValid: boolean;
     try {
       selfSignatureValid = await certificate.verify(
-        { publicKey: certificate.publicKey },
+        { publicKey: certificate.publicKey, date: new Date(now) },
         identityWebCrypto,
       );
     } catch {
@@ -165,6 +189,115 @@ export class WorkerDeviceIdentity {
       }),
     );
     return base64Url(signature);
+  }
+
+  public async verifyIssuedDeviceIdentity(
+    request: VerifyIssuedDeviceIdentity,
+  ): Promise<VerifiedIssuedDeviceIdentity> {
+    const keyId = validateKeyId(request.keyId);
+    const deviceId = validateDeviceId(request.deviceId);
+    const generation = validateGeneration(request.generation);
+    await this.verifyMainIdentity({
+      certificatePem: request.certificateAuthorityPem,
+      expectedSpkiSha256: request.expectedMainSpkiSha256,
+    });
+    if (!(await this.secrets.has(keyId))) {
+      throw invalidIssuedIdentity();
+    }
+
+    let certificateAuthority: X509Certificate;
+    let certificate: X509Certificate;
+    let certificateRequest: Pkcs10CertificateRequest;
+    try {
+      certificateAuthority = new X509Certificate(request.certificateAuthorityPem);
+      certificate = new X509Certificate(request.certificatePem);
+      certificateRequest = new Pkcs10CertificateRequest(request.certificateRequestPem);
+    } catch {
+      throw invalidIssuedIdentity();
+    }
+    const serialNumber = normalizeCertificateSerial(certificate.serialNumber);
+    const algorithm = certificate.publicKey.algorithm;
+    const basicConstraints = certificate.getExtension(BasicConstraintsExtension);
+    const keyUsages = certificate.getExtension(KeyUsagesExtension);
+    const extendedKeyUsages = certificate.getExtension(ExtendedKeyUsageExtension);
+    const subjectAlternativeName = certificate.getExtension(SubjectAlternativeNameExtension);
+    const names = subjectAlternativeName?.names.items.map((name) => name.toJSON());
+    const now = readClock(this.clock);
+    let certificateSignatureValid: boolean;
+    let certificateRequestSignatureValid: boolean;
+    try {
+      [certificateSignatureValid, certificateRequestSignatureValid] = await Promise.all([
+        certificate.verify(
+          { publicKey: certificateAuthority.publicKey, date: new Date(now) },
+          identityWebCrypto,
+        ),
+        certificateRequest.verify(identityWebCrypto),
+      ]);
+    } catch {
+      throw invalidIssuedIdentity();
+    }
+    if (
+      serialNumber === null ||
+      !certificateSignatureValid ||
+      !certificateRequestSignatureValid ||
+      certificate.issuer !== certificateAuthority.subject ||
+      certificate.subject !== `CN=${deviceId}` ||
+      certificateRequest.subject !== `CN=${deviceId}` ||
+      certificate.signatureAlgorithm.name !== "ECDSA" ||
+      certificate.signatureAlgorithm.hash.name !== "SHA-256" ||
+      algorithm.name !== "ECDSA" ||
+      !("namedCurve" in algorithm) ||
+      algorithm.namedCurve !== "P-256" ||
+      basicConstraints?.ca !== false ||
+      keyUsages?.usages !== KeyUsageFlags.digitalSignature ||
+      extendedKeyUsages?.usages.length !== 1 ||
+      extendedKeyUsages.usages[0] !== ExtendedKeyUsage.clientAuth ||
+      names?.length !== 1 ||
+      names[0]?.type !== "url" ||
+      names[0].value !== deviceUri(deviceId) ||
+      !bufferSourcesEqual(certificate.publicKey.rawData, certificateRequest.publicKey.rawData) ||
+      now < certificate.notBefore.getTime() ||
+      now >= certificate.notAfter.getTime()
+    ) {
+      throw invalidIssuedIdentity();
+    }
+
+    const proofPayload = new TextEncoder().encode(
+      ["OpenDelegate issued Device key proof v1", deviceId, serialNumber].join("\n"),
+    );
+    const signature = await this.secrets.signP256(keyId, proofPayload);
+    const signatureCopy = new Uint8Array(signature.byteLength);
+    signatureCopy.set(signature);
+    let proofValid: boolean;
+    try {
+      const publicKey = await certificate.publicKey.export(identityWebCrypto);
+      proofValid = await identityWebCrypto.subtle.verify(
+        ECDSA_SHA256,
+        publicKey,
+        signatureCopy,
+        proofPayload,
+      );
+    } catch {
+      throw invalidIssuedIdentity();
+    } finally {
+      proofPayload.fill(0);
+      signature.fill(0);
+      signatureCopy.fill(0);
+    }
+    if (!proofValid) {
+      throw invalidIssuedIdentity();
+    }
+
+    return deepFreeze({
+      keyId,
+      deviceId,
+      generation,
+      certificatePem: request.certificatePem,
+      certificateAuthorityPem: request.certificateAuthorityPem,
+      serialNumber,
+      notBefore: certificate.notBefore.getTime(),
+      notAfter: certificate.notAfter.getTime(),
+    });
   }
 }
 
@@ -219,6 +352,24 @@ function validateCertificateSerial(value: string): string {
   return value;
 }
 
+function normalizeCertificateSerial(value: string): string | null {
+  const normalized = value.toLowerCase();
+  if (!/^[0-9a-f]{1,32}$/u.test(normalized)) {
+    return null;
+  }
+  return normalized.padStart(32, "0");
+}
+
+function validateGeneration(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new DeviceIdentityError(
+      "IDENTITY_CONFIGURATION_INVALID",
+      "The Device certificate generation must be a positive safe integer.",
+    );
+  }
+  return value;
+}
+
 function validateActivationChallenge(value: string): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(value)) {
     throw new DeviceIdentityError(
@@ -264,6 +415,27 @@ function invalidMainIdentity(): DeviceIdentityError {
     "MAIN_IDENTITY_INVALID",
     "The presented Main identity certificate is invalid.",
   );
+}
+
+function invalidIssuedIdentity(): DeviceIdentityError {
+  return new DeviceIdentityError(
+    "PEER_CERTIFICATE_INVALID",
+    "The issued Device certificate did not match the local key and enrollment request.",
+  );
+}
+
+function bufferSourcesEqual(left: BufferSource, right: BufferSource): boolean {
+  const leftBytes = Buffer.from(
+    left instanceof ArrayBuffer ? left : left.buffer,
+    left instanceof ArrayBuffer ? 0 : left.byteOffset,
+    left instanceof ArrayBuffer ? left.byteLength : left.byteLength,
+  );
+  const rightBytes = Buffer.from(
+    right instanceof ArrayBuffer ? right : right.buffer,
+    right instanceof ArrayBuffer ? 0 : right.byteOffset,
+    right instanceof ArrayBuffer ? right.byteLength : right.byteLength,
+  );
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
 function base64Url(value: Uint8Array): string {

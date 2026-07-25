@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   AgentAdapterError,
   GenericCommandAdapter,
+  selectAgentSteeringDisposition,
   type AgentRunLimits,
   type NormalizedAgentEvent,
 } from "../src/index.ts";
@@ -65,6 +66,7 @@ test("generic command runner uses the strict stdin/JSONL lifecycle and resumes b
   assert.equal(first.session?.adapterId, "generic-fixture");
   assert.equal(first.session?.adapterVersion, "3.4.5");
   assert.equal(first.session?.lineage.lineageId, "lineage-generic");
+  assert.equal(started.steer, undefined);
   assert.ok(
     events.some((event) => event.type === "progress" && event.message === "start:container:true"),
   );
@@ -91,6 +93,42 @@ test("generic command runner uses the strict stdin/JSONL lifecycle and resumes b
 
   assert.equal(second.status, "succeeded");
   assert.equal(second.session?.nativeSessionId, first.session.nativeSessionId);
+
+  const probe = await adapter.probe();
+  assert.equal(probe.capabilities.steering, false);
+  const disposition = selectAgentSteeringDisposition(probe, started, {
+    schemaVersion: 1,
+    requestId: "steer-generic-next-resume",
+    scope: {
+      provider: "generic",
+      adapterId: "generic-fixture",
+      runId: base.runId,
+      taskId: base.taskId,
+      workstreamId: base.workstreamId,
+      sessionKey: base.sessionKey,
+      deviceId: base.deviceId,
+      workspaceId: base.workspace.workspaceId,
+      nativeSessionId: first.session.nativeSessionId,
+    },
+    instruction: "Apply this instruction on the next native-session resume.",
+    requestedBy: "main-agent",
+  });
+  assert.deepEqual(disposition, {
+    delivery: "next-resume",
+    reasonCode: "ADAPTER_LIVE_STEERING_UNAVAILABLE",
+    audit: {
+      eventName: "agent.steering.delivery-selected",
+      requestId: "steer-generic-next-resume",
+      runId: "run-generic-start",
+      taskId: "task-generic",
+      deviceId: "device-linux",
+      nativeSessionId: "generic-session-1",
+      adapterId: "generic-fixture",
+      delivery: "next-resume",
+      reasonCode: "ADAPTER_LIVE_STEERING_UNAVAILABLE",
+    },
+    nextResumeInstruction: "Apply this instruction on the next native-session resume.",
+  });
 });
 
 test("generic command probe reports authentication as not required when no auth command exists", async () => {

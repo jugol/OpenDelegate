@@ -21,6 +21,24 @@ import {
   type OwnerLogin,
 } from "@opendelegate/owner-auth";
 import {
+  ApprovalDecisionRequestSchema,
+  ApprovalDetailSchema,
+  ApprovalListResponseSchema,
+  ApprovalParamsSchema,
+  ArtifactDetailSchema,
+  ArtifactListResponseSchema,
+  ArtifactOpenInstructionSchema,
+  ArtifactParamsSchema,
+  AuditEventListResponseSchema,
+  ConfigurationAgentMessageParamsSchema,
+  ConfigurationAgentMessageRequestSchema,
+  ConfigurationAgentMessageResponseSchema,
+  CreateTaskRequestSchema,
+  DeviceListResponseSchema,
+  DeviceEnrollmentOverviewSchema,
+  ExtendTaskBudgetRequestSchema,
+  IssueEnrollmentGrantRequestSchema,
+  IssueEnrollmentGrantResponseSchema,
   LiveHealthSchema,
   OwnerClaimRequestSchema,
   OwnerClaimResponseSchema,
@@ -35,9 +53,10 @@ import {
   RecoveryCompleteResponseSchema,
   RevokeSessionParamsSchema,
   RuntimeFeaturesResponseSchema,
-  CreateTaskRequestSchema,
-  DeviceListResponseSchema,
+  SecureSecretIngestReceiptSchema,
+  SecureSecretIngestRequestSchema,
   TaskCommandRequestSchema,
+  TaskBudgetSnapshotSchema,
   TaskDetailSchema,
   TaskListResponseSchema,
   TaskParamsSchema,
@@ -47,9 +66,16 @@ import {
 } from "@opendelegate/protocol";
 import type { TaskService } from "@opendelegate/task-service";
 
+import type { ApprovalPort } from "./approval-port.ts";
+import type { ArtifactAdminPort } from "./artifact-admin-port.ts";
+import type { AuditAdminPort } from "./audit-admin-port.ts";
+import type { ConfigurationAgentPort } from "./configuration-agent-port.ts";
+import type { DeviceEnrollmentAdminPort } from "./device-enrollment-admin-port.ts";
 import { createIngressSecurity, isLoopbackAddress, PublicHttpError } from "./http-security.ts";
 import { installProblemHandlers } from "./problem-details.ts";
 import { AcknowledgementSchema, EmptyObjectSchema } from "./schemas.ts";
+import type { SecureSecretIngestPort } from "./secure-secret-ingest-port.ts";
+import type { TaskBudgetAdminPort } from "./task-budget-admin-port.ts";
 
 export const OWNER_SESSION_COOKIE_NAME = "__Host-opendelegate_session";
 
@@ -94,9 +120,19 @@ export interface MainControlPlaneAppOptions extends SharedAppOptions {
     readonly buildId: string;
   };
   readonly devices?: readonly DeviceSummaryV1[];
+  readonly deviceDirectory?: {
+    list(): Promise<readonly DeviceSummaryV1[]>;
+  };
   readonly runtimeFeatures?: RuntimeFeaturesResponseV1;
   readonly readiness?: () => ReadinessV1 | Promise<ReadinessV1>;
   readonly tasks?: Pick<TaskService, "command" | "create" | "get" | "list">;
+  readonly configurationAgent?: ConfigurationAgentPort;
+  readonly secretIngest?: SecureSecretIngestPort;
+  readonly approvals?: ApprovalPort;
+  readonly enrollment?: DeviceEnrollmentAdminPort;
+  readonly artifacts?: ArtifactAdminPort;
+  readonly audit?: AuditAdminPort;
+  readonly budgets?: TaskBudgetAdminPort;
   readonly tls?: {
     readonly certificate: Buffer;
     readonly privateKey: Buffer;
@@ -147,10 +183,416 @@ export async function createMainControlPlaneApp(
   registerMainOwnerRoutes(app, options, ingress.validatePublicMutation);
   registerDeviceRoutes(app, options);
   registerRuntimeFeatureRoutes(app, options);
+  registerSecureSecretIngestRoutes(app, options, ingress.validatePublicMutation);
+  registerConfigurationAgentRoutes(app, options, ingress.validatePublicMutation);
+  registerApprovalRoutes(app, options, ingress.validatePublicMutation);
+  registerDeviceEnrollmentAdminRoutes(app, options, ingress.validatePublicMutation);
+  registerArtifactAdminRoutes(app, options, ingress.validatePublicMutation);
+  registerAuditAdminRoutes(app, options);
   if (options.tasks !== undefined) {
     registerTaskRoutes(app, options, ingress.validatePublicMutation);
   }
+  registerTaskBudgetRoutes(app, options, ingress.validatePublicMutation);
   return app;
+}
+
+function registerTaskBudgetRoutes(
+  app: ControlPlaneApp,
+  options: MainControlPlaneAppOptions,
+  validatePublicMutation: (request: FastifyRequest) => void,
+): void {
+  const budgets = options.budgets;
+  if (budgets === undefined) {
+    return;
+  }
+
+  app.get(
+    "/api/v1/tasks/:taskId/budget",
+    {
+      schema: {
+        params: TaskParamsSchema,
+        response: {
+          200: TaskBudgetSnapshotSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+    },
+    async (request) => {
+      await options.ownerAuth.validateSession(requireSessionToken(request));
+      return budgets.get(request.params.taskId);
+    },
+  );
+
+  app.post(
+    "/api/v1/tasks/:taskId/budget/extensions",
+    {
+      schema: {
+        params: TaskParamsSchema,
+        body: ExtendTaskBudgetRequestSchema,
+        response: {
+          200: TaskBudgetSnapshotSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+      onRequest: async (request) => {
+        validatePublicMutation(request);
+      },
+    },
+    async (request) => {
+      const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
+      const session = await options.ownerAuth.validateSession(sessionToken);
+      return budgets.extend({
+        taskId: request.params.taskId,
+        principalId: session.ownerId,
+        idempotencyKey: requireIdempotencyKey(request),
+        baseRevision: request.body.baseRevision,
+        limits: structuredClone(request.body.limits),
+      });
+    },
+  );
+}
+
+function registerSecureSecretIngestRoutes(
+  app: ControlPlaneApp,
+  options: MainControlPlaneAppOptions,
+  validatePublicMutation: (request: FastifyRequest) => void,
+): void {
+  app.post(
+    "/api/v1/secrets/ingest",
+    {
+      schema: {
+        body: SecureSecretIngestRequestSchema,
+        response: {
+          201: SecureSecretIngestReceiptSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+      onRequest: async (request) => {
+        validatePublicMutation(request);
+      },
+    },
+    async (request, reply) => {
+      const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
+      const session = await options.ownerAuth.validateSession(sessionToken);
+      if (options.secretIngest === undefined) {
+        throw new PublicHttpError(503, "SECRET_INGEST_UNAVAILABLE");
+      }
+      const secret = decodeCanonicalBase64(request.body.secretBase64);
+      clearEncodedSecret(request.body);
+      try {
+        const receipt = await options.secretIngest.ingest({
+          principalId: session.ownerId,
+          idempotencyKey: requireIdempotencyKey(request),
+          purpose: request.body.purpose,
+          secret,
+        });
+        return reply.status(201).send(receipt);
+      } finally {
+        secret.fill(0);
+        clearEncodedSecret(request.body);
+      }
+    },
+  );
+}
+
+function registerDeviceEnrollmentAdminRoutes(
+  app: ControlPlaneApp,
+  options: MainControlPlaneAppOptions,
+  validatePublicMutation: (request: FastifyRequest) => void,
+): void {
+  const enrollment = options.enrollment;
+  if (enrollment === undefined) {
+    return;
+  }
+
+  app.get(
+    "/api/v1/device-enrollment",
+    {
+      schema: {
+        response: {
+          200: DeviceEnrollmentOverviewSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+    },
+    async (request) => {
+      await options.ownerAuth.validateSession(requireSessionToken(request));
+      return enrollment.overview();
+    },
+  );
+
+  app.post(
+    "/api/v1/device-enrollment/grants",
+    {
+      schema: {
+        body: IssueEnrollmentGrantRequestSchema,
+        response: {
+          201: IssueEnrollmentGrantResponseSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+      onRequest: async (request) => {
+        validatePublicMutation(request);
+      },
+    },
+    async (request, reply) => {
+      const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
+      const session = await options.ownerAuth.validateSession(sessionToken);
+      const issued = await enrollment.issue({
+        deviceId: request.body.deviceId,
+        expiresInSeconds: request.body.expiresInSeconds,
+        principalId: session.ownerId,
+        idempotencyKey: requireIdempotencyKey(request),
+      });
+      return reply.status(201).send(issued);
+    },
+  );
+}
+
+function registerArtifactAdminRoutes(
+  app: ControlPlaneApp,
+  options: MainControlPlaneAppOptions,
+  validatePublicMutation: (request: FastifyRequest) => void,
+): void {
+  const artifacts = options.artifacts;
+  if (artifacts === undefined) {
+    return;
+  }
+
+  app.get(
+    "/api/v1/artifacts",
+    {
+      schema: {
+        response: {
+          200: ArtifactListResponseSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+    },
+    async (request) => {
+      await options.ownerAuth.validateSession(requireSessionToken(request));
+      return { artifacts: [...(await artifacts.list())] };
+    },
+  );
+
+  app.get(
+    "/api/v1/artifacts/:artifactId",
+    {
+      schema: {
+        params: ArtifactParamsSchema,
+        response: {
+          200: ArtifactDetailSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+    },
+    async (request) => {
+      await options.ownerAuth.validateSession(requireSessionToken(request));
+      return artifacts.get(request.params.artifactId);
+    },
+  );
+
+  app.post(
+    "/api/v1/artifacts/:artifactId/open",
+    {
+      schema: {
+        params: ArtifactParamsSchema,
+        body: EmptyObjectSchema,
+        response: {
+          200: ArtifactOpenInstructionSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+      onRequest: async (request) => {
+        validatePublicMutation(request);
+      },
+    },
+    async (request) => {
+      const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
+      const session = await options.ownerAuth.validateSession(sessionToken);
+      return artifacts.open({
+        artifactId: request.params.artifactId,
+        principalId: session.ownerId,
+        idempotencyKey: requireIdempotencyKey(request),
+      });
+    },
+  );
+}
+
+function registerAuditAdminRoutes(app: ControlPlaneApp, options: MainControlPlaneAppOptions): void {
+  const audit = options.audit;
+  if (audit === undefined) {
+    return;
+  }
+
+  app.get(
+    "/api/v1/audit-events",
+    {
+      schema: {
+        response: {
+          200: AuditEventListResponseSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+    },
+    async (request) => {
+      await options.ownerAuth.validateSession(requireSessionToken(request));
+      return { events: [...(await audit.list())] };
+    },
+  );
+}
+
+function registerApprovalRoutes(
+  app: ControlPlaneApp,
+  options: MainControlPlaneAppOptions,
+  validatePublicMutation: (request: FastifyRequest) => void,
+): void {
+  const approvals = options.approvals;
+  if (approvals === undefined) {
+    return;
+  }
+
+  app.get(
+    "/api/v1/approvals",
+    {
+      schema: {
+        response: {
+          200: ApprovalListResponseSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+    },
+    async (request) => {
+      await options.ownerAuth.validateSession(requireSessionToken(request));
+      return { approvals: [...(await approvals.list())] };
+    },
+  );
+
+  app.get(
+    "/api/v1/approvals/:approvalId",
+    {
+      schema: {
+        params: ApprovalParamsSchema,
+        response: {
+          200: ApprovalDetailSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+    },
+    async (request) => {
+      await options.ownerAuth.validateSession(requireSessionToken(request));
+      return approvals.get(request.params.approvalId);
+    },
+  );
+
+  app.post(
+    "/api/v1/approvals/:approvalId/decision",
+    {
+      schema: {
+        params: ApprovalParamsSchema,
+        body: ApprovalDecisionRequestSchema,
+        response: {
+          200: ApprovalDetailSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+      onRequest: async (request) => {
+        validatePublicMutation(request);
+      },
+    },
+    async (request) => {
+      const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
+      const session = await options.ownerAuth.validateSession(sessionToken);
+      return approvals.decide({
+        approvalId: request.params.approvalId,
+        principalId: session.ownerId,
+        idempotencyKey: requireIdempotencyKey(request),
+        decision: structuredClone(request.body),
+      });
+    },
+  );
+}
+
+function registerConfigurationAgentRoutes(
+  app: ControlPlaneApp,
+  options: MainControlPlaneAppOptions,
+  validatePublicMutation: (request: FastifyRequest) => void,
+): void {
+  app.post(
+    "/api/v1/devices/:deviceId/configuration/messages",
+    {
+      schema: {
+        params: ConfigurationAgentMessageParamsSchema,
+        body: ConfigurationAgentMessageRequestSchema,
+        response: {
+          200: ConfigurationAgentMessageResponseSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+      onRequest: async (request) => {
+        validatePublicMutation(request);
+      },
+    },
+    async (request) => {
+      const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
+      const session = await options.ownerAuth.validateSession(sessionToken);
+      if (
+        runtimeFeaturesFor(options).configurationAgent.status !== "ready" ||
+        options.configurationAgent === undefined
+      ) {
+        throw new PublicHttpError(503, "CONFIGURATION_AGENT_UNAVAILABLE");
+      }
+      const devices = await currentDevices(options);
+      if (!devices.some((device) => device.deviceId === request.params.deviceId)) {
+        throw new PublicHttpError(404, "DEVICE_NOT_FOUND");
+      }
+      return options.configurationAgent.sendMessage({
+        deviceId: request.params.deviceId,
+        principalId: session.ownerId,
+        idempotencyKey: requireIdempotencyKey(request),
+        message: request.body.message,
+      });
+    },
+  );
 }
 
 function registerRuntimeFeatureRoutes(
@@ -207,9 +649,19 @@ function registerDeviceRoutes(app: ControlPlaneApp, options: MainControlPlaneApp
     },
     async (request) => {
       await options.ownerAuth.validateSession(requireSessionToken(request));
-      return { devices: [...(options.devices ?? [])] };
+      return { devices: await currentDevices(options) };
     },
   );
+}
+
+async function currentDevices(
+  options: Pick<MainControlPlaneAppOptions, "deviceDirectory" | "devices">,
+): Promise<DeviceSummaryV1[]> {
+  const devices =
+    options.deviceDirectory === undefined
+      ? (options.devices ?? [])
+      : await options.deviceDirectory.list();
+  return devices.map((device) => structuredClone(device));
 }
 
 function registerTaskRoutes(
@@ -785,6 +1237,28 @@ function toInstant(timestamp: number): string {
 
 function oneHeader(value: string | readonly string[] | undefined): string | undefined {
   return typeof value === "string" ? value : value?.[0];
+}
+
+function decodeCanonicalBase64(value: string): Buffer {
+  const secret = Buffer.from(value, "base64");
+  if (
+    secret.byteLength === 0 ||
+    secret.byteLength > 65_536 ||
+    secret.toString("base64") !== value
+  ) {
+    secret.fill(0);
+    throw new PublicHttpError(400, "SECRET_INGEST_INVALID");
+  }
+  return secret;
+}
+
+function clearEncodedSecret(value: { readonly secretBase64: string }): void {
+  try {
+    (value as { secretBase64: string }).secretBase64 = "";
+  } catch {
+    // The route never logs or returns this field; this is best-effort shortening
+    // of the immutable JSON string's reachability after decoding.
+  }
 }
 
 function assertBuild(build: MainControlPlaneAppOptions["build"]): void {

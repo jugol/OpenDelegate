@@ -1,15 +1,18 @@
-import { PROTOCOL_VERSION } from "@opendelegate/protocol";
+import { PROTOCOL_VERSION, parseWorkerAgentSessionObservation } from "@opendelegate/protocol";
 import {
   TransportRoutesExhaustedError,
-  type TransportAttemptTrace,
+  transportProfileRevision,
   type TransportResolver,
 } from "@opendelegate/transport";
 
 import {
   assignmentFingerprint,
   configurationFingerprint,
+  createWorkerRouteIncident,
   parseWorkerAssignmentMessage,
+  validateWorkerRunSteeringCommand,
   validateWorkerConfiguration,
+  workerRunSteeringCommandFingerprint,
   WorkerRuntimeError,
   type RunProcess,
   type RunProcessFactory,
@@ -27,11 +30,20 @@ import {
   type WorkerOutboundEventTypeV1,
   type WorkerOutboundEventV1,
   type WorkerRunAssignmentV1,
+  type WorkerRunLeaseAuthority,
+  type WorkerRunSteeringCommandV1,
+  type WorkerRunSteeringReceiptReasonV1,
+  type WorkerRunSteeringReceiptV1,
+  type WorkerRouteIncidentV1,
   type WorkerRuntimeHealthProvider,
   type WorkerRuntimeReadiness,
+  type WorkerSchedulingInventoryProvider,
+  type WorkerSchedulingInventoryV1,
 } from "./contracts.ts";
 import { sanitizeWorkerDiagnostic } from "./diagnostics.ts";
+import { AgentRunBridgeError } from "./agent-run-bridge-error.ts";
 import {
+  type PersistedRunSteeringAttempt,
   type PersistedWorkerRun,
   type PersistedWorkerState,
   type WorkerStateRepository,
@@ -39,8 +51,10 @@ import {
 
 const ACTIVE_RUN_STATES = new Set(["cancelling", "running", "starting"]);
 const DEFAULT_OUTBOX_BATCH_SIZE = 64;
+export const DEFAULT_MAXIMUM_CONCURRENT_RUNS = 4;
 const MAX_STATE_MUTATION_ATTEMPTS = 64;
 const MAX_JAVASCRIPT_DATE_MS = 8_640_000_000_000_000;
+const MAX_PERSISTED_STEERING_ATTEMPTS = 4_096;
 
 export interface WorkerRuntimeOptions {
   readonly configuration: WorkerConfiguration;
@@ -49,6 +63,8 @@ export interface WorkerRuntimeOptions {
   readonly clock?: WorkerClock;
   readonly delay?: WorkerDelay;
   readonly healthProvider?: WorkerRuntimeHealthProvider;
+  readonly inventoryProvider?: WorkerSchedulingInventoryProvider;
+  readonly maximumConcurrentRuns?: number;
   readonly transportResolver?: TransportResolver<WorkerMainConnection>;
 }
 
@@ -64,6 +80,7 @@ interface MutationPlan<TValue> {
 
 interface PendingProcess {
   readonly process: RunProcess;
+  readonly leaseAuthority: WorkerRunLeaseAuthority;
 }
 
 export class WorkerRuntime {
@@ -73,12 +90,16 @@ export class WorkerRuntime {
   private readonly clock: WorkerClock;
   private readonly delay: WorkerDelay;
   private readonly healthProvider: WorkerRuntimeHealthProvider;
+  private readonly inventoryProvider: WorkerSchedulingInventoryProvider | undefined;
+  private readonly maximumConcurrentRuns: number;
   private readonly transportResolver: TransportResolver<WorkerMainConnection> | undefined;
   private readonly processes = new Map<string, PendingProcess>();
+  private readonly leaseAuthorities = new Map<string, WorkerRunLeaseAuthority>();
   private connection: WorkerMainConnection | undefined;
   private connectionState: "offline" | "online" = "offline";
-  private routeAttempts: readonly TransportAttemptTrace[] | undefined;
+  private connectedEndpointId: string | undefined;
   private clockHighWatermarkMs: number;
+  private steeringTail: Promise<void> = Promise.resolve();
   private closed = false;
 
   private constructor(
@@ -99,11 +120,23 @@ export class WorkerRuntime {
     this.healthProvider = options.healthProvider ?? {
       snapshot: () => DEFAULT_READINESS,
     };
+    this.inventoryProvider = options.inventoryProvider;
+    this.maximumConcurrentRuns = options.maximumConcurrentRuns ?? DEFAULT_MAXIMUM_CONCURRENT_RUNS;
     this.transportResolver = options.transportResolver;
     this.clockHighWatermarkMs = clockHighWatermarkMs;
   }
 
   public static async create(options: WorkerRuntimeOptions): Promise<WorkerRuntime> {
+    if (
+      !Number.isSafeInteger(options.maximumConcurrentRuns ?? DEFAULT_MAXIMUM_CONCURRENT_RUNS) ||
+      Number(options.maximumConcurrentRuns ?? DEFAULT_MAXIMUM_CONCURRENT_RUNS) < 1 ||
+      Number(options.maximumConcurrentRuns ?? DEFAULT_MAXIMUM_CONCURRENT_RUNS) > 1_024
+    ) {
+      throw new WorkerRuntimeError(
+        "INVALID_CONFIGURATION",
+        "Maximum concurrent Runs must be a safe integer between 1 and 1024.",
+      );
+    }
     const configuration = validateWorkerConfiguration(options.configuration);
     const now = readClock(options.clock ?? { now: () => Date.now() });
     const initialState: PersistedWorkerState = {
@@ -117,6 +150,8 @@ export class WorkerRuntime {
       runs: [],
       outbox: [],
       nextOutboxSequence: 1,
+      routeIncidents: [],
+      steeringAttempts: [],
     };
     const state = await options.repository.initialize(initialState);
     if (state.configurationFingerprint !== initialState.configurationFingerprint) {
@@ -130,7 +165,10 @@ export class WorkerRuntime {
     return runtime;
   }
 
-  public async acceptAssignment(input: unknown): Promise<WorkerAssignmentAcceptance> {
+  public async acceptAssignment(
+    input: unknown,
+    suppliedLeaseAuthority?: WorkerRunLeaseAuthority,
+  ): Promise<WorkerAssignmentAcceptance> {
     this.assertOpen();
     const message = parseWorkerAssignmentMessage(input);
     this.assertAssignmentScope(message);
@@ -158,7 +196,12 @@ export class WorkerRuntime {
         };
       }
 
-      const rejection = assignmentRejection(touched, message.payload, now);
+      const rejection = assignmentRejection(
+        touched,
+        message.payload,
+        now,
+        this.maximumConcurrentRuns,
+      );
       if (rejection !== undefined) {
         return {
           nextState: recordRejectedAssignment(touched, message, fingerprint, now, rejection),
@@ -207,7 +250,11 @@ export class WorkerRuntime {
     });
 
     if (result.value.disposition === "accepted") {
-      await this.startClaimedRun(message.payload);
+      const leaseAuthority =
+        suppliedLeaseAuthority ??
+        new WallClockRunLeaseAuthority(message.payload.leaseExpiresAtMs, this.clock);
+      this.leaseAuthorities.set(message.payload.runId, leaseAuthority);
+      await this.startClaimedRun(message.payload, leaseAuthority);
     }
     return result.value;
   }
@@ -225,6 +272,23 @@ export class WorkerRuntime {
         .slice(0, limit)
         .map(({ sequence, event }) => Object.freeze({ sequence, ...structuredClone(event) })),
     );
+  }
+
+  /**
+   * Delivers one authenticated, exact-scope steering command. Durable
+   * `delivering` intent is written before provider interaction. If the Worker
+   * restarts in that interval, replay returns `outcome-unknown` and never sends a
+   * second instruction into an unknowable provider turn.
+   */
+  public steerRun(input: WorkerRunSteeringCommandV1): Promise<WorkerRunSteeringReceiptV1> {
+    this.assertOpen();
+    const command = validateWorkerRunSteeringCommand(input);
+    const operation = this.steeringTail.then(() => this.steerRunSerialized(command));
+    this.steeringTail = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 
   public async flushOutbox(
@@ -281,7 +345,8 @@ export class WorkerRuntime {
       });
       this.connection = resolution.connection;
       this.connectionState = "online";
-      this.routeAttempts = resolution.attemptTrace;
+      this.connectedEndpointId = resolution.endpointId;
+      await this.flushRouteIncidents(resolution.connection);
       const replayedEvents = await this.flushOutbox(resolution.connection);
       await resolution.connection.sendHeartbeat(await this.heartbeat());
       return {
@@ -292,12 +357,13 @@ export class WorkerRuntime {
     } catch (error: unknown) {
       const failedConnection = this.connection;
       this.connectionState = "offline";
+      this.connectedEndpointId = undefined;
       this.connection = undefined;
       if (failedConnection?.close !== undefined) {
         await failedConnection.close().catch(() => undefined);
       }
       if (error instanceof TransportRoutesExhaustedError) {
-        this.routeAttempts = error.diagnostics.attempts;
+        await this.recordRouteIncident(error.diagnostics.attempts);
         return {
           connected: false,
           diagnostics: error.diagnostics.attempts,
@@ -307,10 +373,87 @@ export class WorkerRuntime {
     }
   }
 
+  private async recordRouteIncident(
+    attempts: ConstructorParameters<typeof TransportRoutesExhaustedError>[1],
+  ): Promise<void> {
+    const now = this.readNow();
+    await this.mutate((state) => {
+      const touched = touchClock(state, now);
+      const candidate = createWorkerRouteIncident({
+        profile: this.configuration.transportProfile,
+        attempts,
+        occurrenceSeed: [
+          this.configuration.deviceId,
+          String(touched.generation + 1),
+          String(now),
+        ].join(":"),
+      });
+      const current = touched.routeIncidents ?? [];
+      if (current.some((incident) => incident.fingerprint === candidate.fingerprint)) {
+        return { nextState: touched, value: undefined };
+      }
+      if (current.length >= 64) {
+        throw new WorkerRuntimeError(
+          "STATE_CORRUPT",
+          "The durable route incident queue reached its safe capacity.",
+        );
+      }
+      return {
+        nextState: {
+          ...touched,
+          routeIncidents: [...current, candidate],
+        },
+        value: undefined,
+      };
+    });
+  }
+
+  private async flushRouteIncidents(connection: WorkerMainConnection): Promise<void> {
+    if (connection.sendRouteIncident === undefined) {
+      return;
+    }
+    for (;;) {
+      const state = await this.repository.read();
+      const incident = state.routeIncidents?.[0];
+      if (incident === undefined) {
+        return;
+      }
+      await connection.sendRouteIncident(incident);
+      await this.removeRouteIncident(incident);
+    }
+  }
+
+  private async removeRouteIncident(incident: WorkerRouteIncidentV1): Promise<void> {
+    await this.mutate((state) => {
+      const current = state.routeIncidents ?? [];
+      const stored = current.find((entry) => entry.incidentId === incident.incidentId);
+      if (stored === undefined) {
+        return { value: undefined };
+      }
+      if (
+        stored.fingerprint !== incident.fingerprint ||
+        stored.profileRevision !== incident.profileRevision
+      ) {
+        throw new WorkerRuntimeError(
+          "STATE_CORRUPT",
+          "The durable route incident identity changed before delivery.",
+        );
+      }
+      return {
+        nextState: {
+          ...state,
+          routeIncidents: current.filter((entry) => entry.incidentId !== incident.incidentId),
+        },
+        value: undefined,
+      };
+    });
+  }
+
   public async markOffline(): Promise<void> {
     const connection = this.connection;
     this.connection = undefined;
     this.connectionState = "offline";
+    this.connectedEndpointId = undefined;
     if (connection?.close !== undefined) {
       await connection.close();
     }
@@ -325,8 +468,69 @@ export class WorkerRuntime {
     const readiness = readReadiness(this.healthProvider);
     const acceptingWork =
       state.operationalState === "active" &&
+      activeRuns < this.maximumConcurrentRuns &&
       state.outbox.length + activeRuns + 2 <= this.configuration.maxOutboxEntries;
-    const base = {
+    const inventory =
+      this.inventoryProvider === undefined
+        ? undefined
+        : validateSchedulingInventory(await this.inventoryProvider.snapshot());
+    if (
+      inventory?.hardware !== undefined &&
+      [
+        inventory.hardware.cpu.observedAtMs,
+        inventory.hardware.memory.observedAtMs,
+        inventory.hardware.gpu.observedAtMs,
+      ].some((observedAtMs) => observedAtMs > now)
+    ) {
+      throw new WorkerRuntimeError(
+        "INVALID_CONFIGURATION",
+        "Worker hardware evidence cannot be newer than its enclosing heartbeat.",
+      );
+    }
+    const profileRevision = transportProfileRevision(this.configuration.transportProfile);
+    const routes = this.configuration.transportProfile.endpoints.map((endpoint, priority) => {
+      const connected =
+        this.connectionState === "online" && endpoint.endpointId === this.connectedEndpointId;
+      return Object.freeze({
+        routeId: `route:${profileRevision.slice("sha256:".length)}:${priority}`,
+        label: `Route ${priority + 1}`,
+        priority,
+        kind: endpoint.kind,
+        profileRevision,
+        health: connected ? ("healthy" as const) : ("unknown" as const),
+        ...(connected
+          ? {
+              lastAttempt: Object.freeze({
+                probeSource: "live" as const,
+                outcome: "connected" as const,
+                observedAtMs: now,
+              }),
+            }
+          : {}),
+      });
+    });
+    const currentRuns = state.runs
+      .filter(isActiveRun)
+      .sort(
+        (left, right) =>
+          left.acceptedAtMs - right.acceptedAtMs ||
+          left.assignment.runId.localeCompare(right.assignment.runId, "en"),
+      )
+      .map((run) => {
+        const agentSession = this.processes
+          .get(run.assignment.runId)
+          ?.process.currentAgentSession?.();
+        return Object.freeze({
+          taskId: run.assignment.taskId,
+          workOrderId: run.assignment.workOrder.workOrderId,
+          runId: run.assignment.runId,
+          state: run.state as "starting" | "running" | "cancelling",
+          acceptedAtMs: run.acceptedAtMs,
+          leaseExpiresAtMs: run.assignment.leaseExpiresAtMs,
+          ...(agentSession === undefined ? {} : { agentSession }),
+        });
+      });
+    return Object.freeze({
       protocolVersion: PROTOCOL_VERSION,
       deviceId: this.configuration.deviceId,
       workerId: this.configuration.workerId,
@@ -340,15 +544,37 @@ export class WorkerRuntime {
         maxOutboxEntries: this.configuration.maxOutboxEntries,
         outboxDepth: state.outbox.length,
       },
-    } satisfies Omit<WorkerHeartbeatV1, "routeAttempts">;
-    return Object.freeze(
-      this.routeAttempts === undefined
-        ? base
-        : {
-            ...base,
-            routeAttempts: this.routeAttempts,
-          },
-    );
+      ...(inventory === undefined ? {} : { inventory }),
+      routes: Object.freeze(routes),
+      currentRuns: Object.freeze(currentRuns),
+    } satisfies WorkerHeartbeatV1);
+  }
+
+  /**
+   * Performs one bounded daemon maintenance cycle. A failed channel write marks
+   * the Worker offline so the service host can apply its deterministic reconnect
+   * policy without owning or inspecting the connection.
+   */
+  public async pulse(): Promise<boolean> {
+    this.assertOpen();
+    await this.sweepExpiredRuns();
+    const connection = this.connection;
+    if (connection === undefined) {
+      return false;
+    }
+    try {
+      await Promise.all(
+        [...this.leaseAuthorities.values()].map((authority) => authority.renewIfDue()),
+      );
+      await this.sweepExpiredRuns();
+      await this.flushOutbox(connection);
+      await connection.sendHeartbeat(await this.heartbeat());
+      return true;
+    } catch {
+      await this.markOffline().catch(() => undefined);
+      await this.sweepExpiredRuns().catch(() => undefined);
+      return false;
+    }
   }
 
   public async setOperationalState(
@@ -430,9 +656,17 @@ export class WorkerRuntime {
     const now = this.readNow();
     const state = await this.repository.read();
     assertClockNotRegressed(state, now);
-    const expired = state.runs
-      .filter((run) => isActiveRun(run) && run.assignment.leaseExpiresAtMs <= now)
-      .map((run) => run.assignment.runId);
+    const expired: string[] = [];
+    for (const run of state.runs.filter((candidate) => isActiveRun(candidate))) {
+      const authority = this.leaseAuthorities.get(run.assignment.runId);
+      if (
+        authority === undefined
+          ? run.assignment.leaseExpiresAtMs <= now
+          : !(await authority.isCurrent())
+      ) {
+        expired.push(run.assignment.runId);
+      }
+    }
     await Promise.all(
       expired.map((runId) => this.cancelRun(runId, "Run lease expired.", "worker.run.failed")),
     );
@@ -456,27 +690,36 @@ export class WorkerRuntime {
     }
   }
 
-  private async startClaimedRun(assignment: WorkerRunAssignmentV1): Promise<void> {
+  private async startClaimedRun(
+    assignment: WorkerRunAssignmentV1,
+    leaseAuthority: WorkerRunLeaseAuthority,
+  ): Promise<void> {
     let process: RunProcess;
     try {
       process = await this.processFactory.start({
         assignment: structuredClone(assignment),
-        isLeaseCurrent: () => this.isLeaseCurrent(assignment),
+        leaseAuthority,
+        isLeaseCurrent: () => this.isLeaseCurrent(assignment, leaseAuthority),
       });
     } catch (error: unknown) {
+      const requirementUnavailable =
+        error instanceof AgentRunBridgeError && error.code === "AGENT_REQUIREMENT_UNAVAILABLE";
       await this.finalizeRun(assignment.runId, {
         type: "worker.run.failed",
-        report: "The Worker could not start the Run.",
+        report: requirementUnavailable
+          ? "The Worker could not satisfy the immutable Agent requirement for this Run."
+          : "The Worker could not start the Run.",
         diagnostic: sanitizeWorkerDiagnostic({
-          code: "PROCESS_START_FAILED",
+          code: requirementUnavailable ? "AGENT_REQUIREMENT_UNAVAILABLE" : "PROCESS_START_FAILED",
           stage: "startup",
-          retryable: true,
+          retryable: error instanceof AgentRunBridgeError ? error.retryable : true,
           cause: error,
         }),
       });
+      this.leaseAuthorities.delete(assignment.runId);
       return;
     }
-    this.processes.set(assignment.runId, { process });
+    this.processes.set(assignment.runId, { process, leaseAuthority });
     const transition = await this.mutate<boolean>((state) => {
       const run = state.runs.find((candidate) => candidate.assignment.runId === assignment.runId);
       if (run === undefined || run.state !== "starting") {
@@ -500,6 +743,7 @@ export class WorkerRuntime {
         await process.forceTerminate().catch(() => undefined);
       }
       this.processes.delete(assignment.runId);
+      this.leaseAuthorities.delete(assignment.runId);
       return;
     }
     void process.completion
@@ -518,11 +762,13 @@ export class WorkerRuntime {
           return;
         }
         if (outcome.status === "succeeded") {
-          if (await this.isLeaseCurrent(assignment)) {
+          if (await this.isLeaseCurrent(assignment, leaseAuthority)) {
             await this.finalizeRun(assignment.runId, {
               type: "worker.run.succeeded",
               report: outcome.report,
               artifactIds: outcome.artifactIds,
+              ...(outcome.usage === undefined ? {} : { usage: outcome.usage }),
+              ...(outcome.agentSession === undefined ? {} : { agentSession: outcome.agentSession }),
             });
           } else {
             await this.finalizeRun(assignment.runId, {
@@ -533,6 +779,8 @@ export class WorkerRuntime {
                 stage: "lease",
                 retryable: true,
               }),
+              ...(outcome.usage === undefined ? {} : { usage: outcome.usage }),
+              ...(outcome.agentSession === undefined ? {} : { agentSession: outcome.agentSession }),
             });
           }
         } else {
@@ -540,6 +788,8 @@ export class WorkerRuntime {
             type: "worker.run.failed",
             report: outcome.report,
             diagnostic: sanitizeWorkerDiagnostic(outcome.diagnostic),
+            ...(outcome.usage === undefined ? {} : { usage: outcome.usage }),
+            ...(outcome.agentSession === undefined ? {} : { agentSession: outcome.agentSession }),
           });
         }
       })
@@ -556,6 +806,190 @@ export class WorkerRuntime {
         });
       })
       .catch(() => undefined);
+  }
+
+  private async steerRunSerialized(
+    command: WorkerRunSteeringCommandV1,
+  ): Promise<WorkerRunSteeringReceiptV1> {
+    const fingerprint = workerRunSteeringCommandFingerprint(command);
+    const now = this.readNow();
+    const decision = await this.mutate<{
+      readonly deliver: boolean;
+      readonly receipt?: WorkerRunSteeringReceiptV1;
+    }>((state) => {
+      const touched = touchClock(state, now);
+      const attempts = touched.steeringAttempts ?? [];
+      const prior = attempts.find((attempt) => attempt.requestId === command.requestId);
+      if (prior !== undefined) {
+        if (prior.commandFingerprint !== fingerprint) {
+          throw new WorkerRuntimeError(
+            "INVALID_MESSAGE",
+            "A steering request ID was reused with different content or scope.",
+          );
+        }
+        if (prior.state === "completed" && prior.receipt !== undefined) {
+          return { nextState: touched, value: { deliver: false, receipt: prior.receipt } };
+        }
+        const receipt = steeringReceipt(
+          command,
+          now,
+          "none",
+          "outcome-unknown",
+          "STEERING_OUTCOME_UNKNOWN",
+        );
+        return {
+          nextState: replaceSteeringAttempt(touched, command.requestId, {
+            ...prior,
+            state: "completed",
+            receipt,
+          }),
+          value: { deliver: false, receipt },
+        };
+      }
+      if (attempts.length >= MAX_PERSISTED_STEERING_ATTEMPTS) {
+        throw new WorkerRuntimeError(
+          "STATE_CORRUPT",
+          "The bounded durable steering audit reached its safe capacity.",
+        );
+      }
+      const run = touched.runs.find((candidate) => candidate.assignment.runId === command.runId);
+      const scopeReason = steeringRunScopeReason(this.configuration, run, command);
+      if (scopeReason !== undefined) {
+        const receipt = steeringReceipt(command, now, "none", "rejected", scopeReason);
+        return {
+          nextState: {
+            ...touched,
+            steeringAttempts: [
+              ...attempts,
+              {
+                requestId: command.requestId,
+                commandFingerprint: fingerprint,
+                command: structuredClone(command),
+                state: "completed",
+                startedAtMs: now,
+                receipt,
+              },
+            ],
+          },
+          value: { deliver: false, receipt },
+        };
+      }
+      return {
+        nextState: {
+          ...touched,
+          steeringAttempts: [
+            ...attempts,
+            {
+              requestId: command.requestId,
+              commandFingerprint: fingerprint,
+              command: structuredClone(command),
+              state: "delivering",
+              startedAtMs: now,
+            },
+          ],
+        },
+        value: { deliver: true },
+      };
+    });
+    if (!decision.value.deliver) {
+      return structuredClone(decision.value.receipt!);
+    }
+
+    let receipt: WorkerRunSteeringReceiptV1;
+    const pending = this.processes.get(command.runId);
+    const authority = pending?.leaseAuthority ?? this.leaseAuthorities.get(command.runId);
+    if (pending === undefined || pending.process.steer === undefined || authority === undefined) {
+      receipt = steeringReceipt(
+        command,
+        this.readNow(),
+        "none",
+        "rejected",
+        pending === undefined ? "SESSION_NOT_ACTIVE" : "STEERING_UNAVAILABLE",
+      );
+    } else if (!(await this.isSteeringAuthorityCurrent(command, authority))) {
+      receipt = steeringReceipt(command, this.readNow(), "none", "rejected", "RUN_AUTHORITY_LOST");
+    } else {
+      try {
+        const delivered = await pending.process.steer({
+          requestId: command.requestId,
+          instruction: command.instruction,
+          requestedBy: command.requestedBy,
+          agentSession: structuredClone(command.agentSession),
+          isCommandCurrent: () => this.isSteeringAuthorityCurrent(command, authority),
+        });
+        if (!sameAgentSession(delivered.agentSession, command.agentSession)) {
+          throw new AgentRunBridgeError(
+            "STEERING_SCOPE_MISMATCH",
+            "The Run process returned a different native-session scope.",
+          );
+        }
+        receipt = steeringReceipt(
+          command,
+          this.readNow(),
+          delivered.delivery,
+          delivered.delivery === "live" ? "accepted" : "queued",
+          delivered.delivery === "live" ? "LIVE_STEERING_ACCEPTED" : "NEXT_RESUME_QUEUED",
+          delivered.providerTurnId,
+        );
+      } catch (error: unknown) {
+        const mapped = steeringFailure(error);
+        receipt = steeringReceipt(
+          command,
+          this.readNow(),
+          "none",
+          mapped.status,
+          mapped.reasonCode,
+        );
+      }
+    }
+
+    await this.mutate((state) => {
+      const attempt = (state.steeringAttempts ?? []).find(
+        (candidate) => candidate.requestId === command.requestId,
+      );
+      if (
+        attempt === undefined ||
+        attempt.commandFingerprint !== fingerprint ||
+        attempt.state !== "delivering"
+      ) {
+        throw new WorkerRuntimeError(
+          "STATE_CORRUPT",
+          "The durable steering attempt changed during provider delivery.",
+        );
+      }
+      return {
+        nextState: replaceSteeringAttempt(state, command.requestId, {
+          ...attempt,
+          state: "completed",
+          receipt,
+        }),
+        value: undefined,
+      };
+    });
+    return structuredClone(receipt);
+  }
+
+  private async isSteeringAuthorityCurrent(
+    command: WorkerRunSteeringCommandV1,
+    authority: WorkerRunLeaseAuthority,
+  ): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
+    const now = this.readNow();
+    const state = await this.repository.read();
+    if (now < state.lastObservedAtMs) {
+      return false;
+    }
+    const run = state.runs.find((candidate) => candidate.assignment.runId === command.runId);
+    return (
+      run !== undefined &&
+      run.state === "running" &&
+      exactSteeringRunScope(run.assignment, command) &&
+      (await authority.isCurrent()) &&
+      state.operationalState !== "disabled" &&
+      state.operationalState !== "revoked"
+    );
   }
 
   private async finalizeCancelledRun(
@@ -584,6 +1018,8 @@ export class WorkerRuntime {
       readonly report: string;
       readonly artifactIds?: readonly string[];
       readonly diagnostic?: WorkerOutboundEventV1["payload"]["diagnostic"];
+      readonly usage?: WorkerOutboundEventV1["payload"]["usage"];
+      readonly agentSession?: WorkerOutboundEventV1["payload"]["agentSession"];
     },
   ): Promise<void> {
     if (this.closed) {
@@ -619,6 +1055,7 @@ export class WorkerRuntime {
       };
     });
     this.processes.delete(runId);
+    this.leaseAuthorities.delete(runId);
   }
 
   private async acknowledgeOutbox(messageIds: readonly string[]): Promise<void> {
@@ -632,7 +1069,10 @@ export class WorkerRuntime {
     }));
   }
 
-  private async isLeaseCurrent(assignment: WorkerRunAssignmentV1): Promise<boolean> {
+  private async isLeaseCurrent(
+    assignment: WorkerRunAssignmentV1,
+    authority = this.leaseAuthorities.get(assignment.runId),
+  ): Promise<boolean> {
     if (this.closed) {
       return false;
     }
@@ -647,7 +1087,7 @@ export class WorkerRuntime {
       isActiveRun(run) &&
       run.assignment.leaseId === assignment.leaseId &&
       run.assignment.fencingToken === assignment.fencingToken &&
-      now < assignment.leaseExpiresAtMs &&
+      (authority === undefined ? now < assignment.leaseExpiresAtMs : await authority.isCurrent()) &&
       state.operationalState !== "disabled" &&
       state.operationalState !== "revoked"
     );
@@ -739,6 +1179,31 @@ export class WorkerRuntime {
   }
 }
 
+class WallClockRunLeaseAuthority implements WorkerRunLeaseAuthority {
+  private readonly leaseExpiresAtMs: number;
+  private readonly clock: WorkerClock;
+
+  public constructor(leaseExpiresAtMs: number, clock: WorkerClock) {
+    this.leaseExpiresAtMs = leaseExpiresAtMs;
+    this.clock = clock;
+  }
+
+  public snapshot() {
+    return Object.freeze({
+      leaseExpiresAtMs: this.leaseExpiresAtMs,
+      conservativeDeadlineMonotonicMs: this.leaseExpiresAtMs,
+    });
+  }
+
+  public isCurrent(): boolean {
+    return readClock(this.clock) < this.leaseExpiresAtMs;
+  }
+
+  public async renewIfDue(): Promise<void> {
+    // Legacy/in-process tests without a Device Channel retain fixed authority.
+  }
+}
+
 const DEFAULT_READINESS: WorkerRuntimeReadiness = Object.freeze({
   daemon: "healthy",
   session: "unavailable",
@@ -764,6 +1229,7 @@ function assignmentRejection(
   state: PersistedWorkerState,
   assignment: WorkerRunAssignmentV1,
   now: number,
+  maximumConcurrentRuns: number,
 ): WorkerAssignmentAcceptance["reason"] | undefined {
   if (state.operationalState !== "active") {
     return "device-not-active";
@@ -786,6 +1252,9 @@ function assignmentRejection(
   }
   if (workOrderRuns.some((run) => isActiveRun(run))) {
     return "work-order-busy";
+  }
+  if (countActiveRuns(state) >= maximumConcurrentRuns) {
+    return "backpressure";
   }
   if (state.outbox.length + countActiveRuns(state) + 2 > state.configuration.maxOutboxEntries) {
     return "backpressure";
@@ -860,6 +1329,8 @@ function createRunEvent(
     readonly report?: string;
     readonly artifactIds?: readonly string[];
     readonly diagnostic?: WorkerOutboundEventV1["payload"]["diagnostic"];
+    readonly usage?: WorkerOutboundEventV1["payload"]["usage"];
+    readonly agentSession?: WorkerOutboundEventV1["payload"]["agentSession"];
   } = {},
 ): WorkerOutboundEventV1 {
   const suffix = type.slice("worker.run.".length);
@@ -875,6 +1346,8 @@ function createRunEvent(
     ...(result.report === undefined ? {} : { report: result.report }),
     ...(result.artifactIds === undefined ? {} : { artifactIds: result.artifactIds }),
     ...(result.diagnostic === undefined ? {} : { diagnostic: result.diagnostic }),
+    ...(result.usage === undefined ? {} : { usage: result.usage }),
+    ...(result.agentSession === undefined ? {} : { agentSession: result.agentSession }),
   };
   return Object.freeze({
     protocolVersion: PROTOCOL_VERSION,
@@ -919,6 +1392,126 @@ function replaceRun(
     runs: state.runs.map((run) =>
       run.assignment.runId === runId ? structuredClone(replacement) : run,
     ),
+  };
+}
+
+function replaceSteeringAttempt(
+  state: PersistedWorkerState,
+  requestId: string,
+  replacement: PersistedRunSteeringAttempt,
+): PersistedWorkerState {
+  return {
+    ...state,
+    steeringAttempts: (state.steeringAttempts ?? []).map((attempt) =>
+      attempt.requestId === requestId ? structuredClone(replacement) : attempt,
+    ),
+  };
+}
+
+function exactSteeringRunScope(
+  assignment: WorkerRunAssignmentV1,
+  command: WorkerRunSteeringCommandV1,
+): boolean {
+  return (
+    assignment.taskId === command.taskId &&
+    assignment.workOrder.workOrderId === command.workOrderId &&
+    assignment.deviceId === command.deviceId &&
+    assignment.workerId === command.workerId &&
+    assignment.routeId === command.routeId &&
+    assignment.runId === command.runId &&
+    assignment.leaseId === command.leaseId &&
+    assignment.fencingToken === command.fencingToken
+  );
+}
+
+function steeringRunScopeReason(
+  configuration: WorkerConfiguration,
+  run: PersistedWorkerRun | undefined,
+  command: WorkerRunSteeringCommandV1,
+): Extract<WorkerRunSteeringReceiptReasonV1, "RUN_NOT_ACTIVE" | "RUN_SCOPE_MISMATCH"> | undefined {
+  if (command.deviceId !== configuration.deviceId || command.workerId !== configuration.workerId) {
+    return "RUN_SCOPE_MISMATCH";
+  }
+  if (run === undefined || run.state !== "running") {
+    return "RUN_NOT_ACTIVE";
+  }
+  return exactSteeringRunScope(run.assignment, command) ? undefined : "RUN_SCOPE_MISMATCH";
+}
+
+function steeringReceipt(
+  command: WorkerRunSteeringCommandV1,
+  decidedAtMs: number,
+  delivery: WorkerRunSteeringReceiptV1["delivery"],
+  status: WorkerRunSteeringReceiptV1["status"],
+  reasonCode: WorkerRunSteeringReceiptReasonV1,
+  providerTurnId?: string,
+): WorkerRunSteeringReceiptV1 {
+  if (
+    !Number.isSafeInteger(decidedAtMs) ||
+    decidedAtMs < 0 ||
+    decidedAtMs > MAX_JAVASCRIPT_DATE_MS
+  ) {
+    throw new WorkerRuntimeError("INVALID_MESSAGE", "The steering decision time is invalid.");
+  }
+  return Object.freeze({
+    requestId: command.requestId,
+    requestMessageId: command.requestId,
+    taskId: command.taskId,
+    workOrderId: command.workOrderId,
+    deviceId: command.deviceId,
+    workerId: command.workerId,
+    routeId: command.routeId,
+    runId: command.runId,
+    leaseId: command.leaseId,
+    fencingToken: command.fencingToken,
+    agentSession: structuredClone(command.agentSession),
+    delivery,
+    status,
+    reasonCode,
+    decidedAtMs,
+    ...(providerTurnId === undefined ? {} : { providerTurnId }),
+  });
+}
+
+function sameAgentSession(
+  left: WorkerRunSteeringCommandV1["agentSession"],
+  right: WorkerRunSteeringCommandV1["agentSession"],
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function steeringFailure(error: unknown): {
+  readonly status: Extract<WorkerRunSteeringReceiptV1["status"], "outcome-unknown" | "rejected">;
+  readonly reasonCode: WorkerRunSteeringReceiptReasonV1;
+} {
+  if (error instanceof AgentRunBridgeError) {
+    switch (error.code) {
+      case "STEERING_OUTCOME_UNKNOWN":
+        return {
+          status: "outcome-unknown",
+          reasonCode: "STEERING_OUTCOME_UNKNOWN",
+        };
+      case "STEERING_SCOPE_MISMATCH":
+      case "SESSION_BINDING_MISMATCH":
+        return {
+          status: "rejected",
+          reasonCode: "SESSION_SCOPE_MISMATCH",
+        };
+      case "STEERING_NOT_ACTIVE":
+        return {
+          status: "rejected",
+          reasonCode: "SESSION_NOT_ACTIVE",
+        };
+      default:
+        return {
+          status: "rejected",
+          reasonCode: "STEERING_FAILED",
+        };
+    }
+  }
+  return {
+    status: "outcome-unknown",
+    reasonCode: "STEERING_OUTCOME_UNKNOWN",
   };
 }
 
@@ -1038,6 +1631,462 @@ function isPermissionState(value: string): boolean {
   );
 }
 
+function validateSchedulingInventory(value: unknown): WorkerSchedulingInventoryV1 {
+  if (!isPlainRecord(value)) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker inventory is invalid.");
+  }
+  requireExactInventoryKeys(
+    value,
+    [
+      "deviceName",
+      "osFamily",
+      "platformRelease",
+      "architecture",
+      "serviceMode",
+      "maximumConcurrentRuns",
+      "capabilities",
+      "workspaceIds",
+      "availableSecretRefs",
+    ],
+    ["knowledgeHealth", "hardware", "agentAdapters", "resourceLocks"],
+  );
+  const osFamily = value["osFamily"];
+  const serviceMode = value["serviceMode"];
+  const knowledgeHealth = value["knowledgeHealth"];
+  if (
+    (osFamily !== "linux" && osFamily !== "macos" && osFamily !== "windows") ||
+    (serviceMode !== "foreground" &&
+      serviceMode !== "system-service" &&
+      serviceMode !== "user-service") ||
+    (knowledgeHealth !== undefined &&
+      knowledgeHealth !== "healthy" &&
+      knowledgeHealth !== "degraded" &&
+      knowledgeHealth !== "unavailable") ||
+    !Number.isSafeInteger(value["maximumConcurrentRuns"]) ||
+    Number(value["maximumConcurrentRuns"]) < 1 ||
+    Number(value["maximumConcurrentRuns"]) > 1_024
+  ) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker inventory is invalid.");
+  }
+  const deviceName = readInventoryText(value["deviceName"], "Device name", 253);
+  const platformRelease = readInventoryText(value["platformRelease"], "platform release", 256);
+  const architecture = readInventoryText(value["architecture"], "architecture", 64);
+  const capabilities = readCapabilities(value["capabilities"]);
+  const hardware =
+    value["hardware"] === undefined ? undefined : readHardwareFacts(value["hardware"]);
+  const agentAdapters =
+    value["agentAdapters"] === undefined ? undefined : readAgentAdapters(value["agentAdapters"]);
+  const resourceLocks =
+    value["resourceLocks"] === undefined ? undefined : readResourceLocks(value["resourceLocks"]);
+  const workspaceIds = readInventoryIdentifiers(value["workspaceIds"], "Workspace ID", 128);
+  const availableSecretRefs = readInventoryIdentifiers(
+    value["availableSecretRefs"],
+    "Secret reference",
+    256,
+  );
+  return Object.freeze({
+    deviceName,
+    osFamily,
+    platformRelease,
+    architecture,
+    serviceMode,
+    ...(knowledgeHealth === undefined ? {} : { knowledgeHealth }),
+    ...(hardware === undefined ? {} : { hardware }),
+    maximumConcurrentRuns: Number(value["maximumConcurrentRuns"]),
+    capabilities,
+    ...(agentAdapters === undefined ? {} : { agentAdapters }),
+    ...(resourceLocks === undefined ? {} : { resourceLocks }),
+    workspaceIds,
+    availableSecretRefs,
+  });
+}
+
+function readHardwareFacts(value: unknown): NonNullable<WorkerSchedulingInventoryV1["hardware"]> {
+  if (!isPlainRecord(value)) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker hardware facts are invalid.");
+  }
+  requireExactInventoryKeys(value, ["cpu", "memory", "gpu"]);
+  const cpu = value["cpu"];
+  const memory = value["memory"];
+  const gpu = value["gpu"];
+  if (!isPlainRecord(cpu) || !isPlainRecord(memory) || !isPlainRecord(gpu)) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker hardware facts are invalid.");
+  }
+  requireExactInventoryKeys(cpu, [
+    "model",
+    "logicalCoreCount",
+    "observedAtMs",
+    "source",
+    "verification",
+  ]);
+  requireExactInventoryKeys(memory, ["totalBytes", "observedAtMs", "source", "verification"]);
+  requireExactInventoryKeys(gpu, ["devices", "observedAtMs", "source", "verification"]);
+  const logicalCoreCount = readBoundedHardwareInteger(
+    cpu["logicalCoreCount"],
+    "logical CPU core count",
+    4_096,
+  );
+  const totalBytes = readBoundedHardwareInteger(
+    memory["totalBytes"],
+    "total memory bytes",
+    Number.MAX_SAFE_INTEGER,
+  );
+  const devices = gpu["devices"];
+  if (!Array.isArray(devices) || devices.length > 16) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker GPU facts are invalid.");
+  }
+  const seen = new Set<string>();
+  const parsedDevices = devices.map((entry) => {
+    if (!isPlainRecord(entry)) {
+      throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker GPU facts are invalid.");
+    }
+    requireExactInventoryKeys(entry, ["model"], ["vendor", "memoryBytes"]);
+    const model = readHardwareLabel(entry["model"], "GPU model", 256);
+    const vendor =
+      entry["vendor"] === undefined
+        ? undefined
+        : readHardwareLabel(entry["vendor"], "GPU vendor", 128);
+    const memoryBytes =
+      entry["memoryBytes"] === undefined
+        ? undefined
+        : readBoundedHardwareInteger(
+            entry["memoryBytes"],
+            "GPU memory bytes",
+            Number.MAX_SAFE_INTEGER,
+          );
+    const identity = `${vendor ?? ""}\0${model}\0${String(memoryBytes ?? "")}`;
+    if (seen.has(identity)) {
+      throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker GPU facts must be unique.");
+    }
+    seen.add(identity);
+    return Object.freeze({
+      model,
+      ...(vendor === undefined ? {} : { vendor }),
+      ...(memoryBytes === undefined ? {} : { memoryBytes }),
+    });
+  });
+  const cpuVerification = readHardwareVerification(cpu["verification"], false);
+  const memoryVerification = readHardwareVerification(memory["verification"], false);
+  const gpuVerification = readHardwareVerification(gpu["verification"], true);
+  if (gpuVerification === "not-observed" && parsedDevices.length > 0) {
+    throw new WorkerRuntimeError(
+      "INVALID_CONFIGURATION",
+      "An unobserved GPU probe cannot report GPU devices.",
+    );
+  }
+  return Object.freeze({
+    cpu: Object.freeze({
+      model: readHardwareLabel(cpu["model"], "CPU model", 256),
+      logicalCoreCount,
+      observedAtMs: readInventoryTimestamp(cpu["observedAtMs"], "CPU observation time"),
+      source: readHardwareSource(cpu["source"]),
+      verification: cpuVerification,
+    }),
+    memory: Object.freeze({
+      totalBytes,
+      observedAtMs: readInventoryTimestamp(memory["observedAtMs"], "memory observation time"),
+      source: readHardwareSource(memory["source"]),
+      verification: memoryVerification,
+    }),
+    gpu: Object.freeze({
+      devices: Object.freeze(parsedDevices),
+      observedAtMs: readInventoryTimestamp(gpu["observedAtMs"], "GPU observation time"),
+      source: readHardwareSource(gpu["source"]),
+      verification: gpuVerification,
+    }),
+  });
+}
+
+function readHardwareSource(
+  value: unknown,
+): NonNullable<WorkerSchedulingInventoryV1["hardware"]>["cpu"]["source"] {
+  if (value !== "node-os" && value !== "platform-probe") {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker hardware source is invalid.");
+  }
+  return value;
+}
+
+function readHardwareVerification(value: unknown, allowNotObserved: false): "observed" | "verified";
+function readHardwareVerification(
+  value: unknown,
+  allowNotObserved: true,
+): "not-observed" | "observed" | "verified";
+function readHardwareVerification(
+  value: unknown,
+  allowNotObserved: boolean,
+): "not-observed" | "observed" | "verified" {
+  if (
+    value !== "observed" &&
+    value !== "verified" &&
+    (value !== "not-observed" || !allowNotObserved)
+  ) {
+    throw new WorkerRuntimeError(
+      "INVALID_CONFIGURATION",
+      "Worker hardware verification is invalid.",
+    );
+  }
+  return value;
+}
+
+function readBoundedHardwareInteger(value: unknown, label: string, maximum: number): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > maximum) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", `Worker ${label} is invalid.`);
+  }
+  return Number(value);
+}
+
+function readCapabilities(value: unknown): WorkerSchedulingInventoryV1["capabilities"] {
+  if (!Array.isArray(value) || value.length > 256) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker capabilities are invalid.");
+  }
+  const seen = new Set<string>();
+  const capabilities = value.map((entry) => {
+    if (!isPlainRecord(entry)) {
+      throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker capabilities are invalid.");
+    }
+    requireExactInventoryKeys(
+      entry,
+      ["name", "verification"],
+      ["observedAtMs", "evidenceSource", "version"],
+    );
+    const name = readInventoryText(entry["name"], "capability name", 160);
+    const verification = entry["verification"];
+    if (
+      verification !== "detected" &&
+      verification !== "verified" &&
+      verification !== "degraded" &&
+      verification !== "unavailable" &&
+      verification !== "disabled"
+    ) {
+      throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker capabilities are invalid.");
+    }
+    if (seen.has(name)) {
+      throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker capabilities must be unique.");
+    }
+    const observedAtMs =
+      entry["observedAtMs"] === undefined
+        ? undefined
+        : readInventoryTimestamp(entry["observedAtMs"], "capability observation time");
+    const evidenceSource = entry["evidenceSource"];
+    if (
+      evidenceSource !== undefined &&
+      evidenceSource !== "agent-adapter" &&
+      evidenceSource !== "capability-probe" &&
+      evidenceSource !== "workspace-registry"
+    ) {
+      throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker capabilities are invalid.");
+    }
+    const version =
+      entry["version"] === undefined
+        ? undefined
+        : readInventoryText(entry["version"], "capability version", 256);
+    seen.add(name);
+    return Object.freeze({
+      name,
+      verification,
+      ...(observedAtMs === undefined ? {} : { observedAtMs }),
+      ...(evidenceSource === undefined ? {} : { evidenceSource }),
+      ...(version === undefined ? {} : { version }),
+    });
+  });
+  return Object.freeze(capabilities);
+}
+
+function readAgentAdapters(
+  value: unknown,
+): NonNullable<WorkerSchedulingInventoryV1["agentAdapters"]> {
+  if (!Array.isArray(value) || value.length > 64) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker Agent adapters are invalid.");
+  }
+  const seen = new Set<string>();
+  return Object.freeze(
+    value.map((entry) => {
+      if (!isPlainRecord(entry)) {
+        throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker Agent adapters are invalid.");
+      }
+      requireExactInventoryKeys(
+        entry,
+        ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
+        ["version"],
+      );
+      const provider = entry["provider"];
+      const readiness = entry["readiness"];
+      const compatibility = entry["compatibility"];
+      if (
+        (provider !== "codex" && provider !== "claude" && provider !== "generic-command") ||
+        (readiness !== "ready" && readiness !== "degraded" && readiness !== "unavailable") ||
+        (compatibility !== "tested" &&
+          compatibility !== "compatible" &&
+          compatibility !== "untested" &&
+          compatibility !== "incompatible")
+      ) {
+        throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker Agent adapters are invalid.");
+      }
+      const adapterId = readInventoryText(entry["adapterId"], "Agent adapter ID", 160);
+      const identity = `${provider}\0${adapterId}`;
+      if (seen.has(identity)) {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "Worker Agent adapters must be unique.",
+        );
+      }
+      seen.add(identity);
+      const version =
+        entry["version"] === undefined
+          ? undefined
+          : readInventoryText(entry["version"], "Agent adapter version", 256);
+      return Object.freeze({
+        provider,
+        adapterId,
+        readiness,
+        compatibility,
+        ...(version === undefined ? {} : { version }),
+        observedAtMs: readInventoryTimestamp(
+          entry["observedAtMs"],
+          "Agent adapter observation time",
+        ),
+      });
+    }),
+  );
+}
+
+function readResourceLocks(
+  value: unknown,
+): NonNullable<WorkerSchedulingInventoryV1["resourceLocks"]> {
+  if (!Array.isArray(value) || value.length > 128) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker resource locks are invalid.");
+  }
+  const seenResources = new Set<string>();
+  return Object.freeze(
+    value.map((entry) => {
+      if (!isPlainRecord(entry)) {
+        throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker resource locks are invalid.");
+      }
+      requireExactInventoryKeys(entry, ["resourceName", "capacity", "holders"]);
+      const resourceName = readInventoryText(entry["resourceName"], "resource name", 160);
+      const capacity = entry["capacity"];
+      const holders = entry["holders"];
+      if (
+        seenResources.has(resourceName) ||
+        !Number.isSafeInteger(capacity) ||
+        Number(capacity) < 1 ||
+        Number(capacity) > 1_024 ||
+        !Array.isArray(holders) ||
+        holders.length > Number(capacity)
+      ) {
+        throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker resource locks are invalid.");
+      }
+      seenResources.add(resourceName);
+      const seenHolders = new Set<string>();
+      return Object.freeze({
+        resourceName,
+        capacity: Number(capacity),
+        holders: Object.freeze(
+          holders.map((holder) => {
+            if (!isPlainRecord(holder)) {
+              throw new WorkerRuntimeError(
+                "INVALID_CONFIGURATION",
+                "Worker resource lock holders are invalid.",
+              );
+            }
+            requireExactInventoryKeys(holder, ["taskId", "runId", "expiresAtMs"]);
+            const taskId = readInventoryText(holder["taskId"], "resource lock Task ID", 160);
+            const runId = readInventoryText(holder["runId"], "resource lock Run ID", 160);
+            const identity = `${taskId}\0${runId}`;
+            if (seenHolders.has(identity)) {
+              throw new WorkerRuntimeError(
+                "INVALID_CONFIGURATION",
+                "Worker resource lock holders must be unique.",
+              );
+            }
+            seenHolders.add(identity);
+            return Object.freeze({
+              taskId,
+              runId,
+              expiresAtMs: readInventoryTimestamp(holder["expiresAtMs"], "resource lock expiry"),
+            });
+          }),
+        ),
+      });
+    }),
+  );
+}
+
+function readInventoryTimestamp(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0 || Number(value) > MAX_JAVASCRIPT_DATE_MS) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", `${label} inventory is invalid.`);
+  }
+  return Number(value);
+}
+
+function readInventoryIdentifiers(
+  value: unknown,
+  label: string,
+  maximumItems: number,
+): readonly string[] {
+  if (!Array.isArray(value) || value.length > maximumItems) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", `${label} inventory is invalid.`);
+  }
+  const result = value.map((entry) => readInventoryText(entry, label, 160));
+  if (new Set(result).size !== result.length) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", `${label} inventory must be unique.`);
+  }
+  return Object.freeze(result);
+}
+
+function readInventoryText(value: unknown, label: string, maximumBytes: number): string {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > maximumBytes ||
+    [...value].some((character) => {
+      const point = character.codePointAt(0);
+      return point !== undefined && (point <= 31 || point === 127);
+    })
+  ) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", `${label} inventory is invalid.`);
+  }
+  return value;
+}
+
+function readHardwareLabel(value: unknown, label: string, maximumBytes: number): string {
+  const parsed = readInventoryText(value, label, maximumBytes);
+  if (
+    /^(?:[A-Za-z]:[\\/]|\\\\|\/)/u.test(parsed) ||
+    /(?:[\\/]Users[\\/]|[\\/]home[\\/]|[\\/]var[\\/]|[\\/]sys[\\/]|[\\/]proc[\\/]|[\\/]dev[\\/])/iu.test(
+      parsed,
+    ) ||
+    /(?:-----BEGIN [A-Z ]+PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]+|\b(?:sk[-_]|ghp_)[A-Za-z0-9_-]{16,})/u.test(
+      parsed,
+    )
+  ) {
+    throw new WorkerRuntimeError(
+      "INVALID_CONFIGURATION",
+      `${label} contains prohibited local or credential data.`,
+    );
+  }
+  return parsed;
+}
+
+function requireExactInventoryKeys(
+  value: Readonly<Record<string, unknown>>,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[] = [],
+): void {
+  const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+  if (
+    requiredKeys.some((key) => !Object.prototype.hasOwnProperty.call(value, key)) ||
+    Object.keys(value).some((key) => !allowedKeys.has(key))
+  ) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker inventory is invalid.");
+  }
+}
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function normalizeRunProcessOutcome(value: unknown): RunProcessOutcome | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -1051,11 +2100,26 @@ function normalizeRunProcessOutcome(value: unknown): RunProcessOutcome | undefin
   ) {
     return undefined;
   }
+  const usage = normalizeWorkerProviderUsage(outcome["usage"]);
+  if (outcome["usage"] !== undefined && usage === undefined) {
+    return undefined;
+  }
+  let agentSession;
+  try {
+    agentSession =
+      outcome["agentSession"] === undefined
+        ? undefined
+        : parseWorkerAgentSessionObservation(outcome["agentSession"]);
+  } catch {
+    return undefined;
+  }
   if (outcome["status"] === "failed") {
     return {
       status: "failed",
       report,
       diagnostic: outcome["diagnostic"],
+      ...(usage === undefined ? {} : { usage }),
+      ...(agentSession === undefined ? {} : { agentSession }),
     };
   }
   if (outcome["status"] !== "succeeded") {
@@ -1080,5 +2144,46 @@ function normalizeRunProcessOutcome(value: unknown): RunProcessOutcome | undefin
     status: "succeeded",
     report,
     artifactIds: Object.freeze([...artifactIds]) as readonly string[],
+    ...(usage === undefined ? {} : { usage }),
+    ...(agentSession === undefined ? {} : { agentSession }),
   };
+}
+
+function normalizeWorkerProviderUsage(
+  value: unknown,
+): WorkerOutboundEventV1["payload"]["usage"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !isPlainRecord(value) ||
+    Object.keys(value).length === 0 ||
+    !Object.keys(value).every((key) =>
+      ["inputTokens", "outputTokens", "cachedInputTokens", "costUsdMicros"].includes(key),
+    )
+  ) {
+    return undefined;
+  }
+  const usage: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedInputTokens?: number;
+    costUsdMicros?: number;
+  } = {};
+  for (const key of [
+    "inputTokens",
+    "outputTokens",
+    "cachedInputTokens",
+    "costUsdMicros",
+  ] as const) {
+    const amount = value[key];
+    if (amount === undefined) {
+      continue;
+    }
+    if (!Number.isSafeInteger(amount) || Number(amount) < 0) {
+      return undefined;
+    }
+    usage[key] = amount as number;
+  }
+  return Object.freeze(usage);
 }

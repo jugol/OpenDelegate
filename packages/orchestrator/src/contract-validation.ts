@@ -502,6 +502,7 @@ export function fingerprintPlannedWorkOrder(workOrder: PlannedWorkOrder): string
     schedulingHints: workOrder.schedulingHints,
     requiredCapabilities: workOrder.requiredCapabilities,
     requiredSecretRefs: workOrder.requiredSecretRefs,
+    requiredAgent: workOrder.requiredAgent ?? null,
     requiredOsFamily: workOrder.requiredOsFamily ?? null,
     workspaceId: workOrder.workspaceId ?? null,
   });

@@ -1,6 +1,6 @@
 # Platform Capabilities and Constraints
 
-Research snapshot: 2026-07-24
+Research snapshot: 2026-07-25
 
 Scope: official, first-party documentation only
 
@@ -54,6 +54,7 @@ This report verifies the external platform behavior that OpenDelegate's planning
 - `thread/resume` appends later turns to the recorded thread. `thread/fork` creates a distinct thread with copied history. Threads can also be read without resuming, archived, unarchived, compacted, or permanently deleted. [Codex App Server](https://developers.openai.com/codex/app-server/)
 - When Codex settings require approval, App Server sends a server-initiated request carrying `threadId` and `turnId`. The client can accept once, accept for the session, decline, or cancel; command approvals can also accept a proposed execution-policy amendment. Completion still arrives as the terminal item event. [Codex App Server approvals](https://developers.openai.com/codex/app-server/#approvals)
 - App Server can generate TypeScript or JSON schemas that are specific to the installed Codex version. Some methods and fields require explicit `experimentalApi` opt-in, while omitting that capability keeps the client on the stable surface. [Codex App Server](https://developers.openai.com/codex/app-server/)
+- The generated `0.145.0` schema exposes separate server requests for command execution, file changes, and permission-profile elevation. OpenDelegate therefore does not need to infer protected actions from streamed prose, but it must bind every response to the exact thread, turn, item, callback identifier, current Run, and current Policy decision. The generated schema is version evidence, not a stable cross-version API guarantee.
 
 ### Stability and locality caveats
 
@@ -69,6 +70,8 @@ This report verifies the external platform behavior that OpenDelegate's planning
 - Python and TypeScript Agent SDKs provide native messages and programmatic control. With partial-message streaming enabled, they yield raw text and tool-call stream events in addition to complete assistant and result messages. [Claude Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview) [Claude Agent SDK streaming](https://code.claude.com/docs/en/agent-sdk/streaming-output)
 - The SDK exposes a `canUseTool` callback for tool approvals and clarifying questions. The callback pauses execution until OpenDelegate returns a decision; it may remain pending indefinitely, or OpenDelegate can defer the decision, let the process exit, and resume from the persisted session later. [Claude Agent SDK user input](https://code.claude.com/docs/en/agent-sdk/user-input)
 - Permission modes, hooks, declarative deny/ask/allow rules, and the approval callback are separate layers. A `PreToolUse` hook is the documented way to gate every tool call regardless of ordinary permission rules. [Claude Agent SDK permissions](https://code.claude.com/docs/en/agent-sdk/permissions)
+- The TypeScript Agent SDK package is `@anthropic-ai/claude-agent-sdk`. Its `canUseTool` callback includes an abort signal, tool-use ID, proposed input, and optional permission suggestions; programmatic options can disable user/project/local settings, restrict MCP configuration, and keep session persistence enabled for exact resume. [Claude Agent SDK TypeScript reference](https://code.claude.com/docs/en/agent-sdk/typescript)
+- Claude's OS-enforced Bash sandbox is documented for macOS, Linux, and WSL2, but not native Windows. A managed integration can require `failIfUnavailable: true` and disable unsandboxed fallback. OpenDelegate must not advertise native-Windows autonomous Bash through that sandbox; on native Windows it needs a separate verified sandbox or a narrower tool surface. [Claude Code sandboxing](https://code.claude.com/docs/en/sandboxing)
 
 ### Session identity, resume, and locality
 

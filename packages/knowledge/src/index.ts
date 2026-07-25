@@ -10,6 +10,7 @@ export type {
   OpenedKnowledgeNote,
   OpenKnowledgeOptions,
   UpsertKnowledgeNote,
+  UpsertKnowledgeOptions,
   UpsertKnowledgeResult,
 } from "./contracts.ts";
 export { KnowledgeError, type KnowledgeErrorCode } from "./knowledge-error.ts";

@@ -125,6 +125,12 @@ const defaultCases: readonly {
     explanation: "Computer Use input requires owner approval or an explicit Policy grant.",
   },
   {
+    category: "sandbox-boundary-escalation",
+    outcome: "require-approval",
+    code: "POLICY_SANDBOX_BOUNDARY_APPROVAL_REQUIRED",
+    explanation: "Crossing an Agent sandbox boundary requires owner approval.",
+  },
+  {
     category: "package-repository-addition",
     outcome: "require-approval",
     code: "POLICY_SUPPLY_CHAIN_APPROVAL_REQUIRED",
