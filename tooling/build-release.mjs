@@ -96,6 +96,14 @@ const curatedRuntimeLicenseFiles = new Map([
       source: "https://raw.githubusercontent.com/jsumners/abstract-logging/v2.0.1/Readme.md",
     },
   ],
+  [
+    "standardwebhooks@1.0.0",
+    {
+      path: "docs/legal/runtime-license-overrides/standardwebhooks-1.0.0-LICENSE.txt",
+      source:
+        "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/c7cd8a9eadf9879d6dca345e168dc8d15d19e487/libraries/LICENSE",
+    },
+  ],
 ]);
 const acceptanceLedgerPath = "docs/release/acceptance-evidence.json";
 const attestationEvidencePrefix = "docs/release/evidence/";

@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -477,6 +486,77 @@ test("a missing unrelated license file fails closed", () => {
         },
       ]),
     /no retained license or notice file and no same-project license source/,
+  );
+});
+
+test("the exact standardwebhooks release retains its curated upstream license", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-standardwebhooks-license-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const staging = join(root, "staging");
+  const mainDirectory = join(staging, "apps", "main");
+  const packageDirectory = join(mainDirectory, "node_modules", "standardwebhooks");
+  const sourceRoot = join(root, "source");
+  const adminManifestDirectory = join(sourceRoot, "apps", "admin-web");
+  const curatedLicensePath =
+    "docs/legal/runtime-license-overrides/standardwebhooks-1.0.0-LICENSE.txt";
+  await mkdir(packageDirectory, { recursive: true });
+  await mkdir(adminManifestDirectory, { recursive: true });
+  await mkdir(join(staging, "docs", "legal", "runtime-license-overrides"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({
+      name: "standardwebhooks",
+      version: "1.0.0",
+      license: "MIT",
+      repository: "https://github.com/standard-webhooks/standard-webhooks",
+    }),
+    "utf8",
+  );
+  await writeFile(
+    join(adminManifestDirectory, "package.json"),
+    JSON.stringify({ name: "admin-fixture", version: "1.0.0", dependencies: {} }),
+    "utf8",
+  );
+  await copyFile(
+    join(repositoryRoot, ...curatedLicensePath.split("/")),
+    join(staging, curatedLicensePath),
+  );
+
+  await writeThirdPartyNotices(staging, mainDirectory, sourceRoot);
+
+  const inventory = JSON.parse(await readFile(join(staging, "THIRD_PARTY_NOTICES.json"), "utf8"));
+  const standardWebhooks = inventory.packages.find(
+    (packageEntry) => packageEntry.name === "standardwebhooks",
+  );
+  assert.deepEqual(standardWebhooks?.legalFilesSource, {
+    type: "curated-versioned-upstream-copy",
+    source:
+      "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/c7cd8a9eadf9879d6dca345e168dc8d15d19e487/libraries/LICENSE",
+  });
+  assert.equal(standardWebhooks?.legalFiles.length, 1);
+  assert.equal(standardWebhooks?.legalFiles[0]?.path, curatedLicensePath);
+  assert.equal(
+    standardWebhooks?.legalFiles[0]?.sha256,
+    createHash("sha256")
+      .update(await readFile(join(staging, curatedLicensePath)))
+      .digest("hex"),
+  );
+
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({
+      name: "standardwebhooks",
+      version: "1.0.1",
+      license: "MIT",
+      repository: "https://github.com/standard-webhooks/standard-webhooks",
+    }),
+    "utf8",
+  );
+  await assert.rejects(
+    writeThirdPartyNotices(staging, mainDirectory, sourceRoot),
+    /standardwebhooks@1\.0\.1/,
   );
 });
 
