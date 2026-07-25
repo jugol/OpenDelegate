@@ -1,15 +1,5 @@
 import { createHash } from "node:crypto";
-import {
-  chmod,
-  copyFile,
-  lstat,
-  mkdir,
-  mkdtemp,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -34,6 +24,7 @@ export async function stageNativeReleaseAssets(options) {
             architecture,
             buildRoot,
             builders,
+            platform,
             sourceRoot,
             stagingRoot,
           })
@@ -42,6 +33,7 @@ export async function stageNativeReleaseAssets(options) {
               architecture,
               buildRoot,
               builders,
+              platform,
               sourceRoot,
               stagingRoot,
             })
@@ -49,6 +41,7 @@ export async function stageNativeReleaseAssets(options) {
               architecture,
               buildRoot,
               builders,
+              platform,
               sourceRoot,
               stagingRoot,
             });
@@ -239,19 +232,74 @@ async function copyComponents(input, entries) {
   return await Promise.all(
     entries.map(async (entry) => {
       const source = await requireSafeBuildOutput(entry.source, input.buildRoot);
+      const bytes = await readFile(source);
+      await assertNoBuildPathDisclosure(bytes, [input.buildRoot, input.sourceRoot], input.platform);
       const destination = join(input.stagingRoot, ...entry.path.split("/"));
       await mkdir(dirname(destination), { recursive: true, mode: 0o755 });
-      await copyFile(source, destination);
+      await writeFile(destination, bytes, { mode: 0o755 });
       if (process.platform !== "win32") {
         await chmod(destination, 0o755);
+      }
+      const stagedBytes = await readFile(destination);
+      if (!stagedBytes.equals(bytes)) {
+        throw new Error("A staged native release component changed while it was being verified.");
       }
       return Object.freeze({
         kind: entry.kind,
         path: entry.path,
-        sha256: await sha256File(destination),
+        sha256: `sha256:${createHash("sha256").update(stagedBytes).digest("hex")}`,
       });
     }),
   );
+}
+
+async function assertNoBuildPathDisclosure(bytes, roots, platform) {
+  const privatePathSpellings = new Set();
+  for (const root of roots) {
+    for (const canonical of new Set([resolve(root), await realpath(root)])) {
+      for (const spelling of pathSpellings(canonical, platform)) {
+        privatePathSpellings.add(spelling);
+      }
+    }
+  }
+  const comparableBytes = platform === "win32" ? foldAsciiCase(bytes) : bytes;
+  for (const value of privatePathSpellings) {
+    for (const encoding of ["utf8", "utf16le"]) {
+      const encoded = Buffer.from(value, encoding);
+      const comparable = platform === "win32" ? foldAsciiCase(encoded) : encoded;
+      if (comparableBytes.indexOf(comparable) !== -1) {
+        throw new Error("A native release component contains a private build-host path.");
+      }
+    }
+  }
+}
+
+function pathSpellings(value, platform) {
+  const spellings = new Set([value]);
+  if (platform === "win32") {
+    const windowsPath = value.replaceAll("/", "\\");
+    spellings.add(windowsPath);
+    if (/^[a-z]:\\/iu.test(windowsPath)) {
+      spellings.add(`\\\\?\\${windowsPath}`);
+    } else if (windowsPath.startsWith("\\\\") && !windowsPath.startsWith("\\\\?\\")) {
+      spellings.add(`\\\\?\\UNC\\${windowsPath.slice(2)}`);
+    }
+  }
+  for (const spelling of [...spellings]) {
+    spellings.add(spelling.replaceAll("\\", "/"));
+    spellings.add(spelling.replaceAll("/", "\\"));
+  }
+  return spellings;
+}
+
+function foldAsciiCase(value) {
+  const folded = Buffer.from(value);
+  for (let index = 0; index < folded.length; index += 1) {
+    if (folded[index] >= 0x41 && folded[index] <= 0x5a) {
+      folded[index] += 0x20;
+    }
+  }
+  return folded;
 }
 
 async function requireSafeBuildOutput(value, buildRoot) {
@@ -311,10 +359,4 @@ function isStrictDescendant(parent, candidate) {
     relationship !== ".." &&
     !relationship.startsWith(`..${sep}`)
   );
-}
-
-async function sha256File(path) {
-  return `sha256:${createHash("sha256")
-    .update(await readFile(path))
-    .digest("hex")}`;
 }

@@ -1117,13 +1117,17 @@ async function assembleRelease({
   await runCommand("pnpm", createMainDeployArguments(mainDirectory), assemblySourceRoot, {
     pnpmCli: assemblyPnpmCli,
   });
-  await removePackageManagerBinDirectories(join(mainDirectory, "node_modules"));
+  const mainNodeModules = join(mainDirectory, "node_modules");
+  await removePackageManagerBinDirectories(mainNodeModules);
+  await pruneRuntimeNativePackageArtifacts(mainNodeModules);
   const workerDirectory = join(staging, "apps", "worker");
   await mkdir(workerDirectory, { recursive: true });
   await runCommand("pnpm", createWorkerDeployArguments(workerDirectory), assemblySourceRoot, {
     pnpmCli: assemblyPnpmCli,
   });
-  await removePackageManagerBinDirectories(join(workerDirectory, "node_modules"));
+  const workerNodeModules = join(workerDirectory, "node_modules");
+  await removePackageManagerBinDirectories(workerNodeModules);
+  await pruneRuntimeNativePackageArtifacts(workerNodeModules);
 
   await bundle({
     absWorkingDir: assemblySourceRoot,
@@ -1328,6 +1332,126 @@ export function createWorkerDeployArguments(workerDirectory) {
 
 export async function removePackageManagerBinDirectories(root) {
   await removePackageManagerBinsFromTree(root, basename(root) === "node_modules");
+}
+
+export async function pruneRuntimeNativePackageArtifacts(
+  nodeModules,
+  platform = process.platform,
+  architecture = process.arch,
+) {
+  if (!supportedPlatforms.has(platform) || !supportedArchitectures.has(architecture)) {
+    throw new Error(
+      `Runtime native package pruning is unsupported for ${platform}/${architecture}.`,
+    );
+  }
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "node_modules root",
+  );
+  const packageDirectory = await requireSafePruneDirectory(
+    join(canonicalNodeModules, "better-sqlite3"),
+    canonicalNodeModules,
+    "better-sqlite3 package",
+  );
+  const manifestPath = await requireSafePruneFile(
+    join(packageDirectory, "package.json"),
+    packageDirectory,
+    "better-sqlite3 manifest",
+  );
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  if (manifest.name !== "better-sqlite3" || manifest.version !== "13.0.1") {
+    throw new Error("The deployed better-sqlite3 package identity is invalid.");
+  }
+  const targetPrebuild = `${platform}-${architecture}.node`;
+  const prebuildsDirectory = await requireSafePruneDirectory(
+    join(packageDirectory, "prebuilds"),
+    packageDirectory,
+    "better-sqlite3 prebuild inventory",
+  );
+  const buildDirectory = await requireSafePruneDirectory(
+    join(packageDirectory, "build"),
+    packageDirectory,
+    "better-sqlite3 generated build directory",
+    true,
+  );
+  const prebuildEntries = await readdir(prebuildsDirectory, { withFileTypes: true });
+  const validatedPrebuilds = [];
+  let retainedTarget = false;
+  for (const entry of prebuildEntries) {
+    if (!entry.isFile() || !/^[a-z0-9-]+\.node$/u.test(entry.name)) {
+      throw new Error(
+        `The deployed better-sqlite3 prebuild inventory contains an unsupported entry: ${entry.name}.`,
+      );
+    }
+    const path = await requireSafePruneFile(
+      join(prebuildsDirectory, entry.name),
+      prebuildsDirectory,
+      `better-sqlite3 prebuild ${entry.name}`,
+    );
+    const metadata = await lstat(path);
+    validatedPrebuilds.push({ name: entry.name, path });
+    if (entry.name === targetPrebuild) {
+      if (metadata.size <= 0) {
+        throw new Error(`The target better-sqlite3 prebuild is empty: ${targetPrebuild}.`);
+      }
+      retainedTarget = true;
+    }
+  }
+  if (!retainedTarget) {
+    throw new Error(`The target better-sqlite3 prebuild is unavailable: ${targetPrebuild}.`);
+  }
+  for (const entry of validatedPrebuilds) {
+    if (entry.name !== targetPrebuild) {
+      await rm(entry.path, { force: true });
+    }
+  }
+  if (buildDirectory !== undefined) {
+    await rm(buildDirectory, { force: true, recursive: true });
+  }
+}
+
+async function requireSafePruneDirectory(path, parent, label, optional = false) {
+  let metadata;
+  try {
+    metadata = await lstat(path);
+  } catch (error) {
+    if (optional && error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  const canonical = await realpath(path);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    (parent !== undefined && !isStrictPathDescendant(parent, canonical))
+  ) {
+    throw new Error(`The deployed ${label} escaped its release staging boundary.`);
+  }
+  return canonical;
+}
+
+async function requireSafePruneFile(path, parent, label) {
+  const [metadata, canonical] = await Promise.all([lstat(path), realpath(path)]);
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    !isStrictPathDescendant(parent, canonical)
+  ) {
+    throw new Error(`The deployed ${label} escaped its release staging boundary.`);
+  }
+  return canonical;
+}
+
+function isStrictPathDescendant(parent, candidate) {
+  const relationship = relative(resolve(parent), resolve(candidate));
+  return (
+    relationship !== "" &&
+    !isAbsolute(relationship) &&
+    relationship !== ".." &&
+    !relationship.startsWith(`..${sep}`)
+  );
 }
 
 async function removePackageManagerBinsFromTree(root, rootIsNodeModules) {

@@ -39,6 +39,7 @@ import {
   officialRuntimeArchiveFor,
   parseRawGitDiff,
   parseReleaseArguments,
+  pruneRuntimeNativePackageArtifacts,
   readBoundedResponseBody,
   readSourceIdentity,
   removePackageManagerBinDirectories,
@@ -168,8 +169,9 @@ test("target-native release assets use stable production paths and content hashe
       true,
     );
     for (const component of result.components) {
+      const stagedBytes = await readFile(join(stagingRoot, ...component.path.split("/")));
       assert.equal(
-        await readFile(join(stagingRoot, ...component.path.split("/")), "utf8"),
+        stagedBytes.toString("utf8"),
         component.kind === "core-service-host"
           ? `${platform}-core-host\n`
           : component.kind === "session-helper-host"
@@ -188,12 +190,106 @@ test("target-native release assets use stable production paths and content hashe
                         ? "mac-helper\n"
                         : "mac-fixture\n",
       );
+      assert.equal(
+        component.sha256,
+        `sha256:${createHash("sha256").update(stagedBytes).digest("hex")}`,
+      );
     }
     const manifest = JSON.parse(
       await readFile(join(stagingRoot, "native-components.json"), "utf8"),
     );
     assert.deepEqual(manifest, result);
   }
+});
+
+test("native release assets reject private build paths in UTF-8 and UTF-16LE", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-path-disclosure-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const sourceRoot = join(root, "source");
+  await mkdir(sourceRoot);
+
+  for (const disclosure of ["source-utf8", "source-case-utf8", "build-utf16le"]) {
+    const stagingRoot = join(root, `staging-${disclosure}`);
+    await mkdir(stagingRoot);
+    await assert.rejects(
+      stageNativeReleaseAssets({
+        platform: "win32",
+        architecture: "x64",
+        sourceRoot,
+        stagingRoot,
+        builders: {
+          async windows({ outputRoot }) {
+            await mkdir(outputRoot, { recursive: true });
+            const helperExecutable = join(outputRoot, "helper.exe");
+            const fixtureExecutable = join(outputRoot, "fixture.exe");
+            const leakedPath =
+              disclosure === "source-utf8"
+                ? sourceRoot
+                : disclosure === "source-case-utf8"
+                  ? sourceRoot.replace(/[a-z]/giu, (character) =>
+                      character === character.toUpperCase()
+                        ? character.toLowerCase()
+                        : character.toUpperCase(),
+                    )
+                  : outputRoot;
+            const encoding = disclosure === "build-utf16le" ? "utf16le" : "utf8";
+            await writeFile(helperExecutable, Buffer.from(leakedPath, encoding));
+            await writeFile(fixtureExecutable, "safe fixture\n");
+            return { helperExecutable, fixtureExecutable };
+          },
+          async serviceHost({ outputRoot }) {
+            await mkdir(outputRoot, { recursive: true });
+            const coreExecutable = join(outputRoot, "core.exe");
+            const helperExecutable = join(outputRoot, "session.exe");
+            await writeFile(coreExecutable, "safe core\n");
+            await writeFile(helperExecutable, "safe session\n");
+            return { coreExecutable, helperExecutable };
+          },
+        },
+      }),
+      /private build-host path/u,
+    );
+  }
+});
+
+test("native release assets reject a private physical path behind a source alias", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-path-alias-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const physicalSource = join(root, "physical-source");
+  const sourceRoot = join(root, "source-alias");
+  const stagingRoot = join(root, "staging");
+  await mkdir(physicalSource);
+  await mkdir(stagingRoot);
+  await symlink(physicalSource, sourceRoot, process.platform === "win32" ? "junction" : "dir");
+  const physicalDisclosure = await realpath(sourceRoot);
+
+  await assert.rejects(
+    stageNativeReleaseAssets({
+      platform: "win32",
+      architecture: "x64",
+      sourceRoot,
+      stagingRoot,
+      builders: {
+        async windows({ outputRoot }) {
+          await mkdir(outputRoot, { recursive: true });
+          const helperExecutable = join(outputRoot, "helper.exe");
+          const fixtureExecutable = join(outputRoot, "fixture.exe");
+          await writeFile(helperExecutable, physicalDisclosure, "utf8");
+          await writeFile(fixtureExecutable, "safe fixture\n");
+          return { helperExecutable, fixtureExecutable };
+        },
+        async serviceHost({ outputRoot }) {
+          await mkdir(outputRoot, { recursive: true });
+          const coreExecutable = join(outputRoot, "core.exe");
+          const helperExecutable = join(outputRoot, "session.exe");
+          await writeFile(coreExecutable, "safe core\n");
+          await writeFile(helperExecutable, "safe session\n");
+          return { coreExecutable, helperExecutable };
+        },
+      },
+    }),
+    /private build-host path/u,
+  );
 });
 
 function attestationLedger() {
@@ -425,6 +521,156 @@ test("release deployment removes package-manager bins without following their li
     code: "ENOENT",
   });
   await assert.rejects(readFile(join(nestedBin, "tool"), "utf8"), { code: "ENOENT" });
+});
+
+test("release deployment retains only the target better-sqlite3 prebuild", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-package-prune-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const packageDirectory = join(nodeModules, "better-sqlite3");
+  const prebuilds = join(packageDirectory, "prebuilds");
+  const buildDirectory = join(packageDirectory, "build");
+  await mkdir(prebuilds, { recursive: true });
+  await mkdir(buildDirectory);
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({ name: "better-sqlite3", version: "13.0.1" }),
+    "utf8",
+  );
+  await writeFile(join(packageDirectory, "LICENSE"), "MIT fixture\n", "utf8");
+  await writeFile(
+    join(buildDirectory, "better_sqlite3.vcxproj"),
+    "C:\\Users\\builder\\AppData\\Local\\node-gyp\\Cache\\24.18.0\n",
+    "utf8",
+  );
+  await writeFile(join(prebuilds, "darwin-arm64.node"), "darwin", "utf8");
+  await writeFile(join(prebuilds, "linux-x64.node"), "linux", "utf8");
+  await writeFile(join(prebuilds, "win32-x64.node"), "windows", "utf8");
+
+  await pruneRuntimeNativePackageArtifacts(nodeModules, "win32", "x64");
+
+  assert.equal(await readFile(join(prebuilds, "win32-x64.node"), "utf8"), "windows");
+  assert.equal(await readFile(join(packageDirectory, "LICENSE"), "utf8"), "MIT fixture\n");
+  await assert.rejects(readFile(join(prebuilds, "darwin-arm64.node"), "utf8"), {
+    code: "ENOENT",
+  });
+  await assert.rejects(readFile(join(prebuilds, "linux-x64.node"), "utf8"), {
+    code: "ENOENT",
+  });
+  await assert.rejects(readFile(join(buildDirectory, "better_sqlite3.vcxproj"), "utf8"), {
+    code: "ENOENT",
+  });
+});
+
+test("native package pruning rejects linked roots without touching external targets", async (t) => {
+  for (const linkedRoot of ["node-modules", "package", "prebuilds", "build"]) {
+    const root = await mkdtemp(join(tmpdir(), `opendelegate-native-package-link-${linkedRoot}-`));
+    t.after(() => rm(root, { force: true, recursive: true }));
+    const ordinaryNodeModules = join(root, "node_modules");
+    const external = join(root, "external");
+    const nodeModules =
+      linkedRoot === "node-modules" ? join(root, "linked-node-modules") : ordinaryNodeModules;
+    const packageDirectory = join(nodeModules, "better-sqlite3");
+    const externalPackage = join(external, "better-sqlite3");
+    const physicalPackage = linkedRoot === "package" ? externalPackage : packageDirectory;
+    const physicalPrebuilds =
+      linkedRoot === "prebuilds" ? join(external, "prebuilds") : join(physicalPackage, "prebuilds");
+    const physicalBuild =
+      linkedRoot === "build" ? join(external, "build") : join(physicalPackage, "build");
+
+    if (linkedRoot === "node-modules") {
+      await mkdir(externalPackage, { recursive: true });
+      await symlink(external, nodeModules, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      await mkdir(ordinaryNodeModules, { recursive: true });
+      if (linkedRoot === "package") {
+        await mkdir(externalPackage, { recursive: true });
+        await symlink(
+          externalPackage,
+          packageDirectory,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      } else {
+        await mkdir(packageDirectory, { recursive: true });
+      }
+    }
+    await mkdir(physicalPrebuilds, { recursive: true });
+    await mkdir(physicalBuild, { recursive: true });
+    await writeFile(
+      join(physicalPackage, "package.json"),
+      JSON.stringify({ name: "better-sqlite3", version: "13.0.1" }),
+      "utf8",
+    );
+    await writeFile(join(physicalPrebuilds, "win32-x64.node"), "windows", "utf8");
+    await writeFile(join(physicalPrebuilds, "linux-x64.node"), "linux", "utf8");
+    await writeFile(join(physicalBuild, "sentinel.txt"), "outside staging\n", "utf8");
+
+    if (linkedRoot === "prebuilds") {
+      await symlink(
+        physicalPrebuilds,
+        join(packageDirectory, "prebuilds"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } else if (linkedRoot === "build") {
+      await symlink(
+        physicalBuild,
+        join(packageDirectory, "build"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+
+    await assert.rejects(
+      pruneRuntimeNativePackageArtifacts(nodeModules, "win32", "x64"),
+      /escaped its release staging boundary/u,
+    );
+    assert.equal(await readFile(join(physicalPrebuilds, "linux-x64.node"), "utf8"), "linux");
+    assert.equal(await readFile(join(physicalBuild, "sentinel.txt"), "utf8"), "outside staging\n");
+  }
+});
+
+test("native package pruning fails closed without one exact non-empty target prebuild", async (t) => {
+  for (const targetContent of [undefined, ""]) {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-native-package-invalid-"));
+    t.after(() => rm(root, { force: true, recursive: true }));
+    const nodeModules = join(root, "node_modules");
+    const packageDirectory = join(nodeModules, "better-sqlite3");
+    const prebuilds = join(packageDirectory, "prebuilds");
+    await mkdir(prebuilds, { recursive: true });
+    await writeFile(
+      join(packageDirectory, "package.json"),
+      JSON.stringify({ name: "better-sqlite3", version: "13.0.1" }),
+      "utf8",
+    );
+    await writeFile(join(prebuilds, "linux-x64.node"), "linux", "utf8");
+    if (targetContent !== undefined) {
+      await writeFile(join(prebuilds, "win32-x64.node"), targetContent, "utf8");
+    }
+
+    await assert.rejects(
+      pruneRuntimeNativePackageArtifacts(nodeModules, "win32", "x64"),
+      /target better-sqlite3 prebuild is (?:empty|unavailable)/u,
+    );
+  }
+});
+
+test("native package pruning is pinned to the reviewed better-sqlite3 layout", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-package-version-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const packageDirectory = join(nodeModules, "better-sqlite3");
+  const prebuilds = join(packageDirectory, "prebuilds");
+  await mkdir(prebuilds, { recursive: true });
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({ name: "better-sqlite3", version: "13.0.2" }),
+    "utf8",
+  );
+  await writeFile(join(prebuilds, "win32-x64.node"), "windows", "utf8");
+
+  await assert.rejects(
+    pruneRuntimeNativePackageArtifacts(nodeModules, "win32", "x64"),
+    /package identity is invalid/u,
+  );
 });
 
 test("every supported release target has a pinned official Node.js archive", () => {

@@ -57,7 +57,8 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <GenerateDebugInformation Condition="'$(Configuration)'=='Debug'">true</GenerateDebugInformation>
+      <GenerateDebugInformation Condition="'$(Configuration)'=='Release'">false</GenerateDebugInformation>
       <AdditionalOptions>/guard:cf %(AdditionalOptions)</AdditionalOptions>
       <AdditionalDependencies>advapi32.lib;bcrypt.lib;crypt32.lib;d3d11.lib;dxgi.lib;ole32.lib;oleaut32.lib;runtimeobject.lib;uiautomationcore.lib;user32.lib;windowscodecs.lib;wtsapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
