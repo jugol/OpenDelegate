@@ -319,8 +319,8 @@ const WINDOWS_ACL_SCRIPT = [
   "$acl.SetAccessRuleProtection($true,$false)",
   "$rule=New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow')",
   "$acl.AddAccessRule($rule)",
-  "Set-Acl -LiteralPath $path -AclObject $acl",
-  "$verified=Get-Acl -LiteralPath $path",
+  "[IO.Directory]::SetAccessControl($path,$acl)",
+  "$verified=[IO.Directory]::GetAccessControl($path)",
   "if(-not $verified.AreAccessRulesProtected){exit 31}",
   "foreach($entry in $verified.Access){if($entry.AccessControlType -eq 'Allow' -and $entry.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -ne $identity.Value){exit 31}}",
 ].join(";");
