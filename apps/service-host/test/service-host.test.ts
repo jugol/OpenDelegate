@@ -13,19 +13,16 @@ import {
 
 describe("native two-plane JavaScript host", () => {
   it("accepts only the native launcher's non-secret argv contract", () => {
+    const configPath =
+      process.platform === "win32"
+        ? "C:\\ProgramData\\OpenDelegate\\state\\config\\service.json"
+        : "/var/lib/opendelegate/state/config/service.json";
     assert.deepEqual(
-      parseServiceHostArguments([
-        "--plane",
-        "core",
-        "--role",
-        "worker",
-        "--config",
-        "C:\\ProgramData\\OpenDelegate\\state\\config\\service.json",
-      ]),
+      parseServiceHostArguments(["--plane", "core", "--role", "worker", "--config", configPath]),
       {
         plane: "core",
         role: "worker",
-        configPath: "C:\\ProgramData\\OpenDelegate\\state\\config\\service.json",
+        configPath,
       },
     );
     assert.throws(
