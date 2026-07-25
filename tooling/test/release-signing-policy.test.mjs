@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   describePinnedReleaseSigningPolicy,
+  getPinnedReleaseSigningTrust,
   readPinnedReleaseSigningPolicy,
   signWithPinnedReleasePolicy,
 } from "../release-signing-policy.mjs";
@@ -30,6 +31,15 @@ test("a pinned release policy signs through an opaque handle without exposing pa
   assert.equal(
     JSON.stringify(describePinnedReleaseSigningPolicy(policy)).includes(fixture.root),
     false,
+  );
+  const trust = getPinnedReleaseSigningTrust(policy);
+  assert.equal(trust.keyId, fixture.keyId);
+  assert.equal(trust.role, "publisher");
+  assert.deepEqual(Buffer.from(trust.publicKeyPem), await readFile(fixture.publicKeyPath));
+  trust.publicKeyPem.fill(0);
+  assert.deepEqual(
+    Buffer.from(getPinnedReleaseSigningTrust(policy).publicKeyPem),
+    await readFile(fixture.publicKeyPath),
   );
 
   const signingBytes = Buffer.from("OpenDelegate publisher attestation v2\nfixture\n", "utf8");

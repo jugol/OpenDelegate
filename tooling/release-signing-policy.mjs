@@ -79,6 +79,17 @@ export function describePinnedReleaseSigningPolicy(policy) {
   });
 }
 
+export function getPinnedReleaseSigningTrust(policy) {
+  const details = requirePolicyHandle(policy);
+  return Object.freeze({
+    keyId: details.keyId,
+    get publicKeyPem() {
+      return Uint8Array.from(details.publicKey.bytes);
+    },
+    role: details.role,
+  });
+}
+
 export async function signWithPinnedReleasePolicy(input) {
   requireExactKeys(input, ["policy", "signingBytes"], "release statement signing input");
   const details = requirePolicyHandle(input.policy);
