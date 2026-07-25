@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { win32 } from "node:path";
 
 import type {
   ManagedSecretDeletion,
@@ -46,7 +46,7 @@ export class WindowsDpapiSecretStore implements ManagedSecretStore {
       config.maximumSecretBytes ?? DEFAULT_MAXIMUM_SECRET_BYTES,
     );
     this.#powershellPath = config.powershellPath ?? defaultWindowsPowerShellPath();
-    if (!isAbsolute(this.#powershellPath) || this.#powershellPath.includes("\0")) {
+    if (!win32.isAbsolute(this.#powershellPath) || this.#powershellPath.includes("\0")) {
       throw configurationInvalid();
     }
     this.#environment = validateWindowsEnvironment(
@@ -356,10 +356,10 @@ function dpapiTransformScript(operation: "Protect" | "Unprotect"): string {
 
 function defaultWindowsPowerShellPath(): string {
   const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-  if (systemRoot === undefined || !isAbsolute(systemRoot)) {
+  if (systemRoot === undefined || !win32.isAbsolute(systemRoot)) {
     throw configurationInvalid();
   }
-  return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  return win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
 function defaultWindowsEnvironment(): Readonly<Record<string, string>> {

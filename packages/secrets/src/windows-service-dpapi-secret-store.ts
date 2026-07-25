@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, join } from "node:path";
+import { win32 } from "node:path";
 
 import type {
   ManagedSecretDeletion,
@@ -39,8 +39,8 @@ export async function resolveWindowsServiceSid(
   if (!/^OpenDelegate-[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(options.serviceName)) {
     throw configurationInvalid();
   }
-  const scPath = options.scPath ?? join(requireWindowsSystemRoot(), "System32", "sc.exe");
-  if (!isAbsolute(scPath) || scPath.includes("\0")) {
+  const scPath = options.scPath ?? win32.join(requireWindowsSystemRoot(), "System32", "sc.exe");
+  if (!win32.isAbsolute(scPath) || scPath.includes("\0")) {
     throw configurationInvalid();
   }
   const runner = options.runner ?? new NodeNativeSecretCommandRunner();
@@ -92,7 +92,7 @@ export class WindowsServiceDpapiSecretHandoff {
       config.maximumSecretBytes ?? DEFAULT_MAXIMUM_SECRET_BYTES,
     );
     this.#powershellPath = config.powershellPath ?? defaultWindowsPowerShellPath();
-    if (!isAbsolute(this.#powershellPath) || this.#powershellPath.includes("\0")) {
+    if (!win32.isAbsolute(this.#powershellPath) || this.#powershellPath.includes("\0")) {
       throw configurationInvalid();
     }
     this.#environment = validateWindowsEnvironment(
@@ -567,7 +567,7 @@ function defaultWindowsEnvironment(): Readonly<Record<string, string>> {
 }
 
 function defaultWindowsPowerShellPath(): string {
-  return join(
+  return win32.join(
     requireWindowsSystemRoot(),
     "System32",
     "WindowsPowerShell",
@@ -578,7 +578,7 @@ function defaultWindowsPowerShellPath(): string {
 
 function requireWindowsSystemRoot(): string {
   const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-  if (systemRoot === undefined || !isAbsolute(systemRoot)) {
+  if (systemRoot === undefined || !win32.isAbsolute(systemRoot)) {
     throw configurationInvalid();
   }
   return systemRoot;
