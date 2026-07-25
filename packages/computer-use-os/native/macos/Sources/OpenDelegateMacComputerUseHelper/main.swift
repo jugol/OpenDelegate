@@ -103,7 +103,7 @@ private func writePermissionStatus(request: Bool) -> Never {
   let screenCapture: Bool
   let input: Bool
   if request {
-    let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    let prompt = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
     accessibility = AXIsProcessTrustedWithOptions(prompt)
     screenCapture = CGRequestScreenCaptureAccess()
     input = CGRequestPostEventAccess()
