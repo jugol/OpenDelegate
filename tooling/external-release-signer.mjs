@@ -182,7 +182,7 @@ async function runSignerProcess(input) {
     stdoutBytes += chunk.byteLength;
     if (stdoutBytes > MAXIMUM_SIGNER_OUTPUT_BYTES) {
       outputOverflow = true;
-      child.kill();
+      child.kill("SIGKILL");
       return;
     }
     stdoutChunks.push(Buffer.from(chunk));
@@ -191,7 +191,7 @@ async function runSignerProcess(input) {
     stderrBytes += chunk.byteLength;
     if (stderrBytes > MAXIMUM_SIGNER_OUTPUT_BYTES) {
       outputOverflow = true;
-      child.kill();
+      child.kill("SIGKILL");
     }
   });
   child.stdin.once("error", (error) => {
@@ -201,7 +201,7 @@ async function runSignerProcess(input) {
 
   const timer = setTimeout(() => {
     timedOut = true;
-    child.kill();
+    child.kill("SIGKILL");
   }, input.timeoutMs);
   timer.unref();
   const completion = await new Promise((resolvePromise) => {

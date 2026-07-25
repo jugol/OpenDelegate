@@ -180,6 +180,43 @@ test("the signer boundary rejects free-form, oversized, and noncanonical inputs"
   );
 });
 
+test("the signer boundary force-terminates a signer that exceeds its timeout", async (t) => {
+  const fixture = await createSignerFixture(t);
+  const hangingHelper = join(fixture.root, "hanging-signer.mjs");
+  await writeFile(
+    hangingHelper,
+    `process.on("SIGTERM", () => {
+  setTimeout(() => process.exit(0), 5_000);
+});
+setInterval(() => undefined, 1_000);
+`,
+    { mode: 0o700 },
+  );
+  if (process.platform !== "win32") {
+    await chmod(hangingHelper, 0o700);
+  }
+  const startedAt = Date.now();
+  await assert.rejects(
+    invokePinnedReleaseSigner({
+      invocationArtifacts: [
+        {
+          path: hangingHelper,
+          sha256: await sha256File(hangingHelper),
+        },
+      ],
+      executable: {
+        path: process.execPath,
+        sha256: await sha256File(process.execPath),
+      },
+      publicKeyPem: fixture.publicKeyPem,
+      signingBytes: Buffer.from("bounded signing request", "utf8"),
+      timeoutMs: 100,
+    }),
+    /exceeded its bounded timeout/u,
+  );
+  assert.ok(Date.now() - startedAt < 2_000);
+});
+
 async function createSignerFixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-external-signer-"));
   t.after(async () => {
@@ -245,6 +282,7 @@ process.stdout.write(\`\${JSON.stringify(response)}\\n\`);
     helperPath,
     keyId,
     publicKeyPem: Buffer.from(publicKeyPem),
+    root,
   };
 }
 
