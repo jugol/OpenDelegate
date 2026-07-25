@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -31,7 +31,7 @@ const desktopLease: DesktopLease = {
 };
 
 test("only a verified required Run receives a one-time Computer Use MCP bridge", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-cu-capability-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-worker-cu-capability-")));
   const initialNowMs = Date.now();
   let nowMs = initialNowMs;
   let runLeaseExpiresAtMs = initialNowMs + 10_000;
@@ -156,7 +156,7 @@ test("only a verified required Run receives a one-time Computer Use MCP bridge",
 });
 
 test("the real Worker MCP child receives only a capability path and serves Computer Use tools", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-cu-child-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-worker-cu-child-")));
   const broker = await LocalRunCapabilityBroker.listen({
     runtimeDirectory: root,
     sourceCheckoutDirectory: process.cwd(),
@@ -280,7 +280,7 @@ test("the real Worker MCP child receives only a capability path and serves Compu
 });
 
 test("backend start failure releases the capacity-one desktop", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-cu-failure-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-worker-cu-failure-")));
   const broker = await LocalRunCapabilityBroker.listen({
     runtimeDirectory: root,
     sourceCheckoutDirectory: process.cwd(),

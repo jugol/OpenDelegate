@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,7 +22,7 @@ import {
 } from "../src/knowledge-run-capability.ts";
 
 test("one exact Run receives one local Knowledge MCP connection with no Knowledge egress", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-knowledge-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-worker-knowledge-")));
   const knowledgeRoot = join(root, "knowledge-private");
   const runtimeRoot = join(root, "runtime");
   await mkdir(knowledgeRoot, { recursive: true });
@@ -178,7 +178,9 @@ test("one exact Run receives one local Knowledge MCP connection with no Knowledg
 });
 
 test("a claimed Knowledge capability follows the exact Run's renewed lease expiry", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-knowledge-renewed-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "opendelegate-worker-knowledge-renewed-")),
+  );
   const knowledgeRoot = join(root, "knowledge");
   await mkdir(knowledgeRoot, { recursive: true });
   await writeFile(join(knowledgeRoot, "durable.md"), "# Durable\nRenewed local context.", "utf8");
@@ -242,7 +244,9 @@ test("a claimed Knowledge capability follows the exact Run's renewed lease expir
 });
 
 test("Run revocation, cancellation, restart, authority mismatch, and path attacks fail closed", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-knowledge-stale-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "opendelegate-worker-knowledge-stale-")),
+  );
   const knowledgeRoot = join(root, "knowledge");
   await mkdir(knowledgeRoot, { recursive: true });
   await writeFile(join(knowledgeRoot, "safe.md"), "# Safe\nLocal only.", "utf8");

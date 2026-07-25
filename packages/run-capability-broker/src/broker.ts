@@ -1,6 +1,7 @@
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { chmod, lstat, mkdir, realpath, unlink, writeFile } from "node:fs/promises";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { chmod, lstat, mkdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -28,6 +29,10 @@ const DEFAULT_MAX_FRAME_BYTES = 256 * 1024;
 const MAXIMUM_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_IN_FLIGHT_REQUESTS = 16;
 const CAPABILITY_FILE_BYTES = 64 * 1024;
+const MAXIMUM_UNIX_SOCKET_PATH_BYTES = 100;
+const UNIX_ENDPOINT_DIRECTORY_PREFIX = "odc-";
+const UNIX_ENDPOINT_DIRECTORY_ID_HEX_LENGTH = 24;
+const UNIX_ENDPOINT_FILENAME = "broker.sock";
 
 interface RegisteredCapability {
   readonly capabilityId: string;
@@ -55,62 +60,78 @@ interface ResolvedBrokerOptions {
   readonly maxInFlightRequests: number;
 }
 
+interface LocalBrokerEndpoint {
+  readonly path: string;
+  readonly transientDirectory?: string;
+}
+
 export class LocalRunCapabilityBroker {
   readonly #options: ResolvedBrokerOptions;
   readonly #server: Server;
   readonly #endpoint: string;
+  readonly #transientEndpointDirectory: string | undefined;
   readonly #registrations = new Map<string, RegisteredCapability>();
   #closed = false;
 
-  private constructor(options: ResolvedBrokerOptions, server: Server, endpoint: string) {
+  private constructor(
+    options: ResolvedBrokerOptions,
+    server: Server,
+    endpoint: LocalBrokerEndpoint,
+  ) {
     this.#options = options;
     this.#server = server;
-    this.#endpoint = endpoint;
+    this.#endpoint = endpoint.path;
+    this.#transientEndpointDirectory = endpoint.transientDirectory;
   }
 
   public static async listen(
     options: LocalRunCapabilityBrokerOptions,
   ): Promise<LocalRunCapabilityBroker> {
     const resolved = await resolveOptions(options);
-    const endpoint =
-      resolved.hostPlatform === "win32"
-        ? `\\\\.\\pipe\\opendelegate-capability-${requireIdentifier(resolved.idSource.nextId(), 96)}`
-        : join(
-            resolved.runtimeDirectory,
-            `cap-${requireIdentifier(resolved.idSource.nextId(), 48)}.sock`,
-          );
-    if (resolved.hostPlatform !== "win32" && Buffer.byteLength(endpoint, "utf8") > 100) {
-      throw new RunCapabilityBrokerError("INVALID_CONFIGURATION");
-    }
+    const endpoint = await createLocalBrokerEndpoint(resolved, options.sourceCheckoutDirectory);
     const server = createServer();
     const broker = new LocalRunCapabilityBroker(resolved, server, endpoint);
     server.on("connection", (socket) => {
       void broker.#accept(socket);
     });
-    await new Promise<void>((resolve, reject) => {
-      const fail = (): void => {
-        cleanup();
-        reject(new RunCapabilityBrokerError("CONNECTION_FAILED"));
-      };
-      const listening = (): void => {
-        cleanup();
-        resolve();
-      };
-      const cleanup = (): void => {
-        server.off("error", fail);
-        server.off("listening", listening);
-      };
-      server.once("error", fail);
-      server.once("listening", listening);
-      server.listen(endpoint);
-    });
-    if (resolved.hostPlatform !== "win32") {
-      await chmod(endpoint, 0o600).catch(async () => {
-        await broker.close();
-        throw new RunCapabilityBrokerError("INVALID_CONFIGURATION");
+    let listening = false;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const fail = (): void => {
+          cleanup();
+          reject(new RunCapabilityBrokerError("CONNECTION_FAILED"));
+        };
+        const ready = (): void => {
+          cleanup();
+          listening = true;
+          resolve();
+        };
+        const cleanup = (): void => {
+          server.off("error", fail);
+          server.off("listening", ready);
+        };
+        server.once("error", fail);
+        server.once("listening", ready);
+        server.listen(endpoint.path);
       });
+      if (resolved.hostPlatform !== "win32") {
+        await chmod(endpoint.path, 0o600);
+      }
+      return broker;
+    } catch (error) {
+      if (listening) {
+        await closeServer(server);
+        if (resolved.hostPlatform !== "win32") {
+          await unlink(endpoint.path).catch(() => undefined);
+        }
+      }
+      if (endpoint.transientDirectory !== undefined) {
+        await rmdir(endpoint.transientDirectory).catch(() => undefined);
+      }
+      throw error instanceof RunCapabilityBrokerError
+        ? error
+        : new RunCapabilityBrokerError("INVALID_CONFIGURATION");
     }
-    return broker;
   }
 
   public async register(input: RunCapabilityRegistration): Promise<RunCapabilityLease> {
@@ -218,11 +239,12 @@ export class LocalRunCapabilityBroker {
         this.#disposeRegistration(registration),
       ),
     );
-    await new Promise<void>((resolve) => {
-      this.#server.close(() => resolve());
-    }).catch(() => undefined);
+    await closeServer(this.#server);
     if (this.#options.hostPlatform !== "win32") {
       await unlink(this.#endpoint).catch(() => undefined);
+    }
+    if (this.#transientEndpointDirectory !== undefined) {
+      await rmdir(this.#transientEndpointDirectory).catch(() => undefined);
     }
   }
 
@@ -560,6 +582,84 @@ async function resolveOptions(
     maxFrameBytes,
     maxInFlightRequests,
   };
+}
+
+async function createLocalBrokerEndpoint(
+  options: ResolvedBrokerOptions,
+  sourceCheckoutDirectory: string,
+): Promise<LocalBrokerEndpoint> {
+  const endpointId = requireIdentifier(
+    options.idSource.nextId(),
+    options.hostPlatform === "win32" ? 96 : 48,
+  );
+  if (options.hostPlatform === "win32") {
+    return {
+      path: `\\\\.\\pipe\\opendelegate-capability-${endpointId}`,
+    };
+  }
+
+  const stateDirectoryEndpoint = join(options.runtimeDirectory, `cap-${endpointId}.sock`);
+  if (Buffer.byteLength(stateDirectoryEndpoint, "utf8") <= MAXIMUM_UNIX_SOCKET_PATH_BYTES) {
+    return { path: stateDirectoryEndpoint };
+  }
+
+  const endpointSlug = createHash("sha256")
+    .update(endpointId, "utf8")
+    .digest("hex")
+    .slice(0, UNIX_ENDPOINT_DIRECTORY_ID_HEX_LENGTH);
+  const temporaryRoot = await resolveCanonicalUnixTemporaryRoot(sourceCheckoutDirectory);
+  const transientDirectory = requireAbsoluteExternalPath(
+    join(temporaryRoot, `${UNIX_ENDPOINT_DIRECTORY_PREFIX}${endpointSlug}`),
+    sourceCheckoutDirectory,
+  );
+  let directoryCreated = false;
+  try {
+    await mkdir(transientDirectory, { mode: 0o700 });
+    directoryCreated = true;
+    await chmod(transientDirectory, 0o700);
+    const metadata = await lstat(transientDirectory);
+    const canonical = await realpath(transientDirectory);
+    const endpoint = join(transientDirectory, UNIX_ENDPOINT_FILENAME);
+    if (
+      !metadata.isDirectory() ||
+      metadata.isSymbolicLink() ||
+      canonical !== transientDirectory ||
+      Buffer.byteLength(endpoint, "utf8") > MAXIMUM_UNIX_SOCKET_PATH_BYTES
+    ) {
+      throw new RunCapabilityBrokerError("INVALID_CONFIGURATION");
+    }
+    return { path: endpoint, transientDirectory };
+  } catch {
+    if (directoryCreated) {
+      await rmdir(transientDirectory).catch(() => undefined);
+    }
+    throw new RunCapabilityBrokerError("INVALID_CONFIGURATION");
+  }
+}
+
+async function resolveCanonicalUnixTemporaryRoot(sourceCheckoutDirectory: string): Promise<string> {
+  for (const candidate of ["/tmp", tmpdir()]) {
+    try {
+      const canonical = await realpath(candidate);
+      const metadata = await lstat(canonical);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+        continue;
+      }
+      return requireAbsoluteExternalPath(canonical, sourceCheckoutDirectory);
+    } catch {
+      // Try the platform-reported temporary root before failing closed.
+    }
+  }
+  throw new RunCapabilityBrokerError("INVALID_CONFIGURATION");
+}
+
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  }).catch(() => undefined);
 }
 
 function boundedInteger(value: number, minimum: number, maximum: number): number {

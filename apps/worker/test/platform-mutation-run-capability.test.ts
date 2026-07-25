@@ -20,7 +20,7 @@ import {
 } from "../src/platform-mutation-run-capability.ts";
 
 test("one exact Run receives a local typed mutation capability without wider host authority", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-")));
   const workspaceRoot = await realpath(root);
   const broker = await LocalRunCapabilityBroker.listen({
     runtimeDirectory: join(root, "runtime"),
@@ -131,7 +131,9 @@ test("one exact Run receives a local typed mutation capability without wider hos
 });
 
 test("a claimed platform mutation capability follows the exact Run's renewed lease expiry", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-renewed-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-renewed-")),
+  );
   const workspaceRoot = await realpath(root);
   const initialNowMs = Date.now();
   let nowMs = initialNowMs;
@@ -210,7 +212,7 @@ test("a claimed platform mutation capability follows the exact Run's renewed lea
 });
 
 test("revoked Run authority blocks mutation before the executor", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-stale-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-stale-")));
   const workspaceRoot = await realpath(root);
   let current = true;
   let executions = 0;
@@ -269,7 +271,7 @@ test("revoked Run authority blocks mutation before the executor", async () => {
 });
 
 test("a symlink or reparse-point Workspace is rejected before capability creation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-link-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-link-")));
   const outside = join(root, "outside");
   const link = join(root, "workspace-link");
   await mkdir(outside);
@@ -305,7 +307,9 @@ test("a symlink or reparse-point Workspace is rejected before capability creatio
 });
 
 test("Workspace replacement during Policy authorization is caught at the process boundary", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-toctou-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "opendelegate-worker-mutation-toctou-")),
+  );
   const workspaceRoot = join(root, "workspace");
   const originalWorkspace = join(root, "workspace-original");
   await mkdir(workspaceRoot);

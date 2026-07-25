@@ -66,7 +66,9 @@ async function withArtifactCapability(
     renewPastBootstrapExpiry(): void;
   }) => Promise<void>,
 ): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-artifact-capability-fixture-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "opendelegate-artifact-capability-fixture-")),
+  );
   const checkout = join(root, "checkout");
   const runtimeDirectory = join(root, "runtime");
   const workspaceDirectory = join(root, "workspace");
@@ -159,7 +161,7 @@ async function withArtifactCapability(
 }
 
 test("one exact Run writes and idempotently commits an Artifact without exposing its staging path", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-artifact-capability-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-artifact-capability-")));
   const checkout = join(root, "checkout");
   const runtimeDirectory = join(root, "runtime");
   const workspaceDirectory = join(root, "workspace");
@@ -308,7 +310,7 @@ test("one exact Run writes and idempotently commits an Artifact without exposing
 });
 
 test("the real Worker Artifact MCP child receives only its opaque capability path", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-artifact-child-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-artifact-child-")));
   const checkout = join(root, "checkout");
   const runtimeDirectory = join(root, "runtime");
   const workspaceDirectory = join(root, "workspace");
@@ -447,7 +449,9 @@ test("the real Worker Artifact MCP child receives only its opaque capability pat
 });
 
 test("a Secret split across write chunks rejects the entire Artifact commit", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-artifact-capability-egress-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "opendelegate-artifact-capability-egress-")),
+  );
   const checkout = join(root, "checkout");
   const runtimeDirectory = join(root, "runtime");
   const workspaceDirectory = join(root, "workspace");

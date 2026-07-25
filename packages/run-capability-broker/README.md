@@ -9,6 +9,14 @@ single-use descriptor outside the source checkout with owner-only permissions on
 Unix. The descriptor contains an opaque random token and local endpoint, never the
 backing resource's path, content, credential, or executable authority.
 
+On Unix, descriptor files and sockets use the configured protected Worker state
+directory whenever its endpoint fits the platform socket-path limit. For a longer
+normal macOS or Linux Worker home, only the socket falls back to a short, per-broker
+`0700` directory under the canonical system temporary root. The socket is `0600`,
+its fallback directory name retains 96 bits from the broker's random endpoint ID,
+a collision fails without deleting the existing path, and normal shutdown removes
+only the endpoint created by that broker.
+
 `consumeRunCapabilityFile()` verifies file ownership/mode where supported, rejects
 symlinks and oversized or malformed descriptors, deletes the file, authenticates
 once, and returns one multiplexed local request connection. A second claim fails.

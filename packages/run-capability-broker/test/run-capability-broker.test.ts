@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
-import { access, chmod, copyFile, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  access,
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -22,7 +34,7 @@ const binding: RunCapabilityBinding = {
 };
 
 test("one protected file claims one exact Run capability and carries bounded requests", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-capability-"));
+  const root = await canonicalTemporaryDirectory("opendelegate-capability-");
   const broker = await LocalRunCapabilityBroker.listen({
     runtimeDirectory: root,
     sourceCheckoutDirectory: process.cwd(),
@@ -90,7 +102,7 @@ test("one protected file claims one exact Run capability and carries bounded req
 });
 
 test("a claimed capability follows renewed binding expiry and exact Run revocation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-capability-expiry-"));
+  const root = await canonicalTemporaryDirectory("opendelegate-capability-expiry-");
   let now = 100;
   let current = true;
   let leaseExpiresAtMs = 1_000;
@@ -147,7 +159,7 @@ test("a claimed capability follows renewed binding expiry and exact Run revocati
 });
 
 test("client cancellation aborts the bounded broker request without exposing payload", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-capability-cancel-"));
+  const root = await canonicalTemporaryDirectory("opendelegate-capability-cancel-");
   let observedAbort = false;
   const broker = await LocalRunCapabilityBroker.listen({
     runtimeDirectory: root,
@@ -195,7 +207,7 @@ test("client cancellation aborts the bounded broker request without exposing pay
 });
 
 test("broker restart invalidates copied capability material and descriptors are strict", async () => {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-capability-restart-"));
+  const root = await canonicalTemporaryDirectory("opendelegate-capability-restart-");
   const broker = await LocalRunCapabilityBroker.listen({
     runtimeDirectory: root,
     sourceCheckoutDirectory: process.cwd(),
@@ -257,7 +269,7 @@ test("runtime paths inside the source checkout and unprotected files are rejecte
   if (process.platform === "win32") {
     return;
   }
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-capability-mode-"));
+  const root = await canonicalTemporaryDirectory("opendelegate-capability-mode-");
   const filename = join(root, "capability.json");
   await writeFile(filename, "{}\n", { mode: 0o644 });
   await chmod(filename, 0o644);
@@ -270,6 +282,139 @@ test("runtime paths inside the source checkout and unprotected files are rejecte
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test(
+  "short Unix state paths retain their protected in-place socket",
+  { skip: process.platform === "win32" },
+  async () => {
+    const temporaryRoot = await realpath("/tmp");
+    const runtimeDirectory = await mkdtemp(join(temporaryRoot, "odc-short-"));
+    const broker = await LocalRunCapabilityBroker.listen({
+      runtimeDirectory,
+      sourceCheckoutDirectory: process.cwd(),
+    });
+    let endpointPath = "";
+    try {
+      const lease = await broker.register({
+        capability: "fixture",
+        binding,
+        metadata: null,
+        expiresAtMs: Date.now() + 60_000,
+        currentBinding: () => binding,
+        isExecutionCurrent: async () => true,
+        handler: async () => null,
+      });
+      const descriptor = JSON.parse(await readFile(lease.capabilityFile, "utf8")) as {
+        readonly endpoint: {
+          readonly path: string;
+        };
+      };
+      endpointPath = descriptor.endpoint.path;
+      assert.equal(dirname(endpointPath), runtimeDirectory);
+      assert.equal((await lstat(endpointPath)).mode & 0o077, 0);
+    } finally {
+      await broker.close();
+      if (endpointPath !== "") {
+        await assert.rejects(lstat(endpointPath), { code: "ENOENT" });
+      }
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "long Unix state paths keep descriptors durable while using a short protected endpoint",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await canonicalTemporaryDirectory("opendelegate-capability-long-");
+    const runtimeDirectory = join(root, "r".repeat(160));
+    await mkdir(runtimeDirectory, { mode: 0o700 });
+    const broker = await LocalRunCapabilityBroker.listen({
+      runtimeDirectory,
+      sourceCheckoutDirectory: process.cwd(),
+    });
+    let endpointPath = "";
+    let endpointDirectory = "";
+    try {
+      const lease = await broker.register({
+        capability: "fixture",
+        binding,
+        metadata: null,
+        expiresAtMs: Date.now() + 60_000,
+        currentBinding: () => binding,
+        isExecutionCurrent: async () => true,
+        handler: async (request) => request.payload,
+      });
+      const descriptor = JSON.parse(await readFile(lease.capabilityFile, "utf8")) as {
+        readonly endpoint: {
+          readonly kind: string;
+          readonly path: string;
+        };
+      };
+      endpointPath = descriptor.endpoint.path;
+      endpointDirectory = dirname(endpointPath);
+      assert.equal(dirname(lease.capabilityFile), runtimeDirectory);
+      assert.equal(descriptor.endpoint.kind, "unix-domain-socket");
+      assert.ok(Buffer.byteLength(endpointPath, "utf8") <= 100);
+      assert.notEqual(endpointDirectory, runtimeDirectory);
+      assert.equal((await lstat(endpointDirectory)).mode & 0o077, 0);
+      assert.equal((await lstat(endpointPath)).mode & 0o077, 0);
+
+      const client = await consumeRunCapabilityFile({
+        filename: lease.capabilityFile,
+        expectedCapability: "fixture",
+      });
+      assert.deepEqual(
+        await client.request({ method: "fixture.echo", payload: { value: "long-path" } }),
+        { value: "long-path" },
+      );
+      await client.close();
+    } finally {
+      await broker.close();
+      if (endpointPath !== "") {
+        await assert.rejects(lstat(endpointPath), { code: "ENOENT" });
+      }
+      if (endpointDirectory !== "") {
+        await assert.rejects(lstat(endpointDirectory), { code: "ENOENT" });
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "a colliding Unix endpoint directory fails closed without deleting foreign state",
+  { skip: process.platform === "win32" },
+  async () => {
+    const root = await canonicalTemporaryDirectory("opendelegate-capability-collision-");
+    const runtimeDirectory = join(root, "r".repeat(160));
+    await mkdir(runtimeDirectory, { mode: 0o700 });
+    const endpointId = `collision-${createHash("sha256")
+      .update(runtimeDirectory, "utf8")
+      .digest("hex")
+      .slice(0, 32)}`;
+    const endpointSlug = createHash("sha256").update(endpointId, "utf8").digest("hex").slice(0, 24);
+    const temporaryRoot = await realpath("/tmp");
+    const endpointDirectory = join(temporaryRoot, `odc-${endpointSlug}`);
+    const marker = join(endpointDirectory, "foreign-state");
+    await mkdir(endpointDirectory, { mode: 0o700 });
+    await writeFile(marker, "preserve\n", { mode: 0o600 });
+    try {
+      await assert.rejects(
+        LocalRunCapabilityBroker.listen({
+          runtimeDirectory,
+          sourceCheckoutDirectory: process.cwd(),
+          idSource: { nextId: () => endpointId },
+        }),
+        hasCode("INVALID_CONFIGURATION"),
+      );
+      assert.equal(await readFile(marker, "utf8"), "preserve\n");
+    } finally {
+      await rm(endpointDirectory, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 function hasCode(code: string): (error: unknown) => boolean {
   return (error: unknown) =>
@@ -286,4 +431,8 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   assert.fail("Timed out waiting for the broker cancellation boundary.");
+}
+
+async function canonicalTemporaryDirectory(prefix: string): Promise<string> {
+  return await realpath(await mkdtemp(join(tmpdir(), prefix)));
 }
