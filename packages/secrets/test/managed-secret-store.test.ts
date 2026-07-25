@@ -20,6 +20,7 @@ import {
   MacOsKeychainSecretStore,
   LinuxSecretServiceSecretStore,
   ManagedDeviceIdentitySecretStore,
+  NodeNativeSecretCommandRunner,
   resolveWindowsServiceSid,
   SystemdCredentialKeyProvider,
   SystemdCredentialVaultSecretStore,
@@ -963,8 +964,30 @@ test(
     const vaultRoot = join(fixtureRoot, "runtime", "secrets");
     const first = Uint8Array.from([0, 17, 34, 51, 68, 85, 102, 255]);
     const second = Uint8Array.from([255, 238, 221, 204, 187, 170, 153, 0]);
+    const nativeRunner = new NodeNativeSecretCommandRunner();
+    let nativeCall = 0;
     const store = new WindowsDpapiSecretStore({
       deviceId: "device-windows-live",
+      runner: {
+        async run(request) {
+          nativeCall += 1;
+          const call = nativeCall;
+          process.stderr.write(
+            `[DEBUG-dpapi-stage] call=${call} maxOutput=${request.maximumStdoutBytes} start\n`,
+          );
+          try {
+            const result = await nativeRunner.run(request);
+            process.stderr.write(
+              `[DEBUG-dpapi-stage] call=${call} exit=${result.exitCode} complete\n`,
+            );
+            return result;
+          } catch (error) {
+            const code = error instanceof SecretError ? error.code : "UNCLASSIFIED_NATIVE_FAILURE";
+            process.stderr.write(`[DEBUG-dpapi-stage] call=${call} error=${code}\n`);
+            throw error;
+          }
+        },
+      },
       sourceCheckoutRoot,
       vaultRoot,
     });
