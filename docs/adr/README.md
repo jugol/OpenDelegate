@@ -38,6 +38,7 @@ approved product specification.
 15. [`0018-programmatic-agent-adapters-and-action-authorization.md`](0018-programmatic-agent-adapters-and-action-authorization.md)
 16. [`0019-durable-run-lease-renewal-and-clock-calibration.md`](0019-durable-run-lease-renewal-and-clock-calibration.md)
 17. [`0020-main-singleton-ownership.md`](0020-main-singleton-ownership.md)
+18. [`0021-supported-release-promotion-and-native-authenticity.md`](0021-supported-release-promotion-and-native-authenticity.md)
 
 ## Proposed ADRs
 

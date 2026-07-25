@@ -10,10 +10,10 @@ the release candidate.
 
 | Role and capability | First-milestone target | Architecture | Required candidate evidence |
 | --- | --- | --- | --- |
-| Main and Worker on macOS | macOS Tahoe 26.5.2 | Apple silicon (`arm64`) | Signed and notarized bundle; install, reboot, login/logout, upgrade/rollback, Codex and Claude, routes, and owner recovery |
-| Main and Worker on Windows | Windows 11 25H2, build 26200.8875 | `x64` | Signed bundle; SCM and user-helper lifecycle; reboot, login/logout, upgrade/rollback, Codex and Claude, routes, and owner recovery |
-| Main and headless Worker on Linux | Ubuntu Server 24.04.4 LTS | `x64` | systemd and foreground-fallback lifecycle; reboot, upgrade/rollback, Codex and Claude, routes, and explicit Computer Use unavailability |
-| Graphical Worker on Linux | Ubuntu Desktop 24.04.4 LTS, GNOME on Wayland | `x64` | system and user-helper lifecycle; login/lock/logout; portal permission handling; Codex and Claude; and real Computer Use |
+| Main and Worker on macOS | macOS Tahoe 26.5.2 | Apple silicon (`arm64`) | Pre-manifest Developer ID signatures; exact-archive publisher attestation and external accepted notarization receipt; install, reboot, login/logout, upgrade/rollback, Codex and Claude, routes, and owner recovery |
+| Main and Worker on Windows | Windows 11 25H2, build 26200.8875 | `x64` | Pre-manifest Authenticode signatures and trusted timestamps; exact-archive publisher attestation; SCM and user-helper lifecycle; reboot, login/logout, upgrade/rollback, Codex and Claude, routes, and owner recovery |
+| Main and headless Worker on Linux | Ubuntu Server 24.04.4 LTS | `x64` | Exact-archive publisher attestation; systemd and foreground-fallback lifecycle; reboot, upgrade/rollback, Codex and Claude, routes, and explicit Computer Use unavailability |
+| Graphical Worker on Linux | Ubuntu Desktop 24.04.4 LTS, GNOME on Wayland | `x64` | Exact-archive publisher attestation; system and user-helper lifecycle; login/lock/logout; portal permission handling; Codex and Claude; and real Computer Use |
 
 The release evidence must record the complete OS build, kernel, desktop/session
 type, architecture, OpenDelegate bundle checksum, Node runtime checksum, Agent
@@ -54,6 +54,33 @@ These hosted images are engineering evidence only. Windows Server is not the
 declared Windows 11 desktop target, and hosted runners do not prove privileged
 service installation, reboot persistence, interactive permissions, private
 networking, live providers, Discord, signing, or Computer Use.
+
+## Release authenticity and support eligibility
+
+All four target entries are promoted as one complete support set. Platform-native
+signing, a working archive, or a passing hosted job for one tuple never promotes
+that tuple independently.
+
+ADR-0021 requires macOS and Windows executable signatures to be applied and verified
+before payload integrity manifests are generated. Linux has no additional
+first-milestone platform-native signature requirement, but every target requires an
+exact-archive Ed25519 publisher attestation. The exact final macOS archive is
+notarized only after its manifests and publisher attestation exist; the accepted
+result stays outside the archive so no manifest-bound byte is stapled or rewritten.
+
+One cross-platform promotion attestation then binds the complete target set, native
+authenticity records, notarization receipt, publisher attestations, ledger, and live
+evidence. A supported-channel release receipt records remote digest read-back.
+Publisher and promotion trust roots are distinct and provisioned independently.
+Effective `released` is computed from those external records and trust roots while
+the enclosed payload remains `release-candidate`.
+
+Internal previews, ad-hoc or self-signed native binaries, CI-generated Ed25519 keys,
+and a public key distributed only beside its own signature are not support eligible.
+All credential-bearing tools run on clean committed, hash-pinned target runners.
+The actual Developer ID and Authenticode identities, notarization account,
+owner-controlled Devices, Discord and provider credentials, and live matrix remain
+external blockers.
 
 ## Automatic package installation
 

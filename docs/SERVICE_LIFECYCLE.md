@@ -1,7 +1,7 @@
 # Native service lifecycle CLI
 
-Status: **native adapters implemented and composed; signed installable bundles and
-live privileged host proof remain required**
+Status: **native adapters implemented and composed; support-eligible native signing,
+trusted promotion verification, and live privileged host proof remain required**
 
 OpenDelegate exposes its existing `@opendelegate/platform-services` definitions and
 plans through one owner-facing CLI surface. The CLI does not turn a rendered
@@ -197,6 +197,12 @@ Reconfigure, start, stop, restart, status, diagnose, and uninstall do not depend
 release source still being mounted. They validate the installed topology and native
 tools but reserve bundle trust checks for operations that introduce new bytes.
 
+This implemented preflight authenticates a bundle to the configured publisher key;
+it does not by itself establish support promotion. Until ADR-0021's external
+promotion verifier is implemented, every publisher-attested preview or candidate
+installed through this CLI remains an unsupported lab or unpromoted candidate
+installation.
+
 The external trust root is
 `STATE_ROOT/trust/publisher-ed25519.pem`. The detached strict JSON attestation is
 `BUNDLE_SOURCE.publisher-attestation.json`; it binds the SHA-256 of
@@ -220,6 +226,14 @@ unsupported. Copy the emitted public key to the external trust-root path through
 owner-controlled channel. The signer never installs trust or changes a support
 channel.
 
+For a future effective `released` install, a second independently provisioned
+promotion trust root verifies the cross-platform promotion attestation and
+supported-channel release receipt. That external chain must name the exact target
+archive, publisher attestation, native-authenticity record, ledger, and complete
+support matrix. It is not accepted from inside the bundle and does not replace the
+publisher trust root. The runtime keeps enclosed `release-candidate` identity and
+reports `released` only as the verified effective status.
+
 A preflight failure returns, without a host mutation:
 
 ```json
@@ -238,6 +252,12 @@ executor correctly refuses an unsigned preview. After the publisher explicitly
 signs it with `--allow-unsupported-preview`, the bundle may be installed only for
 unsupported platform-lab work; neither signing nor installation is support proof or
 permission to publish it as a supported release.
+
+Support-eligible macOS and Windows native code signatures must already be present
+before `payload-manifest.json` and `SHA256SUMS` are generated. The native service
+executor never signs, notarizes, staples, or rewrites a staged payload. For macOS,
+the accepted notarization result for the exact final archive remains an external
+sidecar verified by the promotion path.
 
 After preflight, the filesystem adapter stages a link-free regular-file tree,
 re-verifies it, promotes it by same-volume rename, atomically swaps the `current`
@@ -290,11 +310,17 @@ journal, native preflight, filesystem/account/supervisor/health adapters, rollba
 and read-only inspection have injected automated coverage. Tests do not mutate the
 test host's native services.
 
-A supported release still requires the bundle builder and promotion channel to
-produce the required native hosts and detached publisher attestation, followed by
-clean-host install, restart, reboot, login/logout, failed-upgrade rollback,
-diagnostics, and uninstall proof on Windows, macOS, and Linux. Native account tools,
-Windows locale behavior, launchd user domains, systemd user buses, ACLs, atomic
-`current` replacement, and reboot persistence must all be observed on the declared
-host versions. Computer Use additionally requires its separate real graphical
-acceptance matrix. None of those live gates is implied by the injected tests.
+A supported release still requires the builder to apply target-native signatures
+before manifests, freeze and publisher-attest exact final archives, obtain the
+external macOS notarization receipt, and implement ADR-0021's distinct promotion
+trust root, cross-platform attestation, supported-channel receipt, and effective
+status verifier. Every credential-bearing step must run from a clean committed,
+hash-pinned target runner.
+
+Those trust artifacts must then be followed by clean-host install, restart, reboot,
+login/logout, failed-upgrade rollback, diagnostics, and uninstall proof on Windows,
+macOS, and Linux. Native account tools, Windows locale behavior, launchd user
+domains, systemd user buses, ACLs, atomic `current` replacement, and reboot
+persistence must all be observed on the declared host versions. Computer Use
+additionally requires its separate real graphical acceptance matrix. None of those
+live gates is implied by the injected tests or a CI/self-signed preview.

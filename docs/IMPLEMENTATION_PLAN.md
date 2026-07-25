@@ -724,6 +724,26 @@ Prove the complete product on real target systems and publish it responsibly.
 - Test private and externally exposed Artifact policies.
 - Perform threat-model review and security regression.
 - Perform upgrade from the earliest internal persisted schema and service bundle.
+- Implement ADR-0021's external release verifier so the installer and runtime
+  distinguish enclosed `release-candidate` identity from the effective `released`
+  result computed from trusted sidecars.
+- Run every credential-bearing signing, notarization, promotion, and publication
+  tool only on clean committed, hash-pinned target runners. Record sanitized runner,
+  tool, public identity, input-digest, and output-digest evidence.
+- Apply and verify macOS Developer ID and Windows Authenticode signatures before
+  generating payload integrity manifests. Freeze each signed payload, build the
+  exact final archive, and create its detached publisher attestation without
+  rewriting candidate bytes or the acceptance ledger.
+- Submit the exact final macOS archive for notarization only after its manifests and
+  publisher attestation exist. Retain the accepted result as an external sidecar;
+  do not staple or otherwise mutate the candidate afterward.
+- Generate one separately signed cross-platform promotion attestation that binds the
+  complete target set, ledger, native-authenticity records, publisher attestations,
+  notarization receipt, and live evidence. Use a promotion trust root distinct from
+  the per-target publisher trust root.
+- Publish only the exact promoted assets, read their digests back from the supported
+  channel, and issue the signed external release receipt required for effective
+  `released` status.
 - Complete installation, onboarding, configuration, policy, transport, Discord,
   backup, recovery, troubleshooting, and contributor documentation.
 - Add Apache-2.0 notices and third-party attribution.
@@ -733,7 +753,12 @@ Prove the complete product on real target systems and publish it responsibly.
 
 Every item under **First Milestone Acceptance Criteria** in the product specification
 has a linked automated result, recorded manual proof, or both. There are no waived
-platform or Computer Use gates.
+platform or Computer Use gates. Every promoted target has pre-manifest native
+authenticity where required, a trusted publisher attestation, and an immutable
+published digest. The complete platform set has one valid cross-platform promotion
+attestation and supported-channel receipt under the external promotion trust root,
+and the packaged verifier computes `released` from that chain without rewriting any
+candidate payload, archive, metadata, or ledger.
 
 ## Test infrastructure
 

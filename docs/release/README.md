@@ -32,7 +32,9 @@ can open the canonical Admin origin once per login only when the typed Main pref
 Source composition and deterministic tests are not release proof.
 Clean-host service privilege, signing/notarization, live provider and Discord credentials, mixed
 private routes, reboot/recovery, real Artifact opening, and the complete three-OS Computer Use
-matrix remain externally unproven.
+matrix remain externally unproven. ADR-0021 now defines the immutable promotion and native
+authenticity contract, but the support-eligible platform signers, promotion verifier, trusted
+publication workflow, and external receipts are not yet implemented or proven.
 
 ## Status vocabulary
 
@@ -58,12 +60,14 @@ The surrounding release labels are distinct from criterion status:
 | Public source pre-alpha         | Reviewable source with no support claim                                     |
 | `internal-preview-blocked`      | Unsupported validation bundle from an incomplete ledger                     |
 | `internal-preview-complete`     | Unsupported validation bundle from a complete ledger                        |
-| `release-candidate`             | Complete-gate bundle awaiting separate publication/promotion attestation     |
-| `released`                      | Immutable candidate promoted through a documented supported channel         |
+| `release-candidate`             | Complete-gate immutable bundle awaiting trusted external promotion           |
+| `released`                      | Effective result of verified publisher, platform, promotion, and channel receipts |
 
 The Admin runtime channel uses `development`, `internal-preview`, `release-candidate`, or
 `released`. Only `released` can represent a supported publication, and only when the connected
-runtime features are also ready.
+runtime features are also ready. Enclosed candidate metadata remains `release-candidate`; a
+verifier computes effective `released` from external sidecars and independently provisioned trust
+roots.
 
 ## Build an unsupported internal preview
 
@@ -133,7 +137,8 @@ build ID, and runtime channel only after verifying the enclosed
 Schema, hash, count, or status disagreements stop startup. This proves only that the enclosed
 files agree with each other; it does not authenticate their publisher. Source-checkout runs always
 identify as `development`, and the current runtime rejects `released` until a separate trusted
-promotion-attestation verifier is designed.
+promotion-attestation verifier implementing ADR-0021 is shipped and supplied with the required
+external receipt and trust roots.
 
 Payload assembly also rejects symbolic links, Windows junctions, and special files. The current
 manifests cover regular file bytes, so a link is never allowed to sit outside their coverage.
@@ -141,6 +146,11 @@ manifests cover regular file bytes, so a link is never allowed to sit outside th
 The bundle is valid only for installation and integration testing on the OS and architecture where
 it was built. It is not a cross-platform archive, does not prove native service persistence, does
 not install a service by itself, and must not be published under a release tag.
+
+An internal preview is never support eligible, even if it is signed with a CI, ad-hoc, or
+self-generated key. Support-eligible macOS and Windows native signing is a production-candidate
+operation and must occur before payload manifests are generated; the current preview command does
+not establish that release identity.
 
 Use `opendelegate.cmd` on Windows or `./opendelegate` on macOS/Linux. Runtime state, credentials,
 databases, logs, and generated Artifacts must remain outside both the source checkout and the
@@ -180,6 +190,52 @@ Provision the emitted public key through an owner-controlled channel as
 the bundle it is expected to authenticate. Windows publisher-key ACL review and any platform code
 signing/notarization remain separate operator gates.
 
+The current `release:sign` command is the implemented service-install publisher boundary: it binds
+the verified checksum manifest and is usable for explicitly unsupported lab previews. ADR-0021
+requires the supported-candidate form also to bind the exact final archive digest, target tuple,
+A/B identities, and ledger digest after native signing and archive finalization. Until that
+extended contract and verifier ship, this command alone cannot create a support-eligible
+publisher attestation.
+
+## Supported promotion trust path
+
+[`ADR-0021`](../adr/0021-supported-release-promotion-and-native-authenticity.md) fixes the
+non-circular order for a supported release:
+
+1. The completed ledger at clean attestation commit B passes `release:gate` for audited source
+   commit A.
+2. A clean committed, hash-pinned target runner assembles the target staging tree. macOS Developer
+   ID or Windows Authenticode signing and verification mutate executable bytes only at this stage,
+   before `payload-manifest.json` and `SHA256SUMS` exist.
+3. The already signed payload is frozen; manifests, packaged smoke, the deterministic final
+   archive, and the detached publisher attestation bind those exact bytes.
+4. The exact final macOS archive is submitted for notarization only now. The accepted Apple result
+   remains an external sidecar. The archive is not stapled or rewritten after its publisher
+   attestation.
+5. After every target and every live criterion is complete, one separately signed cross-platform
+   promotion attestation binds the ledger, complete support matrix, candidate archives, native
+   identities, publisher attestations, notarization receipt, and immutable evidence.
+6. The exact assets are published, read back by digest, and named in a signed supported-channel
+   release receipt.
+
+The per-target publisher trust root and cross-platform promotion trust root are external, distinct,
+and provisioned independently of the bytes they authorize. The candidate payload, archive,
+metadata, and acceptance ledger never change during these steps. A filename, environment variable,
+Git tag, embedded `released` value, preview signature, or CI-generated public key cannot replace
+the external verification chain.
+
+The installer and runtime may compute effective `released` only when the candidate integrity
+chain, native authenticity, publisher attestation, complete promotion attestation, supported
+channel receipt, and applicable trust roots all verify for the same exact asset. Otherwise the
+artifact remains a `release-candidate` at most. The repository currently has the accepted design,
+not the complete verifier or credentialed promotion pipeline, so no supported publication is
+possible yet.
+
+Credential-bearing native signing, timestamping, notarization, publisher signing, promotion
+signing, and publication tools may run only from the clean committed/hash-pinned runner contract.
+Their private material stays in an external Secret Store, HSM, keychain, or short-lived workload
+identity and never enters argv, source, bundle files, Agent context, logs, or public evidence.
+
 ## Production gate
 
 The production evidence check is:
@@ -214,6 +270,11 @@ submodules, and every source, configuration, builder, schema, or ordinary docume
 Candidate `release-metadata.json` records B as `buildCommit`, A as `auditedSourceCommit`, and the
 complete `changedAttestationPaths` list. Unsupported previews set that candidate-only path list to
 `null` because their incomplete evidence state has not passed this candidate provenance gate.
+
+Passing this gate authorizes candidate assembly only. It does not authorize a native-signing
+credential, notarization submission, promotion signature, public upload, release tag, or support
+claim. Those operations must pass the immutable ADR-0021 trust path above, and final target archive
+identities are recorded in detached promotion artifacts rather than written back into the ledger.
 
 All provenance Git reads ignore local replacement refs. Every bundle exports its clean build commit
 through `git archive`, performs the frozen install inside that external committed snapshot, and
@@ -293,7 +354,10 @@ supported release proof still needs:
 - real Computer Use on macOS, Windows, and one declared graphical Linux environment, plus explicit
   headless-Linux unavailability;
 - mixed-OS, mixed-route, Worker reconnect, Artifact upload, and exposure scenarios;
-- signing/notarization and publishing inputs appropriate to the distributed platform bundles.
+- signing/notarization and publishing inputs appropriate to the distributed platform bundles; and
+- an implemented ADR-0021 promotion verifier, distinct trusted publisher and promotion roots,
+  target-native pre-manifest signing, exact-archive macOS notarization, and supported-channel
+  digest receipt.
 
 The safe metadata snapshot and fresh-target recovery contract is documented in
 [`BACKUP_AND_RESTORE.md`](../BACKUP_AND_RESTORE.md). Passing its deterministic

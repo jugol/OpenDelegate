@@ -13,19 +13,19 @@ Evidence from a different target does not silently satisfy this checklist.
 
 ## Current inventory
 
-Audited on 2026-07-25:
+Audited on 2026-07-26:
 
 | Target                          | Current reachability                                                                             | Repository assets now available                                                                                                                                                          | Missing release proof                                                                                                                                                                                            |
 | ------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Windows Main/Worker             | One owner-controlled Windows host is available for local engineering; one nonrelease direct-fixture Computer Use run passed, but no release run is recorded | Bundled Main plus co-located Worker; authenticated Admin operations; SCM core and owner-helper executors; controlled provider homes; native UI Automation, Windows.Graphics.Capture, SendInput, authenticated named-pipe, and Win32 fixture candidates | Build and attest the signed immutable bundle; install the real service/helper; prove owner-picker consent, reboot/login/logout, upgrade/rollback, lock/session/UAC/UIPI failure behavior, and the complete Windows Computer Use matrix |
-| macOS Main/Worker               | Owner-controlled hardware is identified; no approved public lab session is recorded              | Bundled Main/Worker composition; launchd/LaunchAgent executors; authenticated-helper/native-driver seam; Swift ScreenCaptureKit, AXUIElement, and CGEvent candidate; deterministic AppKit fixture; macOS CI compile path | Final-commit macOS compile result, signed/notarized immutable bundle, stable TCC grants, clean-host lifecycle and real Computer Use lab proof |
+| Windows Main/Worker             | One owner-controlled Windows host is available for local engineering; one nonrelease direct-fixture Computer Use run passed, but no release run is recorded | Bundled Main plus co-located Worker; authenticated Admin operations; SCM core and owner-helper executors; controlled provider homes; native UI Automation, Windows.Graphics.Capture, SendInput, authenticated named-pipe, and Win32 fixture candidates | Authenticode-sign the exact native staging tree before manifests; freeze and publisher-attest the candidate; install the real service/helper; prove owner-picker consent, reboot/login/logout, upgrade/rollback, lock/session/UAC/UIPI failure behavior, and the complete Windows Computer Use matrix |
+| macOS Main/Worker               | Owner-controlled hardware is identified; no approved public lab session is recorded              | Bundled Main/Worker composition; launchd/LaunchAgent executors; authenticated-helper/native-driver seam; Swift ScreenCaptureKit, AXUIElement, and CGEvent candidate; deterministic AppKit fixture; macOS CI compile path | Final-commit compile; Developer ID signing before manifests; exact-archive publisher attestation and external notarization receipt without post-manifest stapling; stable TCC grants, clean-host lifecycle, and real Computer Use proof |
 | Headless Linux Worker           | An owner-controlled headless target is identified; no approved public lab session is recorded    | systemd and foreground-fallback executors; systemd credential-vault path; headless readiness contract; outbound enrolled Worker composition | Least-privilege lab access, distro/architecture/service-manager record, Linux bundle, service install/reboot/upgrade proof, Worker enrollment, route proof, and explicit Computer Use `unavailable` evidence |
 | Graphical Linux Worker          | Not provisioned; WSLg is available only for engineering fixtures                                 | Ubuntu 24.04 GNOME Wayland AT-SPI/RemoteDesktop/ScreenCast/PipeWire candidate, private-child boundary, GTK fixture, authenticated helper seam, and Worker readiness composition | Build the immutable Linux bundle, then use a separate real graphical Ubuntu Device or VM for login, lock, logout, reboot, portal revocation, monitor/suspend recovery, cancellation, permission-denial, and screenshot proof |
 | Discord                         | No dedicated release laboratory is connected                                                     | Production-composed HTTP and Gateway drivers; durable Forum authorization, Task mapping, reconciliation, projection, controls, restart state, and redaction contracts | Community-enabled test server, Forum, dedicated bot, token, intents, least-privilege permissions, owner allowlist, reconnect/rate-limit proof, and desktop/mobile canonical journey |
 | Codex                           | A local engineering installation was observed; no pinned public lab attestation exists           | First-class Codex App Server plus capability-reduced CLI fallback, controlled home, exact action authorization, native-session persistence, and deterministic fixtures | Authenticate the exact controlled home at the pinned version and run live start/stream/resume/cancel/approval/restart/checkpoint tests on participating Devices |
 | Claude                          | A local engineering installation was observed; authentication has no public lab attestation      | First-class Claude Agent SDK plus capability-reduced CLI fallback, controlled home, fail-closed sandbox contract, exact action authorization, native-session persistence, and deterministic fixtures | Authenticate the exact controlled home at the pinned version and run live start/stream/resume/cancel/approval/restart/checkpoint tests on supported participating Devices |
 | Network routes                  | Candidate private-network profiles are identified; no sanitized mixed-route proof exists         | Ordered Transport Profile and deterministic fallback contracts                                                                                                                           | One real mixed-route scenario, route failure/fallback evidence, and an Omada or equivalent routed private profile if selected                                                                                    |
-| Release inputs                  | No supported release has been built or published                                                 | Internal-preview builder, pinned-runtime policy, metadata, notices, checksums, and smoke harness                                                                                         | Platform bundles on all targets, clean provenance, signing/notarization policy and identities, publication path, and successful 36-criterion gate                                                                |
+| Release inputs                  | No supported release has been built or published                                                 | Internal-preview builder, pinned-runtime policy, metadata, notices, checksums, smoke harness, publisher signer, and accepted ADR-0021 trust contract                                                                                         | Support-eligible native signers, final-archive publisher binding, promotion verifier, distinct trusted publisher/promotion identities, supported-channel receipt workflow, platform candidates on all targets, and successful 36-criterion gate                                                                |
 | Private vulnerability reporting | GitHub's private reporting route was enabled and verified on 2026-07-24                           | Private draft security-advisory intake documented in `SECURITY.md`                                                                                                                      | Reverify the route and repository access immediately before any supported public release                                                                                                                          |
 
 The current default development shell may use a supported contributor Node 22 runtime. Release
@@ -82,8 +82,8 @@ Follow
 for build prerequisites, authenticated helper boundaries, and the external evidence command.
 
 1. Build the exact final-commit `x64` helper and fixture with pinned Node 24.18.0 and the declared
-   Visual Studio/Windows SDK toolchain, then sign and package those exact binaries through the
-   detached publisher workflow.
+   Visual Studio/Windows SDK toolchain. Authenticode-sign and verify those exact PE bytes before
+   payload manifests are generated, then freeze, archive, and publisher-attest the candidate.
 2. Launch the core through the SCM service and the helper through the production interactive-owner
    session launcher. Supply the IPC Secret only through the inherited descriptor and verify the
    configured service-account SID, helper identity, service epoch, and release version.
@@ -114,8 +114,10 @@ The explicit `--nonrelease-direct-fixture-capture` path is implementation eviden
 3. Keep the test user logged in and unlocked only during the Computer Use run.
 4. Launch the signed user-session helper and grant Accessibility, Screen Recording, and Input
    Monitoring only when macOS presents the expected system prompt.
-5. Provide an Apple Developer ID signing and notarization workflow before distributing a
-   downloadable macOS bundle. TCC behavior cannot be proven through headless SSH.
+5. Provide the external Apple Developer ID signing and notarization identities before producing a
+   downloadable candidate. Native signing occurs before payload manifests; the exact final archive
+   is notarized afterward and its accepted result remains an external sidecar. TCC behavior cannot
+   be proven through headless SSH.
 
 ### macOS Computer Use candidate run
 
@@ -127,9 +129,13 @@ identifiers, and the evidence boundary.
 1. Build both Swift products on the exact declared macOS version and architecture with SwiftPM
    scratch output outside the checkout. Record the final-commit CI job and the local build identity
    separately.
-2. Sign the installed helper and fixture through the release signing workflow and notarize the
-   distributable bundle. Verify the signature and Gatekeeper result before requesting TCC. An
-   ad-hoc build or a different path/signature does not establish the release candidate's TCC state.
+2. Sign the helper, fixture, and every containing native bundle inside-out with the approved
+   Developer ID identity before payload manifests exist. Freeze and archive those exact bytes,
+   create the detached publisher attestation, and submit that exact final archive for notarization.
+   Retain the accepted result as an external sidecar and do not staple or otherwise rewrite the
+   archive. Verify the signature, notarization identity, archive digest, and Gatekeeper result
+   before requesting TCC. An ad-hoc build or a different path/signature does not establish the
+   release candidate's TCC state.
 3. From the visible owner Aqua session, run the signed helper's non-mutating
    `--permission-status`. Use `--request-permissions` only as an explicit owner onboarding action;
    never edit or pre-seed the TCC database.
@@ -241,12 +247,43 @@ together at one immutable source revision. After the complete matrix is linked, 
 `pnpm release:gate` from a clean checkout before building a production candidate without
 `--internal-preview`.
 
+## Supported candidate and promotion order
+
+The internal-preview sequence above gathers engineering and live-lab evidence. It does not grant a
+signing or publication credential. After the ledger is complete, the supported candidate follows
+ADR-0021 without changing that ledger:
+
+1. Run the production gate at clean attestation commit B for audited source commit A.
+2. On each clean committed, hash-pinned target runner, assemble the staging tree and apply required
+   Developer ID or Authenticode signatures before generating any integrity manifest.
+3. Freeze the signed payload; generate metadata and checksum manifests; run packaged smoke; create
+   the deterministic final archive; and create its detached publisher attestation.
+4. Submit only the exact final macOS archive for notarization. Retain the accepted result and log
+   identities as external evidence; never staple or rewrite the candidate.
+5. Execute the required clean-host matrix against those exact candidate digests. If any byte must
+   change, discard the candidate and restart at native staging/signing.
+6. After every declared target and criterion verifies, create one cross-platform promotion
+   attestation under a promotion key distinct from every publisher key.
+7. Publish only the attested assets, read every remote digest back, and create the signed
+   supported-channel release receipt. Effective `released` begins only when the external receipt
+   and independently provisioned promotion trust root verify.
+
+Credential-bearing signing, timestamping, notarization, publisher, promotion, and publication
+tools receive private material only through the approved external credential boundary. Their
+runner image and executable versions are hash-pinned, and sanitized evidence records the public
+identity plus input and output digests. A CI self-signature, ad-hoc certificate, key emitted beside
+its signature, dirty checkout, or unpinned helper is never support eligible.
+
 ## Required live evidence
 
 Each platform run records:
 
-- immutable source commit, bundle version, build ID, manifest, checksum, signature where applicable,
-  and provenance;
+- immutable source commit, bundle version, build ID, manifest, checksum, final archive digest,
+  native-signing identity and verification where applicable, publisher-attestation digest, and
+  provenance;
+- clean/hash-pinned credential runner identity and tool hashes; the external macOS notarization
+  submission and accepted receipt; and the cross-platform promotion attestation and supported
+  channel receipt when promotion is exercised;
 - OS, architecture, service/helper/backend/provider versions;
 - install, start, stop, restart, host reboot, login/logout, upgrade, failed-upgrade rollback,
   diagnostics, and uninstall outcomes;

@@ -522,3 +522,29 @@ paths.
 compatible or untested versions is explicit in the assignment and remains subject
 to stricter Device policy. A successful provider-bound Run without a matching safe
 session observation is invalid.
+
+## D-047 — Immutable candidates and externally trusted release promotion
+
+**Decision:** Platform-native code signing occurs before candidate integrity
+manifests are generated. The candidate payload, archive, acceptance ledger, and
+enclosed `release-candidate` identity are never rewritten during promotion. The
+exact final macOS archive is notarized only after its manifests and detached
+publisher attestation exist; the accepted notarization result remains an external
+sidecar and is not stapled into the candidate.
+
+One detached publisher attestation authenticates each target candidate. A separate
+cross-platform promotion attestation and supported-channel release receipt are
+verified through a distinct external promotion trust root. `released` is the
+effective result of that complete external trust calculation, never a filename,
+embedded field, environment variable, Git tag, or self-signature.
+
+**Rationale:** Native signatures mutate executable bytes, while support eligibility
+depends on one immutable candidate set and the complete three-platform evidence
+matrix. Separate publisher and promotion authorities prevent a valid per-bundle
+signature from silently becoming a support claim.
+
+**Consequence:** Previews and CI self-signatures are never support eligible.
+Credential-bearing signing, notarization, promotion, and publication tools run only
+from clean committed, hash-pinned runners. Actual platform identities, Devices,
+Discord and provider credentials, notarization, and live proof remain external
+release blockers until their exact evidence is recorded.
