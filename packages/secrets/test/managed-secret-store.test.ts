@@ -965,9 +965,56 @@ test(
     const first = Uint8Array.from([0, 17, 34, 51, 68, 85, 102, 255]);
     const second = Uint8Array.from([255, 238, 221, 204, 187, 170, 153, 0]);
     const nativeRunner = new NodeNativeSecretCommandRunner();
+    const systemRoot = process.env["SystemRoot"] ?? process.env["WINDIR"];
+    assert.ok(systemRoot);
+    const powershellPath = join(
+      systemRoot,
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const nativeEnvironment = Object.fromEntries(
+      ["SystemRoot", "WINDIR", "ComSpec"].flatMap((name) => {
+        const value = process.env[name];
+        return value === undefined ? [] : [[name, value]];
+      }),
+    );
+    const stdinProbe = Buffer.from("bounded-stdin-probe", "utf8");
+    process.stderr.write("[DEBUG-dpapi-stage] stdin-probe start\n");
+    try {
+      const probeResult = await nativeRunner.run({
+        args: [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          [
+            "$ErrorActionPreference='Stop'",
+            "$memory=New-Object IO.MemoryStream",
+            "[Console]::OpenStandardInput().CopyTo($memory)",
+            "if($memory.Length -le 0){exit 47}",
+            "[Console]::OpenStandardOutput().Write([Text.Encoding]::ASCII.GetBytes('ready'),0,5)",
+          ].join(";"),
+        ],
+        environment: nativeEnvironment,
+        executable: powershellPath,
+        maximumStdoutBytes: 5,
+        stdin: stdinProbe,
+        timeoutMs: 30_000,
+      });
+      assert.equal(probeResult.exitCode, 0);
+      assert.deepEqual(probeResult.stdout, Buffer.from("ready"));
+      probeResult.stdout.fill(0);
+      process.stderr.write("[DEBUG-dpapi-stage] stdin-probe complete\n");
+    } finally {
+      stdinProbe.fill(0);
+    }
     let nativeCall = 0;
     const store = new WindowsDpapiSecretStore({
       deviceId: "device-windows-live",
+      environment: nativeEnvironment,
+      powershellPath,
       runner: {
         async run(request) {
           nativeCall += 1;
