@@ -34,7 +34,7 @@ export async function buildMacOsComputerUseNative(options = {}) {
     "release",
     "--arch",
     architecture,
-    ...createMacOsSwiftPackagePathRemappingArguments(checkoutDirectory, outputRoot),
+    ...createMacOsSwiftPackageReleaseArguments(checkoutDirectory, outputRoot),
   ];
   for (const product of ["opendelegate-macos-computer-use", "opendelegate-computer-use-fixture"]) {
     await execFileAsync(xcrunPath, [...common, "--product", product], {
@@ -62,9 +62,11 @@ export async function buildMacOsComputerUseNative(options = {}) {
   });
 }
 
-export function createMacOsSwiftPackagePathRemappingArguments(sourceRoot, buildRoot) {
+export function createMacOsSwiftPackageReleaseArguments(sourceRoot, buildRoot) {
   const mappings = createMacOsSwiftPathMappings(sourceRoot, buildRoot);
   return Object.freeze([
+    "-debug-info-format",
+    "none",
     "-Xswiftc",
     "-file-prefix-map",
     "-Xswiftc",

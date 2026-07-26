@@ -18,7 +18,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { createMacOsSwiftPackagePathRemappingArguments } from "../../packages/computer-use-os/native/macos/build.mjs";
+import { createMacOsSwiftPackageReleaseArguments } from "../../packages/computer-use-os/native/macos/build.mjs";
 import { createMacOsSwiftPathRemappingArguments } from "../../packages/secrets/native/macos/build.mjs";
 import {
   PINNED_PNPM_ARCHIVE_INTEGRITY,
@@ -71,7 +71,7 @@ const auditedCommit = "a".repeat(40);
 const zeroObject = "0".repeat(40);
 const changedObject = "b".repeat(40);
 
-test("macOS Swift builders remap private source and build paths", () => {
+test("macOS Swift release builders disable debug metadata and remap private paths", () => {
   const sourceRoot = resolve("private-source");
   const buildRoot = resolve("private-build");
   const sourceMapping = `${sourceRoot}=/opendelegate/source`;
@@ -86,7 +86,9 @@ test("macOS Swift builders remap private source and build paths", () => {
     "-file-compilation-dir",
     "/opendelegate/source",
   ]);
-  assert.deepEqual(createMacOsSwiftPackagePathRemappingArguments(sourceRoot, buildRoot), [
+  assert.deepEqual(createMacOsSwiftPackageReleaseArguments(sourceRoot, buildRoot), [
+    "-debug-info-format",
+    "none",
     "-Xswiftc",
     "-file-prefix-map",
     "-Xswiftc",
@@ -104,7 +106,7 @@ test("macOS Swift builders remap private source and build paths", () => {
   ]);
   for (const createArguments of [
     createMacOsSwiftPathRemappingArguments,
-    createMacOsSwiftPackagePathRemappingArguments,
+    createMacOsSwiftPackageReleaseArguments,
   ]) {
     assert.throws(
       () => createArguments(resolve("ambiguous=source"), buildRoot),
@@ -305,10 +307,11 @@ test("native release assets reject private build paths in UTF-8 and UTF-16LE", a
       (error) => {
         const expectedKind =
           disclosure === "service-source-utf8" ? "core-service-host" : "computer-use-helper";
+        const expectedRootKind = disclosure === "build-utf16le" ? "build-root" : "source-root";
         assert.match(
           error?.message ?? "",
           new RegExp(
-            `Native release component "${expectedKind}" contains a private build-host path`,
+            `Native release component "${expectedKind}" contains a private ${expectedRootKind} path`,
             "u",
           ),
         );
@@ -358,7 +361,7 @@ test("native release assets reject a private physical path behind a source alias
     (error) => {
       assert.match(
         error?.message ?? "",
-        /Native release component "computer-use-helper" contains a private build-host path/u,
+        /Native release component "computer-use-helper" contains a private source-root path/u,
       );
       assert.equal(error.message.includes(physicalDisclosure), false);
       assert.equal(error.message.includes(sourceRoot), false);

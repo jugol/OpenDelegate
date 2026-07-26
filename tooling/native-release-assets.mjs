@@ -228,7 +228,10 @@ async function copyComponents(input, entries) {
       const bytes = await readFile(source);
       await assertNoBuildPathDisclosure(
         bytes,
-        [input.buildRoot, input.sourceRoot],
+        [
+          { kind: "build-root", path: input.buildRoot },
+          { kind: "source-root", path: input.sourceRoot },
+        ],
         input.platform,
         entry.kind,
       );
@@ -251,22 +254,26 @@ async function copyComponents(input, entries) {
 }
 
 async function assertNoBuildPathDisclosure(bytes, roots, platform, componentKind) {
-  const privatePathSpellings = new Set();
+  const privatePaths = [];
   for (const root of roots) {
-    for (const canonical of new Set([resolve(root), await realpath(root)])) {
+    const spellings = new Set();
+    for (const canonical of new Set([resolve(root.path), await realpath(root.path)])) {
       for (const spelling of pathSpellings(canonical, platform)) {
-        privatePathSpellings.add(spelling);
+        spellings.add(spelling);
       }
+    }
+    for (const value of spellings) {
+      privatePaths.push({ rootKind: root.kind, value });
     }
   }
   const comparableBytes = platform === "win32" ? foldAsciiCase(bytes) : bytes;
-  for (const value of privatePathSpellings) {
+  for (const { rootKind, value } of privatePaths) {
     for (const encoding of ["utf8", "utf16le"]) {
       const encoded = Buffer.from(value, encoding);
       const comparable = platform === "win32" ? foldAsciiCase(encoded) : encoded;
       if (comparableBytes.indexOf(comparable) !== -1) {
         throw new Error(
-          `Native release component ${JSON.stringify(componentKind)} contains a private build-host path.`,
+          `Native release component ${JSON.stringify(componentKind)} contains a private ${rootKind} path.`,
         );
       }
     }
