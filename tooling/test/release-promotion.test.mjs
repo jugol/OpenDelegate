@@ -324,7 +324,12 @@ test("pinned cleanup preserves different bytes after a file identity collision",
     }),
     /contents changed|changed before cleanup/u,
   );
-  assert.deepEqual(await readFile(path), ownerBytes);
+  const preserved = await readPinnedBytes({
+    label: "identity-collision owner replacement",
+    path,
+    sha256: createHash("sha256").update(ownerBytes).digest("hex"),
+  });
+  assert.deepEqual(Buffer.from(preserved.bytes), ownerBytes);
 });
 
 test("release-security paths reject regular files, directories, and outputs behind linked ancestors", async (t) => {
