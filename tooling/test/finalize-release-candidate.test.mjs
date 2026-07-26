@@ -329,6 +329,12 @@ test("finalization cleanup never follows a replaced output-directory ancestor", 
           throw new Error("The signer must not be invoked.");
         },
       }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.ok(error.errors.length >= 2);
+        assert.equal(error.cause, error.errors[0]);
+        return true;
+      },
     );
     assert.equal(await readFile(marker, "utf8"), "owner data\n");
     assert.equal(signerInvocations, 0);

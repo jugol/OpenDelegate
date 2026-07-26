@@ -29,6 +29,7 @@ import {
   removePinnedDirectoryTree,
   requireCanonicalDirectory,
   revalidatePinnedDirectory,
+  throwAfterCleanup,
 } from "./release-tooling-io.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
@@ -373,6 +374,8 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       Object.freeze({
         identity: attestationIdentity,
         path: basename(temporaryPaths.attestation),
+        sha256: envelope.sha256,
+        size: envelope.canonicalBytes.byteLength,
         type: "file",
       }),
     );
@@ -453,6 +456,7 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       },
     };
     const runnerBytes = Buffer.from(`${JSON.stringify(runnerRecord, null, 2)}\n`, "utf8");
+    const runnerSha256 = sha256(runnerBytes);
     const runnerRecordIdentity = await writeNewSyncedFile(
       temporaryPaths.runnerRecord,
       runnerBytes,
@@ -467,6 +471,8 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       Object.freeze({
         identity: runnerRecordIdentity,
         path: basename(temporaryPaths.runnerRecord),
+        sha256: runnerSha256,
+        size: runnerBytes.byteLength,
         type: "file",
       }),
     );
@@ -485,7 +491,6 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       published.push({ finalPath, temporaryIdentity, temporaryPath });
     }
 
-    const runnerSha256 = sha256(runnerBytes);
     const verifiedOutputs = await Promise.all([
       hashStableRegularFile(finalPaths.archive, destinationDirectory, stableFileDependencies),
       hashStableRegularFile(finalPaths.attestation, destinationDirectory, stableFileDependencies),
@@ -524,19 +529,25 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       }),
     });
   } catch (error) {
-    await cleanupPublishedOutputs(published, destinationDirectory, destinationIdentity);
-    await removePinnedDirectoryTree({
-      entries: temporaryEntries,
-      identity: temporaryIdentity,
-      label: "release finalization temporary directory",
-      path: temporaryDirectory,
-    });
-    if (isNodeError(error, "EEXIST")) {
-      throw new Error("A release-finalization output already exists; nothing was overwritten.", {
-        cause: error,
-      });
-    }
-    throw error;
+    const operationError = isNodeError(error, "EEXIST")
+      ? new Error("A release-finalization output already exists; nothing was overwritten.", {
+          cause: error,
+        })
+      : error;
+    await throwAfterCleanup(
+      operationError,
+      [
+        () => cleanupPublishedOutputs(published, destinationDirectory, destinationIdentity),
+        () =>
+          removePinnedDirectoryTree({
+            entries: temporaryEntries,
+            identity: temporaryIdentity,
+            label: "release finalization temporary directory",
+            path: temporaryDirectory,
+          }),
+      ],
+      "Release finalization failed and rollback did not complete.",
+    );
   }
 }
 
@@ -774,7 +785,23 @@ async function pinTemporaryFile(path, root, label) {
   if (!identity.isFile() || identity.isSymbolicLink()) {
     throw new Error(`The ${label} is not a regular temporary file.`);
   }
-  return Object.freeze({ identity, path: basename(path), type: "file" });
+  if (identity.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`The ${label} is too large to clean up safely.`);
+  }
+  const size = Number(identity.size);
+  const digest =
+    size === 0 ? sha256(new Uint8Array()) : (await hashStableRegularFile(path, root)).sha256;
+  const after = await lstat(path, { bigint: true });
+  if (!sameFile(identity, after)) {
+    throw new Error(`The ${label} changed while it was pinned for cleanup.`);
+  }
+  return Object.freeze({
+    identity,
+    path: basename(path),
+    sha256: digest,
+    size,
+    type: "file",
+  });
 }
 
 async function pinTemporaryFileIfPresent(path, root, label) {

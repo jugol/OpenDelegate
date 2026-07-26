@@ -232,7 +232,13 @@ export async function publishNewFileSet(entries, options = {}) {
         label: "release temporary directory",
         path: temporaryDirectory,
       });
-      staged.push({ entry, identity, temporaryPath });
+      staged.push({
+        entry,
+        identity,
+        sha256: digestBytes(entry.bytes),
+        size: entry.bytes.byteLength,
+        temporaryPath,
+      });
     }
     for (let index = 0; index < staged.length; index += 1) {
       const item = staged[index];
@@ -267,9 +273,11 @@ export async function publishNewFileSet(entries, options = {}) {
     await options.verifyPublished?.(Object.freeze([...verified]));
     await syncDirectory(parent);
     await removePinnedDirectoryTree({
-      entries: staged.map(({ identity }, index) => ({
+      entries: staged.map(({ identity, sha256, size }, index) => ({
         identity,
         path: String(index),
+        sha256,
+        size,
         type: "file",
       })),
       identity: temporaryIdentity,
@@ -279,23 +287,31 @@ export async function publishNewFileSet(entries, options = {}) {
     await syncDirectory(parent);
     return Object.freeze(verified);
   } catch (error) {
-    await cleanupPublishedOutputs(published, parent, parentIdentity);
-    await removePinnedDirectoryTree({
-      entries: staged.map(({ identity }, index) => ({
-        identity,
-        path: String(index),
-        type: "file",
-      })),
-      identity: temporaryIdentity,
-      label: "release temporary directory",
-      path: temporaryDirectory,
-    });
-    if (isNodeError(error, "EEXIST")) {
-      throw new Error("A release output already exists; nothing was overwritten.", {
-        cause: error,
-      });
-    }
-    throw error;
+    const operationError = isNodeError(error, "EEXIST")
+      ? new Error("A release output already exists; nothing was overwritten.", {
+          cause: error,
+        })
+      : error;
+    await throwAfterCleanup(
+      operationError,
+      [
+        () => cleanupPublishedOutputs(published, parent, parentIdentity),
+        () =>
+          removePinnedDirectoryTree({
+            entries: staged.map(({ identity, sha256, size }, index) => ({
+              identity,
+              path: String(index),
+              sha256,
+              size,
+              type: "file",
+            })),
+            identity: temporaryIdentity,
+            label: "release temporary directory",
+            path: temporaryDirectory,
+          }),
+      ],
+      "Release output publication failed and rollback did not complete.",
+    );
   }
 }
 
@@ -371,7 +387,15 @@ export async function publishNewDirectoryTree(destination, entries, options = {}
         label: "release configuration temporary directory",
         path: temporaryDirectory,
       });
-      pinnedEntries.push(Object.freeze({ identity, path: entry.path, type: "file" }));
+      pinnedEntries.push(
+        Object.freeze({
+          identity,
+          path: entry.path,
+          sha256: digestBytes(entry.bytes),
+          size: entry.bytes.byteLength,
+          type: "file",
+        }),
+      );
       const verified = await hashStableRegularFile(outputPath);
       if (
         verified.sha256 !== digestBytes(entry.bytes) ||
@@ -409,28 +433,54 @@ export async function publishNewDirectoryTree(destination, entries, options = {}
       ),
     });
   } catch (error) {
-    if (publishedIdentity !== undefined) {
-      await removePinnedDirectoryTree({
-        entries: pinnedEntries,
-        identity: publishedIdentity,
-        label: "release configuration output",
-        path: destination,
-      });
-    }
-    await revalidatePinnedDirectory(parent, parentIdentity, "release configuration output parent");
-    await removePinnedDirectoryTree({
-      entries: pinnedEntries,
-      identity: temporaryIdentity,
-      label: "release configuration temporary directory",
-      path: temporaryDirectory,
-    });
-    if (isNodeError(error, "EEXIST") || isNodeError(error, "ENOTEMPTY")) {
-      throw new Error("The release configuration output already exists; nothing was overwritten.", {
-        cause: error,
-      });
-    }
-    throw error;
+    const operationError =
+      isNodeError(error, "EEXIST") || isNodeError(error, "ENOTEMPTY")
+        ? new Error("The release configuration output already exists; nothing was overwritten.", {
+            cause: error,
+          })
+        : error;
+    await throwAfterCleanup(
+      operationError,
+      [
+        ...(publishedIdentity === undefined
+          ? []
+          : [
+              () =>
+                removePinnedDirectoryTree({
+                  entries: pinnedEntries,
+                  identity: publishedIdentity,
+                  label: "release configuration output",
+                  path: destination,
+                }),
+            ]),
+        () =>
+          revalidatePinnedDirectory(parent, parentIdentity, "release configuration output parent"),
+        () =>
+          removePinnedDirectoryTree({
+            entries: pinnedEntries,
+            identity: temporaryIdentity,
+            label: "release configuration temporary directory",
+            path: temporaryDirectory,
+          }),
+      ],
+      "Release configuration publication failed and rollback did not complete.",
+    );
   }
+}
+
+export async function throwAfterCleanup(primaryError, cleanupOperations, message) {
+  const cleanupErrors = [];
+  for (const cleanup of cleanupOperations) {
+    try {
+      await cleanup();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError([primaryError, ...cleanupErrors], message, { cause: primaryError });
+  }
+  throw primaryError;
 }
 
 export async function hashStableRegularFile(path, maximumBytes = Number.MAX_SAFE_INTEGER) {
@@ -692,7 +742,19 @@ export async function removePinnedDirectoryTree(input) {
   }
   const paths = new Set();
   for (const entry of input.entries) {
-    requireExactKeys(entry, ["identity", "path", "type"], "pinned directory cleanup entry");
+    if (entry?.type === "file") {
+      requireExactKeys(
+        entry,
+        ["identity", "path", "sha256", "size", "type"],
+        "pinned directory cleanup entry",
+      );
+      assertSha256(entry.sha256, `${input.label} cleanup entry SHA-256`);
+      if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
+        throw new Error(`The ${input.label} cleanup entry size is invalid.`);
+      }
+    } else {
+      requireExactKeys(entry, ["identity", "path", "type"], "pinned directory cleanup entry");
+    }
     assertPortableRelativePath(entry.path, `${input.label} entry`);
     if (entry.type !== "file" && entry.type !== "directory") {
       throw new Error(`The ${input.label} cleanup entry type is invalid.`);
@@ -733,8 +795,17 @@ export async function removePinnedDirectoryTree(input) {
       throw new Error(`The ${input.label} entry changed before cleanup.`);
     }
     await assertNoLinkedPathComponents(absolutePath, `${input.label} entry`);
+    const sha256 = await hashPinnedCleanupFile(absolutePath, entry.identity, entry.size);
+    if (sha256 !== entry.sha256) {
+      throw new Error(`The ${input.label} entry contents changed before cleanup.`);
+    }
+    await assertNoLinkedPathComponents(absolutePath, `${input.label} entry`);
     const after = await lstat(absolutePath, { bigint: true });
-    if (!sameFileIdentity(before, after) || !sameFileIdentity(after, entry.identity)) {
+    if (
+      !sameFile(before, after) ||
+      !sameFileIdentity(after, entry.identity) ||
+      after.size !== BigInt(entry.size)
+    ) {
       throw new Error(`The ${input.label} entry changed before cleanup.`);
     }
     await unlink(absolutePath);
@@ -791,6 +862,46 @@ export async function removePinnedDirectoryTree(input) {
     })
   ) {
     await rmdir(input.path);
+  }
+}
+
+async function hashPinnedCleanupFile(path, identity, expectedSize) {
+  const flags =
+    process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
+  const handle = await open(path, flags);
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (
+      !opened.isFile() ||
+      opened.isSymbolicLink() ||
+      !sameFileIdentity(opened, identity) ||
+      opened.size !== BigInt(expectedSize)
+    ) {
+      throw new Error("A pinned cleanup file changed before it could be read.");
+    }
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    while (position < expectedSize) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        Math.min(buffer.byteLength, expectedSize - position),
+        position,
+      );
+      if (bytesRead <= 0) {
+        throw new Error("A pinned cleanup file ended while it was being read.");
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    if (!sameFile(opened, after)) {
+      throw new Error("A pinned cleanup file changed while it was being read.");
+    }
+    return hash.digest("hex");
+  } finally {
+    await handle.close();
   }
 }
 

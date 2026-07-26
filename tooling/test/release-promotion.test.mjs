@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createPublicKey } from "node:crypto";
+import { createHash, createPublicKey } from "node:crypto";
 import {
   lstat,
   mkdir,
@@ -31,6 +31,7 @@ import {
   publishNewDirectoryTree,
   publishNewFileSet,
   readPinnedBytes,
+  removePinnedDirectoryTree,
   requireCanonicalDirectory,
 } from "../release-tooling-io.mjs";
 import { hashPromotionReleaseLogic } from "../release-promotion-plan.mjs";
@@ -292,6 +293,38 @@ test("directory-tree publication rejects file-prefix conflicts before mutation",
     /prefix conflicts/u,
   );
   assert.deepEqual(await readdir(root), []);
+});
+
+test("pinned cleanup preserves different bytes after a file identity collision", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-cleanup-identity-collision-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, "entry.txt");
+  const ownerBytes = Buffer.from("owner replacement\n", "utf8");
+  const generatedBytes = Buffer.from("generated content\n", "utf8");
+  await writeFile(path, ownerBytes);
+  const [identity, rootIdentity] = await Promise.all([
+    lstat(path, { bigint: true }),
+    lstat(root, { bigint: true }),
+  ]);
+
+  await assert.rejects(
+    removePinnedDirectoryTree({
+      entries: [
+        {
+          identity,
+          path: "entry.txt",
+          sha256: createHash("sha256").update(generatedBytes).digest("hex"),
+          size: generatedBytes.byteLength,
+          type: "file",
+        },
+      ],
+      identity: rootIdentity,
+      label: "identity-collision fixture",
+      path: root,
+    }),
+    /contents changed|changed before cleanup/u,
+  );
+  assert.deepEqual(await readFile(path), ownerBytes);
 });
 
 test("release-security paths reject regular files, directories, and outputs behind linked ancestors", async (t) => {

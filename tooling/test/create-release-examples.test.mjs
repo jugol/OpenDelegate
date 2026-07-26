@@ -141,6 +141,13 @@ test("release example rollback preserves a replaced child file", async (t) => {
         },
       },
     ),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.cause?.message, "fixture replaced a generated file");
+      assert.equal(error.errors[0]?.message, "fixture replaced a generated file");
+      assert.match(error.errors[1]?.message ?? "", /entry (?:contents )?changed before cleanup/u);
+      return true;
+    },
   );
   assert.equal(await readFile(readme, "utf8"), "owner replacement\n");
 });
