@@ -379,7 +379,45 @@ test("the statement parser rejects malformed nested publisher bindings", () => {
   const malformed = Buffer.from(`${prefix}${JSON.stringify(statement, null, 2)}\n`, "utf8");
   assert.throws(
     () => validateReleaseSigningStatement(malformed, "publisher-attestation-v2"),
-    /candidate binding is invalid/u,
+    /candidate binding target is outside/u,
+  );
+});
+
+test("the statement parser enforces exact nested promotion and receipt grammar", () => {
+  const promotionBytes = promotionSigningBytes();
+  assert.doesNotThrow(() =>
+    validateReleaseSigningStatement(promotionBytes, "promotion-authorization-v1"),
+  );
+  const malformedPromotion = parseSigningStatement(
+    promotionBytes,
+    "OpenDelegate promotion authorization v1\n",
+  );
+  malformedPromotion.targets[1].platformAuthenticity.verificationEvidence[0].unexpected = true;
+  assert.throws(
+    () =>
+      validateReleaseSigningStatement(
+        statementSigningBytes("OpenDelegate promotion authorization v1\n", malformedPromotion),
+        "promotion-authorization-v1",
+      ),
+    /strict schema/u,
+  );
+
+  const receiptBytes = receiptSigningBytes();
+  assert.doesNotThrow(() =>
+    validateReleaseSigningStatement(receiptBytes, "supported-channel-receipt-v2"),
+  );
+  const malformedReceipt = parseSigningStatement(
+    receiptBytes,
+    "OpenDelegate supported channel receipt v2\n",
+  );
+  malformedReceipt.publishedAssets[2].source = malformedReceipt.publishedAssets[1].source;
+  assert.throws(
+    () =>
+      validateReleaseSigningStatement(
+        statementSigningBytes("OpenDelegate supported channel receipt v2\n", malformedReceipt),
+        "supported-channel-receipt-v2",
+      ),
+    /sources are duplicated/u,
   );
 });
 
@@ -424,4 +462,163 @@ async function sendRawLines(endpoint, lines) {
 
 function canonicalLine(value) {
   return Buffer.from(`${JSON.stringify(value)}\n`, "utf8");
+}
+
+function promotionSigningBytes() {
+  const hash = "d".repeat(64);
+  const targets = [
+    {
+      target: { platform: "darwin", architecture: "arm64" },
+      certificateIdentities: ["apple-team:ABCDEFGHIJ", "apple-team:KLMNOPQRST"],
+      productCertificateIdentity: "apple-team:ABCDEFGHIJ",
+    },
+    {
+      target: { platform: "linux", architecture: "x64" },
+      certificateIdentities: [],
+      productCertificateIdentity: null,
+    },
+    {
+      target: { platform: "win32", architecture: "x64" },
+      certificateIdentities: [
+        `authenticode-sha1:${"A".repeat(40)}`,
+        `authenticode-sha1:${"B".repeat(40)}`,
+      ],
+      productCertificateIdentity: `authenticode-sha1:${"A".repeat(40)}`,
+    },
+  ].map(({ target, certificateIdentities, productCertificateIdentity }, index) => {
+    const platformAuthenticitySha256 = `${index + 1}`.repeat(64);
+    return {
+      target,
+      archive: {
+        path: `opendelegate-${target.platform}.tar.gz`,
+        size: 128 + index,
+        sha256: hash,
+      },
+      candidate: {
+        publisherCandidateStatementSha256: hash,
+        target,
+        productVersion: "0.1.0-alpha.1",
+        buildCommit: "1".repeat(40),
+        auditedSourceCommit: "2".repeat(40),
+        acceptanceLedgerSha256: hash,
+        candidateAttestationId: "candidate/release-0001",
+        checksumManifestSha256: hash,
+        payloadManifestSha256: hash,
+        releaseMetadataSha256: hash,
+        nativeComponentsSha256: hash,
+        platformAuthenticitySha256,
+      },
+      publisher: {
+        keyId: `sha256:${`${index + 3}`.repeat(64)}`,
+        attestationSha256: hash,
+      },
+      platformAuthenticity: {
+        recordSha256: platformAuthenticitySha256,
+        certificateIdentities,
+        productCertificateIdentity,
+        verificationEvidence: [
+          {
+            path: `evidence/platform/${target.platform}.json`,
+            sha256: hash,
+          },
+        ],
+      },
+      notarization:
+        target.platform === "darwin"
+          ? {
+              receipt: {
+                path: "evidence/notarization/macos.json",
+                sha256: hash,
+              },
+              submissionId: "submission/macos-0001",
+              status: "accepted",
+              teamId: "ABCDEFGHIJ",
+              resultId: "result/macos-0001",
+              logId: "notary-log/macos-0001",
+            }
+          : null,
+    };
+  });
+  const statement = {
+    schemaVersion: 1,
+    product: "OpenDelegate",
+    role: "promotion",
+    domain: "opendelegate.release.promotion-authorization.v1",
+    releaseId: "release/0.1.0-alpha.1",
+    productVersion: "0.1.0-alpha.1",
+    channel: "stable",
+    issuedAt: "2026-07-25T00:00:00.000Z",
+    statementId: "statement/promotion-0001",
+    publicationPolicy: "immutable-assets-with-remote-digest-readback",
+    auditedSourceCommit: "2".repeat(40),
+    buildCommit: "1".repeat(40),
+    acceptanceLedger: {
+      schemaVersion: 1,
+      sha256: hash,
+      candidateAttestationId: "candidate/release-0001",
+    },
+    supportMatrix: {
+      path: "docs/release/SUPPORT_MATRIX.md",
+      sha256: hash,
+    },
+    targets,
+    liveEvidence: Array.from({ length: 36 }, (_, index) => ({
+      criterionId: index + 1,
+      path: `evidence/live/criterion-${String(index + 1).padStart(2, "0")}.json`,
+      sha256: hash,
+    })),
+  };
+  return statementSigningBytes("OpenDelegate promotion authorization v1\n", statement);
+}
+
+function receiptSigningBytes() {
+  const hash = "e".repeat(64);
+  const observerAuthorityKeyId = `sha256:${"a".repeat(64)}`;
+  const uploaderAuthorityKeyId = `sha256:${"b".repeat(64)}`;
+  const targets = [
+    { platform: "darwin", architecture: "arm64" },
+    { platform: "linux", architecture: "x64" },
+    { platform: "win32", architecture: "x64" },
+  ];
+  const statement = {
+    schemaVersion: 2,
+    product: "OpenDelegate",
+    role: "promotion",
+    domain: "opendelegate.release.supported-channel-receipt.v2",
+    receiptId: "receipt/release-0001",
+    releaseId: "release/0.1.0-alpha.1",
+    channel: "stable",
+    tag: "v0.1.0-alpha.1",
+    promotionAttestationSha256: hash,
+    uploaderAuthorityKeyId,
+    publishedAssets: targets.map((target) => ({
+      target,
+      path: `opendelegate-${target.platform}.tar.gz`,
+      size: 256,
+      sha256: hash,
+      source: {
+        provider: "github-release",
+        immutableObjectId: `object/${target.platform}-0001`,
+        immutableObjectVersion: `version/${target.platform}-0001`,
+      },
+      observedStreamSha256: hash,
+      observerAuthorityKeyId,
+      observedAt: "2026-07-25T00:01:00.000Z",
+      evidenceEnvelope: {
+        domain: "opendelegate.release.remote-read-back-observation.v1",
+        sha256: hash,
+        signature: "A".repeat(86),
+      },
+    })),
+    observedAt: "2026-07-25T00:02:00.000Z",
+  };
+  return statementSigningBytes("OpenDelegate supported channel receipt v2\n", statement);
+}
+
+function parseSigningStatement(bytes, prefix) {
+  return JSON.parse(bytes.subarray(Buffer.byteLength(prefix)).toString("utf8"));
+}
+
+function statementSigningBytes(prefix, statement) {
+  return Buffer.from(`${prefix}${JSON.stringify(statement, null, 2)}\n`, "utf8");
 }

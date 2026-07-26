@@ -19,13 +19,27 @@ const MAXIMUM_AUTHORIZATION_MS = 15_000;
 const MAXIMUM_SIGNING_BYTES = 4 * 1024 * 1024;
 const MAXIMUM_BROKER_OUTPUT_BYTES = 64 * 1024;
 const MAXIMUM_PUBLIC_KEY_BYTES = 64 * 1024;
+const MAXIMUM_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MAXIMUM_POSIX_ENDPOINT_BYTES = 100;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const KEY_ID_PATTERN = /^sha256:[0-9a-f]{64}$/u;
 const ED25519_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{86}$/u;
 const BASE64URL_32_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const COMMIT_PATTERN = /^[0-9a-f]{40}$/u;
+const EXTERNAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{7,255}$/u;
+const SEMVER_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const CHANNEL_PATTERN = /^[a-z][a-z0-9-]{1,31}$/u;
+const TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
+const APPLE_CERTIFICATE_PATTERN = /^apple-team:[A-Z0-9]{10}$/u;
+const AUTHENTICODE_CERTIFICATE_PATTERN = /^authenticode-sha1:[A-F0-9]{40}$/u;
 const WINDOWS_PIPE_PATTERN = /^\\\\\.\\pipe\\[A-Za-z0-9._-]{1,160}$/u;
+const firstMilestoneTargets = Object.freeze([
+  Object.freeze({ platform: "darwin", architecture: "arm64" }),
+  Object.freeze({ platform: "linux", architecture: "x64" }),
+  Object.freeze({ platform: "win32", architecture: "x64" }),
+]);
 const allowedRoles = new Set(["publisher", "promotion"]);
 const allowedDomainsByRole = new Map([
   ["publisher", new Set(["publisher-attestation-v2"])],
@@ -861,99 +875,249 @@ export function validateReleaseSigningStatement(signingBytes, domain) {
 
 function validateDomainSpecificStatement(statement, domain) {
   if (domain === "publisher-attestation-v2") {
-    requireCanonicalKeys(
-      statement.candidate,
-      [
-        "publisherCandidateStatementSha256",
-        "target",
-        "productVersion",
-        "buildCommit",
-        "auditedSourceCommit",
-        "acceptanceLedgerSha256",
-        "candidateAttestationId",
-        "checksumManifestSha256",
-        "payloadManifestSha256",
-        "releaseMetadataSha256",
-        "nativeComponentsSha256",
-        "platformAuthenticitySha256",
-      ],
-      "publisher candidate binding",
-    );
-    requireCanonicalKeys(
-      statement.candidate.target,
-      ["platform", "architecture"],
-      "release target",
-    );
+    validatePublisherCandidate(statement.candidate, "publisher candidate binding");
     validateArchive(statement.archive, "publisher archive");
-    const hashFields = [
+    return;
+  }
+  if (domain === "promotion-authorization-v1") {
+    validatePromotionStatement(statement);
+    return;
+  }
+  validateSupportedChannelReceipt(statement);
+}
+
+function validatePublisherCandidate(value, label, common) {
+  requireCanonicalKeys(
+    value,
+    [
       "publisherCandidateStatementSha256",
+      "target",
+      "productVersion",
+      "buildCommit",
+      "auditedSourceCommit",
       "acceptanceLedgerSha256",
+      "candidateAttestationId",
       "checksumManifestSha256",
       "payloadManifestSha256",
       "releaseMetadataSha256",
       "nativeComponentsSha256",
       "platformAuthenticitySha256",
-    ];
-    if (
-      !hashFields.every((name) => SHA256_PATTERN.test(statement.candidate[name])) ||
-      !/^[0-9a-f]{40}$/u.test(statement.candidate.buildCommit) ||
-      !/^[0-9a-f]{40}$/u.test(statement.candidate.auditedSourceCommit) ||
-      typeof statement.candidate.productVersion !== "string" ||
-      typeof statement.candidate.candidateAttestationId !== "string" ||
-      !isReleaseTarget(statement.candidate.target)
-    ) {
-      throw new Error("The publisher statement candidate binding is invalid.");
-    }
-    return;
-  }
-  if (domain === "promotion-authorization-v1") {
-    if (
-      typeof statement.releaseId !== "string" ||
-      typeof statement.productVersion !== "string" ||
-      typeof statement.channel !== "string" ||
-      !isCanonicalTimestamp(statement.issuedAt) ||
-      typeof statement.statementId !== "string" ||
-      statement.publicationPolicy !== "immutable-assets-with-remote-digest-readback" ||
-      !/^[0-9a-f]{40}$/u.test(statement.auditedSourceCommit) ||
-      !/^[0-9a-f]{40}$/u.test(statement.buildCommit) ||
-      !Array.isArray(statement.targets) ||
-      statement.targets.length !== 3 ||
-      !Array.isArray(statement.liveEvidence) ||
-      statement.liveEvidence.length !== 36 ||
-      statement.acceptanceLedger === null ||
-      typeof statement.acceptanceLedger !== "object" ||
-      statement.supportMatrix === null ||
-      typeof statement.supportMatrix !== "object"
-    ) {
-      throw new Error("The promotion authorization statement is structurally incomplete.");
-    }
-    return;
-  }
+    ],
+    label,
+  );
+  validateReleaseTarget(value.target, `${label} target`);
+  const hashFields = [
+    "publisherCandidateStatementSha256",
+    "acceptanceLedgerSha256",
+    "checksumManifestSha256",
+    "payloadManifestSha256",
+    "releaseMetadataSha256",
+    "nativeComponentsSha256",
+    "platformAuthenticitySha256",
+  ];
   if (
-    typeof statement.receiptId !== "string" ||
-    typeof statement.releaseId !== "string" ||
-    typeof statement.channel !== "string" ||
-    typeof statement.tag !== "string" ||
+    !hashFields.every((name) => SHA256_PATTERN.test(value[name])) ||
+    !SEMVER_PATTERN.test(value.productVersion) ||
+    !COMMIT_PATTERN.test(value.buildCommit) ||
+    !COMMIT_PATTERN.test(value.auditedSourceCommit) ||
+    value.buildCommit === value.auditedSourceCommit ||
+    !EXTERNAL_ID_PATTERN.test(value.candidateAttestationId) ||
+    (common !== undefined &&
+      (targetKey(value.target) !== targetKey(common.target) ||
+        value.productVersion !== common.productVersion ||
+        value.buildCommit !== common.buildCommit ||
+        value.auditedSourceCommit !== common.auditedSourceCommit ||
+        value.acceptanceLedgerSha256 !== common.acceptanceLedgerSha256 ||
+        value.candidateAttestationId !== common.candidateAttestationId))
+  ) {
+    throw new Error(`The ${label} is invalid.`);
+  }
+}
+
+function validatePromotionStatement(statement) {
+  if (
+    !EXTERNAL_ID_PATTERN.test(statement.releaseId) ||
+    !SEMVER_PATTERN.test(statement.productVersion) ||
+    !CHANNEL_PATTERN.test(statement.channel) ||
+    statement.channel.includes("preview") ||
+    statement.channel === "release-candidate" ||
+    !isCanonicalTimestamp(statement.issuedAt) ||
+    !EXTERNAL_ID_PATTERN.test(statement.statementId) ||
+    statement.publicationPolicy !== "immutable-assets-with-remote-digest-readback" ||
+    !COMMIT_PATTERN.test(statement.auditedSourceCommit) ||
+    !COMMIT_PATTERN.test(statement.buildCommit) ||
+    statement.auditedSourceCommit === statement.buildCommit
+  ) {
+    throw new Error("The promotion authorization identity is invalid.");
+  }
+  requireCanonicalKeys(
+    statement.acceptanceLedger,
+    ["schemaVersion", "sha256", "candidateAttestationId"],
+    "promotion acceptance ledger",
+  );
+  if (
+    statement.acceptanceLedger.schemaVersion !== 1 ||
+    !SHA256_PATTERN.test(statement.acceptanceLedger.sha256) ||
+    !EXTERNAL_ID_PATTERN.test(statement.acceptanceLedger.candidateAttestationId)
+  ) {
+    throw new Error("The promotion acceptance ledger is invalid.");
+  }
+  validateEvidenceReference(statement.supportMatrix, "promotion support matrix");
+  if (statement.supportMatrix.path !== "docs/release/SUPPORT_MATRIX.md") {
+    throw new Error("The promotion support matrix path is invalid.");
+  }
+  if (!Array.isArray(statement.targets) || statement.targets.length !== 3) {
+    throw new Error("The promotion target set is incomplete.");
+  }
+  const archivePaths = new Set();
+  statement.targets.forEach((value, index) => {
+    const expectedTarget = firstMilestoneTargets[index];
+    requireCanonicalKeys(
+      value,
+      ["target", "archive", "candidate", "publisher", "platformAuthenticity", "notarization"],
+      "promotion target",
+    );
+    validateReleaseTarget(value.target, "promotion target tuple");
+    if (targetKey(value.target) !== targetKey(expectedTarget)) {
+      throw new Error("The promotion target order or identity is invalid.");
+    }
+    validateArchive(value.archive, "promoted archive");
+    if (archivePaths.has(value.archive.path)) {
+      throw new Error("The promotion archives are duplicated.");
+    }
+    archivePaths.add(value.archive.path);
+    validatePublisherCandidate(value.candidate, "promoted candidate binding", {
+      acceptanceLedgerSha256: statement.acceptanceLedger.sha256,
+      auditedSourceCommit: statement.auditedSourceCommit,
+      buildCommit: statement.buildCommit,
+      candidateAttestationId: statement.acceptanceLedger.candidateAttestationId,
+      productVersion: statement.productVersion,
+      target: expectedTarget,
+    });
+    requireCanonicalKeys(value.publisher, ["keyId", "attestationSha256"], "promoted publisher");
+    if (
+      !KEY_ID_PATTERN.test(value.publisher.keyId) ||
+      !SHA256_PATTERN.test(value.publisher.attestationSha256)
+    ) {
+      throw new Error("The promoted publisher identity is invalid.");
+    }
+    validatePlatformAuthenticity(value.platformAuthenticity, value.candidate, expectedTarget);
+    if (expectedTarget.platform === "darwin") {
+      validatePromotionNotarization(value.notarization, value.platformAuthenticity);
+    } else if (value.notarization !== null) {
+      throw new Error("Notarization is attached to the wrong promotion target.");
+    }
+  });
+  if (!Array.isArray(statement.liveEvidence) || statement.liveEvidence.length !== 36) {
+    throw new Error("The promoted live-evidence set is incomplete.");
+  }
+  const evidencePaths = new Set();
+  statement.liveEvidence.forEach((value, index) => {
+    requireCanonicalKeys(value, ["criterionId", "path", "sha256"], "promoted live evidence");
+    validateEvidenceReferenceFields(value, "promoted live evidence");
+    if (value.criterionId !== index + 1 || evidencePaths.has(value.path)) {
+      throw new Error("The promoted live-evidence set is duplicated or not canonical.");
+    }
+    evidencePaths.add(value.path);
+  });
+}
+
+function validatePlatformAuthenticity(value, candidate, target) {
+  requireCanonicalKeys(
+    value,
+    ["recordSha256", "certificateIdentities", "productCertificateIdentity", "verificationEvidence"],
+    "promoted platform authenticity",
+  );
+  const identityPattern =
+    target.platform === "darwin"
+      ? APPLE_CERTIFICATE_PATTERN
+      : target.platform === "win32"
+        ? AUTHENTICODE_CERTIFICATE_PATTERN
+        : undefined;
+  const expectedIdentityCount = target.platform === "linux" ? 0 : 2;
+  if (
+    value.recordSha256 !== candidate.platformAuthenticitySha256 ||
+    !Array.isArray(value.certificateIdentities) ||
+    value.certificateIdentities.length !== expectedIdentityCount ||
+    new Set(value.certificateIdentities).size !== value.certificateIdentities.length ||
+    value.certificateIdentities.some(
+      (identity) => typeof identity !== "string" || !identityPattern?.test(identity),
+    ) ||
+    (target.platform === "linux"
+      ? value.productCertificateIdentity !== null
+      : value.productCertificateIdentity !== value.certificateIdentities[0]) ||
+    !Array.isArray(value.verificationEvidence) ||
+    value.verificationEvidence.length === 0
+  ) {
+    throw new Error("The promoted platform authenticity is invalid.");
+  }
+  let previousPath;
+  for (const reference of value.verificationEvidence) {
+    validateEvidenceReference(reference, "platform authenticity evidence");
+    if (previousPath !== undefined && previousPath >= reference.path) {
+      throw new Error("Platform authenticity evidence is duplicated or not canonical.");
+    }
+    previousPath = reference.path;
+  }
+}
+
+function validatePromotionNotarization(value, platformAuthenticity) {
+  requireCanonicalKeys(
+    value,
+    ["receipt", "submissionId", "status", "teamId", "resultId", "logId"],
+    "promoted notarization",
+  );
+  validateEvidenceReference(value.receipt, "promoted notarization receipt");
+  if (
+    !EXTERNAL_ID_PATTERN.test(value.submissionId) ||
+    value.status !== "accepted" ||
+    !APPLE_TEAM_ID_PATTERN.test(value.teamId) ||
+    platformAuthenticity.productCertificateIdentity !== `apple-team:${value.teamId}` ||
+    !EXTERNAL_ID_PATTERN.test(value.resultId) ||
+    !EXTERNAL_ID_PATTERN.test(value.logId)
+  ) {
+    throw new Error("The promoted notarization identity is invalid.");
+  }
+}
+
+function validateSupportedChannelReceipt(statement) {
+  if (
+    !EXTERNAL_ID_PATTERN.test(statement.receiptId) ||
+    !EXTERNAL_ID_PATTERN.test(statement.releaseId) ||
+    !CHANNEL_PATTERN.test(statement.channel) ||
+    !TAG_PATTERN.test(statement.tag) ||
     !SHA256_PATTERN.test(statement.promotionAttestationSha256) ||
     !KEY_ID_PATTERN.test(statement.uploaderAuthorityKeyId) ||
     !Array.isArray(statement.publishedAssets) ||
     statement.publishedAssets.length !== 3 ||
-    !statement.publishedAssets.every((asset) => {
-      try {
-        validatePublishedAsset(asset);
-        return (
-          isReleaseTarget(asset.target) &&
-          typeof asset.observerAuthorityKeyId === "string" &&
-          KEY_ID_PATTERN.test(asset.observerAuthorityKeyId)
-        );
-      } catch {
-        return false;
-      }
-    }) ||
     !isCanonicalTimestamp(statement.observedAt)
   ) {
-    throw new Error("The supported-channel receipt statement is structurally incomplete.");
+    throw new Error("The supported-channel receipt identity is invalid.");
   }
+  const archivePaths = new Set();
+  const sourceIdentities = new Set();
+  let observerAuthorityKeyId;
+  statement.publishedAssets.forEach((asset, index) => {
+    validatePublishedAsset(asset);
+    if (
+      targetKey(asset.target) !== targetKey(firstMilestoneTargets[index]) ||
+      asset.observedStreamSha256 !== asset.sha256 ||
+      asset.observerAuthorityKeyId === statement.uploaderAuthorityKeyId ||
+      Date.parse(asset.observedAt) > Date.parse(statement.observedAt) ||
+      (observerAuthorityKeyId !== undefined &&
+        observerAuthorityKeyId !== asset.observerAuthorityKeyId) ||
+      archivePaths.has(asset.path)
+    ) {
+      throw new Error("The supported-channel asset set is mismatched or duplicated.");
+    }
+    const sourceIdentity = `${asset.source.provider}\0${asset.source.immutableObjectId}\0${asset.source.immutableObjectVersion}`;
+    if (sourceIdentities.has(sourceIdentity)) {
+      throw new Error("The supported-channel asset sources are duplicated.");
+    }
+    observerAuthorityKeyId = asset.observerAuthorityKeyId;
+    archivePaths.add(asset.path);
+    sourceIdentities.add(sourceIdentity);
+  });
 }
 
 function validatePublishedAsset(value) {
@@ -984,13 +1148,9 @@ function validatePublishedAsset(value) {
     "supported-channel asset evidence envelope",
   );
   if (
-    !isReleaseTarget(value.target) ||
-    typeof value.source.provider !== "string" ||
-    value.source.provider === "" ||
-    typeof value.source.immutableObjectId !== "string" ||
-    value.source.immutableObjectId === "" ||
-    typeof value.source.immutableObjectVersion !== "string" ||
-    value.source.immutableObjectVersion === "" ||
+    !EXTERNAL_ID_PATTERN.test(value.source.provider) ||
+    !EXTERNAL_ID_PATTERN.test(value.source.immutableObjectId) ||
+    !EXTERNAL_ID_PATTERN.test(value.source.immutableObjectVersion) ||
     !SHA256_PATTERN.test(value.observedStreamSha256) ||
     !KEY_ID_PATTERN.test(value.observerAuthorityKeyId) ||
     !isCanonicalTimestamp(value.observedAt) ||
@@ -999,6 +1159,22 @@ function validatePublishedAsset(value) {
     !ED25519_SIGNATURE_PATTERN.test(value.evidenceEnvelope.signature)
   ) {
     throw new Error("The supported-channel asset is invalid.");
+  }
+  validateReleaseTarget(value.target, "supported-channel asset target");
+}
+
+function validateEvidenceReference(value, label) {
+  requireCanonicalKeys(value, ["path", "sha256"], label);
+  validateEvidenceReferenceFields(value, label);
+}
+
+function validateEvidenceReferenceFields(value, label) {
+  if (
+    typeof value.path !== "string" ||
+    !isPortablePath(value.path) ||
+    !SHA256_PATTERN.test(value.sha256)
+  ) {
+    throw new Error(`The ${label} is invalid.`);
   }
 }
 
@@ -1015,21 +1191,36 @@ function validateArchiveFields(value, label) {
     value.path.includes("\\") ||
     !Number.isSafeInteger(value.size) ||
     value.size < 1 ||
-    value.size > 4 * 1024 * 1024 * 1024 ||
+    value.size > MAXIMUM_ARCHIVE_BYTES ||
     !SHA256_PATTERN.test(value.sha256)
   ) {
     throw new Error(`The ${label} is invalid.`);
   }
 }
 
-function isReleaseTarget(value) {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    ((value.platform === "darwin" && value.architecture === "arm64") ||
-      (value.platform === "linux" && value.architecture === "x64") ||
-      (value.platform === "win32" && value.architecture === "x64"))
-  );
+function validateReleaseTarget(value, label) {
+  requireCanonicalKeys(value, ["platform", "architecture"], label);
+  if (!firstMilestoneTargets.some((target) => targetKey(target) === targetKey(value))) {
+    throw new Error(`The ${label} is outside the first-milestone matrix.`);
+  }
+}
+
+function targetKey(target) {
+  return `${target.platform}-${target.architecture}`;
+}
+
+function isPortablePath(value) {
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value.startsWith("/") ||
+    value.includes("\\") ||
+    value.includes("\0") ||
+    value.normalize("NFC") !== value
+  ) {
+    return false;
+  }
+  return !value.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
 }
 
 function parseCanonicalLine(bytes, keys, label, maximumBytes) {
