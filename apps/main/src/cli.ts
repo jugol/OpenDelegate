@@ -65,7 +65,10 @@ import {
   ServiceLifecycleCliError,
   type ParsedServiceLifecycleArguments,
 } from "./service-lifecycle.ts";
-import { resolveEffectiveMainServiceConfiguration } from "./main-service-configuration.ts";
+import {
+  resolveEffectiveMainServiceConfiguration,
+  resolveMainServiceHomeBinding,
+} from "./main-service-configuration.ts";
 import {
   assertCompositionMatchesMain,
   DeviceEnrollmentCliError,
@@ -790,8 +793,18 @@ async function runServiceLifecycleFromCli(options: ParsedArguments): Promise<voi
         );
       }
       try {
-        const paths = resolveRuntimePaths({
+        const requestedPaths = resolveRuntimePaths({
           home: parsed.home,
+          sourceCheckout: installationRoot,
+        });
+        const boundHome = await resolveMainServiceHomeBinding({
+          command: parsed.command,
+          home: requestedPaths.home,
+          hostPlatform: baseAdapters.hostPlatform,
+          template,
+        });
+        const paths = resolveRuntimePaths({
+          home: boundHome,
           sourceCheckout: installationRoot,
         });
         const main = await loadMainConfiguration(paths.configurationFile);
@@ -802,6 +815,9 @@ async function runServiceLifecycleFromCli(options: ParsedArguments): Promise<voi
           environment: process.env,
         });
         const effective = await resolveEffectiveMainServiceConfiguration({
+          command: parsed.command,
+          home: paths.home,
+          hostPlatform: baseAdapters.hostPlatform,
           service: {
             inspect: async () => values,
           },

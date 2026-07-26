@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -9,9 +12,173 @@ import {
 import type { PlatformServiceConfiguration } from "@opendelegate/platform-services";
 
 import type { MainConfiguration } from "../src/index.ts";
-import { resolveEffectiveMainServiceConfiguration } from "../src/main-service-configuration.ts";
+import {
+  assertMainServiceHomeBinding,
+  resolveEffectiveMainServiceConfiguration,
+  resolveMainServiceHomeBinding,
+} from "../src/main-service-configuration.ts";
 
 const NOW = "2026-07-26T00:00:00.000Z";
+
+test("current-host Main service operations reject a --home outside the template state root", () => {
+  for (const command of [
+    "diagnose",
+    "install",
+    "reconfigure",
+    "restart",
+    "start",
+    "status",
+    "stop",
+    "uninstall",
+    "upgrade",
+  ] as const) {
+    assert.throws(
+      () =>
+        assertMainServiceHomeBinding({
+          command,
+          home: "/srv/opendelegate-main",
+          hostPlatform: "linux",
+          template: serviceConfiguration({ enabled: false }),
+        }),
+      /must match the template state root/i,
+      command,
+    );
+  }
+});
+
+test("Main service home binding preserves cross-target planning and host path semantics", () => {
+  const linux = serviceConfiguration({ enabled: false });
+  for (const command of ["render", "plan"] as const) {
+    assert.doesNotThrow(() =>
+      assertMainServiceHomeBinding({
+        command,
+        home: "/srv/opendelegate-main",
+        hostPlatform: "linux",
+        template: linux,
+      }),
+    );
+  }
+  assert.doesNotThrow(() =>
+    assertMainServiceHomeBinding({
+      command: "status",
+      home: "/var/lib/opendelegate/./",
+      hostPlatform: "linux",
+      template: linux,
+    }),
+  );
+
+  const windows = {
+    platform: "windows",
+    role: "main",
+    paths: {
+      stateRoot: "C:\\ProgramData\\OpenDelegate\\state",
+    },
+  } as const;
+  assert.doesNotThrow(() =>
+    assertMainServiceHomeBinding({
+      command: "restart",
+      home: "c:\\PROGRAMDATA\\OpenDelegate\\state\\.",
+      hostPlatform: "windows",
+      template: windows,
+    }),
+  );
+});
+
+test("current-host Main service home binding resolves a real directory alias to the template state root", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-main-service-home-"));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+  const stateRoot = join(directory, "state");
+  const alias = join(directory, "state-alias");
+  await mkdir(stateRoot);
+  await symlink(stateRoot, alias, process.platform === "win32" ? "junction" : "dir");
+  const hostPlatform =
+    process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
+
+  assert.equal(
+    await resolveMainServiceHomeBinding({
+      command: "status",
+      home: alias,
+      hostPlatform,
+      template: {
+        platform: hostPlatform,
+        role: "main",
+        paths: { stateRoot },
+      },
+    }),
+    stateRoot,
+  );
+});
+
+test("current-host Main service home binding rejects distinct real directories", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-main-service-home-"));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+  const home = join(directory, "home");
+  const stateRoot = join(directory, "state");
+  await Promise.all([mkdir(home), mkdir(stateRoot)]);
+  const hostPlatform =
+    process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
+
+  await assert.rejects(
+    resolveMainServiceHomeBinding({
+      command: "status",
+      home,
+      hostPlatform,
+      template: {
+        platform: hostPlatform,
+        role: "main",
+        paths: { stateRoot },
+      },
+    }),
+    /must match the template state root/i,
+  );
+});
+
+test("cross-target Main service rendering does not inspect host filesystem paths", async () => {
+  for (const command of ["render", "plan"] as const) {
+    const home = "/not-present/main-home";
+    assert.equal(
+      await resolveMainServiceHomeBinding(
+        {
+          command,
+          home,
+          hostPlatform: "windows",
+          template: {
+            platform: "linux",
+            role: "main",
+            paths: { stateRoot: "/not-present/state" },
+          },
+        },
+        {
+          async realPath() {
+            throw new Error("Filesystem access is not permitted for cross-target rendering.");
+          },
+        },
+      ),
+      home,
+    );
+  }
+});
+
+test("Main service resolution rejects a local state-root mismatch before durable Configuration inspection", async () => {
+  let inspections = 0;
+  await assert.rejects(
+    resolveEffectiveMainServiceConfiguration({
+      command: "status",
+      home: "/srv/opendelegate-main",
+      hostPlatform: "linux",
+      service: {
+        async inspect() {
+          inspections += 1;
+          return {};
+        },
+      },
+      main: mainConfiguration(),
+      template: serviceConfiguration({ enabled: false }),
+    }),
+    /must match the template state root/i,
+  );
+  assert.equal(inspections, 0);
+});
 
 test("Main service rendering replaces template state with the effective owner preference and canonical Admin origin", async () => {
   const configuration = configurationService();
@@ -20,6 +187,9 @@ test("Main service rendering replaces template state with the effective owner pr
     url: "https://stale.example.test/",
   });
   const disabled = await resolveEffectiveMainServiceConfiguration({
+    command: "render",
+    home: "/var/lib/opendelegate",
+    hostPlatform: "linux",
     service: configuration,
     main: mainConfiguration(),
     template,
@@ -56,6 +226,9 @@ test("Main service rendering replaces template state with the effective owner pr
   });
 
   const enabled = await resolveEffectiveMainServiceConfiguration({
+    command: "render",
+    home: "/var/lib/opendelegate",
+    hostPlatform: "linux",
     service: configuration,
     main: mainConfiguration(),
     template,
@@ -73,6 +246,9 @@ test("Main service rendering rejects a Worker or a template for another Instance
   const configuration = configurationService();
   await assert.rejects(
     resolveEffectiveMainServiceConfiguration({
+      command: "render",
+      home: "/var/lib/opendelegate",
+      hostPlatform: "linux",
       service: configuration,
       main: mainConfiguration(),
       template: {
@@ -84,6 +260,9 @@ test("Main service rendering rejects a Worker or a template for another Instance
   );
   await assert.rejects(
     resolveEffectiveMainServiceConfiguration({
+      command: "render",
+      home: "/var/lib/opendelegate",
+      hostPlatform: "linux",
       service: configuration,
       main: mainConfiguration(),
       template: {

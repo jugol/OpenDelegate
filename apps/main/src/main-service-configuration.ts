@@ -1,11 +1,20 @@
+import { realpath } from "node:fs/promises";
+import { posix, win32 } from "node:path";
+
 import type { ConfigurationService } from "@opendelegate/configuration";
 import {
   parsePlatformServiceConfiguration,
   type AdminAutoOpenConfiguration,
+  type PlatformFamily,
   type PlatformServiceConfiguration,
 } from "@opendelegate/platform-services";
 
+import type { ServiceLifecycleCommand } from "./service-lifecycle.ts";
+
 export interface EffectiveMainServiceConfigurationInput {
+  readonly command: ServiceLifecycleCommand;
+  readonly home: string;
+  readonly hostPlatform: PlatformFamily | undefined;
   readonly service: Pick<ConfigurationService, "inspect">;
   readonly main: {
     readonly instanceId: string;
@@ -27,6 +36,78 @@ export interface EffectiveMainServiceConfiguration {
   readonly alternateConfiguration: PlatformServiceConfiguration;
 }
 
+export interface MainServiceHomeBindingInput {
+  readonly command: ServiceLifecycleCommand;
+  readonly home: string;
+  readonly hostPlatform: PlatformFamily | undefined;
+  readonly template: {
+    readonly paths: {
+      readonly stateRoot: string;
+    };
+    readonly platform: PlatformFamily;
+    readonly role: PlatformServiceConfiguration["role"];
+  };
+}
+
+export interface MainServiceHomeBindingBoundary {
+  readonly realPath: (path: string) => Promise<string>;
+}
+
+const DEFAULT_MAIN_SERVICE_HOME_BINDING_BOUNDARY: MainServiceHomeBindingBoundary = {
+  realPath: realpath,
+};
+
+export function assertMainServiceHomeBinding(input: MainServiceHomeBindingInput): void {
+  if (!requiresMainServiceHomeBinding(input)) {
+    return;
+  }
+  if (
+    comparablePath(input.home, input.template.platform) !==
+    comparablePath(input.template.paths.stateRoot, input.template.platform)
+  ) {
+    throw new TypeError("Main service --home must match the template state root.");
+  }
+}
+
+/**
+ * Binds current-host Main operations to one filesystem authority. Real paths
+ * accept harmless directory aliases, while returning the template state root
+ * makes all later durable reads use the same path as the native service host.
+ */
+export async function resolveMainServiceHomeBinding(
+  input: MainServiceHomeBindingInput,
+  boundary: MainServiceHomeBindingBoundary = DEFAULT_MAIN_SERVICE_HOME_BINDING_BOUNDARY,
+): Promise<string> {
+  if (!requiresMainServiceHomeBinding(input)) {
+    return input.home;
+  }
+
+  let canonicalHome: string;
+  let canonicalStateRoot: string;
+  try {
+    [canonicalHome, canonicalStateRoot] = await Promise.all([
+      boundary.realPath(input.home),
+      boundary.realPath(input.template.paths.stateRoot),
+    ]);
+  } catch {
+    throw new TypeError(
+      "Main service --home and the template state root must resolve to readable directories.",
+    );
+  }
+
+  assertMainServiceHomeBinding({
+    ...input,
+    home: canonicalHome,
+    template: {
+      ...input.template,
+      paths: {
+        stateRoot: canonicalStateRoot,
+      },
+    },
+  });
+  return input.template.paths.stateRoot;
+}
+
 /**
  * Resolves the owner preference at the deterministic Configuration boundary.
  * The supplied platform document is a topology template: its Admin preference
@@ -36,6 +117,12 @@ export async function resolveEffectiveMainServiceConfiguration(
   input: EffectiveMainServiceConfigurationInput,
 ): Promise<EffectiveMainServiceConfiguration> {
   const template = parsePlatformServiceConfiguration(structuredClone(input.template));
+  assertMainServiceHomeBinding({
+    command: input.command,
+    home: input.home,
+    hostPlatform: input.hostPlatform,
+    template,
+  });
   if (template.role !== "main") {
     throw new TypeError("Admin auto-open service rendering is available only to the fixed Main.");
   }
@@ -64,6 +151,22 @@ export async function resolveEffectiveMainServiceConfiguration(
     configuration: withAdminAutoOpen(template, selected),
     alternateConfiguration: withAdminAutoOpen(template, alternate),
   });
+}
+
+function requiresMainServiceHomeBinding(input: MainServiceHomeBindingInput): boolean {
+  return (
+    input.command !== "help" &&
+    input.command !== "render" &&
+    input.command !== "plan" &&
+    input.template.role === "main" &&
+    input.template.platform === input.hostPlatform
+  );
+}
+
+function comparablePath(value: string, platform: PlatformFamily): string {
+  const path = platform === "windows" ? win32 : posix;
+  const resolved = path.resolve(value);
+  return platform === "windows" ? resolved.toLowerCase() : resolved;
 }
 
 function withAdminAutoOpen(
