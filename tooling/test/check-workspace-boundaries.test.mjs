@@ -38,6 +38,7 @@ test("Phase 2 services keep their accepted inward dependency directions", () => 
     "@opendelegate/platform-services",
     "@opendelegate/policy",
     "@opendelegate/protocol",
+    "@opendelegate/release-integrity",
     "@opendelegate/scheduler",
     "@opendelegate/secrets",
     "@opendelegate/storage-sql",
@@ -86,7 +87,9 @@ test("platform and external adapter packages keep injected ports at their edges"
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/computer-use-mcp"], []);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/computer-use-os"], []);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/discord-adapter"], []);
-  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/platform-services"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/platform-services"], [
+    "@opendelegate/release-integrity",
+  ]);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/run-capability-broker"], []);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/session-helper-ipc"], []);
 });
