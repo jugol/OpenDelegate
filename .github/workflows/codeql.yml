@@ -33,9 +33,6 @@ jobs:
           - language: javascript-typescript
             runner: ubuntu-24.04
             build-mode: none
-          - language: c-cpp
-            runner: ubuntu-24.04
-            build-mode: none
           - language: python
             runner: ubuntu-24.04
             build-mode: none
@@ -60,6 +57,54 @@ jobs:
         uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           category: "/language:${{ matrix.language }}"
+
+  analyze-c-cpp:
+    name: Analyze (c-cpp-${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            runner: windows-2025
+          - target: linux
+            runner: ubuntu-24.04
+          - target: macos
+            runner: macos-26
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          build-mode: manual
+          languages: c-cpp
+          queries: security-extended
+
+      - name: Build Windows Computer Use sources
+        if: matrix.target == 'windows'
+        run: node packages/computer-use-os/native/windows/build.mjs
+
+      - name: Build native service host sources
+        run: node packages/platform-services/native/service-host/build.mjs
+
+      - name: Analyze repository
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          category: "/language:c-cpp/platform:${{ matrix.target }}"
 
   analyze-swift:
     name: Analyze (swift)
