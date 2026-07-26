@@ -36,7 +36,7 @@ export const englishMessages = {
       "This installation is unsupported. Controls are available only when Main reports the corresponding runtime capability as ready.",
   },
   auth: {
-    releaseNote: "Pre-release software · No supported release is published.",
+    releaseNote: "Release status is verified after sign-in.",
     signInTitle: "Sign in to OpenDelegate",
     signInIntro: "Use the owner passphrase created on this Main.",
     ownerPassphrase: "Owner passphrase",

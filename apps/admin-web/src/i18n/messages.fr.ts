@@ -39,7 +39,7 @@ export const frenchMessages = {
       "Cette installation n’est pas prise en charge. Les commandes ne sont disponibles que lorsque le Main déclare prête la fonctionnalité d’exécution correspondante.",
   },
   auth: {
-    releaseNote: "Logiciel en préversion · Aucune version prise en charge n’est publiée.",
+    releaseNote: "L’état de la version est vérifié après la connexion.",
     signInTitle: "Se connecter à OpenDelegate",
     signInIntro: "Utilisez la phrase secrète du propriétaire créée sur cet appareil principal.",
     ownerPassphrase: "Phrase secrète du propriétaire",

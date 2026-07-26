@@ -248,6 +248,7 @@ describe("Admin authentication and Task control", () => {
     render(<AdminApplication api={new BrowserAdminApi()} />);
 
     expect(await screen.findByRole("heading", { name: "Sign in to OpenDelegate" })).toBeTruthy();
+    expect(screen.getByText("Release status is verified after sign-in.")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Admin is temporarily unavailable" })).toBeNull();
     expect(document.body.textContent).not.toContain(privateSentinel);
   });

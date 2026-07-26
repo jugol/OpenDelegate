@@ -37,7 +37,7 @@ export const koreanMessages = {
       "이 설치는 지원 대상이 아닙니다. 메인이 해당 런타임 기능을 준비됨으로 보고할 때만 관련 제어 기능을 사용할 수 있습니다.",
   },
   auth: {
-    releaseNote: "프리릴리스 소프트웨어 · 지원되는 릴리스가 게시되지 않았습니다.",
+    releaseNote: "로그인 후 릴리스 상태를 검증합니다.",
     signInTitle: "OpenDelegate에 로그인",
     signInIntro: "이 메인에서 생성한 소유자 암호를 사용하세요.",
     ownerPassphrase: "소유자 암호",

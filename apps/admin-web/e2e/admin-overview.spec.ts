@@ -733,7 +733,9 @@ async function installApi(
     if (path === "/api/v1/runtime/features" && request.method() === "GET") {
       await route.fulfill({
         json: {
+          declaredReleaseChannel: "development",
           releaseChannel: "development",
+          releaseVerification: { status: "not-applicable" },
           taskExecution: { status: "ready", code: "TASK_EXECUTION_READY" },
           configurationAgent: { status: "ready", code: "CONFIGURATION_AGENT_READY" },
           discord: { status: "unavailable", code: "DISCORD_NOT_CONFIGURED" },

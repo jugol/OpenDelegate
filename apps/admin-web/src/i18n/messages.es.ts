@@ -39,7 +39,7 @@ export const spanishMessages = {
       "Esta instalación no cuenta con soporte. Los controles solo están disponibles cuando el Main declara lista la función de ejecución correspondiente.",
   },
   auth: {
-    releaseNote: "Software preliminar · No se ha publicado ninguna versión con soporte.",
+    releaseNote: "El estado de la versión se verifica después de iniciar sesión.",
     signInTitle: "Iniciar sesión en OpenDelegate",
     signInIntro: "Usa la frase de contraseña del propietario creada en este dispositivo principal.",
     ownerPassphrase: "Frase de contraseña del propietario",

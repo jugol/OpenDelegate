@@ -33,7 +33,7 @@ export const simplifiedChineseMessages = {
       "此安装不受支持。仅当主设备报告相应运行环境功能已就绪时，相关控制项才可使用。",
   },
   auth: {
-    releaseNote: "预发布软件 · 当前尚未发布受支持的正式版本。",
+    releaseNote: "登录后将验证发布状态。",
     signInTitle: "登录 OpenDelegate",
     signInIntro: "请输入在此主设备上创建的所有者口令。",
     ownerPassphrase: "所有者口令",

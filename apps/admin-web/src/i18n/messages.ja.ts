@@ -38,7 +38,7 @@ export const japaneseMessages = {
       "このインストールはサポート対象外です。該当するランタイム機能を Main が準備完了と報告した場合にのみ、各操作を利用できます。",
   },
   auth: {
-    releaseNote: "プレリリースソフトウェア · サポート対象のリリースは未公開です。",
+    releaseNote: "サインイン後にリリース状態を検証します。",
     signInTitle: "OpenDelegate にサインイン",
     signInIntro: "このメインで作成した所有者パスフレーズを使用してください。",
     ownerPassphrase: "所有者パスフレーズ",
