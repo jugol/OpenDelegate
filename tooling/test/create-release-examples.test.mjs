@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -124,6 +124,53 @@ test("release example publication rolls back the complete directory after final 
   await assert.rejects(access(destination), (error) => error?.code === "ENOENT");
 });
 
+test("release example rollback preserves a replaced child file", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-release-examples-file-replacement-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const destination = join(root, "generated");
+  const readme = join(destination, "README.md");
+
+  await assert.rejects(
+    createReleaseExamples(
+      { destination },
+      {
+        async verifyPublished() {
+          await rm(readme);
+          await writeFile(readme, "owner replacement\n", "utf8");
+          throw new Error("fixture replaced a generated file");
+        },
+      },
+    ),
+  );
+  assert.equal(await readFile(readme, "utf8"), "owner replacement\n");
+});
+
+test("release example rollback preserves a replaced child directory", async (t) => {
+  const root = await mkdtemp(
+    join(tmpdir(), "opendelegate-release-examples-directory-replacement-"),
+  );
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const destination = join(root, "generated");
+  const plans = join(destination, "plans");
+  const originalPlans = join(root, "original-plans");
+  const marker = join(plans, "owner-marker.txt");
+
+  await assert.rejects(
+    createReleaseExamples(
+      { destination },
+      {
+        async verifyPublished() {
+          await rename(plans, originalPlans);
+          await mkdir(plans);
+          await writeFile(marker, "owner data\n", "utf8");
+          throw new Error("fixture replaced a generated directory");
+        },
+      },
+    ),
+  );
+  assert.equal(await readFile(marker, "utf8"), "owner data\n");
+});
+
 test("release example validation rejects schema drift and removed placeholder safeguards", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-release-examples-invalid-"));
   t.after(() => rm(root, { force: true, recursive: true }));
@@ -185,6 +232,26 @@ test("release example validation rejects mutation between handle validation and 
     /changed before it could be read/u,
   );
   assert.equal(mutated, true);
+});
+
+test("release example validation rejects a linked validation-root ancestor", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-release-examples-linked-root-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const physicalParent = join(root, "physical");
+  const destination = join(physicalParent, "generated");
+  await mkdir(physicalParent);
+  await createReleaseExamples({ destination });
+
+  const aliasedParent = join(root, "linked-parent");
+  await symlink(physicalParent, aliasedParent, process.platform === "win32" ? "junction" : "dir");
+
+  await assert.rejects(
+    validateReleaseExampleSet({
+      expectedDestination: destination,
+      root: join(aliasedParent, "generated"),
+    }),
+    /linked ancestor|must not be linked/iu,
+  );
 });
 
 test("release example help identifies the safe create-new workflow", () => {

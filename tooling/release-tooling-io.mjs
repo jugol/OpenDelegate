@@ -8,7 +8,6 @@ import {
   open,
   realpath,
   rename,
-  rm,
   rmdir,
   unlink,
 } from "node:fs/promises";
@@ -219,15 +218,20 @@ export async function publishNewFileSet(entries, options = {}) {
   }
   await Promise.all(canonicalEntries.map(({ path }) => assertPathAbsent(path, "A release output")));
 
+  const parentIdentity = await lstat(parent, { bigint: true });
   const temporaryDirectory = await mkdtemp(join(parent, ".opendelegate-release-output-"));
+  const temporaryIdentity = await lstat(temporaryDirectory, { bigint: true });
   const staged = [];
   const published = [];
   try {
     for (let index = 0; index < canonicalEntries.length; index += 1) {
       const entry = canonicalEntries[index];
       const temporaryPath = join(temporaryDirectory, String(index));
-      await writeNewSyncedFile(temporaryPath, entry.bytes, entry.mode);
-      const identity = await lstat(temporaryPath, { bigint: true });
+      const identity = await writeNewSyncedFile(temporaryPath, entry.bytes, entry.mode, {
+        identity: temporaryIdentity,
+        label: "release temporary directory",
+        path: temporaryDirectory,
+      });
       staged.push({ entry, identity, temporaryPath });
     }
     for (let index = 0; index < staged.length; index += 1) {
@@ -262,13 +266,30 @@ export async function publishNewFileSet(entries, options = {}) {
     }
     await options.verifyPublished?.(Object.freeze([...verified]));
     await syncDirectory(parent);
-    await Promise.all(staged.map(({ temporaryPath }) => unlink(temporaryPath)));
-    await rmdir(temporaryDirectory);
+    await removePinnedDirectoryTree({
+      entries: staged.map(({ identity }, index) => ({
+        identity,
+        path: String(index),
+        type: "file",
+      })),
+      identity: temporaryIdentity,
+      label: "release temporary directory",
+      path: temporaryDirectory,
+    });
     await syncDirectory(parent);
     return Object.freeze(verified);
   } catch (error) {
-    await cleanupPublishedOutputs(published);
-    await removePrivateTemporaryDirectory(temporaryDirectory, parent);
+    await cleanupPublishedOutputs(published, parent, parentIdentity);
+    await removePinnedDirectoryTree({
+      entries: staged.map(({ identity }, index) => ({
+        identity,
+        path: String(index),
+        type: "file",
+      })),
+      identity: temporaryIdentity,
+      label: "release temporary directory",
+      path: temporaryDirectory,
+    });
     if (isNodeError(error, "EEXIST")) {
       throw new Error("A release output already exists; nothing was overwritten.", {
         cause: error,
@@ -299,6 +320,14 @@ export async function publishNewDirectoryTree(destination, entries, options = {}
       throw new Error("A release configuration file mode is invalid.");
     }
   }
+  for (const path of paths) {
+    const segments = path.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      if (paths.has(segments.slice(0, index).join("/"))) {
+        throw new Error("Release configuration file paths must not contain prefix conflicts.");
+      }
+    }
+  }
   destination = await requireCanonicalNewPath(destination, "release configuration destination");
   const parent = await requireCanonicalDirectory(
     dirname(destination),
@@ -308,13 +337,41 @@ export async function publishNewDirectoryTree(destination, entries, options = {}
     throw new Error("The release configuration destination parent must not be linked.");
   }
   await assertPathAbsent(destination, "The release configuration output");
+  const parentIdentity = await lstat(parent, { bigint: true });
   const temporaryDirectory = await mkdtemp(join(parent, ".opendelegate-release-configure-"));
+  const temporaryIdentity = await lstat(temporaryDirectory, { bigint: true });
+  const relativePaths = entries.map(({ path }) => path);
+  const directoryPaths = new Set();
+  for (const relativePath of relativePaths) {
+    const segments = relativePath.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      directoryPaths.add(segments.slice(0, index).join("/"));
+    }
+  }
+  const orderedDirectoryPaths = [...directoryPaths].sort((left, right) => {
+    const depthDifference = left.split("/").length - right.split("/").length;
+    return depthDifference !== 0 ? depthDifference : left < right ? -1 : left > right ? 1 : 0;
+  });
+  const pinnedEntries = [];
   let publishedIdentity;
   try {
+    for (const relativePath of orderedDirectoryPaths) {
+      const outputPath = join(temporaryDirectory, ...relativePath.split("/"));
+      await mkdir(outputPath, { mode: 0o700 });
+      const identity = await lstat(outputPath, { bigint: true });
+      if (!identity.isDirectory() || identity.isSymbolicLink()) {
+        throw new Error("A staged release configuration directory is unsafe.");
+      }
+      pinnedEntries.push(Object.freeze({ identity, path: relativePath, type: "directory" }));
+    }
     for (const entry of entries) {
       const outputPath = join(temporaryDirectory, ...entry.path.split("/"));
-      await mkdir(dirname(outputPath), { recursive: true, mode: 0o700 });
-      await writeNewSyncedFile(outputPath, entry.bytes, entry.mode);
+      const identity = await writeNewSyncedFile(outputPath, entry.bytes, entry.mode, {
+        identity: temporaryIdentity,
+        label: "release configuration temporary directory",
+        path: temporaryDirectory,
+      });
+      pinnedEntries.push(Object.freeze({ identity, path: entry.path, type: "file" }));
       const verified = await hashStableRegularFile(outputPath);
       if (
         verified.sha256 !== digestBytes(entry.bytes) ||
@@ -330,7 +387,12 @@ export async function publishNewDirectoryTree(destination, entries, options = {}
     for (const name of topLevelEntries) {
       await rename(join(temporaryDirectory, name), join(destination, name));
     }
-    await rmdir(temporaryDirectory);
+    await removePinnedDirectoryTree({
+      entries: pinnedEntries,
+      identity: temporaryIdentity,
+      label: "release configuration temporary directory",
+      path: temporaryDirectory,
+    });
     await options.verifyPublished?.(destination);
     await syncDirectory(destination);
     await syncDirectory(parent);
@@ -348,18 +410,20 @@ export async function publishNewDirectoryTree(destination, entries, options = {}
     });
   } catch (error) {
     if (publishedIdentity !== undefined) {
-      try {
-        const current = await lstat(destination, { bigint: true });
-        if (sameFileIdentity(current, publishedIdentity)) {
-          await rm(destination, { force: true, recursive: true });
-        }
-      } catch (cleanupError) {
-        if (!isNodeError(cleanupError, "ENOENT")) {
-          throw cleanupError;
-        }
-      }
+      await removePinnedDirectoryTree({
+        entries: pinnedEntries,
+        identity: publishedIdentity,
+        label: "release configuration output",
+        path: destination,
+      });
     }
-    await removePrivateTemporaryDirectory(temporaryDirectory, parent);
+    await revalidatePinnedDirectory(parent, parentIdentity, "release configuration output parent");
+    await removePinnedDirectoryTree({
+      entries: pinnedEntries,
+      identity: temporaryIdentity,
+      label: "release configuration temporary directory",
+      path: temporaryDirectory,
+    });
     if (isNodeError(error, "EEXIST") || isNodeError(error, "ENOTEMPTY")) {
       throw new Error("The release configuration output already exists; nothing was overwritten.", {
         cause: error,
@@ -438,15 +502,16 @@ export function assertAbsolutePath(value, label) {
   }
 }
 
-export async function assertNoLinkedPathComponents(path, label) {
+export async function assertNoLinkedPathComponents(path, label, dependencies = {}) {
   assertAbsolutePath(path, label);
+  const pathLstat = dependencies.lstat ?? lstat;
   const absolutePath = resolve(path);
   const root = parse(absolutePath).root;
   const suffix = relative(root, absolutePath);
   let current = root;
   for (const segment of suffix.split(sep).filter((value) => value !== "")) {
     current = join(current, segment);
-    const metadata = await lstat(current);
+    const metadata = await pathLstat(current);
     if (metadata.isSymbolicLink()) {
       throw new Error(`The ${label} must not use a symlink, junction, or linked ancestor.`);
     }
@@ -489,14 +554,57 @@ export function isSameOrDescendant(root, path) {
   );
 }
 
-async function writeNewSyncedFile(path, bytes, mode) {
+async function writeNewSyncedFile(path, bytes, mode, boundary) {
   const handle = await open(path, "wx", mode);
+  let identity;
+  let operationError;
   try {
+    identity = await handle.stat({ bigint: true });
     await handle.writeFile(bytes);
     await handle.sync();
-  } finally {
-    await handle.close();
+  } catch (error) {
+    operationError = error;
   }
+  try {
+    await handle.close();
+  } catch (error) {
+    operationError ??= error;
+  }
+  if (operationError !== undefined) {
+    if (identity !== undefined) {
+      try {
+        await removePinnedCreatedFile(path, identity, boundary);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [operationError, cleanupError],
+          "A release file write failed and its partial output could not be removed.",
+          { cause: cleanupError },
+        );
+      }
+    }
+    throw operationError;
+  }
+  return identity;
+}
+
+async function removePinnedCreatedFile(path, identity, boundary) {
+  if (
+    !isSameOrDescendant(boundary.path, path) ||
+    comparablePath(boundary.path) === comparablePath(path)
+  ) {
+    throw new Error("A partial release file escaped its pinned staging root.");
+  }
+  await revalidatePinnedDirectory(boundary.path, boundary.identity, boundary.label);
+  const before = await lstat(path, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink() || !sameFileIdentity(before, identity)) {
+    throw new Error("A partial release file changed before cleanup.");
+  }
+  await assertNoLinkedPathComponents(path, "partial release file");
+  const after = await lstat(path, { bigint: true });
+  if (!sameFileIdentity(before, after) || !sameFileIdentity(after, identity)) {
+    throw new Error("A partial release file changed before cleanup.");
+  }
+  await unlink(path);
 }
 
 async function syncDirectory(path) {
@@ -511,12 +619,26 @@ async function syncDirectory(path) {
   }
 }
 
-async function cleanupPublishedOutputs(published) {
+async function cleanupPublishedOutputs(published, parent, parentIdentity) {
   for (const item of [...published].reverse()) {
+    await revalidatePinnedDirectory(parent, parentIdentity, "release output directory");
+    if (comparablePath(dirname(item.entry.path)) !== comparablePath(parent)) {
+      throw new Error("A published release output escaped its pinned output directory.");
+    }
     try {
+      const before = await lstat(item.entry.path, { bigint: true });
+      if (before.isSymbolicLink()) {
+        throw new Error("A published release output changed into a linked path.");
+      }
+      if (!sameFile(before, item.identity)) {
+        continue;
+      }
+      await assertNoLinkedPathComponents(item.entry.path, "published release output");
       const current = await lstat(item.entry.path, { bigint: true });
-      if (sameFileIdentity(current, item.identity)) {
+      if (sameFile(before, current) && sameFile(current, item.identity)) {
         await unlink(item.entry.path);
+      } else {
+        throw new Error("A published release output changed before cleanup.");
       }
     } catch (error) {
       if (!isNodeError(error, "ENOENT")) {
@@ -524,19 +646,151 @@ async function cleanupPublishedOutputs(published) {
       }
     }
   }
+  await revalidatePinnedDirectory(parent, parentIdentity, "release output directory");
 }
 
-async function removePrivateTemporaryDirectory(path, parent) {
+export async function revalidatePinnedDirectory(path, identity, label, options = {}) {
+  const allowAbsent = options.allowAbsent === true;
+  let before;
   try {
-    const [canonicalParent, canonicalPath] = await Promise.all([realpath(parent), realpath(path)]);
-    if (!isStrictDescendant(canonicalParent, canonicalPath)) {
-      throw new Error("The release temporary directory escaped its output root.");
-    }
-    await rm(canonicalPath, { force: true, recursive: true });
+    before = await lstat(path, { bigint: true });
   } catch (error) {
-    if (!isNodeError(error, "ENOENT")) {
+    if (allowAbsent && isNodeError(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+  if (!before.isDirectory() || before.isSymbolicLink() || !sameFileIdentity(before, identity)) {
+    throw new Error(`The ${label} changed before cleanup.`);
+  }
+  await assertNoLinkedPathComponents(path, label);
+  const after = await lstat(path, { bigint: true });
+  if (
+    !after.isDirectory() ||
+    after.isSymbolicLink() ||
+    !sameFileIdentity(before, after) ||
+    !sameFileIdentity(after, identity)
+  ) {
+    throw new Error(`The ${label} changed before cleanup.`);
+  }
+  return true;
+}
+
+export async function removePinnedDirectoryTree(input) {
+  requireExactKeys(
+    input,
+    ["entries", "identity", "label", "path"],
+    "pinned directory cleanup input",
+  );
+  assertAbsolutePath(input.path, input.label);
+  if (
+    typeof input.label !== "string" ||
+    input.label.length === 0 ||
+    !Array.isArray(input.entries)
+  ) {
+    throw new Error("The pinned directory cleanup input is invalid.");
+  }
+  const paths = new Set();
+  for (const entry of input.entries) {
+    requireExactKeys(entry, ["identity", "path", "type"], "pinned directory cleanup entry");
+    assertPortableRelativePath(entry.path, `${input.label} entry`);
+    if (entry.type !== "file" && entry.type !== "directory") {
+      throw new Error(`The ${input.label} cleanup entry type is invalid.`);
+    }
+    const comparable = process.platform === "win32" ? entry.path.toLowerCase() : entry.path;
+    if (paths.has(comparable)) {
+      throw new Error(`The ${input.label} cleanup paths must be distinct.`);
+    }
+    paths.add(comparable);
+  }
+  if (
+    !(await revalidatePinnedDirectory(input.path, input.identity, input.label, {
+      allowAbsent: true,
+    }))
+  ) {
+    return;
+  }
+
+  for (const entry of input.entries.filter(({ type }) => type === "file")) {
+    if (
+      !(await revalidatePinnedDirectory(input.path, input.identity, input.label, {
+        allowAbsent: true,
+      }))
+    ) {
+      return;
+    }
+    const absolutePath = join(input.path, ...entry.path.split("/"));
+    let before;
+    try {
+      before = await lstat(absolutePath, { bigint: true });
+    } catch (error) {
+      if (isNodeError(error, "ENOENT")) {
+        continue;
+      }
       throw error;
     }
+    if (!before.isFile() || before.isSymbolicLink() || !sameFileIdentity(before, entry.identity)) {
+      throw new Error(`The ${input.label} entry changed before cleanup.`);
+    }
+    await assertNoLinkedPathComponents(absolutePath, `${input.label} entry`);
+    const after = await lstat(absolutePath, { bigint: true });
+    if (!sameFileIdentity(before, after) || !sameFileIdentity(after, entry.identity)) {
+      throw new Error(`The ${input.label} entry changed before cleanup.`);
+    }
+    await unlink(absolutePath);
+  }
+
+  const directories = input.entries
+    .filter(({ type }) => type === "directory")
+    .sort((left, right) => {
+      const depthDifference = right.path.split("/").length - left.path.split("/").length;
+      return depthDifference !== 0
+        ? depthDifference
+        : left.path < right.path
+          ? -1
+          : left.path > right.path
+            ? 1
+            : 0;
+    });
+  for (const entry of directories) {
+    if (
+      !(await revalidatePinnedDirectory(input.path, input.identity, input.label, {
+        allowAbsent: true,
+      }))
+    ) {
+      return;
+    }
+    const absolutePath = join(input.path, ...entry.path.split("/"));
+    let before;
+    try {
+      before = await lstat(absolutePath, { bigint: true });
+    } catch (error) {
+      if (isNodeError(error, "ENOENT")) {
+        continue;
+      }
+      throw error;
+    }
+    if (
+      !before.isDirectory() ||
+      before.isSymbolicLink() ||
+      !sameFileIdentity(before, entry.identity)
+    ) {
+      throw new Error(`The ${input.label} directory changed before cleanup.`);
+    }
+    await assertNoLinkedPathComponents(absolutePath, `${input.label} directory`);
+    const after = await lstat(absolutePath, { bigint: true });
+    if (!sameFileIdentity(before, after) || !sameFileIdentity(after, entry.identity)) {
+      throw new Error(`The ${input.label} directory changed before cleanup.`);
+    }
+    await rmdir(absolutePath);
+  }
+
+  if (
+    await revalidatePinnedDirectory(input.path, input.identity, input.label, {
+      allowAbsent: true,
+    })
+  ) {
+    await rmdir(input.path);
   }
 }
 
@@ -554,16 +808,6 @@ function sameFileIdentity(left, right) {
     (left.dev === 0n || right.dev === 0n || left.dev === right.dev) &&
     left.ino !== 0n &&
     left.ino === right.ino
-  );
-}
-
-function isStrictDescendant(root, path) {
-  const difference = relative(resolve(root), resolve(path));
-  return (
-    difference !== "" &&
-    difference !== ".." &&
-    !difference.startsWith(`..${sep}`) &&
-    !isAbsolute(difference)
   );
 }
 

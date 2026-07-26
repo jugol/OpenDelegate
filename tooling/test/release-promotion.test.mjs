@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createPublicKey } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -16,6 +28,7 @@ import {
 } from "./support/release-promotion-fixture.mjs";
 import {
   hashStableRegularFile,
+  publishNewDirectoryTree,
   publishNewFileSet,
   readPinnedBytes,
   requireCanonicalDirectory,
@@ -207,6 +220,76 @@ test("create-new release output sets roll back every linked file after a partial
       },
     ),
     /fixture interruption/u,
+  );
+  assert.deepEqual(await readdir(root), []);
+});
+
+test("file-set rollback never follows a replaced output-directory ancestor", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-output-cleanup-boundary-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const output = join(root, "output");
+  const originalOutput = join(root, "original-output");
+  const victim = join(root, "victim");
+  await Promise.all([mkdir(output), mkdir(victim)]);
+  let marker;
+  let swapped = false;
+
+  try {
+    await assert.rejects(
+      publishNewFileSet(
+        [
+          { path: join(output, "first.json"), bytes: Buffer.from("first\n", "utf8"), mode: 0o644 },
+          {
+            path: join(output, "second.json"),
+            bytes: Buffer.from("second\n", "utf8"),
+            mode: 0o644,
+          },
+        ],
+        {
+          async afterPublish(index) {
+            if (index !== 0) {
+              return;
+            }
+            const temporaryName = (await readdir(output)).find((name) =>
+              name.startsWith(".opendelegate-release-output-"),
+            );
+            assert.notEqual(temporaryName, undefined);
+            const victimTemporaryDirectory = join(victim, temporaryName);
+            await mkdir(victimTemporaryDirectory);
+            marker = join(victimTemporaryDirectory, "owner-marker.txt");
+            await writeFile(marker, "owner data\n", "utf8");
+            await rename(output, originalOutput);
+            await symlink(victim, output, process.platform === "win32" ? "junction" : "dir");
+            swapped = true;
+            throw new Error("fixture output-root replacement");
+          },
+        },
+      ),
+    );
+    assert.equal(await readFile(marker, "utf8"), "owner data\n");
+  } finally {
+    if (swapped) {
+      if (process.platform === "win32") {
+        await rmdir(output);
+      } else {
+        await unlink(output);
+      }
+      await rename(originalOutput, output);
+    }
+  }
+});
+
+test("directory-tree publication rejects file-prefix conflicts before mutation", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-output-prefix-conflict-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const destination = join(root, "output");
+
+  await assert.rejects(
+    publishNewDirectoryTree(destination, [
+      { path: "a", bytes: Buffer.from("file\n", "utf8"), mode: 0o644 },
+      { path: "a/b", bytes: Buffer.from("nested\n", "utf8"), mode: 0o644 },
+    ]),
+    /prefix conflicts/u,
   );
   assert.deepEqual(await readdir(root), []);
 });

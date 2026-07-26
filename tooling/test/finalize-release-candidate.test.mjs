@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test from "node:test";
@@ -9,6 +21,7 @@ import {
   finalizeReleaseCandidate,
   parseReleaseFinalizationArguments,
 } from "../finalize-release-candidate.mjs";
+import { createDeterministicReleaseArchive } from "../create-release-archive.mjs";
 import { releaseSignerBrokerProtocol } from "../external-release-signer.mjs";
 import {
   authorizeCredentialUse,
@@ -51,6 +64,10 @@ test("finalization archives, externally signs, verifies, and publishes an atomic
   assert.equal(runnerRecord.runner.brokerEndpointSha256, fixture.signing.broker.endpointSha256);
   assert.equal(runnerRecord.runner.brokerProtocol, releaseSignerBrokerProtocol);
   assert.equal(runnerRecord.runner.brokerTransportKeyId, fixture.signing.broker.transportKeyId);
+  assert.equal(
+    runnerRecord.source.releaseLogic.some(({ path }) => path === "tooling/release-tooling-io.mjs"),
+    true,
+  );
   assert.equal(Object.hasOwn(runnerRecord.runner, "signerExecutableSha256"), false);
   assert.equal(Object.hasOwn(runnerRecord.runner, "invocationArtifactSha256"), false);
   assert.equal(JSON.stringify(runnerRecord).includes(fixture.root), false);
@@ -227,6 +244,104 @@ test("finalization rejects an archive path replaced after its file handle opens"
   assert.equal(hookCalls, 1);
   assert.equal(signerInvocations, 0);
   assert.deepEqual(await readdirNames(fixture.destination), []);
+});
+
+test("finalization rejects a linked output ancestor before credential use", async (t) => {
+  const fixture = await createFinalizationFixture(t);
+  let linkedAncestor;
+  let exposeLinkedAncestor = false;
+  let signerInvocations = 0;
+
+  await assert.rejects(
+    finalizeReleaseCandidate(fixture.input, {
+      ...fixture.dependencies,
+      integrity: fixture.integrity,
+      readSourceIdentity: fixture.readSourceIdentity,
+      runner: fixture.runner,
+      async signWithPolicy() {
+        signerInvocations += 1;
+        throw new Error("The signer must not be invoked.");
+      },
+      stableFile: {
+        async afterOpen(path) {
+          if (
+            linkedAncestor === undefined &&
+            basename(path).endsWith(".zip") &&
+            basename(dirname(path)).startsWith(".opendelegate-finalize-")
+          ) {
+            linkedAncestor = dirname(path);
+            exposeLinkedAncestor = true;
+          }
+        },
+        async lstat(path, options) {
+          if (exposeLinkedAncestor && path === linkedAncestor) {
+            return { isSymbolicLink: () => true };
+          }
+          return lstat(path, options);
+        },
+      },
+    }),
+    /linked ancestor|symlink|junction/iu,
+  );
+  assert.notEqual(linkedAncestor, undefined);
+  assert.equal(signerInvocations, 0);
+  assert.deepEqual(await readdirNames(fixture.destination), []);
+});
+
+test("finalization cleanup never follows a replaced output-directory ancestor", async (t) => {
+  const fixture = await createFinalizationFixture(t);
+  const originalDestination = join(fixture.root, "original-output");
+  const victim = join(fixture.root, "victim-output");
+  await mkdir(victim);
+  let marker;
+  let swapped = false;
+  let signerInvocations = 0;
+
+  try {
+    await assert.rejects(
+      finalizeReleaseCandidate(fixture.input, {
+        ...fixture.dependencies,
+        async createArchive(input) {
+          const result = await createDeterministicReleaseArchive(input);
+          const temporaryName = basename(dirname(input.destination));
+          const victimTemporaryDirectory = join(victim, temporaryName);
+          await mkdir(victimTemporaryDirectory);
+          await copyFile(
+            input.destination,
+            join(victimTemporaryDirectory, basename(input.destination)),
+          );
+          marker = join(victimTemporaryDirectory, "owner-marker.txt");
+          await writeFile(marker, "owner data\n", "utf8");
+          await rename(fixture.destination, originalDestination);
+          await symlink(
+            victim,
+            fixture.destination,
+            process.platform === "win32" ? "junction" : "dir",
+          );
+          swapped = true;
+          return result;
+        },
+        integrity: fixture.integrity,
+        readSourceIdentity: fixture.readSourceIdentity,
+        runner: fixture.runner,
+        async signWithPolicy() {
+          signerInvocations += 1;
+          throw new Error("The signer must not be invoked.");
+        },
+      }),
+    );
+    assert.equal(await readFile(marker, "utf8"), "owner data\n");
+    assert.equal(signerInvocations, 0);
+  } finally {
+    if (swapped) {
+      if (process.platform === "win32") {
+        await rmdir(fixture.destination);
+      } else {
+        await unlink(fixture.destination);
+      }
+      await rename(originalDestination, fixture.destination);
+    }
+  }
 });
 
 test("finalization detects candidate changes and verifier failure before exposing outputs", async (t) => {

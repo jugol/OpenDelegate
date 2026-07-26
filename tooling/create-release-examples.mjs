@@ -5,7 +5,12 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { releaseSignerBrokerProtocol } from "./external-release-signer.mjs";
-import { publishNewDirectoryTree, requireExactKeys } from "./release-tooling-io.mjs";
+import {
+  assertNoLinkedPathComponents,
+  publishNewDirectoryTree,
+  requireCanonicalDirectory,
+  requireExactKeys,
+} from "./release-tooling-io.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const PLACEHOLDER_SHA256 = "0".repeat(64);
@@ -109,12 +114,15 @@ export async function validateReleaseExampleSet(input, dependencies = {}) {
     }
   }
   const expectedDestination = resolve(input.expectedDestination);
-  const root = resolve(input.root);
+  const root = await requireCanonicalDirectory(
+    resolve(input.root),
+    "release-example validation root",
+  );
   const paths = await listRegularExampleFiles(root);
   if (JSON.stringify(paths) !== JSON.stringify(RELEASE_EXAMPLE_PATHS)) {
     throw new Error("The release-example file inventory does not match the strict schema.");
   }
-  const readme = await readBoundedText(join(root, "README.md"), dependencies);
+  const readme = await readBoundedText(join(root, "README.md"), root, dependencies);
   if (
     readme !== renderReleaseExampleReadme() ||
     !readme.includes("NOT-A-RELEASE") ||
@@ -127,7 +135,7 @@ export async function validateReleaseExampleSet(input, dependencies = {}) {
     await Promise.all(
       RELEASE_EXAMPLE_PATHS.filter((path) => path.endsWith(".json")).map(async (path) => [
         path,
-        await readCanonicalExampleJson(join(root, ...path.split("/")), dependencies),
+        await readCanonicalExampleJson(join(root, ...path.split("/")), root, dependencies),
       ]),
     ),
   );
@@ -1103,8 +1111,8 @@ async function listRegularExampleFiles(root) {
   return files.sort(compareCodeUnits);
 }
 
-async function readCanonicalExampleJson(path, dependencies) {
-  const text = await readBoundedText(path, dependencies);
+async function readCanonicalExampleJson(path, root, dependencies) {
+  const text = await readBoundedText(path, root, dependencies);
   let value;
   try {
     value = JSON.parse(text);
@@ -1117,7 +1125,12 @@ async function readCanonicalExampleJson(path, dependencies) {
   return Object.freeze({ text, value });
 }
 
-async function readBoundedText(path, dependencies = {}) {
+async function readBoundedText(path, root, dependencies = {}) {
+  if (!isStrictDescendant(root, path)) {
+    throw new Error("A release-example file escaped its canonical validation root.");
+  }
+  const pathLstat = dependencies.lstat ?? lstat;
+  const pathRealpath = dependencies.realpath ?? realpath;
   const flags =
     process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
   const handle = await open(path, flags);
@@ -1128,10 +1141,14 @@ async function readBoundedText(path, dependencies = {}) {
       throw new Error("A release-example file is not a bounded regular file.");
     }
     await dependencies.afterFileMetadata?.(path);
-    const canonicalPath = await realpath(path);
+    await assertNoLinkedPathComponents(path, "release-example file", { lstat: pathLstat });
+    const canonicalPath = await pathRealpath(path);
+    if (!isStrictDescendant(root, canonicalPath)) {
+      throw new Error("A release-example file escaped its canonical validation root.");
+    }
     const [pathBefore, canonicalBefore] = await Promise.all([
-      lstat(path, { bigint: true }),
-      lstat(canonicalPath, { bigint: true }),
+      pathLstat(path, { bigint: true }),
+      pathLstat(canonicalPath, { bigint: true }),
     ]);
     if (
       pathBefore.isSymbolicLink() ||
@@ -1156,10 +1173,15 @@ async function readBoundedText(path, dependencies = {}) {
       position += bytesRead;
     }
     const after = await handle.stat({ bigint: true });
-    const canonicalPathAfter = await realpath(path);
+    await assertNoLinkedPathComponents(path, "release-example file", { lstat: pathLstat });
+    const canonicalPathAfter = await pathRealpath(path);
+    if (!isStrictDescendant(root, canonicalPathAfter)) {
+      bytes.fill(0);
+      throw new Error("A release-example file escaped its canonical validation root.");
+    }
     const [pathAfter, canonicalAfter] = await Promise.all([
-      lstat(path, { bigint: true }),
-      lstat(canonicalPathAfter, { bigint: true }),
+      pathLstat(path, { bigint: true }),
+      pathLstat(canonicalPathAfter, { bigint: true }),
     ]);
     if (
       pathAfter.isSymbolicLink() ||
@@ -1186,6 +1208,16 @@ function sameCanonicalPath(left, right) {
   return process.platform === "win32"
     ? resolve(left).toLowerCase() === resolve(right).toLowerCase()
     : resolve(left) === resolve(right);
+}
+
+function isStrictDescendant(root, candidate) {
+  const difference = relative(resolve(root), resolve(candidate));
+  return (
+    difference !== "" &&
+    difference !== ".." &&
+    !difference.startsWith(`..${sep}`) &&
+    !isAbsolute(difference)
+  );
 }
 
 function sameStableFile(left, right) {

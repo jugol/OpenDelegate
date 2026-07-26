@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { link, lstat, mkdtemp, open, realpath, rm, rmdir, unlink } from "node:fs/promises";
+import { link, lstat, mkdtemp, open, realpath, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +14,6 @@ import {
   revalidatePinnedReleaseGitProvenance,
 } from "./release-git-provenance.mjs";
 import {
-  hashCurrentNodeExecutable,
   pinReleaseRunnerIdentity,
   revalidateReleaseRunnerIdentity,
 } from "./release-runner-identity.mjs";
@@ -25,6 +24,12 @@ import {
   readPinnedReleaseSigningPolicy,
   signWithPinnedReleasePolicy,
 } from "./release-signing-policy.mjs";
+import {
+  assertNoLinkedPathComponents,
+  removePinnedDirectoryTree,
+  requireCanonicalDirectory,
+  revalidatePinnedDirectory,
+} from "./release-tooling-io.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const repositoryRoot = resolve(dirname(currentFile), "..");
@@ -118,9 +123,19 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       `Release candidates must be finalized on their target-native Node.js ${REQUIRED_RELEASE_NODE_VERSION} runner.`,
     );
   }
+  let runtimeExecutableHasher = dependencies.hashRuntimeExecutable;
+  if (runtimeExecutableHasher === undefined) {
+    const runtimeExecutablePath = await realpath(process.execPath);
+    const runtimeExecutableRoot = await requireCanonicalDirectory(
+      dirname(runtimeExecutablePath),
+      "release runtime executable parent",
+    );
+    runtimeExecutableHasher = () =>
+      hashStableRegularFile(runtimeExecutablePath, runtimeExecutableRoot, stableFileDependencies);
+  }
   const runnerIdentity = await pinReleaseRunnerIdentity({
     expectedExecutableSha256: input.runnerExecutableSha256,
-    hashRuntimeExecutable: dependencies.hashRuntimeExecutable ?? hashCurrentNodeExecutable,
+    hashRuntimeExecutable: runtimeExecutableHasher,
     runner: {
       architecture: runner.architecture,
       nodeVersion: runner.nodeVersion,
@@ -147,6 +162,7 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     input.destinationDirectory,
     "release output directory",
   );
+  const destinationIdentity = await lstat(destinationDirectory, { bigint: true });
   if (
     isSameOrDescendant(candidateRoot, destinationDirectory) ||
     isSameOrDescendant(destinationDirectory, candidateRoot)
@@ -203,26 +219,41 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     METADATA_LIMIT,
   );
   const releaseMetadata = releaseMetadataForFinalization(metadataBytes);
-  const runtimeExecutableHasher =
-    dependencies.hashRuntimeExecutable ??
-    (() => hashStableRegularFile(process.execPath, stableFileDependencies));
   const runnerExecutableBefore = await runtimeExecutableHasher();
   if (runnerExecutableBefore.sha256 !== releaseMetadata.runtimeExecutableSha256) {
     throw new Error("The finalization runtime does not match the candidate's pinned Node.js.");
   }
   const temporaryDirectory = await mkdtemp(join(destinationDirectory, ".opendelegate-finalize-"));
+  const temporaryIdentity = await lstat(temporaryDirectory, { bigint: true });
   const temporaryPaths = Object.freeze({
     archive: join(temporaryDirectory, archiveName),
     attestation: join(temporaryDirectory, `${archiveName}.publisher-attestation.json`),
     runnerRecord: join(temporaryDirectory, `${archiveName}.publisher-runner.json`),
   });
+  const temporaryEntries = [];
   const published = [];
   try {
-    const archiveResult = await (dependencies.createArchive ?? createDeterministicReleaseArchive)({
-      destination: temporaryPaths.archive,
-      sourceDirectory: candidateRoot,
-      timestamp: releaseMetadata.archiveTimestamp,
-    });
+    let archiveResult;
+    try {
+      archiveResult = await (dependencies.createArchive ?? createDeterministicReleaseArchive)({
+        destination: temporaryPaths.archive,
+        sourceDirectory: candidateRoot,
+        timestamp: releaseMetadata.archiveTimestamp,
+      });
+    } catch (error) {
+      const partialArchive = await pinTemporaryFileIfPresent(
+        temporaryPaths.archive,
+        temporaryDirectory,
+        "partial release archive",
+      );
+      if (partialArchive !== undefined) {
+        temporaryEntries.push(partialArchive);
+      }
+      throw error;
+    }
+    temporaryEntries.push(
+      await pinTemporaryFile(temporaryPaths.archive, temporaryDirectory, "release archive"),
+    );
     const secondCandidate = await integrity.inspectCandidate({
       expectedManifestSha256: input.expectedManifestSha256,
       expectedTarget: input.target,
@@ -293,6 +324,7 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       );
       const currentArchive = await hashStableRegularFile(
         temporaryPaths.archive,
+        destinationDirectory,
         stableFileDependencies,
       );
       if (currentArchive.sha256 !== archive.sha256 || currentArchive.size !== archive.size) {
@@ -327,7 +359,23 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       keyId: signed.keyId,
       signature: signed.signature,
     });
-    await writeNewSyncedFile(temporaryPaths.attestation, envelope.canonicalBytes, 0o644);
+    const attestationIdentity = await writeNewSyncedFile(
+      temporaryPaths.attestation,
+      envelope.canonicalBytes,
+      0o644,
+      {
+        identity: temporaryIdentity,
+        label: "release finalization temporary directory",
+        path: temporaryDirectory,
+      },
+    );
+    temporaryEntries.push(
+      Object.freeze({
+        identity: attestationIdentity,
+        path: basename(temporaryPaths.attestation),
+        type: "file",
+      }),
+    );
 
     const verified = await integrity.verifyRelease({
       candidatePublisherEvidence: {
@@ -405,7 +453,23 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       },
     };
     const runnerBytes = Buffer.from(`${JSON.stringify(runnerRecord, null, 2)}\n`, "utf8");
-    await writeNewSyncedFile(temporaryPaths.runnerRecord, runnerBytes, 0o644);
+    const runnerRecordIdentity = await writeNewSyncedFile(
+      temporaryPaths.runnerRecord,
+      runnerBytes,
+      0o644,
+      {
+        identity: temporaryIdentity,
+        label: "release finalization temporary directory",
+        path: temporaryDirectory,
+      },
+    );
+    temporaryEntries.push(
+      Object.freeze({
+        identity: runnerRecordIdentity,
+        path: basename(temporaryPaths.runnerRecord),
+        type: "file",
+      }),
+    );
 
     for (const name of ["archive", "attestation", "runnerRecord"]) {
       const temporaryPath = temporaryPaths[name];
@@ -423,9 +487,9 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
 
     const runnerSha256 = sha256(runnerBytes);
     const verifiedOutputs = await Promise.all([
-      hashStableRegularFile(finalPaths.archive, stableFileDependencies),
-      hashStableRegularFile(finalPaths.attestation, stableFileDependencies),
-      hashStableRegularFile(finalPaths.runnerRecord, stableFileDependencies),
+      hashStableRegularFile(finalPaths.archive, destinationDirectory, stableFileDependencies),
+      hashStableRegularFile(finalPaths.attestation, destinationDirectory, stableFileDependencies),
+      hashStableRegularFile(finalPaths.runnerRecord, destinationDirectory, stableFileDependencies),
     ]);
     if (
       verifiedOutputs[0].sha256 !== archive.sha256 ||
@@ -439,8 +503,12 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     }
 
     await syncDirectory(destinationDirectory);
-    await Promise.all(Object.values(temporaryPaths).map((path) => unlink(path)));
-    await rmdir(temporaryDirectory);
+    await removePinnedDirectoryTree({
+      entries: temporaryEntries,
+      identity: temporaryIdentity,
+      label: "release finalization temporary directory",
+      path: temporaryDirectory,
+    });
     await syncDirectory(destinationDirectory);
     return Object.freeze({
       archive: Object.freeze({ ...archive, path: finalPaths.archive }),
@@ -456,8 +524,13 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       }),
     });
   } catch (error) {
-    await cleanupPublishedOutputs(published);
-    await removePrivateTemporaryDirectory(temporaryDirectory, destinationDirectory);
+    await cleanupPublishedOutputs(published, destinationDirectory, destinationIdentity);
+    await removePinnedDirectoryTree({
+      entries: temporaryEntries,
+      identity: temporaryIdentity,
+      label: "release finalization temporary directory",
+      path: temporaryDirectory,
+    });
     if (isNodeError(error, "EEXIST")) {
       throw new Error("A release-finalization output already exists; nothing was overwritten.", {
         cause: error,
@@ -560,6 +633,7 @@ async function hashReleaseLogic(stableFileDependencies) {
     "tooling/release-git-provenance.mjs",
     "tooling/release-runner-identity.mjs",
     "tooling/release-signing-policy.mjs",
+    "tooling/release-tooling-io.mjs",
   ];
   return Promise.all(
     files.map(async (path) =>
@@ -568,6 +642,7 @@ async function hashReleaseLogic(stableFileDependencies) {
         sha256: (
           await hashStableRegularFile(
             join(repositoryRoot, ...path.split("/")),
+            repositoryRoot,
             stableFileDependencies,
           )
         ).sha256,
@@ -628,14 +703,6 @@ function assertVerifiedPublisherResult(verified, archive, attestationSha256, key
   }
 }
 
-async function requireCanonicalDirectory(path, label) {
-  const metadata = await lstat(path);
-  if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
-    throw new Error(`The ${label} must be a regular, non-linked directory.`);
-  }
-  return realpath(path);
-}
-
 async function assertPathAbsent(path, label) {
   try {
     await lstat(path);
@@ -648,13 +715,76 @@ async function assertPathAbsent(path, label) {
   throw new Error(`${label} already exists; nothing was overwritten.`);
 }
 
-async function writeNewSyncedFile(path, bytes, mode) {
+async function writeNewSyncedFile(path, bytes, mode, boundary) {
   const handle = await open(path, "wx", mode);
+  let identity;
+  let operationError;
   try {
+    identity = await handle.stat({ bigint: true });
     await handle.writeFile(bytes);
     await handle.sync();
-  } finally {
+  } catch (error) {
+    operationError = error;
+  }
+  try {
     await handle.close();
+  } catch (error) {
+    operationError ??= error;
+  }
+  if (operationError !== undefined) {
+    if (identity !== undefined) {
+      try {
+        await removePinnedCreatedFile(path, identity, boundary);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [operationError, cleanupError],
+          "A release file write failed and its partial output could not be removed.",
+          { cause: cleanupError },
+        );
+      }
+    }
+    throw operationError;
+  }
+  return identity;
+}
+
+async function removePinnedCreatedFile(path, identity, boundary) {
+  if (!isStrictDescendant(boundary.path, path)) {
+    throw new Error("A partial release file escaped its pinned staging root.");
+  }
+  await revalidatePinnedDirectory(boundary.path, boundary.identity, boundary.label);
+  const before = await lstat(path, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink() || !sameFileIdentity(before, identity)) {
+    throw new Error("A partial release file changed before cleanup.");
+  }
+  await assertNoLinkedPathComponents(path, "partial release file");
+  const after = await lstat(path, { bigint: true });
+  if (!sameFileIdentity(before, after) || !sameFileIdentity(after, identity)) {
+    throw new Error("A partial release file changed before cleanup.");
+  }
+  await unlink(path);
+}
+
+async function pinTemporaryFile(path, root, label) {
+  if (comparablePath(dirname(path)) !== comparablePath(root)) {
+    throw new Error(`The ${label} escaped its temporary directory.`);
+  }
+  await assertNoLinkedPathComponents(path, label);
+  const identity = await lstat(path, { bigint: true });
+  if (!identity.isFile() || identity.isSymbolicLink()) {
+    throw new Error(`The ${label} is not a regular temporary file.`);
+  }
+  return Object.freeze({ identity, path: basename(path), type: "file" });
+}
+
+async function pinTemporaryFileIfPresent(path, root, label) {
+  try {
+    return await pinTemporaryFile(path, root, label);
+  } catch (error) {
+    if (isNodeError(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
   }
 }
 
@@ -670,7 +800,10 @@ async function syncDirectory(path) {
   }
 }
 
-async function hashStableRegularFile(path, dependencies = {}) {
+async function hashStableRegularFile(path, root, dependencies = {}) {
+  if (!isStrictDescendant(root, path)) {
+    throw new Error("A finalized release output escaped its trusted root.");
+  }
   const pathLstat = dependencies.lstat ?? lstat;
   const pathRealpath = dependencies.realpath ?? realpath;
   const flags =
@@ -692,6 +825,7 @@ async function hashStableRegularFile(path, dependencies = {}) {
       path,
       pathLstat,
       pathRealpath,
+      root,
     });
     await dependencies.afterOpen?.(path);
     const hash = createHash("sha256");
@@ -722,6 +856,7 @@ async function hashStableRegularFile(path, dependencies = {}) {
       path,
       pathLstat,
       pathRealpath,
+      root,
     });
     return { sha256: hash.digest("hex"), size };
   } finally {
@@ -736,12 +871,19 @@ async function verifyOpenedFinalizedPath({
   path,
   pathLstat,
   pathRealpath,
+  root,
 }) {
+  await assertNoLinkedPathComponents(path, "finalized release output", {
+    lstat: pathLstat,
+  });
   const named = await pathLstat(path, { bigint: true });
   if (!named.isFile() || named.isSymbolicLink() || !sameFile(opened, named)) {
     throw new Error(errorMessage);
   }
   const currentCanonical = await pathRealpath(path);
+  if (!isStrictDescendant(root, currentCanonical)) {
+    throw new Error("A finalized release output escaped its trusted root.");
+  }
   if (canonical !== undefined && comparablePath(canonical) !== comparablePath(currentCanonical)) {
     throw new Error(errorMessage);
   }
@@ -756,12 +898,30 @@ async function verifyOpenedFinalizedPath({
   return currentCanonical;
 }
 
-async function cleanupPublishedOutputs(published) {
+async function cleanupPublishedOutputs(published, destinationDirectory, destinationIdentity) {
   for (const output of [...published].reverse()) {
+    await revalidatePinnedDirectory(
+      destinationDirectory,
+      destinationIdentity,
+      "release output directory",
+    );
+    if (comparablePath(dirname(output.finalPath)) !== comparablePath(destinationDirectory)) {
+      throw new Error("A published release output escaped its pinned output directory.");
+    }
     try {
+      const before = await lstat(output.finalPath, { bigint: true });
+      if (before.isSymbolicLink()) {
+        throw new Error("A published release output changed into a linked path.");
+      }
+      if (!sameFile(before, output.temporaryIdentity)) {
+        continue;
+      }
+      await assertNoLinkedPathComponents(output.finalPath, "published release output");
       const current = await lstat(output.finalPath, { bigint: true });
-      if (sameFileIdentity(current, output.temporaryIdentity)) {
+      if (sameFile(before, current) && sameFile(current, output.temporaryIdentity)) {
         await unlink(output.finalPath);
+      } else {
+        throw new Error("A published release output changed before cleanup.");
       }
     } catch (error) {
       if (!isNodeError(error, "ENOENT")) {
@@ -769,21 +929,11 @@ async function cleanupPublishedOutputs(published) {
       }
     }
   }
-}
-
-async function removePrivateTemporaryDirectory(path, parent) {
-  try {
-    const canonicalParent = await realpath(parent);
-    const canonicalPath = await realpath(path);
-    if (!isStrictDescendant(canonicalParent, canonicalPath)) {
-      throw new Error("The release temporary directory escaped its output root.");
-    }
-    await rm(canonicalPath, { force: true, recursive: true });
-  } catch (error) {
-    if (!isNodeError(error, "ENOENT")) {
-      throw error;
-    }
-  }
+  await revalidatePinnedDirectory(
+    destinationDirectory,
+    destinationIdentity,
+    "release output directory",
+  );
 }
 
 function sameFile(left, right) {
