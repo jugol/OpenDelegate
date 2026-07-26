@@ -18,6 +18,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { createMacOsSwiftPackagePathRemappingArguments } from "../../packages/computer-use-os/native/macos/build.mjs";
+import { createMacOsSwiftPathRemappingArguments } from "../../packages/secrets/native/macos/build.mjs";
 import {
   PINNED_PNPM_ARCHIVE_INTEGRITY,
   PINNED_PNPM_VERSION,
@@ -68,6 +70,48 @@ const execFile = promisify(execFileCallback);
 const auditedCommit = "a".repeat(40);
 const zeroObject = "0".repeat(40);
 const changedObject = "b".repeat(40);
+
+test("macOS Swift builders remap private source and build paths", () => {
+  const sourceRoot = resolve("private-source");
+  const buildRoot = resolve("private-build");
+  const sourceMapping = `${sourceRoot}=/opendelegate/source`;
+  const buildMapping = `${buildRoot}=/opendelegate/build`;
+
+  assert.deepEqual(createMacOsSwiftPathRemappingArguments(sourceRoot, buildRoot), [
+    "-file-prefix-map",
+    sourceMapping,
+    "-file-prefix-map",
+    buildMapping,
+    "-prefix-serialized-debugging-options",
+    "-file-compilation-dir",
+    "/opendelegate/source",
+  ]);
+  assert.deepEqual(createMacOsSwiftPackagePathRemappingArguments(sourceRoot, buildRoot), [
+    "-Xswiftc",
+    "-file-prefix-map",
+    "-Xswiftc",
+    sourceMapping,
+    "-Xswiftc",
+    "-file-prefix-map",
+    "-Xswiftc",
+    buildMapping,
+    "-Xswiftc",
+    "-prefix-serialized-debugging-options",
+    "-Xswiftc",
+    "-file-compilation-dir",
+    "-Xswiftc",
+    "/opendelegate/source",
+  ]);
+  for (const createArguments of [
+    createMacOsSwiftPathRemappingArguments,
+    createMacOsSwiftPackagePathRemappingArguments,
+  ]) {
+    assert.throws(
+      () => createArguments(resolve("ambiguous=source"), buildRoot),
+      /requires unambiguous absolute paths/u,
+    );
+  }
+});
 
 test("release bundles carry both agent-facing installation skills", () => {
   assert.deepEqual(RELEASE_SKILL_DIRECTORIES, ["opendelegate-init", "opendelegate-join"]);
@@ -206,7 +250,12 @@ test("native release assets reject private build paths in UTF-8 and UTF-16LE", a
   const sourceRoot = join(root, "source");
   await mkdir(sourceRoot);
 
-  for (const disclosure of ["source-utf8", "source-case-utf8", "build-utf16le"]) {
+  for (const disclosure of [
+    "source-utf8",
+    "source-case-utf8",
+    "build-utf16le",
+    "service-source-utf8",
+  ]) {
     const stagingRoot = join(root, `staging-${disclosure}`);
     await mkdir(stagingRoot);
     await assert.rejects(
@@ -231,7 +280,12 @@ test("native release assets reject private build paths in UTF-8 and UTF-16LE", a
                     )
                   : outputRoot;
             const encoding = disclosure === "build-utf16le" ? "utf16le" : "utf8";
-            await writeFile(helperExecutable, Buffer.from(leakedPath, encoding));
+            await writeFile(
+              helperExecutable,
+              disclosure === "service-source-utf8"
+                ? "safe helper\n"
+                : Buffer.from(leakedPath, encoding),
+            );
             await writeFile(fixtureExecutable, "safe fixture\n");
             return { helperExecutable, fixtureExecutable };
           },
@@ -239,13 +293,28 @@ test("native release assets reject private build paths in UTF-8 and UTF-16LE", a
             await mkdir(outputRoot, { recursive: true });
             const coreExecutable = join(outputRoot, "core.exe");
             const helperExecutable = join(outputRoot, "session.exe");
-            await writeFile(coreExecutable, "safe core\n");
+            await writeFile(
+              coreExecutable,
+              disclosure === "service-source-utf8" ? sourceRoot : "safe core\n",
+            );
             await writeFile(helperExecutable, "safe session\n");
             return { coreExecutable, helperExecutable };
           },
         },
       }),
-      /private build-host path/u,
+      (error) => {
+        const expectedKind =
+          disclosure === "service-source-utf8" ? "core-service-host" : "computer-use-helper";
+        assert.match(
+          error?.message ?? "",
+          new RegExp(
+            `Native release component "${expectedKind}" contains a private build-host path`,
+            "u",
+          ),
+        );
+        assert.equal(error.message.toLowerCase().includes(root.toLowerCase()), false);
+        return true;
+      },
     );
   }
 });
@@ -286,7 +355,15 @@ test("native release assets reject a private physical path behind a source alias
         },
       },
     }),
-    /private build-host path/u,
+    (error) => {
+      assert.match(
+        error?.message ?? "",
+        /Native release component "computer-use-helper" contains a private build-host path/u,
+      );
+      assert.equal(error.message.includes(physicalDisclosure), false);
+      assert.equal(error.message.includes(sourceRoot), false);
+      return true;
+    },
   );
 });
 

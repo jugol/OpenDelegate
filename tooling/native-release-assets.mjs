@@ -226,7 +226,12 @@ async function copyComponents(input, entries) {
     entries.map(async (entry) => {
       const source = await requireSafeBuildOutput(entry.source, input.buildRoot);
       const bytes = await readFile(source);
-      await assertNoBuildPathDisclosure(bytes, [input.buildRoot, input.sourceRoot], input.platform);
+      await assertNoBuildPathDisclosure(
+        bytes,
+        [input.buildRoot, input.sourceRoot],
+        input.platform,
+        entry.kind,
+      );
       const destination = join(input.stagingRoot, ...entry.path.split("/"));
       await mkdir(dirname(destination), { recursive: true, mode: 0o755 });
       await writeFile(destination, bytes, { mode: 0o755 });
@@ -245,7 +250,7 @@ async function copyComponents(input, entries) {
   );
 }
 
-async function assertNoBuildPathDisclosure(bytes, roots, platform) {
+async function assertNoBuildPathDisclosure(bytes, roots, platform, componentKind) {
   const privatePathSpellings = new Set();
   for (const root of roots) {
     for (const canonical of new Set([resolve(root), await realpath(root)])) {
@@ -260,7 +265,9 @@ async function assertNoBuildPathDisclosure(bytes, roots, platform) {
       const encoded = Buffer.from(value, encoding);
       const comparable = platform === "win32" ? foldAsciiCase(encoded) : encoded;
       if (comparableBytes.indexOf(comparable) !== -1) {
-        throw new Error("A native release component contains a private build-host path.");
+        throw new Error(
+          `Native release component ${JSON.stringify(componentKind)} contains a private build-host path.`,
+        );
       }
     }
   }

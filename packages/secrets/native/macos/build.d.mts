@@ -14,3 +14,8 @@ export interface MacOsKeychainHelperBuild {
 export function buildMacOsKeychainHelper(
   options?: BuildMacOsKeychainHelperOptions,
 ): Promise<MacOsKeychainHelperBuild>;
+
+export function createMacOsSwiftPathRemappingArguments(
+  sourceRoot: string,
+  buildRoot: string,
+): readonly string[];

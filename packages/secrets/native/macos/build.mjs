@@ -30,6 +30,7 @@ export async function buildMacOsKeychainHelper(options = {}) {
       `${architecture}-apple-macos14.0`,
       "-framework",
       "Security",
+      ...createMacOsSwiftPathRemappingArguments(checkoutDirectory, outputRoot),
       "-o",
       helperExecutable,
       source,
@@ -43,6 +44,30 @@ export async function buildMacOsKeychainHelper(options = {}) {
   );
   await access(helperExecutable);
   return Object.freeze({ architecture, outputRoot, helperExecutable });
+}
+
+export function createMacOsSwiftPathRemappingArguments(sourceRoot, buildRoot) {
+  return Object.freeze([
+    "-file-prefix-map",
+    `${requireAbsoluteMappingRoot(sourceRoot)}=/opendelegate/source`,
+    "-file-prefix-map",
+    `${requireAbsoluteMappingRoot(buildRoot)}=/opendelegate/build`,
+    "-prefix-serialized-debugging-options",
+    "-file-compilation-dir",
+    "/opendelegate/source",
+  ]);
+}
+
+function requireAbsoluteMappingRoot(value) {
+  if (
+    typeof value !== "string" ||
+    !isAbsolute(value) ||
+    value.includes("\0") ||
+    value.includes("=")
+  ) {
+    throw new Error("macOS Swift path remapping requires unambiguous absolute paths.");
+  }
+  return resolve(value);
 }
 
 async function validateExternalOutputRoot(value) {

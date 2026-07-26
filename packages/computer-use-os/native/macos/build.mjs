@@ -34,6 +34,7 @@ export async function buildMacOsComputerUseNative(options = {}) {
     "release",
     "--arch",
     architecture,
+    ...createMacOsSwiftPackagePathRemappingArguments(checkoutDirectory, outputRoot),
   ];
   for (const product of ["opendelegate-macos-computer-use", "opendelegate-computer-use-fixture"]) {
     await execFileAsync(xcrunPath, [...common, "--product", product], {
@@ -59,6 +60,45 @@ export async function buildMacOsComputerUseNative(options = {}) {
     helperExecutable,
     fixtureExecutable,
   });
+}
+
+export function createMacOsSwiftPackagePathRemappingArguments(sourceRoot, buildRoot) {
+  const mappings = createMacOsSwiftPathMappings(sourceRoot, buildRoot);
+  return Object.freeze([
+    "-Xswiftc",
+    "-file-prefix-map",
+    "-Xswiftc",
+    mappings.source,
+    "-Xswiftc",
+    "-file-prefix-map",
+    "-Xswiftc",
+    mappings.build,
+    "-Xswiftc",
+    "-prefix-serialized-debugging-options",
+    "-Xswiftc",
+    "-file-compilation-dir",
+    "-Xswiftc",
+    "/opendelegate/source",
+  ]);
+}
+
+function createMacOsSwiftPathMappings(sourceRoot, buildRoot) {
+  return Object.freeze({
+    source: `${requireAbsoluteMappingRoot(sourceRoot)}=/opendelegate/source`,
+    build: `${requireAbsoluteMappingRoot(buildRoot)}=/opendelegate/build`,
+  });
+}
+
+function requireAbsoluteMappingRoot(value) {
+  if (
+    typeof value !== "string" ||
+    !isAbsolute(value) ||
+    value.includes("\0") ||
+    value.includes("=")
+  ) {
+    throw new Error("macOS Swift path remapping requires unambiguous absolute paths.");
+  }
+  return resolve(value);
 }
 
 async function validateExternalOutputRoot(value) {
