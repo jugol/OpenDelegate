@@ -21,6 +21,7 @@ test("finalization archives, externally signs, verifies, and publishes an atomic
     integrity: fixture.integrity,
     now: () => new Date("2026-07-25T12:34:56.000Z"),
     readSourceIdentity: fixture.readSourceIdentity,
+    runner: fixture.runner,
   });
 
   assert.equal(result.archive.sha256, await sha256File(result.archive.path));
@@ -68,6 +69,7 @@ test("finalization refuses existing outputs without publishing a partial set", a
     finalizeReleaseCandidate(fixture.input, {
       integrity: fixture.integrity,
       readSourceIdentity: fixture.readSourceIdentity,
+      runner: fixture.runner,
     }),
     /already exists; nothing was overwritten/u,
   );
@@ -82,6 +84,7 @@ test("finalization detects candidate changes and verifier failure before exposin
     finalizeReleaseCandidate(changed.input, {
       integrity: changed.integrity,
       readSourceIdentity: changed.readSourceIdentity,
+      runner: changed.runner,
     }),
     /candidate changed while its final archive was created/u,
   );
@@ -93,6 +96,7 @@ test("finalization detects candidate changes and verifier failure before exposin
     finalizeReleaseCandidate(rejected.input, {
       integrity: rejected.integrity,
       readSourceIdentity: rejected.readSourceIdentity,
+      runner: rejected.runner,
     }),
     /fixture rejected final verification/u,
   );
@@ -109,6 +113,7 @@ test("finalization rejects a dirty or different release source before signing", 
         commitEpoch: 1_753_315_324,
         dirty: true,
       }),
+      runner: dirty.runner,
     }),
     /clean committed build source/u,
   );
@@ -123,6 +128,7 @@ test("finalization rejects a dirty or different release source before signing", 
         commitEpoch: 1_753_315_324,
         dirty: false,
       }),
+      runner: different.runner,
     }),
     /clean committed build source/u,
   );
@@ -188,11 +194,15 @@ async function createFinalizationFixture(t) {
   const candidateRoot = join(root, "candidate");
   const destination = join(root, "output");
   await Promise.all([mkdir(candidateRoot), mkdir(destination)]);
+  const runnerExecutableSha256 = await sha256File(process.execPath);
   await writeFile(
     join(candidateRoot, "release-metadata.json"),
     `${JSON.stringify(
       {
         createdAt: "2026-07-24T01:02:04.000Z",
+        bundledRuntime: {
+          executableSha256: runnerExecutableSha256,
+        },
       },
       null,
       2,
@@ -248,6 +258,11 @@ async function createFinalizationFixture(t) {
       dirty: false,
     }),
     root,
+    runner: {
+      platform: target.platform,
+      architecture: target.architecture,
+      nodeVersion: "24.18.0",
+    },
     signing,
     target,
   };

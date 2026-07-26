@@ -4,7 +4,7 @@ import { link, lstat, mkdtemp, open, realpath, rm, rmdir, unlink } from "node:fs
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readSourceIdentity } from "./build-release.mjs";
+import { readSourceIdentity, REQUIRED_RELEASE_NODE_VERSION } from "./build-release.mjs";
 import { createDeterministicReleaseArchive } from "./create-release-archive.mjs";
 import {
   assertPinnedReleaseSigningPolicyExternal,
@@ -86,12 +86,16 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
   const runner = dependencies.runner ?? {
     platform: process.platform,
     architecture: process.arch,
+    nodeVersion: process.versions.node,
   };
   if (
     runner.platform !== input.target.platform ||
-    runner.architecture !== input.target.architecture
+    runner.architecture !== input.target.architecture ||
+    runner.nodeVersion !== REQUIRED_RELEASE_NODE_VERSION
   ) {
-    throw new Error("Release candidates must be finalized on their target-native runner.");
+    throw new Error(
+      `Release candidates must be finalized on their target-native Node.js ${REQUIRED_RELEASE_NODE_VERSION} runner.`,
+    );
   }
   const integrity =
     dependencies.integrity ?? (await import("../packages/release-integrity/src/index.ts"));
@@ -153,7 +157,11 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     join(candidateRoot, "release-metadata.json"),
     METADATA_LIMIT,
   );
-  const archiveTimestamp = releaseTimestamp(metadataBytes);
+  const releaseMetadata = releaseMetadataForFinalization(metadataBytes);
+  const runnerExecutableBefore = await hashStableRegularFile(process.execPath);
+  if (runnerExecutableBefore.sha256 !== releaseMetadata.runtimeExecutableSha256) {
+    throw new Error("The finalization runtime does not match the candidate's pinned Node.js.");
+  }
   const temporaryDirectory = await mkdtemp(join(destinationDirectory, ".opendelegate-finalize-"));
   const temporaryPaths = Object.freeze({
     archive: join(temporaryDirectory, archiveName),
@@ -165,7 +173,7 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     const archiveResult = await (dependencies.createArchive ?? createDeterministicReleaseArchive)({
       destination: temporaryPaths.archive,
       sourceDirectory: candidateRoot,
-      timestamp: archiveTimestamp,
+      timestamp: releaseMetadata.archiveTimestamp,
     });
     const secondCandidate = await integrity.inspectCandidate({
       expectedManifestSha256: input.expectedManifestSha256,
@@ -213,7 +221,8 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     assertCleanFinalizationSource(sourceAfter, secondCandidate.buildCommit);
     if (
       sourceAfter.commit !== sourceBefore.commit ||
-      JSON.stringify(await hashReleaseLogic()) !== JSON.stringify(releaseLogicBefore)
+      JSON.stringify(await hashReleaseLogic()) !== JSON.stringify(releaseLogicBefore) ||
+      (await hashStableRegularFile(process.execPath)).sha256 !== runnerExecutableBefore.sha256
     ) {
       throw new Error("The committed release finalization logic changed while signing.");
     }
@@ -246,7 +255,8 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       runner: {
         platform: runner.platform,
         architecture: runner.architecture,
-        nodeVersion: process.versions.node,
+        nodeVersion: runner.nodeVersion,
+        runtimeExecutableSha256: runnerExecutableBefore.sha256,
         signingInputSha256: signed.inputSha256,
         signerExecutableSha256: signed.runner.executableSha256,
         invocationArtifactSha256: signed.runner.invocationArtifactSha256,
@@ -427,12 +437,12 @@ function releaseArchiveName(candidate) {
   return `opendelegate-v${candidate.productVersion}-${candidate.target.platform}-${candidate.target.architecture}.zip`;
 }
 
-function releaseTimestamp(metadataBytes) {
+function releaseMetadataForFinalization(metadataBytes) {
   let metadata;
   try {
     metadata = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(metadataBytes));
   } catch (error) {
-    throw new Error("The verified release metadata has no usable archive timestamp.", {
+    throw new Error("The verified release metadata has no usable finalization provenance.", {
       cause: error,
     });
   }
@@ -441,11 +451,19 @@ function releaseTimestamp(metadataBytes) {
     metadata === null ||
     Array.isArray(metadata) ||
     typeof metadata.createdAt !== "string" ||
-    !Number.isFinite(Date.parse(metadata.createdAt))
+    !Number.isFinite(Date.parse(metadata.createdAt)) ||
+    typeof metadata.bundledRuntime !== "object" ||
+    metadata.bundledRuntime === null ||
+    Array.isArray(metadata.bundledRuntime) ||
+    typeof metadata.bundledRuntime.executableSha256 !== "string" ||
+    !SHA256_PATTERN.test(metadata.bundledRuntime.executableSha256)
   ) {
-    throw new Error("The verified release metadata has no usable archive timestamp.");
+    throw new Error("The verified release metadata has no usable finalization provenance.");
   }
-  return metadata.createdAt;
+  return {
+    archiveTimestamp: metadata.createdAt,
+    runtimeExecutableSha256: metadata.bundledRuntime.executableSha256,
+  };
 }
 
 function assertVerifiedPublisherResult(verified, archive, attestationSha256, keyId) {
