@@ -29,7 +29,7 @@
     "release:sign": "node tooling/sign-release.mjs",
     "release:status": "node tooling/check-release-evidence.mjs",
     "setup:browser": "pnpm --filter @opendelegate/admin-web exec playwright install chromium",
-    "test": "pnpm run test:tooling && pnpm --recursive --if-present run test",
+    "test": "node tooling/run-project-tests.mjs",
     "test:browser": "pnpm --filter @opendelegate/admin-web test:browser",
     "test:tooling": "node tooling/run-tooling-tests.mjs",
     "test:watch": "pnpm --recursive --parallel --if-present run test:watch",
