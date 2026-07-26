@@ -381,6 +381,16 @@ test("the statement parser rejects malformed nested publisher bindings", () => {
     () => validateReleaseSigningStatement(malformed, "publisher-attestation-v2"),
     /candidate binding target is outside/u,
   );
+  const oversizedArchive = parseSigningStatement(signingBytes, prefix);
+  oversizedArchive.archive.size = 512 * 1024 * 1024 + 1;
+  assert.throws(
+    () =>
+      validateReleaseSigningStatement(
+        statementSigningBytes(prefix, oversizedArchive),
+        "publisher-attestation-v2",
+      ),
+    /publisher archive is invalid/u,
+  );
 });
 
 test("the statement parser enforces exact nested promotion and receipt grammar", () => {
