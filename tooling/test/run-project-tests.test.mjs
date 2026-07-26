@@ -47,10 +47,25 @@ test("project tests inherit one canonical physical temp root", async () => {
     assert.equal(exitCode, 0);
     assert.deepEqual(
       invocations.map(({ arguments_ }) => arguments_),
-      [
-        ["/fixture/pnpm.cjs", "run", "test:tooling"],
-        ["/fixture/pnpm.cjs", "--recursive", "--if-present", "run", "test"],
-      ],
+      fixture.platform === "win32"
+        ? [
+            ["/fixture/pnpm.cjs", "run", "test:tooling"],
+            [
+              "/fixture/pnpm.cjs",
+              "--recursive",
+              "--filter",
+              "!@opendelegate/main",
+              "--workspace-concurrency=2",
+              "--if-present",
+              "run",
+              "test",
+            ],
+            ["/fixture/pnpm.cjs", "--filter", "@opendelegate/main", "run", "test:serial"],
+          ]
+        : [
+            ["/fixture/pnpm.cjs", "run", "test:tooling"],
+            ["/fixture/pnpm.cjs", "--recursive", "--if-present", "run", "test"],
+          ],
     );
     for (const invocation of invocations) {
       assert.equal(invocation.executable, "/fixture/node");

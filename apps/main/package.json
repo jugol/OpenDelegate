@@ -11,6 +11,7 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test --test-concurrency=2",
+    "test:serial": "node --experimental-strip-types --test --test-concurrency=1",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {

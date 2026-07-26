@@ -89,7 +89,24 @@ test("Main integration tests retain bounded hosted-runner concurrency and wall t
     manifest.scripts?.test,
     "node --experimental-strip-types --test --test-concurrency=2",
   );
-  assert.match(workflow, /jobs:\s*\n\s*verify:[\s\S]*?\n\s+timeout-minutes:\s*30\s*$/mu);
+  assert.equal(
+    manifest.scripts?.["test:serial"],
+    "node --experimental-strip-types --test --test-concurrency=1",
+  );
+  assert.match(
+    workflow,
+    /jobs:\s*\n\s*verify:[\s\S]*?\n\s+timeout-minutes:\s*\$\{\{\s*matrix\.timeout_minutes\s*\}\}\s*$/mu,
+  );
+  for (const [os, timeout] of [
+    ["ubuntu-24.04", 30],
+    ["windows-2025", 50],
+    ["macos-26", 30],
+  ]) {
+    assert.match(
+      workflow,
+      new RegExp(`- os: ${os.replaceAll(".", "\\.")}\\s+timeout_minutes: ${timeout}`, "u"),
+    );
+  }
 });
 
 test("secret scanning verifies a pinned Gitleaks binary against the full Git history", async () => {

@@ -48,7 +48,21 @@ export async function runProjectTests(dependencies = {}) {
   const executable = dependencies.executablePath ?? process.execPath;
   const commands = [
     [packageManagerPath, "run", "test:tooling"],
-    [packageManagerPath, "--recursive", "--if-present", "run", "test"],
+    ...(platform === "win32"
+      ? [
+          [
+            packageManagerPath,
+            "--recursive",
+            "--filter",
+            "!@opendelegate/main",
+            "--workspace-concurrency=2",
+            "--if-present",
+            "run",
+            "test",
+          ],
+          [packageManagerPath, "--filter", "@opendelegate/main", "run", "test:serial"],
+        ]
+      : [[packageManagerPath, "--recursive", "--if-present", "run", "test"]]),
   ];
   for (const arguments_ of commands) {
     const exitCode = await runChild(executable, arguments_, {
