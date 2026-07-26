@@ -484,7 +484,10 @@ export async function createConfiguredReleaseState(
   const release = releaseSet.releases[releaseIndex]!;
   const publisher = releaseSet.publishers[releaseIndex]!;
   const targetKey = `${release.candidate.target.platform}-${release.candidate.target.architecture}`;
-  const publisherRoot = `publisher/${targetKey}`;
+  const releaseMaterialRoot =
+    `releases/${release.candidate.productVersion}/${targetKey}/` +
+    `${release.candidate.checksumManifestSha256}/files`;
+  const publisherRoot = `${releaseMaterialRoot}/candidate`;
   const archiveFile = `${publisherRoot}/${basename(publisher.archivePath)}`;
   const publisherAttestationFile = `${publisherRoot}/${basename(publisher.attestationPath)}`;
   const publisherTrustRootFile = `${publisherRoot}/publisher-public.pem`;
@@ -503,11 +506,12 @@ export async function createConfiguredReleaseState(
   let promotionConfiguration: object | null = null;
   let promotionAttestationPath: string | undefined;
   if (promotion !== null) {
-    const promotionAttestationFile = "promotion/promotion-attestation.json";
-    const supportedChannelReceiptFile = "promotion/supported-channel-receipt.json";
-    const promotionTrustRootFile = "promotion/promotion-public.pem";
-    const supportMatrixFile = "promotion/support-matrix.md";
-    const notarizationReceiptFile = "promotion/macos-notarization.json";
+    const promotionRoot = `${releaseMaterialRoot}/promotion`;
+    const promotionAttestationFile = `${promotionRoot}/promotion-attestation.json`;
+    const supportedChannelReceiptFile = `${promotionRoot}/supported-channel-receipt.json`;
+    const promotionTrustRootFile = `${promotionRoot}/promotion-public.pem`;
+    const supportMatrixFile = `${promotionRoot}/support-matrix.md`;
+    const notarizationReceiptFile = `${promotionRoot}/macos-notarization.json`;
     promotionAttestationPath = await writeTrustFile(
       promotionAttestationFile,
       await readFile(promotion.attestationPath),
@@ -520,7 +524,8 @@ export async function createConfiguredReleaseState(
     ]);
     const liveEvidence = [];
     for (const evidence of promotion.liveEvidence) {
-      const file = `promotion/live/${String(evidence.criterionId).padStart(2, "0")}.json`;
+      const file =
+        `${promotionRoot}/live/` + `${String(evidence.criterionId).padStart(2, "0")}.json`;
       await writeTrustFile(file, evidence.bytes);
       liveEvidence.push({
         criterionId: evidence.criterionId,

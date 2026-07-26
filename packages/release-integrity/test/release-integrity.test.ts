@@ -1111,12 +1111,20 @@ test("resolveConfiguredRelease rejects path escapes, incomplete evidence, policy
     await writeFile(disordered.configurationPath, canonicalJson(disorderedValue));
     assert.equal((await resolveLinux(disordered.stateRoot)).external.status, "invalid");
 
+    const collisionValue = JSON.parse(await readFile(collision.configurationPath, "utf8")) as {
+      candidate: { archiveFile: string };
+    };
+    const collisionCandidateParent = dirname(
+      dirname(
+        join(collision.stateRoot, "trust", ...collisionValue.candidate.archiveFile.split("/")),
+      ),
+    );
     const collisionReader: ReleaseFileReader = {
       ...nodeReleaseFileReader,
       async list(path) {
         const entries = await nodeReleaseFileReader.list(path);
-        return path === join(collision.stateRoot, "trust")
-          ? [...entries, { kind: "directory", name: "Publisher" }]
+        return path === collisionCandidateParent
+          ? [...entries, { kind: "directory", name: "Candidate" }]
           : entries;
       },
     };
@@ -1133,6 +1141,136 @@ test("resolveConfiguredRelease rejects path escapes, incomplete evidence, policy
       disordered.cleanup(),
       collision.cleanup(),
     ]);
+  }
+});
+
+test("resolveConfiguredRelease rejects a referenced file in a sibling release directory", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  const linuxIndex = releaseSet.releases.findIndex(
+    (release) => release.candidate.target.platform === "linux",
+  );
+  const configured = await createConfiguredReleaseState(releaseSet, linuxIndex, null);
+  try {
+    const configuration = JSON.parse(await readFile(configured.configurationPath, "utf8")) as {
+      candidate: { archiveFile: string };
+    };
+    const originalArchivePath = join(
+      configured.stateRoot,
+      "trust",
+      ...configuration.candidate.archiveFile.split("/"),
+    );
+    const siblingArchiveFile = `releases/shared/${basename(configuration.candidate.archiveFile)}`;
+    const siblingArchivePath = join(
+      configured.stateRoot,
+      "trust",
+      ...siblingArchiveFile.split("/"),
+    );
+    await mkdir(dirname(siblingArchivePath), { recursive: true });
+    await writeFile(siblingArchivePath, await readFile(originalArchivePath));
+    configuration.candidate.archiveFile = siblingArchiveFile;
+    await writeFile(configured.configurationPath, canonicalJson(configuration));
+
+    const resolved = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: configured.stateRoot,
+    });
+
+    assert.equal(resolved.external.status, "invalid");
+    assert.equal(resolved.external.diagnosticCode, "RELEASE_CONFIGURATION_INVALID");
+  } finally {
+    await Promise.all([releaseSet.cleanup(), configured.cleanup()]);
+  }
+});
+
+test("resolveConfiguredRelease rejects a referenced file from another release digest", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  const linuxIndex = releaseSet.releases.findIndex(
+    (release) => release.candidate.target.platform === "linux",
+  );
+  const configured = await createConfiguredReleaseState(releaseSet, linuxIndex, null);
+  try {
+    const release = releaseSet.releases[linuxIndex]!;
+    const configuration = JSON.parse(await readFile(configured.configurationPath, "utf8")) as {
+      candidate: { archiveFile: string };
+    };
+    const originalArchivePath = join(
+      configured.stateRoot,
+      "trust",
+      ...configuration.candidate.archiveFile.split("/"),
+    );
+    const otherDigest =
+      release.candidate.checksumManifestSha256 === "f".repeat(64) ? "e".repeat(64) : "f".repeat(64);
+    const otherReleaseArchiveFile =
+      `releases/${release.candidate.productVersion}/linux-x64/${otherDigest}/files/candidate/` +
+      basename(configuration.candidate.archiveFile);
+    const otherReleaseArchivePath = join(
+      configured.stateRoot,
+      "trust",
+      ...otherReleaseArchiveFile.split("/"),
+    );
+    await mkdir(dirname(otherReleaseArchivePath), { recursive: true });
+    await writeFile(otherReleaseArchivePath, await readFile(originalArchivePath));
+    configuration.candidate.archiveFile = otherReleaseArchiveFile;
+    await writeFile(configured.configurationPath, canonicalJson(configuration));
+
+    const resolved = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: configured.stateRoot,
+    });
+
+    assert.equal(resolved.external.status, "invalid");
+    assert.equal(resolved.external.diagnosticCode, "RELEASE_CONFIGURATION_INVALID");
+  } finally {
+    await Promise.all([releaseSet.cleanup(), configured.cleanup()]);
+  }
+});
+
+test("resolveConfiguredRelease rejects a canonical alias outside its release digest directory", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  const linuxIndex = releaseSet.releases.findIndex(
+    (release) => release.candidate.target.platform === "linux",
+  );
+  const configured = await createConfiguredReleaseState(releaseSet, linuxIndex, null);
+  try {
+    const configuration = JSON.parse(await readFile(configured.configurationPath, "utf8")) as {
+      candidate: { archiveFile: string };
+    };
+    const archivePath = join(
+      configured.stateRoot,
+      "trust",
+      ...configuration.candidate.archiveFile.split("/"),
+    );
+    const aliasedArchivePath = join(
+      configured.stateRoot,
+      "trust",
+      "releases",
+      "shared",
+      basename(configuration.candidate.archiveFile),
+    );
+    await mkdir(dirname(aliasedArchivePath), { recursive: true });
+    await writeFile(aliasedArchivePath, await readFile(archivePath));
+    const aliasedReader: ReleaseFileReader = {
+      ...nodeReleaseFileReader,
+      async realPath(path) {
+        return path === archivePath
+          ? nodeReleaseFileReader.realPath(aliasedArchivePath)
+          : nodeReleaseFileReader.realPath(path);
+      },
+    };
+
+    const resolved = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      reader: aliasedReader,
+      stateRoot: configured.stateRoot,
+    });
+
+    assert.equal(resolved.external.status, "invalid");
+    assert.equal(resolved.external.diagnosticCode, "RELEASE_CONFIGURATION_INVALID");
+  } finally {
+    await Promise.all([releaseSet.cleanup(), configured.cleanup()]);
   }
 });
 
@@ -1165,9 +1303,46 @@ test("resolveConfiguredRelease never downgrades candidate corruption into extern
   }
 });
 
-test("the reusable test-only fixture exercises the real configured verifier", async () => {
+test("resolveConfiguredRelease accepts a composer-style digest-contained subtree", async () => {
   const fixture = await createReleasedConfiguredReleaseTestFixture();
   try {
+    const configuration = JSON.parse(
+      await readFile(fixture.configuration.configurationPath, "utf8"),
+    ) as {
+      candidate: {
+        archiveFile: string;
+        publisherAttestationFile: string;
+        publisherTrustRootFile: string;
+      };
+      promotion: {
+        liveEvidence: readonly { file: string }[];
+        notarizationReceiptFile: string;
+        promotionAttestationFile: string;
+        promotionTrustRootFile: string;
+        supportMatrix: { file: string };
+        supportedChannelReceiptFile: string;
+      };
+    };
+    const targetKey = `${fixture.candidate.target.platform}-${fixture.candidate.target.architecture}`;
+    const containedPrefix =
+      `releases/${fixture.candidate.productVersion}/${targetKey}/` +
+      `${fixture.candidate.checksumManifestSha256}/files/`;
+    const referencedFiles = [
+      configuration.candidate.archiveFile,
+      configuration.candidate.publisherAttestationFile,
+      configuration.candidate.publisherTrustRootFile,
+      configuration.promotion.promotionAttestationFile,
+      configuration.promotion.supportedChannelReceiptFile,
+      configuration.promotion.promotionTrustRootFile,
+      configuration.promotion.supportMatrix.file,
+      configuration.promotion.notarizationReceiptFile,
+      ...configuration.promotion.liveEvidence.map(({ file }) => file),
+    ];
+    assert.equal(
+      referencedFiles.every((file) => file.startsWith(containedPrefix)),
+      true,
+    );
+
     const resolved = await resolveConfiguredRelease({
       root: fixture.root,
       expectedTarget: fixture.expectedTarget,
@@ -1588,7 +1763,10 @@ async function createConfiguredReleaseState(
   const release = releaseSet.releases[releaseIndex]!;
   const publisher = releaseSet.publishers[releaseIndex]!;
   const targetKey = `${release.candidate.target.platform}-${release.candidate.target.architecture}`;
-  const publisherRoot = `publisher/${targetKey}`;
+  const releaseMaterialRoot =
+    `releases/${release.candidate.productVersion}/${targetKey}/` +
+    `${release.candidate.checksumManifestSha256}/files`;
+  const publisherRoot = `${releaseMaterialRoot}/candidate`;
   const archiveFile = `${publisherRoot}/${basename(publisher.archivePath)}`;
   const publisherAttestationFile = `${publisherRoot}/${basename(publisher.attestationPath)}`;
   const publisherTrustRootFile = `${publisherRoot}/publisher-public.pem`;
@@ -1607,11 +1785,12 @@ async function createConfiguredReleaseState(
   let promotionConfiguration: object | null = null;
   let promotionAttestationPath: string | undefined;
   if (promotion !== null) {
-    const promotionAttestationFile = "promotion/promotion-attestation.json";
-    const supportedChannelReceiptFile = "promotion/supported-channel-receipt.json";
-    const promotionTrustRootFile = "promotion/promotion-public.pem";
-    const supportMatrixFile = "promotion/support-matrix.md";
-    const notarizationReceiptFile = "promotion/macos-notarization.json";
+    const promotionRoot = `${releaseMaterialRoot}/promotion`;
+    const promotionAttestationFile = `${promotionRoot}/promotion-attestation.json`;
+    const supportedChannelReceiptFile = `${promotionRoot}/supported-channel-receipt.json`;
+    const promotionTrustRootFile = `${promotionRoot}/promotion-public.pem`;
+    const supportMatrixFile = `${promotionRoot}/support-matrix.md`;
+    const notarizationReceiptFile = `${promotionRoot}/macos-notarization.json`;
     promotionAttestationPath = await writeTrustFile(
       promotionAttestationFile,
       await readFile(promotion.attestationPath),
@@ -1624,7 +1803,8 @@ async function createConfiguredReleaseState(
     ]);
     const liveEvidence = [];
     for (const evidence of promotion.liveEvidence) {
-      const file = `promotion/live/${String(evidence.criterionId).padStart(2, "0")}.json`;
+      const file =
+        `${promotionRoot}/live/` + `${String(evidence.criterionId).padStart(2, "0")}.json`;
       await writeTrustFile(file, evidence.bytes);
       liveEvidence.push({
         criterionId: evidence.criterionId,

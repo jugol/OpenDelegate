@@ -100,6 +100,7 @@ interface LocatedDirectory {
 interface ConfigurationLocation {
   readonly candidateRoot: string;
   readonly configuration: LocatedFile;
+  readonly configurationDirectory: LocatedDirectory;
   readonly trustRoot: LocatedDirectory;
 }
 
@@ -437,6 +438,7 @@ async function locateConfiguration(
   return Object.freeze({
     candidateRoot: candidateRoot.canonicalPath,
     configuration,
+    configurationDirectory: current,
     trustRoot,
   });
 }
@@ -616,7 +618,7 @@ async function materializeConfiguration(
       reader,
       file,
       maximumBytes,
-      location.trustRoot,
+      location.configurationDirectory,
       location.candidateRoot,
     );
     pinnedFiles.set(pathKey(file.lexicalPath), {
@@ -728,7 +730,8 @@ async function locateRelativeFile(
     samePath(file.canonicalPath, location.configuration.canonicalPath) ||
     usedLexicalPaths.has(lexicalKey) ||
     usedCanonicalPaths.has(canonicalKey) ||
-    !isStrictDescendant(location.trustRoot.canonicalPath, file.canonicalPath) ||
+    !isStrictDescendant(location.configurationDirectory.lexicalPath, file.lexicalPath) ||
+    !isStrictDescendant(location.configurationDirectory.canonicalPath, file.canonicalPath) ||
     isWithin(location.candidateRoot, file.canonicalPath)
   ) {
     throw new ConfiguredReleaseError(
@@ -745,7 +748,7 @@ async function readLocatedFile(
   reader: ReleaseFileReader,
   file: LocatedFile,
   maximumBytes: number,
-  trustRoot: LocatedDirectory,
+  containmentRoot: LocatedDirectory,
   candidateRoot: string,
 ): Promise<Uint8Array> {
   if (!Number.isSafeInteger(file.size) || file.size < 0 || file.size > maximumBytes) {
@@ -773,7 +776,8 @@ async function readLocatedFile(
     after.size !== file.size ||
     bytes.byteLength !== file.size ||
     !samePath(canonicalAfter, file.canonicalPath) ||
-    !isStrictDescendant(trustRoot.canonicalPath, canonicalAfter) ||
+    !isStrictDescendant(containmentRoot.lexicalPath, file.lexicalPath) ||
+    !isStrictDescendant(containmentRoot.canonicalPath, canonicalAfter) ||
     isWithin(candidateRoot, canonicalAfter)
   ) {
     throw new ConfiguredReleaseError(
