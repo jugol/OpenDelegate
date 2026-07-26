@@ -62,6 +62,34 @@ test("tooling test children receive the physical temp root on macOS and Windows 
   }
 });
 
+test("macOS tooling tests use the short physical system temp root by default", async () => {
+  let invocation;
+  const child = new EventEmitter();
+  const exitCode = runToolingTests({
+    environment: {
+      PATH: "fixture-path",
+      TMPDIR: "/var/folders/opendelegate",
+    },
+    executablePath: "/fixture/node",
+    platform: "darwin",
+    realPath: async (path) => {
+      assert.equal(path, "/tmp");
+      return "/private/tmp";
+    },
+    repositoryRoot: "/fixture/repository",
+    spawnChild(executable, arguments_, options) {
+      invocation = { arguments_, executable, options };
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    },
+  });
+
+  assert.equal(await exitCode, 0);
+  assert.equal(invocation.options.env.TEMP, "/private/tmp");
+  assert.equal(invocation.options.env.TMP, "/private/tmp");
+  assert.equal(invocation.options.env.TMPDIR, "/private/tmp");
+});
+
 test("the committed release runner creates and propagates only a physical temp root", async () => {
   const lexical = "/var/folders/opendelegate";
   const canonical = "/private/var/folders/opendelegate";

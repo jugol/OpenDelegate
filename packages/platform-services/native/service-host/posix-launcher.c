@@ -77,8 +77,9 @@ static int is_safe_session_component(const char *value) {
 static void configure_session_identity(void) {
   char session_identity[256];
 #if defined(__APPLE__)
-  struct auditinfo audit_info;
-  if (getaudit(&audit_info) == 0 && audit_info.ai_asid > 0 &&
+  auditinfo_addr_t audit_info = {0};
+  if (getaudit_addr(&audit_info, (int)sizeof(audit_info)) == 0 &&
+      audit_info.ai_asid > 0 &&
       snprintf(session_identity, sizeof(session_identity), "unix:%lu:audit:%lu",
                (unsigned long)getuid(), (unsigned long)audit_info.ai_asid) <
           (int)sizeof(session_identity)) {

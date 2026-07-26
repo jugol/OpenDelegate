@@ -26,9 +26,15 @@ export async function isDirectToolingTestInvocation(invokedPath, modulePath = cu
 }
 
 export async function runToolingTests(dependencies = {}) {
+  const platform = dependencies.platform ?? process.platform;
   const temporary = await canonicalizeTemporaryEnvironment(
     dependencies.environment ?? process.env,
-    dependencies,
+    {
+      ...dependencies,
+      platform,
+      temporaryDirectory:
+        dependencies.temporaryDirectory ?? (platform === "darwin" ? () => "/tmp" : undefined),
+    },
   );
   const child = (dependencies.spawnChild ?? spawn)(
     dependencies.executablePath ?? process.execPath,
