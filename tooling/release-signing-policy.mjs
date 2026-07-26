@@ -11,6 +11,7 @@ import {
 import {
   consumeCredentialAuthorization,
   describeCredentialAuthorization,
+  revalidateCredentialAuthorization,
 } from "./release-credential-authorization.mjs";
 import { assertNoLinkedPathComponents } from "./release-tooling-io.mjs";
 
@@ -156,14 +157,18 @@ export async function signWithPinnedReleasePolicy(input) {
   const inputSha256 = sha256(signingBytes);
   const preview = describeCredentialAuthorization(input.authorization);
   await revalidatePolicyFiles(details);
-  const authorization = consumeCredentialAuthorization(input.authorization, {
-    domain: preview.domain,
-    inputSha256,
-    role: details.role,
-  });
   const signed = await invokePinnedReleaseSigner({
-    authorization,
-    domain: authorization.domain,
+    authorization: preview,
+    beforeSign: async () => {
+      await revalidateCredentialAuthorization(input.authorization);
+      await revalidatePolicyFiles(details);
+      return consumeCredentialAuthorization(input.authorization, {
+        domain: preview.domain,
+        inputSha256,
+        role: details.role,
+      });
+    },
+    domain: preview.domain,
     endpoint: details.broker.endpoint,
     policySha256: details.policy.sha256,
     publicKeyPem: details.publicKey.bytes,

@@ -1,17 +1,16 @@
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto";
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import { releaseSignerBrokerProtocol } from "../external-release-signer.mjs";
 import {
-  releaseSignerBrokerProtocol,
-  releaseSignerBrokerTransportResponseDomain,
-  validateReleaseSigningStatement,
-} from "../external-release-signer.mjs";
-import { authorizeCredentialUse } from "../release-credential-authorization.mjs";
+  authorizeCredentialUse,
+  describeCredentialAuthorization,
+} from "../release-credential-authorization.mjs";
 import {
   assertPinnedReleaseSigningPolicyExternal,
   describePinnedReleaseSigningPolicy,
@@ -19,6 +18,10 @@ import {
   readPinnedReleaseSigningPolicy,
   signWithPinnedReleasePolicy,
 } from "../release-signing-policy.mjs";
+import {
+  createPublisherSigningBytes as publisherSigningBytes,
+  createReleaseSignerBrokerFixture,
+} from "./support/release-signer-broker-fixture.mjs";
 
 test("a pinned policy authorizes an authenticated broker without exposing endpoint paths", async (t) => {
   const fixture = await createPolicyFixture(t, "publisher");
@@ -60,6 +63,7 @@ test("a pinned policy authorizes an authenticated broker without exposing endpoi
       signingBytes,
       "publisher",
       "publisher-attestation-v2",
+      fixture,
     ),
     policy,
     signingBytes,
@@ -122,6 +126,7 @@ test("policy handles fail closed after policy, release-key, or transport-key mut
           signingBytes,
           "publisher",
           "publisher-attestation-v2",
+          fixture,
         ),
         policy,
         signingBytes,
@@ -144,6 +149,7 @@ test("signing accepts only pinned policy and one-shot credential-authorization h
     signingBytes,
     "publisher",
     "publisher-attestation-v2",
+    fixture,
   );
   await signWithPinnedReleasePolicy({ authorization, policy, signingBytes });
   await assert.rejects(
@@ -151,6 +157,58 @@ test("signing accepts only pinned policy and one-shot credential-authorization h
     /opaque unconsumed credential authorization/u,
   );
   assert.equal(fixture.requests.length, 1);
+});
+
+test("policy and credential state are revalidated after broker capability issuance", async (t) => {
+  const policyMutation = await createPolicyFixture(t, "publisher");
+  const policy = await readPolicy(policyMutation, "publisher");
+  const signingBytes = publisherSigningBytes("post-capability-policy");
+  const authorization = await credentialAuthorization(
+    signingBytes,
+    "publisher",
+    "publisher-attestation-v2",
+    policyMutation,
+  );
+  policyMutation.broker.behavior.afterCapabilityIssued = () => {
+    writeFileSync(policyMutation.policyPath, "{}\n", "utf8");
+  };
+  await assert.rejects(
+    signWithPinnedReleasePolicy({ authorization, policy, signingBytes }),
+    /policy SHA-256 does not match/u,
+  );
+  assert.equal(policyMutation.broker.metrics.capabilitiesIssued, 1);
+  assert.equal(policyMutation.broker.metrics.releaseKeyUseCount, 0);
+
+  const credentialMutation = await createPolicyFixture(t, "publisher");
+  const credentialPolicy = await readPolicy(credentialMutation, "publisher");
+  const credentialBytes = publisherSigningBytes("post-capability-credential");
+  let revalidationCount = 0;
+  const credentialAuthorizationHandle = await authorizeCredentialUse({
+    domain: "publisher-attestation-v2",
+    inputSha256: sha256(credentialBytes),
+    revalidate: async () => {
+      revalidationCount += 1;
+      if (revalidationCount > 1) {
+        throw new Error("credential precondition changed");
+      }
+    },
+    role: "publisher",
+    snapshot: {
+      candidateSha256: "c".repeat(64),
+      sourceCommit: "d".repeat(40),
+    },
+  });
+  credentialMutation.broker.approve(describeCredentialAuthorization(credentialAuthorizationHandle));
+  await assert.rejects(
+    signWithPinnedReleasePolicy({
+      authorization: credentialAuthorizationHandle,
+      policy: credentialPolicy,
+      signingBytes: credentialBytes,
+    }),
+    /credential precondition changed/u,
+  );
+  assert.equal(revalidationCount, 2);
+  assert.equal(credentialMutation.broker.metrics.releaseKeyUseCount, 0);
 });
 
 test("release signing policies reject linked ancestors for policies and both trust roots", async (t) => {
@@ -191,23 +249,15 @@ test("release signing policies reject linked ancestors for policies and both tru
 
 async function createPolicyFixture(t, role) {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-release-policy-"));
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const transport = generateKeyPairSync("ed25519");
+  const broker = await createReleaseSignerBrokerFixture(t, { role });
   const publicKeyPath = join(root, "public.pem");
   const transportPublicKeyPath = join(root, "transport-public.pem");
   const policyPath = join(root, "policy.json");
-  const endpoint =
-    process.platform === "win32"
-      ? `\\\\.\\pipe\\opendelegate-policy-${randomUUID()}`
-      : join(root, "broker.sock");
-  await writeFile(publicKeyPath, publicKey.export({ format: "pem", type: "spki" }), "utf8");
-  await writeFile(
-    transportPublicKeyPath,
-    transport.publicKey.export({ format: "pem", type: "spki" }),
-    "utf8",
-  );
-  const keyId = keyIdFor(publicKey);
-  const transportKeyId = keyIdFor(transport.publicKey);
+  const endpoint = broker.endpoint;
+  await writeFile(publicKeyPath, broker.releasePublicKeyPem);
+  await writeFile(transportPublicKeyPath, broker.transportPublicKeyPem);
+  const keyId = broker.releaseKeyId;
+  const transportKeyId = broker.transportKeyId;
   const policy = {
     schemaVersion: 2,
     product: "OpenDelegate",
@@ -227,77 +277,30 @@ async function createPolicyFixture(t, role) {
     },
   };
   await writeFile(policyPath, `${JSON.stringify(policy)}\n`, "utf8");
-
-  const requests = [];
-  const sockets = new Set();
-  const server = createServer({ allowHalfOpen: true }, (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-    let input = Buffer.alloc(0);
-    socket.on("data", (chunk) => {
-      input = Buffer.concat([input, chunk]);
-      const newline = input.indexOf(0x0a);
-      if (newline < 0) {
-        return;
-      }
-      const requestBytes = input.subarray(0, newline + 1);
-      const request = JSON.parse(requestBytes.toString("utf8"));
-      const signingBytes = Buffer.from(request.signingBytes, "base64url");
-      validateReleaseSigningStatement(signingBytes, request.domain);
-      requests.push(request);
-      const unsigned = {
-        schemaVersion: 1,
-        protocol: releaseSignerBrokerProtocol,
-        type: "sign-response",
-        requestId: request.requestId,
-        clientNonce: request.clientNonce,
-        brokerNonce: randomBytes(32).toString("base64url"),
-        role: request.role,
-        domain: request.domain,
-        releaseKeyId: keyId,
-        transportKeyId,
-        inputSha256: request.inputSha256,
-        releaseSignature: sign(null, signingBytes, privateKey).toString("base64url"),
-      };
-      const transportSigningBytes = Buffer.concat([
-        Buffer.from(releaseSignerBrokerTransportResponseDomain, "utf8"),
-        Buffer.from(`${sha256(requestBytes)}\n`, "utf8"),
-        Buffer.from(`${JSON.stringify(unsigned)}\n`, "utf8"),
-      ]);
-      const response = {
-        ...unsigned,
-        transportSignature: sign(null, transportSigningBytes, transport.privateKey).toString(
-          "base64url",
-        ),
-      };
-      socket.end(`${JSON.stringify(response)}\n`);
-    });
-  });
-  await new Promise((resolvePromise, reject) => {
-    server.once("error", reject);
-    server.listen(endpoint, resolvePromise);
-  });
+  broker.setPolicySha256(await sha256File(policyPath));
   t.after(async () => {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    await new Promise((resolvePromise) => server.close(resolvePromise));
     await rm(root, { force: true, recursive: true });
   });
   return {
+    broker,
     endpoint,
     keyId,
     policyPath,
     publicKeyPath,
-    requests,
+    requests: broker.signRequests,
     root,
     transportKeyId,
     transportPublicKeyPath,
   };
 }
 
-async function credentialAuthorization(signingBytes, authorizationRole, authorizationDomain) {
-  return authorizeCredentialUse({
+async function credentialAuthorization(
+  signingBytes,
+  authorizationRole,
+  authorizationDomain,
+  fixture,
+) {
+  const authorization = await authorizeCredentialUse({
     domain: authorizationDomain,
     inputSha256: sha256(signingBytes),
     revalidate: async () => undefined,
@@ -307,6 +310,8 @@ async function credentialAuthorization(signingBytes, authorizationRole, authoriz
       sourceCommit: "d".repeat(40),
     },
   });
+  fixture?.broker.approve(describeCredentialAuthorization(authorization));
+  return authorization;
 }
 
 async function readPolicy(fixture, expectedRole) {
@@ -315,19 +320,6 @@ async function readPolicy(fixture, expectedRole) {
     path: fixture.policyPath,
     sha256: await sha256File(fixture.policyPath),
   });
-}
-
-function publisherSigningBytes(candidate) {
-  const statement = {
-    schemaVersion: 2,
-    product: "OpenDelegate",
-    domain: "opendelegate.release.publisher-attestation.v2",
-    candidate,
-  };
-  return Buffer.from(
-    `OpenDelegate publisher attestation v2\n${JSON.stringify(statement, null, 2)}\n`,
-    "utf8",
-  );
 }
 
 async function createDirectoryAlias(aliasPath, targetPath) {
@@ -342,10 +334,6 @@ async function rewritePolicy(path, mutate) {
 
 async function sha256File(path) {
   return sha256(await readFile(path));
-}
-
-function keyIdFor(publicKey) {
-  return `sha256:${sha256(publicKey.export({ format: "der", type: "spki" }))}`;
 }
 
 function sha256(bytes) {

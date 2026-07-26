@@ -50,6 +50,7 @@ export async function authorizeCredentialUse(input, dependencies = {}) {
     Object.freeze({
       description,
       expiresAt: now.getTime() + ttlMs,
+      revalidate: input.revalidate,
     }),
   );
   return handle;
@@ -57,6 +58,20 @@ export async function authorizeCredentialUse(input, dependencies = {}) {
 
 export function describeCredentialAuthorization(handle) {
   return requireAuthorization(handle).description;
+}
+
+export async function revalidateCredentialAuthorization(handle, dependencies = {}) {
+  const details = requireAuthorization(handle);
+  const before = readNow(dependencies.now).getTime();
+  if (before > details.expiresAt) {
+    throw new Error("The short-lived credential authorization expired before revalidation.");
+  }
+  await details.revalidate();
+  const after = readNow(dependencies.now).getTime();
+  if (after > details.expiresAt) {
+    throw new Error("The short-lived credential authorization expired during revalidation.");
+  }
+  return details.description;
 }
 
 export function consumeCredentialAuthorization(handle, expected, dependencies = {}) {

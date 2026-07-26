@@ -1,53 +1,50 @@
 import assert from "node:assert/strict";
-import {
-  createHash,
-  generateKeyPairSync,
-  randomBytes,
-  randomUUID,
-  sign,
-  verify as verifySignature,
-} from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import { createServer } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { generateKeyPairSync, verify as verifySignature } from "node:crypto";
+import { createConnection } from "node:net";
 import test from "node:test";
 
 import {
   invokePinnedReleaseSigner,
+  parseReleaseSignerBrokerAuthorizationRequest,
   releaseSignerBrokerProtocol,
-  releaseSignerBrokerTransportResponseDomain,
   validateReleaseSigningStatement,
 } from "../external-release-signer.mjs";
 import { credentialAuthorizationDigest } from "../release-credential-authorization.mjs";
+import {
+  createCredentialAuthorization,
+  createPublisherSigningBytes,
+  createReleaseSignerBrokerFixture,
+  keyIdFor,
+  sha256,
+} from "./support/release-signer-broker-fixture.mjs";
 
-const role = "publisher";
-const domain = "publisher-attestation-v2";
-const policySha256 = "a".repeat(64);
-
-test("an authenticated local broker signs one authorized release statement", async (t) => {
-  const fixture = await createBrokerFixture(t);
-  const signingBytes = publisherSigningBytes("fixture");
-  const authorization = credentialAuthorization(signingBytes);
+test("an authenticated broker uses a same-session one-shot capability before signing", async (t) => {
+  const fixture = await createReleaseSignerBrokerFixture(t);
+  const signingBytes = createPublisherSigningBytes("happy");
+  const authorization = createCredentialAuthorization(signingBytes);
+  fixture.approve(authorization);
+  let beforeSignCalls = 0;
   process.env["OPENDELEGATE_TEST_SIGNER_SECRET"] = "must-not-cross-the-broker-protocol";
   t.after(() => delete process.env["OPENDELEGATE_TEST_SIGNER_SECRET"]);
 
-  const result = await invokePinnedReleaseSigner({
-    authorization,
-    domain,
-    endpoint: fixture.endpoint,
-    policySha256,
-    publicKeyPem: fixture.releasePublicKeyPem,
-    role,
-    signingBytes,
-    transportPublicKeyPem: fixture.transportPublicKeyPem,
-  });
+  const result = await invokePinnedReleaseSigner(
+    validSignerInput(fixture, signingBytes, authorization, async () => {
+      beforeSignCalls += 1;
+      return authorization;
+    }),
+  );
 
+  assert.equal(beforeSignCalls, 1);
+  assert.equal(fixture.metrics.capabilitiesIssued, 1);
+  assert.equal(fixture.metrics.capabilitiesConsumed, 1);
+  assert.equal(fixture.metrics.releaseKeyUseCount, 1);
   assert.equal(result.algorithm, "ed25519");
   assert.equal(result.keyId, fixture.releaseKeyId);
-  assert.equal(result.broker.protocol, releaseSignerBrokerProtocol);
-  assert.equal(result.broker.transportKeyId, fixture.transportKeyId);
-  assert.equal(result.broker.endpointSha256, sha256(Buffer.from(fixture.endpoint, "utf8")));
+  assert.deepEqual(result.broker, {
+    endpointSha256: fixture.endpointSha256,
+    protocol: releaseSignerBrokerProtocol,
+    transportKeyId: fixture.transportKeyId,
+  });
   assert.equal(
     verifySignature(
       null,
@@ -57,126 +54,226 @@ test("an authenticated local broker signs one authorized release statement", asy
     ),
     true,
   );
+  const authorizationRequest = fixture.authorizationRequests[0];
+  const signRequest = fixture.signRequests[0];
+  assert.equal(
+    authorizationRequest.authorizationSha256,
+    credentialAuthorizationDigest(authorization),
+  );
+  assert.equal(authorizationRequest.endpointSha256, fixture.endpointSha256);
+  assert.equal(signRequest.capabilityId.length, 43);
+  assert.equal(signRequest.brokerNonce.length, 43);
+  assert.equal(signRequest.inputSha256, sha256(signingBytes));
+  assert.equal(signRequest.signingBytes, signingBytes.toString("base64url"));
+  assert.equal(
+    JSON.stringify(authorizationRequest).includes("OPENDELEGATE_TEST_SIGNER_SECRET"),
+    false,
+  );
+  assert.equal(JSON.stringify(result).includes(fixture.endpoint), false);
   assert.equal(Object.isFrozen(result), true);
   assert.equal(Object.isFrozen(result.broker), true);
-
-  const request = fixture.requests.at(-1);
-  assert.equal(request.protocol, releaseSignerBrokerProtocol);
-  assert.equal(request.role, role);
-  assert.equal(request.domain, domain);
-  assert.equal(request.releaseKeyId, fixture.releaseKeyId);
-  assert.equal(request.transportKeyId, fixture.transportKeyId);
-  assert.equal(request.endpointSha256, sha256(Buffer.from(fixture.endpoint, "utf8")));
-  assert.equal(request.inputSha256, sha256(signingBytes));
-  assert.equal(request.signingBytes, signingBytes.toString("base64url"));
-  assert.deepEqual(request.authorization, authorization);
-  assert.equal(request.authorizationSha256, credentialAuthorizationDigest(authorization));
-  assert.equal(JSON.stringify(request).includes("OPENDELEGATE_TEST_SIGNER_SECRET"), false);
-  assert.equal(JSON.stringify(result).includes(fixture.endpoint), false);
 });
 
-test("endpoint substitution fails even when the impostor has the release key", async (t) => {
+test("post-capability revalidation failure closes the session before release-key use", async (t) => {
+  const fixture = await createReleaseSignerBrokerFixture(t);
+  const signingBytes = createPublisherSigningBytes("revalidation");
+  const authorization = createCredentialAuthorization(signingBytes);
+  fixture.approve(authorization);
+
+  await assert.rejects(
+    invokePinnedReleaseSigner(
+      validSignerInput(fixture, signingBytes, authorization, async () => {
+        throw new Error("runner snapshot changed");
+      }),
+    ),
+    /runner snapshot changed/u,
+  );
+  assert.equal(fixture.metrics.capabilitiesIssued, 1);
+  assert.equal(fixture.metrics.capabilitiesConsumed, 0);
+  assert.equal(fixture.metrics.releaseKeyUseCount, 0);
+  assert.equal(fixture.signRequests.length, 0);
+
+  const changed = createCredentialAuthorization(signingBytes, {
+    snapshotSha256: "9".repeat(64),
+  });
+  const second = await createReleaseSignerBrokerFixture(t);
+  const secondAuthorization = createCredentialAuthorization(signingBytes);
+  second.approve(secondAuthorization);
+  await assert.rejects(
+    invokePinnedReleaseSigner(
+      validSignerInput(second, signingBytes, secondAuthorization, async () => changed),
+    ),
+    /changed or expired/u,
+  );
+  assert.equal(second.metrics.releaseKeyUseCount, 0);
+});
+
+test("unapproved, replayed, direct-sign, and cross-session requests never reach the release key", async (t) => {
+  const fixture = await createReleaseSignerBrokerFixture(t);
+  const signingBytes = createPublisherSigningBytes("approval");
+  const unapproved = createCredentialAuthorization(signingBytes);
+  let beforeSignCalls = 0;
+  await assert.rejects(
+    invokePinnedReleaseSigner(
+      validSignerInput(fixture, signingBytes, unapproved, async () => {
+        beforeSignCalls += 1;
+        return unapproved;
+      }),
+    ),
+    /closed before returning|connection failed/u,
+  );
+  assert.equal(beforeSignCalls, 0);
+  assert.equal(fixture.metrics.releaseKeyUseCount, 0);
+
+  const approved = createCredentialAuthorization(signingBytes);
+  fixture.approve(approved);
+  await invokePinnedReleaseSigner(validSignerInput(fixture, signingBytes, approved));
+  const keyUsesAfterSuccess = fixture.metrics.releaseKeyUseCount;
+  const capturedAuthorization = canonicalLine(fixture.authorizationRequests.at(-1));
+  const capturedSign = canonicalLine(fixture.signRequests.at(-1));
+
+  await sendRawLines(fixture.endpoint, [capturedAuthorization]);
+  await sendRawLines(fixture.endpoint, [capturedSign]);
+  assert.equal(fixture.metrics.releaseKeyUseCount, keyUsesAfterSuccess);
+  assert.ok(fixture.errors.length >= 2);
+});
+
+test("endpoint substitution and transcript replay fail before release-key use", async (t) => {
   const releaseKeys = generateKeyPairSync("ed25519");
-  const trustedTransportKeys = generateKeyPairSync("ed25519");
-  const trustedTransportKeyId = keyId(trustedTransportKeys.publicKey);
-  const impostor = await createBrokerFixture(t, {
-    advertisedTransportKeyId: trustedTransportKeyId,
+  const trustedTransport = generateKeyPairSync("ed25519");
+  const impostor = await createReleaseSignerBrokerFixture(t, {
+    advertisedTransportKeyId: keyIdFor(trustedTransport.publicKey),
     releaseKeys,
     transportKeys: generateKeyPairSync("ed25519"),
   });
-  const signingBytes = publisherSigningBytes("substitution");
+  const signingBytes = createPublisherSigningBytes("substitution");
+  const authorization = createCredentialAuthorization(signingBytes);
+  impostor.approve(authorization);
 
   await assert.rejects(
     invokePinnedReleaseSigner({
-      authorization: credentialAuthorization(signingBytes),
-      domain,
-      endpoint: impostor.endpoint,
-      policySha256,
-      publicKeyPem: Buffer.from(releaseKeys.publicKey.export({ format: "pem", type: "spki" })),
-      role,
-      signingBytes,
+      ...validSignerInput(impostor, signingBytes, authorization),
       transportPublicKeyPem: Buffer.from(
-        trustedTransportKeys.publicKey.export({
-          format: "pem",
-          type: "spki",
-        }),
+        trustedTransport.publicKey.export({ format: "pem", type: "spki" }),
       ),
     }),
     /does not authenticate to the pinned transport authority/u,
   );
+  assert.equal(impostor.metrics.releaseKeyUseCount, 0);
+
+  const trusted = await createReleaseSignerBrokerFixture(t);
+  const firstAuthorization = createCredentialAuthorization(signingBytes);
+  trusted.approve(firstAuthorization);
+  await invokePinnedReleaseSigner(validSignerInput(trusted, signingBytes, firstAuthorization));
+  trusted.behavior.replayAuthorizationResponse = Buffer.from(trusted.authorizationResponses.at(-1));
+  const secondAuthorization = createCredentialAuthorization(signingBytes);
+  trusted.approve(secondAuthorization);
+  const keyUsesBeforeReplay = trusted.metrics.releaseKeyUseCount;
+  await assert.rejects(
+    invokePinnedReleaseSigner(validSignerInput(trusted, signingBytes, secondAuthorization)),
+    /does not match request field requestId/u,
+  );
+  assert.equal(trusted.metrics.releaseKeyUseCount, keyUsesBeforeReplay);
 });
 
-test("a broker response cannot be replayed across request IDs or nonces", async (t) => {
-  const fixture = await createBrokerFixture(t);
-  const signingBytes = publisherSigningBytes("replay");
-  await invokePinnedReleaseSigner({
-    authorization: credentialAuthorization(signingBytes),
-    domain,
-    endpoint: fixture.endpoint,
-    policySha256,
-    publicKeyPem: fixture.releasePublicKeyPem,
-    role,
-    signingBytes,
-    transportPublicKeyPem: fixture.transportPublicKeyPem,
-  });
-  fixture.behavior.replayResponse = Buffer.from(fixture.responses.at(-1));
+test("the broker parser requires an independently approved authorization tuple and exact endpoint", async (t) => {
+  const fixture = await createReleaseSignerBrokerFixture(t);
+  const signingBytes = createPublisherSigningBytes("parser");
+  const authorization = createCredentialAuthorization(signingBytes);
+  const approval = fixture.approve(authorization);
+  await invokePinnedReleaseSigner(validSignerInput(fixture, signingBytes, authorization));
+  const requestBytes = canonicalLine(fixture.authorizationRequests[0]);
+  const expected = {
+    approvedInputSha256: approval.inputSha256,
+    approvedSnapshotSha256: approval.snapshotSha256,
+    domain: fixture.domain,
+    endpointSha256: fixture.endpointSha256,
+    policySha256: fixture.policySha256,
+    releaseKeyId: fixture.releaseKeyId,
+    role: fixture.role,
+    transportKeyId: fixture.transportKeyId,
+  };
 
-  await assert.rejects(
-    invokePinnedReleaseSigner({
-      authorization: credentialAuthorization(signingBytes),
-      domain,
-      endpoint: fixture.endpoint,
-      policySha256,
-      publicKeyPem: fixture.releasePublicKeyPem,
-      role,
-      signingBytes,
-      transportPublicKeyPem: fixture.transportPublicKeyPem,
-    }),
-    /does not match request field requestId/u,
+  assert.doesNotThrow(() => parseReleaseSignerBrokerAuthorizationRequest(requestBytes, expected));
+  assert.throws(
+    () =>
+      parseReleaseSignerBrokerAuthorizationRequest(requestBytes, {
+        ...expected,
+        approvedSnapshotSha256: "0".repeat(64),
+      }),
+    /snapshot is not independently approved/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseSignerBrokerAuthorizationRequest(requestBytes, {
+        ...expected,
+        approvedInputSha256: "0".repeat(64),
+      }),
+    /invalid or unauthorized/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseSignerBrokerAuthorizationRequest(requestBytes, {
+        ...expected,
+        endpointSha256: "0".repeat(64),
+      }),
+    /invalid or unauthorized/u,
   );
 });
 
-test("the broker boundary rejects generic signing, malformed authority, and old helper fields", async (t) => {
-  const fixture = await createBrokerFixture(t);
-  const signingBytes = publisherSigningBytes("strict");
-  const valid = {
-    authorization: credentialAuthorization(signingBytes),
-    domain,
-    endpoint: fixture.endpoint,
-    policySha256,
-    publicKeyPem: fixture.releasePublicKeyPem,
-    role,
-    signingBytes,
-    transportPublicKeyPem: fixture.transportPublicKeyPem,
-  };
+test("generic, malformed, expired, oversized, and remote inputs fail before broker contact", async (t) => {
+  const fixture = await createReleaseSignerBrokerFixture(t);
+  const signingBytes = createPublisherSigningBytes("strict");
+  const authorization = createCredentialAuthorization(signingBytes);
+  const valid = validSignerInput(fixture, signingBytes, authorization);
 
   await assert.rejects(
     invokePinnedReleaseSigner({ ...valid, executable: { path: process.execPath } }),
     /release signer input fields do not match the strict schema/u,
   );
   await assert.rejects(
+    invokePinnedReleaseSigner({ ...valid, beforeSign: undefined }),
+    /post-capability revalidation callback/u,
+  );
+  await assert.rejects(
     invokePinnedReleaseSigner({
       ...valid,
       domain: "generic-arbitrary-bytes",
-      authorization: { ...valid.authorization, domain: "generic-arbitrary-bytes" },
+      authorization: { ...authorization, domain: "generic-arbitrary-bytes" },
     }),
     /signing domain is not authorized/u,
   );
-  const arbitraryBytes = Buffer.from("arbitrary bytes under an otherwise allowed domain", "utf8");
-  const requestsBeforeArbitraryInput = fixture.requests.length;
+  const arbitrary = Buffer.from("arbitrary bytes under an otherwise allowed domain", "utf8");
   await assert.rejects(
     invokePinnedReleaseSigner({
       ...valid,
-      authorization: credentialAuthorization(arbitraryBytes),
-      signingBytes: arbitraryBytes,
+      authorization: createCredentialAuthorization(arbitrary),
+      signingBytes: arbitrary,
     }),
     /do not match the authorized statement domain/u,
   );
-  assert.equal(fixture.requests.length, requestsBeforeArbitraryInput);
+  const malformedStatement = JSON.parse(
+    signingBytes
+      .subarray(Buffer.byteLength("OpenDelegate publisher attestation v2\n"))
+      .toString("utf8"),
+  );
+  delete malformedStatement.archive;
+  const malformedBytes = Buffer.from(
+    `OpenDelegate publisher attestation v2\n${JSON.stringify(malformedStatement, null, 2)}\n`,
+    "utf8",
+  );
   await assert.rejects(
     invokePinnedReleaseSigner({
       ...valid,
-      authorization: { ...valid.authorization, inputSha256: "0".repeat(64) },
+      authorization: createCredentialAuthorization(malformedBytes),
+      signingBytes: malformedBytes,
+    }),
+    /strict schema/u,
+  );
+  await assert.rejects(
+    invokePinnedReleaseSigner({
+      ...valid,
+      authorization: { ...authorization, inputSha256: "0".repeat(64) },
     }),
     /authorization does not match/u,
   );
@@ -184,7 +281,7 @@ test("the broker boundary rejects generic signing, malformed authority, and old 
     invokePinnedReleaseSigner({
       ...valid,
       authorization: {
-        ...valid.authorization,
+        ...authorization,
         expiresAt: new Date(Date.now() - 1_000).toISOString(),
       },
     }),
@@ -204,7 +301,6 @@ test("the broker boundary rejects generic signing, malformed authority, and old 
     }),
     /local Windows named pipe|absolute Unix socket/u,
   );
-
   const sameAuthority = generateKeyPairSync("ed25519");
   await assert.rejects(
     invokePinnedReleaseSigner({
@@ -216,196 +312,116 @@ test("the broker boundary rejects generic signing, malformed authority, and old 
     }),
     /authorities must be distinct/u,
   );
+  assert.equal(fixture.authorizationRequests.length, 0);
+  assert.equal(fixture.metrics.releaseKeyUseCount, 0);
 });
 
-test("the broker boundary enforces canonical output, output bounds, and timeout", async (t) => {
-  const fixture = await createBrokerFixture(t);
-  const signingBytes = publisherSigningBytes("bounded");
-  const valid = {
-    authorization: credentialAuthorization(signingBytes),
-    domain,
-    endpoint: fixture.endpoint,
-    policySha256,
-    publicKeyPem: fixture.releasePublicKeyPem,
-    role,
-    signingBytes,
-    transportPublicKeyPem: fixture.transportPublicKeyPem,
-  };
+test("capability lifetime, canonical output, output bounds, and timeout fail closed", async (t) => {
+  const signingBytes = createPublisherSigningBytes("bounds");
 
-  fixture.behavior.reorderResponse = true;
+  const longLived = await createReleaseSignerBrokerFixture(t);
+  const longAuthorization = createCredentialAuthorization(signingBytes);
+  longLived.approve(longAuthorization);
+  longLived.behavior.authorizationResponseMutator = (value) => ({
+    ...value,
+    expiresAt: new Date(Date.now() + 20_000).toISOString(),
+  });
   await assert.rejects(
-    invokePinnedReleaseSigner(valid),
-    /response fields do not match the canonical order|not canonical JSON/u,
+    invokePinnedReleaseSigner(validSignerInput(longLived, signingBytes, longAuthorization)),
+    /invalid one-shot capability lifetime/u,
   );
-  fixture.behavior.reorderResponse = false;
+  assert.equal(longLived.metrics.releaseKeyUseCount, 0);
 
-  fixture.behavior.oversizedResponse = true;
-  await assert.rejects(invokePinnedReleaseSigner(valid), /emitted oversized output/u);
-  fixture.behavior.oversizedResponse = false;
+  const reordered = await createReleaseSignerBrokerFixture(t);
+  const reorderedAuthorization = createCredentialAuthorization(signingBytes);
+  reordered.approve(reorderedAuthorization);
+  reordered.behavior.reorderAuthorizationResponse = true;
+  await assert.rejects(
+    invokePinnedReleaseSigner(validSignerInput(reordered, signingBytes, reorderedAuthorization)),
+    /canonical order|not canonical JSON/u,
+  );
+  assert.equal(reordered.metrics.releaseKeyUseCount, 0);
 
-  fixture.behavior.hang = true;
+  const oversized = await createReleaseSignerBrokerFixture(t);
+  const oversizedAuthorization = createCredentialAuthorization(signingBytes);
+  oversized.approve(oversizedAuthorization);
+  oversized.behavior.oversizedAt = "authorize";
+  await assert.rejects(
+    invokePinnedReleaseSigner(validSignerInput(oversized, signingBytes, oversizedAuthorization)),
+    /emitted oversized output/u,
+  );
+  assert.equal(oversized.metrics.releaseKeyUseCount, 0);
+
+  const hanging = await createReleaseSignerBrokerFixture(t);
+  const hangingAuthorization = createCredentialAuthorization(signingBytes);
+  hanging.approve(hangingAuthorization);
+  hanging.behavior.hangAt = "authorize";
   const startedAt = Date.now();
   await assert.rejects(
-    invokePinnedReleaseSigner({ ...valid, timeoutMs: 100 }),
+    invokePinnedReleaseSigner({
+      ...validSignerInput(hanging, signingBytes, hangingAuthorization),
+      timeoutMs: 100,
+    }),
     /exceeded its bounded timeout/u,
   );
   assert.ok(Date.now() - startedAt < 2_000);
+  assert.equal(hanging.metrics.releaseKeyUseCount, 0);
 });
 
-async function createBrokerFixture(t, options = {}) {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-signer-broker-"));
-  const releaseKeys = options.releaseKeys ?? generateKeyPairSync("ed25519");
-  const transportKeys = options.transportKeys ?? generateKeyPairSync("ed25519");
-  const releasePublicKeyPem = Buffer.from(
-    releaseKeys.publicKey.export({ format: "pem", type: "spki" }),
+test("the statement parser rejects malformed nested publisher bindings", () => {
+  const signingBytes = createPublisherSigningBytes("grammar");
+  assert.doesNotThrow(() =>
+    validateReleaseSigningStatement(signingBytes, "publisher-attestation-v2"),
   );
-  const transportPublicKeyPem = Buffer.from(
-    transportKeys.publicKey.export({ format: "pem", type: "spki" }),
+  const prefix = "OpenDelegate publisher attestation v2\n";
+  const statement = JSON.parse(signingBytes.subarray(Buffer.byteLength(prefix)).toString("utf8"));
+  statement.candidate.target = { platform: "linux", architecture: "arm64" };
+  const malformed = Buffer.from(`${prefix}${JSON.stringify(statement, null, 2)}\n`, "utf8");
+  assert.throws(
+    () => validateReleaseSigningStatement(malformed, "publisher-attestation-v2"),
+    /candidate binding is invalid/u,
   );
-  const releaseKeyId = keyId(releaseKeys.publicKey);
-  const transportKeyId = options.advertisedTransportKeyId ?? keyId(transportKeys.publicKey);
-  const endpoint =
-    process.platform === "win32"
-      ? `\\\\.\\pipe\\opendelegate-signer-${randomUUID()}`
-      : join(root, "broker.sock");
-  const requests = [];
-  const responses = [];
-  const sockets = new Set();
-  const behavior = {
-    hang: false,
-    oversizedResponse: false,
-    reorderResponse: false,
-    replayResponse: undefined,
+});
+
+function validSignerInput(
+  fixture,
+  signingBytes,
+  authorization,
+  beforeSign = async () => authorization,
+) {
+  return {
+    authorization,
+    beforeSign,
+    domain: fixture.domain,
+    endpoint: fixture.endpoint,
+    policySha256: fixture.policySha256,
+    publicKeyPem: fixture.releasePublicKeyPem,
+    role: fixture.role,
+    signingBytes,
+    transportPublicKeyPem: fixture.transportPublicKeyPem,
   };
-  const server = createServer({ allowHalfOpen: true }, (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-    let input = Buffer.alloc(0);
-    socket.on("data", (chunk) => {
-      input = Buffer.concat([input, chunk]);
-      if (input.byteLength > 6 * 1024 * 1024) {
-        socket.destroy();
-        return;
+}
+
+async function sendRawLines(endpoint, lines) {
+  await new Promise((resolvePromise, reject) => {
+    const socket = createConnection(endpoint);
+    socket.once("error", (error) => {
+      if (error.code === "ECONNRESET" || error.code === "EPIPE" || error.code === "ENOENT") {
+        resolvePromise();
+      } else {
+        reject(error);
       }
-      const newline = input.indexOf(0x0a);
-      if (newline < 0) {
-        return;
+    });
+    socket.once("close", resolvePromise);
+    socket.once("connect", () => {
+      for (const line of lines) {
+        socket.write(line);
       }
-      if (behavior.hang) {
-        return;
-      }
-      if (behavior.oversizedResponse) {
-        socket.end(Buffer.alloc(64 * 1024 + 1, 0x61));
-        return;
-      }
-      if (behavior.replayResponse !== undefined) {
-        socket.end(behavior.replayResponse);
-        return;
-      }
-      const requestBytes = input.subarray(0, newline + 1);
-      const request = JSON.parse(requestBytes.toString("utf8"));
-      const signingBytes = Buffer.from(request.signingBytes, "base64url");
-      validateReleaseSigningStatement(signingBytes, request.domain);
-      requests.push(request);
-      const unsigned = {
-        schemaVersion: 1,
-        protocol: releaseSignerBrokerProtocol,
-        type: "sign-response",
-        requestId: request.requestId,
-        clientNonce: request.clientNonce,
-        brokerNonce: randomBytes(32).toString("base64url"),
-        role: request.role,
-        domain: request.domain,
-        releaseKeyId,
-        transportKeyId,
-        inputSha256: request.inputSha256,
-        releaseSignature: sign(null, signingBytes, releaseKeys.privateKey).toString("base64url"),
-      };
-      const transportSigningBytes = Buffer.concat([
-        Buffer.from(releaseSignerBrokerTransportResponseDomain, "utf8"),
-        Buffer.from(`${sha256(requestBytes)}\n`, "utf8"),
-        Buffer.from(`${JSON.stringify(unsigned)}\n`, "utf8"),
-      ]);
-      const transportSignature = sign(
-        null,
-        transportSigningBytes,
-        transportKeys.privateKey,
-      ).toString("base64url");
-      const response = behavior.reorderResponse
-        ? {
-            schemaVersion: unsigned.schemaVersion,
-            protocol: unsigned.protocol,
-            type: unsigned.type,
-            requestId: unsigned.requestId,
-            clientNonce: unsigned.clientNonce,
-            brokerNonce: unsigned.brokerNonce,
-            role: unsigned.role,
-            domain: unsigned.domain,
-            releaseKeyId: unsigned.releaseKeyId,
-            transportKeyId: unsigned.transportKeyId,
-            inputSha256: unsigned.inputSha256,
-            transportSignature,
-            releaseSignature: unsigned.releaseSignature,
-          }
-        : { ...unsigned, transportSignature };
-      const responseBytes = Buffer.from(`${JSON.stringify(response)}\n`, "utf8");
-      responses.push(responseBytes);
-      socket.end(responseBytes);
+      socket.end();
     });
   });
-  await new Promise((resolvePromise, reject) => {
-    server.once("error", reject);
-    server.listen(endpoint, resolvePromise);
-  });
-  t.after(async () => {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    await new Promise((resolvePromise) => server.close(resolvePromise));
-    await rm(root, { force: true, recursive: true });
-  });
-  return {
-    behavior,
-    endpoint,
-    releaseKeyId,
-    releasePublicKeyPem,
-    requests,
-    responses,
-    transportKeyId,
-    transportPublicKeyPem,
-  };
 }
 
-function credentialAuthorization(signingBytes) {
-  const authorizedAt = new Date();
-  return {
-    authorizationId: randomBytes(32).toString("base64url"),
-    role,
-    domain,
-    inputSha256: sha256(signingBytes),
-    snapshotSha256: "b".repeat(64),
-    authorizedAt: authorizedAt.toISOString(),
-    expiresAt: new Date(authorizedAt.getTime() + 15_000).toISOString(),
-  };
-}
-
-function publisherSigningBytes(candidate) {
-  const statement = {
-    schemaVersion: 2,
-    product: "OpenDelegate",
-    domain: "opendelegate.release.publisher-attestation.v2",
-    candidate,
-  };
-  return Buffer.from(
-    `OpenDelegate publisher attestation v2\n${JSON.stringify(statement, null, 2)}\n`,
-    "utf8",
-  );
-}
-
-function keyId(publicKey) {
-  return `sha256:${sha256(publicKey.export({ format: "der", type: "spki" }))}`;
-}
-
-function sha256(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
+function canonicalLine(value) {
+  return Buffer.from(`${JSON.stringify(value)}\n`, "utf8");
 }
