@@ -318,10 +318,12 @@ const bundleReadmeCopy = Object.freeze({
     cliIntroduction: "For deterministic CLI inspection:",
     documentation:
       "See `docs/release/README.md` for release semantics, `SECURITY.md` for private\nvulnerability reporting, and `THIRD_PARTY_NOTICES.json` for the complete bundled\ndependency legal inventory.",
+    implementationLabel: "Implementation",
     integrity:
       "Verify `SHA256SUMS` against a digest obtained through a trusted publication channel\nbefore relying on the payload. The enclosed manifest proves only internal\nconsistency, not publisher identity.",
     languageLabel: "Languages",
     ledgerIntroduction: "The acceptance ledger state recorded during assembly was:",
+    liveProofLabel: "Live proof",
     packageDescription: (target) =>
       `This directory is a self-contained, platform-specific OpenDelegate bundle for\n${target}. It includes its audited Node.js runtime; do not install pnpm or run\nsource-checkout commands here.`,
     previewTitle: "unsupported internal preview",
@@ -331,6 +333,7 @@ const bundleReadmeCopy = Object.freeze({
     startHeading: "Start with an agent",
     stateStep:
       "Keep runtime state, databases, credentials, logs, and generated Artifacts outside\n   this bundle.",
+    supportStatusLabel: "Support status",
   }),
   ko: Object.freeze({
     agentStep:
@@ -340,10 +343,12 @@ const bundleReadmeCopy = Object.freeze({
     cliIntroduction: "결정적인 CLI 인터페이스를 확인하려면 다음을 사용하세요.",
     documentation:
       "릴리스 의미는 `docs/release/README.md`, 비공개 취약점 신고 방법은 `SECURITY.md`,\n번들된 의존성의 전체 법적 목록은 `THIRD_PARTY_NOTICES.json`을 확인하세요.",
+    implementationLabel: "구현",
     integrity:
       "이 payload를 신뢰하기 전에 신뢰할 수 있는 배포 채널에서 얻은 digest와\n`SHA256SUMS`를 대조하세요. 포함된 manifest는 내부 일관성만 증명하며 게시자 신원은\n증명하지 않습니다.",
     languageLabel: "언어",
     ledgerIntroduction: "조립 시 기록된 acceptance ledger 상태는 다음과 같습니다.",
+    liveProofLabel: "실제 증거",
     packageDescription: (target) =>
       `이 디렉터리는 ${target}용 자체 완결형 플랫폼별 OpenDelegate 번들입니다.\n감사된 Node.js runtime이 포함되어 있으므로 여기에서 pnpm을 설치하거나 source checkout\n명령을 실행하지 마세요.`,
     previewTitle: "지원되지 않는 내부 프리뷰",
@@ -353,6 +358,7 @@ const bundleReadmeCopy = Object.freeze({
     startHeading: "Agent로 시작하기",
     stateStep:
       "runtime 상태, 데이터베이스, 자격 증명, 로그 및 생성된 Artifact는 이 번들 밖에\n   보관하세요.",
+    supportStatusLabel: "지원 상태",
   }),
   ja: Object.freeze({
     agentStep:
@@ -362,10 +368,12 @@ const bundleReadmeCopy = Object.freeze({
     cliIntroduction: "決定的な CLI インターフェースを確認するには、次を実行します。",
     documentation:
       "リリースの意味は `docs/release/README.md`、非公開の脆弱性報告は `SECURITY.md`、\nバンドルされた依存関係の完全な法的一覧は `THIRD_PARTY_NOTICES.json` を確認してください。",
+    implementationLabel: "実装",
     integrity:
       "この payload を信頼する前に、信頼できる公開チャネルから取得した digest と\n`SHA256SUMS` を照合してください。同梱の manifest が証明するのは内部整合性のみで、\n公開者の身元ではありません。",
     languageLabel: "言語",
     ledgerIntroduction: "アセンブリ時に記録された acceptance ledger の状態は次のとおりです。",
+    liveProofLabel: "実環境の証拠",
     packageDescription: (target) =>
       `このディレクトリは ${target} 向けの自己完結型プラットフォーム別 OpenDelegate\nバンドルです。監査済みの Node.js runtime が含まれているため、ここで pnpm をインストールしたり\nsource checkout 用のコマンドを実行したりしないでください。`,
     previewTitle: "サポート対象外の内部プレビュー",
@@ -375,6 +383,7 @@ const bundleReadmeCopy = Object.freeze({
     startHeading: "Agent から始める",
     stateStep:
       "runtime 状態、データベース、認証情報、ログ、生成された Artifact はこのバンドルの\n   外に保存してください。",
+    supportStatusLabel: "サポート状況",
   }),
   fr: Object.freeze({
     agentStep:
@@ -384,10 +393,12 @@ const bundleReadmeCopy = Object.freeze({
     cliIntroduction: "Pour inspecter l’interface CLI déterministe :",
     documentation:
       "Consultez `docs/release/README.md` pour la sémantique des releases, `SECURITY.md`\npour signaler une vulnérabilité en privé et `THIRD_PARTY_NOTICES.json` pour\nl’inventaire juridique complet des dépendances incluses.",
+    implementationLabel: "Implémentation",
     integrity:
       "Avant d’utiliser ce payload, comparez `SHA256SUMS` à un digest obtenu par un canal\nde publication fiable. Le manifest inclus prouve uniquement la cohérence interne,\npas l’identité de l’éditeur.",
     languageLabel: "Langues",
     ledgerIntroduction: "L’état de l’acceptance ledger enregistré pendant l’assemblage était :",
+    liveProofLabel: "Preuves réelles",
     packageDescription: (target) =>
       `Ce répertoire contient un bundle OpenDelegate autonome et propre à la plateforme\n${target}. Il inclut son runtime Node.js audité ; n’installez pas pnpm et n’exécutez\npas ici de commandes destinées au source checkout.`,
     previewTitle: "aperçu interne non pris en charge",
@@ -397,6 +408,7 @@ const bundleReadmeCopy = Object.freeze({
     startHeading: "Démarrer avec un Agent",
     stateStep:
       "Conservez l’état du runtime, les bases de données, les identifiants, les logs et les\n   Artifacts générés en dehors de ce bundle.",
+    supportStatusLabel: "Statut de prise en charge",
   }),
   es: Object.freeze({
     agentStep:
@@ -406,10 +418,12 @@ const bundleReadmeCopy = Object.freeze({
     cliIntroduction: "Para inspeccionar la interfaz CLI determinista:",
     documentation:
       "Consulta `docs/release/README.md` para conocer la semántica de las releases,\n`SECURITY.md` para informar de vulnerabilidades en privado y\n`THIRD_PARTY_NOTICES.json` para ver el inventario legal completo de las dependencias incluidas.",
+    implementationLabel: "Implementación",
     integrity:
       "Antes de confiar en este payload, compara `SHA256SUMS` con un digest obtenido por\nun canal de publicación fiable. El manifest incluido solo demuestra la coherencia\ninterna, no la identidad de quien lo publica.",
     languageLabel: "Idiomas",
     ledgerIntroduction: "El estado del acceptance ledger registrado durante el ensamblado fue:",
+    liveProofLabel: "Evidencia real",
     packageDescription: (target) =>
       `Este directorio contiene un bundle OpenDelegate autónomo y específico para\n${target}. Incluye su runtime Node.js auditado; no instales pnpm ni ejecutes aquí\ncomandos propios del source checkout.`,
     previewTitle: "vista previa interna sin soporte",
@@ -419,6 +433,7 @@ const bundleReadmeCopy = Object.freeze({
     startHeading: "Empezar con un Agent",
     stateStep:
       "Mantén el estado del runtime, las bases de datos, las credenciales, los logs y los\n   Artifacts generados fuera de este bundle.",
+    supportStatusLabel: "Estado de soporte",
   }),
   "zh-CN": Object.freeze({
     agentStep:
@@ -427,10 +442,12 @@ const bundleReadmeCopy = Object.freeze({
     cliIntroduction: "如需检查确定性的 CLI 界面，请运行：",
     documentation:
       "Release 语义请参阅 `docs/release/README.md`，私下报告安全漏洞请参阅\n`SECURITY.md`，随附依赖项的完整法律清单请参阅 `THIRD_PARTY_NOTICES.json`。",
+    implementationLabel: "实现",
     integrity:
       "在信任此 payload 之前，请使用从可信发布渠道获得的 digest 校验 `SHA256SUMS`。\n随附的 manifest 只能证明内部一致性，不能证明发布者身份。",
     languageLabel: "语言",
     ledgerIntroduction: "组装时记录的 acceptance ledger 状态如下：",
+    liveProofLabel: "真实证据",
     packageDescription: (target) =>
       `此目录是面向 ${target} 的自包含 OpenDelegate 平台捆绑包，其中包含经过审计的\nNode.js runtime；请勿在此安装 pnpm，也不要运行面向 source checkout 的命令。`,
     previewTitle: "不受支持的内部预览版",
@@ -439,6 +456,7 @@ const bundleReadmeCopy = Object.freeze({
     candidateTitle: "未发布的候选版本",
     startHeading: "从 Agent 开始",
     stateStep: "请将 runtime 状态、数据库、凭据、日志和生成的 Artifact 保存在此捆绑包之外。",
+    supportStatusLabel: "支持状态",
   }),
 });
 
@@ -476,7 +494,7 @@ ${renderBundleReadmeLanguageNavigation(locale)}
 
 ${copy.packageDescription(`${platform}/${architecture}`)}
 
-Support status: \`${supportStatus}\`.
+${copy.supportStatusLabel}: \`${supportStatus}\`.
 
 ## ${copy.startHeading}
 
@@ -494,8 +512,8 @@ ${launcher} status
 
 ${copy.ledgerIntroduction}
 
-- Implementation: ${formatCounts(summary.implementation)}
-- Live proof: ${formatCounts(summary.liveProof)}
+- ${copy.implementationLabel}: ${formatCounts(summary.implementation)}
+- ${copy.liveProofLabel}: ${formatCounts(summary.liveProof)}
 
 ${copy.integrity}
 

@@ -1431,7 +1431,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
     {
       activeLanguage: "English",
       filename: "README.md",
+      implementationLabel: "Implementation",
+      liveProofLabel: "Live proof",
       locale: "en",
+      supportStatusLabel: "Support status",
       unsupported: /This bundle is unsupported and must not be published under a release tag/u,
       candidate:
         /This candidate is not a supported release until it is promoted through the documented release channel/u,
@@ -1439,14 +1442,20 @@ test("assembled bundle documentation includes complete localized launcher guidan
     {
       activeLanguage: "한국어",
       filename: "README.ko.md",
+      implementationLabel: "구현",
+      liveProofLabel: "실제 증거",
       locale: "ko",
+      supportStatusLabel: "지원 상태",
       unsupported: /이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다/u,
       candidate: /이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다/u,
     },
     {
       activeLanguage: "日本語",
       filename: "README.ja.md",
+      implementationLabel: "実装",
+      liveProofLabel: "実環境の証拠",
       locale: "ja",
+      supportStatusLabel: "サポート状況",
       unsupported: /このバンドルはサポート対象外であり、リリースタグで公開してはいけません/u,
       candidate:
         /この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません/u,
@@ -1454,7 +1463,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
     {
       activeLanguage: "Français",
       filename: "README.fr.md",
+      implementationLabel: "Implémentation",
+      liveProofLabel: "Preuves réelles",
       locale: "fr",
+      supportStatusLabel: "Statut de prise en charge",
       unsupported:
         /Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release/u,
       candidate:
@@ -1463,7 +1475,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
     {
       activeLanguage: "Español",
       filename: "README.es.md",
+      implementationLabel: "Implementación",
+      liveProofLabel: "Evidencia real",
       locale: "es",
+      supportStatusLabel: "Estado de soporte",
       unsupported:
         /Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release/u,
       candidate:
@@ -1472,7 +1487,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
     {
       activeLanguage: "简体中文",
       filename: "README.zh-CN.md",
+      implementationLabel: "实现",
+      liveProofLabel: "真实证据",
       locale: "zh-CN",
+      supportStatusLabel: "支持状态",
       unsupported: /此捆绑包不受支持，且不得在 Release tag 下发布/u,
       candidate: /在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release/u,
     },
@@ -1503,11 +1521,22 @@ test("assembled bundle documentation includes complete localized launcher guidan
       assert.match(content, new RegExp(filename.replaceAll(".", String.raw`\.`), "u"));
     }
     assert.match(content, readme.unsupported);
-    assert.match(content, /Support status: `internal-preview-blocked`/u);
+    assert.equal(
+      content.includes(`${readme.supportStatusLabel}: \`internal-preview-blocked\`.`),
+      true,
+    );
     assert.match(content, /opendelegate\.cmd init/u);
     assert.match(content, /skills\/opendelegate-init\/SKILL\.md/u);
-    assert.match(content, /Implementation: partial=36/u);
-    assert.match(content, /Live proof: blocked-external=15, not-run=21/u);
+    assert.equal(content.includes(`- ${readme.implementationLabel}: partial=36`), true);
+    assert.equal(
+      content.includes(`- ${readme.liveProofLabel}: blocked-external=15, not-run=21`),
+      true,
+    );
+    if (readme.locale !== "en") {
+      assert.doesNotMatch(content, /^Support status:/mu);
+      assert.doesNotMatch(content, /^- Implementation:/mu);
+      assert.doesNotMatch(content, /^- Live proof:/mu);
+    }
     assert.match(content, /docs\/release\/README\.md/u);
     assert.match(content, /SECURITY\.md/u);
     assert.match(content, /THIRD_PARTY_NOTICES\.json/u);
@@ -1530,7 +1559,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
       readme.locale,
     );
     assert.match(candidate, readme.candidate);
-    assert.match(candidate, /Support status: `release-candidate`/u);
+    assert.equal(candidate.includes(`${readme.supportStatusLabel}: \`release-candidate\`.`), true);
     assert.match(candidate, /\.\/opendelegate init/u);
     assert.doesNotMatch(candidate, /INTERNAL_PREVIEW\.md/u);
 
@@ -1543,7 +1572,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
       readme.locale,
     );
     assert.match(completePreview, readme.unsupported);
-    assert.match(completePreview, /Support status: `internal-preview-complete`/u);
+    assert.equal(
+      completePreview.includes(`${readme.supportStatusLabel}: \`internal-preview-complete\`.`),
+      true,
+    );
     assert.match(completePreview, /INTERNAL_PREVIEW\.md/u);
   }
 });
