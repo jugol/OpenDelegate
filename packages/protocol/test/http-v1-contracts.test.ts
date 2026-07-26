@@ -345,7 +345,9 @@ test("Device list exposes only explicit scheduling and runtime facts", () => {
 
 test("runtime features distinguish available control surfaces from connected execution", () => {
   const response = {
+    declaredReleaseChannel: "internal-preview",
     releaseChannel: "internal-preview",
+    releaseVerification: { status: "not-applicable" },
     taskExecution: { status: "unavailable", code: "ORCHESTRATION_NOT_CONNECTED" },
     configurationAgent: {
       status: "unavailable",
@@ -358,9 +360,43 @@ test("runtime features distinguish available control surfaces from connected exe
   assert.equal(
     Value.Check(RuntimeFeaturesResponseSchema, {
       ...response,
+      declaredReleaseChannel: "release-candidate",
       releaseChannel: "released",
+      releaseVerification: { status: "released" },
     }),
     true,
+  );
+  assert.equal(
+    Value.Check(RuntimeFeaturesResponseSchema, {
+      ...response,
+      declaredReleaseChannel: "release-candidate",
+      releaseChannel: "release-candidate",
+      releaseVerification: {
+        status: "promotion-invalid",
+        code: "PROMOTION_TRUST_INVALID",
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(RuntimeFeaturesResponseSchema, {
+      ...response,
+      releaseChannel: "released",
+      releaseVerification: { status: "released" },
+    }),
+    false,
+  );
+  assert.equal(
+    Value.Check(RuntimeFeaturesResponseSchema, {
+      ...response,
+      declaredReleaseChannel: "release-candidate",
+      releaseChannel: "released",
+      releaseVerification: {
+        status: "released",
+        code: "raw/path/must-not-cross",
+      },
+    }),
+    false,
   );
   assert.equal(
     Value.Check(RuntimeFeaturesResponseSchema, {

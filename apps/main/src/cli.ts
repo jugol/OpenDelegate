@@ -107,12 +107,12 @@ async function run(arguments_: readonly string[]): Promise<void> {
       await runDeviceEnrollmentFromCli(parsed);
       return;
     case "init": {
-      const identity = await runtimeIdentity();
+      const identity = await runtimeIdentity(parsed.home);
       await runInit(parsed, identity);
       return;
     }
     case "serve": {
-      const identity = await runtimeIdentity();
+      const identity = await runtimeIdentity(parsed.home);
       await runServe(parsed, identity);
       return;
     }
@@ -123,7 +123,7 @@ async function run(arguments_: readonly string[]): Promise<void> {
       await runServiceLifecycleFromCli(parsed);
       return;
     case "version": {
-      const identity = await runtimeIdentity();
+      const identity = await runtimeIdentity(parsed.home);
       printVersion(identity);
       return;
     }
@@ -415,10 +415,21 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   };
 }
 
-async function runtimeIdentity(): Promise<RuntimeIdentity> {
+async function runtimeIdentity(home: string | undefined): Promise<RuntimeIdentity> {
+  if (!bundledRelease) {
+    return resolveRuntimeIdentity({
+      installationRoot,
+      bundled: false,
+    });
+  }
+  const paths = resolveRuntimePaths({
+    ...(home === undefined ? {} : { home }),
+    sourceCheckout: installationRoot,
+  });
   return resolveRuntimeIdentity({
     installationRoot,
-    bundled: bundledRelease,
+    bundled: true,
+    stateRoot: paths.home,
   });
 }
 
@@ -960,7 +971,7 @@ async function createAndListen(
     configuration,
     home,
     build: identity.build,
-    releaseChannel: identity.releaseChannel,
+    releaseIdentity: identity,
     sourceCheckout: installationRoot,
     managedSecretStore,
     ...(initialAdminAutoOpen === undefined ? {} : { initialAdminAutoOpen }),

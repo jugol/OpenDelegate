@@ -24,7 +24,17 @@ export const frenchMessages = {
     development: "Version de développement",
     incomplete: "Configuration incomplète",
     releasedDetail:
-      "Les fonctionnalités d’exécution que le Main déclare prêtes sont disponibles. Le statut de prise en charge dépend toujours des preuves de release associées à cette installation.",
+      "La chaîne externe complète de l’éditeur, de l’authenticité de la plateforme, de la promotion et du canal pris en charge est vérifiée pour cette installation.",
+    verificationAbsentDetail:
+      "Aucun enregistrement externe de vérification de release n’est installé pour cette version candidate. Il ne s’agit pas d’une release prise en charge.",
+    verificationInvalidDetail:
+      "La configuration ou les preuves de vérification externe de la release sont invalides. Le Main a conservé cette installation au statut de version candidate.",
+    promotionInvalidDetail:
+      "L’éditeur a peut-être été vérifié, mais la chaîne de promotion et de reçu du canal pris en charge ne l’a pas été. Le Main a conservé cette installation au statut de version candidate.",
+    revokedDetail:
+      "L’autorisation de release de cette version candidate a été révoquée. Le Main a conservé cette installation au statut de version candidate.",
+    publisherVerifiedDetail:
+      "L’éditeur est vérifié, mais aucune attestation de promotion complète ni aucun reçu du canal pris en charge n’autorise cette version candidate comme release.",
     prereleaseDetail:
       "Cette installation n’est pas prise en charge. Les commandes ne sont disponibles que lorsque le Main déclare prête la fonctionnalité d’exécution correspondante.",
   },

@@ -31,6 +31,11 @@ import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.
 
 const postgresUri = process.env["OPENDELEGATE_TEST_POSTGRES_URI"];
 const execFileAsync = promisify(execFile);
+const DEVELOPMENT_RELEASE_IDENTITY = {
+  declaredReleaseChannel: "development",
+  releaseChannel: "development",
+  releaseVerification: { status: "not-applicable" },
+} as const;
 
 test("CLI init accepts secret-free database and exact HTTPS listener configuration", () => {
   const parsed = parseArguments([
@@ -338,7 +343,7 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "release-candidate-spoof" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
   });
@@ -443,7 +448,9 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
   });
   assert.equal(runtimeFeatures.statusCode, 200);
   assert.deepEqual(runtimeFeatures.json(), {
+    declaredReleaseChannel: "development",
     releaseChannel: "development",
+    releaseVerification: { status: "not-applicable" },
     taskExecution: { status: "unavailable", code: "ORCHESTRATION_NOT_CONNECTED" },
     configurationAgent: {
       status: "unavailable",
@@ -534,7 +541,7 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "test-build-0001" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
   });
@@ -574,7 +581,7 @@ test("one Main owns an installation and restart reconciliation begins only after
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "singleton-first" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
   });
@@ -594,7 +601,7 @@ test("one Main owns an installation and restart reconciliation begins only after
       configuration: initialized.configuration,
       home,
       build: { version: "0.1.0-test", buildId: "singleton-rejected" },
-      releaseChannel: "development",
+      releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
       sourceCheckout: resolve("."),
       managedSecretStore: mainSecrets.store,
       taskExecution: {
@@ -618,7 +625,7 @@ test("one Main owns an installation and restart reconciliation begins only after
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "singleton-restarted" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     taskExecution: {
@@ -655,7 +662,7 @@ test("losing singleton authority closes Main and prevents a listener from starti
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "singleton-loss" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     mainSingletonOwnershipFactory: async () => ownership,
@@ -690,7 +697,7 @@ test("an injected production Task executor makes the authenticated Task API exec
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "task-executor-composition" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     taskExecution: {
@@ -776,7 +783,7 @@ test("an injected Configuration Agent is exposed only through the authenticated 
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "configuration-agent-composition" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     configurationAgent: {
@@ -890,7 +897,7 @@ test(
       configuration: initialized.configuration,
       home,
       build: { version: "0.1.0-test", buildId: "postgres-composition" },
-      releaseChannel: "development",
+      releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
       sourceCheckout: resolve("."),
       managedSecretStore: secretStore,
     });

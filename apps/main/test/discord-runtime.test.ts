@@ -43,6 +43,11 @@ const APPLICATION_ID = "100000000000000001";
 const GUILD_ID = "100000000000000002";
 const FORUM_ID = "100000000000000003";
 const OWNER_ID = "100000000000000004";
+const DEVELOPMENT_RELEASE_IDENTITY = {
+  declaredReleaseChannel: "development",
+  releaseChannel: "development",
+  releaseVerification: { status: "not-applicable" },
+} as const;
 const BOT_ID = "100000000000000005";
 const THREAD_ID = "100000000000000006";
 const REPLY_ID = "100000000000000007";
@@ -344,7 +349,7 @@ test("Main process owns production Discord startup, dynamic feature state, and s
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "discord-runtime-composition" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     discord: {
@@ -397,7 +402,7 @@ test("Main finishes Discord reconciliation before dispatching recovered Forum Ta
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "discord-before-dispatch" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     taskExecution: {

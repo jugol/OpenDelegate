@@ -15,6 +15,12 @@ import type {
 import { createMainRuntime, initializeMainHome } from "../src/index.ts";
 import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 
+const DEVELOPMENT_RELEASE_IDENTITY = {
+  declaredReleaseChannel: "development",
+  releaseChannel: "development",
+  releaseVerification: { status: "not-applicable" },
+} as const;
+
 const limits = {
   wallTimeoutMs: 5_000,
   idleTimeoutMs: 2_000,
@@ -46,7 +52,7 @@ test("a ready Main Agent executes local Tasks with the durable production Budget
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "main-agent-budget-composition" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     agentExecution: {

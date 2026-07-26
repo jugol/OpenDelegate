@@ -35,6 +35,12 @@ import {
   mainTestSecretBackendConfiguration,
 } from "../test-fixtures/main-test-secrets.ts";
 
+const DEVELOPMENT_RELEASE_IDENTITY = {
+  declaredReleaseChannel: "development",
+  releaseChannel: "development",
+  releaseVerification: { status: "not-applicable" },
+} as const;
+
 const limits = {
   wallTimeoutMs: 5_000,
   idleTimeoutMs: 2_000,
@@ -65,7 +71,7 @@ test("production Main auto-applies only Device profile tools through durable SQL
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "configuration-sql-composition" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     initialAdminAutoOpen: true,
@@ -134,7 +140,7 @@ test("production Main auto-applies only Device profile tools through durable SQL
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "configuration-sql-composition" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
     initialAdminAutoOpen: true,
@@ -145,7 +151,7 @@ test("production Main auto-applies only Device profile tools through durable SQL
       configuration: initialized.configuration,
       home,
       build: { version: "0.1.0-test", buildId: "configuration-sql-composition" },
-      releaseChannel: "development",
+      releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
       sourceCheckout: resolve("."),
       managedSecretStore: mainSecrets.store,
       initialAdminAutoOpen: false,
@@ -225,7 +231,7 @@ test("production Main secure ingest makes an exact Main-scoped database referenc
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "secret-reference-composition" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: store,
     agentConfiguration: {

@@ -38,6 +38,11 @@ import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.
 
 const WORKER_DEVICE_ID = "device-worker-action";
 const WORKER_ID = "worker-action";
+const DEVELOPMENT_RELEASE_IDENTITY = {
+  declaredReleaseChannel: "development",
+  releaseChannel: "development",
+  releaseVerification: { status: "not-applicable" },
+} as const;
 const AGENT_LIMITS = {
   wallTimeoutMs: 5_000,
   idleTimeoutMs: 2_000,
@@ -118,7 +123,7 @@ test(
       configuration: initialized.configuration,
       home,
       build: { version: "0.1.0-test", buildId: "worker-action-composition" },
-      releaseChannel: "development",
+      releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
       sourceCheckout: resolve("."),
       managedSecretStore: mainSecrets.store,
       deviceChannel: {

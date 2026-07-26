@@ -1,7 +1,12 @@
 import { MessageCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { AdminApi, SecureSecretIngestPurpose, SecureSecretIngestReceipt } from "./admin-api";
+import type {
+  AdminApi,
+  RuntimeReleaseIdentity,
+  SecureSecretIngestPurpose,
+  SecureSecretIngestReceipt,
+} from "./admin-api";
 import { ArtifactSurface } from "./ArtifactSurface";
 import { ApprovalSurface } from "./ApprovalSurface";
 import { AuditSurface } from "./AuditSurface";
@@ -29,7 +34,7 @@ export interface AppProps {
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,
   ) => Promise<SecureSecretIngestReceipt>;
-  readonly releaseChannel?: "development" | "internal-preview" | "release-candidate" | "released";
+  readonly releaseIdentity?: RuntimeReleaseIdentity;
 }
 
 export function App({
@@ -43,7 +48,11 @@ export function App({
   initialSection = "devices",
   onConfigurationMessage,
   onSecureSecretIngest,
-  releaseChannel = "development",
+  releaseIdentity = {
+    declaredReleaseChannel: "development",
+    releaseChannel: "development",
+    releaseVerification: { status: "not-applicable" },
+  },
 }: AppProps): React.JSX.Element {
   const { messages } = useAdminI18n();
   const [activeSection, setActiveSection] = useState<AdminSection>(initialSection);
@@ -58,6 +67,21 @@ export function App({
   const chatModal = chatOpen && (chatExpanded || compactChat);
   const configurationChatAvailable =
     configurationAgentAvailable && onConfigurationMessage !== undefined;
+  const { releaseChannel, releaseVerification } = releaseIdentity;
+  const releaseDetail =
+    releaseVerification.status === "released"
+      ? messages.runtime.releasedDetail
+      : releaseVerification.status === "absent"
+        ? messages.runtime.verificationAbsentDetail
+        : releaseVerification.status === "publisher-verified"
+          ? messages.runtime.publisherVerifiedDetail
+          : releaseVerification.status === "promotion-invalid"
+            ? messages.runtime.promotionInvalidDetail
+            : releaseVerification.status === "revoked"
+              ? messages.runtime.revokedDetail
+              : releaseVerification.status === "invalid"
+                ? messages.runtime.verificationInvalidDetail
+                : messages.runtime.prereleaseDetail;
   const mainDevice = resolveMainDevice(deviceFleet);
   const device =
     deviceFleet.devices.find((candidate) => candidate.deviceId === selectedDeviceId) ?? mainDevice;
@@ -127,11 +151,7 @@ export function App({
                 ? messages.runtime.development
                 : messages.runtime.incomplete}
         </strong>
-        <span>
-          {releaseChannel === "released"
-            ? messages.runtime.releasedDetail
-            : messages.runtime.prereleaseDetail}
-        </span>
+        <span>{releaseDetail}</span>
       </div>
       <div
         aria-hidden={chatModal ? true : undefined}

@@ -59,7 +59,7 @@ import {
 import type { DeviceIdentitySecretStore } from "@opendelegate/device-identity";
 import type { ManagedSecretStore } from "@opendelegate/secrets";
 
-import type { RuntimeReleaseChannel } from "./release-identity.ts";
+import type { RuntimeReleaseIdentity } from "./release-identity.ts";
 
 import {
   AgentBackedConfigurationAgent,
@@ -416,7 +416,7 @@ export interface CreateMainRuntimeOptions {
   readonly home?: string;
   readonly configuration: MainConfiguration;
   readonly build: MainControlPlaneAppOptions["build"];
-  readonly releaseChannel: RuntimeReleaseChannel;
+  readonly releaseIdentity: RuntimeReleaseIdentity;
   readonly sourceCheckout: string;
   readonly initialAdminAutoOpen?: boolean;
   readonly environment?: Readonly<Record<string, string | undefined>>;
@@ -1117,13 +1117,8 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       taskExecution = new TaskExecutionCoordinator(taskExecutionOptions);
     }
     const tasks = taskExecution ?? taskService;
-    const runtimeFeatures: {
-      releaseChannel: RuntimeReleaseChannel;
-      taskExecution: { status: "ready" | "unavailable"; code: string };
-      configurationAgent: { status: "ready" | "unavailable"; code: string };
-      discord: { status: "ready" | "unavailable"; code: string };
-    } = {
-      releaseChannel: options.releaseChannel,
+    const runtimeFeatures: NonNullable<MainControlPlaneAppOptions["runtimeFeatures"]> = {
+      ...options.releaseIdentity,
       taskExecution:
         taskExecution === undefined
           ? {

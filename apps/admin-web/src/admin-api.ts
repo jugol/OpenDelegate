@@ -481,12 +481,38 @@ export interface RecoveryResult {
   readonly recoveryCodes: readonly string[];
 }
 
-export interface RuntimeFeatures {
-  readonly releaseChannel: "development" | "internal-preview" | "release-candidate" | "released";
+export type RuntimeReleaseIdentity =
+  | {
+      readonly declaredReleaseChannel: "development";
+      readonly releaseChannel: "development";
+      readonly releaseVerification: { readonly status: "not-applicable" };
+    }
+  | {
+      readonly declaredReleaseChannel: "internal-preview";
+      readonly releaseChannel: "internal-preview";
+      readonly releaseVerification: { readonly status: "not-applicable" };
+    }
+  | {
+      readonly declaredReleaseChannel: "release-candidate";
+      readonly releaseChannel: "release-candidate";
+      readonly releaseVerification:
+        | { readonly status: "absent" | "publisher-verified" }
+        | {
+            readonly status: "invalid" | "promotion-invalid" | "revoked";
+            readonly code: string;
+          };
+    }
+  | {
+      readonly declaredReleaseChannel: "release-candidate";
+      readonly releaseChannel: "released";
+      readonly releaseVerification: { readonly status: "released" };
+    };
+
+export type RuntimeFeatures = RuntimeReleaseIdentity & {
   readonly taskExecution: RuntimeFeature;
   readonly configurationAgent: RuntimeFeature;
   readonly discord: RuntimeFeature;
-}
+};
 
 export interface RuntimeFeature {
   readonly status: "ready" | "unavailable";

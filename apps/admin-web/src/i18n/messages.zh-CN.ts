@@ -21,8 +21,14 @@ export const simplifiedChineseMessages = {
     releaseCandidate: "尚未发布的候选版本",
     development: "开发版本",
     incomplete: "配置尚未完成",
-    releasedDetail:
-      "主设备报告为就绪的运行环境功能均可使用。支持状态仍取决于与此安装关联的 Release 证据。",
+    releasedDetail: "此安装的外部发布者、平台真实性、晋升和受支持渠道验证链均已完整验证。",
+    verificationAbsentDetail: "此候选版本未安装外部发布验证记录，因此不属于受支持的正式版本。",
+    verificationInvalidDetail: "外部发布验证配置或证据无效。Main 已将此安装保持为候选版本状态。",
+    promotionInvalidDetail:
+      "发布者验证可能已成功，但晋升和受支持渠道回执链未能通过验证。Main 已将此安装保持为候选版本状态。",
+    revokedDetail: "此候选版本的发布授权已被撤销。Main 已将此安装保持为候选版本状态。",
+    publisherVerifiedDetail:
+      "发布者身份已经验证，但尚无完整的晋升证明和受支持渠道回执将此候选版本授权为正式版本。",
     prereleaseDetail:
       "此安装不受支持。仅当主设备报告相应运行环境功能已就绪时，相关控制项才可使用。",
   },

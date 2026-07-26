@@ -21,7 +21,17 @@ export const englishMessages = {
     development: "Development build",
     incomplete: "Setup is incomplete",
     releasedDetail:
-      "Runtime capabilities reported ready by Main are available. Support status still depends on this installation's release evidence.",
+      "The complete external publisher, platform-authenticity, promotion, and supported-channel chain is verified for this installation.",
+    verificationAbsentDetail:
+      "No external release-verification record is installed for this candidate. It is not a supported release.",
+    verificationInvalidDetail:
+      "External release verification configuration or evidence is invalid. Main has kept this installation at release-candidate status.",
+    promotionInvalidDetail:
+      "Publisher verification may have succeeded, but the promotion and supported-channel receipt chain did not verify. Main has kept this installation at release-candidate status.",
+    revokedDetail:
+      "Release authority for this candidate has been revoked. Main has kept this installation at release-candidate status.",
+    publisherVerifiedDetail:
+      "The publisher is verified, but no complete promotion and supported-channel receipt authorize this candidate as released.",
     prereleaseDetail:
       "This installation is unsupported. Controls are available only when Main reports the corresponding runtime capability as ready.",
   },

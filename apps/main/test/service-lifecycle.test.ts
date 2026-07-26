@@ -28,6 +28,11 @@ import {
 import { createMainProcessTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 
 const execFileAsync = promisify(execFile);
+const DEVELOPMENT_RELEASE_IDENTITY = {
+  declaredReleaseChannel: "development",
+  releaseChannel: "development",
+  releaseVerification: { status: "not-applicable" },
+} as const;
 
 const configuration: PlatformServiceConfiguration = {
   platform: "linux",
@@ -254,7 +259,7 @@ test("packaged Main render replaces stale template auto-open with durable Config
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "service-effective-configuration" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: process.cwd(),
     managedSecretStore: mainSecrets.store,
     environment: mainSecrets.environment,

@@ -24,7 +24,17 @@ export const spanishMessages = {
     development: "Versión de desarrollo",
     incomplete: "La configuración está incompleta",
     releasedDetail:
-      "Las funciones del entorno de ejecución que el Main declara listas están disponibles. El estado de soporte sigue dependiendo de la evidencia de release asociada a esta instalación.",
+      "La cadena externa completa del editor, la autenticidad de la plataforma, la promoción y el canal compatible está verificada para esta instalación.",
+    verificationAbsentDetail:
+      "No hay ningún registro externo de verificación de release instalado para esta versión candidata. No es una release con soporte.",
+    verificationInvalidDetail:
+      "La configuración o la evidencia de verificación externa de la release no son válidas. Main ha mantenido esta instalación como versión candidata.",
+    promotionInvalidDetail:
+      "Es posible que el editor esté verificado, pero la cadena de promoción y del recibo del canal compatible no se verificó. Main ha mantenido esta instalación como versión candidata.",
+    revokedDetail:
+      "La autorización de release de esta versión candidata se ha revocado. Main ha mantenido esta instalación como versión candidata.",
+    publisherVerifiedDetail:
+      "El editor está verificado, pero no hay una atestación de promoción completa ni un recibo del canal compatible que autoricen esta versión candidata como release.",
     prereleaseDetail:
       "Esta instalación no cuenta con soporte. Los controles solo están disponibles cuando el Main declara lista la función de ejecución correspondiente.",
   },

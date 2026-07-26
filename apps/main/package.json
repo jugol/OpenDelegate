@@ -29,6 +29,7 @@
     "@opendelegate/platform-services": "workspace:*",
     "@opendelegate/policy": "workspace:*",
     "@opendelegate/protocol": "workspace:*",
+    "@opendelegate/release-integrity": "workspace:*",
     "@opendelegate/scheduler": "workspace:*",
     "@opendelegate/secrets": "workspace:*",
     "@opendelegate/storage-sql": "workspace:*",

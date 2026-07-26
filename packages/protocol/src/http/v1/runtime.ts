@@ -12,20 +12,90 @@ const RuntimeFeatureSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const RuntimeFeaturesResponseSchema = Type.Object(
+const ReleaseVerificationCodeSchema = Type.String({
+  minLength: 3,
+  maxLength: 96,
+  pattern: "^[A-Z][A-Z0-9_]*$",
+});
+
+const NotApplicableReleaseVerificationSchema = Type.Object(
   {
-    releaseChannel: Type.Union([
-      Type.Literal("development"),
-      Type.Literal("internal-preview"),
-      Type.Literal("release-candidate"),
-      Type.Literal("released"),
-    ]),
-    taskExecution: RuntimeFeatureSchema,
-    configurationAgent: RuntimeFeatureSchema,
-    discord: RuntimeFeatureSchema,
+    status: Type.Literal("not-applicable"),
   },
+  { additionalProperties: false },
+);
+
+const CandidateReleaseVerificationSchema = Type.Union([
+  Type.Object(
+    {
+      status: Type.Union([Type.Literal("absent"), Type.Literal("publisher-verified")]),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      status: Type.Union([
+        Type.Literal("invalid"),
+        Type.Literal("promotion-invalid"),
+        Type.Literal("revoked"),
+      ]),
+      code: ReleaseVerificationCodeSchema,
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+const RuntimeFeatureProperties = {
+  taskExecution: RuntimeFeatureSchema,
+  configurationAgent: RuntimeFeatureSchema,
+  discord: RuntimeFeatureSchema,
+} as const;
+
+export const RuntimeFeaturesResponseSchema = Type.Union(
+  [
+    Type.Object(
+      {
+        declaredReleaseChannel: Type.Literal("development"),
+        releaseChannel: Type.Literal("development"),
+        releaseVerification: NotApplicableReleaseVerificationSchema,
+        ...RuntimeFeatureProperties,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        declaredReleaseChannel: Type.Literal("internal-preview"),
+        releaseChannel: Type.Literal("internal-preview"),
+        releaseVerification: NotApplicableReleaseVerificationSchema,
+        ...RuntimeFeatureProperties,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        declaredReleaseChannel: Type.Literal("release-candidate"),
+        releaseChannel: Type.Literal("release-candidate"),
+        releaseVerification: CandidateReleaseVerificationSchema,
+        ...RuntimeFeatureProperties,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        declaredReleaseChannel: Type.Literal("release-candidate"),
+        releaseChannel: Type.Literal("released"),
+        releaseVerification: Type.Object(
+          {
+            status: Type.Literal("released"),
+          },
+          { additionalProperties: false },
+        ),
+        ...RuntimeFeatureProperties,
+      },
+      { additionalProperties: false },
+    ),
+  ],
   {
-    additionalProperties: false,
     $id: "OpenDelegateRuntimeFeaturesResponseV1",
   },
 );

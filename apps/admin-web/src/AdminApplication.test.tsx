@@ -218,7 +218,9 @@ const linuxWorker: DeviceSummary = {
 };
 
 const readyFeatures: RuntimeFeatures = {
+  declaredReleaseChannel: "development",
   releaseChannel: "development",
+  releaseVerification: { status: "not-applicable" },
   taskExecution: { status: "ready", code: "TASK_EXECUTION_READY" },
   configurationAgent: { status: "ready", code: "CONFIGURATION_AGENT_READY" },
   discord: { status: "unavailable", code: "DISCORD_NOT_CONFIGURED" },
@@ -634,7 +636,9 @@ describe("Admin authentication and Task control", () => {
       getTask: vi.fn<AdminApi["getTask"]>().mockResolvedValue(pausedTask),
       listTasks: vi.fn<AdminApi["listTasks"]>().mockResolvedValue([pausedTask]),
       runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue({
+        declaredReleaseChannel: "internal-preview",
         releaseChannel: "internal-preview",
+        releaseVerification: { status: "not-applicable" },
         taskExecution: { status: "unavailable", code: "ORCHESTRATION_NOT_CONNECTED" },
         configurationAgent: {
           status: "unavailable",
@@ -669,6 +673,79 @@ describe("Admin authentication and Task control", () => {
         }) as HTMLInputElement
       ).disabled,
     ).toBe(true);
+  });
+
+  it("shows a sanitized warning when external release verification is invalid", async () => {
+    const api = createApi({
+      runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue({
+        declaredReleaseChannel: "release-candidate",
+        releaseChannel: "release-candidate",
+        releaseVerification: {
+          status: "promotion-invalid",
+          code: "PROMOTION_TRUST_INVALID",
+        },
+        taskExecution: { status: "ready", code: "TASK_EXECUTION_READY" },
+        configurationAgent: { status: "ready", code: "CONFIGURATION_AGENT_READY" },
+        discord: { status: "ready", code: "DISCORD_READY" },
+      }),
+    });
+
+    render(<AdminApplication api={api} />);
+
+    expect(await screen.findByText("Unpromoted release candidate")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Publisher verification may have succeeded, but the promotion and supported-channel receipt chain did not verify. Main has kept this installation at release-candidate status.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("PROMOTION_TRUST_INVALID")).toBeNull();
+  });
+
+  it("distinguishes revoked release authority without exposing verifier internals", async () => {
+    const api = createApi({
+      runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue({
+        declaredReleaseChannel: "release-candidate",
+        releaseChannel: "release-candidate",
+        releaseVerification: {
+          status: "revoked",
+          code: "RELEASE_REVOKED",
+        },
+        taskExecution: { status: "ready", code: "TASK_EXECUTION_READY" },
+        configurationAgent: { status: "ready", code: "CONFIGURATION_AGENT_READY" },
+        discord: { status: "ready", code: "DISCORD_READY" },
+      }),
+    });
+
+    render(<AdminApplication api={api} />);
+
+    expect(
+      await screen.findByText(
+        "Release authority for this candidate has been revoked. Main has kept this installation at release-candidate status.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("RELEASE_REVOKED")).toBeNull();
+  });
+
+  it("states verified release authority without an unresolved support disclaimer", async () => {
+    const api = createApi({
+      runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue({
+        declaredReleaseChannel: "release-candidate",
+        releaseChannel: "released",
+        releaseVerification: { status: "released" },
+        taskExecution: { status: "unavailable", code: "ORCHESTRATION_NOT_CONNECTED" },
+        configurationAgent: { status: "ready", code: "CONFIGURATION_AGENT_READY" },
+        discord: { status: "ready", code: "DISCORD_READY" },
+      }),
+    });
+
+    render(<AdminApplication api={api} />);
+
+    expect(
+      await screen.findByText(
+        "The complete external publisher, platform-authenticity, promotion, and supported-channel chain is verified for this installation.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/support status still depends/iu)).toBeNull();
   });
 });
 

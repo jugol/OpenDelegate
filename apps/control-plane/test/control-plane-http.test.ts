@@ -264,6 +264,45 @@ test("normal Main exposes detail-free liveness and never mounts owner claim", as
   }
 });
 
+test("runtime features expose declared and effective release identity separately", async () => {
+  const { ownerAuth } = createAuthFixture();
+  await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+  });
+
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/runtime/features",
+      headers: {
+        host: ADMIN_HOST,
+        cookie: authenticated.cookie,
+      },
+    });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), {
+      declaredReleaseChannel: "development",
+      releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
+      taskExecution: { status: "unavailable", code: "ORCHESTRATION_NOT_CONNECTED" },
+      configurationAgent: {
+        status: "unavailable",
+        code: "CONFIGURATION_AGENT_NOT_CONNECTED",
+      },
+      discord: { status: "unavailable", code: "DISCORD_NOT_CONFIGURED" },
+    });
+  } finally {
+    await app.close();
+  }
+});
+
 test("claim listener accepts one local claim and ignores forwarded loopback identity", async () => {
   const remoteFixture = createAuthFixture();
   const claim = await remoteFixture.ownerAuth.issueInitialClaim({
@@ -776,7 +815,9 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
     },
     devices: [MAIN_DEVICE],
     runtimeFeatures: {
+      declaredReleaseChannel: "development",
       releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
       taskExecution: { status: "unavailable", code: "TEST_TASK_UNAVAILABLE" },
       configurationAgent: { status: "ready", code: "TEST_CONFIGURATION_AGENT_READY" },
       discord: { status: "unavailable", code: "TEST_DISCORD_UNAVAILABLE" },
@@ -1231,7 +1272,9 @@ test("authenticated Task routes provide idempotent Discord-independent emergency
       buildId: "commit-404e432",
     },
     runtimeFeatures: {
+      declaredReleaseChannel: "development",
       releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
       taskExecution: { status: "ready", code: "TEST_TASK_EXECUTION_READY" },
       configurationAgent: { status: "unavailable", code: "TEST_AGENT_UNAVAILABLE" },
       discord: { status: "unavailable", code: "TEST_DISCORD_UNAVAILABLE" },

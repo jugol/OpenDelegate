@@ -2,10 +2,20 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 
+import {
+  externalReleaseVerificationPath,
+  inspectCandidate,
+  type ReleaseTarget,
+} from "@opendelegate/release-integrity";
+
 import { ReleaseIdentityError, resolveRuntimeIdentity } from "../src/release-identity.ts";
+import {
+  createCandidateFixture,
+  createReleasedConfiguredReleaseTestFixture,
+} from "../../../packages/release-integrity/test/support/release-fixture.ts";
 
 const auditedCommit = "a".repeat(40);
 const buildCommit = "b".repeat(40);
@@ -44,7 +54,9 @@ test("source-checkout identity is fixed development data despite caller environm
         version: "0.0.0-development",
         buildId: "development-local",
       },
+      declaredReleaseChannel: "development",
       releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
     },
   );
 });
@@ -201,9 +213,11 @@ test("every declared Main and Worker launcher must be present and non-empty", as
 });
 
 test("a complete, clean, internally consistent candidate reports metadata version", async (t) => {
-  const root = await createBundleFixture(t, {
-    complete: true,
-    supportStatus: "release-candidate",
+  const fixture = await createCandidateFixture(currentReleaseTarget());
+  t.after(() => rm(fixture.root, { force: true, recursive: true }));
+  const candidate = await inspectCandidate({
+    root: fixture.root,
+    expectedTarget: currentReleaseTarget(),
   });
   const previousBuildId = process.env["OPENDELEGATE_BUILD_ID"];
   const previousVersion = process.env["OPENDELEGATE_VERSION"];
@@ -214,13 +228,72 @@ test("a complete, clean, internally consistent candidate reports metadata versio
   process.env["OPENDELEGATE_BUILD_ID"] = "internal-preview-blocked-forged";
   process.env["OPENDELEGATE_VERSION"] = "999.999.999";
 
-  assert.deepEqual(await resolveBundle(root), {
+  assert.deepEqual(await resolveBundle(fixture.root), {
     build: {
-      version: "1.2.3-test",
-      buildId: `release-candidate-${buildCommit.slice(0, 12)}-${process.platform}-${process.arch}`,
+      version: candidate.productVersion,
+      buildId: candidate.buildId,
     },
+    declaredReleaseChannel: "release-candidate",
     releaseChannel: "release-candidate",
+    releaseVerification: { status: "absent" },
   });
+});
+
+test("invalid external release configuration safely keeps a valid candidate unpromoted", async (t) => {
+  const fixture = await createCandidateFixture(currentReleaseTarget());
+  t.after(() => rm(fixture.root, { force: true, recursive: true }));
+  const candidate = await inspectCandidate({
+    root: fixture.root,
+    expectedTarget: currentReleaseTarget(),
+  });
+  const stateRoot = await mkdtemp(join(tmpdir(), "opendelegate-release-trust-"));
+  t.after(() => rm(stateRoot, { force: true, recursive: true }));
+  const verificationPath = externalReleaseVerificationPath({
+    checksumManifestSha256: candidate.checksumManifestSha256,
+    productVersion: candidate.productVersion,
+    stateRoot,
+    target: candidate.target,
+  });
+  await mkdir(dirname(verificationPath), { recursive: true });
+  await writeFile(verificationPath, "{}\n");
+
+  const identity = await resolveBundle(fixture.root, stateRoot);
+
+  assert.equal(identity.declaredReleaseChannel, "release-candidate");
+  assert.equal(identity.releaseChannel, "release-candidate");
+  assert.deepEqual(identity.releaseVerification, {
+    status: "invalid",
+    code: "RELEASE_CONFIGURATION_INVALID",
+  });
+});
+
+test("complete external release authority promotes only the effective channel", async (t) => {
+  const fixture = await createReleasedConfiguredReleaseTestFixture(currentReleaseTarget().platform);
+  t.after(() => fixture.cleanup());
+
+  const identity = await resolveBundle(fixture.root, fixture.stateRoot);
+
+  assert.deepEqual(identity, {
+    build: {
+      version: fixture.candidate.productVersion,
+      buildId: fixture.candidate.buildId,
+    },
+    declaredReleaseChannel: "release-candidate",
+    releaseChannel: "released",
+    releaseVerification: { status: "released" },
+  });
+});
+
+test("corruption in a real candidate remains fatal before external authority is considered", async (t) => {
+  const fixture = await createCandidateFixture(currentReleaseTarget());
+  t.after(() => rm(fixture.root, { force: true, recursive: true }));
+  await writeFile(join(fixture.root, releaseEntrypoints()[0]!), "tampered launcher\n");
+
+  await assert.rejects(
+    resolveBundle(fixture.root),
+    (error: unknown) =>
+      error instanceof ReleaseIdentityError && error.code === "RELEASE_IDENTITY_INVALID",
+  );
 });
 
 test("metadata, ledger, payload-manifest, and checksum tampering fail closed", async (t) => {
@@ -339,7 +412,7 @@ test("identity rejects tampered, extra, missing, or linked payload paths", async
   await assertInvalid(resolveBundle(linked), /symbolic link or junction/u);
 });
 
-test("released identity is rejected until promotion attestation has a verified design", async (t) => {
+test("an enclosed released identity remains forbidden even after manifest rehashing", async (t) => {
   const root = await createBundleFixture(t, {
     complete: true,
     supportStatus: "release-candidate",
@@ -609,8 +682,24 @@ function releaseEntrypoints(): readonly string[] {
     : ["opendelegate", "opendelegate-worker", "opendelegate.cmd", "opendelegate-worker.cmd"];
 }
 
-async function resolveBundle(root: string) {
-  return resolveRuntimeIdentity({ installationRoot: root, bundled: true });
+function currentReleaseTarget(): ReleaseTarget {
+  if (process.platform === "darwin" && process.arch === "arm64") {
+    return { platform: "darwin", architecture: "arm64" };
+  }
+  if (process.platform === "linux" && process.arch === "x64") {
+    return { platform: "linux", architecture: "x64" };
+  }
+  if (process.platform === "win32" && process.arch === "x64") {
+    return { platform: "win32", architecture: "x64" };
+  }
+  throw new Error(`Unsupported test target: ${process.platform}-${process.arch}`);
+}
+
+async function resolveBundle(
+  root: string,
+  stateRoot = join(root, "..", `${basename(root)}-state`),
+) {
+  return resolveRuntimeIdentity({ installationRoot: root, bundled: true, stateRoot });
 }
 
 async function assertInvalid(promise: Promise<unknown>, message: RegExp): Promise<void> {

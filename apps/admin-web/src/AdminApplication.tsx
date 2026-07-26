@@ -132,7 +132,7 @@ export function AdminApplication({
         browserApi.sendConfigurationMessage(deviceId, message)
       }
       onSecureSecretIngest={(purpose, secret) => browserApi.ingestSecret(purpose, secret)}
-      releaseChannel={features.releaseChannel}
+      releaseIdentity={features}
     />
   );
 }

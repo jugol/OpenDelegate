@@ -622,7 +622,9 @@ function registerRuntimeFeatureRoutes(
 function runtimeFeaturesFor(options: MainControlPlaneAppOptions): RuntimeFeaturesResponseV1 {
   return (
     options.runtimeFeatures ?? {
+      declaredReleaseChannel: "development",
       releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
       taskExecution: { status: "unavailable", code: "ORCHESTRATION_NOT_CONNECTED" },
       configurationAgent: {
         status: "unavailable",

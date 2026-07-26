@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  resolveConfiguredRelease,
+  type ConfiguredReleaseResolution,
+  type ReleaseTarget,
+} from "@opendelegate/release-integrity";
+
 import { readStableRegularFile } from "./stable-file.ts";
 
 const DEVELOPMENT_VERSION = "0.0.0-development";
@@ -47,15 +53,42 @@ const METADATA_KEYS = [
   "checksumManifest",
 ] as const;
 
-export type RuntimeReleaseChannel = "development" | "internal-preview" | "release-candidate";
+export type RuntimeReleaseChannel =
+  "development" | "internal-preview" | "release-candidate" | "released";
 
-export interface RuntimeIdentity {
+export type RuntimeReleaseIdentity =
+  | {
+      readonly declaredReleaseChannel: "development";
+      readonly releaseChannel: "development";
+      readonly releaseVerification: { readonly status: "not-applicable" };
+    }
+  | {
+      readonly declaredReleaseChannel: "internal-preview";
+      readonly releaseChannel: "internal-preview";
+      readonly releaseVerification: { readonly status: "not-applicable" };
+    }
+  | {
+      readonly declaredReleaseChannel: "release-candidate";
+      readonly releaseChannel: "release-candidate";
+      readonly releaseVerification:
+        | { readonly status: "absent" | "publisher-verified" }
+        | {
+            readonly status: "invalid" | "promotion-invalid" | "revoked";
+            readonly code: string;
+          };
+    }
+  | {
+      readonly declaredReleaseChannel: "release-candidate";
+      readonly releaseChannel: "released";
+      readonly releaseVerification: { readonly status: "released" };
+    };
+
+export type RuntimeIdentity = {
   readonly build: {
     readonly version: string;
     readonly buildId: string;
   };
-  readonly releaseChannel: RuntimeReleaseChannel;
-}
+} & RuntimeReleaseIdentity;
 
 export class ReleaseIdentityError extends Error {
   readonly code = "RELEASE_IDENTITY_INVALID";
@@ -100,22 +133,35 @@ interface NativeComponentsManifest {
   readonly components: readonly NativeComponent[];
 }
 
-export async function resolveRuntimeIdentity(input: {
-  readonly installationRoot: string;
-  readonly bundled: boolean;
-}): Promise<RuntimeIdentity> {
+export type ResolveRuntimeIdentityInput =
+  | {
+      readonly installationRoot: string;
+      readonly bundled: false;
+      readonly stateRoot?: never;
+    }
+  | {
+      readonly installationRoot: string;
+      readonly bundled: true;
+      readonly stateRoot: string;
+    };
+
+export async function resolveRuntimeIdentity(
+  input: ResolveRuntimeIdentityInput,
+): Promise<RuntimeIdentity> {
   if (!input.bundled) {
     return {
       build: {
         version: DEVELOPMENT_VERSION,
         buildId: DEVELOPMENT_BUILD_ID,
       },
+      declaredReleaseChannel: "development",
       releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
     };
   }
 
   try {
-    return await resolveBundledIdentity(input.installationRoot);
+    return await resolveBundledIdentity(input.installationRoot, input.stateRoot);
   } catch (error) {
     if (error instanceof ReleaseIdentityError) {
       throw error;
@@ -126,7 +172,43 @@ export async function resolveRuntimeIdentity(input: {
   }
 }
 
-async function resolveBundledIdentity(installationRoot: string): Promise<RuntimeIdentity> {
+async function resolveBundledIdentity(
+  installationRoot: string,
+  stateRoot: string,
+): Promise<RuntimeIdentity> {
+  let candidateFailure: unknown;
+  try {
+    return configuredReleaseIdentity(
+      await resolveConfiguredRelease({
+        root: installationRoot,
+        expectedTarget: currentReleaseTarget(),
+        stateRoot,
+      }),
+    );
+  } catch (error) {
+    candidateFailure = error;
+  }
+
+  try {
+    const preview = await resolveLegacyBundledIdentity(installationRoot);
+    if (preview.releaseChannel === "internal-preview") {
+      return preview;
+    }
+  } catch (error) {
+    if (error instanceof ReleaseIdentityError) {
+      throw error;
+    }
+    throw new ReleaseIdentityError("The bundled release identity could not be verified.", {
+      cause: error,
+    });
+  }
+
+  throw new ReleaseIdentityError("The bundled release candidate failed integrity verification.", {
+    cause: candidateFailure,
+  });
+}
+
+async function resolveLegacyBundledIdentity(installationRoot: string): Promise<RuntimeIdentity> {
   const [checksumBytes, manifestBytes, metadataBytes, ledgerBytes, nativeComponentsBytes] =
     await Promise.all([
       readRegularPayloadFile(installationRoot, "SHA256SUMS"),
@@ -165,6 +247,70 @@ async function resolveBundledIdentity(installationRoot: string): Promise<Runtime
   }
 
   return identity;
+}
+
+function configuredReleaseIdentity(resolution: ConfiguredReleaseResolution): RuntimeIdentity {
+  const build = {
+    version: resolution.candidate.productVersion,
+    buildId: resolution.candidate.buildId,
+  };
+  if (resolution.external.status === "released") {
+    if (resolution.effectiveChannel !== "released") {
+      invalid("External release verification returned an inconsistent effective channel.");
+    }
+    return {
+      build,
+      declaredReleaseChannel: "release-candidate",
+      releaseChannel: "released",
+      releaseVerification: { status: "released" },
+    };
+  }
+  if (resolution.effectiveChannel !== "release-candidate") {
+    invalid("External release verification returned an inconsistent effective channel.");
+  }
+  if (
+    resolution.external.status === "absent" ||
+    resolution.external.status === "publisher-verified"
+  ) {
+    return {
+      build,
+      declaredReleaseChannel: "release-candidate",
+      releaseChannel: "release-candidate",
+      releaseVerification: { status: resolution.external.status },
+    };
+  }
+  const fallbackCode =
+    resolution.external.status === "promotion-invalid"
+      ? "PROMOTION_TRUST_INVALID"
+      : resolution.external.status === "revoked"
+        ? "RELEASE_REVOKED"
+        : "RELEASE_CONFIGURATION_INVALID";
+  return {
+    build,
+    declaredReleaseChannel: "release-candidate",
+    releaseChannel: "release-candidate",
+    releaseVerification: {
+      status: resolution.external.status,
+      code: sanitizedVerificationCode(resolution.external.diagnosticCode, fallbackCode),
+    },
+  };
+}
+
+function sanitizedVerificationCode(code: string | undefined, fallback: string): string {
+  return code !== undefined && /^[A-Z][A-Z0-9_]{2,95}$/u.test(code) ? code : fallback;
+}
+
+function currentReleaseTarget(): ReleaseTarget {
+  if (process.platform === "darwin" && process.arch === "arm64") {
+    return { platform: "darwin", architecture: "arm64" };
+  }
+  if (process.platform === "linux" && process.arch === "x64") {
+    return { platform: "linux", architecture: "x64" };
+  }
+  if (process.platform === "win32" && process.arch === "x64") {
+    return { platform: "win32", architecture: "x64" };
+  }
+  invalid(`The current target is not supported: ${process.platform}-${process.arch}.`);
 }
 
 function parseChecksumManifest(text: string): ReadonlyMap<string, string> {
@@ -700,7 +846,17 @@ function validateMetadata(
       version: productVersion,
       buildId,
     },
-    releaseChannel,
+    ...(releaseChannel === "release-candidate"
+      ? {
+          declaredReleaseChannel: "release-candidate" as const,
+          releaseChannel: "release-candidate" as const,
+          releaseVerification: { status: "absent" as const },
+        }
+      : {
+          declaredReleaseChannel: "internal-preview" as const,
+          releaseChannel: "internal-preview" as const,
+          releaseVerification: { status: "not-applicable" as const },
+        }),
   };
 }
 
