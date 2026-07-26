@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdtemp, mkdir, open, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -133,6 +135,41 @@ test("native payload discovery rejects symbolic links and junctions", async (t) 
     /rejects symbolic links and junctions/u,
   );
 });
+
+test(
+  "native payload discovery rejects special payload entries",
+  {
+    skip:
+      process.platform === "win32"
+        ? "Unix-domain socket fixture is not portable to Windows."
+        : false,
+  },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-native-inventory-special-"));
+    t.after(() => rm(root, { force: true, recursive: true }));
+    const socketPath = join(root, "apps", "main", "native", "payload.sock");
+    await writeNativeFile(root, "runtime/node", "linux");
+    await mkdir(dirname(socketPath), { recursive: true });
+    const server = createServer();
+    server.listen(socketPath);
+    await once(server, "listening");
+
+    try {
+      await assert.rejects(
+        discoverThirdPartyNativeComponents({
+          ownedPaths: [],
+          platform: "linux",
+          stagingRoot: root,
+        }),
+        /rejects special payload entries/u,
+      );
+    } finally {
+      const closed = once(server, "close");
+      server.close();
+      await closed;
+    }
+  },
+);
 
 test("native discovery fails when the mandatory bundled runtime is omitted", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-native-inventory-missing-"));
