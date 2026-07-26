@@ -15,6 +15,7 @@ export interface EffectiveMainServiceConfigurationInput {
   readonly command: ServiceLifecycleCommand;
   readonly home: string;
   readonly hostPlatform: PlatformFamily | undefined;
+  readonly homeBindingBoundary?: MainServiceHomeBindingBoundary;
   readonly service: Pick<ConfigurationService, "inspect">;
   readonly main: {
     readonly instanceId: string;
@@ -105,7 +106,7 @@ export async function resolveMainServiceHomeBinding(
       },
     },
   });
-  return input.template.paths.stateRoot;
+  return canonicalStateRoot;
 }
 
 /**
@@ -117,12 +118,15 @@ export async function resolveEffectiveMainServiceConfiguration(
   input: EffectiveMainServiceConfigurationInput,
 ): Promise<EffectiveMainServiceConfiguration> {
   const template = parsePlatformServiceConfiguration(structuredClone(input.template));
-  assertMainServiceHomeBinding({
-    command: input.command,
-    home: input.home,
-    hostPlatform: input.hostPlatform,
-    template,
-  });
+  await resolveMainServiceHomeBinding(
+    {
+      command: input.command,
+      home: input.home,
+      hostPlatform: input.hostPlatform,
+      template,
+    },
+    input.homeBindingBoundary,
+  );
   if (template.role !== "main") {
     throw new TypeError("Admin auto-open service rendering is available only to the fixed Main.");
   }

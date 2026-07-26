@@ -109,6 +109,31 @@ test("current-host Main service home binding resolves a real directory alias to 
   );
 });
 
+test("current-host Main service home binding never returns a swappable template alias", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-main-service-home-"));
+  t.after(() => rm(directory, { force: true, recursive: true }));
+  const home = join(directory, "state");
+  const templateAlias = join(directory, "template-state-alias");
+  await mkdir(home);
+  await symlink(home, templateAlias, process.platform === "win32" ? "junction" : "dir");
+  const hostPlatform =
+    process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
+
+  assert.equal(
+    await resolveMainServiceHomeBinding({
+      command: "status",
+      home,
+      hostPlatform,
+      template: {
+        platform: hostPlatform,
+        role: "main",
+        paths: { stateRoot: templateAlias },
+      },
+    }),
+    home,
+  );
+});
+
 test("current-host Main service home binding rejects distinct real directories", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "opendelegate-main-service-home-"));
   t.after(() => rm(directory, { force: true, recursive: true }));
@@ -170,6 +195,11 @@ test("Main service resolution rejects a local state-root mismatch before durable
         async inspect() {
           inspections += 1;
           return {};
+        },
+      },
+      homeBindingBoundary: {
+        async realPath(path) {
+          return path;
         },
       },
       main: mainConfiguration(),
