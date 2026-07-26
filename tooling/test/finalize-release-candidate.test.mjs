@@ -57,6 +57,83 @@ test("finalization archives, externally signs, verifies, and publishes an atomic
   );
 });
 
+test(
+  "finalization interoperates with the real release-integrity candidate and verifier",
+  {
+    skip:
+      !process.versions.node.startsWith("24.") ||
+      !["darwin-arm64", "linux-x64", "win32-x64"].includes(targetName(currentTarget())),
+  },
+  async (t) => {
+    const [integrity, fixtures] = await Promise.all([
+      import("../../packages/release-integrity/src/index.ts"),
+      import("../../packages/release-integrity/test/support/release-fixture.ts"),
+    ]);
+    const target = currentTarget();
+    const buildCommit = "e".repeat(40);
+    const candidateFixture = await fixtures.createCandidateFixture(target, { buildCommit });
+    const workRoot = await mkdtemp(join(tmpdir(), "opendelegate-finalization-real-"));
+    const destination = join(workRoot, "output");
+    await mkdir(destination);
+    t.after(() =>
+      Promise.all([
+        rm(candidateFixture.root, { force: true, recursive: true }),
+        rm(workRoot, { force: true, recursive: true }),
+      ]),
+    );
+    const candidate = await integrity.inspectCandidate({
+      expectedTarget: target,
+      root: candidateFixture.root,
+    });
+    const metadata = JSON.parse(
+      await readFile(join(candidateFixture.root, "release-metadata.json"), "utf8"),
+    );
+    const signing = await createSigningPolicy(workRoot);
+    const result = await finalizeReleaseCandidate(
+      {
+        candidateRoot: candidateFixture.root,
+        destinationDirectory: destination,
+        expectedCandidateDigest: candidate.publisherStatement.sha256,
+        expectedManifestSha256: candidate.checksumManifestSha256,
+        signingPolicyPath: signing.policyPath,
+        signingPolicySha256: await sha256File(signing.policyPath),
+        target,
+      },
+      {
+        hashRuntimeExecutable: async () => ({
+          sha256: metadata.bundledRuntime.executableSha256,
+          size: 1,
+        }),
+        integrity,
+        readSourceIdentity: async () => ({
+          commit: buildCommit,
+          commitEpoch: 1_753_315_324,
+          dirty: false,
+        }),
+        runner: {
+          platform: target.platform,
+          architecture: target.architecture,
+          nodeVersion: "24.18.0",
+        },
+      },
+    );
+    const verified = await integrity.verifyRelease({
+      candidatePublisherEvidence: {
+        archivePath: result.archive.path,
+        attestationPath: result.publisherAttestation.path,
+      },
+      expectedCandidateDigest: candidate.publisherStatement.sha256,
+      expectedManifestSha256: candidate.checksumManifestSha256,
+      expectedTarget: target,
+      publisherTrust: { publicKeyPem: signing.publicKeyPem },
+      root: candidateFixture.root,
+    });
+    assert.equal(verified.effectiveChannel, "release-candidate");
+    assert.equal(verified.publisherKeyId, signing.keyId);
+    assert.equal(verified.archive.sha256, result.archive.sha256);
+  },
+);
+
 test("finalization refuses existing outputs without publishing a partial set", async (t) => {
   const fixture = await createFinalizationFixture(t);
   const occupied = join(

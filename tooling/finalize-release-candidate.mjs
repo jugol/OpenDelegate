@@ -158,7 +158,9 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     METADATA_LIMIT,
   );
   const releaseMetadata = releaseMetadataForFinalization(metadataBytes);
-  const runnerExecutableBefore = await hashStableRegularFile(process.execPath);
+  const runtimeExecutableHasher =
+    dependencies.hashRuntimeExecutable ?? (() => hashStableRegularFile(process.execPath));
+  const runnerExecutableBefore = await runtimeExecutableHasher();
   if (runnerExecutableBefore.sha256 !== releaseMetadata.runtimeExecutableSha256) {
     throw new Error("The finalization runtime does not match the candidate's pinned Node.js.");
   }
@@ -222,7 +224,7 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     if (
       sourceAfter.commit !== sourceBefore.commit ||
       JSON.stringify(await hashReleaseLogic()) !== JSON.stringify(releaseLogicBefore) ||
-      (await hashStableRegularFile(process.execPath)).sha256 !== runnerExecutableBefore.sha256
+      (await runtimeExecutableHasher()).sha256 !== runnerExecutableBefore.sha256
     ) {
       throw new Error("The committed release finalization logic changed while signing.");
     }
