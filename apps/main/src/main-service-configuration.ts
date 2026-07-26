@@ -72,7 +72,7 @@ export function assertMainServiceHomeBinding(input: MainServiceHomeBindingInput)
 
 /**
  * Binds current-host Main operations to one filesystem authority. Real paths
- * accept harmless directory aliases, while returning the template state root
+ * accept harmless directory aliases, while returning the canonical state root
  * makes all later durable reads use the same path as the native service host.
  */
 export async function resolveMainServiceHomeBinding(
