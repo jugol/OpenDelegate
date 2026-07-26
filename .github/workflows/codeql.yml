@@ -19,9 +19,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  analyze:
+  analyze-no-build:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -29,8 +29,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language:
-          - javascript-typescript
+        include:
+          - language: javascript-typescript
+            runner: ubuntu-24.04
+            build-mode: none
+          - language: c-cpp
+            runner: ubuntu-24.04
+            build-mode: none
+          - language: python
+            runner: ubuntu-24.04
+            build-mode: none
+          - language: actions
+            runner: ubuntu-24.04
+            build-mode: none
 
     steps:
       - name: Check out repository
@@ -41,7 +52,7 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
-          build-mode: none
+          build-mode: ${{ matrix.build-mode }}
           languages: ${{ matrix.language }}
           queries: security-extended
 
@@ -49,3 +60,60 @@ jobs:
         uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           category: "/language:${{ matrix.language }}"
+
+  analyze-swift:
+    name: Analyze (swift)
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          build-mode: manual
+          languages: swift
+          queries: security-extended
+
+      - name: Build Swift sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${RUNNER_TEMP}/opendelegate-codeql-swift"
+          swift build \
+            --configuration release \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${RUNNER_TEMP}/opendelegate-codeql-swift" \
+            --product opendelegate-macos-computer-use
+          swift build \
+            --configuration release \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${RUNNER_TEMP}/opendelegate-codeql-swift" \
+            --product opendelegate-computer-use-fixture
+          node --input-type=module <<'NODE'
+          const { buildMacOsKeychainHelper } = await import(
+            "./packages/secrets/native/macos/build.mjs"
+          );
+          await buildMacOsKeychainHelper({
+            outputRoot: `${process.env.RUNNER_TEMP}/opendelegate-codeql-keychain`,
+          });
+          NODE
+
+      - name: Analyze repository
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          category: "/language:swift"
