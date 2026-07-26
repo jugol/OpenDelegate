@@ -2594,17 +2594,32 @@ export function evaluateSmokeShutdown(input) {
   };
 }
 
+const PORTABLE_PACKAGED_MAIN_READINESS_PHASE_TIMEOUT_MS = 20_000;
+// Each Windows phase seals runtime state through several native ACL processes.
+// Keep the smoke bound above any one 60-second native command without allowing
+// a stalled packaged Main to wait indefinitely.
+const WINDOWS_PACKAGED_MAIN_READINESS_PHASE_TIMEOUT_MS = 180_000;
+
 export async function waitForPackagedMainReadiness({
   exited,
   output,
   platform = process.platform,
   wait = waitUntil,
 }) {
-  const phaseTimeoutMilliseconds = platform === "win32" ? 60_000 : 20_000;
+  const phaseTimeoutMilliseconds =
+    platform === "win32"
+      ? WINDOWS_PACKAGED_MAIN_READINESS_PHASE_TIMEOUT_MS
+      : PORTABLE_PACKAGED_MAIN_READINESS_PHASE_TIMEOUT_MS;
   const initialized = () => output().includes('"event":"main.initialized"');
   const ready = () => output().includes('"event":"owner.claim.ready"');
 
-  await wait(() => initialized() || ready() || exited(), phaseTimeoutMilliseconds);
+  await waitForPackagedMainReadinessPhase({
+    exited,
+    phase: "initialization",
+    ready: () => initialized() || ready(),
+    timeoutMilliseconds: phaseTimeoutMilliseconds,
+    wait,
+  });
   if (exited() || (!initialized() && !ready())) {
     throw new Error("The packaged init smoke test exited before initialization readiness.");
   }
@@ -2612,9 +2627,32 @@ export async function waitForPackagedMainReadiness({
     return;
   }
 
-  await wait(() => ready() || exited(), phaseTimeoutMilliseconds);
+  await waitForPackagedMainReadinessPhase({
+    exited,
+    phase: "owner-claim",
+    ready,
+    timeoutMilliseconds: phaseTimeoutMilliseconds,
+    wait,
+  });
   if (exited() || !ready()) {
     throw new Error("The packaged init smoke test exited before owner-claim readiness.");
+  }
+}
+
+async function waitForPackagedMainReadinessPhase({
+  exited,
+  phase,
+  ready,
+  timeoutMilliseconds,
+  wait,
+}) {
+  try {
+    await wait(() => ready() || exited(), timeoutMilliseconds);
+  } catch (error) {
+    throw new Error(
+      `The packaged init smoke test did not reach ${phase} readiness within the bounded ${String(timeoutMilliseconds)}ms window.`,
+      { cause: error },
+    );
   }
 }
 
