@@ -21,6 +21,7 @@
     "lint": "eslint . --max-warnings=0",
     "release:build": "node tooling/build-release.mjs",
     "release:configure": "node --experimental-strip-types tooling/configure-release.mjs",
+    "release:examples": "node tooling/create-release-examples.mjs",
     "release:finalize": "node --experimental-strip-types tooling/finalize-release-candidate.mjs",
     "release:gate": "node tooling/check-release-evidence.mjs --require-complete",
     "release:promote": "node --experimental-strip-types tooling/promote-release.mjs",
