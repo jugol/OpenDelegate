@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { unlinkSync, writeFileSync } from "node:fs";
 import { lstat, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import { AgentAdapterError, FileSessionLeaseStore } from "../src/index.ts";
+
+const execFileAsync = promisify(execFile);
+const windowsEpermFixturePath = fileURLToPath(
+  new URL("../fixtures/file-session-lease-windows-eperm.mjs", import.meta.url),
+);
 
 test("file lease store keeps one writer and monotonic fencing across store instances", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "opendelegate-agent-leases-"));
@@ -123,6 +131,34 @@ test("file lease store elects one recovery leader before removing an abandoned l
       (error as NodeJS.ErrnoException).code === "ENOENT",
   );
 });
+
+test(
+  "file lease store retries transient Windows mutation-open contention",
+  { skip: process.platform !== "win32" },
+  async (context) => {
+    const directory = await mkdtemp(join(tmpdir(), "opendelegate-agent-leases-"));
+    context.after(async () => {
+      await rm(directory, { recursive: true, force: true });
+    });
+    const statePath = join(directory, "native-session-leases.json");
+    const { stdout, stderr } = await execFileAsync(
+      process.execPath,
+      ["--experimental-strip-types", windowsEpermFixturePath, statePath],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+      },
+    );
+    assert.equal(stderr, "");
+    assert.deepEqual(JSON.parse(stdout), {
+      fulfilled: 1,
+      rejectedCode: "NATIVE_SESSION_BUSY",
+      injectedFailures: 1,
+      lockRemoved: true,
+    });
+  },
+);
 
 test("file lease store never auto-deletes malformed or uncertain recovery locks", async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "opendelegate-agent-leases-"));

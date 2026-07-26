@@ -265,15 +265,21 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
       try {
         handle = await open(this.#lockPath, "wx", 0o600);
       } catch (error) {
-        if (!isErrno(error, "EEXIST")) {
-          throw new AgentAdapterError(
-            "SESSION_LEASE_STORE_LOCK_FAILED",
-            "File lease store mutation lock could not be acquired.",
-            true,
-          );
+        const existingLock = isErrno(error, "EEXIST");
+        const transientWindowsContention = await isTransientWindowsLockOpenContention(
+          this.#lockPath,
+          error,
+        );
+        if (!existingLock && !transientWindowsContention) {
+          throw createMutationLockAcquisitionError();
         }
-        await this.#attemptAbandonedLockRecovery();
+        if (existingLock) {
+          await this.#attemptAbandonedLockRecovery();
+        }
         if (Date.now() - startedAt >= this.#mutationTimeoutMs) {
+          if (transientWindowsContention) {
+            throw createMutationLockAcquisitionError();
+          }
           throw new AgentAdapterError(
             "SESSION_LEASE_STORE_BUSY",
             "File lease store is busy with another mutation.",
@@ -303,6 +309,9 @@ export class FileSessionLeaseStore implements SessionLeaseStore {
     } catch (error) {
       if (isErrno(error, "EEXIST")) {
         await rejectUnsafeExistingLockPath(this.#recoveryPath);
+        return;
+      }
+      if (await isTransientWindowsLockOpenContention(this.#recoveryPath, error)) {
         return;
       }
       throw new AgentAdapterError(
@@ -796,6 +805,46 @@ function isErrno(error: unknown, code: string): boolean {
   return (
     error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === code
   );
+}
+
+function createMutationLockAcquisitionError(): AgentAdapterError {
+  return new AgentAdapterError(
+    "SESSION_LEASE_STORE_LOCK_FAILED",
+    "File lease store mutation lock could not be acquired.",
+    true,
+  );
+}
+
+async function isTransientWindowsLockOpenContention(
+  path: string,
+  error: unknown,
+): Promise<boolean> {
+  // libuv reports EPERM when an exclusive create races a Windows path that has
+  // been unlinked but is still completing deletion. Retry only when a no-follow
+  // path inspection proves that the name disappeared or still identifies a
+  // regular lock file. Persistent access denial and unsafe path types remain
+  // fail-closed.
+  if (process.platform !== "win32" || !isErrno(error, "EPERM")) {
+    return false;
+  }
+  try {
+    const information = await lstat(path);
+    if (information.isSymbolicLink() || !information.isFile()) {
+      throw new AgentAdapterError(
+        "UNSAFE_LEASE_STORE_PATH",
+        "File session lease lock paths must be regular files.",
+      );
+    }
+    return true;
+  } catch (inspectionError) {
+    if (isErrno(inspectionError, "ENOENT")) {
+      return true;
+    }
+    if (inspectionError instanceof AgentAdapterError) {
+      throw inspectionError;
+    }
+    return false;
+  }
 }
 
 async function delay(milliseconds: number): Promise<void> {
