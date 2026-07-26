@@ -8,10 +8,11 @@ if (!Number.isSafeInteger(requestedPort) || requestedPort < 1 || requestedPort >
   throw new Error("OPENDELEGATE_PLAYWRIGHT_PORT must be an integer from 1 through 65535.");
 }
 const baseURL = `http://127.0.0.1:${String(requestedPort)}`;
+const outputRoot = process.env["RUNNER_TEMP"]?.trim() || tmpdir();
 
 export default defineConfig({
   testDir: "./e2e",
-  outputDir: join(tmpdir(), "opendelegate-playwright-results"),
+  outputDir: join(outputRoot, "opendelegate-playwright-results"),
   fullyParallel: true,
   timeout: 20_000,
   expect: {
