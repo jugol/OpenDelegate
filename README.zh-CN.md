@@ -144,7 +144,19 @@ tag 发布。
 
 ```sh
 pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
+```
+
+上面的 `release:build` 调用只有用于 Linux x64
+Candidate 时才是完整命令。在 macOS 和 Windows 上，请追加目标平台所需的原生 Credential Policy 参数：
+
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
 ```
 
 `pnpm release:sign` 被刻意限制为仅用于已明确确认且不受支持的 Preview，并会拒绝 Release
@@ -154,7 +166,18 @@ Candidate，并创建 Candidate-v2 发布者 Attestation。只有对已配置的
 Receipt Chain 的验证，才能使该不可变 Candidate 的有效状态成为 `released`；请参阅
 [Release Trust 流程](docs/release/README.md#supported-promotion-trust-path)。
 
-只有在全部 36 项实现和真实证据 gate 都通过后，这两个命令才可以成功。请参阅
+可使用以下命令生成不含 Credential 的运维输入骨架：
+
+```sh
+pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
+```
+
+所有生成内容都会标记为 `PLACEHOLDER` 和
+`NOT-A-RELEASE`，且不包含 Credential、签名、Artifact 或 Release 证据。详情请参阅
+[Release 输入示例指南](docs/release/EXAMPLES.md)。
+
+生产模式的 `release:gate` 和 Candidate 模式的 `release:build`
+命令只有在全部 36 项实现和真实证据 gate 都通过后才能成功。对不受支持 Preview 的签名既不能满足、也不能绕过该生产 gate。请参阅
 [精确的首个里程碑支持矩阵](docs/release/SUPPORT_MATRIX.md)、
 [Release evidence 指南](docs/release/README.md)和
 [平台实验室检查清单](docs/release/PLATFORM_LAB.md)。

@@ -160,7 +160,19 @@ Bundle이 빌드된 플랫폼에 맞는 Launcher를 사용하십시오. 내부 �
 
 ```sh
 pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
+```
+
+위 `release:build` 호출은 Linux x64 Candidate에서만 표시된 그대로 사용할 수 있습니다. macOS와
+Windows에서는 대상 플랫폼별 필수 Credential Policy를 다음과 같이 추가해야 합니다.
+
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
 ```
 
 `pnpm release:sign`은 명시적으로 확인된 지원되지 않는 Preview에만 의도적으로 제한되며 Release
@@ -170,8 +182,19 @@ Attestation을 생성합니다. 구성된 외부 Promotion과 Supported Channel 
 불변 Candidate의 실효 상태가 `released`가 될 수 있습니다. 자세한 내용은
 [Release Trust 절차](docs/release/README.md#supported-promotion-trust-path)를 참고하십시오.
 
-두 명령은 36개 구현 Gate와 실제 증거 Gate를 모두 통과한 뒤에만 성공할 수 있습니다.
-[정확한 첫 Milestone 지원 Matrix](docs/release/SUPPORT_MATRIX.md),
+Credential이 없는 운영자 입력 골격은 다음 명령으로 생성할 수 있습니다.
+
+```sh
+pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
+```
+
+모든 생성물에는 `PLACEHOLDER`와 `NOT-A-RELEASE`가 표시되며 Credential, 서명, Artifact, Release
+증거를 포함하지 않습니다. 자세한 내용은 [Release 입력 예시 가이드](docs/release/EXAMPLES.md)를
+참고하십시오.
+
+프로덕션 `release:gate`와 Candidate 모드 `release:build` 명령은 36개 구현 Gate와 실제 증거 Gate를
+모두 통과한 뒤에만 성공할 수 있습니다. 지원되지 않는 Preview에 대한 서명은 이 프로덕션 Gate를
+충족하지도 우회하지도 않습니다. [정확한 첫 Milestone 지원 Matrix](docs/release/SUPPORT_MATRIX.md),
 [릴리스 증거 가이드](docs/release/README.md)와
 [플랫폼 Lab 체크리스트](docs/release/PLATFORM_LAB.md)를 참고하십시오.
 

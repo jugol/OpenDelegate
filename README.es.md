@@ -174,7 +174,19 @@ incompleto:
 
 ```sh
 pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
+```
+
+La invocación `release:build` anterior solo está completa tal como aparece para el Candidate Linux
+x64. En macOS y Windows, añade la Policy de credenciales obligatoria para la plataforma de destino:
+
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
 ```
 
 `pnpm release:sign` está limitado deliberadamente a previews sin soporte aceptadas de forma
@@ -185,8 +197,19 @@ configurada de la cadena externa de promoción y del recibo del canal con soport
 Candidate inmutable el estado efectivo `released`; consulta el
 [procedimiento de confianza de releases](docs/release/README.md#supported-promotion-trust-path).
 
-Ambos comandos solo pueden completarse después de superar las 36 gates de implementación y de
-evidencia real. Consulta
+Genera esqueletos de entrada para el operador sin credenciales con:
+
+```sh
+pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
+```
+
+Cada conjunto generado está marcado como `PLACEHOLDER` y `NOT-A-RELEASE`; no contiene credenciales,
+firmas, Artifacts ni evidencia de release. Consulta la
+[guía de ejemplos de entradas de release](docs/release/EXAMPLES.md).
+
+Los comandos de producción `release:gate` y `release:build` en modo Candidate solo pueden
+completarse después de superar las 36 gates de implementación y de evidencia real. La firma de una
+preview sin soporte no satisface ni elude esa gate de producción. Consulta
 [la matriz exacta de soporte del primer hito](docs/release/SUPPORT_MATRIX.md),
 [la guía de evidencia de release](docs/release/README.md) y
 [la lista de comprobación del laboratorio de plataformas](docs/release/PLATFORM_LAB.md).

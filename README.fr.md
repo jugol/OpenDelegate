@@ -175,7 +175,19 @@ Un build de production échoue intentionnellement tant qu’un critère d’acce
 
 ```sh
 pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
+```
+
+L’invocation `release:build` ci-dessus n’est complète telle quelle que pour le Candidate Linux x64.
+Sous macOS et Windows, ajoutez la Policy d’identifiants requise pour la plateforme cible :
+
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
 ```
 
 `pnpm release:sign` est délibérément limité aux previews non prises en charge explicitement
@@ -186,8 +198,19 @@ configurée de la chaîne externe de promotion et de reçu du canal pris en char
 Candidate immuable le statut effectif `released` ; consultez la
 [procédure de confiance des releases](docs/release/README.md#supported-promotion-trust-path).
 
-Ces deux commandes ne peuvent réussir qu’après le passage des 36 gates d’implémentation et de
-preuves réelles. Consultez
+Générez des squelettes d’entrée opérateur sans identifiants avec :
+
+```sh
+pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
+```
+
+Chaque ensemble généré porte les mentions `PLACEHOLDER` et `NOT-A-RELEASE` et ne contient ni
+identifiants, ni signatures, ni Artifacts, ni preuve de release. Consultez le
+[guide des exemples d’entrées de release](docs/release/EXAMPLES.md).
+
+Les commandes de production `release:gate` et `release:build` en mode Candidate ne peuvent réussir
+qu’après le passage des 36 gates d’implémentation et de preuves réelles. La signature d’une preview
+non prise en charge ne satisfait ni ne contourne ce gate de production. Consultez
 [la matrice exacte de support du premier jalon](docs/release/SUPPORT_MATRIX.md),
 [le guide des preuves de release](docs/release/README.md) et
 [la checklist du laboratoire de plateformes](docs/release/PLATFORM_LAB.md).

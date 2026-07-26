@@ -158,7 +158,20 @@ Acceptance Criterion が 1 つでも未完了の場合、Production Build は意
 
 ```sh
 pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
+```
+
+上記の `release:build` 呼び出しが記載どおりで完全なのは、Linux x64
+Candidate の場合だけです。macOS と Windows では、対象プラットフォーム固有の必須 Credential
+Policy を次のように追加してください。
+
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
 ```
 
 `pnpm release:sign` は、明示的に確認されたサポート対象外の Preview 専用に意図的に制限され、Release
@@ -170,8 +183,21 @@ Receipt の Chain を検証した場合にのみ、その不変 Candidate の実
 になります。詳細は
 [Release Trust の手順](docs/release/README.md#supported-promotion-trust-path)を参照してください。
 
-どちらのコマンドも、36 個すべての Implementation Gate と Live-evidence
-Gate が通過した後にのみ成功します。[正確な First Milestone Support Matrix](docs/release/SUPPORT_MATRIX.md)、
+Credential を含まない Operator 入力 Skeleton は、次のコマンドで生成できます。
+
+```sh
+pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
+```
+
+生成物にはすべて `PLACEHOLDER` と `NOT-A-RELEASE`
+が明記され、Credential、署名、Artifact、Release 証拠は含まれません。詳しくは
+[Release 入力例ガイド](docs/release/EXAMPLES.md)を参照してください。
+
+Production 用の `release:gate` と Candidate Mode の `release:build` は、36 個すべての Implementation
+Gate と Live-evidence
+Gate が通過した場合にのみ成功します。サポート対象外 Preview の署名は、この Production
+Gate を満たすものでも、回避するものでもありません。
+[正確な First Milestone Support Matrix](docs/release/SUPPORT_MATRIX.md)、
 [Release Evidence Guide](docs/release/README.md) および
 [Platform Lab Checklist](docs/release/PLATFORM_LAB.md) を参照してください。
 
