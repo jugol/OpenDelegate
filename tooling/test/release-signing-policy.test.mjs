@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -157,6 +157,65 @@ test("release signing accepts only handles returned by the pinned policy reader"
   );
 });
 
+test("release signing policies reject linked ancestors for policies, keys, executables, and artifacts", async (t) => {
+  const linkedPolicy = await createPolicyFixture(t, "promotion");
+  const policyAlias = join(linkedPolicy.root, "policy-alias");
+  await createDirectoryAlias(policyAlias, linkedPolicy.root);
+  await assert.rejects(
+    readPinnedReleaseSigningPolicy({
+      expectedRole: "promotion",
+      path: join(policyAlias, "policy.json"),
+      sha256: await sha256File(linkedPolicy.policyPath),
+    }),
+    /canonical path|linked ancestor/iu,
+  );
+
+  const linkedKey = await createPolicyFixture(t, "promotion");
+  const keyAlias = join(linkedKey.root, "key-alias");
+  await createDirectoryAlias(keyAlias, linkedKey.root);
+  await rewritePolicy(linkedKey.policyPath, (value) => {
+    value.publicKey.path = join(keyAlias, "public.pem");
+  });
+  await assert.rejects(
+    readPinnedReleaseSigningPolicy({
+      expectedRole: "promotion",
+      path: linkedKey.policyPath,
+      sha256: await sha256File(linkedKey.policyPath),
+    }),
+    /canonical path|linked ancestor/iu,
+  );
+
+  const linkedExecutable = await createPolicyFixture(t, "promotion");
+  const executableAlias = join(linkedExecutable.root, "executable-alias");
+  await createDirectoryAlias(executableAlias, dirname(process.execPath));
+  await rewritePolicy(linkedExecutable.policyPath, (value) => {
+    value.signer.executable.path = join(executableAlias, basename(process.execPath));
+  });
+  await assert.rejects(
+    readPinnedReleaseSigningPolicy({
+      expectedRole: "promotion",
+      path: linkedExecutable.policyPath,
+      sha256: await sha256File(linkedExecutable.policyPath),
+    }),
+    /canonical path|linked ancestor/iu,
+  );
+
+  const linkedArtifact = await createPolicyFixture(t, "promotion");
+  const artifactAlias = join(linkedArtifact.root, "artifact-alias");
+  await createDirectoryAlias(artifactAlias, linkedArtifact.root);
+  await rewritePolicy(linkedArtifact.policyPath, (value) => {
+    value.signer.invocationArtifacts[0].path = join(artifactAlias, "signer-helper.mjs");
+  });
+  await assert.rejects(
+    readPinnedReleaseSigningPolicy({
+      expectedRole: "promotion",
+      path: linkedArtifact.policyPath,
+      sha256: await sha256File(linkedArtifact.policyPath),
+    }),
+    /canonical path|linked ancestor/iu,
+  );
+});
+
 async function createPolicyFixture(t, role) {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-release-policy-"));
   t.after(() => rm(root, { force: true, recursive: true }));
@@ -244,6 +303,16 @@ process.stdout.write(\`\${JSON.stringify(response)}\\n\`);
 
 async function sha256File(path) {
   return sha256(await readFile(path));
+}
+
+async function createDirectoryAlias(aliasPath, targetPath) {
+  await symlink(resolve(targetPath), aliasPath, process.platform === "win32" ? "junction" : "dir");
+}
+
+async function rewritePolicy(path, mutate) {
+  const value = JSON.parse(await readFile(path, "utf8"));
+  mutate(value);
+  await writeFile(path, `${JSON.stringify(value)}\n`, "utf8");
 }
 
 function sha256(bytes) {

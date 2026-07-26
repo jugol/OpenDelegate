@@ -1,5 +1,5 @@
 import { readdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { readSourceIdentity } from "./build-release.mjs";
@@ -51,6 +51,8 @@ export async function preparePromotionAuthorization(input, dependencies = {}) {
     throw new Error("Promotion must execute from the exact clean repository named by the runner.");
   }
   const outputRoot = await requireSharedOutputRoot(input.outputPaths);
+  const canonicalOutputPaths = input.outputPaths.map((path) => join(outputRoot, basename(path)));
+  assertDisjointPaths(canonicalOutputPaths, "promotion output");
   const planFile = await readPinnedCanonicalJson({
     label: "promotion plan",
     maximumBytes: MAXIMUM_PLAN_BYTES,
@@ -85,7 +87,7 @@ export async function preparePromotionAuthorization(input, dependencies = {}) {
   for (const root of candidateRoots) {
     assertPathOutsideRoots(root, [requestedRepositoryRoot, outputRoot], "release candidate root");
   }
-  for (const path of input.outputPaths) {
+  for (const path of canonicalOutputPaths) {
     assertPathOutsideRoots(
       path,
       [requestedRepositoryRoot, dirname(planFile.path), ...candidateRoots],
@@ -102,6 +104,13 @@ export async function preparePromotionAuthorization(input, dependencies = {}) {
     dependencies.integrity ?? (await import("../packages/release-integrity/src/index.ts"));
   requireIntegrityBoundary(integrity);
   const loaded = await loadPromotionInputs(plan, candidateRoots, integrity);
+  assertLoadedPromotionInputBoundaries({
+    candidateRoots,
+    loaded,
+    outputRoot,
+    planFile,
+    repositoryRoot: requestedRepositoryRoot,
+  });
   const composed = integrity.composePromotionStatement({
     channel: plan.channel,
     issuedAt: plan.issuedAt,
@@ -124,7 +133,15 @@ export async function preparePromotionAuthorization(input, dependencies = {}) {
   ) {
     throw new Error("The committed release-promotion logic changed during verification.");
   }
-  await revalidatePinnedPromotionInputs(planFile, plan, loaded, integrity);
+  await revalidatePinnedPromotionInputs(
+    planFile,
+    plan,
+    loaded,
+    integrity,
+    candidateRoots,
+    outputRoot,
+    requestedRepositoryRoot,
+  );
 
   const prepared = Object.freeze({
     composed,
@@ -173,6 +190,9 @@ export async function revalidatePreparedPromotion(prepared) {
     details.plan,
     details.loaded,
     details.integrity,
+    details.candidateRoots,
+    details.outputRoot,
+    details.requestedRepositoryRoot,
   );
 }
 
@@ -394,66 +414,130 @@ async function loadPromotionInputs(plan, candidateRoots, integrity) {
   });
 }
 
-async function revalidatePinnedPromotionInputs(planFile, plan, loaded, integrity) {
-  await readPinnedCanonicalJson({
+async function revalidatePinnedPromotionInputs(
+  planFile,
+  plan,
+  loaded,
+  integrity,
+  candidateRoots,
+  outputRoot,
+  repositoryRoot,
+) {
+  const currentPlan = await readPinnedCanonicalJson({
     label: "promotion plan",
     maximumBytes: MAXIMUM_PLAN_BYTES,
     path: planFile.path,
     sha256: planFile.sha256,
   });
-  await Promise.all([
-    ...plan.candidates.flatMap((candidate) => [
+  assertSamePinnedFile(currentPlan, planFile, "promotion plan");
+  const currentPublisherFiles = await Promise.all(
+    plan.candidates.map((candidate) =>
+      Promise.all([
+        readPinnedBytes({
+          ...candidate.archive,
+          label: "release archive",
+          maximumBytes: MAXIMUM_ARCHIVE_BYTES,
+        }),
+        readPinnedBytes({ ...candidate.publisherAttestation, label: "publisher attestation" }),
+        readPinnedBytes({
+          ...candidate.publisherTrustRoot,
+          label: "publisher trust root",
+          maximumBytes: MAXIMUM_TRUST_ROOT_BYTES,
+        }),
+      ]).then(([archive, attestation, trust]) => ({ archive, attestation, trust })),
+    ),
+  );
+  const [supportMatrixFile, notarizationFile, liveEvidenceFiles, platformFiles] = await Promise.all(
+    [
       readPinnedBytes({
-        ...candidate.archive,
-        label: "release archive",
-        maximumBytes: MAXIMUM_ARCHIVE_BYTES,
-      }),
-      readPinnedBytes({ ...candidate.publisherAttestation, label: "publisher attestation" }),
-      readPinnedBytes({
-        ...candidate.publisherTrustRoot,
-        label: "publisher trust root",
-        maximumBytes: MAXIMUM_TRUST_ROOT_BYTES,
-      }),
-    ]),
-    readPinnedBytes({
-      ...plan.supportMatrix.file,
-      label: "support matrix",
-      maximumBytes: MAXIMUM_EVIDENCE_BYTES,
-    }),
-    readPinnedBytes({
-      ...plan.notarizationReceipt.file,
-      label: "macOS notarization receipt",
-      maximumBytes: MAXIMUM_EVIDENCE_BYTES,
-    }),
-    ...plan.liveEvidence.map(({ criterionId, file }) =>
-      readPinnedBytes({
-        ...file,
-        label: `live evidence criterion ${String(criterionId)}`,
+        ...plan.supportMatrix.file,
+        label: "support matrix",
         maximumBytes: MAXIMUM_EVIDENCE_BYTES,
       }),
-    ),
-    ...plan.candidates.flatMap((candidate) =>
-      candidate.platformAuthenticity.verificationEvidence.map(({ file }) =>
-        readPinnedBytes({
-          ...file,
-          label: "platform authenticity evidence",
-          maximumBytes: MAXIMUM_EVIDENCE_BYTES,
-        }),
+      readPinnedBytes({
+        ...plan.notarizationReceipt.file,
+        label: "macOS notarization receipt",
+        maximumBytes: MAXIMUM_EVIDENCE_BYTES,
+      }),
+      Promise.all(
+        plan.liveEvidence.map(({ criterionId, file }) =>
+          readPinnedBytes({
+            ...file,
+            label: `live evidence criterion ${String(criterionId)}`,
+            maximumBytes: MAXIMUM_EVIDENCE_BYTES,
+          }),
+        ),
       ),
-    ),
-  ]);
+      Promise.all(
+        plan.candidates.map((candidate) =>
+          Promise.all(
+            candidate.platformAuthenticity.verificationEvidence.map(({ file }) =>
+              readPinnedBytes({
+                ...file,
+                label: "platform authenticity evidence",
+                maximumBytes: MAXIMUM_EVIDENCE_BYTES,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+  for (let index = 0; index < currentPublisherFiles.length; index += 1) {
+    const current = currentPublisherFiles[index];
+    const original = loaded.publisherFiles[index];
+    assertSamePinnedFile(current.archive, original.archive, "release archive");
+    assertSamePinnedFile(current.attestation, original.attestation, "publisher attestation");
+    assertSamePinnedFile(current.trust, original.trust, "publisher trust root");
+  }
+  assertSamePinnedFile(supportMatrixFile, loaded.supportMatrixFile, "support matrix");
+  assertSamePinnedFile(notarizationFile, loaded.notarizationFile, "macOS notarization receipt");
+  for (let index = 0; index < liveEvidenceFiles.length; index += 1) {
+    assertSamePinnedFile(
+      liveEvidenceFiles[index],
+      loaded.liveEvidenceFiles[index].loaded,
+      `live evidence criterion ${String(index + 1)}`,
+    );
+  }
+  for (let candidateIndex = 0; candidateIndex < platformFiles.length; candidateIndex += 1) {
+    for (
+      let evidenceIndex = 0;
+      evidenceIndex < platformFiles[candidateIndex].length;
+      evidenceIndex += 1
+    ) {
+      assertSamePinnedFile(
+        platformFiles[candidateIndex][evidenceIndex],
+        loaded.platformFiles[candidateIndex][evidenceIndex].loaded,
+        "platform authenticity evidence",
+      );
+    }
+  }
+  assertLoadedPromotionInputBoundaries({
+    candidateRoots,
+    loaded: {
+      ...loaded,
+      liveEvidenceFiles: liveEvidenceFiles.map((file) => ({ loaded: file })),
+      notarizationFile,
+      platformFiles: platformFiles.map((files) => files.map((file) => ({ loaded: file }))),
+      publisherFiles: currentPublisherFiles,
+      supportMatrixFile,
+    },
+    outputRoot,
+    planFile: currentPlan,
+    repositoryRoot,
+  });
   for (let index = 0; index < plan.candidates.length; index += 1) {
     const candidate = plan.candidates[index];
     const verified = await integrity.verifyRelease({
-      root: candidate.root,
+      root: candidateRoots[index],
       expectedTarget: candidate.target,
       expectedManifestSha256: candidate.expectedManifestSha256,
       expectedCandidateDigest: candidate.expectedCandidateDigest,
       candidatePublisherEvidence: {
-        archivePath: candidate.archive.path,
-        attestationPath: candidate.publisherAttestation.path,
+        archivePath: currentPublisherFiles[index].archive.path,
+        attestationPath: currentPublisherFiles[index].attestation.path,
       },
-      publisherTrust: { publicKeyPem: loaded.publisherFiles[index].trust.bytes },
+      publisherTrust: { publicKeyPem: currentPublisherFiles[index].trust.bytes },
       policy: plan.revocations,
     });
     if (
@@ -463,6 +547,56 @@ async function revalidatePinnedPromotionInputs(planFile, plan, loaded, integrity
     ) {
       throw new Error("A promotion candidate changed during verification.");
     }
+  }
+}
+
+function assertLoadedPromotionInputBoundaries({
+  candidateRoots,
+  loaded,
+  outputRoot,
+  planFile,
+  repositoryRoot,
+}) {
+  const allFiles = [
+    ...loaded.publisherFiles.flatMap(({ archive, attestation, trust }) => [
+      archive,
+      attestation,
+      trust,
+    ]),
+    loaded.supportMatrixFile,
+    loaded.notarizationFile,
+    ...loaded.liveEvidenceFiles.map(({ loaded: file }) => file),
+    ...loaded.platformFiles.flatMap((files) => files.map(({ loaded: file }) => file)),
+  ];
+  const prohibitedEvidenceRoots = [
+    ...(outputRoot === undefined ? [] : [outputRoot]),
+    ...candidateRoots,
+  ];
+  for (const file of allFiles) {
+    if (prohibitedEvidenceRoots.length > 0) {
+      assertPathOutsideRoots(file.path, prohibitedEvidenceRoots, "promotion evidence input");
+    }
+  }
+  if (repositoryRoot !== undefined) {
+    for (const { archive, attestation, trust } of loaded.publisherFiles) {
+      for (const file of [archive, attestation, trust]) {
+        assertPathOutsideRoots(file.path, [repositoryRoot], "external publisher authority");
+      }
+    }
+  }
+  const paths = [planFile.path, ...allFiles.map(({ path }) => path)].map(comparablePath);
+  if (new Set(paths).size !== paths.length) {
+    throw new Error("Promotion inputs must remain canonically distinct.");
+  }
+}
+
+function assertSamePinnedFile(current, original, label) {
+  if (
+    comparablePath(current.path) !== comparablePath(original.path) ||
+    current.sha256 !== original.sha256 ||
+    current.size !== original.size
+  ) {
+    throw new Error(`The pinned ${label} identity changed during release authorization.`);
   }
 }
 
@@ -762,8 +896,11 @@ function assertPromotionPreparationPaths(input) {
 }
 
 async function requireSharedOutputRoot(paths) {
-  const parent = await requireCanonicalDirectory(dirname(paths[0]), "promotion output directory");
-  if (paths.some((path) => comparablePath(dirname(path)) !== comparablePath(parent))) {
+  const parents = await Promise.all(
+    paths.map((path) => requireCanonicalDirectory(dirname(path), "promotion output directory")),
+  );
+  const parent = parents[0];
+  if (parents.some((value) => comparablePath(value) !== comparablePath(parent))) {
     throw new Error("Promotion outputs must share one canonical directory.");
   }
   return parent;

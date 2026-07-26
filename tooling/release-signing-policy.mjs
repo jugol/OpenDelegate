@@ -4,6 +4,7 @@ import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import { invokePinnedReleaseSigner } from "./external-release-signer.mjs";
+import { assertNoLinkedPathComponents } from "./release-tooling-io.mjs";
 
 const MAXIMUM_POLICY_BYTES = 256 * 1024;
 const MAXIMUM_PUBLIC_KEY_BYTES = 64 * 1024;
@@ -38,6 +39,22 @@ export async function readPinnedReleaseSigningPolicy(input) {
   });
   const publicKey = parseEd25519PublicKey(publicKeyFile.bytes);
   const keyId = `sha256:${sha256(Buffer.from(publicKey.export({ format: "der", type: "spki" })))}`;
+  const signerExecutable = await canonicalizePinnedSignerPath(
+    value.signer.executable,
+    "release-signing executable",
+  );
+  const invocationArtifacts = await Promise.all(
+    value.signer.invocationArtifacts.map((artifact) =>
+      canonicalizePinnedSignerPath(artifact, "release-signing invocation artifact"),
+    ),
+  );
+  const canonicalSignerPaths = [
+    signerExecutable.path,
+    ...invocationArtifacts.map(({ path }) => path),
+  ].map(comparablePath);
+  if (new Set(canonicalSignerPaths).size !== canonicalSignerPaths.length) {
+    throw new Error("The release-signing invocation paths must remain canonically distinct.");
+  }
   const handle = Object.freeze(Object.create(null));
   policyDetails.set(
     handle,
@@ -54,9 +71,9 @@ export async function readPinnedReleaseSigningPolicy(input) {
       }),
       role: value.role,
       signer: Object.freeze({
-        executable: Object.freeze({ ...value.signer.executable }),
+        executable: signerExecutable,
         invocationArtifacts: Object.freeze(
-          value.signer.invocationArtifacts.map((artifact) => Object.freeze({ ...artifact })),
+          invocationArtifacts.map((artifact) => Object.freeze({ ...artifact })),
         ),
         timeoutMs: value.signer.timeoutMs,
       }),
@@ -232,6 +249,7 @@ async function readStablePinnedFile(input) {
   ) {
     throw new Error(`The ${input.label} is not a bounded regular file.`);
   }
+  await assertNoLinkedPathComponents(input.path, input.label);
   const canonicalPath = await realpath(input.path);
   const flags =
     process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
@@ -261,6 +279,19 @@ async function readStablePinnedFile(input) {
   } finally {
     await handle.close();
   }
+}
+
+async function canonicalizePinnedSignerPath(value, label) {
+  const metadata = await lstat(value.path);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) {
+    throw new Error(`The ${label} must be a regular, non-linked file.`);
+  }
+  await assertNoLinkedPathComponents(value.path, label);
+  const canonicalPath = await realpath(value.path);
+  return Object.freeze({
+    path: canonicalPath,
+    sha256: value.sha256,
+  });
 }
 
 function parseEd25519PublicKey(bytes) {

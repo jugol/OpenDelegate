@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createPublicKey } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import { parseReleasePromotionArguments } from "../promote-release.mjs";
@@ -14,7 +14,12 @@ import {
   sha256File,
   writeCanonical,
 } from "./support/release-promotion-fixture.mjs";
-import { publishNewFileSet } from "../release-tooling-io.mjs";
+import {
+  hashStableRegularFile,
+  publishNewFileSet,
+  readPinnedBytes,
+  requireCanonicalDirectory,
+} from "../release-tooling-io.mjs";
 import { hashPromotionReleaseLogic } from "../release-promotion-plan.mjs";
 import {
   pinReleaseRunnerIdentity,
@@ -174,6 +179,58 @@ test("create-new release output sets roll back every linked file after a partial
     /fixture interruption/u,
   );
   assert.deepEqual(await readdir(root), []);
+});
+
+test("release-security paths reject regular files, directories, and outputs behind linked ancestors", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-linked-release-path-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const canonicalRoot = join(root, "canonical");
+  const canonicalChild = join(canonicalRoot, "child");
+  const aliasRoot = join(root, "alias");
+  await mkdir(canonicalChild, { recursive: true });
+  const inputPath = join(canonicalChild, "input.json");
+  await writeFile(inputPath, "{}\n", "utf8");
+  await createDirectoryAlias(aliasRoot, canonicalRoot);
+  const aliasedInput = join(aliasRoot, "child", "input.json");
+
+  await assert.rejects(
+    readPinnedBytes({
+      label: "linked-ancestor fixture",
+      path: aliasedInput,
+      sha256: await sha256File(inputPath),
+    }),
+    /canonical path|linked ancestor/iu,
+  );
+  await assert.rejects(hashStableRegularFile(aliasedInput), /canonical path|linked ancestor/iu);
+  await assert.rejects(
+    requireCanonicalDirectory(join(aliasRoot, "child"), "linked-ancestor fixture directory"),
+    /canonical path|linked ancestor/iu,
+  );
+  await assert.rejects(
+    publishNewFileSet([
+      {
+        path: join(aliasRoot, "child", "output.json"),
+        bytes: Buffer.from("{}\n", "utf8"),
+        mode: 0o644,
+      },
+      {
+        path: join(aliasRoot, "child", "runner.json"),
+        bytes: Buffer.from("{}\n", "utf8"),
+        mode: 0o644,
+      },
+    ]),
+    /canonical path|linked ancestor/iu,
+  );
+
+  const canonicalMetadata = await lstat(canonicalChild, { bigint: true });
+  const alternateCanonicalSpelling = join(root, "RUNNER~1", "child");
+  assert.equal(
+    await requireCanonicalDirectory(canonicalChild, "Windows alias fixture", {
+      canonicalLstat: async () => canonicalMetadata,
+      realPath: async () => alternateCanonicalSpelling,
+    }),
+    alternateCanonicalSpelling,
+  );
 });
 
 test("the promotion runner hash inventory covers every executable authorization module", async () => {
@@ -522,6 +579,31 @@ test(
       (await readdir(occupied.outputRoot)).includes("promotion-attestation.json"),
       false,
     );
+
+    const linkedTrust = await createPromotionToolFixture(t);
+    const firstCandidateRoot = linkedTrust.candidates[0].root;
+    const masqueradingTrust = join(firstCandidateRoot, "masquerading-publisher-public.pem");
+    await writeFile(
+      masqueradingTrust,
+      await readFile(linkedTrust.promotionPlan.candidates[0].publisherTrustRoot.path),
+    );
+    const linkedTrustRoot = join(linkedTrust.root, "linked-trust-root");
+    await createDirectoryAlias(linkedTrustRoot, firstCandidateRoot);
+    await linkedTrust.rewritePromotionPlan((plan) => {
+      plan.candidates[0].publisherTrustRoot = {
+        path: join(linkedTrustRoot, "masquerading-publisher-public.pem"),
+        sha256: plan.candidates[0].publisherTrustRoot.sha256,
+      };
+    });
+    await assert.rejects(
+      promoteRelease(linkedTrust.promotionInput, {
+        ...linkedTrust.runnerDependencies,
+        integrity: linkedTrust.integrity,
+        readSourceIdentity: async () => linkedTrust.sourceIdentity,
+      }),
+      /canonical path|linked ancestor/iu,
+    );
+    assert.deepEqual(await readdir(linkedTrust.outputRoot), []);
   },
 );
 
@@ -721,5 +803,72 @@ test(
       (await readdir(occupied.outputRoot)).includes("supported-channel-receipt.json"),
       false,
     );
+
+    const linkedReadBack = await createPromotionToolFixture(t);
+    const linkedPromotion = await promoteRelease(linkedReadBack.promotionInput, {
+      ...linkedReadBack.runnerDependencies,
+      integrity: linkedReadBack.integrity,
+      readSourceIdentity: async () => linkedReadBack.sourceIdentity,
+    });
+    const linkedReadBackInput = await linkedReadBack.createReadBackInput(linkedPromotion);
+    const originalRecord = linkedReadBackInput.readBackPlan.readBackRecords[0].file.path;
+    const masqueradingRecord = join(linkedReadBack.outputRoot, "masquerading-read-back.json");
+    await writeFile(masqueradingRecord, await readFile(originalRecord));
+    const linkedOutputRoot = join(linkedReadBack.root, "linked-output-root");
+    await createDirectoryAlias(linkedOutputRoot, linkedReadBack.outputRoot);
+    linkedReadBackInput.readBackPlan.readBackRecords[0].file = {
+      path: join(linkedOutputRoot, "masquerading-read-back.json"),
+      sha256: await sha256File(masqueradingRecord),
+    };
+    await writeCanonical(linkedReadBackInput.readBackPlanPath, linkedReadBackInput.readBackPlan);
+    linkedReadBackInput.input.readBackPlanSha256 = await sha256File(
+      linkedReadBackInput.readBackPlanPath,
+    );
+    await assert.rejects(
+      createSupportedChannelReceipt(linkedReadBackInput.input, {
+        ...linkedReadBack.runnerDependencies,
+        integrity: linkedReadBack.integrity,
+        readSourceIdentity: async () => linkedReadBack.sourceIdentity,
+      }),
+      /canonical path|linked ancestor/iu,
+    );
+    assert.equal(
+      (await readdir(linkedReadBack.outputRoot)).includes("supported-channel-receipt.json"),
+      false,
+    );
+
+    const linkedAttestation = await createPromotionToolFixture(t);
+    const attestationPromotion = await promoteRelease(linkedAttestation.promotionInput, {
+      ...linkedAttestation.runnerDependencies,
+      integrity: linkedAttestation.integrity,
+      readSourceIdentity: async () => linkedAttestation.sourceIdentity,
+    });
+    const linkedAttestationInput =
+      await linkedAttestation.createReadBackInput(attestationPromotion);
+    const linkedAttestationRoot = join(linkedAttestation.root, "linked-attestation-root");
+    await createDirectoryAlias(linkedAttestationRoot, linkedAttestation.outputRoot);
+    linkedAttestationInput.readBackPlan.promotion.attestation.path = join(
+      linkedAttestationRoot,
+      "promotion-attestation.json",
+    );
+    await writeCanonical(
+      linkedAttestationInput.readBackPlanPath,
+      linkedAttestationInput.readBackPlan,
+    );
+    linkedAttestationInput.input.readBackPlanSha256 = await sha256File(
+      linkedAttestationInput.readBackPlanPath,
+    );
+    await assert.rejects(
+      createSupportedChannelReceipt(linkedAttestationInput.input, {
+        ...linkedAttestation.runnerDependencies,
+        integrity: linkedAttestation.integrity,
+        readSourceIdentity: async () => linkedAttestation.sourceIdentity,
+      }),
+      /canonical path|linked ancestor/iu,
+    );
   },
 );
+
+async function createDirectoryAlias(aliasPath, targetPath) {
+  await symlink(resolve(targetPath), aliasPath, process.platform === "win32" ? "junction" : "dir");
+}

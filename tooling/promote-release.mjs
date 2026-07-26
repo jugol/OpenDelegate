@@ -12,6 +12,8 @@ import {
   assertPathAbsent,
   digestBytes,
   publishNewFileSet,
+  requireCanonicalDirectory,
+  requireCanonicalNewPath,
   requireExactKeys,
 } from "./release-tooling-io.mjs";
 import {
@@ -81,26 +83,28 @@ export async function promoteRelease(input, dependencies = {}) {
       platform: process.platform,
     },
   });
-  assertDisjointPaths(
-    [input.attestationDestination, input.runnerRecordDestination],
-    "promotion output",
-  );
-  if (dirname(input.attestationDestination) !== dirname(input.runnerRecordDestination)) {
+  const [attestationDestination, runnerRecordDestination, repositoryRoot] = await Promise.all([
+    requireCanonicalNewPath(input.attestationDestination, "promotion attestation destination"),
+    requireCanonicalNewPath(input.runnerRecordDestination, "promotion runner-record destination"),
+    requireCanonicalDirectory(input.repositoryRoot, "release repository"),
+  ]);
+  assertDisjointPaths([attestationDestination, runnerRecordDestination], "promotion output");
+  if (dirname(attestationDestination) !== dirname(runnerRecordDestination)) {
     throw new Error("Promotion outputs must share one directory.");
   }
   await Promise.all([
-    assertPathAbsent(input.attestationDestination, "A release-promotion output"),
-    assertPathAbsent(input.runnerRecordDestination, "A release-promotion output"),
+    assertPathAbsent(attestationDestination, "A release-promotion output"),
+    assertPathAbsent(runnerRecordDestination, "A release-promotion output"),
   ]);
   const integrity =
     dependencies.integrity ?? (await import("../packages/release-integrity/src/index.ts"));
   requirePromotionIntegrityBoundary(integrity);
   const prepared = await preparePromotionAuthorization(
     {
-      repositoryRoot: input.repositoryRoot,
+      repositoryRoot,
       planPath: input.planPath,
       planSha256: input.planSha256,
-      outputPaths: [input.attestationDestination, input.runnerRecordDestination],
+      outputPaths: [attestationDestination, runnerRecordDestination],
     },
     {
       hashReleaseLogic: dependencies.hashReleaseLogic,
@@ -156,12 +160,12 @@ export async function promoteRelease(input, dependencies = {}) {
   const published = await (dependencies.publishOutputs ?? publishNewFileSet)(
     [
       {
-        path: input.attestationDestination,
+        path: attestationDestination,
         bytes: envelope.canonicalBytes,
         mode: 0o644,
       },
       {
-        path: input.runnerRecordDestination,
+        path: runnerRecordDestination,
         bytes: runnerBytes,
         mode: 0o644,
       },

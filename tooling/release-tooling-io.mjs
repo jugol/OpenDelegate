@@ -12,7 +12,7 @@ import {
   rmdir,
   unlink,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const DEFAULT_MAXIMUM_BYTES = 4 * 1024 * 1024;
@@ -59,6 +59,7 @@ export async function readPinnedBytes({
   ) {
     throw new Error(`The ${label} is not a bounded regular file.`);
   }
+  await assertNoLinkedPathComponents(path, label);
   const canonicalPath = await realpath(path);
   const flags =
     process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
@@ -97,13 +98,27 @@ export async function readPinnedBytes({
   }
 }
 
-export async function requireCanonicalDirectory(path, label) {
+export async function requireCanonicalDirectory(path, label, dependencies = {}) {
   assertAbsolutePath(path, label);
-  const metadata = await lstat(path);
+  const metadata = await lstat(path, { bigint: true });
   if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
     throw new Error(`The ${label} must be a regular, non-linked directory.`);
   }
-  return realpath(path);
+  await assertNoLinkedPathComponents(path, label);
+  const canonicalPath = await (dependencies.realPath ?? realpath)(path);
+  const canonicalMetadata = await (dependencies.canonicalLstat ?? lstat)(canonicalPath, {
+    bigint: true,
+  });
+  if (!sameFile(metadata, canonicalMetadata)) {
+    throw new Error(`The ${label} changed while its canonical path was resolved.`);
+  }
+  return canonicalPath;
+}
+
+export async function requireCanonicalNewPath(path, label) {
+  assertAbsolutePath(path, label);
+  const parent = await requireCanonicalDirectory(dirname(path), `${label} parent`);
+  return join(parent, basename(path));
 }
 
 export function assertPathOutsideRoots(path, roots, label) {
@@ -156,25 +171,33 @@ export async function publishNewFileSet(entries, options = {}) {
       throw new Error("A release output mode is invalid.");
     }
   }
+  const canonicalEntries = await Promise.all(
+    entries.map(async (entry) => ({
+      ...entry,
+      path: await requireCanonicalNewPath(entry.path, "release output"),
+    })),
+  );
   assertDisjointPaths(
-    entries.map(({ path }) => path),
+    canonicalEntries.map(({ path }) => path),
     "release output",
   );
   const parent = await requireCanonicalDirectory(
-    dirname(entries[0].path),
+    dirname(canonicalEntries[0].path),
     "release output directory",
   );
-  if (entries.some(({ path }) => comparablePath(dirname(path)) !== comparablePath(parent))) {
+  if (
+    canonicalEntries.some(({ path }) => comparablePath(dirname(path)) !== comparablePath(parent))
+  ) {
     throw new Error("A release output set must share one canonical directory.");
   }
-  await Promise.all(entries.map(({ path }) => assertPathAbsent(path, "A release output")));
+  await Promise.all(canonicalEntries.map(({ path }) => assertPathAbsent(path, "A release output")));
 
   const temporaryDirectory = await mkdtemp(join(parent, ".opendelegate-release-output-"));
   const staged = [];
   const published = [];
   try {
-    for (let index = 0; index < entries.length; index += 1) {
-      const entry = entries[index];
+    for (let index = 0; index < canonicalEntries.length; index += 1) {
+      const entry = canonicalEntries[index];
       const temporaryPath = join(temporaryDirectory, String(index));
       await writeNewSyncedFile(temporaryPath, entry.bytes, entry.mode);
       const identity = await lstat(temporaryPath, { bigint: true });
@@ -249,6 +272,7 @@ export async function publishNewDirectoryTree(destination, entries, options = {}
       throw new Error("A release configuration file mode is invalid.");
     }
   }
+  destination = await requireCanonicalNewPath(destination, "release configuration destination");
   const parent = await requireCanonicalDirectory(
     dirname(destination),
     "release configuration output parent",
@@ -330,9 +354,11 @@ export async function hashStableRegularFile(path, maximumBytes = Number.MAX_SAFE
   ) {
     throw new Error("A release file is not a bounded regular file.");
   }
+  await assertNoLinkedPathComponents(path, "release file");
+  const canonicalPath = await realpath(path);
   const flags =
     process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
-  const handle = await open(path, flags);
+  const handle = await open(canonicalPath, flags);
   try {
     const opened = await handle.stat({ bigint: true });
     if (!sameFile(before, opened)) {
@@ -382,6 +408,21 @@ export function requireExactKeys(value, expected, label) {
 export function assertAbsolutePath(value, label) {
   if (typeof value !== "string" || !isAbsolute(value) || value.includes("\0")) {
     throw new Error(`The ${label} path must be absolute.`);
+  }
+}
+
+export async function assertNoLinkedPathComponents(path, label) {
+  assertAbsolutePath(path, label);
+  const absolutePath = resolve(path);
+  const root = parse(absolutePath).root;
+  const suffix = relative(root, absolutePath);
+  let current = root;
+  for (const segment of suffix.split(sep).filter((value) => value !== "")) {
+    current = join(current, segment);
+    const metadata = await lstat(current);
+    if (metadata.isSymbolicLink()) {
+      throw new Error(`The ${label} must not use a symlink, junction, or linked ancestor.`);
+    }
   }
 }
 

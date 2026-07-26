@@ -19,6 +19,7 @@ import {
   readPinnedBytes,
   readPinnedCanonicalJson,
   requireCanonicalDirectory,
+  requireCanonicalNewPath,
   requireExactKeys,
 } from "./release-tooling-io.mjs";
 
@@ -91,11 +92,11 @@ export async function composeReleaseConfiguration(input, dependencies = {}) {
       platform: process.platform,
     },
   });
-  await assertPathAbsent(input.destinationRoot, "The release configuration output");
-  const repositoryRoot = await requireCanonicalDirectory(
-    input.repositoryRoot,
-    "release repository",
-  );
+  const [destinationRoot, repositoryRoot] = await Promise.all([
+    requireCanonicalNewPath(input.destinationRoot, "release configuration destination"),
+    requireCanonicalDirectory(input.repositoryRoot, "release repository"),
+  ]);
+  await assertPathAbsent(destinationRoot, "The release configuration output");
   const runningRepositoryRoot = await requireCanonicalDirectory(
     dependencies.runningRepositoryRoot ?? moduleRepositoryRoot,
     "running release-tool repository",
@@ -106,10 +107,10 @@ export async function composeReleaseConfiguration(input, dependencies = {}) {
     );
   }
   const destinationParent = await requireCanonicalDirectory(
-    dirname(input.destinationRoot),
+    dirname(destinationRoot),
     "release configuration output parent",
   );
-  if (comparablePath(destinationParent) !== comparablePath(dirname(input.destinationRoot))) {
+  if (comparablePath(destinationParent) !== comparablePath(dirname(destinationRoot))) {
     throw new Error("The release configuration output parent must not be linked.");
   }
   const planFile = await readPinnedCanonicalJson({
@@ -129,11 +130,11 @@ export async function composeReleaseConfiguration(input, dependencies = {}) {
     "release configuration plan",
   );
   assertPathOutsideRoots(
-    input.destinationRoot,
+    destinationRoot,
     [repositoryRoot, candidateRoot, dirname(planFile.path)],
     "release configuration output",
   );
-  if (isSameOrDescendant(input.destinationRoot, candidateRoot)) {
+  if (isSameOrDescendant(destinationRoot, candidateRoot)) {
     throw new Error("The release configuration output cannot contain the candidate.");
   }
 
@@ -192,7 +193,7 @@ export async function composeReleaseConfiguration(input, dependencies = {}) {
   };
 
   const published = await (dependencies.publishDirectory ?? publishNewDirectoryTree)(
-    input.destinationRoot,
+    destinationRoot,
     prepared.entries,
     {
       async verifyStaged(stagingRoot) {
@@ -320,7 +321,48 @@ async function loadConfigurationInputs(plan, roots) {
   if (new Set(canonicalPaths).size !== canonicalPaths.length) {
     throw new Error("Release configuration inputs overlap or alias one another.");
   }
+  assertConfigurationInputBoundaries({ candidate, promotion }, roots);
   return Object.freeze({ candidate: Object.freeze(candidate), promotion });
+}
+
+function assertConfigurationInputBoundaries(loaded, roots) {
+  const allFiles = [
+    loaded.candidate.archive,
+    loaded.candidate.publisherAttestation,
+    loaded.candidate.publisherTrustRoot,
+    ...(loaded.promotion === null
+      ? []
+      : [
+          loaded.promotion.promotionAttestation,
+          loaded.promotion.supportedChannelReceipt,
+          loaded.promotion.promotionTrustRoot,
+          loaded.promotion.supportMatrix,
+          loaded.promotion.notarizationReceipt,
+          ...loaded.promotion.liveEvidence,
+        ]),
+  ];
+  for (const file of allFiles) {
+    assertPathOutsideRoots(file.path, [roots.candidateRoot], "release authority input");
+  }
+  const authorityFiles = [
+    loaded.candidate.archive,
+    loaded.candidate.publisherAttestation,
+    loaded.candidate.publisherTrustRoot,
+    ...(loaded.promotion === null
+      ? []
+      : [
+          loaded.promotion.promotionAttestation,
+          loaded.promotion.supportedChannelReceipt,
+          loaded.promotion.promotionTrustRoot,
+        ]),
+  ];
+  for (const file of authorityFiles) {
+    assertPathOutsideRoots(
+      file.path,
+      [roots.repositoryRoot, roots.candidateRoot],
+      "external release authority",
+    );
+  }
 }
 
 async function verifyConfigurationSource(integrity, plan, loaded, candidateRoot) {
@@ -559,12 +601,19 @@ function createConfigurationTree({
 }
 
 async function revalidateConfigurationInputs(planFile, plan, loaded) {
-  await readPinnedCanonicalJson({
+  const currentPlan = await readPinnedCanonicalJson({
     label: "release configuration plan",
     maximumBytes: MAXIMUM_PLAN_BYTES,
     path: planFile.path,
     sha256: planFile.sha256,
   });
+  if (
+    currentPlan.sha256 !== planFile.sha256 ||
+    currentPlan.size !== planFile.size ||
+    comparablePath(currentPlan.path) !== comparablePath(planFile.path)
+  ) {
+    throw new Error("The release configuration plan identity changed during composition.");
+  }
   const expectations = [
     [plan.candidate.archive, loaded.candidate.archive, "release archive", MAXIMUM_ARCHIVE_BYTES],
     [

@@ -4,6 +4,8 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
+import { assertNoLinkedPathComponents } from "./release-tooling-io.mjs";
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAXIMUM_TIMEOUT_MS = 60_000;
 const MAXIMUM_SIGNING_BYTES = 4 * 1024 * 1024;
@@ -105,6 +107,7 @@ async function inspectPinnedFile(value, label, requireExecutable) {
   if (!before.isFile() || before.isSymbolicLink()) {
     throw new Error(`The ${label} must be a regular, non-linked file.`);
   }
+  await assertNoLinkedPathComponents(value.path, label);
   const canonicalPath = await realpath(value.path);
   const flags =
     process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;

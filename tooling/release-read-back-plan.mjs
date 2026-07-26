@@ -26,11 +26,12 @@ export async function readPinnedReleaseReadBackPlan(input) {
     sha256: input.sha256,
   });
   const plan = parseReadBackPlan(file.value, input.preparedPromotion);
-  assertPathOutsideRoots(
-    file.path,
-    [input.repositoryRoot, dirname(input.outputPaths[0]), ...input.candidateRoots],
-    "release read-back plan",
-  );
+  const prohibitedRecordRoots = [
+    input.repositoryRoot,
+    dirname(input.outputPaths[0]),
+    ...input.candidateRoots,
+  ];
+  assertPathOutsideRoots(file.path, prohibitedRecordRoots, "release read-back plan");
   for (const outputPath of input.outputPaths) {
     assertPathOutsideRoots(
       outputPath,
@@ -38,13 +39,20 @@ export async function readPinnedReleaseReadBackPlan(input) {
       "supported-channel receipt output",
     );
   }
+  const promotionAttestation = await readPinnedCanonicalJson({
+    label: "promotion attestation",
+    maximumBytes: 4 * 1024 * 1024,
+    path: plan.promotion.attestation.path,
+    sha256: plan.promotion.attestation.sha256,
+    indent: 2,
+  });
   const loadedRecords = [];
   const sourceKeys = new Set();
   for (let index = 0; index < plan.readBackRecords.length; index += 1) {
     const reference = plan.readBackRecords[index];
     assertPathOutsideRoots(
       reference.file.path,
-      [input.repositoryRoot, dirname(input.outputPaths[0]), ...input.candidateRoots],
+      prohibitedRecordRoots,
       "independent remote read-back record",
     );
     if (comparablePath(reference.file.path) === comparablePath(plan.promotion.attestation.path)) {
@@ -56,6 +64,11 @@ export async function readPinnedReleaseReadBackPlan(input) {
       path: reference.file.path,
       sha256: reference.file.sha256,
     });
+    assertPathOutsideRoots(
+      fileRecord.path,
+      prohibitedRecordRoots,
+      "independent remote read-back record",
+    );
     const expectedRelease = input.preparedPromotion.verifiedCandidates[index];
     const record = parseReadBackRecord(fileRecord.value, {
       channel: plan.channel,
@@ -78,8 +91,8 @@ export async function readPinnedReleaseReadBackPlan(input) {
     channel: plan.channel,
     observedAt: plan.observedAt,
     planSha256: file.sha256,
-    promotionAttestationPath: plan.promotion.attestation.path,
-    promotionAttestationSha256: plan.promotion.attestation.sha256,
+    promotionAttestationPath: promotionAttestation.path,
+    promotionAttestationSha256: promotionAttestation.sha256,
     publishedAssetReadBacks: Object.freeze(
       loadedRecords.map(({ record }) =>
         Object.freeze({
@@ -104,7 +117,24 @@ export async function readPinnedReleaseReadBackPlan(input) {
       ),
     ),
   });
-  readBackDetails.set(handle, Object.freeze({ file, loadedRecords, plan }));
+  const canonicalInputPaths = [
+    file.path,
+    promotionAttestation.path,
+    ...loadedRecords.map(({ file: recordFile }) => recordFile.path),
+  ].map(comparablePath);
+  if (new Set(canonicalInputPaths).size !== canonicalInputPaths.length) {
+    throw new Error("Release read-back inputs must remain canonically distinct.");
+  }
+  readBackDetails.set(
+    handle,
+    Object.freeze({
+      file,
+      loadedRecords,
+      plan,
+      prohibitedRecordRoots: Object.freeze([...prohibitedRecordRoots]),
+      promotionAttestation,
+    }),
+  );
   return handle;
 }
 
@@ -113,22 +143,59 @@ export async function revalidatePinnedReleaseReadBackPlan(handle) {
   if (details === undefined) {
     throw new Error("An opaque pinned release read-back plan is required.");
   }
-  await Promise.all([
+  const [currentPlan, currentPromotionAttestation, currentRecords] = await Promise.all([
     readPinnedCanonicalJson({
       label: "release read-back plan",
       maximumBytes: MAXIMUM_PLAN_BYTES,
       path: details.file.path,
       sha256: details.file.sha256,
     }),
-    ...details.plan.readBackRecords.map(({ file }) =>
-      readPinnedCanonicalJson({
-        label: "independent remote read-back record",
-        maximumBytes: MAXIMUM_RECORD_BYTES,
-        path: file.path,
-        sha256: file.sha256,
-      }),
+    readPinnedCanonicalJson({
+      label: "promotion attestation",
+      maximumBytes: 4 * 1024 * 1024,
+      path: details.promotionAttestation.path,
+      sha256: details.promotionAttestation.sha256,
+      indent: 2,
+    }),
+    Promise.all(
+      details.plan.readBackRecords.map(({ file }) =>
+        readPinnedCanonicalJson({
+          label: "independent remote read-back record",
+          maximumBytes: MAXIMUM_RECORD_BYTES,
+          path: file.path,
+          sha256: file.sha256,
+        }),
+      ),
     ),
   ]);
+  assertSamePinnedFile(currentPlan, details.file, "release read-back plan");
+  assertSamePinnedFile(
+    currentPromotionAttestation,
+    details.promotionAttestation,
+    "promotion attestation",
+  );
+  for (let index = 0; index < currentRecords.length; index += 1) {
+    assertSamePinnedFile(
+      currentRecords[index],
+      details.loadedRecords[index].file,
+      "independent remote read-back record",
+    );
+    assertPathOutsideRoots(
+      currentRecords[index].path,
+      details.prohibitedRecordRoots,
+      "independent remote read-back record",
+    );
+  }
+}
+
+function assertSamePinnedFile(current, original, label) {
+  if (
+    comparablePath(current.path) !== comparablePath(original.path) ||
+    current.sha256 !== original.sha256 ||
+    current.size !== original.size
+  ) {
+    throw new Error(`The pinned ${label} identity changed during release authorization.`);
+  }
 }
 
 function parseReadBackPlan(value, prepared) {

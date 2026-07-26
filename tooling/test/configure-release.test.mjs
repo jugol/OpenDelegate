@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -204,6 +204,41 @@ test(
     assert.equal(
       (await readdir(interrupted.root)).includes("configured-publisher-only-linux"),
       false,
+    );
+
+    const linkedTrust = await createPromotionToolFixture(t);
+    const linkedTrustPlan = await linkedTrust.createConfigurationInput({
+      mode: "publisher-only",
+    });
+    const candidateRoot = linkedTrustPlan.configurationPlan.candidate.root;
+    const masqueradingTrust = join(candidateRoot, "masquerading-configuration-trust.pem");
+    await writeFile(
+      masqueradingTrust,
+      await readFile(linkedTrustPlan.configurationPlan.candidate.publisherTrustRoot.path),
+    );
+    const aliasRoot = join(linkedTrust.root, "linked-configuration-trust");
+    await symlink(
+      resolve(candidateRoot),
+      aliasRoot,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    linkedTrustPlan.configurationPlan.candidate.publisherTrustRoot.path = join(
+      aliasRoot,
+      "masquerading-configuration-trust.pem",
+    );
+    await writeFile(
+      linkedTrustPlan.planPath,
+      `${JSON.stringify(linkedTrustPlan.configurationPlan)}\n`,
+      "utf8",
+    );
+    linkedTrustPlan.input.planSha256 = await sha256File(linkedTrustPlan.planPath);
+    await assert.rejects(
+      composeReleaseConfiguration(linkedTrustPlan.input, {
+        ...linkedTrust.runnerDependencies,
+        integrity: linkedTrust.integrity,
+        readSourceIdentity: async () => linkedTrust.sourceIdentity,
+      }),
+      /canonical path|linked ancestor/iu,
     );
   },
 );

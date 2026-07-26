@@ -19,6 +19,8 @@ import {
   digestBytes,
   publishNewFileSet,
   readPinnedCanonicalJson,
+  requireCanonicalDirectory,
+  requireCanonicalNewPath,
   requireExactKeys,
 } from "./release-tooling-io.mjs";
 import {
@@ -116,26 +118,31 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
       platform: process.platform,
     },
   });
+  const [receiptDestination, runnerRecordDestination, repositoryRoot] = await Promise.all([
+    requireCanonicalNewPath(input.receiptDestination, "supported-channel receipt destination"),
+    requireCanonicalNewPath(input.runnerRecordDestination, "receipt runner-record destination"),
+    requireCanonicalDirectory(input.repositoryRoot, "release repository"),
+  ]);
   assertDisjointPaths(
-    [input.receiptDestination, input.runnerRecordDestination],
+    [receiptDestination, runnerRecordDestination],
     "supported-channel receipt output",
   );
-  if (dirname(input.receiptDestination) !== dirname(input.runnerRecordDestination)) {
+  if (dirname(receiptDestination) !== dirname(runnerRecordDestination)) {
     throw new Error("Supported-channel receipt outputs must share one directory.");
   }
   await Promise.all([
-    assertPathAbsent(input.receiptDestination, "A supported-channel receipt output"),
-    assertPathAbsent(input.runnerRecordDestination, "A supported-channel receipt output"),
+    assertPathAbsent(receiptDestination, "A supported-channel receipt output"),
+    assertPathAbsent(runnerRecordDestination, "A supported-channel receipt output"),
   ]);
   const integrity =
     dependencies.integrity ?? (await import("../packages/release-integrity/src/index.ts"));
   requireReceiptIntegrityBoundary(integrity);
   const prepared = await preparePromotionAuthorization(
     {
-      repositoryRoot: input.repositoryRoot,
+      repositoryRoot,
       planPath: input.promotionPlanPath,
       planSha256: input.promotionPlanSha256,
-      outputPaths: [input.receiptDestination, input.runnerRecordDestination],
+      outputPaths: [receiptDestination, runnerRecordDestination],
     },
     {
       hashReleaseLogic: dependencies.hashReleaseLogic,
@@ -149,8 +156,8 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
     path: input.readBackPlanPath,
     sha256: input.readBackPlanSha256,
     preparedPromotion: prepared,
-    outputPaths: [input.receiptDestination, input.runnerRecordDestination],
-    repositoryRoot: input.repositoryRoot,
+    outputPaths: [receiptDestination, runnerRecordDestination],
+    repositoryRoot,
     candidateRoots: evidence.candidates.map(({ candidateRoot }) => candidateRoot),
   });
   const promotionAttestation = await readPinnedCanonicalJson({
@@ -208,7 +215,7 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
     prepared,
     promotionAttestationPath: promotionAttestation.path,
     promotionTrust: trust.publicKeyPem,
-    receiptPath: input.receiptDestination,
+    receiptPath: receiptDestination,
   });
   await Promise.all([
     revalidatePreparedPromotion(prepared),
@@ -237,12 +244,12 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
   const published = await (dependencies.publishOutputs ?? publishNewFileSet)(
     [
       {
-        path: input.receiptDestination,
+        path: receiptDestination,
         bytes: envelope.canonicalBytes,
         mode: 0o644,
       },
       {
-        path: input.runnerRecordDestination,
+        path: runnerRecordDestination,
         bytes: runnerBytes,
         mode: 0o644,
       },

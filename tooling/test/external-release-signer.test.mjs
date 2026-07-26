@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { invokePinnedReleaseSigner } from "../external-release-signer.mjs";
@@ -215,6 +215,33 @@ setInterval(() => undefined, 1_000);
     /exceeded its bounded timeout/u,
   );
   assert.ok(Date.now() - startedAt < 2_000);
+});
+
+test("the signer boundary rejects an invocation artifact reached through a linked ancestor", async (t) => {
+  const fixture = await createSignerFixture(t);
+  const aliasRoot = join(fixture.root, "artifact-alias");
+  await symlink(
+    resolve(fixture.root),
+    aliasRoot,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  await assert.rejects(
+    invokePinnedReleaseSigner({
+      invocationArtifacts: [
+        {
+          path: join(aliasRoot, "signer-helper.mjs"),
+          sha256: await sha256File(fixture.helperPath),
+        },
+      ],
+      executable: {
+        path: process.execPath,
+        sha256: await sha256File(process.execPath),
+      },
+      publicKeyPem: fixture.publicKeyPem,
+      signingBytes: Buffer.from("must never reach a linked signer artifact", "utf8"),
+    }),
+    /canonical path|linked ancestor/iu,
+  );
 });
 
 async function createSignerFixture(t, options = {}) {
