@@ -1,149 +1,194 @@
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync, verify as verifySignature } from "node:crypto";
-import { chmod, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  randomUUID,
+  sign,
+  verify as verifySignature,
+} from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
 
-import { invokePinnedReleaseSigner } from "../external-release-signer.mjs";
+import {
+  invokePinnedReleaseSigner,
+  releaseSignerBrokerProtocol,
+  releaseSignerBrokerTransportResponseDomain,
+  validateReleaseSigningStatement,
+} from "../external-release-signer.mjs";
+import { credentialAuthorizationDigest } from "../release-credential-authorization.mjs";
 
-test("a pinned external signer receives only signing bytes and returns a verified signature", async (t) => {
-  const fixture = await createSignerFixture(t);
-  const signingBytes = Buffer.from(
-    'OpenDelegate publisher attestation v2\n{"candidate":"fixture"}\n',
-    "utf8",
-  );
-  const previousSecret = process.env["OPENDELEGATE_TEST_SIGNER_SECRET"];
-  process.env["OPENDELEGATE_TEST_SIGNER_SECRET"] = "must-not-reach-the-signer";
-  try {
-    const result = await invokePinnedReleaseSigner({
-      invocationArtifacts: [
-        {
-          path: fixture.helperPath,
-          sha256: await sha256File(fixture.helperPath),
-        },
-      ],
-      executable: {
-        path: process.execPath,
-        sha256: await sha256File(process.execPath),
-      },
-      publicKeyPem: fixture.publicKeyPem,
-      signingBytes,
-    });
+const role = "publisher";
+const domain = "publisher-attestation-v2";
+const policySha256 = "a".repeat(64);
 
-    assert.equal(result.algorithm, "ed25519");
-    assert.equal(result.keyId, fixture.keyId);
-    assert.match(result.signature, /^[A-Za-z0-9_-]{86}$/u);
-    assert.equal(
-      verifySignature(
-        null,
-        signingBytes,
-        fixture.publicKeyPem,
-        Buffer.from(result.signature, "base64url"),
-      ),
-      true,
-    );
-    assert.deepEqual(result.runner, {
-      executable: {
-        path: await realpath(process.execPath),
-        sha256: await sha256File(process.execPath),
-      },
-      invocationArtifacts: [
-        {
-          path: await realpath(fixture.helperPath),
-          sha256: await sha256File(fixture.helperPath),
-        },
-      ],
-    });
-    assert.equal(Object.isFrozen(result), true);
-    assert.equal(Object.isFrozen(result.runner), true);
-    assert.equal(Object.isFrozen(result.runner.executable), true);
-    assert.equal(Object.isFrozen(result.runner.invocationArtifacts), true);
-  } finally {
-    if (previousSecret === undefined) {
-      delete process.env["OPENDELEGATE_TEST_SIGNER_SECRET"];
-    } else {
-      process.env["OPENDELEGATE_TEST_SIGNER_SECRET"] = previousSecret;
-    }
-  }
-});
+test("an authenticated local broker signs one authorized release statement", async (t) => {
+  const fixture = await createBrokerFixture(t);
+  const signingBytes = publisherSigningBytes("fixture");
+  const authorization = credentialAuthorization(signingBytes);
+  process.env["OPENDELEGATE_TEST_SIGNER_SECRET"] = "must-not-cross-the-broker-protocol";
+  t.after(() => delete process.env["OPENDELEGATE_TEST_SIGNER_SECRET"]);
 
-test("the signer boundary fails closed for unpinned tools and an unrelated trust root", async (t) => {
-  const fixture = await createSignerFixture(t);
-  const executableSha256 = await sha256File(process.execPath);
-  const helperSha256 = await sha256File(fixture.helperPath);
-  const signingBytes = Buffer.from("release statement", "utf8");
-
-  await assert.rejects(
-    invokePinnedReleaseSigner({
-      invocationArtifacts: [{ path: fixture.helperPath, sha256: "0".repeat(64) }],
-      executable: { path: process.execPath, sha256: executableSha256 },
-      publicKeyPem: fixture.publicKeyPem,
-      signingBytes,
-    }),
-    /invocation artifact SHA-256 does not match/u,
-  );
-
-  const unrelated = generateKeyPairSync("ed25519").publicKey.export({
-    format: "pem",
-    type: "spki",
+  const result = await invokePinnedReleaseSigner({
+    authorization,
+    domain,
+    endpoint: fixture.endpoint,
+    policySha256,
+    publicKeyPem: fixture.releasePublicKeyPem,
+    role,
+    signingBytes,
+    transportPublicKeyPem: fixture.transportPublicKeyPem,
   });
-  await assert.rejects(
-    invokePinnedReleaseSigner({
-      invocationArtifacts: [{ path: fixture.helperPath, sha256: helperSha256 }],
-      executable: { path: process.execPath, sha256: executableSha256 },
-      publicKeyPem: Buffer.from(unrelated),
-      signingBytes,
-    }),
-    /signer response key ID does not match the external trust root/u,
-  );
 
-  await writeFile(fixture.helperPath, `${await readFile(fixture.helperPath, "utf8")}\n`);
+  assert.equal(result.algorithm, "ed25519");
+  assert.equal(result.keyId, fixture.releaseKeyId);
+  assert.equal(result.broker.protocol, releaseSignerBrokerProtocol);
+  assert.equal(result.broker.transportKeyId, fixture.transportKeyId);
+  assert.equal(result.broker.endpointSha256, sha256(Buffer.from(fixture.endpoint, "utf8")));
+  assert.equal(
+    verifySignature(
+      null,
+      signingBytes,
+      fixture.releasePublicKeyPem,
+      Buffer.from(result.signature, "base64url"),
+    ),
+    true,
+  );
+  assert.equal(Object.isFrozen(result), true);
+  assert.equal(Object.isFrozen(result.broker), true);
+
+  const request = fixture.requests.at(-1);
+  assert.equal(request.protocol, releaseSignerBrokerProtocol);
+  assert.equal(request.role, role);
+  assert.equal(request.domain, domain);
+  assert.equal(request.releaseKeyId, fixture.releaseKeyId);
+  assert.equal(request.transportKeyId, fixture.transportKeyId);
+  assert.equal(request.endpointSha256, sha256(Buffer.from(fixture.endpoint, "utf8")));
+  assert.equal(request.inputSha256, sha256(signingBytes));
+  assert.equal(request.signingBytes, signingBytes.toString("base64url"));
+  assert.deepEqual(request.authorization, authorization);
+  assert.equal(request.authorizationSha256, credentialAuthorizationDigest(authorization));
+  assert.equal(JSON.stringify(request).includes("OPENDELEGATE_TEST_SIGNER_SECRET"), false);
+  assert.equal(JSON.stringify(result).includes(fixture.endpoint), false);
+});
+
+test("endpoint substitution fails even when the impostor has the release key", async (t) => {
+  const releaseKeys = generateKeyPairSync("ed25519");
+  const trustedTransportKeys = generateKeyPairSync("ed25519");
+  const trustedTransportKeyId = keyId(trustedTransportKeys.publicKey);
+  const impostor = await createBrokerFixture(t, {
+    advertisedTransportKeyId: trustedTransportKeyId,
+    releaseKeys,
+    transportKeys: generateKeyPairSync("ed25519"),
+  });
+  const signingBytes = publisherSigningBytes("substitution");
+
   await assert.rejects(
     invokePinnedReleaseSigner({
-      invocationArtifacts: [{ path: fixture.helperPath, sha256: helperSha256 }],
-      executable: { path: process.execPath, sha256: executableSha256 },
-      publicKeyPem: fixture.publicKeyPem,
+      authorization: credentialAuthorization(signingBytes),
+      domain,
+      endpoint: impostor.endpoint,
+      policySha256,
+      publicKeyPem: Buffer.from(releaseKeys.publicKey.export({ format: "pem", type: "spki" })),
+      role,
       signingBytes,
+      transportPublicKeyPem: Buffer.from(
+        trustedTransportKeys.publicKey.export({
+          format: "pem",
+          type: "spki",
+        }),
+      ),
     }),
-    /invocation artifact SHA-256 does not match/u,
+    /does not authenticate to the pinned transport authority/u,
   );
 });
 
-test("the signer boundary rejects free-form, oversized, and noncanonical inputs", async (t) => {
-  const fixture = await createSignerFixture(t);
-  const executableSha256 = await sha256File(process.execPath);
-  const helperSha256 = await sha256File(fixture.helperPath);
+test("a broker response cannot be replayed across request IDs or nonces", async (t) => {
+  const fixture = await createBrokerFixture(t);
+  const signingBytes = publisherSigningBytes("replay");
+  await invokePinnedReleaseSigner({
+    authorization: credentialAuthorization(signingBytes),
+    domain,
+    endpoint: fixture.endpoint,
+    policySha256,
+    publicKeyPem: fixture.releasePublicKeyPem,
+    role,
+    signingBytes,
+    transportPublicKeyPem: fixture.transportPublicKeyPem,
+  });
+  fixture.behavior.replayResponse = Buffer.from(fixture.responses.at(-1));
+
+  await assert.rejects(
+    invokePinnedReleaseSigner({
+      authorization: credentialAuthorization(signingBytes),
+      domain,
+      endpoint: fixture.endpoint,
+      policySha256,
+      publicKeyPem: fixture.releasePublicKeyPem,
+      role,
+      signingBytes,
+      transportPublicKeyPem: fixture.transportPublicKeyPem,
+    }),
+    /does not match request field requestId/u,
+  );
+});
+
+test("the broker boundary rejects generic signing, malformed authority, and old helper fields", async (t) => {
+  const fixture = await createBrokerFixture(t);
+  const signingBytes = publisherSigningBytes("strict");
   const valid = {
-    invocationArtifacts: [{ path: fixture.helperPath, sha256: helperSha256 }],
-    executable: { path: process.execPath, sha256: executableSha256 },
-    publicKeyPem: fixture.publicKeyPem,
-    signingBytes: Buffer.from("statement", "utf8"),
+    authorization: credentialAuthorization(signingBytes),
+    domain,
+    endpoint: fixture.endpoint,
+    policySha256,
+    publicKeyPem: fixture.releasePublicKeyPem,
+    role,
+    signingBytes,
+    transportPublicKeyPem: fixture.transportPublicKeyPem,
   };
 
   await assert.rejects(
-    invokePinnedReleaseSigner({
-      ...valid,
-      arguments: ["--private-key", "secret.pem"],
-    }),
+    invokePinnedReleaseSigner({ ...valid, executable: { path: process.execPath } }),
     /release signer input fields do not match the strict schema/u,
   );
   await assert.rejects(
     invokePinnedReleaseSigner({
       ...valid,
-      executable: { ...valid.executable, path: "relative-signer" },
+      domain: "generic-arbitrary-bytes",
+      authorization: { ...valid.authorization, domain: "generic-arbitrary-bytes" },
     }),
-    /signer executable path must be absolute/u,
+    /signing domain is not authorized/u,
+  );
+  const arbitraryBytes = Buffer.from("arbitrary bytes under an otherwise allowed domain", "utf8");
+  const requestsBeforeArbitraryInput = fixture.requests.length;
+  await assert.rejects(
+    invokePinnedReleaseSigner({
+      ...valid,
+      authorization: credentialAuthorization(arbitraryBytes),
+      signingBytes: arbitraryBytes,
+    }),
+    /do not match the authorized statement domain/u,
+  );
+  assert.equal(fixture.requests.length, requestsBeforeArbitraryInput);
+  await assert.rejects(
+    invokePinnedReleaseSigner({
+      ...valid,
+      authorization: { ...valid.authorization, inputSha256: "0".repeat(64) },
+    }),
+    /authorization does not match/u,
   );
   await assert.rejects(
     invokePinnedReleaseSigner({
       ...valid,
-      invocationArtifacts: [
-        ...valid.invocationArtifacts,
-        { path: fixture.helperPath, sha256: helperSha256 },
-      ],
+      authorization: {
+        ...valid.authorization,
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      },
     }),
-    /signer invocation paths must be distinct/u,
+    /authorization is expired/u,
   );
   await assert.rejects(
     invokePinnedReleaseSigner({
@@ -155,166 +200,212 @@ test("the signer boundary rejects free-form, oversized, and noncanonical inputs"
   await assert.rejects(
     invokePinnedReleaseSigner({
       ...valid,
-      timeoutMs: 0,
+      endpoint: process.platform === "win32" ? "\\\\server\\pipe\\remote" : "relative.sock",
     }),
-    /signer timeout must be an integer/u,
+    /local Windows named pipe|absolute Unix socket/u,
   );
 
-  const reordered = await createSignerFixture(t, { reorderResponseKeys: true });
+  const sameAuthority = generateKeyPairSync("ed25519");
   await assert.rejects(
     invokePinnedReleaseSigner({
-      invocationArtifacts: [
-        {
-          path: reordered.helperPath,
-          sha256: await sha256File(reordered.helperPath),
-        },
-      ],
-      executable: {
-        path: process.execPath,
-        sha256: executableSha256,
-      },
-      publicKeyPem: reordered.publicKeyPem,
-      signingBytes: valid.signingBytes,
+      ...valid,
+      publicKeyPem: Buffer.from(sameAuthority.publicKey.export({ format: "pem", type: "spki" })),
+      transportPublicKeyPem: Buffer.from(
+        sameAuthority.publicKey.export({ format: "pem", type: "spki" }),
+      ),
     }),
-    /signer response is not canonical JSON/u,
+    /authorities must be distinct/u,
   );
 });
 
-test("the signer boundary force-terminates a signer that exceeds its timeout", async (t) => {
-  const fixture = await createSignerFixture(t);
-  const hangingHelper = join(fixture.root, "hanging-signer.mjs");
-  await writeFile(
-    hangingHelper,
-    `process.on("SIGTERM", () => {
-  setTimeout(() => process.exit(0), 5_000);
-});
-setInterval(() => undefined, 1_000);
-`,
-    { mode: 0o700 },
+test("the broker boundary enforces canonical output, output bounds, and timeout", async (t) => {
+  const fixture = await createBrokerFixture(t);
+  const signingBytes = publisherSigningBytes("bounded");
+  const valid = {
+    authorization: credentialAuthorization(signingBytes),
+    domain,
+    endpoint: fixture.endpoint,
+    policySha256,
+    publicKeyPem: fixture.releasePublicKeyPem,
+    role,
+    signingBytes,
+    transportPublicKeyPem: fixture.transportPublicKeyPem,
+  };
+
+  fixture.behavior.reorderResponse = true;
+  await assert.rejects(
+    invokePinnedReleaseSigner(valid),
+    /response fields do not match the canonical order|not canonical JSON/u,
   );
-  if (process.platform !== "win32") {
-    await chmod(hangingHelper, 0o700);
-  }
+  fixture.behavior.reorderResponse = false;
+
+  fixture.behavior.oversizedResponse = true;
+  await assert.rejects(invokePinnedReleaseSigner(valid), /emitted oversized output/u);
+  fixture.behavior.oversizedResponse = false;
+
+  fixture.behavior.hang = true;
   const startedAt = Date.now();
   await assert.rejects(
-    invokePinnedReleaseSigner({
-      invocationArtifacts: [
-        {
-          path: hangingHelper,
-          sha256: await sha256File(hangingHelper),
-        },
-      ],
-      executable: {
-        path: process.execPath,
-        sha256: await sha256File(process.execPath),
-      },
-      publicKeyPem: fixture.publicKeyPem,
-      signingBytes: Buffer.from("bounded signing request", "utf8"),
-      timeoutMs: 100,
-    }),
+    invokePinnedReleaseSigner({ ...valid, timeoutMs: 100 }),
     /exceeded its bounded timeout/u,
   );
   assert.ok(Date.now() - startedAt < 2_000);
 });
 
-test("the signer boundary rejects an invocation artifact reached through a linked ancestor", async (t) => {
-  const fixture = await createSignerFixture(t);
-  const aliasRoot = join(fixture.root, "artifact-alias");
-  await symlink(
-    resolve(fixture.root),
-    aliasRoot,
-    process.platform === "win32" ? "junction" : "dir",
+async function createBrokerFixture(t, options = {}) {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-signer-broker-"));
+  const releaseKeys = options.releaseKeys ?? generateKeyPairSync("ed25519");
+  const transportKeys = options.transportKeys ?? generateKeyPairSync("ed25519");
+  const releasePublicKeyPem = Buffer.from(
+    releaseKeys.publicKey.export({ format: "pem", type: "spki" }),
   );
-  await assert.rejects(
-    invokePinnedReleaseSigner({
-      invocationArtifacts: [
-        {
-          path: join(aliasRoot, "signer-helper.mjs"),
-          sha256: await sha256File(fixture.helperPath),
-        },
-      ],
-      executable: {
-        path: process.execPath,
-        sha256: await sha256File(process.execPath),
-      },
-      publicKeyPem: fixture.publicKeyPem,
-      signingBytes: Buffer.from("must never reach a linked signer artifact", "utf8"),
-    }),
-    /canonical path|linked ancestor/iu,
+  const transportPublicKeyPem = Buffer.from(
+    transportKeys.publicKey.export({ format: "pem", type: "spki" }),
   );
-});
-
-async function createSignerFixture(t, options = {}) {
-  const root = await mkdtemp(join(tmpdir(), "opendelegate-external-signer-"));
+  const releaseKeyId = keyId(releaseKeys.publicKey);
+  const transportKeyId = options.advertisedTransportKeyId ?? keyId(transportKeys.publicKey);
+  const endpoint =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\opendelegate-signer-${randomUUID()}`
+      : join(root, "broker.sock");
+  const requests = [];
+  const responses = [];
+  const sockets = new Set();
+  const behavior = {
+    hang: false,
+    oversizedResponse: false,
+    reorderResponse: false,
+    replayResponse: undefined,
+  };
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    let input = Buffer.alloc(0);
+    socket.on("data", (chunk) => {
+      input = Buffer.concat([input, chunk]);
+      if (input.byteLength > 6 * 1024 * 1024) {
+        socket.destroy();
+        return;
+      }
+      const newline = input.indexOf(0x0a);
+      if (newline < 0) {
+        return;
+      }
+      if (behavior.hang) {
+        return;
+      }
+      if (behavior.oversizedResponse) {
+        socket.end(Buffer.alloc(64 * 1024 + 1, 0x61));
+        return;
+      }
+      if (behavior.replayResponse !== undefined) {
+        socket.end(behavior.replayResponse);
+        return;
+      }
+      const requestBytes = input.subarray(0, newline + 1);
+      const request = JSON.parse(requestBytes.toString("utf8"));
+      const signingBytes = Buffer.from(request.signingBytes, "base64url");
+      validateReleaseSigningStatement(signingBytes, request.domain);
+      requests.push(request);
+      const unsigned = {
+        schemaVersion: 1,
+        protocol: releaseSignerBrokerProtocol,
+        type: "sign-response",
+        requestId: request.requestId,
+        clientNonce: request.clientNonce,
+        brokerNonce: randomBytes(32).toString("base64url"),
+        role: request.role,
+        domain: request.domain,
+        releaseKeyId,
+        transportKeyId,
+        inputSha256: request.inputSha256,
+        releaseSignature: sign(null, signingBytes, releaseKeys.privateKey).toString("base64url"),
+      };
+      const transportSigningBytes = Buffer.concat([
+        Buffer.from(releaseSignerBrokerTransportResponseDomain, "utf8"),
+        Buffer.from(`${sha256(requestBytes)}\n`, "utf8"),
+        Buffer.from(`${JSON.stringify(unsigned)}\n`, "utf8"),
+      ]);
+      const transportSignature = sign(
+        null,
+        transportSigningBytes,
+        transportKeys.privateKey,
+      ).toString("base64url");
+      const response = behavior.reorderResponse
+        ? {
+            schemaVersion: unsigned.schemaVersion,
+            protocol: unsigned.protocol,
+            type: unsigned.type,
+            requestId: unsigned.requestId,
+            clientNonce: unsigned.clientNonce,
+            brokerNonce: unsigned.brokerNonce,
+            role: unsigned.role,
+            domain: unsigned.domain,
+            releaseKeyId: unsigned.releaseKeyId,
+            transportKeyId: unsigned.transportKeyId,
+            inputSha256: unsigned.inputSha256,
+            transportSignature,
+            releaseSignature: unsigned.releaseSignature,
+          }
+        : { ...unsigned, transportSignature };
+      const responseBytes = Buffer.from(`${JSON.stringify(response)}\n`, "utf8");
+      responses.push(responseBytes);
+      socket.end(responseBytes);
+    });
+  });
+  await new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(endpoint, resolvePromise);
+  });
   t.after(async () => {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    await new Promise((resolvePromise) => server.close(resolvePromise));
     await rm(root, { force: true, recursive: true });
   });
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const privateKeyPath = join(root, "signer-private.pem");
-  const helperPath = join(root, "signer-helper.mjs");
-  const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" });
-  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
-  const publicKeyDer = publicKey.export({ format: "der", type: "spki" });
-  const keyId = `sha256:${createHash("sha256").update(publicKeyDer).digest("hex")}`;
-  const responseSource =
-    options.reorderResponseKeys === true
-      ? `{
-  signature: sign(null, signingBytes, privateKey).toString("base64url"),
-  keyId,
-  algorithm: "ed25519",
-  schemaVersion: 1,
-}`
-      : `{
-  schemaVersion: 1,
-  algorithm: "ed25519",
-  keyId,
-  signature: sign(null, signingBytes, privateKey).toString("base64url"),
-}`;
-  await writeFile(privateKeyPath, privateKeyPem, { mode: 0o600 });
-  await writeFile(
-    helperPath,
-    `import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-if (process.env.OPENDELEGATE_TEST_SIGNER_SECRET !== undefined) {
-  throw new Error("The release runner leaked its environment.");
-}
-const chunks = [];
-let total = 0;
-for await (const chunk of process.stdin) {
-  total += chunk.byteLength;
-  if (total > 4 * 1024 * 1024) {
-    throw new Error("Signing input is oversized.");
-  }
-  chunks.push(chunk);
-}
-const signingBytes = Buffer.concat(chunks, total);
-const keyPath = join(dirname(fileURLToPath(import.meta.url)), "signer-private.pem");
-const privateKey = createPrivateKey(await readFile(keyPath));
-const publicKey = createPublicKey(privateKey);
-const keyId = \`sha256:\${createHash("sha256")
-  .update(publicKey.export({ format: "der", type: "spki" }))
-  .digest("hex")}\`;
-const response = ${responseSource};
-process.stdout.write(\`\${JSON.stringify(response)}\\n\`);
-`,
-    { mode: 0o700 },
-  );
-  if (process.platform !== "win32") {
-    await Promise.all([chmod(privateKeyPath, 0o600), chmod(helperPath, 0o700)]);
-  }
   return {
-    helperPath,
-    keyId,
-    publicKeyPem: Buffer.from(publicKeyPem),
-    root,
+    behavior,
+    endpoint,
+    releaseKeyId,
+    releasePublicKeyPem,
+    requests,
+    responses,
+    transportKeyId,
+    transportPublicKeyPem,
   };
 }
 
-async function sha256File(path) {
-  return createHash("sha256")
-    .update(await readFile(path))
-    .digest("hex");
+function credentialAuthorization(signingBytes) {
+  const authorizedAt = new Date();
+  return {
+    authorizationId: randomBytes(32).toString("base64url"),
+    role,
+    domain,
+    inputSha256: sha256(signingBytes),
+    snapshotSha256: "b".repeat(64),
+    authorizedAt: authorizedAt.toISOString(),
+    expiresAt: new Date(authorizedAt.getTime() + 15_000).toISOString(),
+  };
+}
+
+function publisherSigningBytes(candidate) {
+  const statement = {
+    schemaVersion: 2,
+    product: "OpenDelegate",
+    domain: "opendelegate.release.publisher-attestation.v2",
+    candidate,
+  };
+  return Buffer.from(
+    `OpenDelegate publisher attestation v2\n${JSON.stringify(statement, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function keyId(publicKey) {
+  return `sha256:${sha256(publicKey.export({ format: "der", type: "spki" }))}`;
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
 }
