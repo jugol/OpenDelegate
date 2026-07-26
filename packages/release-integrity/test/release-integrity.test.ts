@@ -15,12 +15,14 @@ import {
   ReleaseIntegrityError,
   composePromotionStatement,
   composePublisherAttestationStatement,
+  composeRemoteReadBackObservationStatement,
   composeSignedReleaseEnvelope,
   composeSupportedChannelReceiptStatement,
   externalReleaseVerificationPath,
   inspectCandidate,
   nodeReleaseFileReader,
   resolveConfiguredRelease,
+  verifyRemoteReadBackObservation,
   verifyRelease,
   type CandidateDescription,
   type ReleaseFileReader,
@@ -643,20 +645,16 @@ test("composeSupportedChannelReceiptStatement binds canonical remote read-back p
   try {
     const promotion = composePromotionStatement(promotionCompositionInput(releaseSet));
     const promotionAttestationSha256 = "7".repeat(64);
+    const observations = createVerifiedReadBackObservations(releaseSet);
     const composed = composeSupportedChannelReceiptStatement({
       promotion,
       promotionAttestationSha256,
-      publishedAssetReadBacks: releaseSet.releases
-        .map((release) => ({
-          target: release.candidate.target,
-          readBackSha256: release.archive.sha256,
-        }))
-        .reverse(),
+      verifiedObservations: [...observations.verified].reverse(),
       receiptId: "receipt:opendelegate-v0.1.0-alpha.1:0001",
       observedAt: "2026-07-26T03:00:00.000Z",
     });
 
-    assert.equal(composed.domain, "opendelegate.release.supported-channel-receipt.v1");
+    assert.equal(composed.domain, "opendelegate.release.supported-channel-receipt.v2");
     assert.equal(composed.receiptId, "receipt:opendelegate-v0.1.0-alpha.1:0001");
     assert.equal(
       Buffer.from(composed.canonicalBytes).toString("utf8"),
@@ -664,7 +662,7 @@ test("composeSupportedChannelReceiptStatement binds canonical remote read-back p
     );
     assert.equal(
       Buffer.from(composed.signingBytes).toString("utf8"),
-      `OpenDelegate supported channel receipt v1\n${JSON.stringify(composed.statement, null, 2)}\n`,
+      `OpenDelegate supported channel receipt v2\n${JSON.stringify(composed.statement, null, 2)}\n`,
     );
     assert.equal(composed.sha256, sha256(composed.canonicalBytes));
     assert.deepEqual(
@@ -686,18 +684,143 @@ test("composeSupportedChannelReceiptStatement binds canonical remote read-back p
         composeSupportedChannelReceiptStatement({
           promotion,
           promotionAttestationSha256,
-          publishedAssetReadBacks: releaseSet.releases.map((release) => ({
-            target: release.candidate.target,
-            readBackSha256:
-              release.candidate.target.platform === "linux"
-                ? "0".repeat(64)
-                : release.archive.sha256,
-          })),
+          verifiedObservations: [...observations.verified.slice(0, 2), observations.verified[0]!],
           receiptId: "receipt:opendelegate-v0.1.0-alpha.1:0002",
           observedAt: "2026-07-26T03:00:00.000Z",
         }),
       (error: unknown) =>
         error instanceof ReleaseIntegrityError && error.code === "PROMOTION_INPUT_INVALID",
+    );
+  } finally {
+    await releaseSet.cleanup();
+  }
+});
+
+test("verifyRemoteReadBackObservation authenticates one canonical independent observation", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  try {
+    const release = releaseSet.releases[0]!;
+    const observer = generateKeyPairSync("ed25519");
+    const uploader = generateKeyPairSync("ed25519");
+    const observerAuthorityKeyId = `sha256:${sha256(
+      observer.publicKey.export({ format: "der", type: "spki" }),
+    )}`;
+    const uploaderAuthorityKeyId = `sha256:${sha256(
+      uploader.publicKey.export({ format: "der", type: "spki" }),
+    )}`;
+    const composed = composeRemoteReadBackObservationStatement({
+      archive: release.archive,
+      channel: "stable",
+      immutableObjectId: "fixture/releases/release:opendelegate-v0.1.0-alpha.1/archive",
+      immutableObjectVersion: "fixture-version-0001",
+      observedAt: "2026-07-26T03:00:00.000Z",
+      observedStreamSha256: release.archive.sha256,
+      observerAuthorityKeyId,
+      provider: "fixture-channel",
+      releaseId: "release:opendelegate-v0.1.0-alpha.1",
+      tag: "v0.1.0-alpha.1",
+      target: release.candidate.target,
+      uploaderAuthorityKeyId,
+    });
+    const signature = createSignature(null, composed.signingBytes, observer.privateKey).toString(
+      "base64url",
+    );
+    const envelope = composeSignedReleaseEnvelope({
+      composed,
+      keyId: observerAuthorityKeyId,
+      signature,
+    });
+
+    const verified = verifyRemoteReadBackObservation({
+      envelopeBytes: envelope.canonicalBytes,
+      expectedUploaderAuthorityKeyId: uploaderAuthorityKeyId,
+      observerTrust: {
+        publicKeyPem: Buffer.from(observer.publicKey.export({ format: "pem", type: "spki" })),
+      },
+    });
+
+    assert.equal(verified.observerAuthorityKeyId, observerAuthorityKeyId);
+    assert.equal(verified.uploaderAuthorityKeyId, uploaderAuthorityKeyId);
+    assert.equal(verified.observationEnvelopeSha256, envelope.sha256);
+    assert.equal(verified.observationSignature, signature);
+    assert.equal(verified.source.immutableObjectVersion, "fixture-version-0001");
+    assert.ok(Object.isFrozen(verified));
+    assert.ok(Object.isFrozen(verified.source));
+  } finally {
+    await releaseSet.cleanup();
+  }
+});
+
+test("composeSupportedChannelReceiptStatement rejects caller-forged observation objects", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  try {
+    const promotion = composePromotionStatement(promotionCompositionInput(releaseSet));
+    const observations = createVerifiedReadBackObservations(releaseSet);
+    assert.throws(
+      () =>
+        composeSupportedChannelReceiptStatement({
+          promotion,
+          promotionAttestationSha256: "7".repeat(64),
+          verifiedObservations: observations.verified.map((observation) => ({
+            ...observation,
+          })),
+          receiptId: "receipt:opendelegate-v0.1.0-alpha.1:forged",
+          observedAt: "2026-07-26T03:00:00.000Z",
+        }),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "PROMOTION_INPUT_INVALID",
+    );
+  } finally {
+    await releaseSet.cleanup();
+  }
+});
+
+test("verifyRemoteReadBackObservation rejects unsigned, incomplete, mutated, and same-authority evidence", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  try {
+    const observations = createVerifiedReadBackObservations(releaseSet);
+    const envelope = observations.envelopes[0]!;
+    const trust = {
+      publicKeyPem: Buffer.from(
+        observations.observer.publicKey.export({ format: "pem", type: "spki" }),
+      ),
+    };
+    const verify = (envelopeBytes: Uint8Array, uploader = observations.uploaderAuthorityKeyId) =>
+      verifyRemoteReadBackObservation({
+        envelopeBytes,
+        expectedUploaderAuthorityKeyId: uploader,
+        observerTrust: trust,
+      });
+    assert.throws(
+      () => verify(canonicalJson(envelope.envelope.statement)),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "READ_BACK_TRUST_INVALID",
+    );
+
+    const incomplete = structuredClone(envelope.envelope) as unknown as Record<string, unknown>;
+    delete incomplete["signature"];
+    assert.throws(
+      () => verify(canonicalJson(incomplete)),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "READ_BACK_TRUST_INVALID",
+    );
+
+    const mutated = structuredClone(envelope.envelope);
+    (
+      mutated.statement as {
+        source: { immutableObjectVersion: string };
+      }
+    ).source.immutableObjectVersion = "fixture-version-mutated";
+    assert.throws(
+      () => verify(canonicalJson(mutated)),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "READ_BACK_TRUST_INVALID",
+    );
+
+    assert.throws(
+      () => verify(envelope.canonicalBytes, observations.observerAuthorityKeyId),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "READ_BACK_TRUST_INVALID",
     );
   } finally {
     await releaseSet.cleanup();
@@ -807,7 +930,11 @@ test("verifyRelease computes released only from a distinct trusted promotion and
         notarizationReceiptPath: promotion.notarizationReceiptPath,
         supportMatrix: promotion.supportMatrix,
       },
-      promotionReceipt: { receiptPath: promotion.receiptPath },
+      promotionReceipt: {
+        observerTrust: { publicKeyPem: promotion.observerPublicKeyPem },
+        readBackObservations: promotion.readBackObservations,
+        receiptPath: promotion.receiptPath,
+      },
       promotionTrust: { publicKeyPem: promotion.publicKeyPem },
     });
 
@@ -815,6 +942,54 @@ test("verifyRelease computes released only from a distinct trusted promotion and
     assert.equal(result.promotionStatementId, promotion.statementId);
     assert.equal(result.receiptId, promotion.receiptId);
     assert.notEqual(result.publisherKeyId, promotion.keyId);
+  } finally {
+    await Promise.all([releaseSet.cleanup(), promotion.cleanup()]);
+  }
+});
+
+test("verifyRelease independently authenticates the external read-back evidence set", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  const promotion = await createPromotionFixture(releaseSet);
+  try {
+    const complete = linuxVerificationInput(releaseSet, promotion);
+    await assert.rejects(
+      verifyRelease({
+        ...complete,
+        promotionReceipt: {
+          ...complete.promotionReceipt,
+          observerTrust: { publicKeyPem: promotion.publicKeyPem },
+        },
+      }),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "READ_BACK_TRUST_INVALID",
+    );
+    await assert.rejects(
+      verifyRelease({
+        ...complete,
+        promotionReceipt: {
+          ...complete.promotionReceipt,
+          readBackObservations: [
+            complete.promotionReceipt.readBackObservations[0]!,
+            complete.promotionReceipt.readBackObservations[1]!,
+            complete.promotionReceipt.readBackObservations[1]!,
+          ],
+        },
+      }),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "READ_BACK_TRUST_INVALID",
+    );
+
+    const forgedPath = promotion.readBackObservations[0]!.envelopePath;
+    const forged = JSON.parse(await readFile(forgedPath, "utf8")) as {
+      statement: { source: { immutableObjectVersion: string } };
+    };
+    forged.statement.source.immutableObjectVersion = "caller-forged-version";
+    await writeFile(forgedPath, canonicalJson(forged));
+    await assert.rejects(
+      verifyRelease(complete),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "READ_BACK_TRUST_INVALID",
+    );
   } finally {
     await Promise.all([releaseSet.cleanup(), promotion.cleanup()]);
   }
@@ -1317,8 +1492,10 @@ test("resolveConfiguredRelease accepts a composer-style digest-contained subtree
       promotion: {
         liveEvidence: readonly { file: string }[];
         notarizationReceiptFile: string;
+        observerTrustRootFile: string;
         promotionAttestationFile: string;
         promotionTrustRootFile: string;
+        readBackObservations: readonly { file: string }[];
         supportMatrix: { file: string };
         supportedChannelReceiptFile: string;
       };
@@ -1334,8 +1511,10 @@ test("resolveConfiguredRelease accepts a composer-style digest-contained subtree
       configuration.promotion.promotionAttestationFile,
       configuration.promotion.supportedChannelReceiptFile,
       configuration.promotion.promotionTrustRootFile,
+      configuration.promotion.observerTrustRootFile,
       configuration.promotion.supportMatrix.file,
       configuration.promotion.notarizationReceiptFile,
+      ...configuration.promotion.readBackObservations.map(({ file }) => file),
       ...configuration.promotion.liveEvidence.map(({ file }) => file),
     ];
     assert.equal(
@@ -1486,7 +1665,12 @@ interface PromotionFixture {
     readonly bytes: Buffer;
   }[];
   readonly notarizationReceiptPath: string;
+  readonly observerPublicKeyPem: Buffer;
   readonly publicKeyPem: Buffer;
+  readonly readBackObservations: readonly {
+    readonly envelopePath: string;
+    readonly target: CandidateDescription["target"];
+  }[];
   readonly receiptId: string;
   readonly receiptPath: string;
   readonly statementId: string;
@@ -1515,7 +1699,11 @@ function linuxVerificationInput(releaseSet: VerifiedReleaseSet, promotion: Promo
       notarizationReceiptPath: promotion.notarizationReceiptPath,
       supportMatrix: promotion.supportMatrix,
     },
-    promotionReceipt: { receiptPath: promotion.receiptPath },
+    promotionReceipt: {
+      observerTrust: { publicKeyPem: promotion.observerPublicKeyPem },
+      readBackObservations: promotion.readBackObservations,
+      receiptPath: promotion.receiptPath,
+    },
     promotionTrust: { publicKeyPem: promotion.publicKeyPem },
   };
 }
@@ -1656,73 +1844,113 @@ async function createPromotionFixture(
         signature: promotionSignature,
       });
   const attestationPath = join(directory, "promotion-attestation.json");
+  const observer = generateKeyPairSync("ed25519");
+  const observerKeyId = `sha256:${sha256(observer.publicKey.export({ format: "der", type: "spki" }))}`;
+  const observerPublicKeyPem = Buffer.from(
+    observer.publicKey.export({ format: "pem", type: "spki" }),
+  );
+  const observationEvidence = releaseSet.releases.map((release) => {
+    const targetKey = `${release.candidate.target.platform}-${release.candidate.target.architecture}`;
+    const observation = composeRemoteReadBackObservationStatement({
+      archive: release.archive,
+      channel: "stable",
+      immutableObjectId: `fixture/releases/opendelegate-v0.1.0-alpha.1/${release.archive.path}`,
+      immutableObjectVersion: `fixture-version-${targetKey}`,
+      observedAt: "2026-07-26T02:30:00.000Z",
+      observedStreamSha256: release.archive.sha256,
+      observerAuthorityKeyId: observerKeyId,
+      provider: "fixture-channel",
+      releaseId: "opendelegate-v0.1.0-alpha.1",
+      tag: "v0.1.0-alpha.1",
+      target: release.candidate.target,
+      uploaderAuthorityKeyId: keyId,
+    });
+    const signature = createSignature(null, observation.signingBytes, observer.privateKey).toString(
+      "base64url",
+    );
+    const envelope = composeSignedReleaseEnvelope({
+      composed: observation,
+      keyId: observerKeyId,
+      signature,
+    });
+    return {
+      envelopeBytes: envelope.canonicalBytes,
+      envelopePath: join(directory, `read-back-${targetKey}.json`),
+      target: release.candidate.target,
+      verified: verifyRemoteReadBackObservation({
+        envelopeBytes: envelope.canonicalBytes,
+        expectedUploaderAuthorityKeyId: keyId,
+        observerTrust: { publicKeyPem: observerPublicKeyPem },
+      }),
+    };
+  });
+  const verifiedObservations = observationEvidence.map(({ verified }) => verified);
   const receiptUsesComposer =
     options.receiptDomain === undefined && options.receiptReadBackMismatch !== true;
-  const receiptComposed = receiptUsesComposer
-    ? composeSupportedChannelReceiptStatement({
-        promotion: composed,
-        promotionAttestationSha256: sha256(attestationBytes),
-        publishedAssetReadBacks: releaseSet.releases.map((release) => ({
-          target: release.candidate.target,
-          readBackSha256: release.archive.sha256,
-        })),
-        receiptId,
-        observedAt: "2026-07-26T03:00:00.000Z",
-      })
-    : undefined;
-  const receiptStatement = receiptComposed?.statement ?? {
-    schemaVersion: 1,
-    product: "OpenDelegate",
-    role: "promotion",
-    domain: options.receiptDomain ?? "opendelegate.release.supported-channel-receipt.v1",
-    receiptId,
-    releaseId: "opendelegate-v0.1.0-alpha.1",
-    channel: "stable",
-    tag: "v0.1.0-alpha.1",
+  const receiptComposed = composeSupportedChannelReceiptStatement({
+    promotion: composed,
     promotionAttestationSha256: sha256(attestationBytes),
-    publishedAssets: releaseSet.releases.map((release) => ({
-      target: release.candidate.target,
-      path: release.archive.path,
-      size: release.archive.size,
-      sha256: release.archive.sha256,
-      readBackSha256:
-        options.receiptReadBackMismatch === true && release.candidate.target.platform === "linux"
-          ? "0".repeat(64)
-          : release.archive.sha256,
-    })),
+    verifiedObservations,
+    receiptId,
     observedAt: "2026-07-26T03:00:00.000Z",
-  };
-  const receiptStatementBytes = receiptComposed?.canonicalBytes ?? canonicalJson(receiptStatement);
+  });
+  let receiptStatement: unknown = receiptComposed.statement;
+  if (!receiptUsesComposer) {
+    const alteredReceiptStatement = JSON.parse(
+      Buffer.from(receiptComposed.canonicalBytes).toString("utf8"),
+    ) as {
+      domain: string;
+      publishedAssets: {
+        observedStreamSha256: string;
+        target: { platform: string };
+      }[];
+    };
+    if (options.receiptDomain !== undefined) {
+      alteredReceiptStatement.domain = options.receiptDomain;
+    }
+    if (options.receiptReadBackMismatch === true) {
+      alteredReceiptStatement.publishedAssets.find(
+        ({ target }) => target.platform === "linux",
+      )!.observedStreamSha256 = "0".repeat(64);
+    }
+    receiptStatement = alteredReceiptStatement;
+  }
+  const receiptStatementBytes = receiptUsesComposer
+    ? receiptComposed.canonicalBytes
+    : canonicalJson(receiptStatement);
   const receiptSignature = createSignature(
     null,
-    receiptComposed?.signingBytes ??
-      Buffer.concat([
-        Buffer.from("OpenDelegate supported channel receipt v1\n", "utf8"),
-        receiptStatementBytes,
-      ]),
+    receiptUsesComposer
+      ? receiptComposed.signingBytes
+      : Buffer.concat([
+          Buffer.from("OpenDelegate supported channel receipt v2\n", "utf8"),
+          receiptStatementBytes,
+        ]),
     privateKey,
   ).toString("base64url");
-  const receiptBytes =
-    receiptComposed === undefined
-      ? canonicalJson({
-          schemaVersion: 1,
-          product: "OpenDelegate",
-          role: "promotion",
-          algorithm: "ed25519",
-          keyId,
-          statement: receiptStatement,
-          signature: receiptSignature,
-        })
-      : composeSignedReleaseEnvelope({
-          composed: receiptComposed,
-          keyId,
-          signature: receiptSignature,
-        }).canonicalBytes;
+  const receiptBytes = !receiptUsesComposer
+    ? canonicalJson({
+        schemaVersion: 2,
+        product: "OpenDelegate",
+        role: "promotion",
+        algorithm: "ed25519",
+        keyId,
+        statement: receiptStatement,
+        signature: receiptSignature,
+      })
+    : composeSignedReleaseEnvelope({
+        composed: receiptComposed,
+        keyId,
+        signature: receiptSignature,
+      }).canonicalBytes;
   const receiptPath = join(directory, "release-receipt.json");
   await Promise.all([
     writeFile(notarizationReceiptPath, notarizationBytes),
     writeFile(attestationPath, attestationBytes),
     writeFile(receiptPath, receiptBytes),
+    ...observationEvidence.map(({ envelopeBytes, envelopePath }) =>
+      writeFile(envelopePath, envelopeBytes),
+    ),
   ]);
   return {
     attestationPath,
@@ -1732,7 +1960,12 @@ async function createPromotionFixture(
     keyId,
     liveEvidence,
     notarizationReceiptPath,
+    observerPublicKeyPem,
     publicKeyPem: Buffer.from(publicKeyPem),
+    readBackObservations: observationEvidence.map(({ envelopePath, target }) => ({
+      envelopePath,
+      target,
+    })),
     receiptId,
     receiptPath,
     statementId,
@@ -1789,6 +2022,7 @@ async function createConfiguredReleaseState(
     const promotionAttestationFile = `${promotionRoot}/promotion-attestation.json`;
     const supportedChannelReceiptFile = `${promotionRoot}/supported-channel-receipt.json`;
     const promotionTrustRootFile = `${promotionRoot}/promotion-public.pem`;
+    const observerTrustRootFile = `${promotionRoot}/observer-public.pem`;
     const supportMatrixFile = `${promotionRoot}/support-matrix.md`;
     const notarizationReceiptFile = `${promotionRoot}/macos-notarization.json`;
     promotionAttestationPath = await writeTrustFile(
@@ -1798,6 +2032,7 @@ async function createConfiguredReleaseState(
     await Promise.all([
       writeTrustFile(supportedChannelReceiptFile, await readFile(promotion.receiptPath)),
       writeTrustFile(promotionTrustRootFile, promotion.publicKeyPem),
+      writeTrustFile(observerTrustRootFile, promotion.observerPublicKeyPem),
       writeTrustFile(supportMatrixFile, promotion.supportMatrix.bytes),
       writeTrustFile(notarizationReceiptFile, await readFile(promotion.notarizationReceiptPath)),
     ]);
@@ -1812,10 +2047,20 @@ async function createConfiguredReleaseState(
         file,
       });
     }
+    const readBackObservations = [];
+    for (const observation of promotion.readBackObservations) {
+      const file =
+        `${promotionRoot}/read-back/` +
+        `${observation.target.platform}-${observation.target.architecture}.json`;
+      await writeTrustFile(file, await readFile(observation.envelopePath));
+      readBackObservations.push({ target: observation.target, file });
+    }
     promotionConfiguration = {
       promotionAttestationFile,
       supportedChannelReceiptFile,
       promotionTrustRootFile,
+      observerTrustRootFile,
+      readBackObservations,
       supportMatrix: {
         statementPath: promotion.supportMatrix.path,
         file: supportMatrixFile,
@@ -2402,6 +2647,67 @@ function fakeFileIdentity(input: {
       return false;
     },
   };
+}
+
+function createVerifiedReadBackObservations(
+  releaseSet: VerifiedReleaseSet,
+  input: {
+    readonly observer?: ReturnType<typeof generateKeyPairSync>;
+    readonly uploader?: ReturnType<typeof generateKeyPairSync>;
+  } = {},
+) {
+  const observer = input.observer ?? generateKeyPairSync("ed25519");
+  const uploader = input.uploader ?? generateKeyPairSync("ed25519");
+  const observerAuthorityKeyId = `sha256:${sha256(
+    observer.publicKey.export({ format: "der", type: "spki" }),
+  )}`;
+  const uploaderAuthorityKeyId = `sha256:${sha256(
+    uploader.publicKey.export({ format: "der", type: "spki" }),
+  )}`;
+  const composition = promotionCompositionInput(releaseSet);
+  const envelopes = releaseSet.releases.map((release) => {
+    const targetKey = `${release.candidate.target.platform}-${release.candidate.target.architecture}`;
+    const composed = composeRemoteReadBackObservationStatement({
+      archive: release.archive,
+      channel: composition.channel,
+      immutableObjectId: `fixture/releases/${composition.releaseId}/${release.archive.path}`,
+      immutableObjectVersion: `fixture-version-${targetKey}`,
+      observedAt: "2026-07-26T02:30:00.000Z",
+      observedStreamSha256: release.archive.sha256,
+      observerAuthorityKeyId,
+      provider: "fixture-channel",
+      releaseId: composition.releaseId,
+      tag: `v${release.candidate.productVersion}`,
+      target: release.candidate.target,
+      uploaderAuthorityKeyId,
+    });
+    const signature = createSignature(null, composed.signingBytes, observer.privateKey).toString(
+      "base64url",
+    );
+    return composeSignedReleaseEnvelope({
+      composed,
+      keyId: observerAuthorityKeyId,
+      signature,
+    });
+  });
+  return Object.freeze({
+    envelopes: Object.freeze(envelopes),
+    observer,
+    observerAuthorityKeyId,
+    uploader,
+    uploaderAuthorityKeyId,
+    verified: Object.freeze(
+      envelopes.map((envelope) =>
+        verifyRemoteReadBackObservation({
+          envelopeBytes: envelope.canonicalBytes,
+          expectedUploaderAuthorityKeyId: uploaderAuthorityKeyId,
+          observerTrust: {
+            publicKeyPem: Buffer.from(observer.publicKey.export({ format: "pem", type: "spki" })),
+          },
+        }),
+      ),
+    ),
+  });
 }
 
 function canonicalJson(value: unknown): Buffer {

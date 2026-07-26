@@ -11,6 +11,7 @@ import {
 } from "./release-promotion-plan.mjs";
 import {
   readPinnedReleaseReadBackPlan,
+  releaseReadBackVerificationEvidence,
   revalidatePinnedReleaseReadBackPlan,
 } from "./release-read-back-plan.mjs";
 import {
@@ -51,6 +52,8 @@ export function parseSupportedChannelReceiptArguments(values) {
     "--promotion-plan-sha256",
     "--read-back-plan",
     "--read-back-plan-sha256",
+    "--observer-trust-root",
+    "--observer-trust-root-sha256",
     "--signing-policy",
     "--signing-policy-sha256",
     "--receipt-destination",
@@ -75,6 +78,7 @@ export function parseSupportedChannelReceiptArguments(values) {
     "--repository",
     "--promotion-plan",
     "--read-back-plan",
+    "--observer-trust-root",
     "--signing-policy",
     "--receipt-destination",
     "--runner-record-destination",
@@ -86,6 +90,7 @@ export function parseSupportedChannelReceiptArguments(values) {
   for (const name of [
     "--promotion-plan-sha256",
     "--read-back-plan-sha256",
+    "--observer-trust-root-sha256",
     "--runner-executable-sha256",
     "--signing-policy-sha256",
   ]) {
@@ -96,6 +101,8 @@ export function parseSupportedChannelReceiptArguments(values) {
   return {
     promotionPlanPath: resolve(parsed.get("--promotion-plan")),
     promotionPlanSha256: parsed.get("--promotion-plan-sha256"),
+    observerTrustRootPath: resolve(parsed.get("--observer-trust-root")),
+    observerTrustRootSha256: parsed.get("--observer-trust-root-sha256"),
     readBackPlanPath: resolve(parsed.get("--read-back-plan")),
     readBackPlanSha256: parsed.get("--read-back-plan-sha256"),
     receiptDestination: resolve(parsed.get("--receipt-destination")),
@@ -152,22 +159,6 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
     },
   );
   const evidence = promotionPreparationEvidence(prepared);
-  const readBack = await readPinnedReleaseReadBackPlan({
-    path: input.readBackPlanPath,
-    sha256: input.readBackPlanSha256,
-    preparedPromotion: prepared,
-    outputPaths: [receiptDestination, runnerRecordDestination],
-    repositoryRoot,
-    candidateRoots: evidence.candidates.map(({ candidateRoot }) => candidateRoot),
-  });
-  const promotionAttestation = await readPinnedCanonicalJson({
-    label: "promotion attestation",
-    maximumBytes: 4 * 1024 * 1024,
-    path: readBack.promotionAttestationPath,
-    sha256: readBack.promotionAttestationSha256,
-    indent: 2,
-  });
-
   const policy = await readPinnedReleaseSigningPolicy({
     expectedRole: "promotion",
     path: input.signingPolicyPath,
@@ -185,13 +176,40 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
   if (prepared.revocations.revokedPromotionKeyIds.includes(trust.keyId)) {
     throw new Error("The promotion trust root is revoked by release policy.");
   }
+  const readBack = await readPinnedReleaseReadBackPlan({
+    path: input.readBackPlanPath,
+    sha256: input.readBackPlanSha256,
+    preparedPromotion: prepared,
+    outputPaths: [receiptDestination, runnerRecordDestination],
+    repositoryRoot,
+    candidateRoots: evidence.candidates.map(({ candidateRoot }) => candidateRoot),
+    integrity,
+    observerTrustRootPath: input.observerTrustRootPath,
+    observerTrustRootSha256: input.observerTrustRootSha256,
+    expectedUploaderAuthorityKeyId: trust.keyId,
+  });
+  if (
+    prepared.verifiedCandidates.some(
+      ({ publisherKeyId }) => publisherKeyId === readBack.observerAuthorityKeyId,
+    )
+  ) {
+    throw new Error("The read-back observer must be distinct from every publisher authority.");
+  }
+  const readBackEvidence = releaseReadBackVerificationEvidence(readBack);
+  const promotionAttestation = await readPinnedCanonicalJson({
+    label: "promotion attestation",
+    maximumBytes: 4 * 1024 * 1024,
+    path: readBack.promotionAttestationPath,
+    sha256: readBack.promotionAttestationSha256,
+    indent: 2,
+  });
   verifyExactPromotionAttestation(promotionAttestation, prepared, trust);
 
   await revalidateReleaseRunnerIdentity(runnerIdentity);
   const composed = integrity.composeSupportedChannelReceiptStatement({
     promotion: prepared.composed,
     promotionAttestationSha256: promotionAttestation.sha256,
-    publishedAssetReadBacks: readBack.publishedAssetReadBacks,
+    verifiedObservations: readBack.verifiedObservations,
     receiptId: readBack.receiptId,
     observedAt: readBack.observedAt,
   });
@@ -215,6 +233,7 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
     prepared,
     promotionAttestationPath: promotionAttestation.path,
     promotionTrust: trust.publicKeyPem,
+    readBackEvidence,
     receiptPath: receiptDestination,
   });
   await Promise.all([
@@ -286,7 +305,9 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
     throw new Error("The published supported-channel receipt outputs failed verification.");
   }
   return Object.freeze({
+    observerTrustRoot: readBackEvidence.observerTrustRoot,
     promotionKeyId: signed.keyId,
+    readBackObservations: readBackEvidence.readBackObservations,
     receiptId: readBack.receiptId,
     runnerRecord: Object.freeze({
       path: published[1].path,
@@ -346,6 +367,7 @@ async function verifyCompleteReleaseSetBeforeReceiptPublication({
   prepared,
   promotionAttestationPath,
   promotionTrust,
+  readBackEvidence,
   receiptPath,
 }) {
   const reader = createOverlayReleaseReader(
@@ -373,7 +395,11 @@ async function verifyCompleteReleaseSetBeforeReceiptPublication({
         notarizationReceiptPath: evidence.notarizationReceiptPath,
         supportMatrix: evidence.supportMatrix,
       },
-      promotionReceipt: { receiptPath },
+      promotionReceipt: {
+        observerTrust: readBackEvidence.observerTrust,
+        readBackObservations: readBackEvidence.readBackObservations,
+        receiptPath,
+      },
       promotionTrust: { publicKeyPem: promotionTrust },
       policy: prepared.revocations,
     });
@@ -461,8 +487,12 @@ function createReceiptRunnerRecord({
       readBackPlanSha256: readBack.planSha256,
       promotionAttestationSha256: promotionAttestation.sha256,
       publication: {
-        uploaderId: readBack.uploaderId,
+        uploaderAuthorityKeyId: readBack.uploaderAuthorityKeyId,
         immutable: true,
+      },
+      observerTrust: {
+        keyId: readBack.observerAuthorityKeyId,
+        publicKeySha256: readBack.observerTrustRootSha256,
       },
       remoteReadBacks: readBack.records,
     },
@@ -494,6 +524,8 @@ function validateReceiptInput(input) {
     [
       "promotionPlanPath",
       "promotionPlanSha256",
+      "observerTrustRootPath",
+      "observerTrustRootSha256",
       "readBackPlanPath",
       "readBackPlanSha256",
       "receiptDestination",
@@ -507,6 +539,7 @@ function validateReceiptInput(input) {
   );
   for (const [value, label] of [
     [input.promotionPlanPath, "promotion plan"],
+    [input.observerTrustRootPath, "remote read-back observer trust root"],
     [input.readBackPlanPath, "read-back plan"],
     [input.receiptDestination, "supported-channel receipt destination"],
     [input.repositoryRoot, "release repository"],
@@ -519,6 +552,7 @@ function validateReceiptInput(input) {
   }
   for (const [value, label] of [
     [input.promotionPlanSha256, "promotion plan"],
+    [input.observerTrustRootSha256, "remote read-back observer trust root"],
     [input.readBackPlanSha256, "read-back plan"],
     [input.runnerExecutableSha256, "release-runner executable"],
     [input.signingPolicySha256, "promotion signing policy"],
@@ -534,6 +568,7 @@ function requireReceiptIntegrityBoundary(value) {
     "composePromotionStatement",
     "composeSignedReleaseEnvelope",
     "composeSupportedChannelReceiptStatement",
+    "verifyRemoteReadBackObservation",
     "verifyRelease",
   ]) {
     if (typeof value?.[name] !== "function") {
@@ -555,6 +590,7 @@ Usage:
     --repository <absolute-clean-checkout> \\
     --promotion-plan <absolute-plan> --promotion-plan-sha256 <sha256> \\
     --read-back-plan <absolute-plan> --read-back-plan-sha256 <sha256> \\
+    --observer-trust-root <absolute-public-key> --observer-trust-root-sha256 <sha256> \\
     --signing-policy <absolute-policy> --signing-policy-sha256 <sha256> \\
     --receipt-destination <absolute-new-file> \\
     --runner-record-destination <absolute-new-file> \\

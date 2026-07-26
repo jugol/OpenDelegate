@@ -55,6 +55,7 @@ export type ReleaseIntegrityErrorCode =
   | "PUBLISHER_TRUST_INVALID"
   | "PROMOTION_INPUT_INVALID"
   | "PROMOTION_TRUST_INVALID"
+  | "READ_BACK_TRUST_INVALID"
   | "SIGNED_ENVELOPE_INVALID"
   | "RELEASE_REVOKED";
 
@@ -383,8 +384,10 @@ const MAXIMUM_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const PUBLISHER_CANDIDATE_DOMAIN = "opendelegate.release.publisher-candidate.v2" as const;
 const PUBLISHER_ATTESTATION_DOMAIN = "opendelegate.release.publisher-attestation.v2" as const;
 const PROMOTION_AUTHORIZATION_DOMAIN = "opendelegate.release.promotion-authorization.v1" as const;
+const REMOTE_READ_BACK_OBSERVATION_DOMAIN =
+  "opendelegate.release.remote-read-back-observation.v1" as const;
 const SUPPORTED_CHANNEL_RECEIPT_DOMAIN =
-  "opendelegate.release.supported-channel-receipt.v1" as const;
+  "opendelegate.release.supported-channel-receipt.v2" as const;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const QUALIFIED_SHA256_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const BASE64_URL_SIGNATURE_PATTERN = /^[A-Za-z0-9_-]{86}$/u;
@@ -463,11 +466,13 @@ const inspectedCandidateObjects = new WeakSet<object>();
 const signableStatementBrands = new WeakMap<
   object,
   {
-    readonly role: "promotion" | "publisher";
+    readonly requiredKeyId?: string;
+    readonly role: "observer" | "promotion" | "publisher";
     readonly schemaVersion: 1 | 2;
     readonly statement: object;
   }
 >();
+const verifiedRemoteReadBackObservations = new WeakSet<object>();
 
 async function listCandidateFiles(
   reader: ReleaseFileReader,
@@ -1913,11 +1918,22 @@ export interface ImmutableEvidenceFile {
 }
 
 export interface PromotionReceiptEvidence {
+  readonly observerTrust: ReleaseReadBackObserverTrust;
+  readonly readBackObservations: readonly RemoteReadBackObservationEvidence[];
   readonly receiptPath: string;
 }
 
 export interface ReleasePromotionTrust {
   readonly publicKeyPem: Uint8Array;
+}
+
+export interface ReleaseReadBackObserverTrust {
+  readonly publicKeyPem: Uint8Array;
+}
+
+export interface RemoteReadBackObservationEvidence {
+  readonly envelopePath: string;
+  readonly target: ReleaseTarget;
 }
 
 export interface VerifyReleaseInput extends InspectCandidateInput {
@@ -2283,6 +2299,7 @@ interface ParsedPromotionTarget {
 
 interface ParsedPromotionAuthorization {
   readonly channel: string;
+  readonly issuedAt: string;
   readonly productVersion: string;
   readonly releaseId: string;
   readonly statementId: string;
@@ -2350,6 +2367,12 @@ async function verifyPromotionChain(
     fail("RELEASE_REVOKED", "The promotion statement is revoked by release policy.");
   }
 
+  const verifiedObservations = await verifyRemoteReadBackEvidenceSet(
+    reader,
+    receiptEvidence,
+    keyId,
+    promotion,
+  );
   const receiptBytes = await readExternalFile(
     reader,
     receiptEvidence.receiptPath,
@@ -2357,15 +2380,20 @@ async function verifyPromotionChain(
     "supported-channel receipt",
     "PROMOTION_TRUST_INVALID",
   );
-  const receiptEnvelope = parseSignedPromotionEnvelope(
+  const receiptEnvelope = parseSignedReleaseEnvelope(
     receiptBytes,
     keyId,
+    2,
+    "promotion",
     "supported-channel receipt",
+    "PROMOTION_TRUST_INVALID",
   );
   const receipt = parseSupportedChannelReceipt(
     receiptEnvelope.statement,
     promotion,
     sha256(attestationBytes),
+    keyId,
+    verifiedObservations,
   );
   if (
     !verifySignature(
@@ -2381,6 +2409,89 @@ async function verifyPromotionChain(
     fail("RELEASE_REVOKED", "The supported-channel receipt is revoked by release policy.");
   }
   return { receiptId: receipt.receiptId, statementId: promotion.statementId };
+}
+
+async function verifyRemoteReadBackEvidenceSet(
+  reader: ReleaseFileReader,
+  evidence: PromotionReceiptEvidence,
+  expectedUploaderAuthorityKeyId: string,
+  promotion: ParsedPromotionAuthorization,
+): Promise<readonly VerifiedRemoteReadBackObservation[]> {
+  if (
+    typeof evidence !== "object" ||
+    evidence === null ||
+    typeof evidence.observerTrust !== "object" ||
+    evidence.observerTrust === null ||
+    !(evidence.observerTrust.publicKeyPem instanceof Uint8Array) ||
+    evidence.observerTrust.publicKeyPem.byteLength === 0 ||
+    evidence.observerTrust.publicKeyPem.byteLength > MAXIMUM_KEY_BYTES ||
+    !Array.isArray(evidence.readBackObservations) ||
+    evidence.readBackObservations.length !== FIRST_MILESTONE_TARGETS.length
+  ) {
+    fail("READ_BACK_TRUST_INVALID", "The remote read-back evidence set is invalid.");
+  }
+  const references = new Map<string, RemoteReadBackObservationEvidence>();
+  for (const candidate of evidence.readBackObservations) {
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      !isNonEmptyString(candidate.envelopePath)
+    ) {
+      fail("READ_BACK_TRUST_INVALID", "A remote read-back evidence reference is invalid.");
+    }
+    const target = parseTargetRecord(
+      candidate.target,
+      "remote read-back evidence target",
+      "READ_BACK_TRUST_INVALID",
+    );
+    const key = targetKey(target);
+    if (references.has(key)) {
+      fail("READ_BACK_TRUST_INVALID", "The remote read-back evidence targets are duplicated.");
+    }
+    references.set(key, {
+      envelopePath: candidate.envelopePath,
+      target,
+    });
+  }
+  if (
+    FIRST_MILESTONE_TARGETS.some(
+      ({ platform, architecture }) => !references.has(targetKey({ platform, architecture })),
+    )
+  ) {
+    fail(
+      "READ_BACK_TRUST_INVALID",
+      "The remote read-back evidence must cover the exact first-milestone target set.",
+    );
+  }
+
+  const publisherKeyIds = new Set(promotion.targets.map(({ publisher }) => publisher.keyId));
+  const observations: VerifiedRemoteReadBackObservation[] = [];
+  for (const target of FIRST_MILESTONE_TARGETS) {
+    const reference = references.get(targetKey(target))!;
+    const envelopeBytes = await readExternalFile(
+      reader,
+      reference.envelopePath,
+      MAXIMUM_ATTESTATION_BYTES,
+      "remote read-back observation",
+      "READ_BACK_TRUST_INVALID",
+    );
+    const observation = verifyRemoteReadBackObservation({
+      envelopeBytes,
+      expectedUploaderAuthorityKeyId,
+      observerTrust: evidence.observerTrust,
+    });
+    if (
+      targetKey(observation.target) !== targetKey(target) ||
+      publisherKeyIds.has(observation.observerAuthorityKeyId)
+    ) {
+      fail(
+        "READ_BACK_TRUST_INVALID",
+        "The remote read-back observer authority or target binding is invalid.",
+      );
+    }
+    observations.push(observation);
+  }
+  return Object.freeze(observations);
 }
 
 function parseSignedPromotionEnvelope(
@@ -2405,7 +2516,7 @@ function parseSignedReleaseEnvelope(
   bytes: Uint8Array,
   expectedKeyId: string,
   expectedSchemaVersion: 1 | 2,
-  expectedRole: "promotion" | "publisher",
+  expectedRole: "observer" | "promotion" | "publisher",
   label: string,
   code: ReleaseIntegrityErrorCode,
 ): {
@@ -2465,6 +2576,7 @@ async function parsePromotionAuthorization(
   const releaseId = requirePromotionString(statement["releaseId"], "release ID");
   const productVersion = requirePromotionString(statement["productVersion"], "product version");
   const channel = requirePromotionString(statement["channel"], "supported channel");
+  const issuedAt = requirePromotionString(statement["issuedAt"], "issue time");
   const statementId = requirePromotionString(statement["statementId"], "statement ID");
   const auditedSourceCommit = requirePromotionString(
     statement["auditedSourceCommit"],
@@ -2481,7 +2593,7 @@ async function parsePromotionAuthorization(
     !/^[a-z][a-z0-9-]{1,31}$/u.test(channel) ||
     channel.includes("preview") ||
     channel === "release-candidate" ||
-    !isRfc3339Instant(statement["issuedAt"]) ||
+    !isRfc3339Instant(issuedAt) ||
     !isValidExternalId(statementId) ||
     statement["publicationPolicy"] !== "immutable-assets-with-remote-digest-readback" ||
     !FULL_COMMIT_PATTERN.test(auditedSourceCommit) ||
@@ -2606,6 +2718,7 @@ async function parsePromotionAuthorization(
   }
   return {
     channel,
+    issuedAt,
     productVersion,
     releaseId,
     statementId,
@@ -2938,6 +3051,8 @@ function parseSupportedChannelReceipt(
   statement: Record<string, unknown>,
   promotion: ParsedPromotionAuthorization,
   promotionAttestationSha256: string,
+  expectedUploaderAuthorityKeyId: string,
+  verifiedObservations: readonly VerifiedRemoteReadBackObservation[],
 ): ComposedSupportedChannelReceiptStatement {
   assertExternalExactKeys(
     statement,
@@ -2951,6 +3066,7 @@ function parseSupportedChannelReceipt(
       "channel",
       "tag",
       "promotionAttestationSha256",
+      "uploaderAuthorityKeyId",
       "publishedAssets",
       "observedAt",
     ],
@@ -2959,39 +3075,33 @@ function parseSupportedChannelReceipt(
   );
   const receiptId = requirePromotionString(statement["receiptId"], "receipt ID");
   const observedAt = requirePromotionString(statement["observedAt"], "receipt observation time");
-  if (!Array.isArray(statement["publishedAssets"])) {
-    fail("PROMOTION_TRUST_INVALID", "The supported-channel asset set is invalid.");
+  const uploaderAuthorityKeyId = requirePromotionString(
+    statement["uploaderAuthorityKeyId"],
+    "uploader authority",
+  );
+  if (
+    statement["schemaVersion"] !== 2 ||
+    statement["product"] !== "OpenDelegate" ||
+    statement["role"] !== "promotion" ||
+    statement["domain"] !== SUPPORTED_CHANNEL_RECEIPT_DOMAIN ||
+    uploaderAuthorityKeyId !== expectedUploaderAuthorityKeyId
+  ) {
+    fail("PROMOTION_TRUST_INVALID", "The supported-channel receipt identity is invalid.");
   }
-  const publishedAssetReadBacks = statement["publishedAssets"].map((candidate) => {
-    const value = requireExternalRecord(candidate, "published asset", "PROMOTION_TRUST_INVALID");
-    assertExternalExactKeys(
-      value,
-      ["target", "path", "size", "sha256", "readBackSha256"],
-      "published asset",
-      "PROMOTION_TRUST_INVALID",
-    );
-    const target = parseTargetRecord(
-      value["target"],
-      "published asset target",
-      "PROMOTION_TRUST_INVALID",
-    );
-    if (typeof value["readBackSha256"] !== "string") {
-      fail("PROMOTION_TRUST_INVALID", "A published asset read-back is invalid.");
-    }
-    return {
-      target,
-      readBackSha256: value["readBackSha256"],
-    };
-  });
   const composed = composeSupportedChannelReceiptFromBinding(
     {
       channel: promotion.channel,
+      issuedAt: promotion.issuedAt,
       productVersion: promotion.productVersion,
       releaseId: promotion.releaseId,
-      targets: promotion.targets,
+      targets: promotion.targets.map(({ archive, publisher, target }) => ({
+        archive,
+        publisherKeyId: publisher.keyId,
+        target,
+      })),
     },
     promotionAttestationSha256,
-    publishedAssetReadBacks,
+    normalizeVerifiedReadBackObservations(verifiedObservations, "PROMOTION_TRUST_INVALID"),
     receiptId,
     observedAt,
     "PROMOTION_TRUST_INVALID",
@@ -3101,10 +3211,12 @@ export interface ComposedPromotionStatement {
 
 interface ReceiptPromotionBinding {
   readonly channel: string;
+  readonly issuedAt: string;
   readonly productVersion: string;
   readonly releaseId: string;
   readonly targets: readonly {
     readonly archive: VerifiedArchive;
+    readonly publisherKeyId: string;
     readonly target: ReleaseTarget;
   }[];
 }
@@ -3240,6 +3352,7 @@ export function composePromotionStatement(
     composed,
     Object.freeze({
       channel: input.channel,
+      issuedAt: input.issuedAt,
       productVersion: first.candidate.productVersion,
       releaseId: input.releaseId,
       targets: Object.freeze(
@@ -3250,6 +3363,7 @@ export function composePromotionStatement(
               size: release.archive.size,
               sha256: release.archive.sha256,
             }),
+            publisherKeyId: release.publisherKeyId,
             target: Object.freeze({
               platform: release.candidate.target.platform,
               architecture: release.candidate.target.architecture,
@@ -3267,26 +3381,350 @@ export function composePromotionStatement(
   return composed;
 }
 
-export interface PublishedAssetReadBack {
-  readonly readBackSha256: string;
+export interface RemoteReadBackObservationSource {
+  readonly immutableObjectId: string;
+  readonly immutableObjectVersion: string;
+  readonly provider: string;
+}
+
+export interface RemoteReadBackObservationStatement {
+  readonly archive: VerifiedArchive;
+  readonly channel: string;
+  readonly domain: "opendelegate.release.remote-read-back-observation.v1";
+  readonly observedAt: string;
+  readonly observedStreamSha256: string;
+  readonly observerAuthorityKeyId: string;
+  readonly product: "OpenDelegate";
+  readonly releaseId: string;
+  readonly role: "observer";
+  readonly schemaVersion: 1;
+  readonly source: RemoteReadBackObservationSource;
+  readonly tag: string;
   readonly target: ReleaseTarget;
+  readonly uploaderAuthorityKeyId: string;
+}
+
+export interface ComposeRemoteReadBackObservationStatementInput {
+  readonly archive: VerifiedArchive;
+  readonly channel: string;
+  readonly immutableObjectId: string;
+  readonly immutableObjectVersion: string;
+  readonly observedAt: string;
+  readonly observedStreamSha256: string;
+  readonly observerAuthorityKeyId: string;
+  readonly provider: string;
+  readonly releaseId: string;
+  readonly tag: string;
+  readonly target: ReleaseTarget;
+  readonly uploaderAuthorityKeyId: string;
+}
+
+export interface ComposedRemoteReadBackObservationStatement {
+  readonly canonicalBytes: Uint8Array;
+  readonly domain: "opendelegate.release.remote-read-back-observation.v1";
+  readonly sha256: string;
+  readonly signingBytes: Uint8Array;
+  readonly statement: RemoteReadBackObservationStatement;
+}
+
+export interface VerifiedRemoteReadBackObservation {
+  readonly archive: VerifiedArchive;
+  readonly channel: string;
+  readonly observedAt: string;
+  readonly observedStreamSha256: string;
+  readonly observationEnvelopeSha256: string;
+  readonly observationSignature: string;
+  readonly observerAuthorityKeyId: string;
+  readonly releaseId: string;
+  readonly source: RemoteReadBackObservationSource;
+  readonly tag: string;
+  readonly target: ReleaseTarget;
+  readonly uploaderAuthorityKeyId: string;
+}
+
+export function composeRemoteReadBackObservationStatement(
+  input: ComposeRemoteReadBackObservationStatementInput,
+): ComposedRemoteReadBackObservationStatement {
+  return composeRemoteReadBackObservationWithCode(input, "PROMOTION_INPUT_INVALID");
+}
+
+export function verifyRemoteReadBackObservation(input: {
+  readonly envelopeBytes: Uint8Array;
+  readonly expectedUploaderAuthorityKeyId: string;
+  readonly observerTrust: ReleaseReadBackObserverTrust;
+}): VerifiedRemoteReadBackObservation {
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    !(input.envelopeBytes instanceof Uint8Array) ||
+    input.envelopeBytes.byteLength === 0 ||
+    input.envelopeBytes.byteLength > MAXIMUM_ATTESTATION_BYTES ||
+    !QUALIFIED_SHA256_PATTERN.test(input.expectedUploaderAuthorityKeyId) ||
+    typeof input.observerTrust !== "object" ||
+    input.observerTrust === null ||
+    !(input.observerTrust.publicKeyPem instanceof Uint8Array) ||
+    input.observerTrust.publicKeyPem.byteLength === 0 ||
+    input.observerTrust.publicKeyPem.byteLength > MAXIMUM_KEY_BYTES
+  ) {
+    fail("READ_BACK_TRUST_INVALID", "The remote read-back observer input is invalid.");
+  }
+  const key = parseEd25519TrustRoot(
+    input.observerTrust.publicKeyPem,
+    "remote read-back observer",
+    "READ_BACK_TRUST_INVALID",
+  );
+  const observerAuthorityKeyId = `sha256:${sha256(Buffer.from(key.export({ format: "der", type: "spki" })))}`;
+  if (observerAuthorityKeyId === input.expectedUploaderAuthorityKeyId) {
+    fail(
+      "READ_BACK_TRUST_INVALID",
+      "Remote read-back observer and uploader authorities must be distinct.",
+    );
+  }
+  const envelope = parseSignedReleaseEnvelope(
+    input.envelopeBytes,
+    observerAuthorityKeyId,
+    1,
+    "observer",
+    "remote read-back observation",
+    "READ_BACK_TRUST_INVALID",
+  );
+  const composed = parseRemoteReadBackObservation(
+    envelope.statement,
+    observerAuthorityKeyId,
+    input.expectedUploaderAuthorityKeyId,
+  );
+  if (
+    !verifySignature(null, composed.signingBytes, key, Buffer.from(envelope.signature, "base64url"))
+  ) {
+    fail("READ_BACK_TRUST_INVALID", "The remote read-back observation signature is invalid.");
+  }
+  const statement = composed.statement;
+  const verified = Object.freeze({
+    archive: statement.archive,
+    channel: statement.channel,
+    observedAt: statement.observedAt,
+    observedStreamSha256: statement.observedStreamSha256,
+    observationEnvelopeSha256: sha256(input.envelopeBytes),
+    observationSignature: envelope.signature,
+    observerAuthorityKeyId: statement.observerAuthorityKeyId,
+    releaseId: statement.releaseId,
+    source: statement.source,
+    tag: statement.tag,
+    target: statement.target,
+    uploaderAuthorityKeyId: statement.uploaderAuthorityKeyId,
+  });
+  verifiedRemoteReadBackObservations.add(verified);
+  return verified;
+}
+
+function parseRemoteReadBackObservation(
+  statement: Record<string, unknown>,
+  observerAuthorityKeyId: string,
+  uploaderAuthorityKeyId: string,
+): ComposedRemoteReadBackObservationStatement {
+  assertExternalExactKeys(
+    statement,
+    [
+      "schemaVersion",
+      "product",
+      "role",
+      "domain",
+      "releaseId",
+      "channel",
+      "tag",
+      "target",
+      "archive",
+      "source",
+      "observedStreamSha256",
+      "observerAuthorityKeyId",
+      "uploaderAuthorityKeyId",
+      "observedAt",
+    ],
+    "remote read-back observation",
+    "READ_BACK_TRUST_INVALID",
+  );
+  if (
+    statement["schemaVersion"] !== 1 ||
+    statement["product"] !== "OpenDelegate" ||
+    statement["role"] !== "observer" ||
+    statement["domain"] !== REMOTE_READ_BACK_OBSERVATION_DOMAIN
+  ) {
+    fail("READ_BACK_TRUST_INVALID", "The remote read-back observation identity is invalid.");
+  }
+  const source = requireExternalRecord(
+    statement["source"],
+    "remote read-back observation source",
+    "READ_BACK_TRUST_INVALID",
+  );
+  assertExternalExactKeys(
+    source,
+    ["provider", "immutableObjectId", "immutableObjectVersion"],
+    "remote read-back observation source",
+    "READ_BACK_TRUST_INVALID",
+  );
+  const composed = composeRemoteReadBackObservationWithCode(
+    {
+      archive: parseArchiveRecord(
+        statement["archive"],
+        "remote read-back observation archive",
+        "READ_BACK_TRUST_INVALID",
+      ),
+      channel: statement["channel"] as string,
+      immutableObjectId: source["immutableObjectId"] as string,
+      immutableObjectVersion: source["immutableObjectVersion"] as string,
+      observedAt: statement["observedAt"] as string,
+      observedStreamSha256: statement["observedStreamSha256"] as string,
+      observerAuthorityKeyId: statement["observerAuthorityKeyId"] as string,
+      provider: source["provider"] as string,
+      releaseId: statement["releaseId"] as string,
+      tag: statement["tag"] as string,
+      target: parseTargetRecord(
+        statement["target"],
+        "remote read-back observation target",
+        "READ_BACK_TRUST_INVALID",
+      ),
+      uploaderAuthorityKeyId: statement["uploaderAuthorityKeyId"] as string,
+    },
+    "READ_BACK_TRUST_INVALID",
+  );
+  if (
+    composed.statement.observerAuthorityKeyId !== observerAuthorityKeyId ||
+    composed.statement.uploaderAuthorityKeyId !== uploaderAuthorityKeyId ||
+    !Buffer.from(composed.canonicalBytes).equals(Buffer.from(canonicalJsonBytes(statement)))
+  ) {
+    fail(
+      "READ_BACK_TRUST_INVALID",
+      "The remote read-back observation authority or canonical statement is invalid.",
+    );
+  }
+  return composed;
+}
+
+function composeRemoteReadBackObservationWithCode(
+  input: ComposeRemoteReadBackObservationStatementInput,
+  code: ReleaseIntegrityErrorCode,
+): ComposedRemoteReadBackObservationStatement {
+  const value = requireExternalRecord(input, "remote read-back observation input", code);
+  assertExternalExactKeys(
+    value,
+    [
+      "archive",
+      "channel",
+      "immutableObjectId",
+      "immutableObjectVersion",
+      "observedAt",
+      "observedStreamSha256",
+      "observerAuthorityKeyId",
+      "provider",
+      "releaseId",
+      "tag",
+      "target",
+      "uploaderAuthorityKeyId",
+    ],
+    "remote read-back observation input",
+    code,
+  );
+  const archive = parseArchiveRecord(value["archive"], "observed archive", code);
+  const target = parseTargetRecord(value["target"], "observed target", code);
+  const releaseId = requireExternalIdWithCode(value["releaseId"], "observed release ID", code);
+  const provider = requireExternalIdWithCode(value["provider"], "read-back provider", code);
+  const immutableObjectId = requireExternalIdWithCode(
+    value["immutableObjectId"],
+    "immutable object ID",
+    code,
+  );
+  const immutableObjectVersion = requireExternalIdWithCode(
+    value["immutableObjectVersion"],
+    "immutable object version",
+    code,
+  );
+  const channel = value["channel"];
+  const tag = value["tag"];
+  const observedStreamSha256 = value["observedStreamSha256"];
+  const observerAuthorityKeyId = value["observerAuthorityKeyId"];
+  const uploaderAuthorityKeyId = value["uploaderAuthorityKeyId"];
+  const observedAt = value["observedAt"];
+  if (
+    typeof channel !== "string" ||
+    !/^[a-z][a-z0-9-]{1,31}$/u.test(channel) ||
+    typeof tag !== "string" ||
+    !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(tag) ||
+    typeof observedStreamSha256 !== "string" ||
+    observedStreamSha256 !== archive.sha256 ||
+    typeof observerAuthorityKeyId !== "string" ||
+    !QUALIFIED_SHA256_PATTERN.test(observerAuthorityKeyId) ||
+    typeof uploaderAuthorityKeyId !== "string" ||
+    !QUALIFIED_SHA256_PATTERN.test(uploaderAuthorityKeyId) ||
+    observerAuthorityKeyId === uploaderAuthorityKeyId ||
+    !isRfc3339Instant(observedAt)
+  ) {
+    fail(code, "The remote read-back observation fields are invalid.");
+  }
+  const statement = Object.freeze({
+    schemaVersion: 1 as const,
+    product: "OpenDelegate" as const,
+    role: "observer" as const,
+    domain: REMOTE_READ_BACK_OBSERVATION_DOMAIN,
+    releaseId,
+    channel,
+    tag,
+    target: Object.freeze({ platform: target.platform, architecture: target.architecture }),
+    archive: Object.freeze({ path: archive.path, size: archive.size, sha256: archive.sha256 }),
+    source: Object.freeze({ provider, immutableObjectId, immutableObjectVersion }),
+    observedStreamSha256,
+    observerAuthorityKeyId,
+    uploaderAuthorityKeyId,
+    observedAt,
+  });
+  const canonicalBytes = canonicalJsonBytes(statement);
+  const signingBytes = Buffer.concat([
+    Buffer.from("OpenDelegate remote read-back observation v1\n", "utf8"),
+    canonicalBytes,
+  ]);
+  const composed = Object.freeze({
+    get canonicalBytes(): Uint8Array {
+      return Uint8Array.from(canonicalBytes);
+    },
+    domain: REMOTE_READ_BACK_OBSERVATION_DOMAIN,
+    sha256: sha256(canonicalBytes),
+    get signingBytes(): Uint8Array {
+      return Uint8Array.from(signingBytes);
+    },
+    statement,
+  });
+  signableStatementBrands.set(composed, {
+    role: "observer",
+    schemaVersion: 1,
+    requiredKeyId: observerAuthorityKeyId,
+    statement,
+  });
+  return composed;
 }
 
 export interface SupportedChannelPublishedAsset extends VerifiedArchive {
-  readonly readBackSha256: string;
+  readonly evidenceEnvelope: {
+    readonly domain: "opendelegate.release.remote-read-back-observation.v1";
+    readonly sha256: string;
+    readonly signature: string;
+  };
+  readonly observedAt: string;
+  readonly observedStreamSha256: string;
+  readonly observerAuthorityKeyId: string;
+  readonly source: RemoteReadBackObservationSource;
   readonly target: ReleaseTarget;
 }
 
 export interface SupportedChannelReceiptStatement {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly product: "OpenDelegate";
   readonly role: "promotion";
-  readonly domain: "opendelegate.release.supported-channel-receipt.v1";
+  readonly domain: "opendelegate.release.supported-channel-receipt.v2";
   readonly receiptId: string;
   readonly releaseId: string;
   readonly channel: string;
   readonly tag: string;
   readonly promotionAttestationSha256: string;
+  readonly uploaderAuthorityKeyId: string;
   readonly publishedAssets: readonly SupportedChannelPublishedAsset[];
   readonly observedAt: string;
 }
@@ -3295,13 +3733,13 @@ export interface ComposeSupportedChannelReceiptStatementInput {
   readonly observedAt: string;
   readonly promotion: ComposedPromotionStatement;
   readonly promotionAttestationSha256: string;
-  readonly publishedAssetReadBacks: readonly PublishedAssetReadBack[];
   readonly receiptId: string;
+  readonly verifiedObservations: readonly VerifiedRemoteReadBackObservation[];
 }
 
 export interface ComposedSupportedChannelReceiptStatement {
   readonly canonicalBytes: Uint8Array;
-  readonly domain: "opendelegate.release.supported-channel-receipt.v1";
+  readonly domain: "opendelegate.release.supported-channel-receipt.v2";
   readonly receiptId: string;
   readonly sha256: string;
   readonly signingBytes: Uint8Array;
@@ -3324,7 +3762,7 @@ export function composeSupportedChannelReceiptStatement(
   return composeSupportedChannelReceiptFromBinding(
     promotion,
     input.promotionAttestationSha256,
-    input.publishedAssetReadBacks,
+    normalizeVerifiedReadBackObservations(input.verifiedObservations, "PROMOTION_INPUT_INVALID"),
     input.receiptId,
     input.observedAt,
     "PROMOTION_INPUT_INVALID",
@@ -3334,7 +3772,7 @@ export function composeSupportedChannelReceiptStatement(
 function composeSupportedChannelReceiptFromBinding(
   promotion: ReceiptPromotionBinding,
   promotionAttestationSha256: string,
-  readBacks: readonly PublishedAssetReadBack[],
+  observations: readonly ReceiptObservationBinding[],
   receiptId: string,
   observedAt: string,
   code: ReleaseIntegrityErrorCode,
@@ -3343,28 +3781,58 @@ function composeSupportedChannelReceiptFromBinding(
     !isValidExternalId(receiptId) ||
     !SHA256_PATTERN.test(promotionAttestationSha256) ||
     !isRfc3339Instant(observedAt) ||
-    !Array.isArray(readBacks) ||
-    readBacks.length !== FIRST_MILESTONE_TARGETS.length
+    !Array.isArray(observations) ||
+    observations.length !== FIRST_MILESTONE_TARGETS.length
   ) {
     fail(code, "The supported-channel receipt identity or read-back set is invalid.");
   }
-  const byTarget = new Map<string, string>();
-  for (const readBack of readBacks) {
-    const value = requireExternalRecord(readBack, "published asset read-back", code);
-    assertExternalExactKeys(value, ["target", "readBackSha256"], "published asset read-back", code);
-    const target = parseTargetRecord(value["target"], "published asset read-back target", code);
-    const digest = value["readBackSha256"];
-    const key = targetKey(target);
-    if (typeof digest !== "string" || !SHA256_PATTERN.test(digest) || byTarget.has(key)) {
-      fail(code, "A published asset read-back is invalid or duplicated.");
+  const byTarget = new Map<string, ReceiptObservationBinding>();
+  const publisherKeyIds = new Set(promotion.targets.map(({ publisherKeyId }) => publisherKeyId));
+  const sourceIdentities = new Set<string>();
+  let observerAuthorityKeyId: string | undefined;
+  let uploaderAuthorityKeyId: string | undefined;
+  for (const observation of observations) {
+    const key = targetKey(observation.target);
+    const sourceIdentity =
+      `${observation.source.provider}\0${observation.source.immutableObjectId}\0` +
+      observation.source.immutableObjectVersion;
+    if (
+      byTarget.has(key) ||
+      sourceIdentities.has(sourceIdentity) ||
+      observation.releaseId !== promotion.releaseId ||
+      observation.channel !== promotion.channel ||
+      observation.tag !== `v${promotion.productVersion}` ||
+      observation.observedStreamSha256 !== observation.archive.sha256 ||
+      observation.observerAuthorityKeyId === observation.uploaderAuthorityKeyId ||
+      publisherKeyIds.has(observation.observerAuthorityKeyId) ||
+      Date.parse(observation.observedAt) < Date.parse(promotion.issuedAt) ||
+      Date.parse(observation.observedAt) > Date.parse(observedAt) ||
+      (observerAuthorityKeyId !== undefined &&
+        observerAuthorityKeyId !== observation.observerAuthorityKeyId) ||
+      (uploaderAuthorityKeyId !== undefined &&
+        uploaderAuthorityKeyId !== observation.uploaderAuthorityKeyId)
+    ) {
+      fail(code, "A remote read-back observation is invalid, duplicated, or mismatched.");
     }
-    byTarget.set(key, digest);
+    observerAuthorityKeyId = observation.observerAuthorityKeyId;
+    uploaderAuthorityKeyId = observation.uploaderAuthorityKeyId;
+    byTarget.set(key, observation);
+    sourceIdentities.add(sourceIdentity);
+  }
+  if (
+    uploaderAuthorityKeyId === undefined ||
+    !QUALIFIED_SHA256_PATTERN.test(uploaderAuthorityKeyId)
+  ) {
+    fail(code, "The supported-channel uploader authority is invalid.");
   }
   const publishedAssets = Object.freeze(
     promotion.targets.map(({ archive, target }) => {
-      const readBackSha256 = byTarget.get(targetKey(target));
-      if (readBackSha256 !== archive.sha256) {
-        fail(code, "A remote read-back digest does not match the promoted archive.");
+      const observation = byTarget.get(targetKey(target));
+      if (
+        observation === undefined ||
+        JSON.stringify(observation.archive) !== JSON.stringify(archive)
+      ) {
+        fail(code, "A remote read-back observation does not match the promoted archive.");
       }
       return Object.freeze({
         target: Object.freeze({
@@ -3374,12 +3842,20 @@ function composeSupportedChannelReceiptFromBinding(
         path: archive.path,
         size: archive.size,
         sha256: archive.sha256,
-        readBackSha256,
+        source: observation.source,
+        observedStreamSha256: observation.observedStreamSha256,
+        observerAuthorityKeyId: observation.observerAuthorityKeyId,
+        observedAt: observation.observedAt,
+        evidenceEnvelope: Object.freeze({
+          domain: REMOTE_READ_BACK_OBSERVATION_DOMAIN,
+          sha256: observation.observationEnvelopeSha256,
+          signature: observation.observationSignature,
+        }),
       });
     }),
   );
   const statement = Object.freeze({
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     product: "OpenDelegate" as const,
     role: "promotion" as const,
     domain: SUPPORTED_CHANNEL_RECEIPT_DOMAIN,
@@ -3388,12 +3864,13 @@ function composeSupportedChannelReceiptFromBinding(
     channel: promotion.channel,
     tag: `v${promotion.productVersion}`,
     promotionAttestationSha256,
+    uploaderAuthorityKeyId,
     publishedAssets,
     observedAt,
   });
   const canonicalBytes = canonicalJsonBytes(statement);
   const signingBytes = Buffer.concat([
-    Buffer.from("OpenDelegate supported channel receipt v1\n", "utf8"),
+    Buffer.from("OpenDelegate supported channel receipt v2\n", "utf8"),
     canonicalBytes,
   ]);
   const composed = Object.freeze({
@@ -3410,27 +3887,51 @@ function composeSupportedChannelReceiptFromBinding(
   });
   signableStatementBrands.set(composed, {
     role: "promotion",
-    schemaVersion: 1,
+    schemaVersion: 2,
+    requiredKeyId: uploaderAuthorityKeyId,
     statement,
   });
   return composed;
 }
 
+type ReceiptObservationBinding = VerifiedRemoteReadBackObservation;
+
+function normalizeVerifiedReadBackObservations(
+  observations: readonly VerifiedRemoteReadBackObservation[],
+  code: ReleaseIntegrityErrorCode,
+): readonly ReceiptObservationBinding[] {
+  if (
+    !Array.isArray(observations) ||
+    observations.length !== FIRST_MILESTONE_TARGETS.length ||
+    observations.some(
+      (observation) =>
+        typeof observation !== "object" ||
+        observation === null ||
+        !verifiedRemoteReadBackObservations.has(observation),
+    )
+  ) {
+    fail(code, "The receipt requires an opaque verified remote read-back observation set.");
+  }
+  return observations;
+}
+
 export type SignableReleaseStatement =
   | ComposedPromotionStatement
   | ComposedPublisherAttestationStatement
+  | ComposedRemoteReadBackObservationStatement
   | ComposedSupportedChannelReceiptStatement;
 
 export interface SignedReleaseEnvelopeValue {
   readonly algorithm: "ed25519";
   readonly keyId: string;
   readonly product: "OpenDelegate";
-  readonly role: "promotion" | "publisher";
+  readonly role: "observer" | "promotion" | "publisher";
   readonly schemaVersion: 1 | 2;
   readonly signature: string;
   readonly statement:
     | PromotionAuthorizationStatementValue
     | PublisherAttestationStatementValue
+    | RemoteReadBackObservationStatement
     | SupportedChannelReceiptStatement;
 }
 
@@ -3454,7 +3955,8 @@ export function composeSignedReleaseEnvelope(input: {
     typeof input.keyId !== "string" ||
     !QUALIFIED_SHA256_PATTERN.test(input.keyId) ||
     typeof input.signature !== "string" ||
-    !BASE64_URL_SIGNATURE_PATTERN.test(input.signature)
+    !BASE64_URL_SIGNATURE_PATTERN.test(input.signature) ||
+    (descriptor.requiredKeyId !== undefined && descriptor.requiredKeyId !== input.keyId)
   ) {
     fail(
       "SIGNED_ENVELOPE_INVALID",

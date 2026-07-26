@@ -121,11 +121,18 @@ interface ParsedLiveEvidenceConfiguration extends ParsedEvidenceConfiguration {
   readonly criterionId: number;
 }
 
+interface ParsedReadBackObservationConfiguration {
+  readonly file: string;
+  readonly target: ReleaseTarget;
+}
+
 interface ParsedPromotionConfiguration {
   readonly liveEvidence: readonly ParsedLiveEvidenceConfiguration[];
   readonly notarizationReceiptFile: string;
+  readonly observerTrustRootFile: string;
   readonly promotionAttestationFile: string;
   readonly promotionTrustRootFile: string;
+  readonly readBackObservations: readonly ParsedReadBackObservationConfiguration[];
   readonly supportMatrix: ParsedEvidenceConfiguration;
   readonly supportedChannelReceiptFile: string;
 }
@@ -146,7 +153,12 @@ interface MaterializedPromotion {
   readonly attestationPath: string;
   readonly liveEvidence: readonly ImmutableLiveEvidenceFile[];
   readonly notarizationReceiptPath: string;
+  readonly observerPublicKeyPem: Uint8Array;
   readonly publicKeyPem: Uint8Array;
+  readonly readBackObservations: readonly {
+    readonly envelopePath: string;
+    readonly target: ReleaseTarget;
+  }[];
   readonly receiptPath: string;
   readonly supportMatrix: {
     readonly bytes: Uint8Array;
@@ -367,7 +379,11 @@ function configuredVerifyReleaseInput(
       notarizationReceiptPath: materialized.promotion.notarizationReceiptPath,
       supportMatrix: materialized.promotion.supportMatrix,
     },
-    promotionReceipt: { receiptPath: materialized.promotion.receiptPath },
+    promotionReceipt: {
+      observerTrust: { publicKeyPem: materialized.promotion.observerPublicKeyPem },
+      readBackObservations: materialized.promotion.readBackObservations,
+      receiptPath: materialized.promotion.receiptPath,
+    },
     promotionTrust: { publicKeyPem: materialized.promotion.publicKeyPem },
   };
 }
@@ -658,6 +674,20 @@ async function materializeConfiguration(
       configuration.promotion.promotionTrustRootFile,
       MAXIMUM_KEY_BYTES,
     );
+    const observerTrust = await resolveAndPin(
+      configuration.promotion.observerTrustRootFile,
+      MAXIMUM_KEY_BYTES,
+    );
+    const readBackObservations = [];
+    for (const observation of configuration.promotion.readBackObservations) {
+      const envelope = await resolveAndPin(observation.file, MAXIMUM_ATTESTATION_BYTES);
+      readBackObservations.push(
+        Object.freeze({
+          envelopePath: envelope.lexicalPath,
+          target: observation.target,
+        }),
+      );
+    }
     const supportMatrix = await resolveAndPin(
       configuration.promotion.supportMatrix.file,
       MAXIMUM_EVIDENCE_BYTES,
@@ -681,7 +711,11 @@ async function materializeConfiguration(
       attestationPath: promotionAttestation.lexicalPath,
       liveEvidence: Object.freeze(liveEvidence),
       notarizationReceiptPath: notarizationReceipt.lexicalPath,
+      observerPublicKeyPem: Uint8Array.from(
+        pinnedFiles.get(pathKey(observerTrust.lexicalPath))!.bytes,
+      ),
       publicKeyPem: Uint8Array.from(pinnedFiles.get(pathKey(promotionTrust.lexicalPath))!.bytes),
+      readBackObservations: Object.freeze(readBackObservations),
       receiptPath: receipt.lexicalPath,
       supportMatrix: Object.freeze({
         bytes: Uint8Array.from(pinnedFiles.get(pathKey(supportMatrix.lexicalPath))!.bytes),
@@ -882,6 +916,8 @@ function parsePromotionConfiguration(candidate: unknown): ParsedPromotionConfigu
     "promotionAttestationFile",
     "supportedChannelReceiptFile",
     "promotionTrustRootFile",
+    "observerTrustRootFile",
+    "readBackObservations",
     "supportMatrix",
     "notarizationReceiptFile",
     "liveEvidence",
@@ -907,10 +943,37 @@ function parsePromotionConfiguration(candidate: unknown): ParsedPromotionConfigu
   });
   assertUniqueStrings(liveEvidence.map(({ statementPath }) => statementPath));
   assertUniqueStrings(liveEvidence.map(({ file }) => file));
+  if (
+    !Array.isArray(value["readBackObservations"]) ||
+    value["readBackObservations"].length !== FIRST_MILESTONE_TARGETS.size
+  ) {
+    throw configurationInvalid();
+  }
+  const expectedTargets = ["darwin-arm64", "linux-x64", "win32-x64"];
+  const readBackObservations = value["readBackObservations"].map((entry, index) => {
+    const record = requireRecord(entry);
+    assertExactKeys(record, ["target", "file"]);
+    const target = requireRecord(record["target"]);
+    assertExactKeys(target, ["platform", "architecture"]);
+    const parsedTarget = Object.freeze({
+      platform: target["platform"],
+      architecture: target["architecture"],
+    }) as ReleaseTarget;
+    if (targetKey(parsedTarget) !== expectedTargets[index]) {
+      throw configurationInvalid();
+    }
+    return Object.freeze({
+      file: requirePortablePath(record["file"]),
+      target: parsedTarget,
+    });
+  });
+  assertUniqueStrings(readBackObservations.map(({ file }) => file));
   return Object.freeze({
     promotionAttestationFile: requirePortablePath(value["promotionAttestationFile"]),
     supportedChannelReceiptFile: requirePortablePath(value["supportedChannelReceiptFile"]),
     promotionTrustRootFile: requirePortablePath(value["promotionTrustRootFile"]),
+    observerTrustRootFile: requirePortablePath(value["observerTrustRootFile"]),
+    readBackObservations: Object.freeze(readBackObservations),
     supportMatrix,
     notarizationReceiptFile: requirePortablePath(value["notarizationReceiptFile"]),
     liveEvidence: Object.freeze(liveEvidence),

@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, sign as createSignature } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -110,25 +110,48 @@ export async function createPromotionToolFixture(t) {
   const promotionPlanPath = join(inputRoot, "promotion-plan.json");
   await writeCanonical(promotionPlanPath, promotionPlan);
   const signing = await createSigningPolicy(join(root, "promotion-authority"), "promotion");
+  const observerKeyPair = generateKeyPairSync("ed25519");
+  const observerAuthorityRoot = join(root, "observer-authority");
+  const observerPublicKeyPath = join(observerAuthorityRoot, "public.pem");
+  await mkdir(observerAuthorityRoot, { recursive: true });
+  await writeFile(
+    observerPublicKeyPath,
+    observerKeyPair.publicKey.export({ format: "pem", type: "spki" }),
+    { mode: 0o644 },
+  );
+  const observerKeyId = `sha256:${sha256(
+    observerKeyPair.publicKey.export({ format: "der", type: "spki" }),
+  )}`;
   const runnerExecutableSha256 = await sha256File(process.execPath);
+  const sourceIdentity = {
+    commit: promotionPlan.source.buildCommit,
+    commitEpoch: 1_753_315_324,
+    dirty: false,
+  };
+  const gitProvenance = Object.freeze({
+    description: Object.freeze({
+      gitExecutableSha256: runnerExecutableSha256,
+      source: Object.freeze({ ...sourceIdentity }),
+    }),
+  });
   const runnerDependencies = {
+    assertGitFilesMatchCommit: async () => {},
     hashRuntimeExecutable: async () => ({
       sha256: runnerExecutableSha256,
       size: 1,
     }),
+    pinGitProvenance: async () => gitProvenance,
+    revalidateGitProvenance: async () => sourceIdentity,
     runner: {
       architecture: process.arch,
       nodeVersion: "24.18.0",
       platform: process.platform,
     },
   };
-  const sourceIdentity = {
-    commit: promotionPlan.source.buildCommit,
-    commitEpoch: 1_753_315_324,
-    dirty: false,
-  };
   const promotionInput = {
     attestationDestination: join(outputRoot, "promotion-attestation.json"),
+    gitExecutablePath: process.execPath,
+    gitExecutableSha256: runnerExecutableSha256,
     planPath: promotionPlanPath,
     planSha256: await sha256File(promotionPlanPath),
     repositoryRoot,
@@ -152,6 +175,11 @@ export async function createPromotionToolFixture(t) {
     root,
     runnerDependencies,
     signing,
+    observer: {
+      keyId: observerKeyId,
+      keyPair: observerKeyPair,
+      publicKeyPath: observerPublicKeyPath,
+    },
     sourceIdentity,
     async rewritePromotionPlan(mutator) {
       const value = structuredClone(promotionPlan);
@@ -160,35 +188,54 @@ export async function createPromotionToolFixture(t) {
       promotionInput.planSha256 = await sha256File(promotionPlanPath);
       return value;
     },
-    async createReadBackInput(promotionResult, mutator = () => {}) {
+    async createReadBackInput(promotionResult, mutator = () => {}, observationMutator = () => {}) {
       const readBackRoot = join(inputRoot, "remote-read-back");
       await mkdir(readBackRoot, { recursive: true });
       const readBackRecords = [];
-      for (const release of releaseSet.releases) {
+      const observationEnvelopes = [];
+      for (let index = 0; index < releaseSet.releases.length; index += 1) {
+        const release = releaseSet.releases[index];
         const targetName = `${release.candidate.target.platform}-${release.candidate.target.architecture}`;
-        const record = {
-          schemaVersion: 1,
-          product: "OpenDelegate",
-          type: "independent-remote-read-back",
+        const expectedSource = {
+          provider: "fixture-channel",
+          immutableObjectId: `fixture/releases/${composition.releaseId}/${release.archive.path}`,
+          immutableObjectVersion: `fixture-version-${targetName}`,
+        };
+        const observationInput = {
+          archive: release.archive,
           releaseId: composition.releaseId,
           channel: composition.channel,
           tag: `v${release.candidate.productVersion}`,
           target: release.candidate.target,
-          asset: release.archive,
-          source: {
-            provider: "fixture-channel",
-            immutableObjectId: `fixture/releases/${composition.releaseId}/${release.archive.path}`,
-            readerId: `fixture-read-back-${targetName}`,
-          },
-          readBackSha256: release.archive.sha256,
+          provider: expectedSource.provider,
+          immutableObjectId: expectedSource.immutableObjectId,
+          immutableObjectVersion: expectedSource.immutableObjectVersion,
+          observedStreamSha256: release.archive.sha256,
+          observerAuthorityKeyId: observerKeyId,
+          uploaderAuthorityKeyId: signing.keyId,
           observedAt: "2026-07-26T03:00:00.000Z",
         };
+        observationMutator(observationInput, index);
+        const composedObservation =
+          integrity.composeRemoteReadBackObservationStatement(observationInput);
+        const observationSignature = createSignature(
+          null,
+          composedObservation.signingBytes,
+          observerKeyPair.privateKey,
+        ).toString("base64url");
+        const envelope = integrity.composeSignedReleaseEnvelope({
+          composed: composedObservation,
+          keyId: observerKeyId,
+          signature: observationSignature,
+        });
         const path = join(readBackRoot, `${targetName}.json`);
-        await writeCanonical(path, record);
+        await writeFile(path, envelope.canonicalBytes);
         readBackRecords.push({
           target: release.candidate.target,
-          file: await pinnedFile(path),
+          expectedSource,
+          envelope: await pinnedFile(path),
         });
+        observationEnvelopes.push({ envelope, path });
       }
       const readBackPlan = {
         schemaVersion: 1,
@@ -199,7 +246,7 @@ export async function createPromotionToolFixture(t) {
         receiptId: "receipt:opendelegate-v0.1.0-alpha.1:tool-0001",
         observedAt: "2026-07-26T03:01:00.000Z",
         publication: {
-          uploaderId: "fixture-uploader",
+          uploaderAuthorityKeyId: signing.keyId,
           immutable: true,
         },
         promotion: {
@@ -214,9 +261,12 @@ export async function createPromotionToolFixture(t) {
       return {
         readBackPlan,
         readBackPlanPath,
+        observationEnvelopes,
         input: {
           promotionPlanPath,
           promotionPlanSha256: promotionInput.planSha256,
+          observerTrustRootPath: observerPublicKeyPath,
+          observerTrustRootSha256: await sha256File(observerPublicKeyPath),
           readBackPlanPath,
           readBackPlanSha256: await sha256File(readBackPlanPath),
           receiptDestination: join(outputRoot, "supported-channel-receipt.json"),
@@ -280,6 +330,8 @@ export async function createPromotionToolFixture(t) {
         planPath,
         input: {
           destinationRoot: join(root, `configured-${mode}-${platform}`),
+          gitExecutablePath: process.execPath,
+          gitExecutableSha256: runnerExecutableSha256,
           planPath,
           planSha256: await sha256File(planPath),
           repositoryRoot,
