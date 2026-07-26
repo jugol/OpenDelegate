@@ -74,6 +74,10 @@ test("promotion and receipt CLIs require exact absolute hash-pinned inputs", () 
       "--",
       "--repository",
       root,
+      "--git-executable",
+      process.execPath,
+      "--git-executable-sha256",
+      "e".repeat(64),
       "--promotion-plan",
       join(root, "promotion-plan.json"),
       "--promotion-plan-sha256",
@@ -82,6 +86,10 @@ test("promotion and receipt CLIs require exact absolute hash-pinned inputs", () 
       join(root, "read-back-plan.json"),
       "--read-back-plan-sha256",
       "b".repeat(64),
+      "--observer-trust-root",
+      join(root, "observer-public.pem"),
+      "--observer-trust-root-sha256",
+      "f".repeat(64),
       "--signing-policy",
       join(root, "promotion-policy.json"),
       "--signing-policy-sha256",
@@ -94,8 +102,12 @@ test("promotion and receipt CLIs require exact absolute hash-pinned inputs", () 
       "d".repeat(64),
     ]),
     {
+      gitExecutablePath: process.execPath,
+      gitExecutableSha256: "e".repeat(64),
       promotionPlanPath: join(root, "promotion-plan.json"),
       promotionPlanSha256: "a".repeat(64),
+      observerTrustRootPath: join(root, "observer-public.pem"),
+      observerTrustRootSha256: "f".repeat(64),
       readBackPlanPath: join(root, "read-back-plan.json"),
       readBackPlanSha256: "b".repeat(64),
       receiptDestination: join(root, "receipt.json"),
@@ -138,6 +150,10 @@ test("promotion and receipt CLIs require exact absolute hash-pinned inputs", () 
       parseSupportedChannelReceiptArguments([
         "--repository",
         root,
+        "--git-executable",
+        process.execPath,
+        "--git-executable-sha256",
+        "e".repeat(64),
         "--promotion-plan",
         join(root, "promotion-plan.json"),
         "--promotion-plan-sha256",
@@ -146,6 +162,10 @@ test("promotion and receipt CLIs require exact absolute hash-pinned inputs", () 
         join(root, "read-back-plan.json"),
         "--read-back-plan-sha256",
         "b".repeat(64),
+        "--observer-trust-root",
+        join(root, "observer-public.pem"),
+        "--observer-trust-root-sha256",
+        "f".repeat(64),
         "--signing-policy",
         join(root, "promotion-policy.json"),
         "--signing-policy-sha256",
@@ -378,6 +398,10 @@ test(
         arguments: [
           "--repository",
           root,
+          "--git-executable",
+          process.execPath,
+          "--git-executable-sha256",
+          digest,
           "--promotion-plan",
           join(root, "promotion-plan.json"),
           "--promotion-plan-sha256",
@@ -385,6 +409,10 @@ test(
           "--read-back-plan",
           join(root, "read-back-plan.json"),
           "--read-back-plan-sha256",
+          digest,
+          "--observer-trust-root",
+          join(root, "observer-public.pem"),
+          "--observer-trust-root-sha256",
           digest,
           "--signing-policy",
           join(root, "promotion-policy.json"),
@@ -459,6 +487,11 @@ test(
       runnerRecord.outputs.promotionAttestation.sha256,
       result.promotionAttestation.sha256,
     );
+    assert.match(runnerRecord.runner.brokerEndpointSha256, /^[0-9a-f]{64}$/u);
+    assert.equal(runnerRecord.runner.brokerProtocol, "opendelegate.release.signer-broker.v1");
+    assert.equal(runnerRecord.runner.brokerTransportKeyId, fixture.signing.transportKeyId);
+    assert.equal(Object.hasOwn(runnerRecord.runner, "signerExecutableSha256"), false);
+    assert.equal(Object.hasOwn(runnerRecord.runner, "invocationArtifactSha256"), false);
     assert.equal(recordText.includes(fixture.root), false);
     assert.equal(recordText.includes("PRIVATE KEY"), false);
     assert.deepEqual(
@@ -502,10 +535,15 @@ test(
 
     const reused = await createPromotionToolFixture(t);
     const publisher = reused.releaseSet.publishers[0];
-    const signing = await createSigningPolicy(join(reused.root, "reused-authority"), "promotion", {
-      privateKey: publisher.privateKey,
-      publicKey: createPublicKey(publisher.privateKey),
-    });
+    const signing = await createSigningPolicy(
+      join(reused.root, "reused-authority"),
+      "promotion",
+      {
+        privateKey: publisher.privateKey,
+        publicKey: createPublicKey(publisher.privateKey),
+      },
+      t,
+    );
     reused.promotionInput.signingPolicyPath = signing.policyPath;
     reused.promotionInput.signingPolicySha256 = await sha256File(signing.policyPath);
     await assert.rejects(
@@ -547,10 +585,36 @@ test(
     );
     assert.deepEqual(await readdir(changedLogic.outputRoot), []);
 
+    const precredentialMutation = await createPromotionToolFixture(t);
+    let signerInvocationCount = 0;
+    const { authorizeCredentialUse } = await import("../release-credential-authorization.mjs");
+    await assert.rejects(
+      promoteRelease(precredentialMutation.promotionInput, {
+        ...precredentialMutation.runnerDependencies,
+        async authorizeCredentialUse(input) {
+          const changedPlan = structuredClone(precredentialMutation.promotionPlan);
+          changedPlan.revocations.revokedPromotionKeyIds.push(precredentialMutation.signing.keyId);
+          await writeCanonical(precredentialMutation.promotionPlanPath, changedPlan);
+          return authorizeCredentialUse(input);
+        },
+        integrity: precredentialMutation.integrity,
+        readSourceIdentity: async () => precredentialMutation.sourceIdentity,
+        async signWithPolicy() {
+          signerInvocationCount += 1;
+          throw new Error("signer must not be invoked");
+        },
+      }),
+      /SHA-256.*pin|changed during release authorization/iu,
+    );
+    assert.equal(signerInvocationCount, 0);
+    assert.deepEqual(await readdir(precredentialMutation.outputRoot), []);
+
     const wrongRole = await createPromotionToolFixture(t);
     const publisherPolicy = await createSigningPolicy(
       join(wrongRole.root, "wrong-role-authority"),
       "publisher",
+      undefined,
+      t,
     );
     wrongRole.promotionInput.signingPolicyPath = publisherPolicy.policyPath;
     wrongRole.promotionInput.signingPolicySha256 = await sha256File(publisherPolicy.policyPath);
@@ -641,10 +705,20 @@ test(
       readSourceIdentity: async () => fixture.sourceIdentity,
     });
     const readBack = await fixture.createReadBackInput(promotion);
+    let receiptAuthorizationSnapshot;
+    let receiptGitInput;
     const receipt = await createSupportedChannelReceipt(readBack.input, {
       ...fixture.runnerDependencies,
+      async authorizeCredentialUse(input) {
+        receiptAuthorizationSnapshot = structuredClone(input.snapshot);
+        return fixture.runnerDependencies.authorizeCredentialUse(input);
+      },
       integrity: fixture.integrity,
       now: () => new Date("2026-07-26T03:02:00.000Z"),
+      async pinGitProvenance(input) {
+        receiptGitInput = structuredClone(input);
+        return fixture.runnerDependencies.pinGitProvenance(input);
+      },
       readSourceIdentity: async () => fixture.sourceIdentity,
     });
 
@@ -654,10 +728,20 @@ test(
       await sha256File(receipt.supportedChannelReceipt.path),
     );
     const envelope = JSON.parse(await readFile(receipt.supportedChannelReceipt.path, "utf8"));
-    assert.equal(envelope.statement.domain, "opendelegate.release.supported-channel-receipt.v1");
+    assert.equal(envelope.statement.domain, "opendelegate.release.supported-channel-receipt.v2");
     assert.equal(envelope.statement.channel, fixture.composition.channel);
     assert.equal(envelope.statement.tag, "v0.1.0-alpha.1");
     assert.equal(envelope.statement.publishedAssets.length, 3);
+    assert.deepEqual(receiptGitInput, {
+      expectedExecutableSha256: fixture.promotionInput.gitExecutableSha256,
+      executablePath: fixture.promotionInput.gitExecutablePath,
+      repositoryRoot: fixture.repositoryRoot,
+    });
+    assert.equal(
+      receiptAuthorizationSnapshot.gitExecutableSha256,
+      fixture.promotionInput.gitExecutableSha256,
+    );
+    assert.equal(receiptAuthorizationSnapshot.sourceCommit, fixture.sourceIdentity.commit);
 
     for (let index = 0; index < fixture.releaseSet.releases.length; index += 1) {
       const release = fixture.releaseSet.releases[index];
@@ -679,7 +763,16 @@ test(
           notarizationReceiptPath: fixture.promotionPlan.notarizationReceipt.file.path,
           supportMatrix: fixture.composition.supportMatrix,
         },
-        promotionReceipt: { receiptPath: receipt.supportedChannelReceipt.path },
+        promotionReceipt: {
+          observerTrust: {
+            publicKeyPem: await readFile(receipt.observerTrustRoot.path),
+          },
+          readBackObservations: receipt.readBackObservations.map(({ envelopePath, target }) => ({
+            envelopePath,
+            target,
+          })),
+          receiptPath: receipt.supportedChannelReceipt.path,
+        },
         promotionTrust: { publicKeyPem: await readFile(fixture.signing.publicKeyPath) },
       });
       assert.equal(verified.effectiveChannel, "released");
@@ -688,6 +781,12 @@ test(
     const recordText = await readFile(receipt.runnerRecord.path, "utf8");
     assert.equal(recordText.includes(fixture.root), false);
     assert.equal(recordText.includes("PRIVATE KEY"), false);
+    const runnerRecord = JSON.parse(recordText);
+    assert.equal(
+      runnerRecord.runner.gitExecutableSha256,
+      fixture.promotionInput.gitExecutableSha256,
+    );
+    assert.equal(runnerRecord.source.buildCommit, fixture.sourceIdentity.commit);
   },
 );
 
@@ -706,16 +805,18 @@ test(
       integrity: independent.integrity,
       readSourceIdentity: async () => independent.sourceIdentity,
     });
-    const nonIndependent = await independent.createReadBackInput(firstPromotion, (plan) => {
-      plan.publication.uploaderId = "fixture-read-back-darwin-arm64";
-    });
+    const nonIndependent = await independent.createReadBackInput(firstPromotion);
+    nonIndependent.input.observerTrustRootPath = independent.signing.publicKeyPath;
+    nonIndependent.input.observerTrustRootSha256 = await sha256File(
+      independent.signing.publicKeyPath,
+    );
     await assert.rejects(
       createSupportedChannelReceipt(nonIndependent.input, {
         ...independent.runnerDependencies,
         integrity: independent.integrity,
         readSourceIdentity: async () => independent.sourceIdentity,
       }),
-      /independent/u,
+      /observer and uploader authorities must be distinct/u,
     );
     assert.equal(
       (await readdir(independent.outputRoot)).includes("supported-channel-receipt.json"),
@@ -745,6 +846,27 @@ test(
       false,
     );
 
+    const revokedObserver = await createPromotionToolFixture(t);
+    await revokedObserver.rewritePromotionPlan((plan) => {
+      plan.revocations.revokedObserverKeyIds.push(revokedObserver.observer.keyId);
+    });
+    const revokedObserverPromotion = await promoteRelease(revokedObserver.promotionInput, {
+      ...revokedObserver.runnerDependencies,
+      integrity: revokedObserver.integrity,
+      readSourceIdentity: async () => revokedObserver.sourceIdentity,
+    });
+    const revokedObserverReadBack =
+      await revokedObserver.createReadBackInput(revokedObserverPromotion);
+    await assert.rejects(
+      createSupportedChannelReceipt(revokedObserverReadBack.input, {
+        ...revokedObserver.runnerDependencies,
+        integrity: revokedObserver.integrity,
+        readSourceIdentity: async () => revokedObserver.sourceIdentity,
+      }),
+      /observer is revoked/u,
+    );
+    assert.equal(revokedObserver.receiptSigning.broker.metrics.releaseKeyUseCount, 0);
+
     const tampered = await createPromotionToolFixture(t);
     const tamperedPromotion = await promoteRelease(tampered.promotionInput, {
       ...tampered.runnerDependencies,
@@ -752,10 +874,10 @@ test(
       readSourceIdentity: async () => tampered.sourceIdentity,
     });
     const tamperedReadBack = await tampered.createReadBackInput(tamperedPromotion);
-    const firstRecord = tamperedReadBack.readBackPlan.readBackRecords[0].file.path;
+    const firstRecord = tamperedReadBack.readBackPlan.readBackRecords[0].envelope.path;
     const record = JSON.parse(await readFile(firstRecord, "utf8"));
-    record.readBackSha256 = "0".repeat(64);
-    await writeFile(firstRecord, `${JSON.stringify(record)}\n`, "utf8");
+    record.statement.source.immutableObjectVersion = "caller-forged-version";
+    await writeFile(firstRecord, `${JSON.stringify(record, null, 2)}\n`, "utf8");
     await assert.rejects(
       createSupportedChannelReceipt(tamperedReadBack.input, {
         ...tampered.runnerDependencies,
@@ -764,6 +886,128 @@ test(
       }),
       /SHA-256.*pin|digest.*pin/iu,
     );
+
+    const invalidBinding = await createPromotionToolFixture(t);
+    const invalidBindingPromotion = await promoteRelease(invalidBinding.promotionInput, {
+      ...invalidBinding.runnerDependencies,
+      integrity: invalidBinding.integrity,
+      readSourceIdentity: async () => invalidBinding.sourceIdentity,
+    });
+    const wrongObject = await invalidBinding.createReadBackInput(
+      invalidBindingPromotion,
+      undefined,
+      (observation, index) => {
+        if (index === 0) {
+          observation.immutableObjectVersion = "wrong-immutable-version";
+        }
+      },
+    );
+    await assert.rejects(
+      createSupportedChannelReceipt(wrongObject.input, {
+        ...invalidBinding.runnerDependencies,
+        integrity: invalidBinding.integrity,
+        readSourceIdentity: async () => invalidBinding.sourceIdentity,
+      }),
+      /does not match the immutable promoted asset/u,
+    );
+
+    const wrongHash = await invalidBinding.createReadBackInput(
+      invalidBindingPromotion,
+      undefined,
+      (observation, index) => {
+        if (index === 1) {
+          const forgedSha256 = "0".repeat(64);
+          observation.archive = { ...observation.archive, sha256: forgedSha256 };
+          observation.observedStreamSha256 = forgedSha256;
+        }
+      },
+    );
+    await assert.rejects(
+      createSupportedChannelReceipt(wrongHash.input, {
+        ...invalidBinding.runnerDependencies,
+        integrity: invalidBinding.integrity,
+        readSourceIdentity: async () => invalidBinding.sourceIdentity,
+      }),
+      /does not match the immutable promoted asset/u,
+    );
+
+    const missingSignature = await invalidBinding.createReadBackInput(invalidBindingPromotion);
+    const unsignedPath = missingSignature.readBackPlan.readBackRecords[0].envelope.path;
+    const unsignedEnvelope = JSON.parse(await readFile(unsignedPath, "utf8"));
+    delete unsignedEnvelope.signature;
+    await writeFile(unsignedPath, `${JSON.stringify(unsignedEnvelope, null, 2)}\n`, "utf8");
+    missingSignature.readBackPlan.readBackRecords[0].envelope.sha256 =
+      await sha256File(unsignedPath);
+    await writeCanonical(missingSignature.readBackPlanPath, missingSignature.readBackPlan);
+    missingSignature.input.readBackPlanSha256 = await sha256File(missingSignature.readBackPlanPath);
+    await assert.rejects(
+      createSupportedChannelReceipt(missingSignature.input, {
+        ...invalidBinding.runnerDependencies,
+        integrity: invalidBinding.integrity,
+        readSourceIdentity: async () => invalidBinding.sourceIdentity,
+      }),
+      /fields do not match|signature/u,
+    );
+
+    const incompleteSet = await invalidBinding.createReadBackInput(invalidBindingPromotion);
+    incompleteSet.readBackPlan.readBackRecords.pop();
+    await writeCanonical(incompleteSet.readBackPlanPath, incompleteSet.readBackPlan);
+    incompleteSet.input.readBackPlanSha256 = await sha256File(incompleteSet.readBackPlanPath);
+    await assert.rejects(
+      createSupportedChannelReceipt(incompleteSet.input, {
+        ...invalidBinding.runnerDependencies,
+        integrity: invalidBinding.integrity,
+        readSourceIdentity: async () => invalidBinding.sourceIdentity,
+      }),
+      /exact promoted asset set/u,
+    );
+
+    const precredentialMutation = await invalidBinding.createReadBackInput(invalidBindingPromotion);
+    let receiptSignerInvocationCount = 0;
+    const authorizeReceipt = invalidBinding.runnerDependencies.authorizeCredentialUse;
+    await assert.rejects(
+      createSupportedChannelReceipt(precredentialMutation.input, {
+        ...invalidBinding.runnerDependencies,
+        async authorizeCredentialUse(input) {
+          const envelopePath = precredentialMutation.readBackPlan.readBackRecords[0].envelope.path;
+          await writeFile(envelopePath, "mutated before credential use\n", "utf8");
+          return authorizeReceipt(input);
+        },
+        integrity: invalidBinding.integrity,
+        readSourceIdentity: async () => invalidBinding.sourceIdentity,
+        async signWithPolicy() {
+          receiptSignerInvocationCount += 1;
+          throw new Error("receipt signer must not be invoked");
+        },
+      }),
+      /SHA-256.*pin|changed during release authorization/iu,
+    );
+    assert.equal(receiptSignerInvocationCount, 0);
+
+    const changedGit = await invalidBinding.createReadBackInput(invalidBindingPromotion);
+    let gitRevalidationCount = 0;
+    let gitMutationSignerInvocationCount = 0;
+    await assert.rejects(
+      createSupportedChannelReceipt(changedGit.input, {
+        ...invalidBinding.runnerDependencies,
+        integrity: invalidBinding.integrity,
+        readSourceIdentity: async () => invalidBinding.sourceIdentity,
+        async revalidateGitProvenance() {
+          gitRevalidationCount += 1;
+          if (gitRevalidationCount > 1) {
+            throw new Error("The pinned release source identity changed during authorization.");
+          }
+          return invalidBinding.sourceIdentity;
+        },
+        async signWithPolicy() {
+          gitMutationSignerInvocationCount += 1;
+          throw new Error("receipt signer must not be invoked");
+        },
+      }),
+      /source identity changed during authorization/u,
+    );
+    assert.equal(gitRevalidationCount, 2);
+    assert.equal(gitMutationSignerInvocationCount, 0);
 
     const recomposed = await createPromotionToolFixture(t);
     const recomposedPromotion = await promoteRelease(recomposed.promotionInput, {
@@ -829,12 +1073,12 @@ test(
       readSourceIdentity: async () => linkedReadBack.sourceIdentity,
     });
     const linkedReadBackInput = await linkedReadBack.createReadBackInput(linkedPromotion);
-    const originalRecord = linkedReadBackInput.readBackPlan.readBackRecords[0].file.path;
+    const originalRecord = linkedReadBackInput.readBackPlan.readBackRecords[0].envelope.path;
     const masqueradingRecord = join(linkedReadBack.outputRoot, "masquerading-read-back.json");
     await writeFile(masqueradingRecord, await readFile(originalRecord));
     const linkedOutputRoot = join(linkedReadBack.root, "linked-output-root");
     await createDirectoryAlias(linkedOutputRoot, linkedReadBack.outputRoot);
-    linkedReadBackInput.readBackPlan.readBackRecords[0].file = {
+    linkedReadBackInput.readBackPlan.readBackRecords[0].envelope = {
       path: join(linkedOutputRoot, "masquerading-read-back.json"),
       sha256: await sha256File(masqueradingRecord),
     };

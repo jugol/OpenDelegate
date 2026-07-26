@@ -272,6 +272,8 @@ async function loadConfigurationInputs(plan, roots) {
           plan.promotion.promotionAttestation,
           plan.promotion.supportedChannelReceipt,
           plan.promotion.promotionTrustRoot,
+          plan.promotion.observerTrustRoot,
+          ...plan.promotion.readBackObservations.map(({ envelope }) => envelope),
         ]),
   ]) {
     assertPathOutsideRoots(
@@ -315,6 +317,20 @@ async function loadConfigurationInputs(plan, roots) {
         label: "promotion trust root",
         maximumBytes: MAXIMUM_KEY_BYTES,
       }),
+      observerTrustRoot: await readPinnedBytes({
+        ...plan.promotion.observerTrustRoot,
+        label: "remote read-back observer trust root",
+        maximumBytes: MAXIMUM_KEY_BYTES,
+      }),
+      readBackObservations: await Promise.all(
+        plan.promotion.readBackObservations.map(({ target, envelope }) =>
+          readPinnedBytes({
+            ...envelope,
+            label: `remote read-back observation ${target.platform}-${target.architecture}`,
+            maximumBytes: MAXIMUM_ATTESTATION_BYTES,
+          }),
+        ),
+      ),
       supportMatrix: await readPinnedBytes({
         ...plan.promotion.supportMatrix.file,
         label: "support matrix",
@@ -346,6 +362,8 @@ async function loadConfigurationInputs(plan, roots) {
           promotion.promotionAttestation.path,
           promotion.supportedChannelReceipt.path,
           promotion.promotionTrustRoot.path,
+          promotion.observerTrustRoot.path,
+          ...promotion.readBackObservations.map(({ path }) => path),
           promotion.supportMatrix.path,
           promotion.notarizationReceipt.path,
           ...promotion.liveEvidence.map(({ path }) => path),
@@ -369,6 +387,8 @@ function assertConfigurationInputBoundaries(loaded, roots) {
           loaded.promotion.promotionAttestation,
           loaded.promotion.supportedChannelReceipt,
           loaded.promotion.promotionTrustRoot,
+          loaded.promotion.observerTrustRoot,
+          ...loaded.promotion.readBackObservations,
           loaded.promotion.supportMatrix,
           loaded.promotion.notarizationReceipt,
           ...loaded.promotion.liveEvidence,
@@ -387,6 +407,8 @@ function assertConfigurationInputBoundaries(loaded, roots) {
           loaded.promotion.promotionAttestation,
           loaded.promotion.supportedChannelReceipt,
           loaded.promotion.promotionTrustRoot,
+          loaded.promotion.observerTrustRoot,
+          ...loaded.promotion.readBackObservations,
         ]),
   ];
   for (const file of authorityFiles) {
@@ -430,6 +452,13 @@ async function verifyConfigurationSource(integrity, plan, loaded, candidateRoot)
             },
           },
           promotionReceipt: {
+            observerTrust: {
+              publicKeyPem: loaded.promotion.observerTrustRoot.bytes,
+            },
+            readBackObservations: plan.promotion.readBackObservations.map(({ target }, index) => ({
+              envelopePath: loaded.promotion.readBackObservations[index].path,
+              target,
+            })),
             receiptPath: loaded.promotion.supportedChannelReceipt.path,
           },
           promotionTrust: {
@@ -494,6 +523,13 @@ function createConfigurationTree({
             promotionAttestationFile: `${materialTrustRoot}/promotion/promotion-attestation.json`,
             supportedChannelReceiptFile: `${materialTrustRoot}/promotion/supported-channel-receipt.json`,
             promotionTrustRootFile: `${materialTrustRoot}/promotion/promotion-public.pem`,
+            observerTrustRootFile: `${materialTrustRoot}/promotion/observer-public.pem`,
+            readBackObservations: plan.promotion.readBackObservations.map(({ target }) => ({
+              target,
+              file:
+                `${materialTrustRoot}/promotion/read-back/` +
+                `${target.platform}-${target.architecture}.json`,
+            })),
             supportMatrix: {
               statementPath: plan.promotion.supportMatrix.statementPath,
               file: `${materialTrustRoot}/promotion/support-matrix.md`,
@@ -548,6 +584,23 @@ function createConfigurationTree({
         mode: 0o644,
         role: "promotion-trust-root",
       },
+      {
+        path: `${materialRoot}/promotion/observer-public.pem`,
+        bytes: loaded.promotion.observerTrustRoot.bytes,
+        mode: 0o644,
+        role: "read-back-observer-trust-root",
+      },
+      ...loaded.promotion.readBackObservations.map((file, index) => {
+        const target = plan.promotion.readBackObservations[index].target;
+        return {
+          path:
+            `${materialRoot}/promotion/read-back/` +
+            `${target.platform}-${target.architecture}.json`,
+          bytes: file.bytes,
+          mode: 0o644,
+          role: `read-back-observation-${target.platform}-${target.architecture}`,
+        };
+      }),
       {
         path: `${materialRoot}/promotion/support-matrix.md`,
         bytes: loaded.promotion.supportMatrix.bytes,
@@ -685,6 +738,18 @@ async function revalidateConfigurationInputs(planFile, plan, loaded) {
         MAXIMUM_KEY_BYTES,
       ],
       [
+        plan.promotion.observerTrustRoot,
+        loaded.promotion.observerTrustRoot,
+        "remote read-back observer trust root",
+        MAXIMUM_KEY_BYTES,
+      ],
+      ...plan.promotion.readBackObservations.map((observation, index) => [
+        observation.envelope,
+        loaded.promotion.readBackObservations[index],
+        `remote read-back observation ${observation.target.platform}-${observation.target.architecture}`,
+        MAXIMUM_ATTESTATION_BYTES,
+      ]),
+      [
         plan.promotion.supportMatrix.file,
         loaded.promotion.supportMatrix,
         "support matrix",
@@ -798,6 +863,8 @@ function parsePromotion(value) {
       "promotionAttestation",
       "supportedChannelReceipt",
       "promotionTrustRoot",
+      "observerTrustRoot",
+      "readBackObservations",
       "supportMatrix",
       "notarizationReceipt",
       "liveEvidence",
@@ -818,6 +885,30 @@ function parsePromotion(value) {
   if (!Array.isArray(value.liveEvidence) || value.liveEvidence.length !== 36) {
     throw new Error("Released configuration requires all 36 live-evidence criteria.");
   }
+  if (!Array.isArray(value.readBackObservations) || value.readBackObservations.length !== 3) {
+    throw new Error("Released configuration requires the exact three-target read-back set.");
+  }
+  const expectedReadBackTargets = ["darwin-arm64", "linux-x64", "win32-x64"];
+  const readBackObservations = value.readBackObservations.map((observation, index) => {
+    requireExactKeys(
+      observation,
+      ["target", "envelope"],
+      "release configuration read-back observation",
+    );
+    const target = parseTarget(observation.target);
+    if (`${target.platform}-${target.architecture}` !== expectedReadBackTargets[index]) {
+      throw new Error(
+        "Release configuration read-back observations must be the exact ordered target set.",
+      );
+    }
+    return Object.freeze({
+      target,
+      envelope: parsePinnedFile(
+        observation.envelope,
+        `read-back observation ${target.platform}-${target.architecture}`,
+      ),
+    });
+  });
   const liveEvidence = value.liveEvidence.map((evidence, index) => {
     requireExactKeys(
       evidence,
@@ -841,6 +932,11 @@ function parsePromotion(value) {
       "supported-channel receipt",
     ),
     promotionTrustRoot: parsePinnedFile(value.promotionTrustRoot, "promotion trust root"),
+    observerTrustRoot: parsePinnedFile(
+      value.observerTrustRoot,
+      "remote read-back observer trust root",
+    ),
+    readBackObservations: Object.freeze(readBackObservations),
     supportMatrix,
     notarizationReceipt,
     liveEvidence: Object.freeze(liveEvidence),
@@ -870,6 +966,7 @@ function parsePolicy(value) {
     value,
     [
       "revokedCertificateIdentities",
+      "revokedObserverKeyIds",
       "revokedPromotionKeyIds",
       "revokedPublisherKeyIds",
       "revokedStatementIds",
@@ -879,6 +976,7 @@ function parsePolicy(value) {
   const output = {};
   for (const name of [
     "revokedCertificateIdentities",
+    "revokedObserverKeyIds",
     "revokedPromotionKeyIds",
     "revokedPublisherKeyIds",
     "revokedStatementIds",
@@ -896,7 +994,9 @@ function parsePolicy(value) {
       }
     }
     if (
-      (name === "revokedPromotionKeyIds" || name === "revokedPublisherKeyIds") &&
+      (name === "revokedObserverKeyIds" ||
+        name === "revokedPromotionKeyIds" ||
+        name === "revokedPublisherKeyIds") &&
       entries.some((entry) => !QUALIFIED_SHA256_PATTERN.test(entry))
     ) {
       throw new Error(`The ${name} release configuration key is invalid.`);
@@ -935,6 +1035,8 @@ function allPinnedPlanFiles(plan) {
           plan.promotion.promotionAttestation,
           plan.promotion.supportedChannelReceipt,
           plan.promotion.promotionTrustRoot,
+          plan.promotion.observerTrustRoot,
+          ...plan.promotion.readBackObservations.map(({ envelope }) => envelope),
           plan.promotion.supportMatrix.file,
           plan.promotion.notarizationReceipt.file,
           ...plan.promotion.liveEvidence.map(({ file }) => file),

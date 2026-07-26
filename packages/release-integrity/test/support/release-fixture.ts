@@ -530,6 +530,7 @@ export async function createConfiguredReleaseState(
   promotion: PromotionFixture | null,
   policy: {
     readonly revokedCertificateIdentities?: readonly string[];
+    readonly revokedObserverKeyIds?: readonly string[];
     readonly revokedPromotionKeyIds?: readonly string[];
     readonly revokedPublisherKeyIds?: readonly string[];
     readonly revokedStatementIds?: readonly string[];
@@ -628,6 +629,7 @@ export async function createConfiguredReleaseState(
     promotion: promotionConfiguration,
     policy: {
       revokedCertificateIdentities: policy.revokedCertificateIdentities ?? [],
+      revokedObserverKeyIds: policy.revokedObserverKeyIds ?? [],
       revokedPromotionKeyIds: policy.revokedPromotionKeyIds ?? [],
       revokedPublisherKeyIds: policy.revokedPublisherKeyIds ?? [],
       revokedStatementIds: policy.revokedStatementIds ?? [],

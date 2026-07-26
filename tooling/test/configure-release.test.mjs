@@ -128,6 +128,16 @@ test(
 
     assert.equal(result.externalStatus, "released");
     assert.equal(result.effectiveChannel, "released");
+    const configuration = JSON.parse(await readFile(result.configuration.path, "utf8"));
+    assert.match(configuration.promotion.observerTrustRootFile, /observer-public\.pem$/u);
+    assert.deepEqual(
+      configuration.promotion.readBackObservations.map(({ target }) => target),
+      [
+        { platform: "darwin", architecture: "arm64" },
+        { platform: "linux", architecture: "x64" },
+        { platform: "win32", architecture: "x64" },
+      ],
+    );
     const resolution = await fixture.integrity.resolveConfiguredRelease({
       root: planned.configurationPlan.candidate.root,
       expectedTarget: planned.configurationPlan.candidate.target,
@@ -179,6 +189,61 @@ test(
         readSourceIdentity: async () => revoked.sourceIdentity,
       }),
       /publisher-verified configuration|revoked/u,
+    );
+
+    const observerEvidence = await createPromotionToolFixture(t);
+    const observerMaterials = await createReleasedMaterials(observerEvidence);
+    const incompleteObserverPlan = await observerEvidence.createConfigurationInput({
+      mode: "released",
+      promotionResult: observerMaterials.promotion,
+      receiptResult: observerMaterials.receipt,
+      mutator(plan) {
+        plan.promotion.readBackObservations.pop();
+      },
+    });
+    await assert.rejects(
+      composeReleaseConfiguration(incompleteObserverPlan.input, {
+        ...observerEvidence.runnerDependencies,
+        integrity: observerEvidence.integrity,
+        readSourceIdentity: async () => observerEvidence.sourceIdentity,
+      }),
+      /exact three-target read-back set/u,
+    );
+
+    const revokedObserverPlan = await observerEvidence.createConfigurationInput({
+      mode: "released",
+      promotionResult: observerMaterials.promotion,
+      receiptResult: observerMaterials.receipt,
+      mutator(plan) {
+        plan.policy.revokedObserverKeyIds.push(observerEvidence.observer.keyId);
+      },
+    });
+    await assert.rejects(
+      composeReleaseConfiguration(revokedObserverPlan.input, {
+        ...observerEvidence.runnerDependencies,
+        integrity: observerEvidence.integrity,
+        readSourceIdentity: async () => observerEvidence.sourceIdentity,
+      }),
+      /released configuration|revoked/u,
+    );
+
+    const tamperedObserverPlan = await observerEvidence.createConfigurationInput({
+      mode: "released",
+      promotionResult: observerMaterials.promotion,
+      receiptResult: observerMaterials.receipt,
+    });
+    await writeFile(
+      tamperedObserverPlan.configurationPlan.promotion.readBackObservations[0].envelope.path,
+      "caller-forged observation\n",
+      "utf8",
+    );
+    await assert.rejects(
+      composeReleaseConfiguration(tamperedObserverPlan.input, {
+        ...observerEvidence.runnerDependencies,
+        integrity: observerEvidence.integrity,
+        readSourceIdentity: async () => observerEvidence.sourceIdentity,
+      }),
+      /SHA-256.*pin/u,
     );
 
     const occupied = await createPromotionToolFixture(t);
@@ -252,3 +317,22 @@ test(
     );
   },
 );
+
+async function createReleasedMaterials(fixture) {
+  const [{ promoteRelease }, { createSupportedChannelReceipt }] = await Promise.all([
+    import("../promote-release.mjs"),
+    import("../create-supported-channel-receipt.mjs"),
+  ]);
+  const promotion = await promoteRelease(fixture.promotionInput, {
+    ...fixture.runnerDependencies,
+    integrity: fixture.integrity,
+    readSourceIdentity: async () => fixture.sourceIdentity,
+  });
+  const readBack = await fixture.createReadBackInput(promotion);
+  const receipt = await createSupportedChannelReceipt(readBack.input, {
+    ...fixture.runnerDependencies,
+    integrity: fixture.integrity,
+    readSourceIdentity: async () => fixture.sourceIdentity,
+  });
+  return { promotion, readBack, receipt };
+}

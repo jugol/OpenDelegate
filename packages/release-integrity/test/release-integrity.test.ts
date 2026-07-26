@@ -952,6 +952,17 @@ test("verifyRelease independently authenticates the external read-back evidence 
   const promotion = await createPromotionFixture(releaseSet);
   try {
     const complete = linuxVerificationInput(releaseSet, promotion);
+    const observerAuthorityKeyId = `sha256:${sha256(
+      createPublicKey(promotion.observerPublicKeyPem).export({ format: "der", type: "spki" }),
+    )}`;
+    await assert.rejects(
+      verifyRelease({
+        ...complete,
+        policy: { revokedObserverKeyIds: [observerAuthorityKeyId] },
+      }),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "RELEASE_REVOKED",
+    );
     await assert.rejects(
       verifyRelease({
         ...complete,
@@ -1200,6 +1211,12 @@ test("resolveConfiguredRelease fails closed for configuration and promotion fail
   const revoked = await createConfiguredReleaseState(releaseSet, linuxIndex, promotion, {
     revokedCertificateIdentities: ["apple-team:HX7739G8FX"],
   });
+  const observerAuthorityKeyId = `sha256:${sha256(
+    createPublicKey(promotion.observerPublicKeyPem).export({ format: "der", type: "spki" }),
+  )}`;
+  const revokedObserver = await createConfiguredReleaseState(releaseSet, linuxIndex, promotion, {
+    revokedObserverKeyIds: [observerAuthorityKeyId],
+  });
   try {
     await writeFile(malformed.configurationPath, '{"schemaVersion":1}\n', "utf8");
     const malformedResult = await resolveConfiguredRelease({
@@ -1235,6 +1252,14 @@ test("resolveConfiguredRelease fails closed for configuration and promotion fail
     });
     assert.equal(revokedResult.external.status, "revoked");
     assert.equal(revokedResult.external.diagnosticCode, "RELEASE_REVOKED");
+
+    const revokedObserverResult = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: revokedObserver.stateRoot,
+    });
+    assert.equal(revokedObserverResult.external.status, "revoked");
+    assert.equal(revokedObserverResult.external.diagnosticCode, "RELEASE_REVOKED");
   } finally {
     await Promise.all([
       releaseSet.cleanup(),
@@ -1243,6 +1268,7 @@ test("resolveConfiguredRelease fails closed for configuration and promotion fail
       missingPromotionFile.cleanup(),
       invalidPromotion.cleanup(),
       revoked.cleanup(),
+      revokedObserver.cleanup(),
     ]);
   }
 });
@@ -1986,6 +2012,7 @@ async function createConfiguredReleaseState(
   promotion: PromotionFixture | null,
   policy: {
     readonly revokedCertificateIdentities?: readonly string[];
+    readonly revokedObserverKeyIds?: readonly string[];
     readonly revokedPromotionKeyIds?: readonly string[];
     readonly revokedPublisherKeyIds?: readonly string[];
     readonly revokedStatementIds?: readonly string[];
@@ -2084,6 +2111,7 @@ async function createConfiguredReleaseState(
     promotion: promotionConfiguration,
     policy: {
       revokedCertificateIdentities: policy.revokedCertificateIdentities ?? [],
+      revokedObserverKeyIds: policy.revokedObserverKeyIds ?? [],
       revokedPromotionKeyIds: policy.revokedPromotionKeyIds ?? [],
       revokedPublisherKeyIds: policy.revokedPublisherKeyIds ?? [],
       revokedStatementIds: policy.revokedStatementIds ?? [],

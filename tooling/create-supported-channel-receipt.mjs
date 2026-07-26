@@ -2,7 +2,13 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readSourceIdentity } from "./build-release.mjs";
+import { authorizeCredentialUse } from "./release-credential-authorization.mjs";
+import {
+  assertPinnedReleaseGitFilesMatchCommit,
+  pinReleaseGitProvenance,
+  readPinnedReleaseSourceIdentity,
+  revalidatePinnedReleaseGitProvenance,
+} from "./release-git-provenance.mjs";
 import {
   preparePromotionAuthorization,
   promotionPreparationEvidence,
@@ -48,6 +54,8 @@ export function parseSupportedChannelReceiptArguments(values) {
   }
   const names = new Set([
     "--repository",
+    "--git-executable",
+    "--git-executable-sha256",
     "--promotion-plan",
     "--promotion-plan-sha256",
     "--read-back-plan",
@@ -76,6 +84,7 @@ export function parseSupportedChannelReceiptArguments(values) {
   }
   for (const name of [
     "--repository",
+    "--git-executable",
     "--promotion-plan",
     "--read-back-plan",
     "--observer-trust-root",
@@ -89,6 +98,7 @@ export function parseSupportedChannelReceiptArguments(values) {
   }
   for (const name of [
     "--promotion-plan-sha256",
+    "--git-executable-sha256",
     "--read-back-plan-sha256",
     "--observer-trust-root-sha256",
     "--runner-executable-sha256",
@@ -99,6 +109,8 @@ export function parseSupportedChannelReceiptArguments(values) {
     }
   }
   return {
+    gitExecutablePath: resolve(parsed.get("--git-executable")),
+    gitExecutableSha256: parsed.get("--git-executable-sha256"),
     promotionPlanPath: resolve(parsed.get("--promotion-plan")),
     promotionPlanSha256: parsed.get("--promotion-plan-sha256"),
     observerTrustRootPath: resolve(parsed.get("--observer-trust-root")),
@@ -125,6 +137,17 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
       platform: process.platform,
     },
   });
+  const gitProvenance = await (dependencies.pinGitProvenance ?? pinReleaseGitProvenance)({
+    expectedExecutableSha256: input.gitExecutableSha256,
+    executablePath: input.gitExecutablePath,
+    repositoryRoot: input.repositoryRoot,
+  });
+  const readGitSource =
+    dependencies.readSourceIdentity ?? (() => readPinnedReleaseSourceIdentity(gitProvenance));
+  const revalidateGit =
+    dependencies.revalidateGitProvenance ?? revalidatePinnedReleaseGitProvenance;
+  const assertGitFiles =
+    dependencies.assertGitFilesMatchCommit ?? assertPinnedReleaseGitFilesMatchCommit;
   const [receiptDestination, runnerRecordDestination, repositoryRoot] = await Promise.all([
     requireCanonicalNewPath(input.receiptDestination, "supported-channel receipt destination"),
     requireCanonicalNewPath(input.runnerRecordDestination, "receipt runner-record destination"),
@@ -154,10 +177,15 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
     {
       hashReleaseLogic: dependencies.hashReleaseLogic,
       integrity,
-      readSourceIdentity: dependencies.readSourceIdentity ?? readSourceIdentity,
+      readSourceIdentity: readGitSource,
       runningRepositoryRoot: dependencies.runningRepositoryRoot,
     },
   );
+  await assertGitFiles(
+    gitProvenance,
+    prepared.releaseLogic.map(({ path }) => path),
+  );
+  await revalidateGit(gitProvenance);
   const evidence = promotionPreparationEvidence(prepared);
   const policy = await readPinnedReleaseSigningPolicy({
     expectedRole: "promotion",
@@ -195,6 +223,12 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
   ) {
     throw new Error("The read-back observer must be distinct from every publisher authority.");
   }
+  if (prepared.revocations.revokedObserverKeyIds.includes(readBack.observerAuthorityKeyId)) {
+    throw new Error("The remote read-back observer is revoked by release policy.");
+  }
+  if (prepared.revocations.revokedStatementIds.includes(readBack.receiptId)) {
+    throw new Error("The supported-channel receipt is revoked by release policy.");
+  }
   const readBackEvidence = releaseReadBackVerificationEvidence(readBack);
   const promotionAttestation = await readPinnedCanonicalJson({
     label: "promotion attestation",
@@ -213,14 +247,76 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
     receiptId: readBack.receiptId,
     observedAt: readBack.observedAt,
   });
-  const signed = await signWithPinnedReleasePolicy({
+  const revalidateCredentialUse = async () => {
+    await Promise.all([
+      revalidatePreparedPromotion(prepared),
+      revalidatePinnedReleaseReadBackPlan(readBack),
+      revalidateReleaseRunnerIdentity(runnerIdentity),
+      readPinnedCanonicalJson({
+        label: "promotion attestation",
+        maximumBytes: 4 * 1024 * 1024,
+        path: promotionAttestation.path,
+        sha256: promotionAttestation.sha256,
+        indent: 2,
+      }),
+      assertPathAbsent(receiptDestination, "A supported-channel receipt output"),
+      assertPathAbsent(runnerRecordDestination, "A supported-channel receipt output"),
+    ]);
+    await assertGitFiles(
+      gitProvenance,
+      prepared.releaseLogic.map(({ path }) => path),
+    );
+    await revalidateGit(gitProvenance);
+    const currentPolicy = await readPinnedReleaseSigningPolicy({
+      expectedRole: "promotion",
+      path: input.signingPolicyPath,
+      sha256: input.signingPolicySha256,
+    });
+    assertPinnedReleaseSigningPolicyExternal(
+      currentPolicy,
+      promotionPreparationExternalRoots(prepared),
+    );
+    if (
+      JSON.stringify(describePinnedReleaseSigningPolicy(currentPolicy)) !==
+        JSON.stringify(policyDescription) ||
+      prepared.revocations.revokedPromotionKeyIds.includes(trust.keyId) ||
+      prepared.revocations.revokedObserverKeyIds.includes(readBack.observerAuthorityKeyId) ||
+      prepared.revocations.revokedStatementIds.includes(readBack.receiptId) ||
+      prepared.verifiedCandidates.some(
+        ({ publisherKeyId }) =>
+          publisherKeyId === trust.keyId || publisherKeyId === readBack.observerAuthorityKeyId,
+      )
+    ) {
+      throw new Error("The receipt credential authority or revocation policy changed.");
+    }
+  };
+  const authorization = await (dependencies.authorizeCredentialUse ?? authorizeCredentialUse)({
+    domain: "supported-channel-receipt-v2",
+    inputSha256: digestBytes(composed.signingBytes),
+    revalidate: revalidateCredentialUse,
+    role: "promotion",
+    snapshot: {
+      gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
+      observerKeyId: readBack.observerAuthorityKeyId,
+      observerTrustSha256: readBack.observerTrustRootSha256,
+      planSha256: prepared.planSha256,
+      policySha256: policyDescription.policySha256,
+      promotionKeyId: trust.keyId,
+      readBackPlanSha256: readBack.planSha256,
+      receiptId: readBack.receiptId,
+      runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
+      sourceCommit: prepared.source.buildCommit,
+    },
+  });
+  const signed = await (dependencies.signWithPolicy ?? signWithPinnedReleasePolicy)({
+    authorization,
     policy,
     signingBytes: composed.signingBytes,
   });
   if (signed.role !== "promotion" || signed.keyId !== trust.keyId) {
     throw new Error("The external signer did not preserve the promotion authority.");
   }
-  await revalidateReleaseRunnerIdentity(runnerIdentity);
+  await revalidateCredentialUse();
   const envelope = integrity.composeSignedReleaseEnvelope({
     composed,
     keyId: signed.keyId,
@@ -247,10 +343,16 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
       indent: 2,
     }),
   ]);
+  await assertGitFiles(
+    gitProvenance,
+    prepared.releaseLogic.map(({ path }) => path),
+  );
+  await revalidateGit(gitProvenance);
 
   const recordedAt = (dependencies.now?.() ?? new Date()).toISOString();
   const runnerRecord = createReceiptRunnerRecord({
     envelope,
+    gitProvenance,
     policyDescription,
     prepared,
     promotionAttestation,
@@ -287,6 +389,11 @@ export async function createSupportedChannelReceipt(input, dependencies = {}) {
             indent: 2,
           }),
         ]);
+        await assertGitFiles(
+          gitProvenance,
+          prepared.releaseLogic.map(({ path }) => path),
+        );
+        await revalidateGit(gitProvenance);
         const currentPolicy = await readPinnedReleaseSigningPolicy({
           expectedRole: "promotion",
           path: input.signingPolicyPath,
@@ -454,6 +561,7 @@ function createOverlayReleaseReader(base, overlayPath, overlayBytes) {
 
 function createReceiptRunnerRecord({
   envelope,
+  gitProvenance,
   policyDescription,
   prepared,
   promotionAttestation,
@@ -506,9 +614,11 @@ function createReceiptRunnerRecord({
       architecture: runnerIdentity.description.architecture,
       nodeVersion: runnerIdentity.description.nodeVersion,
       runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
+      gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
       signingInputSha256: signed.inputSha256,
-      signerExecutableSha256: signed.runner.executableSha256,
-      invocationArtifactSha256: signed.runner.invocationArtifactSha256,
+      brokerEndpointSha256: signed.runner.brokerEndpointSha256,
+      brokerProtocol: signed.runner.brokerProtocol,
+      brokerTransportKeyId: signed.runner.brokerTransportKeyId,
     },
     outputs: {
       supportedChannelReceipt: {
@@ -522,6 +632,8 @@ function validateReceiptInput(input) {
   requireExactKeys(
     input,
     [
+      "gitExecutablePath",
+      "gitExecutableSha256",
       "promotionPlanPath",
       "promotionPlanSha256",
       "observerTrustRootPath",
@@ -538,6 +650,7 @@ function validateReceiptInput(input) {
     "supported-channel receipt input",
   );
   for (const [value, label] of [
+    [input.gitExecutablePath, "Git executable"],
     [input.promotionPlanPath, "promotion plan"],
     [input.observerTrustRootPath, "remote read-back observer trust root"],
     [input.readBackPlanPath, "read-back plan"],
@@ -551,6 +664,7 @@ function validateReceiptInput(input) {
     }
   }
   for (const [value, label] of [
+    [input.gitExecutableSha256, "Git executable"],
     [input.promotionPlanSha256, "promotion plan"],
     [input.observerTrustRootSha256, "remote read-back observer trust root"],
     [input.readBackPlanSha256, "read-back plan"],
@@ -588,6 +702,7 @@ function renderHelp() {
 Usage:
   pnpm release:receipt -- \\
     --repository <absolute-clean-checkout> \\
+    --git-executable <absolute-unlinked-git> --git-executable-sha256 <sha256> \\
     --promotion-plan <absolute-plan> --promotion-plan-sha256 <sha256> \\
     --read-back-plan <absolute-plan> --read-back-plan-sha256 <sha256> \\
     --observer-trust-root <absolute-public-key> --observer-trust-root-sha256 <sha256> \\

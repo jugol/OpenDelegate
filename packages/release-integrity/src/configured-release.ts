@@ -993,6 +993,7 @@ function parsePolicy(candidate: unknown): ReleaseVerificationPolicy {
   const value = requireRecord(candidate);
   assertExactKeys(value, [
     "revokedCertificateIdentities",
+    "revokedObserverKeyIds",
     "revokedPromotionKeyIds",
     "revokedPublisherKeyIds",
     "revokedStatementIds",
@@ -1001,6 +1002,10 @@ function parsePolicy(candidate: unknown): ReleaseVerificationPolicy {
     revokedCertificateIdentities: parseSortedUniqueStrings(
       value["revokedCertificateIdentities"],
       CERTIFICATE_IDENTITY_PATTERN,
+    ),
+    revokedObserverKeyIds: parseSortedUniqueStrings(
+      value["revokedObserverKeyIds"],
+      QUALIFIED_SHA256_PATTERN,
     ),
     revokedPromotionKeyIds: parseSortedUniqueStrings(
       value["revokedPromotionKeyIds"],

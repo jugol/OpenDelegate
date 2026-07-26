@@ -1,7 +1,13 @@
 import { createHash, generateKeyPairSync, sign as createSignature } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+
+import {
+  authorizeCredentialUse,
+  describeCredentialAuthorization,
+} from "../../release-credential-authorization.mjs";
+import { createReleaseSignerBrokerFixture } from "./release-signer-broker-fixture.mjs";
 
 export async function createPromotionToolFixture(t) {
   const [integrity, fixtures] = await Promise.all([
@@ -102,6 +108,7 @@ export async function createPromotionToolFixture(t) {
     liveEvidence,
     revocations: {
       revokedCertificateIdentities: [],
+      revokedObserverKeyIds: [],
       revokedPromotionKeyIds: [],
       revokedPublisherKeyIds: [],
       revokedStatementIds: [],
@@ -109,7 +116,21 @@ export async function createPromotionToolFixture(t) {
   };
   const promotionPlanPath = join(inputRoot, "promotion-plan.json");
   await writeCanonical(promotionPlanPath, promotionPlan);
-  const signing = await createSigningPolicy(join(root, "promotion-authority"), "promotion");
+  const signingKeys = generateKeyPairSync("ed25519");
+  const signing = await createSigningPolicy(
+    join(root, "promotion-authority"),
+    "promotion",
+    signingKeys,
+    t,
+    "promotion-authorization-v1",
+  );
+  const receiptSigning = await createSigningPolicy(
+    join(root, "receipt-authority"),
+    "promotion",
+    signingKeys,
+    t,
+    "supported-channel-receipt-v2",
+  );
   const observerKeyPair = generateKeyPairSync("ed25519");
   const observerAuthorityRoot = join(root, "observer-authority");
   const observerPublicKeyPath = join(observerAuthorityRoot, "public.pem");
@@ -135,6 +156,13 @@ export async function createPromotionToolFixture(t) {
     }),
   });
   const runnerDependencies = {
+    async authorizeCredentialUse(input) {
+      const authorization = await authorizeCredentialUse(input);
+      const description = describeCredentialAuthorization(authorization);
+      const authority = input.domain === "supported-channel-receipt-v2" ? receiptSigning : signing;
+      authority.broker.approve(description);
+      return authorization;
+    },
     assertGitFilesMatchCommit: async () => {},
     hashRuntimeExecutable: async () => ({
       sha256: runnerExecutableSha256,
@@ -174,6 +202,7 @@ export async function createPromotionToolFixture(t) {
     repositoryRoot,
     root,
     runnerDependencies,
+    receiptSigning,
     signing,
     observer: {
       keyId: observerKeyId,
@@ -203,17 +232,17 @@ export async function createPromotionToolFixture(t) {
         };
         const observationInput = {
           archive: release.archive,
-          releaseId: composition.releaseId,
           channel: composition.channel,
-          tag: `v${release.candidate.productVersion}`,
-          target: release.candidate.target,
-          provider: expectedSource.provider,
           immutableObjectId: expectedSource.immutableObjectId,
           immutableObjectVersion: expectedSource.immutableObjectVersion,
+          observedAt: "2026-07-26T03:00:00.000Z",
           observedStreamSha256: release.archive.sha256,
           observerAuthorityKeyId: observerKeyId,
+          provider: expectedSource.provider,
+          releaseId: composition.releaseId,
+          tag: `v${release.candidate.productVersion}`,
+          target: release.candidate.target,
           uploaderAuthorityKeyId: signing.keyId,
-          observedAt: "2026-07-26T03:00:00.000Z",
         };
         observationMutator(observationInput, index);
         const composedObservation =
@@ -263,6 +292,8 @@ export async function createPromotionToolFixture(t) {
         readBackPlanPath,
         observationEnvelopes,
         input: {
+          gitExecutablePath: process.execPath,
+          gitExecutableSha256: runnerExecutableSha256,
           promotionPlanPath,
           promotionPlanSha256: promotionInput.planSha256,
           observerTrustRootPath: observerPublicKeyPath,
@@ -273,8 +304,8 @@ export async function createPromotionToolFixture(t) {
           repositoryRoot,
           runnerExecutableSha256,
           runnerRecordDestination: join(outputRoot, "receipt-runner.json"),
-          signingPolicyPath: signing.policyPath,
-          signingPolicySha256: await sha256File(signing.policyPath),
+          signingPolicyPath: receiptSigning.policyPath,
+          signingPolicySha256: await sha256File(receiptSigning.policyPath),
         },
       };
     },
@@ -299,6 +330,16 @@ export async function createPromotionToolFixture(t) {
               promotionAttestation: await pinnedFile(promotionResult.promotionAttestation.path),
               supportedChannelReceipt: await pinnedFile(receiptResult.supportedChannelReceipt.path),
               promotionTrustRoot: await pinnedFile(signing.publicKeyPath),
+              observerTrustRoot: await pinnedFile(receiptResult.observerTrustRoot.path),
+              readBackObservations: receiptResult.readBackObservations.map(
+                ({ envelopePath, envelopeSha256, target }) => ({
+                  target,
+                  envelope: {
+                    path: envelopePath,
+                    sha256: envelopeSha256,
+                  },
+                }),
+              ),
               supportMatrix: structuredClone(promotionPlan.supportMatrix),
               notarizationReceipt: structuredClone(promotionPlan.notarizationReceipt),
               liveEvidence: structuredClone(promotionPlan.liveEvidence),
@@ -342,85 +383,61 @@ export async function createPromotionToolFixture(t) {
   };
 }
 
-export async function createSigningPolicy(root, role, keyPair = generateKeyPairSync("ed25519")) {
-  await mkdir(root, { recursive: true });
-  const privateKeyPath = join(root, "external-private.pem");
-  const publicKeyPath = join(root, "public.pem");
-  const helperPath = join(root, "signer-helper.mjs");
-  const policyPath = join(root, "policy.json");
-  await writeFile(privateKeyPath, keyPair.privateKey.export({ format: "pem", type: "pkcs8" }), {
-    mode: 0o600,
-  });
-  await writeFile(publicKeyPath, keyPair.publicKey.export({ format: "pem", type: "spki" }), {
-    mode: 0o644,
-  });
-  await writeFile(
-    helperPath,
-    `import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const chunks = [];
-let total = 0;
-for await (const chunk of process.stdin) {
-  total += chunk.byteLength;
-  if (total > 4 * 1024 * 1024) throw new Error("oversized");
-  chunks.push(chunk);
-}
-const privateKey = createPrivateKey(
-  await readFile(join(dirname(fileURLToPath(import.meta.url)), "external-private.pem")),
-);
-const publicKey = createPublicKey(privateKey);
-process.stdout.write(\`\${JSON.stringify({
-  schemaVersion: 1,
-  algorithm: "ed25519",
-  keyId: \`sha256:\${createHash("sha256")
-    .update(publicKey.export({ format: "der", type: "spki" }))
-    .digest("hex")}\`,
-  signature: sign(null, Buffer.concat(chunks, total), privateKey).toString("base64url"),
-})}\\n\`);
-`,
-    { mode: 0o700 },
-  );
-  if (process.platform !== "win32") {
-    await Promise.all([
-      chmod(privateKeyPath, 0o600),
-      chmod(publicKeyPath, 0o644),
-      chmod(helperPath, 0o700),
-    ]);
+export async function createSigningPolicy(
+  root,
+  role,
+  keyPair = generateKeyPairSync("ed25519"),
+  t,
+  domain = role === "promotion" ? "promotion-authorization-v1" : "publisher-attestation-v2",
+) {
+  if (typeof t?.after !== "function") {
+    throw new Error("The release-signing fixture requires a test cleanup context.");
   }
+  await mkdir(root, { recursive: true });
+  const broker = await createReleaseSignerBrokerFixture(t, {
+    domain,
+    releaseKeys: keyPair,
+    role,
+  });
+  const publicKeyPath = join(root, "public.pem");
+  const transportPublicKeyPath = join(root, "transport-public.pem");
+  const policyPath = join(root, "policy.json");
+  await Promise.all([
+    writeFile(publicKeyPath, broker.releasePublicKeyPem, { mode: 0o644 }),
+    writeFile(transportPublicKeyPath, broker.transportPublicKeyPem, { mode: 0o644 }),
+  ]);
   const policy = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     product: "OpenDelegate",
     role,
     publicKey: {
       path: publicKeyPath,
       sha256: await sha256File(publicKeyPath),
     },
-    signer: {
-      executable: {
-        path: process.execPath,
-        sha256: await sha256File(process.execPath),
+    broker: {
+      protocol: "opendelegate.release.signer-broker.v1",
+      endpoint: broker.endpoint,
+      transportPublicKey: {
+        path: transportPublicKeyPath,
+        sha256: await sha256File(transportPublicKeyPath),
       },
-      invocationArtifacts: [
-        {
-          path: helperPath,
-          sha256: await sha256File(helperPath),
-        },
-      ],
       timeoutMs: 30_000,
     },
   };
   await writeCanonical(policyPath, policy);
-  const publicKeyDer = keyPair.publicKey.export({ format: "der", type: "spki" });
+  broker.setPolicySha256(await sha256File(policyPath));
   return {
-    helperPath,
-    keyId: `sha256:${sha256(publicKeyDer)}`,
+    broker,
+    endpoint: broker.endpoint,
+    keyId: broker.releaseKeyId,
     policyPath,
-    privateKeyPath,
     publicKeyPath,
+    get requests() {
+      return [...broker.authorizationRequests, ...broker.signRequests];
+    },
     root,
+    transportKeyId: broker.transportKeyId,
+    transportPublicKeyPath,
   };
 }
 

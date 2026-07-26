@@ -1900,6 +1900,7 @@ export interface ReleasePublisherTrust {
 
 export interface ReleaseVerificationPolicy {
   readonly revokedCertificateIdentities?: readonly string[];
+  readonly revokedObserverKeyIds?: readonly string[];
   readonly revokedPromotionKeyIds?: readonly string[];
   readonly revokedPublisherKeyIds?: readonly string[];
   readonly revokedStatementIds?: readonly string[];
@@ -2372,6 +2373,7 @@ async function verifyPromotionChain(
     receiptEvidence,
     keyId,
     promotion,
+    policy,
   );
   const receiptBytes = await readExternalFile(
     reader,
@@ -2416,6 +2418,7 @@ async function verifyRemoteReadBackEvidenceSet(
   evidence: PromotionReceiptEvidence,
   expectedUploaderAuthorityKeyId: string,
   promotion: ParsedPromotionAuthorization,
+  policy: ReleaseVerificationPolicy | undefined,
 ): Promise<readonly VerifiedRemoteReadBackObservation[]> {
   if (
     typeof evidence !== "object" ||
@@ -2482,8 +2485,12 @@ async function verifyRemoteReadBackEvidenceSet(
     });
     if (
       targetKey(observation.target) !== targetKey(target) ||
-      publisherKeyIds.has(observation.observerAuthorityKeyId)
+      publisherKeyIds.has(observation.observerAuthorityKeyId) ||
+      policy?.revokedObserverKeyIds?.includes(observation.observerAuthorityKeyId) === true
     ) {
+      if (policy?.revokedObserverKeyIds?.includes(observation.observerAuthorityKeyId) === true) {
+        fail("RELEASE_REVOKED", "The remote read-back observer is revoked by release policy.");
+      }
       fail(
         "READ_BACK_TRUST_INVALID",
         "The remote read-back observer authority or target binding is invalid.",

@@ -797,6 +797,7 @@ function parseRevocations(value) {
     value,
     [
       "revokedCertificateIdentities",
+      "revokedObserverKeyIds",
       "revokedPromotionKeyIds",
       "revokedPublisherKeyIds",
       "revokedStatementIds",
@@ -806,6 +807,7 @@ function parseRevocations(value) {
   const entries = {};
   for (const name of [
     "revokedCertificateIdentities",
+    "revokedObserverKeyIds",
     "revokedPromotionKeyIds",
     "revokedPublisherKeyIds",
     "revokedStatementIds",
@@ -820,7 +822,9 @@ function parseRevocations(value) {
     }
     assertStrictlySorted(value[name], `${name} release revocation set`);
     if (
-      (name === "revokedPromotionKeyIds" || name === "revokedPublisherKeyIds") &&
+      (name === "revokedObserverKeyIds" ||
+        name === "revokedPromotionKeyIds" ||
+        name === "revokedPublisherKeyIds") &&
       value[name].some((entry) => !KEY_ID_PATTERN.test(entry))
     ) {
       throw new Error(`The ${name} release revocation key is invalid.`);
