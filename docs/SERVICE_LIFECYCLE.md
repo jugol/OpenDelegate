@@ -1,7 +1,7 @@
 # Native service lifecycle CLI
 
-Status: **native adapters implemented and composed; support-eligible native signing,
-trusted promotion verification, and live privileged host proof remain required**
+Status: **native adapters and release-authority verification implemented; real support-eligible
+native signing, provisioned promotion evidence, and live privileged host proof remain required**
 
 OpenDelegate exposes its existing `@opendelegate/platform-services` definitions and
 plans through one owner-facing CLI surface. The CLI does not turn a rendered
@@ -20,7 +20,10 @@ For a Main template, every command also requires `--home MAIN_HOME`. The CLI ope
 Main's durable Configuration repository, ignores any `adminAutoOpen` value copied
 into the template, and renders the effective `admin.open-on-login` value with
 Main's canonical Admin origin. Worker templates do not read Main state and do not
-accept enabled Admin auto-open.
+accept enabled Admin auto-open. Current-host mutation, status, and diagnosis require
+the canonical `MAIN_HOME` to equal the template's `paths.stateRoot`, because the
+installed service launches Main from that exact root. Cross-target `render` and
+`plan` remain read-only and may intentionally describe a different target root.
 
 Unknown fields, raw Secret values, relative or source-checkout runtime paths,
 untrusted health endpoints, malformed identities, unstable files, and files larger
@@ -188,22 +191,26 @@ preflight before creating the command journal or entering a host mutation:
   Secret-reference definition byte for byte; bundle version, source, and checksum
   may change; Admin auto-open changes use the narrow `reconfigure` operation;
 - staging, versioned releases, and `current` must share one volume;
-- for install or upgrade, the detached Ed25519 publisher attestation must verify
-  before untrusted payload traversal, the complete bundle manifest and every
-  payload byte must then verify, and both native service hosts must be present and
-  executable.
+- install and upgrade select exactly one explicit release track. A legacy
+  `INTERNAL_PREVIEW.md` payload must verify its detached Ed25519 preview attestation before
+  untrusted traversal. A candidate-v2 payload must pass enclosed candidate inspection and the
+  configured digest-addressed external release authority. Missing, invalid, promotion-invalid, or
+  revoked authority prevents candidate installation; publisher-verified candidates may install
+  only with effective `release-candidate`. Both tracks then verify every payload byte and both
+  executable native service hosts.
 
-Reconfigure, start, stop, restart, status, diagnose, and uninstall do not depend on the original
-release source still being mounted. They validate the installed topology and native
-tools but reserve bundle trust checks for operations that introduce new bytes.
+Start, restart, and reconfigure do not depend on the original release source still being mounted.
+Before mutation they revalidate the installed payload, native hosts, persisted release-verification
+seal, and current external authority. Stop, status, diagnose, and uninstall retain their narrower
+read-only or removal boundaries.
 
-This implemented preflight authenticates a bundle to the configured publisher key;
-it does not by itself establish support promotion. Until ADR-0021's external
-promotion verifier is implemented, every publisher-attested preview or candidate
-installed through this CLI remains an unsupported lab or unpromoted candidate
-installation.
+Publisher authentication by itself does not establish support promotion. The candidate resolver
+keeps declared and effective channel separate: publisher-only authority authorizes an unpromoted
+candidate installation, while only the complete platform-authenticity, promotion,
+observer-read-back, supported-channel, and revocation-policy chain can authorize effective
+`released`.
 
-The external trust root is
+For the legacy unsupported-preview track, the external trust root is
 `STATE_ROOT/trust/publisher-ed25519.pem`. The detached strict JSON attestation is
 `BUNDLE_SOURCE.publisher-attestation.json`; it binds the SHA-256 of
 `SHA256SUMS`, and `bundle.checksum` must contain that same digest as
@@ -216,23 +223,30 @@ smoke:
 ```sh
 pnpm release:sign --bundle ABSOLUTE_BUNDLE_PATH \
   --private-key ABSOLUTE_PRIVATE_KEY_PEM \
-  --public-key-destination ABSOLUTE_NEW_PUBLIC_KEY_PEM
+  --public-key-destination ABSOLUTE_NEW_PUBLIC_KEY_PEM \
+  --allow-unsupported-preview
 ```
 
 The signer revalidates every manifest-bound byte, both native service hosts, target
-metadata, smoke evidence, and candidate completeness. Unsupported lab previews
-require `--allow-unsupported-preview`; their signed support status remains
-unsupported. Copy the emitted public key to the external trust-root path through an
-owner-controlled channel. The signer never installs trust or changes a support
-channel.
+metadata, and smoke evidence. It rejects candidates and requires
+`--allow-unsupported-preview`; the signed support status remains unsupported. Copy the emitted
+public key to the external trust-root path through an owner-controlled channel. The signer never
+installs trust or changes a support channel.
 
-For a future effective `released` install, a second independently provisioned
-promotion trust root verifies the cross-platform promotion attestation and
-supported-channel release receipt. That external chain must name the exact target
-archive, publisher attestation, native-authenticity record, ledger, and complete
-support matrix. It is not accepted from inside the bundle and does not replace the
-publisher trust root. The runtime keeps enclosed `release-candidate` identity and
-reports `released` only as the verified effective status.
+Candidate-v2 authority is configured at:
+
+```text
+STATE_ROOT/trust/releases/<version>/<platform>-<architecture>/<checksumManifestSha256>/release-verification.json
+```
+
+Its strictly parsed external files bind the exact target archive, publisher attestation,
+native-authenticity record, ledger, support matrix, 36 live-evidence records, notarization result,
+promotion attestation, exactly three target-scoped observer-signed read-back envelopes,
+supported-channel receipt, independently provisioned publisher, promotion, and observer trust
+roots, and revocation policy. The read-back plan binds uploader authorization to the promotion key
+ID while the distinct observer key proves the returned remote bytes and remains independently
+revocable. Nothing inside the candidate can provision those authorities. The runtime keeps the
+enclosed `release-candidate` identity and reports `released` only as the verified effective status.
 
 A preflight failure returns, without a host mutation:
 
@@ -240,7 +254,7 @@ A preflight failure returns, without a host mutation:
 {
   "level": "error",
   "code": "SERVICE_COMMAND_PREFLIGHT_FAILED",
-  "message": "The failed privilege, tool, path, bundle, or publisher-trust requirement.",
+  "message": "The failed privilege, tool, path, candidate-integrity, configured-authority, staging, or verification-seal requirement.",
   "mutationMayHaveOccurred": false,
   "requiresElevation": true
 }
@@ -259,10 +273,13 @@ executor never signs, notarizes, staples, or rewrites a staged payload. For macO
 the accepted notarization result for the exact final archive remains an external
 sidecar verified by the promotion path.
 
-After preflight, the filesystem adapter stages a link-free regular-file tree,
-re-verifies it, promotes it by same-volume rename, atomically swaps the `current`
-directory link, writes definitions atomically, applies least-privilege ownership,
-and prunes only bounded semantic-version release directories after health succeeds.
+After preflight, the filesystem adapter stages a link-free regular-file tree, re-inspects those
+copied bytes, verifies the native hosts, promotes by same-volume rename, and writes a bounded
+sanitized seal to `STATE_ROOT/release-verification/<version>.json`. It recomputes the current
+external authority and compares the seal immediately before atomically switching `current`, then
+writes definitions atomically, applies least-privilege ownership, and prunes only bounded
+semantic-version release directories after health succeeds. Activation failure removes only the
+new release and seal while preserving the prior active release and its seal.
 Windows ACL changes use fixed `icacls.exe` argv. Linux creates a non-login system
 account through fixed `groupadd`/`useradd`/`usermod` argv. macOS creates and validates
 a hidden `/var/empty`, `/usr/bin/false` account through fixed `dscl` and
@@ -310,12 +327,13 @@ journal, native preflight, filesystem/account/supervisor/health adapters, rollba
 and read-only inspection have injected automated coverage. Tests do not mutate the
 test host's native services.
 
-A supported release still requires the builder to apply target-native signatures
-before manifests, freeze and publisher-attest exact final archives, obtain the
-external macOS notarization receipt, and implement ADR-0021's distinct promotion
-trust root, cross-platform attestation, supported-channel receipt, and effective
-status verifier. Every credential-bearing step must run from a clean committed,
-hash-pinned target runner.
+A supported release still requires real target-native signatures before manifests,
+credentialed publisher finalization of exact archives, the external macOS notarization receipt,
+independently provisioned publisher, promotion, and observer roots, a credentialed cross-platform
+promotion run, immutable remote publication, exactly three observer-signed target read-back
+envelopes, and a supported-channel receipt. The finalizer, verifier, and deterministic
+promotion/receipt composition boundaries are implemented; every credential-bearing production run
+must still execute from its clean committed, hash-pinned runner.
 
 Those trust artifacts must then be followed by clean-host install, restart, reboot,
 login/logout, failed-upgrade rollback, diagnostics, and uninstall proof on Windows,

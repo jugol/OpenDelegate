@@ -741,9 +741,13 @@ Prove the complete product on real target systems and publish it responsibly.
   complete target set, ledger, native-authenticity records, publisher attestations,
   notarization receipt, and live evidence. Use a promotion trust root distinct from
   the per-target publisher trust root.
-- Publish only the exact promoted assets, read their digests back from the supported
-  channel, and issue the signed external release receipt required for effective
-  `released` status.
+- Publish only the exact promoted assets. Authenticate exactly three target-scoped
+  remote digest observations—one per required archive—as signed envelopes under a
+  separately provisioned observer trust root. The observer identity must differ
+  from all publisher and promotion/uploader identities and remain independently
+  revocable. Bind the read-back plan's uploader authorization to the promotion key
+  ID, then issue the signed external release receipt over those exact observations
+  for effective `released` status.
 - Complete installation, onboarding, configuration, policy, transport, Discord,
   backup, recovery, troubleshooting, and contributor documentation.
 - Add Apache-2.0 notices and third-party attribution.
@@ -756,9 +760,10 @@ has a linked automated result, recorded manual proof, or both. There are no waiv
 platform or Computer Use gates. Every promoted target has pre-manifest native
 authenticity where required, a trusted publisher attestation, and an immutable
 published digest. The complete platform set has one valid cross-platform promotion
-attestation and supported-channel receipt under the external promotion trust root,
-and the packaged verifier computes `released` from that chain without rewriting any
-candidate payload, archive, metadata, or ledger.
+attestation, exactly three observer-signed target read-back envelopes under the
+independent observer trust root, and one supported-channel receipt under the
+external promotion trust root. The packaged verifier computes `released` from that
+chain without rewriting any candidate payload, archive, metadata, or ledger.
 
 ## Test infrastructure
 

@@ -26,8 +26,11 @@ collapsed:
   archive;
 - the 36-criterion ledger and live evidence establish product support eligibility
   across the complete declared platform matrix; and
-- a supported-channel receipt establishes that the promoted assets are the exact
-  candidates that were published.
+- observer-signed remote read-back envelopes establish that each of the three
+  promoted target archives was retrieved unchanged from its immutable channel
+  object; and
+- a supported-channel receipt binds those observations to the same promotion and
+  channel authorization.
 
 Native code signing changes executable bytes. Running it after
 `payload-manifest.json` or `SHA256SUMS` is written would invalidate the integrity
@@ -84,16 +87,24 @@ OpenDelegate uses the following distinct artifacts and authorities:
    release, signed under a dedicated promotion key whose public trust root is
    distinct from the publisher trust root. It authorizes a complete set of exact
    target candidates for one supported channel.
-6. **Supported-channel release receipt** is produced only after publication and
-   remote digest read-back. It records the immutable channel, tag or release
-   identity, promotion-attestation digest, published asset identities and SHA-256
-   digests, and observation time. It is signed with the promotion role using a
-   domain distinct from the promotion authorization.
+6. **Remote read-back observations** are exactly three signed envelopes, one for
+   each first-milestone target archive. Each binds the immutable channel and object
+   identity, target tuple, expected and observed digest, observation time, the
+   promotion statement, and the uploader authorization. They verify against a
+   separately provisioned observer trust root. The observer key is distinct from
+   every publisher and promotion/uploader key and can be revoked independently.
+7. **Supported-channel release receipt** is produced only after publication and
+   verification of all three remote read-back envelopes. It records the immutable
+   channel, tag or release identity, promotion-attestation digest, published asset
+   identities and SHA-256 digests, observer envelope identities and digests, and
+   observation time. It is signed with the promotion role using a domain distinct
+   from the promotion authorization.
 
-The publisher key and promotion key must have different SPKIs and key IDs. Native
-platform certificate chains, the publisher trust root, and the promotion trust root
-are separate authorities. Compromise or approval in one role cannot silently grant
-another role.
+Publisher, promotion, and observer keys must have different SPKIs and key IDs.
+Native platform certificate chains and those three external trust roots are
+separate authorities. The read-back plan deliberately names the promotion key ID
+as its uploader authorization; it does not provision a separate uploader signing
+key. Compromise or approval in one role cannot silently grant another role.
 
 ### Immutable candidate order
 
@@ -169,11 +180,15 @@ following hold:
 4. the cross-platform promotion attestation verifies against the externally
    provisioned promotion trust root and includes this exact target in a complete
    supported matrix;
-5. the supported-channel release receipt verifies under the promotion role, names
-   the same promotion attestation and channel, and matches the remotely read-back
-   asset digest; and
-6. no applicable trust root, signing identity, promotion statement, or release
-   receipt is revoked by the configured release policy.
+5. exactly three observer-signed read-back envelopes verify against the external
+   observer trust root, cover each required target archive exactly once, name the
+   promotion key as uploader authorization, and match the same promotion,
+   immutable channel objects, and remotely observed asset digests;
+6. the supported-channel release receipt verifies under the promotion role, names
+   the same promotion attestation and channel, and digest-binds those exact three
+   observer envelopes; and
+7. no applicable publisher, promotion, observer, or platform identity, promotion
+   statement, or release receipt is revoked by the configured release policy.
 
 If any external sidecar or trust root is absent, the bytes remain a valid
 `release-candidate` at most. Enclosed metadata that directly declares `released`
@@ -196,8 +211,8 @@ support-eligible candidate.
 ### Credential-bearing release runners
 
 Native code signing, timestamping, notarization submission, publisher signing,
-promotion signing, and supported-channel publication are credential-bearing
-operations. They may run only when:
+promotion signing, observer signing, and supported-channel publication are
+credential-bearing operations. They may run only when:
 
 - the release logic and policy come from clean committed B or an immutable
   artifact whose digest is pinned by B;
@@ -258,8 +273,9 @@ weakening ADR-0010's A-to-B diff restriction.
 
 - Supported publication gains a non-circular trust chain while candidate payload
   bytes and the accepted ledger remain immutable.
-- Platform build credentials and support-promotion credentials are operationally
-  separate and can be rotated or revoked independently.
+- Platform build credentials, support-promotion credentials, and remote-observer
+  credentials are operationally separate and can be rotated or revoked
+  independently.
 - The first release requires additional external sidecars and a verifier that
   computes effective status. The current publisher signer alone is insufficient.
 - macOS candidates are not stapled after finalization. If offline Gatekeeper
@@ -283,8 +299,10 @@ weakening ADR-0010's A-to-B diff restriction.
   mismatched A or B, wrong publisher key, reused statement domain, substituted
   archive, missing notarization receipt, and untrusted or revoked promotion root.
 - Publication tests upload immutable candidates to a disposable channel, read the
-  bytes back, and reject a receipt when any remote digest, tag, channel, or
-  promotion-attestation digest differs.
+  bytes back, require exactly three independently signed target observations, and
+  reject a receipt when an observation is missing, duplicated, signed by the
+  uploader/promotion authority, revoked, or bound to a different remote digest,
+  tag, channel, or promotion-attestation digest.
 - Self-signing tests prove an ephemeral CI key or a key supplied only beside the
   candidate cannot become support eligible.
 - Runner tests reject dirty, uncommitted, unpinned, or digest-mismatched signing and
@@ -303,7 +321,7 @@ weakening ADR-0010's A-to-B diff restriction.
 - `CONTEXT.md`, invariants 19 and 20
 - `docs/PRODUCT_SPEC.md`, First Milestone Acceptance Criteria 6, 19, and 32
 - `docs/IMPLEMENTATION_PLAN.md`, Spike B and Phase 13
-- `docs/DECISIONS.md`, D-040
+- `docs/DECISIONS.md`, D-040 and D-047
 - [`ADR-0010`](0010-reproducible-platform-bundles-and-provenance.md)
 - [`ADR-0011`](0011-native-two-plane-service-supervision-and-authenticated-ipc.md)
 - [`ADR-0017`](0017-device-local-secret-store-backends.md)

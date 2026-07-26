@@ -13,18 +13,21 @@ until the signed, packaged candidate passes the complete clean-host matrix.
   `SendInput` only as a same-or-lower-integrity fallback.
 - `OpenDelegate.WindowsComputerUseFixture.vcxproj` builds the deterministic Win32
   fixture used by the shared native-driver conformance laboratory.
-- `../../src/windows-helper-ipc.ts` is the core-side authenticated named-pipe port.
-  The native helper and the port mutually prove a 32-byte bootstrap Secret, derive
-  directional keys, authenticate every bounded frame, and bind the helper instance,
-  service epoch, session identity, Device, and release version.
+- `../../src/windows-helper-ipc.ts` is the owner-session helper's authenticated
+  named-pipe port for its one-process native child. The native child and the port
+  mutually prove a 32-byte bootstrap Secret, derive directional keys, authenticate
+  every bounded frame, and bind the helper instance, service epoch, session identity,
+  Device, and release version. This child boundary is nested behind the separate
+  Ed25519-authenticated core/owner-session helper plane from ADR-0011 and D-043.
 - `../../src/windows-native-driver.ts` maps the authenticated helper into the shared
   `NativeComputerUseDriver` contract without minting Policy, lease, or fencing
   authority.
 
-The production launcher must supply the bootstrap Secret through an inherited
-descriptor and the exact owner-session helper process through
-`--parent-process-id`. The pipe DACL is owner-only, and every production connection
-must additionally report that exact client PID. `--lab-allow-owner-client` remains
+The owner-session helper must supply this child-only bootstrap Secret through
+inherited descriptor 3 and identify its exact process through `--parent-process-id`.
+It is not the service-plane IPC credential and is never shared with the core
+service. The pipe DACL is owner-only, and every production connection must
+additionally report that exact client PID. `--lab-allow-owner-client` remains
 restricted to focused authentication tests. The conformance harness keeps the
 production parent-PID check and uses the separate `--lab-fixture-capture` switch
 only for its deterministic non-release window.

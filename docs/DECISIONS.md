@@ -534,17 +534,27 @@ sidecar and is not stapled into the candidate.
 
 One detached publisher attestation authenticates each target candidate. A separate
 cross-platform promotion attestation and supported-channel release receipt are
-verified through a distinct external promotion trust root. `released` is the
-effective result of that complete external trust calculation, never a filename,
-embedded field, environment variable, Git tag, or self-signature.
+verified through a distinct external promotion trust root. Before that receipt is
+created, exactly three target-scoped remote read-back observations—one per supported
+target—must verify as signed envelopes against a separately provisioned observer
+trust root. The observer authority is distinct from all publisher and
+promotion/uploader authorities and has its own revocation set. The read-back plan
+binds its uploader authorization to the promotion key ID rather than inventing a
+fourth release-signing role. `released` is the effective result of that complete
+external trust calculation, never a filename, embedded field, environment
+variable, Git tag, or self-signature.
 
 **Rationale:** Native signatures mutate executable bytes, while support eligibility
 depends on one immutable candidate set and the complete three-platform evidence
 matrix. Separate publisher and promotion authorities prevent a valid per-bundle
-signature from silently becoming a support claim.
+signature from silently becoming a support claim. Independently signed read-back
+observations prevent the publishing authority from self-asserting that all target
+bytes were retrieved unchanged.
 
 **Consequence:** Previews and CI self-signatures are never support eligible.
 Credential-bearing signing, notarization, promotion, and publication tools run only
 from clean committed, hash-pinned runners. Actual platform identities, Devices,
 Discord and provider credentials, notarization, and live proof remain external
-release blockers until their exact evidence is recorded.
+release blockers until their exact evidence is recorded. Configured release policy
+can revoke observer identities independently of publisher and promotion keys,
+platform identities, and promotion or receipt statement IDs.

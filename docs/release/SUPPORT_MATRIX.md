@@ -49,11 +49,15 @@ provider changes a `*-latest` alias:
 | Linux verification | `ubuntu-24.04` | Source, package, browser, and platform-bundle compatibility |
 | Windows verification | `windows-2025` | Source, package, browser, and platform-bundle compatibility |
 | macOS verification | `macos-26` | Apple-silicon source, package, browser, and platform-bundle compatibility |
+| Persistence verification | `ubuntu-24.04` with PostgreSQL 17 | SQLite/PostgreSQL domain-contract equivalence and Main composition |
 
 These hosted images are engineering evidence only. Windows Server is not the
 declared Windows 11 desktop target, and hosted runners do not prove privileged
 service installation, reboot persistence, interactive permissions, private
 networking, live providers, Discord, signing, or Computer Use.
+The hosted persistence job currently proves PostgreSQL 17 only. Other PostgreSQL
+major versions are not covered by the first-milestone automated evidence and must
+not be inferred from the generic external-URI configuration surface.
 
 ## Release authenticity and support eligibility
 
@@ -70,10 +74,17 @@ result stays outside the archive so no manifest-bound byte is stapled or rewritt
 
 One cross-platform promotion attestation then binds the complete target set, native
 authenticity records, notarization receipt, publisher attestations, ledger, and live
-evidence. A supported-channel release receipt records remote digest read-back.
-Publisher and promotion trust roots are distinct and provisioned independently.
-Effective `released` is computed from those external records and trust roots while
-the enclosed payload remains `release-candidate`.
+evidence. Exactly three independently signed observer envelopes—one per supported
+target archive—prove remote digest read-back before a supported-channel release
+receipt can bind them. Publisher, promotion, and observer trust roots are mutually
+distinct and provisioned independently; the promotion key ID is also the read-back
+plan's uploader authorization, not a separate uploader signing role. The configured
+policy revokes observer keys independently. Effective `released` is computed from
+those external records and trust roots while the enclosed payload remains
+`release-candidate`. Main and Admin expose the enclosed `declaredReleaseChannel`
+separately from effective `releaseChannel` and a sanitized verification status.
+Absent, invalid, incomplete, promotion-invalid, or revoked external authority never
+upgrades the effective channel beyond `release-candidate`.
 
 Internal previews, ad-hoc or self-signed native binaries, CI-generated Ed25519 keys,
 and a public key distributed only beside its own signature are not support eligible.

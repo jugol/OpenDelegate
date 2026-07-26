@@ -19,8 +19,9 @@ the candidate.
 - `verifyRelease(input)` verifies an inspected candidate plus its detached archive,
   publisher attestation, externally supplied publisher key, and revocation policy.
   Publisher verification alone remains `release-candidate`. A complete and valid
-  promotion attestation, evidence set, distinct promotion trust root, and
-  supported-channel receipt produce `released`.
+  promotion attestation, evidence set, distinct promotion trust root, exactly three
+  independently signed target read-back observations, distinct observer trust root,
+  and supported-channel receipt produce `released`.
 - `resolveConfiguredRelease(input)` is the installer/runtime entry point. It always
   inspects the candidate first, then resolves external authority from the configured
   state root. Candidate corruption throws a `ReleaseIntegrityError` with a
@@ -49,9 +50,11 @@ must not overlap the candidate; linked, escaping, aliased, case-colliding, dupli
 or changing paths fail closed. Files are pinned to the bytes read for one
 verification.
 
-Publisher and promotion keys are distinct Ed25519 trust authorities. Policy can
-revoke publisher keys, promotion keys, platform certificate identities, promotion
-statements, and release receipts.
+Publisher, promotion, and observer keys are distinct Ed25519 trust authorities.
+The read-back plan uses the promotion key ID as uploader authorization, while each
+remote observation is signed by the separate observer. Policy can revoke publisher,
+promotion, and observer keys, platform certificate identities, promotion statements,
+and release receipts.
 
 ## Resolution results
 
@@ -65,7 +68,7 @@ status changes the computed `effectiveChannel`:
 | `publisher-verified` | `release-candidate` | The target candidate is authenticated, but not promoted. |
 | `promotion-invalid` | `release-candidate` | Publisher authentication passed, but the promotion chain did not. |
 | `revoked` | `release-candidate` | An applicable trusted identity or statement is revoked. |
-| `released` | `released` | The complete external publisher, promotion, evidence, and publication-receipt chain passed. |
+| `released` | `released` | The complete external publisher, promotion, evidence, three-observer-read-back, and publication-receipt chain passed. |
 
 Promotion is defined only for the exact first-milestone target set:
 `darwin-arm64`, `linux-x64`, and `win32-x64`.

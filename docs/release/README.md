@@ -32,9 +32,12 @@ can open the canonical Admin origin once per login only when the typed Main pref
 Source composition and deterministic tests are not release proof.
 Clean-host service privilege, signing/notarization, live provider and Discord credentials, mixed
 private routes, reboot/recovery, real Artifact opening, and the complete three-OS Computer Use
-matrix remain externally unproven. ADR-0021 now defines the immutable promotion and native
-authenticity contract, but the support-eligible platform signers, promotion verifier, trusted
-publication workflow, and external receipts are not yet implemented or proven.
+matrix remain externally unproven. The repository implements ADR-0021's immutable candidate
+verifier, target finalizer, strict digest-addressed external authority resolver, and declared versus
+effective runtime projection. Real release credentials, independently provisioned authorities,
+signed and notarized target candidates, credentialed promotion, publication, three observer-signed
+remote read-back envelopes, one supported-channel receipt, and complete live evidence do not yet
+exist.
 
 ## Status vocabulary
 
@@ -61,13 +64,20 @@ The surrounding release labels are distinct from criterion status:
 | `internal-preview-blocked`      | Unsupported validation bundle from an incomplete ledger                     |
 | `internal-preview-complete`     | Unsupported validation bundle from a complete ledger                        |
 | `release-candidate`             | Complete-gate immutable bundle awaiting trusted external promotion           |
-| `released`                      | Effective result of verified publisher, platform, promotion, and channel receipts |
+| `released`                      | Effective result of immutable candidate integrity plus the verified publisher, platform, promotion, observer-read-back, channel-receipt, and revocation-policy chain |
 
-The Admin runtime channel uses `development`, `internal-preview`, `release-candidate`, or
-`released`. Only `released` can represent a supported publication, and only when the connected
-runtime features are also ready. Enclosed candidate metadata remains `release-candidate`; a
-verifier computes effective `released` from external sidecars and independently provisioned trust
-roots.
+The runtime API exposes three separate facts:
+
+- `declaredReleaseChannel` is the identity enclosed by the build: `development`,
+  `internal-preview`, or `release-candidate`;
+- `releaseChannel` is the effective verified result and adds `released`; and
+- `releaseVerification` is a sanitized status: `not-applicable`, `absent`,
+  `publisher-verified`, `invalid`, `promotion-invalid`, `revoked`, or `released`.
+
+Only effective `released` can represent a supported publication, and only when the connected
+runtime features are also ready. Enclosed candidate metadata always remains
+`release-candidate`; the verifier computes effective status from external sidecars,
+independently provisioned trust roots, and revocation policy.
 
 ## Build an unsupported internal preview
 
@@ -132,13 +142,13 @@ limit and executes it only after its pinned SHA-512 matches. Every later pnpm pr
 explicit regular CLI path outside the live checkout.
 
 The launchers clear caller-provided identity variables. The packaged CLI derives its version,
-build ID, and runtime channel only after verifying the enclosed
+build ID, and declared channel only after verifying the enclosed
 `SHA256SUMS` → `payload-manifest.json` → `release-metadata.json` → acceptance-ledger chain.
-Schema, hash, count, or status disagreements stop startup. This proves only that the enclosed
-files agree with each other; it does not authenticate their publisher. Source-checkout runs always
-identify as `development`, and the current runtime rejects `released` until a separate trusted
-promotion-attestation verifier implementing ADR-0021 is shipped and supplied with the required
-external receipt and trust roots.
+Schema, hash, count, or status disagreements in candidate bytes stop startup. Source-checkout runs
+always identify as `development`, and internal previews retain their unsupported identity.
+For a valid candidate, Main resolves external release authority below its resolved state root:
+absent, invalid, incomplete, or revoked external material keeps the effective channel at
+`release-candidate`, while the complete verified ADR-0021 chain alone produces `released`.
 
 Payload assembly also rejects symbolic links, Windows junctions, and special files. The current
 manifests cover regular file bytes, so a link is never allowed to sit outside their coverage.
@@ -156,29 +166,28 @@ Use `opendelegate.cmd` on Windows or `./opendelegate` on macOS/Linux. Runtime st
 databases, logs, and generated Artifacts must remain outside both the source checkout and the
 release bundle.
 
-## Publisher attestation for service installation
+## Legacy preview attestation for service installation
 
 Native install and upgrade authenticate bundle bytes with a detached Ed25519 publisher
-attestation. This is distinct from release-channel promotion: signing an
-`internal-preview-*` bundle does not make it supported, and signing a `release-candidate` does not
-make it `released`.
+attestation. The `release:sign` command is the legacy, explicitly unsupported preview path. It
+rejects production candidates and cannot create support eligibility.
 
 Keep the Ed25519 PKCS#8 private key outside the checkout, bundle, runtime home, logs, and Agent
 context. After a bundle contains both target-native service hosts and its packaged smoke has
-passed, sign it with:
+passed, acknowledge and sign the preview with:
 
 ```sh
 pnpm release:sign --bundle ABSOLUTE_BUNDLE_PATH \
   --private-key ABSOLUTE_PRIVATE_KEY_PEM \
-  --public-key-destination ABSOLUTE_NEW_PUBLIC_KEY_PEM
+  --public-key-destination ABSOLUTE_NEW_PUBLIC_KEY_PEM \
+  --allow-unsupported-preview
 ```
 
-Signing an unsupported lab bundle additionally requires the exact
-`--allow-unsupported-preview` acknowledgement. The signer:
+The preview signer:
 
 - rejects linked or special paths and byte-compares the complete payload and checksum manifests;
 - requires the two target-native service executables and matching successful packaged smoke;
-- refuses an incomplete `release-candidate`;
+- refuses every `release-candidate`;
 - derives the publisher key ID from the Ed25519 public key;
 - creates `BUNDLE_PATH.publisher-attestation.json` and the requested public-key file with
   create-new semantics; and
@@ -190,12 +199,13 @@ Provision the emitted public key through an owner-controlled channel as
 the bundle it is expected to authenticate. Windows publisher-key ACL review and any platform code
 signing/notarization remain separate operator gates.
 
-The current `release:sign` command is the implemented service-install publisher boundary: it binds
-the verified checksum manifest and is usable for explicitly unsupported lab previews. ADR-0021
-requires the supported-candidate form also to bind the exact final archive digest, target tuple,
-A/B identities, and ledger digest after native signing and archive finalization. Until that
-extended contract and verifier ship, this command alone cannot create a support-eligible
-publisher attestation.
+Production candidates use `pnpm release:finalize` from the exact clean, committed, hash-pinned
+target runner. The finalizer revalidates the already native-signed frozen payload, packaged smoke,
+candidate completeness, pinned runtime and release tools; creates the deterministic final archive;
+and obtains the candidate-v2 publisher attestation through the opaque external signing policy.
+That statement binds the exact archive, target tuple, A/B identities, ledger, native authenticity,
+and manifest digests without exposing private material in argv, output, logs, or Agent context.
+Neither finalization nor publisher verification changes the enclosed channel.
 
 ## Supported promotion trust path
 
@@ -215,26 +225,133 @@ non-circular order for a supported release:
 5. After every target and every live criterion is complete, one separately signed cross-platform
    promotion attestation binds the ledger, complete support matrix, candidate archives, native
    identities, publisher attestations, notarization receipt, and immutable evidence.
-6. The exact assets are published, read back by digest, and named in a signed supported-channel
-   release receipt.
+6. The exact assets are published and each of the three target archives is read back by digest.
+   An independent observer signs exactly one bounded observation envelope per target against its
+   separately provisioned observer trust root.
+7. A signed supported-channel release receipt binds the promotion, immutable publication identity,
+   uploader authorization, and all three verified observer envelopes.
 
-The per-target publisher trust root and cross-platform promotion trust root are external, distinct,
-and provisioned independently of the bytes they authorize. The candidate payload, archive,
-metadata, and acceptance ledger never change during these steps. A filename, environment variable,
-Git tag, embedded `released` value, preview signature, or CI-generated public key cannot replace
-the external verification chain.
+The per-target publisher trust roots, cross-platform promotion trust root, and observer trust root
+are external, mutually distinct, and provisioned independently of the bytes they authorize. The
+read-back plan names the promotion key ID as its uploader authorization; the observer key must
+differ from it and is independently revocable. The candidate payload, archive, metadata, and
+acceptance ledger never change during these steps. A filename, environment variable, Git tag,
+embedded `released` value, preview signature, or CI-generated public key cannot replace the
+external verification chain.
+
+For each installed candidate, provision strict canonical
+`release-verification.json` at:
+
+```text
+STATE_ROOT/trust/releases/<version>/<platform>-<architecture>/<checksumManifestSha256>/release-verification.json
+```
+
+Every referenced archive, attestation, trust root, notarization record, support-matrix file, and
+criterion-evidence file must be a distinct bounded regular file beneath that digest-addressed trust
+directory and outside the candidate. The resolver rejects aliases, links, case collisions, path
+escapes, inconsistent targets or digests, incomplete 36-item evidence, a missing or duplicate
+target observation, reused authorities, and applicable publisher, promotion, observer, platform,
+statement, or receipt revocations. A publisher-only configuration authorizes candidate
+installation but cannot produce effective `released`.
 
 The installer and runtime may compute effective `released` only when the candidate integrity
-chain, native authenticity, publisher attestation, complete promotion attestation, supported
-channel receipt, and applicable trust roots all verify for the same exact asset. Otherwise the
-artifact remains a `release-candidate` at most. The repository currently has the accepted design,
-not the complete verifier or credentialed promotion pipeline, so no supported publication is
-possible yet.
+chain, native authenticity, publisher attestation, complete promotion attestation, all three
+observer-signed target read-back envelopes, supported channel receipt, and applicable trust roots
+verify for the same exact asset. Otherwise the artifact remains a `release-candidate` at most. The
+verifier and deterministic promotion/receipt composition tools are implemented, but no supported
+publication is possible until their exact external trust material, credentialed runs, remote
+digest read-back, and complete live evidence exist.
 
 Credential-bearing native signing, timestamping, notarization, publisher signing, promotion
-signing, and publication tools may run only from the clean committed/hash-pinned runner contract.
-Their private material stays in an external Secret Store, HSM, keychain, or short-lived workload
-identity and never enters argv, source, bundle files, Agent context, logs, or public evidence.
+signing, observer signing, and publication tools may run only from the clean committed/hash-pinned
+runner contract. Their private material stays in an external Secret Store, HSM, keychain, or
+short-lived workload identity and never enters argv, source, bundle files, Agent context, logs, or
+public evidence. Publisher and promotion signing policies select a pre-provisioned local IPC
+broker, pin distinct release and transport Ed25519 authorities, and use a same-session two-phase
+one-shot capability. See [`SIGNER_BROKER_PROTOCOL.md`](SIGNER_BROKER_PROTOCOL.md) for the exact
+wire grammar, peer authorization, monotonic expiry, and deployment requirements.
+
+### Promotion, receipt, and authority tooling
+
+The production tools intentionally do not choose a hosting provider or upload assets. An operator
+may use any immutable channel whose uploader and independent reader can produce the strict pinned
+records, including a private owner-controlled channel. The trust steps remain deterministic:
+
+To inspect credential-free canonical plan and signer-policy shapes, first run
+`pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY`; every generated file is marked
+`PLACEHOLDER` and `NOT-A-RELEASE`. The output is documentation, not evidence or authorization.
+See [`EXAMPLES.md`](EXAMPLES.md).
+
+```sh
+pnpm release:finalize -- \
+  --candidate ABSOLUTE_CANDIDATE_DIRECTORY \
+  --destination ABSOLUTE_NEW_OUTPUT_DIRECTORY \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256 \
+  --target darwin-arm64 \
+  --expected-manifest-sha256 SHA256 \
+  --expected-candidate-digest SHA256 \
+  --signing-policy ABSOLUTE_PUBLISHER_SIGNING_POLICY \
+  --signing-policy-sha256 SHA256
+
+pnpm release:promote -- \
+  --repository ABSOLUTE_CLEAN_CHECKOUT \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256 \
+  --plan ABSOLUTE_PROMOTION_PLAN --plan-sha256 SHA256 \
+  --signing-policy ABSOLUTE_PROMOTION_SIGNING_POLICY --signing-policy-sha256 SHA256 \
+  --attestation-destination ABSOLUTE_NEW_ATTESTATION \
+  --runner-record-destination ABSOLUTE_NEW_RUNNER_RECORD
+
+pnpm release:receipt -- \
+  --repository ABSOLUTE_CLEAN_CHECKOUT \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256 \
+  --promotion-plan ABSOLUTE_PROMOTION_PLAN --promotion-plan-sha256 SHA256 \
+  --read-back-plan ABSOLUTE_READ_BACK_PLAN --read-back-plan-sha256 SHA256 \
+  --observer-trust-root ABSOLUTE_OBSERVER_PUBLIC_KEY \
+  --observer-trust-root-sha256 SHA256 \
+  --signing-policy ABSOLUTE_PROMOTION_SIGNING_POLICY --signing-policy-sha256 SHA256 \
+  --receipt-destination ABSOLUTE_NEW_RECEIPT \
+  --runner-record-destination ABSOLUTE_NEW_RUNNER_RECORD
+
+pnpm release:configure -- \
+  --repository ABSOLUTE_CLEAN_CHECKOUT \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256 \
+  --plan ABSOLUTE_CONFIGURATION_PLAN --plan-sha256 SHA256 \
+  --destination-root ABSOLUTE_NEW_EXTERNAL_BUNDLE
+```
+
+`release:finalize` runs separately on each target-native host. `release:promote` re-verifies the
+exact three candidates, their independent publisher roots, platform authenticity, macOS
+notarization, support matrix, and all 36 immutable evidence records. Its promotion authority must
+differ from every publisher authority. `release:receipt` re-composes and verifies that promotion,
+then authenticates exactly three independently created observer envelopes against the pinned
+observer trust root—one for each remotely read-back candidate archive. The observer authority must
+differ from the promotion/uploader authorization and every publisher authority. The read-back plan
+must name the promotion authority as `uploaderAuthorityKeyId`; this binds publication authorization
+without creating a second uploader signing key. The promotion attestation is separately signature-
+and digest-bound rather than counted as a target archive. The configured revocation policy covers
+observer key IDs independently.
+
+`release:configure` accepts either a publisher-only or fully released plan, re-verifies the entire
+selected chain, and creates a new standalone state-root-shaped bundle containing only bounded
+external public material plus a sanitized runner record. It never installs into a Device state
+root. The owner must review and copy that bundle through an appropriate privileged boundary, then
+rerun Main and installer verification. All plans and signing policies are strict canonical JSON,
+SHA-256 pinned on the command line, and stored outside the checkout, candidates, outputs, and
+credential store. Every credential-bearing production command shown above requires Node.js 24.18.0
+and independently pins the exact orchestrating `process.execPath` bytes with
+`--runner-executable-sha256`; derive that value from the approved runner provenance, not from an
+untrusted executable at invocation time. It also pins an absolute unlinked Git executable by
+SHA-256 and clears ambient Git repository and configuration overrides. The sanitized runner record
+retains the verified executable digests. Output paths must be absent; partial publication rolls
+back without overwrite.
 
 ## Production gate
 
@@ -248,7 +365,20 @@ It must fail while any of the 36 criteria is incomplete. The production bundle c
 preview flag:
 
 ```sh
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
+```
+
+That command is complete as written only for the Linux x64 candidate, whose first-milestone native
+policy is built-in `publisher-only`. The macOS and Windows candidate commands must additionally
+include:
+
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
 ```
 
 That command must also fail before bundle assembly while the ledger is blocked. Once the ledger is
@@ -355,8 +485,9 @@ supported release proof still needs:
   headless-Linux unavailability;
 - mixed-OS, mixed-route, Worker reconnect, Artifact upload, and exposure scenarios;
 - signing/notarization and publishing inputs appropriate to the distributed platform bundles; and
-- an implemented ADR-0021 promotion verifier, distinct trusted publisher and promotion roots,
-  target-native pre-manifest signing, exact-archive macOS notarization, and supported-channel
+- independently provisioned, distinct publisher, promotion, and observer authorities; credentialed
+  target-native pre-manifest signing; exact-archive macOS notarization; promotion artifacts; remote
+  publication; exactly three observer-signed target read-back envelopes; and the supported-channel
   digest receipt.
 
 The safe metadata snapshot and fresh-target recovery contract is documented in

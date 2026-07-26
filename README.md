@@ -59,7 +59,7 @@ required before support can be claimed.
 
 | Area                 | Implemented and testable in source                                                                                                                                                                                                                                                                           | Still required for the first milestone                                                                                                                                                                                       |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main and persistence | Bundled `opendelegate` CLI; composed Control Plane; SQLite and PostgreSQL storage contracts; durable Task execution, approval, audit, Artifact, enrollment, Discord, and Device-channel services; startup reconciliation that fails closed when an interrupted action outcome is unknown                           | Clean-host installation, database migration and restore, service restart, and complete reconciliation evidence on every declared Main platform                                                                               |
+| Main and persistence | Bundled `opendelegate` CLI; composed Control Plane; SQLite and PostgreSQL storage contracts (hosted PostgreSQL proof is currently pinned to 17); durable Task execution, approval, audit, Artifact, enrollment, Discord, and Device-channel services; startup reconciliation that fails closed when an interrupted action outcome is unknown | Clean-host installation, database migration and restore, service restart, and complete reconciliation evidence on every declared Main platform; other PostgreSQL major versions remain unproven                              |
 | Owner access         | Loopback-only initial claim, passphrase login, recovery codes, session revocation, CSRF protection, and SQL persistence                                                                                                                                                                                      | Release-valid remote-route, restart, browser-theft revocation, and Discord-independent recovery evidence                                                                                                                     |
 | Admin Web            | Authenticated Device, Task, Approval, enrollment, Artifact, audit, emergency-control, and Configuration Chat surfaces; capability-aware controls; responsive, persisted English, Korean, Japanese, French, Spanish, and Simplified Chinese presentation                                                        | Real-device onboarding and outage journeys, accessibility and overflow evidence on the release bundles, and live operator acceptance                                                                                         |
 | Device runtime       | Single-use enrollment, Device-scoped identity, authenticated outbound Main–Worker channel, leased dispatch, durable inbox/outbox, Run supervision, Workspaces, local Agent execution, local Knowledge MCP, Computer Use MCP, and Artifact upload                                                              | Enrolled physical Devices, route-loss and restart recovery, mixed Omada/Tailscale-style route proof, and persistent service proof on all three OS families                                                                    |
@@ -92,7 +92,7 @@ Release words have deliberately narrow meanings:
 | Public source pre-alpha         | Reviewable source; unsupported and not a completed installation         |
 | `internal-preview-*` bundle     | Local validation payload; always unsupported, even if local smoke passes |
 | `release-candidate` bundle      | All 36 gates passed, but the artifact is not yet promoted or supported  |
-| `released`                      | A separately attested artifact published through a supported channel    |
+| `released`                      | Effective status computed from a valid immutable candidate and the complete trusted publisher, platform-authenticity, promotion, observer read-back, supported-channel, and revocation-policy chain |
 
 No `released` artifact currently exists.
 
@@ -163,15 +163,41 @@ A production build intentionally fails while any acceptance criterion is incompl
 
 ```sh
 pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
 ```
 
-After a complete target bundle passes packaged smoke, `pnpm release:sign` can create its detached
-Ed25519 publisher attestation and a separately provisioned public trust root. Signing never changes
-an `internal-preview-*` or `release-candidate` into a supported release; see the
-[publisher-attestation procedure](docs/release/README.md#publisher-attestation-for-service-installation).
+The `release:build` invocation above is complete as written only for the Linux x64 candidate. On
+macOS and Windows, append the required target-native credential policy:
 
-Both commands may succeed only after all 36 implementation and live-evidence gates pass. See
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
+```
+
+`pnpm release:sign` is deliberately restricted to explicitly acknowledged unsupported previews.
+It rejects release candidates. After the 36-criterion gate is complete, a clean hash-pinned
+target-native runner uses `pnpm release:finalize` to freeze each production candidate and create
+its candidate-v2 publisher attestation. Only the configured external promotion and
+supported-channel receipt chain can make that immutable candidate effectively `released`; see the
+[release trust procedure](docs/release/README.md#supported-promotion-trust-path).
+
+Generate credential-free operator input skeletons with:
+
+```sh
+pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
+```
+
+Every generated set is marked `PLACEHOLDER` and `NOT-A-RELEASE`; it contains no credentials,
+signatures, artifacts, or release evidence. See the
+[release input examples guide](docs/release/EXAMPLES.md).
+
+The production `release:gate` and candidate-mode `release:build` commands may succeed only after all
+36 implementation and live-evidence gates pass. Unsupported preview signing does not satisfy or
+bypass that production gate. See
 [the exact first-milestone support matrix](docs/release/SUPPORT_MATRIX.md),
 [the release evidence guide](docs/release/README.md), and
 [platform lab checklist](docs/release/PLATFORM_LAB.md).

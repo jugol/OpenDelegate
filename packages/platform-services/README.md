@@ -82,9 +82,11 @@ A release bundle includes its pinned runtime and service hosts:
   .staging/<version>-<checksum-prefix>/
 ```
 
-Install and upgrade copy into `.staging`, verify the release checksum, signed manifest, and bundled
-runtime, atomically promote the version directory, then atomically replace `current`. Service
-manifests refer only to `current`, so their paths do not change during upgrade.
+Install and upgrade authenticate the source, copy a link-free tree into `.staging`, reinspect the
+copied bytes and bundled runtime, verify both native hosts, atomically promote the version directory,
+and persist a bounded release-verification seal. The executor recomputes current authority and
+compares that seal immediately before atomically replacing `current`. Service manifests refer only
+to `current`, so their paths do not change during upgrade.
 
 After activation, required core health is checked. The helper health check may defer only when the
 owner is logged out. A failure unwinds completed steps in reverse, stops the new processes, restores
@@ -164,14 +166,19 @@ opendelegate service plan OPERATION --config PATH [--home MAIN_HOME] [--active-v
 opendelegate service install --config PATH [--home MAIN_HOME] --command-id ID
 opendelegate service reconfigure --config PATH --home MAIN_HOME --active-version VERSION --command-id ID
 opendelegate service start|stop|restart --config PATH [--home MAIN_HOME] --active-version VERSION --command-id ID
-opendelegate service upgrade --config NEW_BUNDLE_PATH --active-version CURRENT_VERSION --command-id ID
-opendelegate service status|diagnose --config PATH
-opendelegate service uninstall --config PATH --active-version VERSION --command-id ID
+opendelegate service upgrade --config PATH [--home MAIN_HOME] --active-version CURRENT_VERSION --command-id ID
+opendelegate service status|diagnose --config PATH [--home MAIN_HOME]
+opendelegate service uninstall --config PATH [--home MAIN_HOME] --active-version VERSION --command-id ID
 ```
 
 `--home` is required whenever the template role is Main. The owner CLI reads
 `admin.open-on-login` from Main's durable Configuration state and replaces stale
 template preference data before rendering, inspection, planning, or mutation.
+For upgrade, `--config` names the new validated platform configuration whose
+`paths.bundleSource` selects the incoming bundle; it is not itself a bundle path.
+Current-host mutation, status, and diagnosis require that canonical Main home to
+equal the template `stateRoot`; the installed service uses that root as Main's
+runtime home. Read-only cross-target rendering and planning remain available.
 `reconfigure` accepts only that preference change, atomically rewrites the exact
 runtime configuration, and restarts and health-checks only the owner-session helper
 with rollback while the core stays running.
@@ -188,29 +195,39 @@ new release bytes are introduced.
 
 The default CLI composes the native current-host implementation. Before claiming a durable command
 or mutating the host, it verifies elevation, fixed native tools, safe link-free path topology,
-canonical plan identity, and same-volume activation. Install and upgrade additionally verify every
-payload digest, the two executable native service hosts, and a detached Ed25519 publisher
-attestation rooted outside the payload. Publisher authentication occurs before untrusted payload
-traversal; ordinary lifecycle recovery does not depend on the original bundle source
-remaining mounted. Missing authority
-or trust returns `SERVICE_COMMAND_PREFLIGHT_FAILED` with `mutationMayHaveOccurred: false`; the CLI
-never elevates itself. Status and diagnose use conservative native inspection and never infer
-Computer Use from core health. See
+canonical plan identity, and same-volume activation. Install and upgrade additionally select one
+explicit trust track:
+
+- a legacy `INTERNAL_PREVIEW.md` bundle verifies its detached Ed25519 preview attestation against
+  `STATE_ROOT/trust/publisher-ed25519.pem`; or
+- a candidate-v2 bundle resolves strict external authority from
+  `STATE_ROOT/trust/releases/<version>/<platform>-<architecture>/<checksumManifestSha256>/release-verification.json`.
+
+Candidate corruption is fatal. Missing, invalid, incomplete, or revoked external authority prevents
+installation; publisher-verified authority permits only an effective unpromoted candidate, and the
+complete promotion/receipt chain can yield effective `released`. Source authentication precedes
+untrusted traversal, staging is reinspected, a durable sanitized seal is persisted, and current
+authority is recomputed immediately before activation. Start, restart, and reconfigure reauthenticate
+the installed release and seal without requiring the original source mount. Missing authority or
+trust returns `SERVICE_COMMAND_PREFLIGHT_FAILED` with `mutationMayHaveOccurred: false`; the CLI never
+elevates itself. Status and diagnose use conservative native inspection and never infer Computer
+Use from core health. See
 [`docs/SERVICE_LIFECYCLE.md`](../../docs/SERVICE_LIFECYCLE.md) for the owner contract and exact
 failure behavior.
 
-Current target-native preview builds include both self-tested service-host executables. They remain
-unsupported until a clean build has a detached publication attestation, the platform-specific
-signature or notarization required by the support matrix, and clean-host lifecycle evidence. An
-unsigned preview therefore intentionally fails production install preflight. The native
-implementation does not change the release ledger and does not replace clean-host, reboot/login,
-or rollback evidence.
+Current target-native preview builds include both self-tested service-host executables. A preview
+is permanently unsupported and never promotion eligible. Support requires a separate clean
+production candidate with its detached publisher attestation, the platform-specific signature or
+notarization required by the support matrix, and clean-host lifecycle evidence. An unsigned preview
+therefore intentionally fails production install preflight. The native implementation does not
+change the release ledger and does not replace clean-host, reboot/login, or rollback evidence.
 
-Once a target bundle contains both hosts and has passed packaged smoke,
-`pnpm release:sign` revalidates the complete manifest-bound payload and creates the detached
-Ed25519 publisher attestation plus a separately provisioned public trust root. Signing never
-changes `internal-preview-*` or `release-candidate` support status and is not release-channel
-promotion. See [`docs/release/README.md`](../../docs/release/README.md#publisher-attestation-for-service-installation).
+For an explicitly unsupported preview, `pnpm release:sign --allow-unsupported-preview` revalidates
+the complete manifest-bound payload and creates the detached Ed25519 preview attestation plus a
+separately provisioned public trust root. It rejects candidates. Production candidates instead use
+the clean, pinned `pnpm release:finalize` path and candidate-v2 authority; neither publisher
+operation is release-channel promotion. See
+[`docs/release/README.md`](../../docs/release/README.md#legacy-preview-attestation-for-service-installation).
 
 ## Windows read-only validation
 
@@ -233,12 +250,14 @@ npx --yes node@24 --experimental-strip-types --test packages/platform-services/t
 
 The contract suite strictly parses generated Task Scheduler XML, launchd property lists, and systemd
 units; tests deterministic output, privilege and tool preflight, link/path attacks, complete payload
-and publisher-signature verification, lifecycle coverage, partial-supervisor compensation,
-failed-health rollback, rollback failure, state-preserving uninstall, durable
-replay/conflict/in-progress behavior, logged-out readiness, Secret exclusion, and injected
-filesystem/supervisor behavior. Auto-open tests additionally cover disabled and
-Worker states, structured Main readiness, same-session replay, a distinct login
-session, bounded failure, and shell-free Windows/macOS/Linux browser commands.
+and publisher-signature verification, candidate corruption, configured-authority classifications,
+staged-byte mutation, verification-seal mismatch, immediate pre-activation recheck, installed
+release reauthentication, lifecycle coverage, partial-supervisor compensation, failed-health
+rollback, rollback failure, state-preserving uninstall, durable replay/conflict/in-progress
+behavior, logged-out readiness, Secret exclusion, and injected filesystem/supervisor behavior.
+Auto-open tests additionally cover disabled and Worker states, structured Main readiness,
+same-session replay, a distinct login session, bounded failure, and shell-free
+Windows/macOS/Linux browser commands.
 
 This package does not by itself constitute macOS, Linux, or Windows service acceptance. Clean-host
 install, reboot, login/logout, upgrade, and rollback proof remain self-hosted platform-lab gates,

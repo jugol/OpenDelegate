@@ -57,8 +57,11 @@ Before invoking any credential-bearing release command:
    certificate identity, and immutable object identity.
 3. Replace every zeroed SHA-256 and the zeroed Git commit with a digest captured from
    the exact immutable input.
-4. Provision distinct publisher, promotion, uploader, observer, and broker
-   authorities. Keep all private keys and credentials outside plan and policy files.
+4. Provision distinct publisher, promotion, and observer authorities. The read-back
+   plan names the promotion key ID as its uploader authorization; it does not mint a
+   separate uploader signing authority. Every signer broker also uses a transport
+   identity distinct from its release-signing identity. Keep all private keys and
+   credentials outside plan and policy files.
 5. Update the signing policies with the real public release key, broker transport
    public key, local broker endpoint, and their exact pins.
 6. Recompute `read-back-plan.json`'s promotion-plan digest after the final promotion

@@ -37,11 +37,12 @@ trusted.
 - Native Codex and Claude sessions.
 - Artifact content and exposure credentials.
 - Desktop input authority.
-- Platform code-signing, publisher, promotion, notarization, and publication
-  credentials.
+- Platform code-signing, publisher, promotion, observer, notarization, and
+  publication credentials.
 - Candidate manifests and archives, native-authenticity records, publisher
   attestations, macOS notarization receipts, cross-platform promotion attestations,
-  and supported-channel release receipts.
+  observer-signed remote read-back envelopes, and supported-channel release
+  receipts.
 
 ## Trust boundaries
 
@@ -91,15 +92,17 @@ permissions where other local users are not trusted.
 ### Release runner to supported channel
 
 The source checkout, build dependencies, target staging tree, native signing tools,
-notarization client, publisher signer, promotion signer, and publication client are
-separate inputs. Credential-bearing operations trust only clean committed release
-logic, hash-pinned tools, and candidate digests. Private material arrives through an
-external credential boundary and never enters Agent context or the candidate.
+notarization client, publisher signer, promotion signer, publication client, and
+independent remote observer are separate inputs. Credential-bearing operations trust
+only clean committed release logic, hash-pinned tools, and candidate digests. Private
+material arrives through an external credential boundary and never enters Agent
+context or the candidate.
 
-Candidate payloads remain `release-candidate`. Per-target publisher authenticity and
-cross-platform support promotion use distinct external trust roots. A supported
-channel is trusted only through a signed receipt that matches remotely read-back
-asset digests; it cannot authorize a different candidate by name or tag alone.
+Candidate payloads remain `release-candidate`. Per-target publisher authenticity,
+cross-platform support promotion, and remote observations use distinct external trust
+roots. A supported channel is trusted only through exactly three independently
+observer-signed target read-back envelopes and a receipt that binds those envelopes;
+it cannot authorize a different candidate by name or tag alone.
 
 ## Primary threats and required controls
 
@@ -134,10 +137,10 @@ asset digests; it cannot authorize a different candidate by name or tag alone.
 | Main restart loses external events | Durable inbox/outbox, Discord reconciliation | Restart journey reaches one valid result |
 | Native code is signed after integrity manifests | Require target-native signing and verification before payload freeze; reject every post-manifest mutation | Mutating one signed executable invalidates publisher and promotion verification |
 | Candidate bytes or ledger are rewritten during promotion | Keep payload, archive, enclosed metadata, and ledger immutable; use detached promotion records | Promotion leaves every candidate and ledger digest unchanged |
-| One valid bundle signature is treated as support | Distinct publisher and promotion keys, statement domains, and trust roots; complete target-set gate | Publisher-only, wrong-role, and missing-platform cases remain unpromoted |
+| One valid bundle signature is treated as support | Distinct publisher, promotion, and observer keys, statement domains, and trust roots; complete target-set gate | Publisher-only, wrong-role, missing-observation, and missing-platform cases remain unpromoted |
 | CI or a candidate supplies its own trust root | Provision trust roots independently; previews, ad-hoc certificates, and ephemeral keys are ineligible | Self-signed and key-beside-signature fixtures fail support verification |
 | macOS notarization or stapling changes final bytes | Submit the exact final archive after manifests and publisher attestation; keep the accepted receipt external and do not staple | Notarization evidence matches the archive SHA-256 and a post-receipt mutation fails |
-| A published asset differs from the promoted candidate | Bind archive digests in the promotion attestation, read them back from the supported channel, and sign a channel receipt | Tag, channel, asset, and digest substitution fixtures fail |
+| A published asset differs from the promoted candidate | Bind archive digests in the promotion attestation, require exactly three independently observer-signed target read-back envelopes, and bind them in the channel receipt | Missing, duplicate, wrong-authority, tag, channel, asset, and digest substitution fixtures fail |
 | Release credentials are exposed to mutable tooling or Agent context | Clean committed/hash-pinned runner, external Secret/HSM/keychain identity, sanitized outputs, no credential argv/log/evidence fields | Dirty/unpinned runner fails before credential access and leak fixtures remain empty |
 
 ## Security review gates
@@ -155,7 +158,9 @@ asset digests; it cannot authorize a different candidate by name or tag alone.
   tool ran from a dirty, uncommitted, or unpinned runner.
 - No runtime or installer reports effective `released` without a trusted per-target
   publisher attestation, required platform authenticity, a complete cross-platform
-  promotion attestation, and the matching supported-channel receipt.
+  promotion attestation, exactly three independently signed target read-back
+  envelopes under the observer trust root, and the matching supported-channel
+  receipt.
 - No preview, CI self-signature, ad-hoc certificate, Git tag, filename, environment
   variable, or trust key delivered only with its own signature can satisfy a release
   trust root.

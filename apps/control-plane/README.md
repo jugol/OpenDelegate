@@ -7,7 +7,9 @@ production socket or install a service.
 `createMainControlPlaneApp` contains:
 
 - detail-free `GET /health/live`;
-- owner-authenticated readiness, runtime-feature, and Device projections;
+- owner-authenticated readiness, runtime-feature, and Device projections. Runtime features keep
+  enclosed `declaredReleaseChannel`, effective `releaseChannel`, and sanitized
+  `releaseVerification` separate; the response schema rejects impossible combinations;
 - owner login, session, reauthentication, session listing, revocation, and logout;
 - independent recovery-code begin and complete operations;
 - Discord-independent Task creation, inspection, pause, resume, cancel, and retry;

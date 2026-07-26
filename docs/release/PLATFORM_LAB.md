@@ -25,7 +25,7 @@ Audited on 2026-07-26:
 | Codex                           | A local engineering installation was observed; no pinned public lab attestation exists           | First-class Codex App Server plus capability-reduced CLI fallback, controlled home, exact action authorization, native-session persistence, and deterministic fixtures | Authenticate the exact controlled home at the pinned version and run live start/stream/resume/cancel/approval/restart/checkpoint tests on participating Devices |
 | Claude                          | A local engineering installation was observed; authentication has no public lab attestation      | First-class Claude Agent SDK plus capability-reduced CLI fallback, controlled home, fail-closed sandbox contract, exact action authorization, native-session persistence, and deterministic fixtures | Authenticate the exact controlled home at the pinned version and run live start/stream/resume/cancel/approval/restart/checkpoint tests on supported participating Devices |
 | Network routes                  | Candidate private-network profiles are identified; no sanitized mixed-route proof exists         | Ordered Transport Profile and deterministic fallback contracts                                                                                                                           | One real mixed-route scenario, route failure/fallback evidence, and an Omada or equivalent routed private profile if selected                                                                                    |
-| Release inputs                  | No supported release has been built or published                                                 | Internal-preview builder, pinned-runtime policy, metadata, notices, checksums, smoke harness, publisher signer, and accepted ADR-0021 trust contract                                                                                         | Support-eligible native signers, final-archive publisher binding, promotion verifier, distinct trusted publisher/promotion identities, supported-channel receipt workflow, platform candidates on all targets, and successful 36-criterion gate                                                                |
+| Release inputs                  | No supported release has been built or published                                                 | Internal-preview builder; candidate finalizer; pinned runner/signing policies; native-authenticity and immutable archive checks; candidate/promotion/observer-read-back/receipt verifier; digest-addressed configured authority; declared/effective Main projection; sanitized Admin status; and accepted ADR-0021 contract | Real target-native signing identities; independently provisioned publisher/promotion/observer authorities; credentialed finalization, notarization, promotion, and publication; exactly three signed remote read-back observations; exact candidates on every target; and successful 36-criterion proof |
 | Private vulnerability reporting | GitHub's private reporting route was enabled and verified on 2026-07-24                           | Private draft security-advisory intake documented in `SECURITY.md`                                                                                                                      | Reverify the route and repository access immediately before any supported public release                                                                                                                          |
 
 The current default development shell may use a supported contributor Node 22 runtime. Release
@@ -84,9 +84,12 @@ for build prerequisites, authenticated helper boundaries, and the external evide
 1. Build the exact final-commit `x64` helper and fixture with pinned Node 24.18.0 and the declared
    Visual Studio/Windows SDK toolchain. Authenticode-sign and verify those exact PE bytes before
    payload manifests are generated, then freeze, archive, and publisher-attest the candidate.
-2. Launch the core through the SCM service and the helper through the production interactive-owner
-   session launcher. Supply the IPC Secret only through the inherited descriptor and verify the
-   configured service-account SID, helper identity, service epoch, and release version.
+2. Launch the core through the SCM service and the owner-session helper through the production
+   interactive-session launcher. Verify their separate OS-scoped Ed25519 identities, pinned peer
+   SPKIs/key IDs, signed session/release/service-epoch handshake, and configured service-account
+   SID. The owner-session helper then launches its one-process native Computer Use child and passes
+   that narrower child bootstrap Secret only through inherited descriptor 3; it is not the
+   core/helper plane credential.
 3. Through the system capture picker, select the signed deterministic fixture and prove separate
    readiness for the active/unlocked session, current frame, UI Automation controls,
    same-or-lower-integrity input, local emergency stop, and authenticated helper.
@@ -264,15 +267,24 @@ ADR-0021 without changing that ledger:
    change, discard the candidate and restart at native staging/signing.
 6. After every declared target and criterion verifies, create one cross-platform promotion
    attestation under a promotion key distinct from every publisher key.
-7. Publish only the attested assets, read every remote digest back, and create the signed
-   supported-channel release receipt. Effective `released` begins only when the external receipt
-   and independently provisioned promotion trust root verify.
+7. Publish only the attested assets. Read back each of the three target archives and obtain exactly
+   one independently observer-signed envelope per target against a distinct observer trust root.
+   The read-back plan names the promotion key ID as uploader authorization. Create the signed
+   supported-channel release receipt only after all three observations verify. Effective
+   `released` begins only when the complete publisher, platform, promotion, observer, receipt, and
+   revocation-policy chain verifies.
+8. Install strict digest-addressed `release-verification.json` and its distinct bounded evidence
+   beneath
+   `STATE_ROOT/trust/releases/<version>/<platform>-<architecture>/<checksumManifestSha256>/`.
+   Prove `absent`, malformed, promotion-invalid, revoked, publisher-only, and fully released
+   outcomes against the exact installed bytes. A receipt or filename without this independently
+   provisioned and verified authority is insufficient.
 
-Credential-bearing signing, timestamping, notarization, publisher, promotion, and publication
-tools receive private material only through the approved external credential boundary. Their
-runner image and executable versions are hash-pinned, and sanitized evidence records the public
-identity plus input and output digests. A CI self-signature, ad-hoc certificate, key emitted beside
-its signature, dirty checkout, or unpinned helper is never support eligible.
+Credential-bearing signing, timestamping, notarization, publisher, promotion, observer, and
+publication tools receive private material only through the approved external credential
+boundary. Their runner image and executable versions are hash-pinned, and sanitized evidence
+records the public identity plus input and output digests. A CI self-signature, ad-hoc certificate,
+key emitted beside its signature, dirty checkout, or unpinned helper is never support eligible.
 
 ## Required live evidence
 
