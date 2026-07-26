@@ -66,6 +66,7 @@ export interface PersistedLoginAttempts {
 
 export type OwnerAuthAuditEventName =
   | "owner.auth.claim-issued"
+  | "owner.auth.claim-replaced"
   | "owner.auth.claimed"
   | "owner.auth.login-succeeded"
   | "owner.auth.reauthenticated"

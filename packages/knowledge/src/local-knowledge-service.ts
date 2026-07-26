@@ -19,6 +19,7 @@ import type {
   OpenedKnowledge,
   OpenKnowledgeOptions,
   UpsertKnowledgeNote,
+  UpsertKnowledgeOptions,
   UpsertKnowledgeResult,
 } from "./contracts.ts";
 import { KnowledgeError } from "./knowledge-error.ts";
@@ -219,8 +220,19 @@ export class LocalKnowledgeService {
     });
   }
 
-  public async upsertNote(input: UpsertKnowledgeNote): Promise<UpsertKnowledgeResult> {
+  public async upsertNote(
+    input: UpsertKnowledgeNote,
+    options?: UpsertKnowledgeOptions,
+  ): Promise<UpsertKnowledgeResult> {
     validateDurableNote(input, this.#maxNoteCharacters, this.#knownSecretValues);
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        typeof options.beforeCommit !== "function")
+    ) {
+      throw new TypeError("Knowledge upsert options are invalid.");
+    }
     await this.#ensureRoot();
 
     const noteId = normalizeNoteId(input.noteId);
@@ -250,6 +262,7 @@ export class LocalKnowledgeService {
         flag: "wx",
         mode: 0o600,
       });
+      await options?.beforeCommit();
       await rename(temporaryPath, target);
     } finally {
       await unlink(temporaryPath).catch((error: unknown) => {

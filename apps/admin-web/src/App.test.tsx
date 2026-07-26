@@ -14,12 +14,28 @@ function renderApp(device: DeviceOverviewViewModel = firstRunDevice) {
   render(
     <App
       configurationAgentAvailable
-      device={device}
+      deviceFleet={
+        device.role === "main"
+          ? { devices: [device], mainDeviceId: device.deviceId }
+          : {
+              devices: [firstRunDevice, device],
+              mainDeviceId: firstRunDevice.deviceId,
+            }
+      }
       executionAvailable
       initialChatOpen
-      onConfigurationMessage={async (message) => `Fixture response for: ${message}`}
+      onConfigurationMessage={async (deviceId, message) =>
+        `Fixture response for ${deviceId}: ${message}`
+      }
     />,
   );
+  if (device.role === "worker") {
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `${device.name}, ${presentationTextFallback(device.roleLabel)}, ${presentationTextFallback(device.connection.label)}`,
+      }),
+    );
+  }
   return user;
 }
 
@@ -78,6 +94,8 @@ function installMatchMedia(initialMatches: boolean): {
 const windowsWorker = {
   deviceId: "device-windows-build-rig",
   name: "Build Rig",
+  osFamily: "windows",
+  role: "worker",
   roleLabel: "Worker",
   deviceTypeLabel: "Worker computer",
   operatingSystem: "Windows 11",
@@ -94,6 +112,9 @@ const windowsWorker = {
     { label: "User session", value: "Signed out", tone: "muted" },
   ],
   roles: ["Build automation"],
+  instructions: ["Use the registered build workspace only."],
+  policies: [],
+  agentAdapters: [],
   capabilities: [
     {
       capabilityId: "claude-code",
@@ -110,6 +131,8 @@ const windowsWorker = {
       tone: "muted",
     },
   ],
+  resourceLocks: [],
+  currentRuns: [],
   currentWork: {
     activeRunCount: 0,
     summary: "No active runs",
@@ -197,7 +220,7 @@ describe("first-run Device overview", () => {
     ]);
   });
 
-  it("keeps unfinished navigation and Device tabs honest and non-interactive", () => {
+  it("keeps unfinished navigation honest while Device detail tabs are keyboard-operable", () => {
     renderApp();
 
     for (const label of ["Tasks", "Approvals", "Artifacts", "Audit", "Join a device"]) {
@@ -206,17 +229,116 @@ describe("first-run Device overview", () => {
       );
     }
 
-    for (const label of ["Capabilities", "Roles & Instructions", "Routes", "Runs"]) {
+    for (const label of [
+      "Capabilities",
+      "Roles & Instructions",
+      "Routes",
+      "Authority & resources",
+      "Runs",
+    ]) {
       const tab = screen.getByRole("tab", { name: label });
-      expect((tab as HTMLButtonElement).disabled).toBe(true);
-      expect(tab.getAttribute("aria-disabled")).toBe("true");
+      expect((tab as HTMLButtonElement).disabled).toBe(false);
+      expect(tab.getAttribute("aria-disabled")).toBeNull();
     }
 
     const overview = screen.getByRole("tab", { name: "Overview" });
     overview.focus();
     fireEvent.keyDown(overview, { key: "ArrowRight" });
-    expect(document.activeElement).toBe(overview);
-    expect(overview.getAttribute("aria-selected")).toBe("true");
+    const capabilities = screen.getByRole("tab", { name: "Capabilities" });
+    expect(document.activeElement).toBe(capabilities);
+    expect(capabilities.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tabpanel").getAttribute("id")).toBe("device-panel-capabilities");
+
+    fireEvent.keyDown(capabilities, { key: "End" });
+    const runs = screen.getByRole("tab", { name: "Runs" });
+    expect(document.activeElement).toBe(runs);
+    expect(runs.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Roles & Instructions" }));
+    expect(screen.getByRole("heading", { name: "Instructions" })).toBeTruthy();
+  });
+
+  it("shows evidence-backed Facts, executable Policy, adapters, locks, load, and exact Runs", async () => {
+    const user = renderApp({
+      ...firstRunDevice,
+      facts: [
+        {
+          label: "Hostname",
+          value: "main-studio",
+          evidence: {
+            source: "Authenticated heartbeat",
+            observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+            verification: "verified",
+          },
+        },
+      ],
+      policies: [
+        {
+          policyId: "policy-network",
+          actionCategory: "os-network-change",
+          decision: "require-approval",
+          source: "configuration",
+          effectiveScope: "device",
+        },
+      ],
+      agentAdapters: [
+        {
+          provider: "codex",
+          adapterId: "codex-app-server",
+          version: "0.145.0",
+          readiness: "ready",
+          compatibility: "tested",
+          observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+        },
+      ],
+      resourceLocks: [
+        {
+          resourceName: "desktop-session",
+          capacity: 1,
+          holders: [
+            {
+              taskId: "task-1",
+              runId: "run-1",
+              expiresAtMs: Date.parse("2026-07-25T00:05:00.000Z"),
+            },
+          ],
+        },
+      ],
+      currentRuns: [
+        {
+          taskId: "task-1",
+          workOrderId: "work-order-1",
+          runId: "run-1",
+          state: "running",
+          acceptedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+          leaseExpiresAtMs: Date.parse("2026-07-25T00:05:00.000Z"),
+        },
+      ],
+      currentWork: {
+        activeRunCount: 1,
+        summary: "1 active Run",
+        maximumConcurrentRuns: 4,
+        acceptingWork: true,
+        outboxDepth: 2,
+        maxOutboxEntries: 10_000,
+      },
+    });
+
+    expect(screen.getByText(/Verified · Authenticated heartbeat/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "Authority & resources" }));
+    expect(screen.getByText("Operating system network change")).toBeTruthy();
+    expect(screen.getByText("Configured · Device")).toBeTruthy();
+    expect(screen.getByText("Owner approval required")).toBeTruthy();
+    expect(screen.getByText("codex-app-server · 0.145.0")).toBeTruthy();
+    expect(screen.getByText("Ready · Tested")).toBeTruthy();
+    expect(screen.getByText("desktop-session")).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: "Runs" }));
+    expect(screen.getByText("Run run-1")).toBeTruthy();
+    expect(screen.getByText("Task task-1 · Work Order work-order-1")).toBeTruthy();
+    expect(screen.getByText(/^Running · lease until/u)).toBeTruthy();
+    expect(screen.getByText("1 of 4 Run slots active")).toBeTruthy();
+    expect(screen.getByText("2 of 10000 buffered events")).toBeTruthy();
   });
 
   it("opens and closes Configuration Chat with an explicit accessible focus lifecycle", async () => {
@@ -254,6 +376,30 @@ describe("first-run Device overview", () => {
     expect(document.activeElement).toBe(
       screen.getByRole("button", { name: "Open Configuration Chat" }),
     );
+  });
+
+  it("preserves the current focus when Configuration Chat starts closed", () => {
+    const priorFocus = document.createElement("button");
+    priorFocus.type = "button";
+    document.body.append(priorFocus);
+    priorFocus.focus();
+
+    try {
+      render(
+        <App
+          configurationAgentAvailable
+          deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+          executionAvailable
+          onConfigurationMessage={async (deviceId, message) =>
+            `Fixture response for ${deviceId}: ${message}`
+          }
+        />,
+      );
+
+      expect(document.activeElement).toBe(priorFocus);
+    } finally {
+      priorFocus.remove();
+    }
   });
 
   it("moves focus into an already-open Configuration Chat from Configure", async () => {

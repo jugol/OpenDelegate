@@ -1,0 +1,35 @@
+{
+  "name": "@opendelegate/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "opendelegate-worker": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@opendelegate/agent-adapters": "workspace:*",
+    "@opendelegate/computer-use-os": "workspace:*",
+    "@opendelegate/computer-use-mcp": "workspace:*",
+    "@opendelegate/device-channel": "workspace:*",
+    "@opendelegate/device-identity": "workspace:*",
+    "@opendelegate/knowledge": "workspace:*",
+    "@opendelegate/knowledge-mcp": "workspace:*",
+    "@opendelegate/platform-services": "workspace:*",
+    "@opendelegate/protocol": "workspace:*",
+    "@opendelegate/run-capability-broker": "workspace:*",
+    "@opendelegate/secrets": "workspace:*",
+    "@opendelegate/transport": "workspace:*",
+    "@opendelegate/worker-runtime": "workspace:*",
+    "better-sqlite3": "13.0.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13"
+  }
+}

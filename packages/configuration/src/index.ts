@@ -1,3 +1,11 @@
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+
+import {
+  isNullableCanonicalMainSecretReferenceValue,
+  type CanonicalMainSecretReferenceValue,
+} from "./secret-reference.ts";
+
 export type ConfigurationScopeKind =
   | "instance"
   | "main"
@@ -32,7 +40,30 @@ export interface ConfigurationDefinition {
    * one of these scopes.
    */
   readonly scopes: readonly ConfigurationScopeKind[];
+  /**
+   * Marks a value as a Secret Store reference rather than ordinary
+   * configuration data. Main-local references are revalidated against local
+   * availability before proposal persistence and immediately before mutation.
+   */
+  readonly secretReference?: {
+    readonly locality: "main";
+  };
   readonly validate: (value: unknown) => boolean;
+}
+
+export interface ConfigurationSecretReferenceAvailabilityInput {
+  readonly key: string;
+  readonly locality: "main";
+  readonly scope: ConfigurationScope;
+  readonly secretRef: string;
+}
+
+export interface ConfigurationSecretReferenceAuthority {
+  /**
+   * Consults Main-local availability metadata only. Implementations must not
+   * resolve or return the Secret value through this boundary.
+   */
+  isAvailable(input: ConfigurationSecretReferenceAvailabilityInput): boolean;
 }
 
 export type ConfigurationChange =
@@ -97,30 +128,158 @@ export interface ConfigurationCommit {
   readonly audit: ConfigurationAudit;
 }
 
-interface ConfigurationEntry {
+export type ConfigurationToolName =
+  "inspect" | "validate" | "propose" | "diff" | "apply" | "rollback";
+
+export type ConfigurationToolRequest =
+  | {
+      readonly tool: "inspect";
+    }
+  | {
+      readonly tool: "validate";
+      readonly expectedRevision: number;
+      readonly changes: readonly ConfigurationChange[];
+    }
+  | {
+      readonly tool: "propose";
+      readonly expectedRevision: number;
+      readonly reason: string;
+      readonly changes: readonly ConfigurationChange[];
+    }
+  | {
+      readonly tool: "diff";
+      readonly proposalId: string;
+      readonly expectedRevision: number;
+    }
+  | {
+      readonly tool: "apply";
+      readonly proposalId: string;
+      readonly expectedRevision: number;
+    }
+  | {
+      readonly tool: "rollback";
+      readonly changeSetId: string;
+      readonly expectedRevision: number;
+      readonly reason: string;
+    };
+
+export type ConfigurationMutationAuthorization =
+  | {
+      readonly decision: "allow";
+      readonly authority: "owner" | "policy";
+      readonly decisionId?: string;
+    }
+  | {
+      readonly decision: "deny" | "require-approval";
+      readonly code: string;
+    };
+
+export interface ConfigurationMutationAuthorizationInput {
+  readonly actor: string;
+  readonly context: ConfigurationContext;
+  readonly tool: "apply" | "rollback";
+  readonly reason: string;
+  readonly diff: readonly ConfigurationDiff[];
+  readonly proposalId?: string;
+  readonly changeSetId?: string;
+}
+
+export type ConfigurationMutationAuthorizer = (
+  input: ConfigurationMutationAuthorizationInput,
+) => ConfigurationMutationAuthorization;
+
+interface ConfigurationToolReceiptBase {
+  readonly schemaVersion: 1;
+  readonly receiptId: string;
+  readonly operationId: string;
+  readonly requestDigest: string;
+  readonly actor: string;
+  readonly occurredAt: string;
+}
+
+export type ConfigurationToolReceipt =
+  | (ConfigurationToolReceiptBase & {
+      readonly tool: "inspect";
+      readonly result: {
+        readonly revision: number;
+        readonly values: Readonly<Record<string, EffectiveConfigurationValue>>;
+      };
+    })
+  | (ConfigurationToolReceiptBase & {
+      readonly tool: "validate";
+      readonly result: {
+        readonly baseRevision: number;
+        readonly changes: readonly ConfigurationChange[];
+        readonly diff: readonly ConfigurationDiff[];
+      };
+    })
+  | (ConfigurationToolReceiptBase & {
+      readonly tool: "propose";
+      readonly result: {
+        readonly proposal: ConfigurationProposal;
+      };
+    })
+  | (ConfigurationToolReceiptBase & {
+      readonly tool: "diff";
+      readonly result: {
+        readonly proposalId: string;
+        readonly baseRevision: number;
+        readonly diff: readonly ConfigurationDiff[];
+      };
+    })
+  | (ConfigurationToolReceiptBase & {
+      readonly tool: "apply";
+      readonly authorization: Extract<ConfigurationMutationAuthorization, { decision: "allow" }>;
+      readonly result: {
+        readonly commit: ConfigurationCommit;
+      };
+    })
+  | (ConfigurationToolReceiptBase & {
+      readonly tool: "rollback";
+      readonly authorization: Extract<ConfigurationMutationAuthorization, { decision: "allow" }>;
+      readonly result: {
+        readonly commit: ConfigurationCommit;
+      };
+    });
+
+export interface ExecuteConfigurationToolInput {
+  readonly operationId: string;
+  readonly actor: string;
+  readonly context: ConfigurationContext;
+  readonly request: ConfigurationToolRequest;
+  readonly authorizeMutation: ConfigurationMutationAuthorizer;
+}
+
+export interface ConfigurationEntry {
   readonly key: string;
   readonly scope: ConfigurationScope;
   readonly value: unknown;
 }
 
-interface StoredProposal {
+export interface StoredProposal {
   readonly proposal: ConfigurationProposal;
   consumedAtRevision?: number;
 }
 
-interface StoredChangeSet {
+export interface StoredChangeSet {
   readonly id: string;
   readonly revision: number;
   readonly diff: readonly ConfigurationDiff[];
   rolledBackBy?: string;
 }
 
-interface ConfigurationRepositoryState {
+export interface StoredConfigurationToolReceipt {
+  readonly requestDigest: string;
+  readonly receipt: ConfigurationToolReceipt;
+}
+
+export interface ConfigurationRepositoryState {
   revision: number;
   readonly entries: Map<string, ConfigurationEntry>;
   readonly proposals: Map<string, StoredProposal>;
   readonly changeSets: Map<string, StoredChangeSet>;
   readonly audits: ConfigurationAudit[];
+  readonly toolReceipts: Map<string, StoredConfigurationToolReceipt>;
 }
 
 export interface ConfigurationRepository {
@@ -134,6 +293,7 @@ export interface ReadonlyConfigurationState {
   readonly proposals: ReadonlyMap<string, Readonly<StoredProposal>>;
   readonly changeSets: ReadonlyMap<string, Readonly<StoredChangeSet>>;
   readonly audits: readonly ConfigurationAudit[];
+  readonly toolReceipts: ReadonlyMap<string, Readonly<StoredConfigurationToolReceipt>>;
 }
 
 export interface ConfigurationServiceOptions {
@@ -141,6 +301,7 @@ export interface ConfigurationServiceOptions {
   readonly repository: ConfigurationRepository;
   readonly idSource: () => string;
   readonly clock: () => string;
+  readonly secretReferenceAuthority?: ConfigurationSecretReferenceAuthority;
 }
 
 export class ConfigurationError extends Error {
@@ -162,7 +323,14 @@ export class ConfigurationError extends Error {
     | "revision-conflict"
     | "change-set-not-found"
     | "change-set-already-rolled-back"
-    | "rollback-conflict";
+    | "rollback-conflict"
+    | "scope-outside-context"
+    | "secret-reference-unavailable"
+    | "invalid-tool-request"
+    | "tool-idempotency-conflict"
+    | "mutation-authorization-unavailable"
+    | "mutation-denied"
+    | "mutation-requires-approval";
 
   constructor(
     code:
@@ -183,7 +351,14 @@ export class ConfigurationError extends Error {
       | "revision-conflict"
       | "change-set-not-found"
       | "change-set-already-rolled-back"
-      | "rollback-conflict",
+      | "rollback-conflict"
+      | "scope-outside-context"
+      | "secret-reference-unavailable"
+      | "invalid-tool-request"
+      | "tool-idempotency-conflict"
+      | "mutation-authorization-unavailable"
+      | "mutation-denied"
+      | "mutation-requires-approval",
     message: string,
   ) {
     super(message);
@@ -199,6 +374,7 @@ export class InMemoryConfigurationRepository implements ConfigurationRepository 
     proposals: new Map(),
     changeSets: new Map(),
     audits: [],
+    toolReceipts: new Map(),
   };
 
   #writeTail: Promise<void> = Promise.resolve();
@@ -232,12 +408,22 @@ export class ConfigurationService {
   readonly #repository: ConfigurationRepository;
   readonly #idSource: () => string;
   readonly #clock: () => string;
+  readonly #secretReferenceAuthority: ConfigurationSecretReferenceAuthority | undefined;
 
   constructor(options: ConfigurationServiceOptions) {
     this.#definitions = validateDefinitions(options.definitions);
     this.#repository = options.repository;
     this.#idSource = options.idSource;
     this.#clock = options.clock;
+    if (
+      options.secretReferenceAuthority !== undefined &&
+      (options.secretReferenceAuthority === null ||
+        typeof options.secretReferenceAuthority !== "object" ||
+        typeof options.secretReferenceAuthority.isAvailable !== "function")
+    ) {
+      throw new TypeError("The Configuration Secret reference authority is invalid.");
+    }
+    this.#secretReferenceAuthority = options.secretReferenceAuthority;
   }
 
   getRevision(): Promise<number> {
@@ -248,34 +434,268 @@ export class ConfigurationService {
     context: ConfigurationContext,
   ): Promise<Readonly<Record<string, EffectiveConfigurationValue>>> {
     const scopeByKind = contextScopes(context);
-    return this.#repository.read((state) => {
-      const result: Record<string, EffectiveConfigurationValue> = {};
-      for (const definition of this.#definitions.values()) {
-        const candidates: ConfigurationCandidate[] = [];
-        for (const kind of definition.scopes) {
-          const scope = scopeByKind.get(kind);
-          if (scope === undefined) {
-            continue;
-          }
-          const entry = state.entries.get(entryKey(definition.key, scope));
-          if (entry !== undefined) {
-            candidates.push({
-              scope: cloneScope(entry.scope),
-              value: cloneValue(entry.value),
-            });
-          }
-        }
+    return this.#repository.read((state) =>
+      inspectConfiguration(this.#definitions, scopeByKind, state),
+    );
+  }
 
-        const selected = candidates.at(-1);
-        result[definition.key] = {
-          key: definition.key,
-          value: cloneValue(selected === undefined ? definition.defaultValue : selected.value),
-          source: selected === undefined ? "default" : cloneScope(selected.scope),
-          inherited: selected !== undefined && selected.scope.kind !== definition.scopes.at(-1),
-          candidates,
-        };
+  executeTool(input: ExecuteConfigurationToolInput): Promise<ConfigurationToolReceipt> {
+    validateNonempty(input.operationId, "invalid-tool-request", "Configuration tool operation ID");
+    validateNonempty(input.actor, "invalid-actor", "Configuration actor");
+    if (typeof input.authorizeMutation !== "function") {
+      throw new ConfigurationError(
+        "mutation-authorization-unavailable",
+        "Configuration mutation authorization is unavailable.",
+      );
+    }
+    const context = cloneConfigurationContext(input.context);
+    const scopeByKind = contextScopes(context);
+    const request = cloneToolRequest(input.request);
+    const requestDigest = configurationToolRequestDigest({
+      actor: input.actor.trim(),
+      context,
+      request,
+    });
+
+    return this.#repository.transact((state) => {
+      const stored = state.toolReceipts.get(input.operationId);
+      if (stored !== undefined) {
+        if (stored.requestDigest !== requestDigest) {
+          throw new ConfigurationError(
+            "tool-idempotency-conflict",
+            "The Configuration Agent tool operation ID was reused for different input.",
+          );
+        }
+        return cloneToolReceipt(stored.receipt);
       }
-      return result;
+
+      const actor = input.actor.trim();
+      const reservedIds = new Set<string>();
+      let outcome:
+        | {
+            readonly tool: "inspect";
+            readonly result: Extract<ConfigurationToolReceipt, { tool: "inspect" }>["result"];
+          }
+        | {
+            readonly tool: "validate";
+            readonly result: Extract<ConfigurationToolReceipt, { tool: "validate" }>["result"];
+          }
+        | {
+            readonly tool: "propose";
+            readonly result: Extract<ConfigurationToolReceipt, { tool: "propose" }>["result"];
+          }
+        | {
+            readonly tool: "diff";
+            readonly result: Extract<ConfigurationToolReceipt, { tool: "diff" }>["result"];
+          }
+        | {
+            readonly tool: "apply";
+            readonly authorization: Extract<
+              ConfigurationMutationAuthorization,
+              { decision: "allow" }
+            >;
+            readonly result: Extract<ConfigurationToolReceipt, { tool: "apply" }>["result"];
+          }
+        | {
+            readonly tool: "rollback";
+            readonly authorization: Extract<
+              ConfigurationMutationAuthorization,
+              { decision: "allow" }
+            >;
+            readonly result: Extract<ConfigurationToolReceipt, { tool: "rollback" }>["result"];
+          };
+
+      switch (request.tool) {
+        case "inspect": {
+          outcome = {
+            tool: request.tool,
+            result: {
+              revision: state.revision,
+              values: inspectConfiguration(this.#definitions, scopeByKind, state),
+            },
+          };
+          break;
+        }
+        case "validate": {
+          assertRevision(state.revision, request.expectedRevision);
+          const changes = this.#validateChanges(request.changes);
+          assertChangesWithinContext(changes, scopeByKind);
+          outcome = {
+            tool: request.tool,
+            result: {
+              baseRevision: state.revision,
+              changes,
+              diff: calculateDiff(state.entries, changes),
+            },
+          };
+          break;
+        }
+        case "propose": {
+          assertRevision(state.revision, request.expectedRevision);
+          validateNonempty(request.reason, "invalid-reason", "Configuration reason");
+          const changes = this.#validateChanges(request.changes);
+          assertChangesWithinContext(changes, scopeByKind);
+          const diff = calculateDiff(state.entries, changes);
+          assertEffectiveDiff(diff);
+          const proposal: ConfigurationProposal = {
+            id: this.#nextToolId(state, reservedIds),
+            baseRevision: state.revision,
+            actor,
+            reason: request.reason.trim(),
+            createdAt: this.#clock(),
+            changes,
+            diff,
+          };
+          state.proposals.set(proposal.id, { proposal });
+          outcome = {
+            tool: request.tool,
+            result: {
+              proposal: cloneProposal(proposal),
+            },
+          };
+          break;
+        }
+        case "diff": {
+          assertRevision(state.revision, request.expectedRevision);
+          const storedProposal = requireApplicableProposal(state, request.proposalId);
+          assertChangesWithinContext(storedProposal.proposal.changes, scopeByKind);
+          outcome = {
+            tool: request.tool,
+            result: {
+              proposalId: storedProposal.proposal.id,
+              baseRevision: storedProposal.proposal.baseRevision,
+              diff: structuredClone(storedProposal.proposal.diff),
+            },
+          };
+          break;
+        }
+        case "apply": {
+          assertRevision(state.revision, request.expectedRevision);
+          const storedProposal = requireApplicableProposal(state, request.proposalId);
+          assertChangesWithinContext(storedProposal.proposal.changes, scopeByKind);
+          this.#assertSecretReferencesAvailable(storedProposal.proposal.changes);
+          const authorization = requireAllowedMutation(
+            input.authorizeMutation({
+              actor,
+              context,
+              tool: "apply",
+              reason: storedProposal.proposal.reason,
+              diff: structuredClone(storedProposal.proposal.diff),
+              proposalId: storedProposal.proposal.id,
+            }),
+          );
+          this.#assertSecretReferencesAvailable(storedProposal.proposal.changes);
+          const diff = applyChanges(state.entries, storedProposal.proposal.changes);
+          const revision = state.revision + 1;
+          state.revision = revision;
+          storedProposal.consumedAtRevision = revision;
+          const changeSetId = this.#nextToolId(state, reservedIds);
+          const changeSet: StoredChangeSet = {
+            id: changeSetId,
+            revision,
+            diff,
+          };
+          state.changeSets.set(changeSetId, changeSet);
+          const audit: ConfigurationAudit = {
+            id: this.#nextToolId(state, reservedIds),
+            action: "configuration.applied",
+            actor,
+            reason: storedProposal.proposal.reason,
+            occurredAt: this.#clock(),
+            revision,
+            changeSetId,
+            proposalId: storedProposal.proposal.id,
+            diff,
+          };
+          state.audits.push(audit);
+          outcome = {
+            tool: request.tool,
+            authorization,
+            result: {
+              commit: {
+                revision,
+                changeSetId,
+                audit: cloneAudit(audit),
+              },
+            },
+          };
+          break;
+        }
+        case "rollback": {
+          assertRevision(state.revision, request.expectedRevision);
+          validateNonempty(request.reason, "invalid-reason", "Configuration reason");
+          const original = requireRollbackChangeSet(state, request.changeSetId);
+          assertDiffWithinContext(original.diff, scopeByKind);
+          assertRollbackTargetsCurrent(state.entries, original.diff);
+          const inverseChanges = [...original.diff].reverse().map(diffToInverseChange);
+          this.#assertSecretReferencesAvailable(inverseChanges);
+          const preview = calculateDiff(state.entries, inverseChanges);
+          const authorization = requireAllowedMutation(
+            input.authorizeMutation({
+              actor,
+              context,
+              tool: "rollback",
+              reason: request.reason.trim(),
+              diff: preview,
+              changeSetId: original.id,
+            }),
+          );
+          this.#assertSecretReferencesAvailable(inverseChanges);
+          const diff = applyChanges(state.entries, inverseChanges);
+          const revision = state.revision + 1;
+          state.revision = revision;
+          const rollbackChangeSetId = this.#nextToolId(state, reservedIds);
+          original.rolledBackBy = rollbackChangeSetId;
+          state.changeSets.set(rollbackChangeSetId, {
+            id: rollbackChangeSetId,
+            revision,
+            diff,
+          });
+          const audit: ConfigurationAudit = {
+            id: this.#nextToolId(state, reservedIds),
+            action: "configuration.rolled-back",
+            actor,
+            reason: request.reason.trim(),
+            occurredAt: this.#clock(),
+            revision,
+            changeSetId: rollbackChangeSetId,
+            rolledBackChangeSetId: original.id,
+            diff,
+          };
+          state.audits.push(audit);
+          outcome = {
+            tool: request.tool,
+            authorization,
+            result: {
+              commit: {
+                revision,
+                changeSetId: rollbackChangeSetId,
+                audit: cloneAudit(audit),
+              },
+            },
+          };
+          break;
+        }
+      }
+
+      const receiptId = this.#nextToolId(state, reservedIds);
+      const common = {
+        schemaVersion: 1 as const,
+        receiptId,
+        operationId: input.operationId.trim(),
+        requestDigest,
+        actor,
+        occurredAt: this.#clock(),
+      };
+      const receipt = {
+        ...common,
+        ...outcome,
+      } as ConfigurationToolReceipt;
+      state.toolReceipts.set(input.operationId, {
+        requestDigest,
+        receipt: cloneToolReceipt(receipt),
+      });
+      return cloneToolReceipt(receipt);
     });
   }
 
@@ -355,6 +775,7 @@ export class ConfigurationService {
         );
       }
 
+      this.#assertSecretReferencesAvailable(stored.proposal.changes);
       const diff = applyChanges(state.entries, stored.proposal.changes);
       const revision = state.revision + 1;
       state.revision = revision;
@@ -428,6 +849,7 @@ export class ConfigurationService {
       }
 
       const inverseChanges = [...original.diff].reverse().map(diffToInverseChange);
+      this.#assertSecretReferencesAvailable(inverseChanges);
       const diff = applyChanges(state.entries, inverseChanges);
       const revision = state.revision + 1;
       state.revision = revision;
@@ -471,7 +893,7 @@ export class ConfigurationService {
     }
 
     const targets = new Set<string>();
-    return input.map((change) => {
+    const changes = input.map((change): ConfigurationChange => {
       const definition = this.#definitions.get(change.key);
       if (definition === undefined) {
         throw new ConfigurationError(
@@ -512,6 +934,65 @@ export class ConfigurationService {
         scope: cloneScope(change.scope),
       };
     });
+    this.#assertSecretReferencesAvailable(changes);
+    return changes;
+  }
+
+  #assertSecretReferencesAvailable(changes: readonly ConfigurationChange[]): void {
+    for (const change of changes) {
+      if (change.operation !== "set") {
+        continue;
+      }
+      const definition = this.#definitions.get(change.key);
+      if (definition === undefined) {
+        throw new ConfigurationError(
+          "unknown-setting",
+          "A stored configuration change references an unknown setting.",
+        );
+      }
+      const metadata = definition.secretReference;
+      if (metadata === undefined) {
+        if (hasSecretReferenceField(change.value)) {
+          throw new ConfigurationError("invalid-value", `The value for ${change.key} is invalid.`);
+        }
+        continue;
+      }
+      if (!isNullableCanonicalMainSecretReferenceValue(change.value)) {
+        throw new ConfigurationError("invalid-value", `The value for ${change.key} is invalid.`);
+      }
+      if (change.value === null) {
+        continue;
+      }
+      if (change.scope.kind !== metadata.locality) {
+        throw new ConfigurationError(
+          "secret-reference-unavailable",
+          "The Configuration Secret reference is unavailable on its required Main scope.",
+        );
+      }
+      const authority = this.#secretReferenceAuthority;
+      let available = false;
+      if (authority !== undefined) {
+        try {
+          available =
+            authority.isAvailable(
+              Object.freeze({
+                key: change.key,
+                locality: metadata.locality,
+                scope: Object.freeze(cloneScope(change.scope)),
+                secretRef: (change.value as CanonicalMainSecretReferenceValue).secretRef,
+              }),
+            ) === true;
+        } catch {
+          available = false;
+        }
+      }
+      if (!available) {
+        throw new ConfigurationError(
+          "secret-reference-unavailable",
+          "The Configuration Secret reference is unavailable on its required Main scope.",
+        );
+      }
+    }
   }
 
   #nextId(): string {
@@ -519,6 +1000,331 @@ export class ConfigurationService {
     validateNonempty(id, "duplicate-id", "Generated configuration identifier");
     return id.trim();
   }
+
+  #nextToolId(state: ConfigurationRepositoryState, reservedIds: Set<string>): string {
+    const id = this.#nextId();
+    assertUniqueId(state, id);
+    if (reservedIds.has(id)) {
+      throw new ConfigurationError(
+        "duplicate-id",
+        "A generated configuration identifier was reused.",
+      );
+    }
+    reservedIds.add(id);
+    return id;
+  }
+}
+
+function inspectConfiguration(
+  definitions: ReadonlyMap<string, ConfigurationDefinition>,
+  scopeByKind: ReadonlyMap<ConfigurationScopeKind, ConfigurationScope>,
+  state: ReadonlyConfigurationState,
+): Readonly<Record<string, EffectiveConfigurationValue>> {
+  const result: Record<string, EffectiveConfigurationValue> = {};
+  for (const definition of definitions.values()) {
+    const candidates: ConfigurationCandidate[] = [];
+    for (const kind of definition.scopes) {
+      const scope = scopeByKind.get(kind);
+      if (scope === undefined) {
+        continue;
+      }
+      const entry = state.entries.get(entryKey(definition.key, scope));
+      if (entry !== undefined) {
+        candidates.push({
+          scope: cloneScope(entry.scope),
+          value: cloneValue(entry.value),
+        });
+      }
+    }
+
+    const selected = candidates.at(-1);
+    result[definition.key] = {
+      key: definition.key,
+      value: cloneValue(selected === undefined ? definition.defaultValue : selected.value),
+      source: selected === undefined ? "default" : cloneScope(selected.scope),
+      inherited: selected !== undefined && selected.scope.kind !== definition.scopes.at(-1),
+      candidates,
+    };
+  }
+  return result;
+}
+
+function cloneConfigurationContext(context: ConfigurationContext): ConfigurationContext {
+  if (context === null || typeof context !== "object" || Array.isArray(context)) {
+    throw new ConfigurationError(
+      "invalid-tool-request",
+      "The Configuration Agent context is invalid.",
+    );
+  }
+  return {
+    instanceId: context.instanceId,
+    ...(context.mainId === undefined ? {} : { mainId: context.mainId }),
+    ...(context.deviceId === undefined ? {} : { deviceId: context.deviceId }),
+    ...(context.agentAdapterId === undefined ? {} : { agentAdapterId: context.agentAdapterId }),
+    ...(context.transportId === undefined ? {} : { transportId: context.transportId }),
+    ...(context.channelBindingId === undefined
+      ? {}
+      : { channelBindingId: context.channelBindingId }),
+    ...(context.taskDefaultId === undefined ? {} : { taskDefaultId: context.taskDefaultId }),
+    ...(context.artifactId === undefined ? {} : { artifactId: context.artifactId }),
+  };
+}
+
+function cloneToolRequest(request: ConfigurationToolRequest): ConfigurationToolRequest {
+  if (request === null || typeof request !== "object" || Array.isArray(request)) {
+    throw new ConfigurationError(
+      "invalid-tool-request",
+      "The Configuration Agent tool request is invalid.",
+    );
+  }
+  switch (request.tool) {
+    case "inspect":
+      return { tool: request.tool };
+    case "validate":
+      return {
+        tool: request.tool,
+        expectedRevision: request.expectedRevision,
+        changes: structuredClone(request.changes),
+      };
+    case "propose":
+      return {
+        tool: request.tool,
+        expectedRevision: request.expectedRevision,
+        reason: request.reason,
+        changes: structuredClone(request.changes),
+      };
+    case "diff":
+      return {
+        tool: request.tool,
+        proposalId: request.proposalId,
+        expectedRevision: request.expectedRevision,
+      };
+    case "apply":
+      return {
+        tool: request.tool,
+        proposalId: request.proposalId,
+        expectedRevision: request.expectedRevision,
+      };
+    case "rollback":
+      return {
+        tool: request.tool,
+        changeSetId: request.changeSetId,
+        expectedRevision: request.expectedRevision,
+        reason: request.reason,
+      };
+    default:
+      throw new ConfigurationError(
+        "invalid-tool-request",
+        "The Configuration Agent tool request is invalid.",
+      );
+  }
+}
+
+function calculateDiff(
+  entries: ReadonlyMap<string, ConfigurationEntry>,
+  changes: readonly ConfigurationChange[],
+): readonly ConfigurationDiff[] {
+  return changes.map((change) => ({
+    key: change.key,
+    scope: cloneScope(change.scope),
+    before: cloneValue(entries.get(entryKey(change.key, change.scope))?.value),
+    after: change.operation === "set" ? cloneValue(change.value) : undefined,
+  }));
+}
+
+function assertEffectiveDiff(diff: readonly ConfigurationDiff[]): void {
+  if (diff.every((item) => isDeepStrictEqual(item.before, item.after))) {
+    throw new ConfigurationError(
+      "no-effective-change",
+      "The configuration proposal does not change any stored value.",
+    );
+  }
+}
+
+function assertChangesWithinContext(
+  changes: readonly ConfigurationChange[],
+  scopeByKind: ReadonlyMap<ConfigurationScopeKind, ConfigurationScope>,
+): void {
+  for (const change of changes) {
+    const available = scopeByKind.get(change.scope.kind);
+    if (available === undefined || available.id !== change.scope.id) {
+      throw new ConfigurationError(
+        "scope-outside-context",
+        "A Configuration Agent tool cannot modify a scope outside its target context.",
+      );
+    }
+  }
+}
+
+function assertDiffWithinContext(
+  diff: readonly ConfigurationDiff[],
+  scopeByKind: ReadonlyMap<ConfigurationScopeKind, ConfigurationScope>,
+): void {
+  for (const item of diff) {
+    const available = scopeByKind.get(item.scope.kind);
+    if (available === undefined || available.id !== item.scope.id) {
+      throw new ConfigurationError(
+        "scope-outside-context",
+        "A Configuration Agent tool cannot modify a scope outside its target context.",
+      );
+    }
+  }
+}
+
+function requireApplicableProposal(
+  state: ConfigurationRepositoryState,
+  proposalId: string,
+): StoredProposal {
+  validateNonempty(proposalId, "invalid-tool-request", "Configuration proposal ID");
+  const stored = state.proposals.get(proposalId);
+  if (stored === undefined) {
+    throw new ConfigurationError(
+      "proposal-not-found",
+      "The configuration proposal does not exist.",
+    );
+  }
+  if (stored.consumedAtRevision !== undefined) {
+    throw new ConfigurationError(
+      "proposal-consumed",
+      "The configuration proposal was already consumed.",
+    );
+  }
+  if (stored.proposal.baseRevision !== state.revision) {
+    throw new ConfigurationError(
+      "revision-conflict",
+      "The configuration proposal is based on an obsolete revision.",
+    );
+  }
+  return stored;
+}
+
+function requireRollbackChangeSet(
+  state: ConfigurationRepositoryState,
+  changeSetId: string,
+): StoredChangeSet {
+  validateNonempty(changeSetId, "invalid-tool-request", "Configuration change-set ID");
+  const original = state.changeSets.get(changeSetId);
+  if (original === undefined) {
+    throw new ConfigurationError(
+      "change-set-not-found",
+      "The configuration change set does not exist.",
+    );
+  }
+  if (original.rolledBackBy !== undefined) {
+    throw new ConfigurationError(
+      "change-set-already-rolled-back",
+      "The configuration change set was already rolled back.",
+    );
+  }
+  return original;
+}
+
+function assertRollbackTargetsCurrent(
+  entries: ReadonlyMap<string, ConfigurationEntry>,
+  diff: readonly ConfigurationDiff[],
+): void {
+  for (const item of diff) {
+    const current = entries.get(entryKey(item.key, item.scope));
+    if (!isDeepStrictEqual(current?.value, item.after)) {
+      throw new ConfigurationError(
+        "rollback-conflict",
+        "A newer configuration change modified a rollback target.",
+      );
+    }
+  }
+}
+
+function requireAllowedMutation(
+  authorization: ConfigurationMutationAuthorization,
+): Extract<ConfigurationMutationAuthorization, { decision: "allow" }> {
+  if (authorization === null || typeof authorization !== "object") {
+    throw new ConfigurationError(
+      "mutation-authorization-unavailable",
+      "Configuration mutation authorization is unavailable.",
+    );
+  }
+  if (authorization.decision === "deny") {
+    validateAuthorizationCode(authorization.code);
+    throw new ConfigurationError(
+      "mutation-denied",
+      `Configuration mutation denied by executable policy (${authorization.code}).`,
+    );
+  }
+  if (authorization.decision === "require-approval") {
+    validateAuthorizationCode(authorization.code);
+    throw new ConfigurationError(
+      "mutation-requires-approval",
+      `Configuration mutation requires owner approval (${authorization.code}).`,
+    );
+  }
+  if (
+    authorization.decision !== "allow" ||
+    (authorization.authority !== "owner" && authorization.authority !== "policy") ||
+    (authorization.decisionId !== undefined && !isCanonicalSafeText(authorization.decisionId, 500))
+  ) {
+    throw new ConfigurationError(
+      "mutation-authorization-unavailable",
+      "Configuration mutation authorization is invalid.",
+    );
+  }
+  return structuredClone(authorization);
+}
+
+function validateAuthorizationCode(code: string): void {
+  if (!isCanonicalSafeText(code, 160) || !/^[A-Z][A-Z0-9_]*$/u.test(code)) {
+    throw new ConfigurationError(
+      "mutation-authorization-unavailable",
+      "Configuration mutation authorization is invalid.",
+    );
+  }
+}
+
+function configurationToolRequestDigest(input: {
+  readonly actor: string;
+  readonly context: ConfigurationContext;
+  readonly request: ConfigurationToolRequest;
+}): string {
+  return `sha256:${createHash("sha256").update(canonicalJson(input), "utf8").digest("hex")}`;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new ConfigurationError(
+        "invalid-tool-request",
+        "The Configuration Agent tool request is invalid.",
+      );
+    }
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value === undefined || typeof value !== "object") {
+    throw new ConfigurationError(
+      "invalid-tool-request",
+      "The Configuration Agent tool request is invalid.",
+    );
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new ConfigurationError(
+      "invalid-tool-request",
+      "The Configuration Agent tool request is invalid.",
+    );
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function cloneToolReceipt(receipt: ConfigurationToolReceipt): ConfigurationToolReceipt {
+  return structuredClone(receipt);
 }
 
 function validateDefinitions(
@@ -526,6 +1332,7 @@ function validateDefinitions(
 ): ReadonlyMap<string, ConfigurationDefinition> {
   const result = new Map<string, ConfigurationDefinition>();
   for (const definition of definitions) {
+    const secretReference = validateSecretReferenceDefinition(definition);
     if (
       definition.key.trim() !== definition.key ||
       !/^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u.test(definition.key) ||
@@ -548,9 +1355,46 @@ function validateDefinitions(
       ...definition,
       defaultValue: cloneValue(definition.defaultValue),
       scopes: [...definition.scopes],
+      ...(secretReference === undefined ? {} : { secretReference }),
     });
   }
   return result;
+}
+
+function validateSecretReferenceDefinition(
+  definition: ConfigurationDefinition,
+): ConfigurationDefinition["secretReference"] {
+  const metadata = definition.secretReference;
+  if (metadata === undefined) {
+    return undefined;
+  }
+  if (
+    metadata === null ||
+    typeof metadata !== "object" ||
+    Array.isArray(metadata) ||
+    Object.keys(metadata).length !== 1 ||
+    metadata.locality !== "main" ||
+    definition.defaultValue !== null ||
+    definition.scopes.length !== 1 ||
+    definition.scopes[0] !== "main" ||
+    !definition.validate({
+      secretRef: "secret://main/configuration-definition-probe",
+    })
+  ) {
+    throw new ConfigurationError(
+      "invalid-definition",
+      `Invalid Secret reference definition: ${definition.key}.`,
+    );
+  }
+  return Object.freeze({ locality: "main" });
+}
+
+function hasSecretReferenceField(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Object.prototype.hasOwnProperty.call(value, "secretRef")
+  );
 }
 
 function contextScopes(
@@ -612,17 +1456,22 @@ function validateScopeId(id: string): void {
 
 function validateNonempty(
   value: string,
-  code: "invalid-actor" | "invalid-reason" | "duplicate-id",
+  code: "invalid-actor" | "invalid-reason" | "duplicate-id" | "invalid-tool-request",
   label: string,
 ): void {
-  if (
-    typeof value !== "string" ||
-    value.trim().length === 0 ||
-    value.length > 500 ||
-    containsControlCharacter(value)
-  ) {
+  if (!isCanonicalSafeText(value, 500)) {
     throw new ConfigurationError(code, `${label} must be nonempty safe text.`);
   }
+}
+
+function isCanonicalSafeText(value: unknown, maximumLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim() === value &&
+    value.length > 0 &&
+    value.length <= maximumLength &&
+    !containsControlCharacter(value)
+  );
 }
 
 function containsControlCharacter(value: string): boolean {
@@ -680,6 +1529,15 @@ function cloneState(state: ConfigurationRepositoryState): ConfigurationRepositor
       [...state.changeSets].map(([id, changeSet]) => [id, structuredClone(changeSet)]),
     ),
     audits: state.audits.map(cloneAudit),
+    toolReceipts: new Map(
+      [...state.toolReceipts].map(([operationId, stored]) => [
+        operationId,
+        {
+          requestDigest: stored.requestDigest,
+          receipt: cloneToolReceipt(stored.receipt),
+        },
+      ]),
+    ),
   };
 }
 
@@ -701,13 +1559,18 @@ function replaceState(
     target.changeSets.set(key, value);
   }
   target.audits.splice(0, target.audits.length, ...source.audits);
+  target.toolReceipts.clear();
+  for (const [key, value] of source.toolReceipts) {
+    target.toolReceipts.set(key, value);
+  }
 }
 
 function assertUniqueId(state: ConfigurationRepositoryState, id: string): void {
   if (
     state.proposals.has(id) ||
     state.changeSets.has(id) ||
-    state.audits.some((audit) => audit.id === id)
+    state.audits.some((audit) => audit.id === id) ||
+    [...state.toolReceipts.values()].some((stored) => stored.receipt.receiptId === id)
   ) {
     throw new ConfigurationError(
       "duplicate-id",
@@ -766,4 +1629,8 @@ function diffToInverseChange(diff: ConfigurationDiff): ConfigurationChange {
 }
 
 export { STANDARD_CONFIGURATION_DEFINITIONS } from "./standard-definitions.ts";
-import { isDeepStrictEqual } from "node:util";
+export {
+  isCanonicalMainSecretReference,
+  isNullableCanonicalMainSecretReferenceValue,
+  type CanonicalMainSecretReferenceValue,
+} from "./secret-reference.ts";

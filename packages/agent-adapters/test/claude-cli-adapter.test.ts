@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { realpath } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { after } from "node:test";
 
 import { ClaudeCliAdapter, type AgentRunLimits, type NormalizedAgentEvent } from "../src/index.ts";
 
@@ -16,10 +18,23 @@ const limits: AgentRunLimits = {
   maxLineBytes: 64 * 1024,
   maxDiagnosticBytes: 64 * 1024,
 };
+const temporaryClaudeHomes: string[] = [];
+
+async function createClaudeHome(): Promise<string> {
+  const home = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-claude-cli-home-")));
+  temporaryClaudeHomes.push(home);
+  return home;
+}
+
+after(async () => {
+  await Promise.all(temporaryClaudeHomes.map((home) => rm(home, { force: true, recursive: true })));
+});
 
 test("Claude CLI starts, streams public/tool events, and resumes the exact native session", async () => {
   const cwd = await realpath(process.cwd());
+  const claudeHome = await createClaudeHome();
   const adapter = new ClaudeCliAdapter({
+    claudeHome,
     executable: process.execPath,
     prefixArgs: [fixturePath, "claude"],
     lineageId: () => "lineage-claude",
@@ -43,7 +58,23 @@ test("Claude CLI starts, streams public/tool events, and resumes the exact nativ
       allowedTools: ["Read"],
       deniedTools: ["Bash"],
     },
+    toolServers: [
+      {
+        serverName: "opendelegate",
+        command: process.execPath,
+        args: [fixturePath, "mcp-bridge", "--capability-file", "/runtime/grant.json"],
+        enabledTools: ["computer_use_capture", "computer_use_click"],
+        startupTimeoutMs: 5_000,
+        toolTimeoutMs: 30_000,
+      },
+    ],
     limits,
+    environment: {
+      CLAUDE_CONFIG_DIR: "ambient-home-must-not-win",
+      FIXTURE_EXPECT_CLAUDE_HOME: claudeHome,
+      FIXTURE_REQUIRE_CLAUDE_ISOLATION: "1",
+      FIXTURE_REQUIRE_CLAUDE_TOOL_SERVER: "1",
+    },
   };
 
   const started = await adapter.start({ operation: "start", ...base });
@@ -87,18 +118,26 @@ test("Claude CLI starts, streams public/tool events, and resumes the exact nativ
 });
 
 test("Claude CLI reports version/auth compatibility without a provider turn", async () => {
+  const claudeHome = await createClaudeHome();
   const adapter = new ClaudeCliAdapter({
+    claudeHome,
     executable: process.execPath,
     prefixArgs: [fixturePath, "claude"],
   });
 
-  const probe = await adapter.probe();
+  const probe = await adapter.probe({
+    environment: {
+      CLAUDE_CONFIG_DIR: "ambient-home-must-not-win",
+      FIXTURE_EXPECT_CLAUDE_HOME: claudeHome,
+    },
+  });
 
   assert.equal(probe.installed, true);
   assert.equal(probe.version, "2.1.205");
   assert.equal(probe.compatibility, "tested");
   assert.equal(probe.auth.state, "ready");
   assert.equal(probe.capabilities.approvalBridge, false);
+  assert.equal(probe.capabilities.steering, false);
 
   const signedOut = await adapter.probe({
     environment: { FIXTURE_SIGNED_OUT: "1" },
@@ -110,4 +149,86 @@ test("Claude CLI reports version/auth compatibility without a provider turn", as
       message: "Claude CLI authentication is not ready.",
     },
   ]);
+});
+
+test("Claude exposes only the Run-scoped Knowledge server and redacts local tool data", async () => {
+  const cwd = await realpath(process.cwd());
+  const claudeHome = await createClaudeHome();
+  const adapter = new ClaudeCliAdapter({
+    claudeHome,
+    executable: process.execPath,
+    prefixArgs: [fixturePath, "claude"],
+  });
+  const handle = await adapter.start({
+    operation: "start",
+    requestId: "request-claude-knowledge",
+    runId: "run-claude-knowledge",
+    taskId: "task-claude-knowledge",
+    workstreamId: "implementation",
+    sessionKey: "task-claude-knowledge/implementation",
+    deviceId: "device-worker",
+    prompt: "inspect local guidance",
+    workspace: {
+      workspaceId: "workspace-open-delegate",
+      cwd,
+      isolation: "agent-native-worktree",
+    },
+    sandbox: "provider-default",
+    permissions: { mode: "deny" },
+    toolServers: [
+      {
+        serverName: "opendelegate-knowledge",
+        command: process.execPath,
+        args: [
+          fixturePath,
+          "knowledge-mcp-bridge",
+          "--capability-file",
+          "/runtime/knowledge-capability.json",
+        ],
+        enabledTools: [
+          "knowledge_search",
+          "knowledge_open",
+          "knowledge_relationships",
+          "knowledge_upsert",
+        ],
+        startupTimeoutMs: 15_000,
+        toolTimeoutMs: 30_000,
+      },
+    ],
+    limits,
+    environment: {
+      FIXTURE_REQUIRE_CLAUDE_ISOLATION: "1",
+      FIXTURE_REQUIRE_CLAUDE_KNOWLEDGE_TOOL_SERVER: "1",
+      FIXTURE_EMIT_KNOWLEDGE_TOOL_EVENTS: "1",
+    },
+  });
+
+  const events: NormalizedAgentEvent[] = [];
+  for await (const event of handle.events) {
+    events.push(event);
+  }
+  assert.equal((await handle.result).status, "succeeded");
+  const request = events.find(
+    (event) =>
+      event.type === "tool_request" &&
+      event.toolName === "mcp__opendelegate-knowledge__knowledge_search",
+  );
+  const result = events.find(
+    (event) =>
+      event.type === "tool_result" &&
+      event.toolName === "mcp__opendelegate-knowledge__knowledge_search",
+  );
+  assert.ok(request);
+  assert.equal("input" in request, false);
+  assert.ok(result);
+  assert.equal("summary" in result, false);
+  const normalized = JSON.stringify(events);
+  for (const privateValue of [
+    "private-query",
+    "private-note.md",
+    "private-Knowledge-content",
+    "private-Knowledge-result",
+  ]) {
+    assert.equal(normalized.includes(privateValue), false);
+  }
 });

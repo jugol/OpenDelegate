@@ -47,6 +47,7 @@ export async function canonicalizeWorkspace(
 
 export function validateAgentRequest(request: AgentStartRequest | AgentResumeRequest): void {
   validateEnvironmentChannels(request.environment);
+  validateToolServers(request.toolServers);
   const required = [
     request.requestId,
     request.runId,
@@ -91,6 +92,75 @@ export function validateAgentRequest(request: AgentStartRequest | AgentResumeReq
       );
     }
   }
+}
+
+/**
+ * A general-purpose Agent provider is not a minimal credential scope: any
+ * provider-native shell or file tool could read its process environment.
+ * Provider authentication belongs in the controlled provider home, while Task
+ * credentials must be exposed through an exact, typed Device-local helper.
+ */
+export function rejectUnscopedProviderSecrets(
+  request: AgentStartRequest | AgentResumeRequest,
+): void {
+  if (Object.keys(request.secretEnvironment ?? {}).length > 0) {
+    throw new AgentAdapterError(
+      "SECRET_ENVIRONMENT_SCOPE_UNSAFE",
+      "Agent provider turns cannot receive credential environment variables; use the controlled provider home or a typed Run-scoped Secret helper.",
+    );
+  }
+}
+
+function validateToolServers(toolServers: AgentStartRequest["toolServers"]): void {
+  if (toolServers === undefined) {
+    return;
+  }
+  if (toolServers.length === 0 || toolServers.length > 8) {
+    throw new AgentAdapterError(
+      "INVALID_REQUEST",
+      "Agent tool-server configuration must contain 1 to 8 servers.",
+    );
+  }
+  const names = new Set<string>();
+  for (const server of toolServers) {
+    if (
+      !/^[a-z][a-z0-9_-]{0,63}$/u.test(server.serverName) ||
+      names.has(server.serverName) ||
+      !isAbsolute(server.command) ||
+      server.command.includes("\0") ||
+      server.args.length > 64 ||
+      server.args.some(
+        (argument) =>
+          typeof argument !== "string" ||
+          argument.length > 8_192 ||
+          argument.includes("\0") ||
+          hasControlCharacter(argument),
+      ) ||
+      server.enabledTools.length === 0 ||
+      server.enabledTools.length > 64 ||
+      new Set(server.enabledTools).size !== server.enabledTools.length ||
+      server.enabledTools.some((tool) => !/^[a-z][a-z0-9_]{0,127}$/u.test(tool)) ||
+      !Number.isSafeInteger(server.startupTimeoutMs) ||
+      server.startupTimeoutMs < 1_000 ||
+      server.startupTimeoutMs > 120_000 ||
+      !Number.isSafeInteger(server.toolTimeoutMs) ||
+      server.toolTimeoutMs < 1_000 ||
+      server.toolTimeoutMs > 300_000
+    ) {
+      throw new AgentAdapterError("INVALID_REQUEST", "Agent tool-server configuration is invalid.");
+    }
+    names.add(server.serverName);
+  }
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const point = character.codePointAt(0);
+    if (point !== undefined && (point <= 0x1f || point === 0x7f)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function validateResumeReference(

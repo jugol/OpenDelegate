@@ -18,14 +18,17 @@ jobs:
   verify:
     name: Verify Node 24 (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-latest
+        include:
+          - os: ubuntu-24.04
+            timeout_minutes: 30
+          - os: windows-2025
+            timeout_minutes: 50
+          - os: macos-26
+            timeout_minutes: 30
 
     steps:
       - name: Check out repository
@@ -48,6 +51,34 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify live Windows DPAPI Secret Store
+        if: runner.os == 'Windows'
+        run: >-
+          pnpm --filter @opendelegate/secrets exec node --experimental-strip-types --test
+          --test-name-pattern "Windows DPAPI protects and restores"
+          test/managed-secret-store.test.ts
+
+      - name: Compile and test the native macOS Computer Use helper
+        if: runner.os == 'macOS'
+        run: |
+          swift test \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-tests"
+          swift build \
+            --configuration release \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-release" \
+            --product opendelegate-macos-computer-use
+          swift build \
+            --configuration release \
+            --package-path packages/computer-use-os/native/macos \
+            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-release" \
+            --product opendelegate-computer-use-fixture
+
+      - name: Compile and self-test the native Windows Computer Use helper
+        if: runner.os == 'Windows'
+        run: pnpm --filter @opendelegate/computer-use-os native:windows:build
+
       - name: Verify canonical planning-document links
         run: pnpm docs:check
 
@@ -65,6 +96,8 @@ jobs:
 
       - name: Run acceptance and unit harness
         run: pnpm test
+        env:
+          OPENDELEGATE_TEST_SKIP_LIVE_DPAPI: ${{ runner.os == 'Windows' && '1' || '0' }}
 
       - name: Build applications
         run: pnpm build
@@ -116,7 +149,7 @@ jobs:
 
   node-22-compatibility:
     name: Verify temporary Node 22 floor
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -148,7 +181,7 @@ jobs:
 
   postgres-integration:
     name: Verify PostgreSQL persistence
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     services:

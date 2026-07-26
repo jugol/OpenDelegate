@@ -2,13 +2,21 @@ import { createHash } from "node:crypto";
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  resolveConfiguredRelease,
+  type ConfiguredReleaseResolution,
+  type ReleaseTarget,
+} from "@opendelegate/release-integrity";
+
 import { readStableRegularFile } from "./stable-file.ts";
 
 const DEVELOPMENT_VERSION = "0.0.0-development";
 const DEVELOPMENT_BUILD_ID = "development-local";
 const ACCEPTANCE_LEDGER_PATH = "docs/release/acceptance-evidence.json";
 const ATTESTATION_EVIDENCE_PREFIX = "docs/release/evidence/";
+const NATIVE_COMPONENTS_PATH = "native-components.json";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const QUALIFIED_SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const RFC3339_PATTERN =
@@ -32,6 +40,7 @@ const METADATA_KEYS = [
   "dependencyLockSha256",
   "sourcePackageManifestSha256",
   "runtimeExternals",
+  "nativeComponents",
   "buildCommit",
   "auditedSourceCommit",
   "changedAttestationPaths",
@@ -44,15 +53,42 @@ const METADATA_KEYS = [
   "checksumManifest",
 ] as const;
 
-export type RuntimeReleaseChannel = "development" | "internal-preview" | "release-candidate";
+export type RuntimeReleaseChannel =
+  "development" | "internal-preview" | "release-candidate" | "released";
 
-export interface RuntimeIdentity {
+export type RuntimeReleaseIdentity =
+  | {
+      readonly declaredReleaseChannel: "development";
+      readonly releaseChannel: "development";
+      readonly releaseVerification: { readonly status: "not-applicable" };
+    }
+  | {
+      readonly declaredReleaseChannel: "internal-preview";
+      readonly releaseChannel: "internal-preview";
+      readonly releaseVerification: { readonly status: "not-applicable" };
+    }
+  | {
+      readonly declaredReleaseChannel: "release-candidate";
+      readonly releaseChannel: "release-candidate";
+      readonly releaseVerification:
+        | { readonly status: "absent" | "publisher-verified" }
+        | {
+            readonly status: "invalid" | "promotion-invalid" | "revoked";
+            readonly code: string;
+          };
+    }
+  | {
+      readonly declaredReleaseChannel: "release-candidate";
+      readonly releaseChannel: "released";
+      readonly releaseVerification: { readonly status: "released" };
+    };
+
+export type RuntimeIdentity = {
   readonly build: {
     readonly version: string;
     readonly buildId: string;
   };
-  readonly releaseChannel: RuntimeReleaseChannel;
-}
+} & RuntimeReleaseIdentity;
 
 export class ReleaseIdentityError extends Error {
   readonly code = "RELEASE_IDENTITY_INVALID";
@@ -84,22 +120,48 @@ interface PayloadReference {
   readonly sha256: string;
 }
 
-export async function resolveRuntimeIdentity(input: {
-  readonly installationRoot: string;
-  readonly bundled: boolean;
-}): Promise<RuntimeIdentity> {
+interface NativeComponent {
+  readonly kind: string;
+  readonly path: string;
+  readonly sha256: string;
+}
+
+interface NativeComponentsManifest {
+  readonly schemaVersion: 1;
+  readonly platform: NodeJS.Platform;
+  readonly architecture: string;
+  readonly components: readonly NativeComponent[];
+}
+
+export type ResolveRuntimeIdentityInput =
+  | {
+      readonly installationRoot: string;
+      readonly bundled: false;
+      readonly stateRoot?: never;
+    }
+  | {
+      readonly installationRoot: string;
+      readonly bundled: true;
+      readonly stateRoot: string;
+    };
+
+export async function resolveRuntimeIdentity(
+  input: ResolveRuntimeIdentityInput,
+): Promise<RuntimeIdentity> {
   if (!input.bundled) {
     return {
       build: {
         version: DEVELOPMENT_VERSION,
         buildId: DEVELOPMENT_BUILD_ID,
       },
+      declaredReleaseChannel: "development",
       releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
     };
   }
 
   try {
-    return await resolveBundledIdentity(input.installationRoot);
+    return await resolveBundledIdentity(input.installationRoot, input.stateRoot);
   } catch (error) {
     if (error instanceof ReleaseIdentityError) {
       throw error;
@@ -110,25 +172,69 @@ export async function resolveRuntimeIdentity(input: {
   }
 }
 
-async function resolveBundledIdentity(installationRoot: string): Promise<RuntimeIdentity> {
-  const [checksumBytes, manifestBytes, metadataBytes, ledgerBytes] = await Promise.all([
-    readRegularPayloadFile(installationRoot, "SHA256SUMS"),
-    readRegularPayloadFile(installationRoot, "payload-manifest.json"),
-    readRegularPayloadFile(installationRoot, "release-metadata.json"),
-    readRegularPayloadFile(installationRoot, ACCEPTANCE_LEDGER_PATH),
-  ]);
+async function resolveBundledIdentity(
+  installationRoot: string,
+  stateRoot: string,
+): Promise<RuntimeIdentity> {
+  let candidateFailure: unknown;
+  try {
+    return configuredReleaseIdentity(
+      await resolveConfiguredRelease({
+        root: installationRoot,
+        expectedTarget: currentReleaseTarget(),
+        stateRoot,
+      }),
+    );
+  } catch (error) {
+    candidateFailure = error;
+  }
+
+  try {
+    const preview = await resolveLegacyBundledIdentity(installationRoot);
+    if (preview.releaseChannel === "internal-preview") {
+      return preview;
+    }
+  } catch (error) {
+    if (error instanceof ReleaseIdentityError) {
+      throw error;
+    }
+    throw new ReleaseIdentityError("The bundled release identity could not be verified.", {
+      cause: error,
+    });
+  }
+
+  throw new ReleaseIdentityError("The bundled release candidate failed integrity verification.", {
+    cause: candidateFailure,
+  });
+}
+
+async function resolveLegacyBundledIdentity(installationRoot: string): Promise<RuntimeIdentity> {
+  const [checksumBytes, manifestBytes, metadataBytes, ledgerBytes, nativeComponentsBytes] =
+    await Promise.all([
+      readRegularPayloadFile(installationRoot, "SHA256SUMS"),
+      readRegularPayloadFile(installationRoot, "payload-manifest.json"),
+      readRegularPayloadFile(installationRoot, "release-metadata.json"),
+      readRegularPayloadFile(installationRoot, ACCEPTANCE_LEDGER_PATH),
+      readRegularPayloadFile(installationRoot, NATIVE_COMPONENTS_PATH),
+    ]);
   const checksums = parseChecksumManifest(checksumBytes.toString("utf8"));
   const payload = parsePayloadManifest(manifestBytes);
 
   verifyManifestChain(checksums, payload, manifestBytes);
   verifyPayloadEntry(payload, checksums, "release-metadata.json", metadataBytes);
   verifyPayloadEntry(payload, checksums, ACCEPTANCE_LEDGER_PATH, ledgerBytes);
+  verifyPayloadEntry(payload, checksums, NATIVE_COMPONENTS_PATH, nativeComponentsBytes);
   await verifyCompletePayload(installationRoot, payload, checksums);
 
   const ledger = parseJsonRecord(ledgerBytes, "acceptance evidence");
   const ledgerSummary = validateLedger(ledger);
+  const nativeComponents = validateNativeComponents(
+    parseJsonRecord(nativeComponentsBytes, "native component manifest"),
+    "Native component manifest",
+  );
+  validateNativeComponentPayloadBindings(nativeComponents, payload);
   const metadata = parseJsonRecord(metadataBytes, "release metadata");
-  const identity = validateMetadata(metadata, ledgerSummary);
+  const identity = validateMetadata(metadata, ledgerSummary, nativeComponents, payload);
 
   const metadataEvidence = requireRecord(metadata["releaseEvidence"], "releaseEvidence");
   if (metadataEvidence["sha256"] !== sha256(ledgerBytes)) {
@@ -141,6 +247,70 @@ async function resolveBundledIdentity(installationRoot: string): Promise<Runtime
   }
 
   return identity;
+}
+
+function configuredReleaseIdentity(resolution: ConfiguredReleaseResolution): RuntimeIdentity {
+  const build = {
+    version: resolution.candidate.productVersion,
+    buildId: resolution.candidate.buildId,
+  };
+  if (resolution.external.status === "released") {
+    if (resolution.effectiveChannel !== "released") {
+      invalid("External release verification returned an inconsistent effective channel.");
+    }
+    return {
+      build,
+      declaredReleaseChannel: "release-candidate",
+      releaseChannel: "released",
+      releaseVerification: { status: "released" },
+    };
+  }
+  if (resolution.effectiveChannel !== "release-candidate") {
+    invalid("External release verification returned an inconsistent effective channel.");
+  }
+  if (
+    resolution.external.status === "absent" ||
+    resolution.external.status === "publisher-verified"
+  ) {
+    return {
+      build,
+      declaredReleaseChannel: "release-candidate",
+      releaseChannel: "release-candidate",
+      releaseVerification: { status: resolution.external.status },
+    };
+  }
+  const fallbackCode =
+    resolution.external.status === "promotion-invalid"
+      ? "PROMOTION_TRUST_INVALID"
+      : resolution.external.status === "revoked"
+        ? "RELEASE_REVOKED"
+        : "RELEASE_CONFIGURATION_INVALID";
+  return {
+    build,
+    declaredReleaseChannel: "release-candidate",
+    releaseChannel: "release-candidate",
+    releaseVerification: {
+      status: resolution.external.status,
+      code: sanitizedVerificationCode(resolution.external.diagnosticCode, fallbackCode),
+    },
+  };
+}
+
+function sanitizedVerificationCode(code: string | undefined, fallback: string): string {
+  return code !== undefined && /^[A-Z][A-Z0-9_]{2,95}$/u.test(code) ? code : fallback;
+}
+
+function currentReleaseTarget(): ReleaseTarget {
+  if (process.platform === "darwin" && process.arch === "arm64") {
+    return { platform: "darwin", architecture: "arm64" };
+  }
+  if (process.platform === "linux" && process.arch === "x64") {
+    return { platform: "linux", architecture: "x64" };
+  }
+  if (process.platform === "win32" && process.arch === "x64") {
+    return { platform: "win32", architecture: "x64" };
+  }
+  invalid(`The current target is not supported: ${process.platform}-${process.arch}.`);
 }
 
 function parseChecksumManifest(text: string): ReadonlyMap<string, string> {
@@ -533,6 +703,8 @@ function validateExpectedProof(
 function validateMetadata(
   metadata: Record<string, unknown>,
   ledger: LedgerSummary,
+  nativeComponentsManifest: NativeComponentsManifest,
+  payload: ReadonlyMap<string, PayloadEntry>,
 ): RuntimeIdentity {
   assertExactKeys(metadata, METADATA_KEYS, "Release metadata");
   if (
@@ -572,6 +744,13 @@ function validateMetadata(
   requireSha256(metadata["dependencyLockSha256"], "dependencyLockSha256");
   requireSha256(metadata["sourcePackageManifestSha256"], "sourcePackageManifestSha256");
   validateRuntimeExternals(metadata["runtimeExternals"]);
+  const metadataNativeComponents = validateNativeComponents(
+    metadata["nativeComponents"],
+    "Release metadata nativeComponents",
+  );
+  if (JSON.stringify(metadataNativeComponents) !== JSON.stringify(nativeComponentsManifest)) {
+    invalid("Release metadata nativeComponents does not match native-components.json.");
+  }
   if (typeof metadata["buildSourceDirty"] !== "boolean") {
     invalid("Release metadata buildSourceDirty must be boolean.");
   }
@@ -645,7 +824,9 @@ function validateMetadata(
   }
 
   const expectedEntrypoints =
-    process.platform === "win32" ? ["opendelegate.cmd"] : ["opendelegate", "opendelegate.cmd"];
+    process.platform === "win32"
+      ? ["opendelegate.cmd", "opendelegate-worker.cmd"]
+      : ["opendelegate", "opendelegate-worker", "opendelegate.cmd", "opendelegate-worker.cmd"];
   if (
     !Array.isArray(metadata["entrypoints"]) ||
     metadata["entrypoints"].length !== expectedEntrypoints.length ||
@@ -653,14 +834,127 @@ function validateMetadata(
   ) {
     invalid("Release metadata entrypoints do not match this platform.");
   }
+  for (const path of expectedEntrypoints) {
+    const entry = payload.get(path);
+    if (entry === undefined || entry.size <= 0) {
+      invalid(`Release entrypoint is missing or empty in the payload: ${path}.`);
+    }
+  }
 
   return {
     build: {
       version: productVersion,
       buildId,
     },
-    releaseChannel,
+    ...(releaseChannel === "release-candidate"
+      ? {
+          declaredReleaseChannel: "release-candidate" as const,
+          releaseChannel: "release-candidate" as const,
+          releaseVerification: { status: "absent" as const },
+        }
+      : {
+          declaredReleaseChannel: "internal-preview" as const,
+          releaseChannel: "internal-preview" as const,
+          releaseVerification: { status: "not-applicable" as const },
+        }),
   };
+}
+
+function validateNativeComponents(value: unknown, label: string): NativeComponentsManifest {
+  const manifest = requireRecord(value, label);
+  assertExactKeys(manifest, ["schemaVersion", "platform", "architecture", "components"], label);
+  if (
+    manifest["schemaVersion"] !== 1 ||
+    manifest["platform"] !== process.platform ||
+    manifest["architecture"] !== process.arch ||
+    !Array.isArray(manifest["components"])
+  ) {
+    invalid(`${label} does not match this runtime.`);
+  }
+  const expectedComponents = expectedNativeComponents();
+  if (manifest["components"].length !== expectedComponents.length) {
+    invalid(`${label} does not contain the exact required native components.`);
+  }
+  const components = manifest["components"].map((value, index) => {
+    const component = requireRecord(value, `${label} component`);
+    assertExactKeys(component, ["kind", "path", "sha256"], `${label} component`);
+    const expected = expectedComponents[index]!;
+    if (
+      component["kind"] !== expected.kind ||
+      component["path"] !== expected.path ||
+      typeof component["sha256"] !== "string" ||
+      !QUALIFIED_SHA256_PATTERN.test(component["sha256"])
+    ) {
+      invalid(`${label} component order, path, or digest is invalid.`);
+    }
+    return {
+      kind: expected.kind,
+      path: expected.path,
+      sha256: component["sha256"],
+    };
+  });
+  return {
+    schemaVersion: 1,
+    platform: process.platform,
+    architecture: process.arch,
+    components,
+  };
+}
+
+function validateNativeComponentPayloadBindings(
+  manifest: NativeComponentsManifest,
+  payload: ReadonlyMap<string, PayloadEntry>,
+): void {
+  for (const component of manifest.components) {
+    const entry = payload.get(component.path);
+    if (entry === undefined || component.sha256 !== `sha256:${entry.sha256}`) {
+      invalid(`Native component digest does not match the payload: ${component.path}.`);
+    }
+  }
+}
+
+function expectedNativeComponents(): readonly { readonly kind: string; readonly path: string }[] {
+  if (process.platform === "win32") {
+    return [
+      { kind: "core-service-host", path: "bin/opendelegate-service-host.exe" },
+      { kind: "session-helper-host", path: "bin/opendelegate-session-helper.exe" },
+      {
+        kind: "computer-use-helper",
+        path: "libexec/opendelegate-windows-computer-use-helper.exe",
+      },
+      {
+        kind: "computer-use-fixture",
+        path: "libexec/opendelegate-windows-computer-use-fixture.exe",
+      },
+    ];
+  }
+  if (process.platform === "darwin") {
+    return [
+      { kind: "core-service-host", path: "bin/opendelegate-service-host" },
+      { kind: "session-helper-host", path: "bin/opendelegate-session-helper" },
+      { kind: "computer-use-helper", path: "libexec/opendelegate-macos-computer-use" },
+      {
+        kind: "computer-use-fixture",
+        path: "libexec/opendelegate-macos-computer-use-fixture",
+      },
+      {
+        kind: "secret-store-helper",
+        path: "runtime/native/opendelegate-keychain-helper",
+      },
+    ];
+  }
+  if (process.platform === "linux") {
+    return [
+      { kind: "core-service-host", path: "bin/opendelegate-service-host" },
+      { kind: "session-helper-host", path: "bin/opendelegate-session-helper" },
+      { kind: "computer-use-helper", path: "libexec/opendelegate-linux-computer-use" },
+      {
+        kind: "computer-use-fixture",
+        path: "libexec/opendelegate-linux-computer-use-fixture",
+      },
+    ];
+  }
+  invalid(`Native components are unsupported on ${process.platform}.`);
 }
 
 function validateBundledRuntime(value: unknown): void {

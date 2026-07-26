@@ -11,8 +11,14 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@opendelegate/artifact-store": "workspace:*",
+    "@opendelegate/configuration": "workspace:*",
+    "@opendelegate/device-channel": "workspace:*",
+    "@opendelegate/device-identity": "workspace:*",
+    "@opendelegate/discord-adapter": "workspace:*",
     "@opendelegate/event-store": "workspace:*",
     "@opendelegate/owner-auth": "workspace:*",
+    "@opendelegate/policy": "workspace:*",
     "better-sqlite3": "13.0.1",
     "kysely": "0.29.4",
     "pg": "8.22.0"

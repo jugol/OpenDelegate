@@ -19,7 +19,7 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
   assert.equal(artifacts.core.identity, "NT SERVICE\\OpenDelegate-personal");
   assert.notEqual(artifacts.core.identity, "LocalSystem");
   assert.match(artifacts.ipc.endpoint, /^\\\\\.\\pipe\\/);
-  assert.equal(artifacts.ipc.authentication, "hmac-sha256-challenge");
+  assert.equal(artifacts.ipc.authentication, "ed25519-mutual-signature-v2");
 
   const task = parseWindowsTaskXml(artifacts.helper.manifest.content);
   assert.equal(task.logonType, "InteractiveToken");
@@ -44,7 +44,9 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
   validateSupervisorCommands(artifacts.installCommands);
 
   const rendered = artifacts.files.map((file) => file.content).join("\n");
-  assert.match(rendered, /secret:\/\/windows\/helper-ipc/);
+  assert.match(rendered, /secret:\/\/windows\/core-ipc-signing-v2/);
+  assert.match(rendered, /secret:\/\/windows\/helper-ipc-signing-v2/);
+  assert.doesNotMatch(rendered, /"helperIpc"/);
   assert.doesNotMatch(rendered, /raw-super-secret/);
   const runtimeFile = artifacts.files.find((file) => file.purpose === "runtime-configuration");
   assert.ok(runtimeFile);
@@ -72,6 +74,7 @@ test("renders a LaunchDaemon and Aqua LaunchAgent with separate privilege planes
   assert.equal(daemon.GroupName, "_opendelegate");
   assert.equal(daemon.RunAtLoad, true);
   assert.equal(daemon.KeepAlive, true);
+  assert.equal(daemon.AbandonProcessGroup, false);
   assert.match(String(daemon.StandardOutPath), /core\.stdout\.log$/);
   assert.match(String(daemon.StandardErrorPath), /core\.stderr\.log$/);
 
@@ -79,14 +82,22 @@ test("renders a LaunchDaemon and Aqua LaunchAgent with separate privilege planes
   assert.equal(agent.LimitLoadToSessionType, "Aqua");
   assert.equal(agent.RunAtLoad, true);
   assert.equal(agent.KeepAlive, true);
+  assert.equal(agent.AbandonProcessGroup, false);
   assert.equal(Object.hasOwn(agent, "UserName"), false);
   assert.match(String(agent.StandardOutPath), /helper\.stdout\.log$/);
-  assert.match(artifacts.ipc.endpoint, /^\/var\/run\/opendelegate\//);
+  assert.match(artifacts.ipc.endpoint, /^\/private\/var\/run\/opendelegate\//);
   assert.equal(artifacts.ipc.socketMode, "0660");
 });
 
 test("renders hardened system and graphical-user systemd units", () => {
-  const artifacts = renderPlatformServiceArtifacts(linuxConfiguration());
+  const artifacts = renderPlatformServiceArtifacts(
+    linuxConfiguration({
+      systemdCredential: {
+        credentialName: "opendelegate-vault-key",
+        encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+      },
+    }),
+  );
   assert.equal(artifacts.platform, "linux");
   const core = parseSystemdUnit(artifacts.core.manifest.content);
   const helper = parseSystemdUnit(artifacts.helper.manifest.content);
@@ -94,8 +105,14 @@ test("renders hardened system and graphical-user systemd units", () => {
   assert.equal(core.Service?.User, "opendelegate");
   assert.equal(core.Service?.Group, "opendelegate");
   assert.equal(core.Service?.NoNewPrivileges, "yes");
+  assert.equal(core.Service?.KillMode, "control-group");
   assert.equal(core.Service?.ProtectSystem, "strict");
   assert.equal(core.Service?.PrivateTmp, "yes");
+  assert.equal(core.Service?.PrivateMounts, "yes");
+  assert.equal(
+    core.Service?.LoadCredentialEncrypted,
+    '"opendelegate-vault-key:/etc/credstore.encrypted/opendelegate-vault-key.cred"',
+  );
   assert.equal(core.Service?.StandardOutput, "append:/var/log/opendelegate/core.stdout.log");
   assert.equal(core.Install?.WantedBy, "multi-user.target");
 
@@ -103,7 +120,16 @@ test("renders hardened system and graphical-user systemd units", () => {
   assert.equal(helper.Unit?.PartOf, "graphical-session.target");
   assert.equal(helper.Install?.WantedBy, "graphical-session.target");
   assert.equal(helper.Service?.NoNewPrivileges, "yes");
+  assert.equal(helper.Service?.KillMode, "control-group");
   assert.equal(helper.Service?.StandardError, "append:/var/log/opendelegate/helper.stderr.log");
+  const helperEnable = artifacts.installCommands.find(
+    (invocation) => invocation.plane === "session-helper" && invocation.verb === "enable",
+  );
+  const helperReload = artifacts.installCommands.find(
+    (invocation) => invocation.plane === "session-helper" && invocation.verb === "reload",
+  );
+  assert.equal(helperEnable?.availabilityPolicy, "required");
+  assert.equal(helperReload?.availabilityPolicy, "defer-if-logged-out");
   assert.match(artifacts.foregroundFallback.command, /opendelegate-service-host$/);
   assert.equal(artifacts.foregroundFallback.requiresExternalSupervisor, true);
 });
@@ -121,6 +147,58 @@ test("rendering is byte-for-byte deterministic", () => {
     renderPlatformServiceArtifacts(linuxConfiguration()),
     renderPlatformServiceArtifacts(linuxConfiguration()),
   );
+});
+
+test("persists the owner Admin auto-open choice for every login-session renderer", () => {
+  const configurations = [
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        adminAutoOpen: {
+          enabled: true,
+          url: "http://127.0.0.1:43180/",
+        },
+      },
+    }),
+    macOsConfiguration({
+      ownerSession: {
+        ...macOsConfiguration().ownerSession,
+        adminAutoOpen: {
+          enabled: true,
+          url: "https://admin.example.test/",
+        },
+      },
+    }),
+    linuxConfiguration({
+      role: "main",
+      ownerSession: {
+        ...linuxConfiguration().ownerSession,
+        adminAutoOpen: {
+          enabled: true,
+          url: "http://localhost:43180/",
+        },
+      },
+    }),
+  ] as const;
+
+  for (const configuration of configurations) {
+    const artifacts = renderPlatformServiceArtifacts(configuration);
+    const runtimeFile = artifacts.files.find((file) => file.purpose === "runtime-configuration");
+    assert.ok(runtimeFile);
+    const runtime = JSON.parse(runtimeFile.content) as {
+      role: string;
+      ownerSession: {
+        adminAutoOpen: {
+          enabled: boolean;
+          url: string;
+        };
+      };
+    };
+    assert.equal(runtime.role, "main");
+    assert.deepEqual(runtime.ownerSession.adminAutoOpen, configuration.ownerSession.adminAutoOpen);
+    assert.equal(artifacts.helper.bootSemantics, "login");
+    assert.doesNotMatch(artifacts.core.manifest.content, /admin\.example|43180/u);
+  }
 });
 
 test("manifest parsers reject widened privilege and ambiguous duplicate state", () => {

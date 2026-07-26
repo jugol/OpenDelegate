@@ -2,12 +2,13 @@ import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { AdminApiError, BrowserAdminApi, type AdminApi, type RuntimeFeatures } from "./admin-api";
+import { parseAdminDeepLink } from "./admin-deep-link";
 import { App } from "./App";
-import { mapMainDeviceOverview } from "./device-overview";
+import { mapDeviceOverview } from "./device-overview";
 import { useAdminI18n } from "./i18n";
 import { LanguageSelector } from "./LanguageSelector";
 import { LoginScreen } from "./LoginScreen";
-import type { DeviceOverviewViewModel } from "./view-model";
+import type { DeviceFleetViewModel } from "./view-model";
 
 type AuthenticationState = "checking" | "authenticated" | "signed-out" | "unavailable";
 
@@ -18,9 +19,10 @@ export function AdminApplication({
 }): React.JSX.Element {
   const { messages } = useAdminI18n();
   const browserApi = useMemo(() => suppliedApi ?? new BrowserAdminApi(), [suppliedApi]);
+  const deepLink = useMemo(() => parseAdminDeepLink(window.location.search), []);
   const [state, setState] = useState<AuthenticationState>("checking");
   const [failureCode, setFailureCode] = useState<string | null>(null);
-  const [device, setDevice] = useState<DeviceOverviewViewModel | null>(null);
+  const [deviceFleet, setDeviceFleet] = useState<DeviceFleetViewModel | null>(null);
   const [features, setFeatures] = useState<RuntimeFeatures | null>(null);
 
   async function enterAdmin(checkSession: boolean): Promise<void> {
@@ -43,7 +45,15 @@ export function AdminApplication({
           "OpenDelegate Main did not return exactly one fixed Main Device.",
         );
       }
-      setDevice(mapMainDeviceOverview(mainDevice));
+      setDeviceFleet({
+        devices: [
+          mapDeviceOverview(mainDevice),
+          ...devices
+            .filter((candidate) => candidate.role === "worker")
+            .map((candidate) => mapDeviceOverview(candidate)),
+        ],
+        mainDeviceId: mainDevice.deviceId,
+      });
       setFeatures(runtimeFeatures);
       setState("authenticated");
     } catch (cause) {
@@ -99,7 +109,7 @@ export function AdminApplication({
     );
   }
 
-  if (device === null || features === null) {
+  if (deviceFleet === null || features === null) {
     return (
       <main className="startup-state startup-state--error">
         <LanguageSelector placement="utility" />
@@ -113,11 +123,16 @@ export function AdminApplication({
     <App
       api={browserApi}
       configurationAgentAvailable={features.configurationAgent.status === "ready"}
-      device={device}
+      deviceFleet={deviceFleet}
       discordConfigured={features.discord.status === "ready"}
       executionAvailable={features.taskExecution.status === "ready"}
-      initialSection="devices"
-      releaseChannel={features.releaseChannel}
+      {...(deepLink.artifactId === undefined ? {} : { initialArtifactId: deepLink.artifactId })}
+      initialSection={deepLink.section}
+      onConfigurationMessage={(deviceId, message) =>
+        browserApi.sendConfigurationMessage(deviceId, message)
+      }
+      onSecureSecretIngest={(purpose, secret) => browserApi.ingestSecret(purpose, secret)}
+      releaseIdentity={features}
     />
   );
 }

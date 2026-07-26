@@ -1,4 +1,32 @@
 export {
+  ApprovalDecisionRequestSchema,
+  ApprovalDetailSchema,
+  ApprovalListResponseSchema,
+  ApprovalParamsSchema,
+  type ApprovalDecisionRequestV1,
+  type ApprovalDetailV1,
+  type ApprovalListResponseV1,
+  type ApprovalParamsV1,
+} from "./approval.ts";
+export {
+  ArtifactDetailSchema,
+  ArtifactListResponseSchema,
+  ArtifactOpenInstructionSchema,
+  ArtifactParamsSchema,
+  type ArtifactDetailV1,
+  type ArtifactListResponseV1,
+  type ArtifactOpenInstructionV1,
+  type ArtifactParamsV1,
+} from "./artifact.ts";
+export {
+  AuditEventListResponseSchema,
+  AuditEventSummarySchema,
+  RouteIncidentAuditDetailSchema,
+  type AuditEventListResponseV1,
+  type AuditEventSummaryV1,
+  type RouteIncidentAuditDetailV1,
+} from "./audit.ts";
+export {
   BrowserSessionSchema,
   BrowserSessionSummarySchema,
   OwnerClaimRequestSchema,
@@ -24,6 +52,26 @@ export {
   type RevokeSessionParamsV1,
 } from "./auth.ts";
 export {
+  ExtendTaskBudgetRequestSchema,
+  TaskBudgetExtensionEventSchema,
+  TaskBudgetLimitEventSchema,
+  TaskBudgetLimitSchema,
+  TaskBudgetLimitsSchema,
+  TaskBudgetMetricSchema,
+  TaskBudgetSnapshotSchema,
+  TaskBudgetUsageSchema,
+  WorkOrderBudgetSnapshotSchema,
+  type ExtendTaskBudgetRequestV1,
+  type TaskBudgetExtensionEventV1,
+  type TaskBudgetLimitEventV1,
+  type TaskBudgetLimitsV1,
+  type TaskBudgetLimitV1,
+  type TaskBudgetMetricV1,
+  type TaskBudgetSnapshotV1,
+  type TaskBudgetUsageV1,
+  type WorkOrderBudgetSnapshotV1,
+} from "./budget.ts";
+export {
   CorrelationIdSchema,
   LiveHealthSchema,
   OpaqueIdSchema,
@@ -36,15 +84,46 @@ export {
   type ReadinessV1,
 } from "./common.ts";
 export {
+  ConfigurationAgentMessageParamsSchema,
+  ConfigurationAgentMessageRequestSchema,
+  ConfigurationAgentMessageResponseSchema,
+  type ConfigurationAgentMessageParamsV1,
+  type ConfigurationAgentMessageRequestV1,
+  type ConfigurationAgentMessageResponseV1,
+} from "./configuration-agent.ts";
+export {
   DeviceListResponseSchema,
   DeviceOsFamilySchema,
   DeviceSummarySchema,
   type DeviceListResponseV1,
   type DeviceSummaryV1,
 } from "./device.ts";
+export {
+  DeviceEnrollmentOverviewSchema,
+  EnrollmentChannelEndpointSchema,
+  EnrollmentGrantDocumentSchema,
+  EnrollmentGrantSummarySchema,
+  IssueEnrollmentGrantRequestSchema,
+  IssueEnrollmentGrantResponseSchema,
+  type DeviceEnrollmentOverviewV1,
+  type EnrollmentChannelEndpointV1,
+  type EnrollmentGrantDocumentV1,
+  type EnrollmentGrantSummaryV1,
+  type IssueEnrollmentGrantRequestV1,
+  type IssueEnrollmentGrantResponseV1,
+} from "./enrollment.ts";
 export { RuntimeFeaturesResponseSchema, type RuntimeFeaturesResponseV1 } from "./runtime.ts";
 export {
+  SecureSecretIngestPurposeSchema,
+  SecureSecretIngestReceiptSchema,
+  SecureSecretIngestRequestSchema,
+  type SecureSecretIngestPurposeV1,
+  type SecureSecretIngestReceiptV1,
+  type SecureSecretIngestRequestV1,
+} from "./secret-ingest.ts";
+export {
   CreateTaskRequestSchema,
+  TaskConversationMessageSchema,
   TaskCommandRequestSchema,
   TaskDetailSchema,
   TaskEventSummarySchema,
@@ -53,6 +132,7 @@ export {
   TaskStateSchema,
   TaskSummarySchema,
   type CreateTaskRequestV1,
+  type TaskConversationMessageV1,
   type TaskCommandRequestV1,
   type TaskDetailV1,
   type TaskListResponseV1,

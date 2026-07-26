@@ -93,6 +93,52 @@ function registerOwnerAuthRepositoryContract(label: string, createFixture: Fixtu
       }
     });
 
+    test("atomically replaces an unreachable pre-owner claim across restart", async () => {
+      const fixture = await createFixture();
+      const clock = new MutableClock(NOW);
+      const random = new DeterministicRandomSource(`${label}-claim-replacement`);
+      const passwordHasher = new FakePasswordHasher();
+      let repository: SqlOwnerAuthRepository | undefined;
+
+      try {
+        repository = await fixture.open("apply");
+        let auth = createAuth(repository, clock, random, passwordHasher);
+        const original = await auth.issueInitialClaim({ channel: "local-bootstrap" });
+
+        await repository.close();
+        repository = await fixture.open("verify");
+        auth = createAuth(repository, clock, random, passwordHasher);
+        const replacement = await auth.replaceInitialClaim({
+          channel: "local-bootstrap",
+        });
+
+        await repository.close();
+        repository = await fixture.open("verify");
+        auth = createAuth(repository, clock, random, passwordHasher);
+        await assert.rejects(
+          auth.claimOwner({
+            channel: "local-bootstrap",
+            claimToken: original.claimToken,
+            passphrase: PASSPHRASE,
+          }),
+          isAuthError("CLAIM_INVALID"),
+        );
+        await auth.claimOwner({
+          channel: "local-bootstrap",
+          claimToken: replacement.claimToken,
+          passphrase: PASSPHRASE,
+        });
+
+        assert.deepEqual(
+          (await repository.snapshot()).auditRecords.map((record) => record.event).sort(),
+          ["owner.auth.claim-issued", "owner.auth.claim-replaced", "owner.auth.claimed"].sort(),
+        );
+      } finally {
+        await repository?.close();
+        await fixture.cleanup();
+      }
+    });
+
     test("permits exactly one concurrent claim and one recovery-code consumption", async () => {
       const fixture = await createFixture();
       const clock = new MutableClock(NOW);
@@ -474,7 +520,108 @@ test("SQLite schema denies raw credential columns and enforces append-only auth 
   }
 });
 
-test("migration 0002 upgrades the released event-store schema and remains checksum-verifiable", async () => {
+test("migration 0012 preserves existing auth audit while enabling claim-replacement audit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-owner-auth-0012-upgrade-"));
+  const filename = join(directory, "main.sqlite3");
+  let repository: SqlOwnerAuthRepository | undefined = await SqlOwnerAuthRepository.openSqlite({
+    filename,
+    migrationMode: "apply",
+  });
+  const clock = new MutableClock(NOW);
+  const random = new DeterministicRandomSource("sqlite-0012-upgrade");
+  let auth = createAuth(repository, clock, random, new FakePasswordHasher());
+  const original = await auth.issueInitialClaim({ channel: "local-bootstrap" });
+  await repository.close();
+  repository = undefined;
+
+  const legacy = new Database(filename);
+  try {
+    legacy.exec(`
+      DROP TRIGGER od_owner_auth_audit_no_update;
+      DROP TRIGGER od_owner_auth_audit_no_delete;
+      DROP INDEX od_owner_auth_audit_order;
+      ALTER TABLE od_owner_auth_audit RENAME TO od_owner_auth_audit_current;
+      CREATE TABLE od_owner_auth_audit (
+        audit_id TEXT PRIMARY KEY
+          CHECK (length(trim(audit_id)) > 0 AND length(audit_id) <= 200),
+        event_name TEXT NOT NULL CHECK (
+          event_name IN (
+            'owner.auth.claim-issued',
+            'owner.auth.claimed',
+            'owner.auth.login-succeeded',
+            'owner.auth.reauthenticated',
+            'owner.auth.recovery-begun',
+            'owner.auth.recovered',
+            'owner.auth.session-revoked',
+            'owner.auth.session-logged-out'
+          )
+        ),
+        occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms >= 0),
+        owner_id TEXT CHECK (owner_id IS NULL OR length(trim(owner_id)) > 0),
+        session_id TEXT CHECK (session_id IS NULL OR length(trim(session_id)) > 0),
+        target_session_id TEXT
+          CHECK (target_session_id IS NULL OR length(trim(target_session_id)) > 0)
+      ) STRICT;
+      INSERT INTO od_owner_auth_audit
+      SELECT * FROM od_owner_auth_audit_current;
+      DROP TABLE od_owner_auth_audit_current;
+      CREATE INDEX od_owner_auth_audit_order
+        ON od_owner_auth_audit (occurred_at_ms, audit_id);
+      CREATE TRIGGER od_owner_auth_audit_no_update
+        BEFORE UPDATE ON od_owner_auth_audit
+        BEGIN
+          SELECT RAISE(ABORT, 'owner auth audit is append-only');
+        END;
+      CREATE TRIGGER od_owner_auth_audit_no_delete
+        BEFORE DELETE ON od_owner_auth_audit
+        BEGIN
+          SELECT RAISE(ABORT, 'owner auth audit is append-only');
+        END;
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0012_owner_claim_replacement_audit';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0012_owner_claim_replacement_audit';
+    `);
+  } finally {
+    legacy.close();
+  }
+
+  try {
+    await assert.rejects(
+      SqlOwnerAuthRepository.openSqlite({
+        filename,
+        migrationMode: "verify",
+      }),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        Reflect.get(error, "code") === "MIGRATION_PENDING",
+    );
+
+    repository = await SqlOwnerAuthRepository.openSqlite({
+      filename,
+      migrationMode: "apply",
+    });
+    auth = createAuth(repository, clock, random, new FakePasswordHasher());
+    const replacement = await auth.replaceInitialClaim({ channel: "local-bootstrap" });
+    assert.notEqual(replacement.claimToken, original.claimToken);
+    assert.deepEqual(
+      (await repository.snapshot()).auditRecords.map((record) => record.event).sort(),
+      ["owner.auth.claim-issued", "owner.auth.claim-replaced"].sort(),
+    );
+    await repository.close();
+    repository = undefined;
+    repository = await SqlOwnerAuthRepository.openSqlite({
+      filename,
+      migrationMode: "verify",
+    });
+  } finally {
+    await repository?.close();
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("migration 0002 upgrades the released event-store schema through Device channel state", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opendelegate-owner-auth-upgrade-"));
   const filename = join(directory, "main.sqlite3");
   const initialized = await SqlOwnerAuthRepository.openSqlite({
@@ -486,6 +633,25 @@ test("migration 0002 upgrades the released event-store schema and remains checks
   const sqlite = new Database(filename);
   try {
     sqlite.exec(`
+      DROP TABLE od_device_observation_latest;
+      DROP TABLE od_device_observation_events;
+      DROP TABLE od_artifact_index_state;
+      DROP TABLE od_action_authorizations;
+      DROP TABLE od_approval_state;
+      DROP TABLE od_configuration_state;
+      DROP TABLE od_device_channel_inbound_effect;
+      DROP TABLE od_device_channel_outbox;
+      DROP TABLE od_device_channel_inbox;
+      DROP TABLE od_device_channel_state;
+      DROP TABLE od_discord_outbox;
+      DROP TABLE od_discord_task_bindings;
+      DROP TABLE od_discord_inbound;
+      DROP TABLE od_discord_gateway_cursor;
+      DROP TABLE od_device_identity_audit;
+      DROP TABLE od_device_enrollment_grants;
+      DROP TABLE od_device_certificates;
+      DROP TABLE od_device_identities;
+      DROP TABLE od_device_certificate_authority;
       DROP TABLE od_owner_sessions;
       DROP TABLE od_owner_recovery_states;
       DROP TABLE od_owner_recovery_credentials;
@@ -493,7 +659,41 @@ test("migration 0002 upgrades the released event-store schema and remains checks
       DROP TABLE od_owner_auth_audit;
       DROP TABLE od_owner_credential;
       DROP TABLE od_owner_claim;
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0012_owner_claim_replacement_audit';
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0011_device_observations';
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0010_artifact_index_state';
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0009_action_authorizations';
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0008_approval_state';
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0007_configuration_state';
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0006_device_channel_inbound_effect';
+      DELETE FROM od_migration_manifest WHERE migration_name = '0005_device_channel';
+      DELETE FROM od_migration_manifest WHERE migration_name = '0004_discord_state';
+      DELETE FROM od_migration_manifest WHERE migration_name = '0003_device_identity';
       DELETE FROM od_migration_manifest WHERE migration_name = '0002_owner_auth';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0012_owner_claim_replacement_audit';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0011_device_observations';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0010_artifact_index_state';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0009_action_authorizations';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0008_approval_state';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0007_configuration_state';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0006_device_channel_inbound_effect';
+      DELETE FROM od_kysely_migration WHERE name = '0005_device_channel';
+      DELETE FROM od_kysely_migration WHERE name = '0004_discord_state';
+      DELETE FROM od_kysely_migration WHERE name = '0003_device_identity';
       DELETE FROM od_kysely_migration WHERE name = '0002_owner_auth';
     `);
   } finally {
@@ -659,6 +859,201 @@ const postgresAdminPool =
 after(async () => {
   await postgresAdminPool?.end();
 });
+
+test(
+  "PostgreSQL migration 0012 preserves auth audit protections and enables claim replacement",
+  {
+    skip:
+      postgresUri === undefined
+        ? "OPENDELEGATE_TEST_POSTGRES_URI is required for the PostgreSQL migration contract."
+        : false,
+  },
+  async (t) => {
+    if (postgresUri === undefined || postgresAdminPool === undefined) {
+      throw new Error("The PostgreSQL migration contract ran without its required database.");
+    }
+
+    const schema = `od_owner_auth_upgrade_${randomUUID().replaceAll("-", "")}`;
+    let repository: SqlOwnerAuthRepository | undefined;
+    t.after(async () => {
+      const cleanupErrors: unknown[] = [];
+      try {
+        await repository?.close();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await postgresAdminPool.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(cleanupErrors, "PostgreSQL migration fixture cleanup failed.");
+      }
+    });
+
+    await postgresAdminPool.query(`CREATE SCHEMA "${schema}"`);
+    repository = await SqlOwnerAuthRepository.openPostgres({
+      connectionString: postgresUri,
+      migrationMode: "apply",
+      schema,
+    });
+    const clock = new MutableClock(NOW);
+    const random = new DeterministicRandomSource("postgres-0012-upgrade");
+    let auth = createAuth(repository, clock, random, new FakePasswordHasher());
+    const original = await auth.issueInitialClaim({ channel: "local-bootstrap" });
+    await repository.close();
+    repository = undefined;
+
+    const downgradeClient = await postgresAdminPool.connect();
+    try {
+      await downgradeClient.query("BEGIN");
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_owner_auth_audit
+          DROP CONSTRAINT od_owner_auth_audit_event_name_check
+      `);
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_owner_auth_audit
+          ADD CONSTRAINT od_owner_auth_audit_event_name_check CHECK (
+            event_name IN (
+              'owner.auth.claim-issued',
+              'owner.auth.claimed',
+              'owner.auth.login-succeeded',
+              'owner.auth.reauthenticated',
+              'owner.auth.recovery-begun',
+              'owner.auth.recovered',
+              'owner.auth.session-revoked',
+              'owner.auth.session-logged-out'
+            )
+          )
+      `);
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_migration_manifest
+         WHERE migration_name = '0012_owner_claim_replacement_audit'`,
+      );
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_kysely_migration
+         WHERE name = '0012_owner_claim_replacement_audit'`,
+      );
+      await downgradeClient.query("COMMIT");
+    } catch (error) {
+      await downgradeClient.query("ROLLBACK");
+      throw error;
+    } finally {
+      downgradeClient.release();
+    }
+
+    await assert.rejects(
+      SqlOwnerAuthRepository.openPostgres({
+        connectionString: postgresUri,
+        migrationMode: "verify",
+        schema,
+      }),
+      (error: unknown) =>
+        typeof error === "object" &&
+        error !== null &&
+        Reflect.get(error, "code") === "MIGRATION_PENDING",
+    );
+
+    repository = await SqlOwnerAuthRepository.openPostgres({
+      connectionString: postgresUri,
+      migrationMode: "apply",
+      schema,
+    });
+    auth = createAuth(repository, clock, random, new FakePasswordHasher());
+    const replacement = await auth.replaceInitialClaim({ channel: "local-bootstrap" });
+    assert.notEqual(replacement.claimToken, original.claimToken);
+    await assert.rejects(
+      auth.claimOwner({
+        channel: "local-bootstrap",
+        claimToken: original.claimToken,
+        passphrase: PASSPHRASE,
+      }),
+      isAuthError("CLAIM_INVALID"),
+    );
+    assert.deepEqual(
+      (await repository.snapshot()).auditRecords.map((record) => record.event).sort(),
+      ["owner.auth.claim-issued", "owner.auth.claim-replaced"].sort(),
+    );
+    await repository.close();
+    repository = undefined;
+
+    const protections = await postgresAdminPool.query<{
+      readonly hasAppendOnlyTrigger: boolean;
+      readonly hasAuditIndex: boolean;
+      readonly hasReplacementConstraint: boolean;
+    }>(
+      `SELECT
+         EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_indexes
+           WHERE schemaname = $1
+             AND tablename = 'od_owner_auth_audit'
+             AND indexname = 'od_owner_auth_audit_order'
+         ) AS "hasAuditIndex",
+         EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_trigger AS trigger
+           INNER JOIN pg_catalog.pg_class AS relation
+             ON relation.oid = trigger.tgrelid
+           INNER JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = relation.relnamespace
+           WHERE namespace.nspname = $1
+             AND relation.relname = 'od_owner_auth_audit'
+             AND trigger.tgname = 'od_owner_auth_audit_no_mutation'
+             AND NOT trigger.tgisinternal
+             AND trigger.tgenabled <> 'D'
+         ) AS "hasAppendOnlyTrigger",
+         EXISTS (
+           SELECT 1
+           FROM pg_catalog.pg_constraint AS constraint_record
+           INNER JOIN pg_catalog.pg_class AS relation
+             ON relation.oid = constraint_record.conrelid
+           INNER JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = relation.relnamespace
+           WHERE namespace.nspname = $1
+             AND relation.relname = 'od_owner_auth_audit'
+             AND constraint_record.conname = 'od_owner_auth_audit_event_name_check'
+             AND pg_catalog.pg_get_constraintdef(constraint_record.oid)
+               LIKE '%owner.auth.claim-replaced%'
+         ) AS "hasReplacementConstraint"`,
+      [schema],
+    );
+    assert.deepEqual(protections.rows, [
+      {
+        hasAppendOnlyTrigger: true,
+        hasAuditIndex: true,
+        hasReplacementConstraint: true,
+      },
+    ]);
+
+    await assert.rejects(
+      postgresAdminPool.query(
+        `UPDATE "${schema}".od_owner_auth_audit
+         SET occurred_at_ms = occurred_at_ms + 1
+         WHERE event_name = 'owner.auth.claim-issued'`,
+      ),
+      /owner auth audit is append-only/u,
+    );
+    await assert.rejects(
+      postgresAdminPool.query(
+        `DELETE FROM "${schema}".od_owner_auth_audit
+         WHERE event_name = 'owner.auth.claim-issued'`,
+      ),
+      /owner auth audit is append-only/u,
+    );
+
+    repository = await SqlOwnerAuthRepository.openPostgres({
+      connectionString: postgresUri,
+      migrationMode: "verify",
+      schema,
+    });
+    assert.deepEqual(
+      (await repository.snapshot()).auditRecords.map((record) => record.event).sort(),
+      ["owner.auth.claim-issued", "owner.auth.claim-replaced"].sort(),
+    );
+  },
+);
 
 if (postgresUri !== undefined) {
   registerOwnerAuthRepositoryContract("PostgreSQL", async () => {

@@ -30,8 +30,11 @@ export function renderWindowsServiceArtifacts(
   const ipc: LocalIpcDefinition = {
     kind: "named-pipe",
     endpoint: `\\\\.\\pipe\\OpenDelegate\\${configuration.instanceId}\\session-helper`,
-    authentication: "hmac-sha256-challenge",
-    credentialReference: configuration.secretReferences.helperIpc ?? "",
+    authentication: "ed25519-mutual-signature-v2",
+    corePrivateKeyReference: configuration.secretReferences.coreIpcSigningKey ?? "",
+    helperPrivateKeyReference: configuration.secretReferences.helperIpcSigningKey ?? "",
+    corePublicKey: configuration.ipcTrust.core,
+    helperPublicKey: configuration.ipcTrust.helper,
     allowedPeers: [coreIdentity, configuration.ownerSession.stableUserId],
   };
   const manifestsRoot = win32.join(configuration.paths.stateRoot, "manifests");
@@ -90,7 +93,6 @@ export function renderWindowsServiceArtifacts(
         plane: "core",
         verb: "install",
         privilege: "elevated",
-        expectedExitCodes: [0, 1073],
       },
     ),
     command(
@@ -113,7 +115,7 @@ export function renderWindowsServiceArtifacts(
       ["failure", serviceName, "reset=", "86400", "actions=", "restart/5000/restart/15000"],
       { plane: "core", verb: "install", privilege: "elevated" },
     ),
-    command("schtasks.exe", ["/Create", "/TN", taskName, "/XML", helperManifest.path, "/F"], {
+    command("schtasks.exe", ["/Create", "/TN", taskName, "/XML", helperManifest.path], {
       plane: "session-helper",
       verb: "install",
       privilege: "elevated",

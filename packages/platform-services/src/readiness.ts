@@ -24,7 +24,7 @@ export interface SessionHelperObservation {
 export interface SessionHelperReadiness {
   readonly session: SessionHelperState;
   readonly computerUse: "ready" | "unavailable";
-  readonly headlessWorkAvailable: true;
+  readonly headlessWorkAvailable: boolean;
   readonly helperProcess: HelperProcessState;
   readonly loggedIn: boolean;
   readonly desktopUnlocked: boolean;

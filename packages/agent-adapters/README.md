@@ -4,6 +4,7 @@
 agent sessions. It provides:
 
 - one strict `AgentAdapter` contract;
+- first-class Codex App Server and Claude Agent SDK adapters;
 - executable Codex CLI and Claude CLI fallbacks;
 - a versioned generic command/JSONL adapter;
 - normalized public messages, tool outcomes, approval requests, progress, usage,
@@ -13,18 +14,23 @@ agent sessions. It provides:
 - a bounded event stream with stdout backpressure;
 - wall and idle timeouts, cooperative cancellation with forced-process escalation,
   output-size limits, and malformed-output rejection;
+- exact active-Run live steering for Codex App Server and Claude Agent SDK, with an
+  explicit audited next-resume fallback for reduced-capability adapters;
 - process-local and file-backed single-writer session leases with fencing; and
-- explicit non-secret and secret environment channels with output redaction.
+- an explicit non-secret environment channel plus a separate secret channel for
+  generic adapters that explicitly own that contract.
 
-The package uses only Node.js built-ins. It has no dependency on the OpenDelegate
-domain, protocol, Worker, storage, HTTP, or provider SDK packages.
+The package depends on the exact-pinned Claude Agent SDK and otherwise stays below
+the OpenDelegate domain, protocol, Worker, storage, and HTTP layers.
 
 ## Provider compatibility
 
 The contract-tested fallback versions for this source revision are:
 
-| Adapter | Tested executable version | Non-interactive surface |
+| Adapter | Tested version | Non-interactive surface |
 | --- | --- | --- |
+| `CodexAppServerAdapter` | `codex-cli 0.145.0` | App Server JSONL over stdio |
+| `ClaudeAgentSdkAdapter` | SDK `0.3.205` / Claude Code `2.1.205` | SDK `query()` async stream |
 | `CodexCliAdapter` | `codex-cli 0.145.0` | `codex exec --json` and `codex exec resume` |
 | `ClaudeCliAdapter` | Claude Code `2.1.205` | `claude -p --output-format stream-json` |
 
@@ -33,11 +39,27 @@ model turn. An installed version outside the configured tested set is reported a
 `untested` and execution fails closed unless the owner explicitly configures
 `allowUntestedVersion`.
 
+Every first-class Codex and Claude adapter uses an absolute
+OpenDelegate-controlled provider home and rejects ambient or per-Run attempts to
+override it. The default Worker paths are `state/providers/codex` and
+`state/providers/claude`. Existing authentication from a user's global provider
+home is deliberately not copied; the owner must authenticate each controlled home
+through the provider's normal interactive login. Keep these homes outside the
+checkout and restrict them to the Worker service identity.
+
+Claude SDK also ignores ambient settings, skills, and plugins and requires its
+fail-closed sandbox. Native Windows Claude SDK execution is reported incompatible
+until that sandbox is available; use Codex, WSL2, or an explicitly configured
+container.
+
 The CLI adapters pass prompts through stdin, never a command-line argument. Child
 processes always use `shell: false`. Only a narrow OS environment allowlist is
-inherited. API keys and other credential variables must be supplied through
-`secretEnvironment`; known secret values and their common encoded forms are redacted
-from normalized output and diagnostics.
+inherited. First-class provider Runs reject `secretEnvironment`; provider
+authentication belongs in the controlled home, while future Task credentials must
+cross a typed, exact Run-scoped Secret helper. The generic adapter may accept an
+explicit secret environment when its caller deliberately composes that separate
+contract, and known values and common encoded forms are redacted from normalized
+output and diagnostics.
 
 ## Native session bindings
 
@@ -60,6 +82,40 @@ The caller must durably persist every returned `NativeSessionReference`. The cal
 must also consume `AgentRunHandle.events`; bounded streaming intentionally applies
 backpressure when the consumer stops.
 
+## Live steering
+
+`probe().capabilities.steering` is `true` only for the pinned programmatic
+integrations:
+
+- Codex App Server `0.145.0` sends stable `turn/steer` with the exact active
+  `threadId` and `expectedTurnId`.
+- Claude Agent SDK `0.3.205` keeps one streaming-input channel open and sends an
+  `SDKUserMessage` with `priority: "now"` to the exact active Query.
+
+Those adapters expose `AgentRunHandle.steer`. CLI and generic-command handles do
+not, and their probes continue to report `steering: false`.
+
+Every steering request binds provider, adapter, Run, Task, workstream, Device,
+Workspace, Device-local session key, and native session ID. A mismatch fails before
+provider input. A new request after provider completion fails, while an exact replay
+of an already accepted request returns the original receipt as `already-accepted`;
+reusing its request ID with different text or scope fails closed. Accepted requests
+emit a normalized `steering_accepted` event without copying the instruction into
+audit output.
+
+Call `selectAgentSteeringDisposition()` before dispatch. For a reduced-capability
+adapter it returns:
+
+- `delivery: "next-resume"`;
+- stable reason `ADAPTER_LIVE_STEERING_UNAVAILABLE`;
+- a bounded safe audit projection; and
+- the exact instruction to persist as an input to the next native-session resume.
+
+This function does not create a new turn itself. The coordinator remains responsible
+for durably recording the audit projection and supplying that instruction on the
+next `resume()`. A capability/handle disagreement is treated as an adapter contract
+failure rather than silently falling back.
+
 ## Single-writer leases
 
 The default store is one process-wide `InMemorySessionLeaseStore`, shared by all
@@ -72,8 +128,15 @@ const leaseStore = new FileSessionLeaseStore({
   statePath: "C:/ProgramData/OpenDelegate/native-session-leases.json",
 });
 
-const adapter = new CodexCliAdapter({ leaseStore });
+const adapter = new CodexAppServerAdapter({
+  codexHome: "C:/ProgramData/OpenDelegate/providers/codex",
+  leaseStore,
+});
 ```
+
+Main-owned coordinator/configuration workspaces may intentionally live outside a Git
+repository. Their programmatic turns use reasoning-only deny mode and a read-only
+sandbox.
 
 The file store:
 
@@ -108,13 +171,26 @@ service. Never remove either lock while an adapter process may still be running.
 
 Every turn declares a sandbox and permission mode.
 
+- Codex App Server supports reasoning-only deny mode and Worker allow-listed mode.
+  Worker shell, file, and permission callbacks are released only after Main's exact
+  action decision is durably consumed. Ambient MCP, skills, hooks, browser, desktop,
+  and dynamic-install integrations are disabled.
+- Claude Agent SDK supports reasoning-only deny mode and Worker allow-listed mode.
+  Every Worker callback crosses the same exact-action bridge except Device-local
+  Knowledge tools, whose one-use capability is independently enforced on the
+  Device. Settings sources are empty, MCP is strict, and filesystem/network
+  sandbox startup fails closed.
 - Codex CLI supports `provider-default`, `read-only`, `workspace-write`, and
   `danger-full-access`. The fallback supports deny or an exact Task-scoped dangerous
-  bypass. It does not claim an interactive approval bridge.
+  bypass. Deny mode disables the shell tool; every mode ignores ambient user
+  configuration and rules and disables unrelated built-in integrations, hooks,
+  plugins, dynamic dependency installation, MCP elicitation, browser, and Computer
+  Use surfaces. It does not claim an interactive approval bridge.
 - Claude CLI supports `provider-default`. Deny mode disables tools; allow-listed
   mode exposes only the declared tools; dangerous bypass requires an exact
-  Task-scoped owner or Policy grant. The fallback does not claim a `canUseTool`
-  callback.
+  Task-scoped owner or Policy grant. Every turn uses safe mode, strict empty MCP
+  configuration, no Chrome integration, and no slash-command discovery. The fallback
+  does not claim a `canUseTool` callback.
 - The generic runner receives the exact normalized sandbox and permission fields in
   its input envelope and can emit normalized approval requests.
 
@@ -172,21 +248,21 @@ The runner emits one JSON object per line. Every object must contain
 Unknown types, invalid versions, malformed JSON, oversized lines, missing sessions,
 and missing terminal results fail closed.
 
-## SDK seam and current limitations
+## Programmatic seam and current limitations
 
-`AgentSdkDriver` is the injectable seam for the Codex SDK/App Server and Claude Agent
-SDK. This package revision does not bundle either provider SDK and does not claim an
-SDK-native live run. Consequently:
+The App Server and SDK ports are injectable for deterministic conformance tests.
+Programmatic turns provide bounded streaming, cancellation, native-session fencing,
+strict MCP composition, and provider approval callbacks. Current limits are:
 
-- CLI fallbacks cannot pause on provider-native approval callbacks; their probe
-  truthfully reports `approvalBridge: false`;
-- live steering is not exposed by the fallback adapters;
+- CLI fallbacks truthfully report `approvalBridge: false`;
+- CLI and generic fallbacks cannot steer a live turn and require the explicit
+  `next-resume` disposition described above;
 - provider-created worktree cleanup remains the Worker/Workspace lifecycle owner's
   responsibility;
-- cancellation terminates the provider runner process, but cleanup of arbitrary
-  grandchildren still depends on the provider CLI's process handling; and
-- no authenticated or paid live-provider model smoke is part of the default test
-  suite.
+- native Windows Claude SDK execution is disabled because its required sandbox is
+  unavailable there; and
+- authenticated or paid live-provider turns are release-lab evidence and are not
+  performed by the default test suite.
 
 The deterministic fixture suite executes real child processes and covers probe,
 start, resume, checkpoint lineage, cancellation, timeout, backpressure, secret

@@ -49,7 +49,16 @@ test("candidate status fails unless implementation and live proof are all verifi
   const criteria = Array.from({ length: 36 }, (_, index) => criterion(index + 1));
 
   assert.deepEqual(await auditReleaseEvidence(process.cwd(), ledger(criteria, "candidate")), [
-    "A candidate or released ledger requires all 36 criteria to be verified.",
+    "A candidate ledger requires all 36 criteria to be verified.",
+  ]);
+});
+
+test("released is never an enclosed acceptance-ledger status", async () => {
+  const criteria = Array.from({ length: 36 }, (_, index) => criterion(index + 1));
+
+  assert.deepEqual(await auditReleaseEvidence(process.cwd(), ledger(criteria, "released")), [
+    "An incomplete ledger must remain blocked.",
+    "Release evidence has an unsupported releaseStatus.",
   ]);
 });
 

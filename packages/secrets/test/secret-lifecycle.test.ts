@@ -465,6 +465,25 @@ test("redacts registered values and sensitive keys across adversarial nested and
   assert.equal(Object.isFrozen(redacted), true);
 });
 
+test("redacts encoded registered values and common credential forms in diagnostic strings", () => {
+  const value = "registered-secret-value";
+  const redactor = new SecretRedactor([value]);
+  const diagnostic = {
+    base64: Buffer.from(value, "utf8").toString("base64"),
+    base64url: Buffer.from(value, "utf8").toString("base64url"),
+    bearer: "Authorization: Bearer unregistered-bearer-token-value",
+    github: "github_pat_A1B2C3D4E5F6G7H8I9J0",
+    jsonEscaped: JSON.stringify(value).slice(1, -1),
+    urlEncoded: encodeURIComponent(value),
+  };
+
+  const serialized = JSON.stringify(redactor.redact(diagnostic));
+  for (const forbidden of Object.values(diagnostic)) {
+    assert.equal(serialized.includes(forbidden), false);
+  }
+  assert.ok(serialized.includes("[REDACTED]"));
+});
+
 test("rejects invalid lease lifetimes, clocks, and overflowing expirations before issuing a lease", () => {
   const invalidTtls = [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY];
 

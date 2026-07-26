@@ -485,11 +485,18 @@ Replace fake agents with resumable, observable first-class providers.
 - Implement generic command adapter with explicit lifecycle and output schema.
 - Add adapter version pinning, compatibility probes, capability degradation, and
   diagnostics.
+- Add an optional Work Order Agent requirement and copy it into each immutable Run
+  assignment. Require the named provider, optionally require one exact adapter and
+  allowed compatibility set, and use Device Auto only when the assignment omits the
+  requirement.
 - Map provider events into normalized public messages, tool/action requests, progress,
   usage, and completion.
 - Route provider approval mechanisms through OpenDelegate Policy.
 - Implement native-session registry with Device, provider, session ID, Workspace,
   working directory/worktree, adapter version, single-writer lease, and lineage.
+- Return a bounded safe session observation to Main on terminal Worker events and
+  persist it through event replay without returning cwd, worktree path, or the
+  Device-local session key.
 - Implement Task checkpoint and native continuation packages.
 - Add safe worktree lifecycle and garbage collection.
 
@@ -500,6 +507,10 @@ Replace fake agents with resumable, observable first-class providers.
 - Two unrelated Tasks never share a native session.
 - Related Worker follow-up resumes the correct native session.
 - Coordinator provider remains pinned while another provider participates as Worker.
+- Provider-bound Worker Runs fail closed when the required binding is unavailable;
+  exact retry and restart replay cannot widen or substitute that binding.
+- Main replay preserves the actual safe provider, adapter, native-session, and
+  lineage observation reported by the Worker.
 - Simulated session deletion continues from checkpoint with an explicit lineage
   change.
 
@@ -713,6 +724,30 @@ Prove the complete product on real target systems and publish it responsibly.
 - Test private and externally exposed Artifact policies.
 - Perform threat-model review and security regression.
 - Perform upgrade from the earliest internal persisted schema and service bundle.
+- Implement ADR-0021's external release verifier so the installer and runtime
+  distinguish enclosed `release-candidate` identity from the effective `released`
+  result computed from trusted sidecars.
+- Run every credential-bearing signing, notarization, promotion, and publication
+  tool only on clean committed, hash-pinned target runners. Record sanitized runner,
+  tool, public identity, input-digest, and output-digest evidence.
+- Apply and verify macOS Developer ID and Windows Authenticode signatures before
+  generating payload integrity manifests. Freeze each signed payload, build the
+  exact final archive, and create its detached publisher attestation without
+  rewriting candidate bytes or the acceptance ledger.
+- Submit the exact final macOS archive for notarization only after its manifests and
+  publisher attestation exist. Retain the accepted result as an external sidecar;
+  do not staple or otherwise mutate the candidate afterward.
+- Generate one separately signed cross-platform promotion attestation that binds the
+  complete target set, ledger, native-authenticity records, publisher attestations,
+  notarization receipt, and live evidence. Use a promotion trust root distinct from
+  the per-target publisher trust root.
+- Publish only the exact promoted assets. Authenticate exactly three target-scoped
+  remote digest observations—one per required archive—as signed envelopes under a
+  separately provisioned observer trust root. The observer identity must differ
+  from all publisher and promotion/uploader identities and remain independently
+  revocable. Bind the read-back plan's uploader authorization to the promotion key
+  ID, then issue the signed external release receipt over those exact observations
+  for effective `released` status.
 - Complete installation, onboarding, configuration, policy, transport, Discord,
   backup, recovery, troubleshooting, and contributor documentation.
 - Add Apache-2.0 notices and third-party attribution.
@@ -722,7 +757,13 @@ Prove the complete product on real target systems and publish it responsibly.
 
 Every item under **First Milestone Acceptance Criteria** in the product specification
 has a linked automated result, recorded manual proof, or both. There are no waived
-platform or Computer Use gates.
+platform or Computer Use gates. Every promoted target has pre-manifest native
+authenticity where required, a trusted publisher attestation, and an immutable
+published digest. The complete platform set has one valid cross-platform promotion
+attestation, exactly three observer-signed target read-back envelopes under the
+independent observer trust root, and one supported-channel receipt under the
+external promotion trust root. The packaged verifier computes `released` from that
+chain without rewriting any candidate payload, archive, metadata, or ledger.
 
 ## Test infrastructure
 

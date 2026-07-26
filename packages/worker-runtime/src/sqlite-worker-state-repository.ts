@@ -8,9 +8,14 @@ import {
   WorkerRuntimeError,
   configurationFingerprint,
   validateWorkerConfiguration,
+  validateWorkerRouteIncident,
+  validateWorkerRunSteeringCommand,
+  validateWorkerRunSteeringReceipt,
+  workerRunSteeringCommandFingerprint,
 } from "./contracts.ts";
 import {
   cloneWorkerState,
+  type PersistedRunSteeringAttempt,
   type PersistedWorkerState,
   type WorkerStateRepository,
 } from "./state-repository.ts";
@@ -243,7 +248,133 @@ function decodeState(row: StateRow): PersistedWorkerState {
     throw corruptState();
   }
 
-  return record as unknown as PersistedWorkerState;
+  const rawRouteIncidents = record["routeIncidents"];
+  if (
+    rawRouteIncidents !== undefined &&
+    (!Array.isArray(rawRouteIncidents) || rawRouteIncidents.length > 64)
+  ) {
+    throw corruptState();
+  }
+  const incidentIds = new Set<string>();
+  const fingerprints = new Set<string>();
+  let routeIncidents: PersistedWorkerState["routeIncidents"];
+  try {
+    routeIncidents = Object.freeze(
+      (rawRouteIncidents ?? []).map(
+        (incident: NonNullable<PersistedWorkerState["routeIncidents"]>[number]) => {
+          const validated = validateWorkerRouteIncident(incident);
+          if (incidentIds.has(validated.incidentId) || fingerprints.has(validated.fingerprint)) {
+            throw corruptState();
+          }
+          incidentIds.add(validated.incidentId);
+          fingerprints.add(validated.fingerprint);
+          return validated;
+        },
+      ),
+    );
+  } catch {
+    throw corruptState();
+  }
+
+  const rawSteeringAttempts = record["steeringAttempts"];
+  if (
+    rawSteeringAttempts !== undefined &&
+    (!Array.isArray(rawSteeringAttempts) || rawSteeringAttempts.length > 4_096)
+  ) {
+    throw corruptState();
+  }
+  const steeringRequestIds = new Set<string>();
+  const steeringAttempts = Object.freeze(
+    (rawSteeringAttempts ?? []).map((rawAttempt) => {
+      if (rawAttempt === null || typeof rawAttempt !== "object" || Array.isArray(rawAttempt)) {
+        throw corruptState();
+      }
+      const attempt = rawAttempt as Record<string, unknown>;
+      const allowed = new Set([
+        "requestId",
+        "commandFingerprint",
+        "command",
+        "state",
+        "startedAtMs",
+        "receipt",
+      ]);
+      if (
+        Object.keys(attempt).some((key) => !allowed.has(key)) ||
+        typeof attempt["requestId"] !== "string" ||
+        steeringRequestIds.has(attempt["requestId"]) ||
+        (attempt["state"] !== "completed" && attempt["state"] !== "delivering") ||
+        !Number.isSafeInteger(attempt["startedAtMs"]) ||
+        Number(attempt["startedAtMs"]) < 0
+      ) {
+        throw corruptState();
+      }
+      let command;
+      try {
+        command = validateWorkerRunSteeringCommand(
+          attempt["command"] as PersistedRunSteeringAttempt["command"],
+        );
+      } catch {
+        throw corruptState();
+      }
+      const expectedFingerprint = workerRunSteeringCommandFingerprint(command);
+      if (
+        attempt["requestId"] !== command.requestId ||
+        attempt["commandFingerprint"] !== expectedFingerprint ||
+        (attempt["state"] === "completed") !== (attempt["receipt"] !== undefined)
+      ) {
+        throw corruptState();
+      }
+      const receipt =
+        attempt["receipt"] === undefined
+          ? undefined
+          : validatePersistedSteeringReceipt(attempt["receipt"], command);
+      steeringRequestIds.add(command.requestId);
+      return Object.freeze({
+        requestId: command.requestId,
+        commandFingerprint: expectedFingerprint,
+        command,
+        state: attempt["state"],
+        startedAtMs: Number(attempt["startedAtMs"]),
+        ...(receipt === undefined ? {} : { receipt }),
+      });
+    }),
+  );
+
+  return {
+    ...(record as unknown as PersistedWorkerState),
+    routeIncidents,
+    steeringAttempts,
+  };
+}
+
+function validatePersistedSteeringReceipt(
+  input: unknown,
+  command: PersistedRunSteeringAttempt["command"],
+): PersistedRunSteeringAttempt["receipt"] {
+  let receipt;
+  try {
+    receipt = validateWorkerRunSteeringReceipt(
+      input as NonNullable<PersistedRunSteeringAttempt["receipt"]>,
+    );
+  } catch {
+    throw corruptState();
+  }
+  if (
+    receipt.requestId !== command.requestId ||
+    receipt.requestMessageId !== command.requestId ||
+    receipt.taskId !== command.taskId ||
+    receipt.workOrderId !== command.workOrderId ||
+    receipt.deviceId !== command.deviceId ||
+    receipt.workerId !== command.workerId ||
+    receipt.routeId !== command.routeId ||
+    receipt.runId !== command.runId ||
+    receipt.leaseId !== command.leaseId ||
+    receipt.fencingToken !== command.fencingToken ||
+    JSON.stringify(receipt.agentSession) !== JSON.stringify(command.agentSession)
+  ) {
+    throw corruptState();
+  }
+  return receipt;
 }
 
 function checksum(document: string): string {

@@ -32,6 +32,19 @@ helper. It is intentionally separate from the Phase 1 fake backend in
 - The deterministic fixture exposes accessible controls, reaches a visible success
   state, generates a result file, and returns actual PNG bytes. The exported
   conformance laboratory also proves cancellation and emergency-stop rejection.
+- The macOS candidate binds a verified signed Swift child to one already
+  authenticated user-session helper identity and epoch over private inherited
+  stdio. Its target-native source uses ScreenCaptureKit, AXUIElement, CGEvent,
+  active-Aqua/lock checks, TCC preflight, and Secure Event Input detection.
+- The Windows candidate binds the core to a least-privilege interactive-session
+  helper through mutually authenticated, direction-keyed named-pipe frames. Its
+  native source uses Windows UI Automation, Windows.Graphics.Capture, and guarded
+  same-or-lower-integrity `SendInput` fallback.
+- The Linux candidate binds a digest- and ownership-verified private child to an
+  already authenticated GNOME user-session helper. Its target-native Python/GLib
+  source uses AT-SPI2, the RemoteDesktop and ScreenCast portals, and the portal's
+  PipeWire stream. It requires positive GNOME unlock evidence and never falls back
+  to XTest, `/dev/uinput`, or compositor-private input.
 
 ## What this package does not prove
 
@@ -43,12 +56,25 @@ the first-milestone Computer Use release claim by itself.
   but absence of LogonUI remains insufficient to prove an unlocked desktop. It
   deliberately leaves capture, accessibility, and input unverified and fails
   helper-authentication and service-epoch checks. It never injects input.
-- A real Windows UI Automation/capture/input helper and platform-lab evidence are
-  still required.
-- A real macOS helper, Accessibility and Screen Recording onboarding, native driver,
-  and platform-lab evidence are still required.
-- A real Ubuntu 24.04 GNOME Wayland helper/driver and platform-lab evidence are still
+- The Windows native candidate and deterministic Win32 fixture are implemented under
+  `native/windows`. A local nonrelease direct-fixture engineering run has exercised
+  mutual IPC authentication, UI Automation, Windows.Graphics.Capture PNG evidence,
+  input, cancellation, and emergency stop. Publisher signing, immutable bundle
+  composition, system-picker consent proof, clean-host service/helper lifecycle,
+  negative security cases, and owner-controlled release-ledger evidence are still
   required.
+- The macOS native candidate and deterministic AppKit fixture are implemented under
+  `native/macos`, with strict wire/parser tests and a macOS CI compile path. The
+  Apple-framework branch has not yet produced final-commit CI evidence, and the
+  authenticated ADR-0011 outer helper, signed/notarized bundle, stable TCC grants,
+  lifecycle tests, and owner-controlled live platform-lab evidence are still
+  required.
+- The Ubuntu 24.04 GNOME Wayland helper/driver candidate and deterministic GTK
+  fixture are implemented under `native/linux`, with strict driver, private-child,
+  Worker-composition, and Python parser tests. Authenticated outer-helper service
+  composition, immutable bundle inclusion, real portal consent, clean-host
+  lifecycle, negative session cases, and owner-controlled platform-lab evidence are
+  still required.
 - The OS-specific backend choice, permissions, supported versions, and known
   limitations still require one accepted ADR per OS family as required by Spike D.
 
@@ -85,6 +111,19 @@ pnpm --filter @opendelegate/computer-use-os test
 `runNativeDriverConformanceLab` is suitable for a real driver only when the
 deterministic fixture application is visible on that OS. Passing it with the bundled
 fixture driver is contract proof, not platform proof.
+
+macOS-native build, permission, fixture, and evidence-boundary instructions are in
+[`native/macos/README.md`](native/macos/README.md). SwiftPM scratch output must remain
+outside the source checkout.
+
+Windows-native build, helper-authentication, fixture, and evidence-boundary
+instructions are in [`native/windows/README.md`](native/windows/README.md). MSBuild
+output remains external scratch, never source state or release evidence.
+
+Ubuntu GNOME Wayland dependencies, permission behavior, fixture scope, and the
+support-claim boundary are documented in
+[`native/linux/README.md`](native/linux/README.md). Python bytecode and staged
+executables must remain in external scratch.
 
 ## Dependency graph
 

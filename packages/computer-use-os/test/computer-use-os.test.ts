@@ -18,6 +18,66 @@ import {
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 
 describe("OS Computer Use public seam", () => {
+  it("carries the exact post-Policy authorization proof to the final native input boundary", async () => {
+    const fixture = createFixtureNativeDriver({
+      osFamily: "windows",
+      runIdentifier: "authorization-binding",
+    });
+    let receivedContext: unknown;
+    let receivedAction: unknown;
+    const driver: NativeComputerUseDriver = {
+      ...fixture.driver,
+      async act(context, action) {
+        receivedContext = context;
+        receivedAction = action;
+        return fixture.driver.act(context, action);
+      },
+    };
+    const backend = new ComputerUseOsBackend({
+      osFamily: "windows",
+      driver,
+      authority: currentAuthority(),
+      leases: currentLease(),
+      startHistory: new InMemoryComputerUseStartHistory(),
+      authorizer: {
+        consume: consumeExact,
+        authorize(request) {
+          return {
+            decision: "allow",
+            authorizationId: "authorization-native-boundary",
+            fingerprint: request.fingerprint,
+          };
+        },
+      },
+      clock: { now: () => 10_000 },
+      logger: { write() {} },
+    });
+    const session = await backend.start(startInput());
+
+    await session.typeText({ controlId: "task-text", text: "sensitive native text" });
+
+    const context = receivedContext as {
+      readonly authorization?: {
+        readonly action?: unknown;
+        readonly authorizationId?: unknown;
+        readonly fingerprint?: unknown;
+      };
+    };
+    assert.equal(context.authorization?.authorizationId, "authorization-native-boundary");
+    assert.match(String(context.authorization?.fingerprint), /^sha256:[a-f0-9]{64}$/u);
+    assert.deepEqual(context.authorization?.action, {
+      kind: "type-text",
+      controlId: "task-text",
+      textSha256: "sha256:01bd7f71b9a0b74cee7e41b0b9242fc2e8289f1690f45b5ae5d9a9594da359f2",
+      textLength: 21,
+    });
+    assert.deepEqual(receivedAction, {
+      kind: "type-text",
+      controlId: "task-text",
+      text: "sensitive native text",
+    });
+  });
+
   it("drives the cross-platform fixture through authorized input and returns real PNG evidence", async () => {
     for (const osFamily of ["windows", "macos", "linux"] as const) {
       const fixture = createFixtureNativeDriver({
@@ -33,6 +93,7 @@ describe("OS Computer Use public seam", () => {
         leases: currentLease(),
         startHistory: new InMemoryComputerUseStartHistory(),
         authorizer: {
+          consume: consumeExact,
           authorize(request) {
             requests.push(request);
             return {
@@ -394,6 +455,7 @@ describe("OS Computer Use public seam", () => {
       leases: currentLease(),
       startHistory: new InMemoryComputerUseStartHistory(),
       authorizer: {
+        consume: consumeExact,
         authorize(request) {
           requests.push(request);
           return {
@@ -426,6 +488,182 @@ describe("OS Computer Use public seam", () => {
     );
   });
 
+  it("serializes concurrent mutations through distinct one-time authorization requests", async () => {
+    const fixture = createFixtureNativeDriver({
+      osFamily: "windows",
+      runIdentifier: "serialized-input",
+    });
+    const requestIds: string[] = [];
+    let activeAuthorizations = 0;
+    let maximumActiveAuthorizations = 0;
+    let releaseFirst: (() => void) | undefined;
+    const firstAuthorizationGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const backend = new ComputerUseOsBackend({
+      osFamily: "windows",
+      driver: fixture.driver,
+      authority: currentAuthority(),
+      leases: currentLease(),
+      startHistory: new InMemoryComputerUseStartHistory(),
+      authorizer: {
+        async authorize(request) {
+          requestIds.push(request.authorizationRequestId);
+          activeAuthorizations += 1;
+          maximumActiveAuthorizations = Math.max(maximumActiveAuthorizations, activeAuthorizations);
+          if (requestIds.length === 1) {
+            await firstAuthorizationGate;
+          }
+          activeAuthorizations -= 1;
+          return {
+            decision: "allow",
+            authorizationId: `authorization-${String(requestIds.length)}`,
+            fingerprint: request.fingerprint,
+          };
+        },
+        consume: consumeExact,
+      },
+      clock: { now: () => 10_000 },
+      logger: { write() {} },
+    });
+    const session = await backend.start({
+      ...startInput(),
+      commandId: "start-serialized-input",
+      runId: "run-serialized-input",
+    });
+
+    const first = session.click({ controlId: "option-alpha" });
+    while (requestIds.length === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    const second = session.click({ controlId: "option-beta" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(requestIds.length, 1);
+    releaseFirst?.();
+    await Promise.all([first, second]);
+
+    assert.equal(maximumActiveAuthorizations, 1);
+    assert.deepEqual(requestIds, [
+      `${session.executionHandleId}:input:1`,
+      `${session.executionHandleId}:input:2`,
+    ]);
+    assert.equal(fixture.activity().actionCount, 2);
+    assert.deepEqual(
+      session.actionSummary().entries.map(({ sequence }) => sequence),
+      [1, 2],
+    );
+  });
+
+  it("advances the input attempt after a denial so a different action can proceed", async () => {
+    const fixture = createFixtureNativeDriver({
+      osFamily: "windows",
+      runIdentifier: "denied-then-different-input",
+    });
+    const requests: ComputerUseInputAuthorizationRequest[] = [];
+    const backend = new ComputerUseOsBackend({
+      osFamily: "windows",
+      driver: fixture.driver,
+      authority: currentAuthority(),
+      leases: currentLease(),
+      startHistory: new InMemoryComputerUseStartHistory(),
+      authorizer: {
+        authorize(request) {
+          requests.push(structuredClone(request));
+          return requests.length === 1
+            ? {
+                decision: "deny",
+                authorizationId: "owner-denial-1",
+                fingerprint: request.fingerprint,
+              }
+            : {
+                decision: "allow",
+                authorizationId: "owner-allow-2",
+                fingerprint: request.fingerprint,
+              };
+        },
+        consume: consumeExact,
+      },
+      clock: { now: () => 10_000 },
+      logger: { write() {} },
+    });
+    const session = await backend.start({
+      ...startInput(),
+      commandId: "start-denied-then-different-input",
+      runId: "run-denied-then-different-input",
+    });
+
+    await assert.rejects(
+      session.click({ controlId: "option-alpha" }),
+      hasCode("AUTHORIZATION_DENIED"),
+    );
+    await session.click({ controlId: "option-beta" });
+
+    assert.deepEqual(
+      requests.map(({ authorizationRequestId }) => authorizationRequestId),
+      [`${session.executionHandleId}:input:1`, `${session.executionHandleId}:input:2`],
+    );
+    assert.notEqual(requests[0]?.fingerprint, requests[1]?.fingerprint);
+    assert.equal(fixture.activity().actionCount, 1);
+  });
+
+  it("replays one pending exact input request unchanged after Main authorization restarts", async () => {
+    const fixture = createFixtureNativeDriver({
+      osFamily: "windows",
+      runIdentifier: "pending-input-main-restart",
+    });
+    const requests: ComputerUseInputAuthorizationRequest[] = [];
+    let now = 10_000;
+    let mainAuthorizationGeneration = 1;
+    const backend = new ComputerUseOsBackend({
+      osFamily: "windows",
+      driver: fixture.driver,
+      authority: currentAuthority(),
+      leases: currentLease(),
+      startHistory: new InMemoryComputerUseStartHistory(),
+      authorizer: {
+        authorize(request) {
+          requests.push(structuredClone(request));
+          return mainAuthorizationGeneration === 1
+            ? {
+                decision: "require-approval",
+                authorizationId: "pending-owner-approval-1",
+                fingerprint: request.fingerprint,
+              }
+            : {
+                decision: "allow",
+                authorizationId: "recovered-owner-approval-1",
+                fingerprint: request.fingerprint,
+              };
+        },
+        consume: consumeExact,
+      },
+      clock: { now: () => now },
+      logger: { write() {} },
+    });
+    const session = await backend.start({
+      ...startInput(),
+      commandId: "start-pending-input-main-restart",
+      runId: "run-pending-input-main-restart",
+    });
+
+    await assert.rejects(
+      session.click({ controlId: "option-alpha" }),
+      hasCode("AUTHORIZATION_REQUIRED"),
+    );
+    now = 10_100;
+    mainAuthorizationGeneration = 2;
+    await session.click({ controlId: "option-alpha" });
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[1], requests[0]);
+    assert.equal(requests[1]?.requestedAtMs, 10_000);
+    assert.equal(requests[1]?.authorizationRequestId, `${session.executionHandleId}:input:1`);
+
+    await session.click({ controlId: "option-beta" });
+    assert.equal(requests[2]?.authorizationRequestId, `${session.executionHandleId}:input:2`);
+    assert.equal(fixture.activity().actionCount, 2);
+  });
+
   it("revalidates authority and lease after authorization immediately before mutation", async () => {
     const fixture = createFixtureNativeDriver({
       osFamily: "windows",
@@ -454,6 +692,7 @@ describe("OS Computer Use public seam", () => {
       },
       startHistory: new InMemoryComputerUseStartHistory(),
       authorizer: {
+        consume: consumeExact,
         authorize(request) {
           leaseCurrent = false;
           return {
@@ -519,7 +758,7 @@ describe("OS Computer Use public seam", () => {
         authority: currentAuthority(),
         leases: currentLease(),
         startHistory: new InMemoryComputerUseStartHistory(),
-        authorizer: { authorize: testCase.proof },
+        authorizer: { authorize: testCase.proof, consume: consumeExact },
         clock: { now: () => 10_000 },
         logger: { write() {} },
       });
@@ -651,6 +890,7 @@ function createBackend(
     leases: currentLease(),
     startHistory: history,
     authorizer: {
+      consume: consumeExact,
       authorize(request) {
         return {
           decision: "allow",
@@ -686,6 +926,7 @@ function startInput() {
 
 function allowAll() {
   return {
+    consume: consumeExact,
     authorize(request: ComputerUseInputAuthorizationRequest) {
       return {
         decision: "allow" as const,
@@ -693,6 +934,22 @@ function allowAll() {
         fingerprint: request.fingerprint,
       };
     },
+  };
+}
+
+function consumeExact(
+  request: ComputerUseInputAuthorizationRequest,
+  proof: {
+    readonly decision: "allow";
+    readonly authorizationId: string;
+    readonly fingerprint: `sha256:${string}`;
+  },
+) {
+  return {
+    decision: "consumed" as const,
+    authorizationRequestId: request.authorizationRequestId,
+    authorizationId: proof.authorizationId,
+    fingerprint: proof.fingerprint,
   };
 }
 

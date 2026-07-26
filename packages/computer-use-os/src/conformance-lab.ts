@@ -4,9 +4,12 @@ import {
   NativeDriverError,
   type ComputerUseOsFamily,
   type NativeComputerUseDriver,
+  type NativeComputerUseAction,
+  type NativeDriverAuthorizedInputContext,
   type NativeDriverExecutionContext,
   type ReadinessCheckName,
 } from "./contracts.ts";
+import { createActionFingerprint, describeNativeComputerUseAction } from "./input-authorization.ts";
 
 const REQUIRED_CHECKS = [
   "interactive-session",
@@ -77,13 +80,16 @@ export async function runNativeDriverConformanceLab(
     }
   }
 
-  await driver.act(context, {
+  const typeAction = {
     kind: "type-text",
     controlId: "task-text",
     text: "OpenDelegate native-driver conformance",
-  });
-  await driver.act(context, { kind: "click", controlId: "option-beta" });
-  await driver.act(context, { kind: "click", controlId: "submit" });
+  } as const;
+  const optionAction = { kind: "click", controlId: "option-beta" } as const;
+  const submitAction = { kind: "click", controlId: "submit" } as const;
+  await driver.act(authorizedContext(context, typeAction), typeAction);
+  await driver.act(authorizedContext(context, optionAction), optionAction);
+  await driver.act(authorizedContext(context, submitAction), submitAction);
   const completed = await driver.observe(context);
   if (
     completed.fixture?.state !== "success" ||
@@ -182,9 +188,27 @@ async function actionIsStopped(
   expectedCode: "CANCELLED" | "EMERGENCY_STOPPED",
 ): Promise<boolean> {
   try {
-    await driver.act(context, { kind: "click", controlId: "submit" });
+    const action = { kind: "click", controlId: "submit" } as const;
+    await driver.act(authorizedContext(context, action), action);
     return false;
   } catch (error: unknown) {
     return error instanceof NativeDriverError && error.code === expectedCode;
   }
+}
+
+function authorizedContext(
+  context: NativeDriverExecutionContext,
+  action: NativeComputerUseAction,
+): NativeDriverAuthorizedInputContext {
+  const authorizedAction = describeNativeComputerUseAction(action);
+  return {
+    ...context,
+    authorization: {
+      authorizationId: `conformance:${context.executionHandleId}:${action.kind}`,
+      fingerprint: createActionFingerprint({
+        action: authorizedAction,
+      }),
+      action: authorizedAction,
+    },
+  };
 }

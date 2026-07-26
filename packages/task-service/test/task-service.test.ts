@@ -40,6 +40,48 @@ test("channel-neutral Task creation defaults to Auto and survives service restar
   });
 });
 
+test("Task creation resolves its current default mode immediately before persistence", async () => {
+  const eventStore = new InMemoryEventStore({ clock });
+  let currentMode: "auto" | "manual" = "manual";
+  let configurationAvailable = true;
+  const service = new TaskService({
+    clock,
+    eventStore,
+    resolveDefaultMode: async () => {
+      if (!configurationAvailable) {
+        throw new Error("configuration unavailable");
+      }
+      return currentMode;
+    },
+  });
+
+  const manualInput = taskInput("configured-manual", "Configured manual");
+  const manual = await service.create(manualInput);
+  assert.equal(manual.mode, "manual");
+
+  currentMode = "auto";
+  assert.deepEqual(
+    await service.create(manualInput),
+    manual,
+    "an idempotent replay keeps the mode selected for the original Task",
+  );
+  const automatic = await service.create(taskInput("configured-auto", "Configured auto"));
+  assert.equal(automatic.mode, "auto");
+
+  configurationAvailable = false;
+  assert.deepEqual(await service.create(manualInput), manual);
+  await assert.rejects(
+    service.create(taskInput("configured-unavailable", "Unavailable")),
+    isTaskError("CONFIGURATION_UNAVAILABLE"),
+  );
+
+  const explicit = await service.create({
+    ...taskInput("explicit-manual", "Explicit manual"),
+    mode: "manual",
+  });
+  assert.equal(explicit.mode, "manual");
+});
+
 test("create idempotency returns one Task and rejects a conflicting replay", async () => {
   const service = fixture();
   const input = {
@@ -167,6 +209,177 @@ test("runtime validation rejects extra, secret-shaped, and Knowledge-shaped inta
   await assert.rejects(
     service.create({ ...base, knowledge: "private note" } as never),
     isTaskError("INPUT_INVALID"),
+  );
+});
+
+test("execution state is durable, idempotent, and completion verifies every criterion", async () => {
+  const eventStore = new InMemoryEventStore({ clock });
+  const service = new TaskService({ clock, eventStore });
+  const task = await service.create(taskInput("execution", "Execute"));
+
+  const running = await service.recordExecution({
+    taskId: task.taskId,
+    idempotencyKey: "execution-running-1",
+    state: "running",
+  });
+  assert.equal(running.state, "running");
+
+  const replay = await service.recordExecution({
+    taskId: task.taskId,
+    idempotencyKey: "execution-running-1",
+    state: "running",
+  });
+  assert.deepEqual(replay, running);
+
+  const completed = await service.recordExecution({
+    taskId: task.taskId,
+    idempotencyKey: "execution-completed-1",
+    state: "completed",
+    verifiedCompletionCriteria: ["Execute is complete."],
+    publicMessage: "Execution completed with every criterion verified.",
+  });
+  assert.equal(completed.state, "completed");
+  assert.deepEqual(completed.messages, [
+    {
+      messageId: completed.events[2]?.eventId,
+      role: "agent",
+      content: "Execution completed with every criterion verified.",
+      occurredAt: clock.now(),
+    },
+  ]);
+  assert.deepEqual(
+    completed.events.map((event) => event.type),
+    ["task.created", "task.execution-recorded", "task.execution-recorded"],
+  );
+
+  const restarted = new TaskService({ clock, eventStore });
+  assert.equal((await restarted.get(task.taskId)).state, "completed");
+  await assert.rejects(
+    service.recordExecution({
+      taskId: task.taskId,
+      idempotencyKey: "execution-conflict",
+      state: "failed",
+    }),
+    isTaskError("TRANSITION_INVALID"),
+  );
+});
+
+test("execution completion rejects missing or unknown verified criteria", async () => {
+  const service = fixture();
+  const task = await service.create(taskInput("criteria", "Criteria"));
+
+  await assert.rejects(
+    service.recordExecution({
+      taskId: task.taskId,
+      idempotencyKey: "missing-criteria",
+      state: "completed",
+      verifiedCompletionCriteria: [],
+    }),
+    isTaskError("TRANSITION_INVALID"),
+  );
+  await assert.rejects(
+    service.recordExecution({
+      taskId: task.taskId,
+      idempotencyKey: "unknown-criteria",
+      state: "completed",
+      verifiedCompletionCriteria: ["Invented criterion."],
+    }),
+    isTaskError("INPUT_INVALID"),
+  );
+  assert.equal((await service.get(task.taskId)).version, 1);
+});
+
+test("a durable Task reply resumes waiting work and reopens completed work without crossing Tasks", async () => {
+  const eventStore = new InMemoryEventStore({ clock });
+  const service = new TaskService({ clock, eventStore });
+  const first = await service.create(taskInput("reply-first", "First"));
+  const second = await service.create(taskInput("reply-second", "Second"));
+  await service.recordExecution({
+    taskId: first.taskId,
+    idempotencyKey: "first-waiting",
+    state: "waiting_user",
+  });
+
+  const resumed = await service.appendInput({
+    taskId: first.taskId,
+    principalId: "owner-1",
+    idempotencyKey: "first-reply",
+    message: "Use the owner-selected repository.",
+    selectedInputRefs: ["artifact-owner-choice"],
+  });
+  assert.equal(resumed.state, "queued");
+  assert.deepEqual(resumed.messages, [
+    {
+      messageId: resumed.events[2]?.eventId,
+      role: "owner",
+      content: "Use the owner-selected repository.",
+      occurredAt: clock.now(),
+    },
+  ]);
+  assert.deepEqual(
+    await service.appendInput({
+      taskId: first.taskId,
+      principalId: "owner-1",
+      idempotencyKey: "first-reply",
+      message: "Use the owner-selected repository.",
+      selectedInputRefs: ["artifact-owner-choice"],
+    }),
+    resumed,
+  );
+  assert.equal((await service.get(second.taskId)).version, 1);
+
+  await service.recordExecution({
+    taskId: first.taskId,
+    idempotencyKey: "first-complete",
+    state: "completed",
+    verifiedCompletionCriteria: ["First is complete."],
+  });
+  const reopened = await service.appendInput({
+    taskId: first.taskId,
+    principalId: "owner-1",
+    idempotencyKey: "first-follow-up",
+    message: "Also include a concise comparison.",
+    selectedInputRefs: [],
+  });
+  assert.equal(reopened.state, "queued");
+});
+
+test("approval decisions are durable and conflicting decision-key reuse fails closed", async () => {
+  const service = fixture();
+  const task = await service.create(taskInput("approval", "Approval"));
+  await service.recordExecution({
+    taskId: task.taskId,
+    idempotencyKey: "approval-waiting",
+    state: "waiting_user",
+  });
+
+  const approved = await service.resolveApproval({
+    taskId: task.taskId,
+    approvalId: "approval-1",
+    principalId: "owner-1",
+    idempotencyKey: "approval-decision-1",
+    decision: "approve",
+  });
+  assert.equal(approved.state, "queued");
+  assert.deepEqual(
+    await service.resolveApproval({
+      taskId: task.taskId,
+      approvalId: "approval-1",
+      principalId: "owner-1",
+      idempotencyKey: "approval-decision-1",
+      decision: "approve",
+    }),
+    approved,
+  );
+  await assert.rejects(
+    service.resolveApproval({
+      taskId: task.taskId,
+      approvalId: "approval-1",
+      principalId: "owner-1",
+      idempotencyKey: "approval-decision-1",
+      decision: "reject",
+    }),
+    isTaskError("IDEMPOTENCY_CONFLICT"),
   );
 });
 

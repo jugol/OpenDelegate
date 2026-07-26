@@ -6,6 +6,8 @@ ADR-0006. It deliberately contains no HTTP route or SQL adapter.
 The public `OwnerAuth` service provides:
 
 - loopback-channel-only, ten-minute, single-use initial owner claims;
+- fail-closed pre-owner crash recovery that lets an exclusively owned local
+  bootstrap runtime invalidate an unreachable claim and issue a replacement;
 - Argon2id passphrase login with repository-backed source and account throttles;
 - hash-only opaque sessions with bounded idle and absolute expiry;
 - HMAC-derived CSRF tokens, trusted-origin validation, and fresh-auth bearer

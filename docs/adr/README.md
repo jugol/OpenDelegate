@@ -34,6 +34,11 @@ approved product specification.
 11. [`0011-native-two-plane-service-supervision-and-authenticated-ipc.md`](0011-native-two-plane-service-supervision-and-authenticated-ipc.md)
 12. [`0012-computer-use-native-driver-authority-and-readiness.md`](0012-computer-use-native-driver-authority-and-readiness.md)
 13. [`0016-pnpm-toolchain-security-upgrade.md`](0016-pnpm-toolchain-security-upgrade.md)
+14. [`0017-device-local-secret-store-backends.md`](0017-device-local-secret-store-backends.md)
+15. [`0018-programmatic-agent-adapters-and-action-authorization.md`](0018-programmatic-agent-adapters-and-action-authorization.md)
+16. [`0019-durable-run-lease-renewal-and-clock-calibration.md`](0019-durable-run-lease-renewal-and-clock-calibration.md)
+17. [`0020-main-singleton-ownership.md`](0020-main-singleton-ownership.md)
+18. [`0021-supported-release-promotion-and-native-authenticity.md`](0021-supported-release-promotion-and-native-authenticity.md)
 
 ## Proposed ADRs
 

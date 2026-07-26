@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 
 import Database from "better-sqlite3";
+import { Pool } from "pg";
 
-import { createSqliteDatabase } from "../src/dialects.ts";
+import { createPostgresDatabase, createSqliteDatabase } from "../src/dialects.ts";
 import { SqlStorageError } from "../src/errors.ts";
 import { SqlEventStore } from "../src/sql-event-store.ts";
 import { executeWithSqlRetry } from "../src/transactions.ts";
@@ -152,3 +154,46 @@ test("the PostgreSQL retry seam retries only serializable transaction failures",
   );
   assert.equal(nonRetryableAttempts, 1);
 });
+
+const postgresUri = process.env["OPENDELEGATE_TEST_POSTGRES_URI"];
+const postgresAdminPool =
+  postgresUri === undefined ? undefined : new Pool({ connectionString: postgresUri });
+
+after(async () => {
+  await postgresAdminPool?.end();
+});
+
+if (postgresUri !== undefined) {
+  test("schema-bound PostgreSQL introspection never traverses unrelated schemas", async () => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const targetSchema = `od_introspection_target_${suffix}`;
+    const unrelatedSchema = `od_introspection_other_${suffix}`;
+    await postgresAdminPool?.query(`CREATE SCHEMA "${targetSchema}"`);
+    await postgresAdminPool?.query(`CREATE SCHEMA "${unrelatedSchema}"`);
+    await postgresAdminPool?.query(
+      `CREATE TABLE "${targetSchema}".target_table (id BIGSERIAL PRIMARY KEY)`,
+    );
+    await postgresAdminPool?.query(
+      `CREATE TABLE "${unrelatedSchema}".unrelated_table (id BIGSERIAL PRIMARY KEY)`,
+    );
+
+    const context = await createPostgresDatabase({
+      connectionString: postgresUri,
+      schema: targetSchema,
+    });
+
+    try {
+      const tables = await context.database.introspection.getTables({
+        withInternalKyselyTables: true,
+      });
+      assert.deepEqual(
+        tables.map((table) => ({ name: table.name, schema: table.schema })),
+        [{ name: "target_table", schema: targetSchema }],
+      );
+    } finally {
+      await context.close();
+      await postgresAdminPool?.query(`DROP SCHEMA IF EXISTS "${targetSchema}" CASCADE`);
+      await postgresAdminPool?.query(`DROP SCHEMA IF EXISTS "${unrelatedSchema}" CASCADE`);
+    }
+  });
+}

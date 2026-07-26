@@ -1,35 +1,58 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { arch, hostname, platform, release, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
 
 import { Pool } from "pg";
+import type {
+  ManagedSecretDeletion,
+  ManagedSecretMutation,
+  ManagedSecretStore,
+  ManagedSecretStoreHealth,
+  SecretAvailability,
+} from "@opendelegate/secrets";
 
-import { parseArguments } from "../src/cli.ts";
+import { browserOpenCommand, openBrowser, parseArguments } from "../src/cli.ts";
 import {
-  createMainRuntime,
-  initializeMainHome,
+  listenMainRuntime,
   loadMainConfiguration,
+  MainSingletonOwnershipError,
   MainRuntimeError,
   resolveRuntimePaths,
+  type MainSingletonOwnership,
 } from "../src/index.ts";
+import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
+import { createMainRuntime, initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
 const postgresUri = process.env["OPENDELEGATE_TEST_POSTGRES_URI"];
-const execFileAsync = promisify(execFile);
+const DEVELOPMENT_RELEASE_IDENTITY = {
+  declaredReleaseChannel: "development",
+  releaseChannel: "development",
+  releaseVerification: { status: "not-applicable" },
+} as const;
 
 test("CLI init accepts secret-free database and exact HTTPS listener configuration", () => {
   const parsed = parseArguments([
     "init",
     "--database",
     "postgresql",
-    "--database-uri-environment",
-    "OPENDELEGATE_DATABASE_URI",
+    "--database-uri-ref",
+    "secret://main/database-primary",
+    "--database-uri-stdin",
+    "--secret-backend-config",
+    "secret-backend.json",
     "--database-schema",
     "opendelegate",
+    "--agent",
+    "claude",
+    "--admin-auto-open",
+    "enabled",
+    "--artifact-config",
+    "artifacts.json",
+    "--discord-config",
+    "discord.json",
     "--listen-host",
     "100.64.0.10",
     "--listen-port",
@@ -44,7 +67,7 @@ test("CLI init accepts secret-free database and exact HTTPS listener configurati
 
   assert.deepEqual(parsed.database, {
     adapter: "postgresql",
-    uriEnvironment: "OPENDELEGATE_DATABASE_URI",
+    uriRef: "secret://main/database-primary",
     schema: "opendelegate",
   });
   assert.deepEqual(parsed.listener, {
@@ -56,32 +79,183 @@ test("CLI init accepts secret-free database and exact HTTPS listener configurati
       privateKeyPath: resolve("private-key.pem"),
     },
   });
+  assert.equal(parsed.agentProvider, "claude");
+  assert.equal(parsed.adminAutoOpen, true);
+  assert.equal(parsed.artifactConfigurationFile, resolve("artifacts.json"));
+  assert.equal(parsed.discordConfigurationFile, resolve("discord.json"));
+  assert.equal(parsed.databaseUriStdin, true);
+  assert.equal(parsed.secretBackendConfigurationFile, resolve("secret-backend.json"));
+  assert.equal(
+    parseArguments(["init", "--discord-config", "discord.json", "--discord-token-stdin"])
+      .discordTokenStdin,
+    true,
+  );
   assert.throws(
     () => parseArguments(["serve", "--database", "sqlite"]),
     /available only with init/,
   );
+  for (const retired of [
+    ["init", "--database-uri-environment", "OPENDELEGATE_DATABASE_URI"],
+    ["init", "--discord-token-environment", "OPENDELEGATE_DISCORD_TOKEN"],
+  ]) {
+    assert.throws(
+      () => parseArguments(retired),
+      (error: unknown) =>
+        error instanceof MainRuntimeError && error.code === "CONFIG_MIGRATION_REQUIRED",
+    );
+  }
+  assert.throws(() => parseArguments(["init", "--database", "postgresql"]), /database-uri-ref/);
+  assert.throws(() => parseArguments(["serve", "--agent", "codex"]), /available only with init/);
   assert.throws(
-    () => parseArguments(["init", "--database", "postgresql"]),
-    /database-uri-environment/,
+    () => parseArguments(["serve", "--admin-auto-open", "enabled"]),
+    /available only with init/,
   );
+  assert.throws(
+    () => parseArguments(["init", "--admin-auto-open", "sometimes"]),
+    /enabled or disabled/,
+  );
+  assert.throws(() => parseArguments(["init", "--agent", "unknown"]), /must be auto/);
+  assert.throws(
+    () => parseArguments(["init", "--discord-token-stdin"]),
+    /requires --discord-config/,
+  );
+  assert.throws(
+    () => parseArguments(["serve", "--discord-config", "discord.json"]),
+    /available only with init/,
+  );
+  assert.throws(
+    () => parseArguments(["serve", "--artifact-config", "artifacts.json"]),
+    /available only with init/,
+  );
+});
+
+test("browser opener commands are explicit for Windows, macOS, and Linux", () => {
+  assert.deepEqual(browserOpenCommand("win32", "http://127.0.0.1:4381"), {
+    file: "powershell.exe",
+    arguments: [
+      "-NoProfile",
+      "-Command",
+      "Start-Process -FilePath $args[0]",
+      "http://127.0.0.1:4381",
+    ],
+  });
+  assert.deepEqual(browserOpenCommand("darwin", "http://127.0.0.1:4381"), {
+    file: "open",
+    arguments: ["http://127.0.0.1:4381"],
+  });
+  assert.deepEqual(browserOpenCommand("linux", "http://127.0.0.1:4381"), {
+    file: "xdg-open",
+    arguments: ["http://127.0.0.1:4381"],
+  });
+  assert.equal(
+    browserOpenCommand("win32", "http://127.0.0.1:4381").arguments.some((argument) =>
+      argument.includes("-LiteralPath"),
+    ),
+    false,
+  );
+});
+
+test("a missing browser opener records only bounded diagnostics and does not escape", () => {
+  const events: Array<{
+    readonly event: string;
+    readonly fields: Readonly<Record<string, unknown>>;
+  }> = [];
+  assert.doesNotThrow(() =>
+    openBrowser("http://127.0.0.1:4381", {
+      hostPlatform: "linux",
+      spawnProcess() {
+        throw new Error("secret://main/browser-opener-must-not-leak");
+      },
+      recordEvent(event, fields) {
+        events.push({ event, fields });
+      },
+    }),
+  );
+
+  assert.deepEqual(events, [
+    {
+      event: "main.admin-browser.open-failed",
+      fields: {
+        code: "BROWSER_OPEN_UNAVAILABLE",
+        hostPlatform: "linux",
+        phase: "spawn-threw",
+      },
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(events), /secret|127\.0\.0\.1/iu);
+  assert.doesNotThrow(() =>
+    openBrowser("http://127.0.0.1:4381", {
+      hostPlatform: "linux",
+      spawnProcess() {
+        throw new Error("missing xdg-open");
+      },
+      recordEvent() {
+        throw new Error("closed diagnostic sink");
+      },
+    }),
+  );
+});
+
+test("an asynchronous browser spawn error is contained after the child is unreferenced", () => {
+  const events: Array<{
+    readonly event: string;
+    readonly fields: Readonly<Record<string, unknown>>;
+  }> = [];
+  let errorListener: ((error: Error) => void) | undefined;
+  let unrefCount = 0;
+  openBrowser("http://127.0.0.1:4381", {
+    hostPlatform: "linux",
+    spawnProcess() {
+      return {
+        once(event, listener) {
+          assert.equal(event, "error");
+          errorListener = listener;
+          return this;
+        },
+        unref() {
+          unrefCount += 1;
+        },
+      };
+    },
+    recordEvent(event, fields) {
+      events.push({ event, fields });
+    },
+  });
+
+  assert.equal(unrefCount, 1);
+  assert.equal(events.length, 0);
+  errorListener?.(new Error("DATABASE_URI=postgresql://secret"));
+  assert.deepEqual(events, [
+    {
+      event: "main.admin-browser.open-failed",
+      fields: {
+        code: "BROWSER_OPEN_UNAVAILABLE",
+        hostPlatform: "linux",
+        phase: "child-error",
+      },
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(events), /database|postgresql|secret|127\.0\.0\.1/iu);
 });
 
 test("init creates a secret-free SQLite Main outside the source checkout", async (t) => {
   const home = await mkdtemp(join(tmpdir(), "opendelegate-main-init-"));
   t.after(() => rm(home, { force: true, recursive: true }));
   const adminRoot = await createAdminFixture(home);
+  const mainSecrets = createMainTestSecretContext(home);
 
   const initialized = await initializeMainHome({
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
-  await assertWindowsRuntimeOwnership(home);
-
   assert.equal(initialized.created, true);
   assert.equal(initialized.configuration.database.adapter, "sqlite");
   assert.equal(initialized.configuration.main.origin, "http://127.0.0.1:4380");
   assert.equal(initialized.configuration.main.host, "127.0.0.1");
+  assert.equal(initialized.configuration.discord, undefined);
   assert.notEqual(initialized.configuration.instanceId, initialized.configuration.deviceId);
 
   const serialized = await readFile(join(home, "config", "main.json"), "utf8");
@@ -92,6 +266,7 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   assert.equal(second.created, false);
   assert.deepEqual(second.configuration, initialized.configuration);
@@ -101,9 +276,10 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
       adminRoot,
       database: {
         adapter: "postgresql",
-        uriEnvironment: "OPENDELEGATE_DATABASE_URI",
+        uriRef: "secret://main/database-primary",
       },
       sourceCheckout: resolve("."),
+      managedSecretStore: mainSecrets.store,
     }),
     (error: unknown) => error instanceof MainRuntimeError && error.code === "CONFIG_EXISTS",
   );
@@ -113,6 +289,7 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   assert.equal(resumed.created, false);
   assert.equal(await readFile(resumed.paths.sqliteFile).then(Boolean), true);
@@ -147,25 +324,28 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     await rm(home, { force: true, recursive: true });
   });
   const adminRoot = await createAdminFixture(home);
+  const mainSecrets = createMainTestSecretContext(home);
   const initialized = await initializeMainHome({
     home,
     adminRoot,
     sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
   });
 
   const runtime = await createMainRuntime({
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "release-candidate-spoof" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   if (process.platform === "win32") {
     const stateEntries = await readdir(initialized.paths.stateDirectory);
     assert.ok(stateEntries.includes("main.sqlite3-wal"));
     assert.ok(stateEntries.includes("main.sqlite3-shm"));
   }
-  await assertWindowsRuntimeOwnership(home);
   const claim = await runtime.ownerAuth.issueInitialClaim({ channel: "local-bootstrap" });
   const claimed = await runtime.ownerAuth.claimOwner({
     channel: "local-bootstrap",
@@ -199,6 +379,54 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
         connection: "online",
         runtime: "healthy",
         serviceMode: "foreground",
+        roles: ["main-coordinator"],
+        instructions: [],
+        policies: [
+          {
+            policyId: "policy.official-package-install",
+            actionCategory: "configured-official-package-install",
+            decision: "allow",
+            source: "built-in",
+            effectiveScope: "instance",
+          },
+          {
+            policyId: "policy.network-change",
+            actionCategory: "os-network-change",
+            decision: "require-approval",
+            source: "built-in",
+            effectiveScope: "instance",
+          },
+          {
+            policyId: "built-in-secret-export",
+            actionCategory: "secret-export",
+            decision: "deny",
+            source: "built-in",
+            effectiveScope: "instance",
+          },
+          {
+            policyId: "built-in-cross-device-knowledge-transfer",
+            actionCategory: "cross-device-knowledge-transfer",
+            decision: "deny",
+            source: "built-in",
+            effectiveScope: "instance",
+          },
+          {
+            policyId: "built-in-policy-bypass-attempt",
+            actionCategory: "policy-bypass-attempt",
+            decision: "deny",
+            source: "built-in",
+            effectiveScope: "instance",
+          },
+        ],
+        routes: [
+          {
+            routeId: `main-local:${initialized.configuration.deviceId}`,
+            label: "Main-local",
+            priority: 0,
+            health: "healthy",
+          },
+        ],
+        knowledgeHealth: "unknown",
       },
     ],
   });
@@ -213,7 +441,9 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
   });
   assert.equal(runtimeFeatures.statusCode, 200);
   assert.deepEqual(runtimeFeatures.json(), {
+    declaredReleaseChannel: "development",
     releaseChannel: "development",
+    releaseVerification: { status: "not-applicable" },
     taskExecution: { status: "unavailable", code: "ORCHESTRATION_NOT_CONNECTED" },
     configurationAgent: {
       status: "unavailable",
@@ -304,8 +534,9 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "test-build-0001" },
-    releaseChannel: "development",
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
     sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
   });
   cleanup.runtime = restarted;
   const restoredLogin = await restarted.ownerAuth.login({
@@ -324,8 +555,295 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
   assert.equal(restored.json().objective, "Survive Main restart.");
 });
 
+test("one Main owns an installation and restart reconciliation begins only after release", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-singleton-runtime-"));
+  const mainSecrets = createMainTestSecretContext(home);
+  const runtimes: Array<Awaited<ReturnType<typeof createMainRuntime>>> = [];
+  t.after(async () => {
+    await Promise.allSettled(runtimes.map(async (runtime) => runtime.close()));
+    await rm(home, { force: true, recursive: true });
+  });
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot: await createAdminFixture(home),
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+  });
+  const first = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "singleton-first" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+  runtimes.push(first);
+  await first.tasks.create({
+    principalId: "owner_singleton_test",
+    idempotencyKey: "singleton-restart-task",
+    objective: "Resume only under the next exclusive Main.",
+    completionCriteria: ["Exactly one exclusive Main executes the Task."],
+    constraints: [],
+    selectedInputRefs: [],
+  });
+
+  let executions = 0;
+  await assert.rejects(
+    createMainRuntime({
+      configuration: initialized.configuration,
+      home,
+      build: { version: "0.1.0-test", buildId: "singleton-rejected" },
+      releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+      sourceCheckout: resolve("."),
+      managedSecretStore: mainSecrets.store,
+      taskExecution: {
+        executor: {
+          async execute(request) {
+            executions += 1;
+            return {
+              state: "completed",
+              verifiedCompletionCriteria: [...request.task.completionCriteria],
+            };
+          },
+        },
+      },
+    }),
+    isRuntimeError("MAIN_ALREADY_RUNNING"),
+  );
+  assert.equal(executions, 0);
+
+  await first.close();
+  const restarted = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "singleton-restarted" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    taskExecution: {
+      retryDelayMs: 0,
+      executor: {
+        async execute(request) {
+          executions += 1;
+          return {
+            state: "completed",
+            verifiedCompletionCriteria: [...request.task.completionCriteria],
+          };
+        },
+      },
+    },
+  });
+  runtimes.push(restarted);
+  await restarted.taskExecution?.waitForIdle();
+  assert.equal(executions, 1);
+});
+
+test("losing singleton authority closes Main and prevents a listener from starting", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-singleton-loss-"));
+  t.after(() => rm(home, { force: true, recursive: true }));
+  const mainSecrets = createMainTestSecretContext(home);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot: await createAdminFixture(home),
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+  });
+  const ownership = new ControllableMainSingletonOwnership();
+  const runtime = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "singleton-loss" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    mainSingletonOwnershipFactory: async () => ownership,
+  });
+
+  ownership.lose();
+  await ownership.released;
+  assert.equal(ownership.releaseCalls, 1);
+  await assert.rejects(listenMainRuntime(runtime), isRuntimeError("MAIN_OWNERSHIP_LOST"));
+  await runtime.close();
+  assert.equal(ownership.releaseCalls, 1);
+});
+
+test("an injected production Task executor makes the authenticated Task API executable", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-task-executor-"));
+  const cleanup: {
+    runtime?: Awaited<ReturnType<typeof createMainRuntime>>;
+  } = {};
+  t.after(async () => {
+    await cleanup.runtime?.close();
+    await rm(home, { force: true, recursive: true });
+  });
+  const mainSecrets = createMainTestSecretContext(home);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot: await createAdminFixture(home),
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+  });
+  const runtime = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "task-executor-composition" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    taskExecution: {
+      retryDelayMs: 0,
+      executor: {
+        async execute(request) {
+          return {
+            state: "completed",
+            verifiedCompletionCriteria: [...request.task.completionCriteria],
+          };
+        },
+      },
+    },
+  });
+  cleanup.runtime = runtime;
+  const claim = await runtime.ownerAuth.issueInitialClaim({ channel: "local-bootstrap" });
+  await runtime.ownerAuth.claimOwner({
+    channel: "local-bootstrap",
+    claimToken: claim.claimToken,
+    passphrase: "correct horse battery staple",
+  });
+  const login = await runtime.ownerAuth.login({
+    passphrase: "correct horse battery staple",
+    sourceKey: "127.0.0.1",
+  });
+  const headers = {
+    host: "127.0.0.1:4380",
+    cookie: `__Host-opendelegate_session=${login.sessionToken}`,
+  };
+
+  const features = await runtime.app.inject({
+    method: "GET",
+    url: "/api/v1/runtime/features",
+    headers,
+  });
+  assert.deepEqual(features.json().taskExecution, {
+    status: "ready",
+    code: "TASK_EXECUTION_READY",
+  });
+
+  const created = await runtime.app.inject({
+    method: "POST",
+    url: "/api/v1/tasks",
+    headers: {
+      ...headers,
+      origin: "http://127.0.0.1:4380",
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      "x-opendelegate-csrf": login.csrfToken,
+      "idempotency-key": "executable-task-1",
+    },
+    payload: {
+      objective: "Execute through Main.",
+      completionCriteria: ["Main records verified completion."],
+      constraints: [],
+      selectedInputRefs: [],
+    },
+  });
+  assert.equal(created.statusCode, 201);
+  await runtime.taskExecution?.waitForIdle();
+  assert.equal((await runtime.tasks.get(created.json().taskId)).state, "completed");
+});
+
+test("an injected Configuration Agent is exposed only through the authenticated Device route", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-configuration-agent-"));
+  const cleanup: {
+    runtime?: Awaited<ReturnType<typeof createMainRuntime>>;
+  } = {};
+  t.after(async () => {
+    await cleanup.runtime?.close();
+    await rm(home, { force: true, recursive: true });
+  });
+  const mainSecrets = createMainTestSecretContext(home);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot: await createAdminFixture(home),
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+  });
+  const calls: unknown[] = [];
+  const runtime = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "configuration-agent-composition" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    configurationAgent: {
+      async sendMessage(input) {
+        calls.push(input);
+        return {
+          messageId: "configuration_message_main_001",
+          sessionId: "configuration_session_main",
+          content: "The Main Device configuration has been inspected.",
+          occurredAt: "2026-07-24T00:00:00.000Z",
+        };
+      },
+    },
+  });
+  cleanup.runtime = runtime;
+  const claim = await runtime.ownerAuth.issueInitialClaim({ channel: "local-bootstrap" });
+  const owner = await runtime.ownerAuth.claimOwner({
+    channel: "local-bootstrap",
+    claimToken: claim.claimToken,
+    passphrase: "correct horse battery staple",
+  });
+  const login = await runtime.ownerAuth.login({
+    passphrase: "correct horse battery staple",
+    sourceKey: "127.0.0.1",
+  });
+  const headers = {
+    host: "127.0.0.1:4380",
+    cookie: `__Host-opendelegate_session=${login.sessionToken}`,
+  };
+
+  const features = await runtime.app.inject({
+    method: "GET",
+    url: "/api/v1/runtime/features",
+    headers,
+  });
+  assert.deepEqual(features.json().configurationAgent, {
+    status: "ready",
+    code: "CONFIGURATION_AGENT_READY",
+  });
+
+  const response = await runtime.app.inject({
+    method: "POST",
+    url: `/api/v1/devices/${initialized.configuration.deviceId}/configuration/messages`,
+    headers: {
+      ...headers,
+      origin: "http://127.0.0.1:4380",
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      "x-opendelegate-csrf": login.csrfToken,
+      "idempotency-key": "main-configuration-message-1",
+    },
+    payload: { message: "Inspect the Main Device configuration." },
+  });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().content, "The Main Device configuration has been inspected.");
+  assert.deepEqual(calls, [
+    {
+      deviceId: initialized.configuration.deviceId,
+      principalId: owner.ownerId,
+      idempotencyKey: "main-configuration-message-1",
+      message: "Inspect the Main Device configuration.",
+    },
+  ]);
+});
+
 test(
-  "production Main composes PostgreSQL through an environment reference",
+  "production Main composes PostgreSQL through a managed Secret reference",
   { skip: postgresUri === undefined ? "OPENDELEGATE_TEST_POSTGRES_URI is not configured" : false },
   async (t) => {
     const home = await mkdtemp(join(tmpdir(), "opendelegate-main-postgres-"));
@@ -347,33 +865,34 @@ test(
       }
     });
     const adminRoot = await createAdminFixture(home);
-    const environment = {
-      ...process.env,
-      OPENDELEGATE_TEST_POSTGRES_URI: postgresUri,
-    };
+    const mainSecrets = createMainTestSecretContext(home, {
+      deviceId: "device_postgres",
+    });
+    const secretStore = mainSecrets.store;
     const initialized = await initializeMainHome({
       home,
       adminRoot,
       sourceCheckout: resolve("."),
       database: {
         adapter: "postgresql",
-        uriEnvironment: "OPENDELEGATE_TEST_POSTGRES_URI",
+        uriRef: "secret://main/database-primary",
         schema,
       },
-      environment,
+      databaseSecret: Buffer.from(postgresUri!, "utf8"),
+      secretBackend: mainSecrets.configuration,
+      managedSecretStore: secretStore,
     });
-
     const serialized = await readFile(initialized.paths.configurationFile, "utf8");
-    assert.match(serialized, /OPENDELEGATE_TEST_POSTGRES_URI/);
+    assert.match(serialized, /secret:\/\/main\/database-primary/);
     assert.doesNotMatch(serialized, /postgres(?:ql)?:\/\//i);
 
     const runtime = await createMainRuntime({
       configuration: initialized.configuration,
       home,
       build: { version: "0.1.0-test", buildId: "postgres-composition" },
-      releaseChannel: "development",
+      releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
       sourceCheckout: resolve("."),
-      environment,
+      managedSecretStore: secretStore,
     });
     cleanup.runtime = runtime;
     const claim = await runtime.ownerAuth.issueInitialClaim({ channel: "local-bootstrap" });
@@ -401,6 +920,46 @@ test(
     );
   },
 );
+
+test("Main ignores database and Discord credentials placed in process-style environment fields", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-no-env-secrets-"));
+  t.after(() => rm(home, { force: true, recursive: true }));
+  const adminRoot = await createAdminFixture(home);
+  const environmentUri =
+    "postgresql://environment-owner:must-not-import@environment.example.test/opendelegate";
+  const environmentToken = "must.not.import.discord.token";
+
+  await assert.rejects(
+    initializeMainHome({
+      home,
+      adminRoot,
+      sourceCheckout: resolve("."),
+      database: {
+        adapter: "postgresql",
+        uriRef: "secret://main/database-primary",
+      },
+      secretBackend: {
+        backend: "windows-dpapi",
+        vaultRoot: join(home, "secrets", "main"),
+      },
+      managedSecretStore: new RuntimeManagedSecretStore("device_environment_negative"),
+      environment: {
+        OPENDELEGATE_DATABASE_URI: environmentUri,
+        DATABASE_URL: environmentUri,
+        OPENDELEGATE_DISCORD_TOKEN: environmentToken,
+        DISCORD_TOKEN: environmentToken,
+      },
+    }),
+    isRuntimeError("DATABASE_SECRET_UNAVAILABLE"),
+  );
+
+  const persisted = await readFile(join(home, "config", "main.json"), "utf8");
+  assert.match(persisted, /secret:\/\/main\/database-primary/u);
+  assert.doesNotMatch(
+    persisted,
+    /must-not-import|environment\.example\.test|must\.not\.import\.discord\.token/u,
+  );
+});
 
 test("configuration rejects remote cleartext binding, unknown fields, and checkout state", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-main-config-"));
@@ -438,43 +997,141 @@ test("configuration rejects remote cleartext binding, unknown fields, and checko
         origin: "http://example.test:4380",
       },
       database: { adapter: "sqlite" },
+      secretBackend: {
+        backend: "windows-dpapi",
+        vaultRoot: join(root, "secrets"),
+      },
       adminRoot,
       rawToken: "must-fail",
     }),
   );
   await assert.rejects(loadMainConfiguration(configPath), isRuntimeError("CONFIG_INVALID"));
+
+  const legacyConfigPath = join(configDirectory, "legacy-main.json");
+  await writeFile(
+    legacyConfigPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      instanceId: "instance_legacy",
+      deviceId: "device_legacy",
+      main: {
+        host: "127.0.0.1",
+        port: 4380,
+        origin: "http://127.0.0.1:4380",
+      },
+      database: {
+        adapter: "postgresql",
+        uriEnvironment: "OPENDELEGATE_DATABASE_URI",
+      },
+      secretBackend: {
+        backend: "windows-dpapi",
+        vaultRoot: join(root, "secrets"),
+      },
+      adminRoot,
+    }),
+  );
+  await assert.rejects(
+    loadMainConfiguration(legacyConfigPath),
+    isRuntimeError("CONFIG_MIGRATION_REQUIRED"),
+  );
 });
 
-async function assertWindowsRuntimeOwnership(root: string): Promise<void> {
-  if (process.platform !== "win32") {
-    return;
+class RuntimeManagedSecretStore implements ManagedSecretStore {
+  public readonly backend = "windows-dpapi";
+  readonly deviceId: string;
+  #value: Buffer | undefined;
+
+  public constructor(deviceId: string, value?: string) {
+    this.deviceId = deviceId;
+    this.#value = value === undefined ? undefined : Buffer.from(value, "utf8");
   }
-  const verificationScript = String.raw`
-$ErrorActionPreference = "Stop"
-Import-Module (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1")
-$root = $env:OPENDELEGATE_TEST_ACL_ROOT
-$currentSid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-$items = @((Get-Item -LiteralPath $root -Force)) + @(Get-ChildItem -LiteralPath $root -Force -Recurse)
-foreach ($item in $items) {
-  $ownerSid = (Get-Acl -LiteralPath $item.FullName).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-  if ($ownerSid -ne $currentSid) {
-    throw "Expected '$($item.FullName)' to be owned by '$currentSid', but found '$ownerSid'."
+
+  public async health(): Promise<ManagedSecretStoreHealth> {
+    return { backend: this.backend, deviceId: this.deviceId, status: "ready" };
+  }
+
+  public async availability(alias: string): Promise<SecretAvailability> {
+    return { alias, ready: this.#value !== undefined };
+  }
+
+  public async store(_alias: string, value: Uint8Array): Promise<ManagedSecretMutation> {
+    this.#value?.fill(0);
+    this.#value = Buffer.from(value);
+    return { status: "stored" };
+  }
+
+  public async rotate(_alias: string, value: Uint8Array): Promise<ManagedSecretMutation> {
+    this.#value?.fill(0);
+    this.#value = Buffer.from(value);
+    return { status: "rotated" };
+  }
+
+  public async delete(_alias: string): Promise<ManagedSecretDeletion> {
+    const status = this.#value === undefined ? "absent" : "deleted";
+    this.#value?.fill(0);
+    this.#value = undefined;
+    return { status };
+  }
+
+  public async executeWithSecretBytes(
+    _alias: string,
+    executor: (value: Uint8Array) => unknown | Promise<unknown>,
+  ): Promise<void> {
+    if (this.#value === undefined) {
+      throw new Error("Secret is unavailable.");
+    }
+    const copy = Buffer.from(this.#value);
+    try {
+      await executor(copy);
+    } finally {
+      copy.fill(0);
+    }
   }
 }
-`;
-  await execFileAsync(
-    "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", verificationScript],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENDELEGATE_TEST_ACL_ROOT: root,
-      },
-      maxBuffer: 1024 * 1024,
-      windowsHide: true,
-    },
-  );
+
+class ControllableMainSingletonOwnership implements MainSingletonOwnership {
+  public readonly backend = "sqlite" as const;
+  public releaseCalls = 0;
+  readonly #listeners = new Set<(error: MainSingletonOwnershipError) => void>();
+  readonly #released: Promise<void>;
+  #resolveReleased!: () => void;
+  #loss: MainSingletonOwnershipError | undefined;
+
+  public constructor() {
+    this.#released = new Promise<void>((resolve) => {
+      this.#resolveReleased = resolve;
+    });
+  }
+
+  public get released(): Promise<void> {
+    return this.#released;
+  }
+
+  public assertCurrent(): void {
+    if (this.#loss !== undefined) {
+      throw this.#loss;
+    }
+  }
+
+  public onLost(listener: (error: MainSingletonOwnershipError) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  public async release(): Promise<void> {
+    this.releaseCalls += 1;
+    this.#resolveReleased();
+  }
+
+  public lose(): void {
+    this.#loss = new MainSingletonOwnershipError(
+      "MAIN_OWNERSHIP_LOST",
+      "The test authority was lost.",
+    );
+    for (const listener of this.#listeners) {
+      listener(this.#loss);
+    }
+  }
 }
 
 async function createAdminFixture(parent: string): Promise<string> {

@@ -55,6 +55,49 @@ test("a loopback-only claim creates exactly one owner and returns recovery codes
   }
 });
 
+test("an exclusively owned local bootstrap can replace an unreachable pre-owner claim", async () => {
+  const harness = createHarness();
+  const original = await harness.auth.issueInitialClaim({ channel: "local-bootstrap" });
+
+  await assert.rejects(
+    harness.auth.issueInitialClaim({ channel: "local-bootstrap" }),
+    isAuthError("CLAIM_ALREADY_ACTIVE"),
+  );
+  await assert.rejects(
+    harness.auth.replaceInitialClaim({ channel: "external-admin" }),
+    isAuthError("LOCAL_ACCESS_REQUIRED"),
+  );
+
+  const replacement = await harness.auth.replaceInitialClaim({
+    channel: "local-bootstrap",
+  });
+  assert.notEqual(replacement.claimToken, original.claimToken);
+  assert.equal(replacement.expiresAt, NOW + 10 * 60_000);
+
+  await assert.rejects(
+    harness.auth.claimOwner({
+      channel: "local-bootstrap",
+      claimToken: original.claimToken,
+      passphrase: "correct horse battery staple",
+    }),
+    isAuthError("CLAIM_INVALID"),
+  );
+  await harness.auth.claimOwner({
+    channel: "local-bootstrap",
+    claimToken: replacement.claimToken,
+    passphrase: "correct horse battery staple",
+  });
+  await assert.rejects(
+    harness.auth.replaceInitialClaim({ channel: "local-bootstrap" }),
+    isAuthError("CLAIM_INVALID"),
+  );
+
+  assert.deepEqual(
+    (await harness.repository.snapshot()).auditRecords.map((record) => record.event).sort(),
+    ["owner.auth.claim-issued", "owner.auth.claim-replaced", "owner.auth.claimed"].sort(),
+  );
+});
+
 test("remote, expired, weak, and concurrent claims fail closed with one atomic winner", async () => {
   const harness = createHarness();
   await assert.rejects(

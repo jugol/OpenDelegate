@@ -11,10 +11,12 @@ Work Orders to eligible Devices, and receive one durable, inspectable result wit
 reopening every agent session.
 
 > [!WARNING] This repository currently builds an **unsupported internal preview**, not a supported
-> OpenDelegate release. The Main runtime, authenticated Admin Task surface, and many
-> production-shaped contracts exist, but production Worker/Discord/service/Agent/Computer Use
-> execution wiring and the live three-OS acceptance matrix are incomplete. OpenDelegate must not be
-> represented as complete or used as an unattended production control plane yet.
+> OpenDelegate release. Production-shaped source paths now cover Main–Worker orchestration,
+> programmatic Agent Adapters, exact action approvals, Device-local Knowledge, native service
+> supervision, and Computer Use. Implementation in source is not release proof: the required live
+> macOS, Windows, Linux, Discord, provider, private-network, restart, permission, and packaging
+> evidence is not complete. Do not represent OpenDelegate as released or use it as an unattended
+> production control plane yet.
 
 ## Why OpenDelegate
 
@@ -52,19 +54,31 @@ Main and each Device.
 
 ## Current source state
 
-The following table distinguishes runnable code from boundaries that are not yet connected to
-release-valid external systems.
+The following table distinguishes production-shaped source paths from the external evidence still
+required before support can be claimed.
 
-| Area                 | Implemented and testable now                                                                                                                                                                                  | Still required for the first milestone                                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main and persistence | Bundled `opendelegate` CLI with `init`, `serve`, and `status`; Main composition; Control Plane health; authenticated Task inspection/emergency-control APIs; embedded SQLite; PostgreSQL configuration and equivalent storage contracts | Connected orchestration/execution, clean-host and restart proof on every supported OS, backup/restore proof, and complete runtime reconciliation      |
-| Owner access         | Loopback-only initial claim, passphrase login, recovery codes, session revocation, CSRF protection, and SQL persistence                                                                                       | Release-valid remote-route, restart, theft-revocation, and recovery evidence                                                                          |
-| Admin Web            | Authenticated login/recovery; durable Task inspection; pause/cancel emergency controls; responsive Device and read-only Configuration Chat surfaces; persisted English, Korean, Japanese, French, Spanish, and Simplified Chinese UI. Creation/resume/retry fixtures exist but packaged Main gates them while execution is unavailable | Connected Task execution and Configuration Agent messaging, real Device projections, approvals/audit inspectors, and live outage acceptance           |
-| Device runtime       | Device identity and single-use enrollment contracts, Worker durable inbox/outbox and Run supervision contracts, discovery, transport, locks, and local Knowledge                                              | Authenticated end-to-end Main–Worker channel, enrolled real Devices, service installation, and disconnect/restart proof                               |
-| Agents and Discord   | Codex CLI, Claude CLI, and generic command adapter lifecycle packages; durable Discord Forum mapping, authorization, reconciliation, controls, and projection contracts                                       | Authenticated live provider sessions; production Discord HTTP/Gateway driver; dedicated Community Server, Forum, bot, token, intents, and permissions |
-| Artifacts            | Local Artifact Store and isolated Artifact Gateway contracts with hostile-content tests                                                                                                                       | Resumable Worker upload, live Discord presentation, owner-route exposure, and cross-network acceptance                                                |
-| Platform services    | Windows SCM, macOS launchd, and Linux systemd service plans, renderers, readiness models, and read-only validation seams                                                                                      | Privileged native installation, packaged service executors, reboot/login/logout tests, upgrade rollback, and signing/notarization                     |
-| Computer Use         | Resource-lock kernel, OS-driver contract package, permission/readiness probes, and deterministic conformance fixtures                                                                                         | A real input backend and reference workflow on macOS, Windows, and supported graphical Linux, including cancellation and permission-failure proof     |
+| Area                 | Implemented and testable in source                                                                                                                                                                                                                                                                           | Still required for the first milestone                                                                                                                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main and persistence | Bundled `opendelegate` CLI; composed Control Plane; SQLite and PostgreSQL storage contracts (hosted PostgreSQL proof is currently pinned to 17); durable Task execution, approval, audit, Artifact, enrollment, Discord, and Device-channel services; startup reconciliation that fails closed when an interrupted action outcome is unknown | Clean-host installation, database migration and restore, service restart, and complete reconciliation evidence on every declared Main platform; other PostgreSQL major versions remain unproven                              |
+| Owner access         | Loopback-only initial claim, passphrase login, recovery codes, session revocation, CSRF protection, and SQL persistence                                                                                                                                                                                      | Release-valid remote-route, restart, browser-theft revocation, and Discord-independent recovery evidence                                                                                                                     |
+| Admin Web            | Authenticated Device, Task, Approval, enrollment, Artifact, audit, emergency-control, and Configuration Chat surfaces; capability-aware controls; responsive, persisted English, Korean, Japanese, French, Spanish, and Simplified Chinese presentation                                                        | Real-device onboarding and outage journeys, accessibility and overflow evidence on the release bundles, and live operator acceptance                                                                                         |
+| Device runtime       | Single-use enrollment, Device-scoped identity, authenticated outbound Main–Worker channel, leased dispatch, durable inbox/outbox, Run supervision, Workspaces, local Agent execution, local Knowledge MCP, Computer Use MCP, and Artifact upload                                                              | Enrolled physical Devices, route-loss and restart recovery, mixed Omada/Tailscale-style route proof, and persistent service proof on all three OS families                                                                    |
+| Agents and Discord   | Codex App Server and Claude Agent SDK as first-class adapters, reduced-capability CLI fallbacks, generic commands, native-session continuity, single-writer enforcement, and exact action authorization; Discord HTTP/Gateway, Forum reconciliation, controls, and Main composition                              | Authenticated live Codex and Claude runs with pinned versions; a dedicated Community Server, Forum, bot, token, intents, permissions, reconnect, mobile, and outage proof                                                      |
+| Knowledge            | Device-local linked Markdown discovery, bounded retrieval, deterministic indexing, admission checks, and agent-facing MCP tools whose contents stay outside Main contracts                                                                                                                                   | Packet-level no-egress proof and create/update/rebuild journeys on each real Device family                                                                                                                                    |
+| Artifacts            | Main-owned local store, authenticated resumable Worker upload, isolated static and interactive gateway paths, signed access, exposure-policy contracts, and Admin inspection                                                                                                                                  | Live Discord presentation, retention/exposure journeys, hostile-content validation on packaged builds, and cross-network opening from an owner Device                                                                        |
+| Platform services    | Windows SCM, macOS launchd, and Linux systemd/foreground source implementations; separate core and owner-session helper hosts; authenticated local IPC; install, start, stop, restart, upgrade, rollback, diagnose, and uninstall command paths                                                                  | Privileged clean-host execution, reboot/login/logout persistence, failure rollback, permission onboarding, platform signing/notarization where applicable, and lab evidence                                                  |
+| Computer Use         | Device-wide desktop lock, exact action authorization, one-time local capability broker, session-helper IPC, native Windows/macOS/Linux backend source, readiness and permission probes, capture/input/cancel/emergency-stop contracts, and deterministic/native fixture tests                                 | The reference interaction on physical macOS, Windows, and the declared graphical Linux environment, including screenshot, exclusivity, cancellation, permission failure, locked-session, and headless-Linux evidence         |
+
+Native Windows Claude SDK execution is intentionally not advertised until its required sandbox can
+be enforced; use Codex, WSL2, or a configured container there. A WSL2 or container Worker does not
+substitute for the native Windows service, restart, permission, or Computer Use release gates.
+
+Automatic project dependency installation currently supports npm only, through a credential-free
+official-registry staging boundary with scripts disabled. OpenDelegate also accepts install-only
+requests for an explicitly configured system package manager, pins and revalidates that manager
+executable, and keeps repository additions and remote installers behind approval. This is
+implementation evidence only: no system manager is release-supported until its existing-source and
+privilege behavior passes the target clean-host lab.
 
 The machine-readable release ledger is
 [`docs/release/acceptance-evidence.json`](docs/release/acceptance-evidence.json).
@@ -78,7 +92,7 @@ Release words have deliberately narrow meanings:
 | Public source pre-alpha         | Reviewable source; unsupported and not a completed installation         |
 | `internal-preview-*` bundle     | Local validation payload; always unsupported, even if local smoke passes |
 | `release-candidate` bundle      | All 36 gates passed, but the artifact is not yet promoted or supported  |
-| `released`                      | A separately attested artifact published through a supported channel    |
+| `released`                      | Effective status computed from a valid immutable candidate and the complete trusted publisher, platform-authenticity, promotion, observer read-back, supported-channel, and revocation-policy chain |
 
 No `released` artifact currently exists.
 
@@ -93,8 +107,9 @@ content or Agent conversation history.
 
 ![Implemented OpenDelegate Task operations](docs/design/admin-tasks-implemented.png)
 
-_Task operations design fixture: authenticated list/detail data and controls. Packaged Main disables
-execution-starting actions until its orchestration runtime is connected._
+_Task operations design fixture: authenticated list/detail data and controls. Each control follows
+the capability state reported by Main; this fixture is not evidence that a live external runtime is
+ready._
 
 ![Implemented OpenDelegate owner login](docs/design/admin-login-implemented.png)
 
@@ -123,9 +138,10 @@ pnpm release:build --destination ABSOLUTE_PATH --internal-preview
 `ABSOLUTE_PATH` must be an absent path outside the source checkout. The builder refuses to overwrite
 an existing destination. A minimal launcher exports the clean commit and re-executes the release
 logic from that disposable snapshot before assembly. The builder creates a platform-specific bundle
-by downloading the pinned official Node archive and verifying its audited SHA-256. It includes
-Admin assets, the init skill, release metadata, a dependency-instance legal inventory, checksums,
-and smoke evidence for CLI help, clean-home initialization, Main health, Admin serving, owner
+by downloading the pinned official Node archive and verifying its audited SHA-256. It includes Main
+and Worker launchers, Admin assets, the init and join skills, release metadata, a
+dependency-instance legal inventory, checksums, and bounded smoke evidence for
+CLI/service/Worker commands, clean-home initialization, Main health, Admin serving, owner
 claim/login, session-cookie round-trip, and clean shutdown.
 
 The destination name must contain `internal-preview`. Generated `INTERNAL_PREVIEW.md` and
@@ -147,11 +163,43 @@ A production build intentionally fails while any acceptance criterion is incompl
 
 ```sh
 pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
 ```
 
-Both commands may succeed only after all 36 implementation and live-evidence gates pass. See
-[the release evidence guide](docs/release/README.md) and
+The `release:build` invocation above is complete as written only for the Linux x64 candidate. On
+macOS and Windows, append the required target-native credential policy:
+
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
+```
+
+`pnpm release:sign` is deliberately restricted to explicitly acknowledged unsupported previews.
+It rejects release candidates. After the 36-criterion gate is complete, a clean hash-pinned
+target-native runner uses `pnpm release:finalize` to freeze each production candidate and create
+its candidate-v2 publisher attestation. Only the configured external promotion and
+supported-channel receipt chain can make that immutable candidate effectively `released`; see the
+[release trust procedure](docs/release/README.md#supported-promotion-trust-path).
+
+Generate credential-free operator input skeletons with:
+
+```sh
+pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
+```
+
+Every generated set is marked `PLACEHOLDER` and `NOT-A-RELEASE`; it contains no credentials,
+signatures, artifacts, or release evidence. See the
+[release input examples guide](docs/release/EXAMPLES.md).
+
+The production `release:gate` and candidate-mode `release:build` commands may succeed only after all
+36 implementation and live-evidence gates pass. Unsupported preview signing does not satisfy or
+bypass that production gate. See
+[the exact first-milestone support matrix](docs/release/SUPPORT_MATRIX.md),
+[the release evidence guide](docs/release/README.md), and
 [platform lab checklist](docs/release/PLATFORM_LAB.md).
 
 ## Development
@@ -176,28 +224,46 @@ pnpm dev:admin
 This development server is not an owner installation path. Use the generated internal-preview
 launcher when validating the bundled Main.
 
+Codex and Claude authentication is isolated per OpenDelegate Device under
+`state/providers/codex` and `state/providers/claude` by default. Authenticate those
+exact controlled homes interactively after setup. OpenDelegate intentionally does
+not copy or inherit a login from the user's global provider home, and first-class
+provider Runs reject credential environment variables.
+
 ## Repository map
 
-- `apps/main` — Main composition and deterministic CLI.
+- `apps/main` — Main composition, deterministic CLI, action authorization, Device channel, Discord,
+  Artifact, and Agent runtime wiring.
+- `apps/worker` and `apps/service-host` — enrolled Worker runtime and the persistent core/session
+  process hosts used by platform service definitions.
 - `apps/control-plane` — authenticated HTTP and local-claim boundaries.
-- `apps/admin-web` — owner login, Task operations, Device surface, and Configuration Chat.
+- `apps/admin-web` — owner login, Device, Task, Approval, enrollment, Artifact, audit, emergency
+  operations, and Configuration Chat.
 - `apps/artifact-gateway` — isolated Artifact delivery boundary.
 - `packages/domain`, `packages/policy`, and `packages/scheduler` — deterministic domain mechanics
   and executable policy.
 - `packages/storage-sql`, `packages/owner-auth`, `packages/task-service`, and
   `packages/configuration` — Main persistence and application services.
-- `packages/device-identity`, `packages/worker-runtime`, `packages/transport`, and
-  `packages/device-discovery` — Device enrollment and Worker-side contracts.
-- `packages/agent-adapters` and `packages/discord-adapter` — provider and Forum adapter
-  implementations that still require live integration proof.
+- `packages/device-identity`, `packages/device-channel`, `packages/worker-runtime`,
+  `packages/transport`, and `packages/device-discovery` — Device enrollment, authenticated
+  Main–Worker communication, and Worker execution.
+- `packages/agent-adapters` and `packages/discord-adapter` — programmatic provider and Discord Forum
+  integrations that still require credentialed live proof.
 - `packages/artifact-store` — Main-owned Artifact bytes and metadata boundary.
 - `packages/platform-services` and `packages/computer-use-os` — OS service and graphical-runtime
-  contracts; these are not evidence of installed services or real desktop control.
-- `packages/knowledge` — Device-local Markdown discovery, linked retrieval, and indexing.
+  implementations; source and fixture results are not evidence of supported installed services or
+  three-OS desktop control.
+- `packages/session-helper-ipc`, `packages/session-helper-runtime`,
+  `packages/computer-use-mcp`, and `packages/run-capability-broker` — authenticated owner-session
+  capabilities with bounded, per-Run access.
+- `packages/knowledge` and `packages/knowledge-mcp` — Device-local Markdown discovery, linked
+  retrieval, indexing, and agent tools.
 - `packages/acceptance` and `packages/simulator` — deterministic Task journeys, restart cases, and
   replay fixtures.
 - `skills/opendelegate-init` — agent-facing initialization workflow with explicit internal-preview
   gating.
+- `skills/opendelegate-join` — credential-safe, outbound-only Worker enrollment and recovery
+  workflow.
 - `docs` — product, architecture, security, design, research, and release evidence.
 
 ## Canonical product documents
@@ -213,7 +279,9 @@ Read these in order before planning or changing product behavior:
    primary-source platform constraints.
 
 Contributor workflow is documented in [CONTRIBUTING.md](CONTRIBUTING.md). Security boundaries and
-the verified private vulnerability-reporting route are in [SECURITY.md](SECURITY.md).
+the verified private vulnerability-reporting route are in [SECURITY.md](SECURITY.md). Safe Main
+metadata snapshots and fresh-target recovery are documented in
+[the backup and restore guide](docs/BACKUP_AND_RESTORE.md).
 
 OpenDelegate is licensed under the [Apache License 2.0](LICENSE). Repository content, domain terms,
 APIs, logs, and UI defaults use English. This README and owner-facing Admin UI are also available in

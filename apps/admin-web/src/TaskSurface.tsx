@@ -19,6 +19,7 @@ import {
   type TaskSummary,
 } from "./admin-api";
 import { formatAdminDate, formatMessage, type Messages, useAdminI18n } from "./i18n";
+import { TaskBudgetPanel } from "./TaskBudgetPanel";
 import { useMediaQuery } from "./use-media-query";
 
 interface TaskSurfaceProps {
@@ -284,6 +285,7 @@ export function TaskSurface({
 
       {selected !== null ? (
         <TaskInspector
+          api={api}
           busy={detailLoading}
           executionAvailable={executionAvailable}
           onClose={() => setSelected(null)}
@@ -303,12 +305,14 @@ export function TaskSurface({
 }
 
 function TaskInspector({
+  api,
   busy,
   executionAvailable,
   onClose,
   onCommand,
   task,
 }: {
+  readonly api: AdminApi;
   readonly busy: boolean;
   readonly executionAvailable: boolean;
   readonly onClose: () => void;
@@ -357,6 +361,23 @@ function TaskInspector({
             </ul>
           </DetailBlock>
         ) : null}
+        {task.messages.length > 0 ? (
+          <DetailBlock title={messages.task.conversation}>
+            <ol className="task-conversation">
+              {task.messages.map((message) => (
+                <li
+                  className={`task-conversation__message task-conversation__message--${message.role}`}
+                  key={message.messageId}
+                >
+                  <p>{message.content}</p>
+                  <time dateTime={message.occurredAt}>
+                    {formatAdminDate(message.occurredAt, locale)}
+                  </time>
+                </li>
+              ))}
+            </ol>
+          </DetailBlock>
+        ) : null}
         <DetailBlock title={messages.task.eventTimeline}>
           <ol className="event-timeline">
             {task.events.map((event) => (
@@ -368,6 +389,7 @@ function TaskInspector({
             ))}
           </ol>
         </DetailBlock>
+        <TaskBudgetPanel api={api} taskId={task.taskId} />
       </div>
 
       <div className="task-inspector-actions">

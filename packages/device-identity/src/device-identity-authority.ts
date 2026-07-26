@@ -1,6 +1,7 @@
 import "reflect-metadata";
 
 import { timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 
 import {
   AuthorityKeyIdentifierExtension,
@@ -34,6 +35,7 @@ import { DeviceIdentityError } from "./error.ts";
 
 const CA_VALIDITY_MS = 3_650 * 24 * 60 * 60 * 1_000;
 const DEVICE_CERTIFICATE_VALIDITY_MS = 24 * 60 * 60 * 1_000;
+const MAIN_SERVER_CERTIFICATE_VALIDITY_MS = 90 * 24 * 60 * 60 * 1_000;
 const CLOCK_SKEW_MS = 60_000;
 const MINIMUM_GRANT_TTL_MS = 30_000;
 const MAXIMUM_GRANT_TTL_MS = 30 * 60_000;
@@ -57,6 +59,20 @@ export interface DeviceIdentityAuthorityOptions {
 
 export interface BootstrapCertificateAuthority {
   readonly instanceId: string;
+}
+
+export interface IssueMainServerCertificate {
+  readonly publicKey: CryptoKey;
+  readonly hostnames: readonly string[];
+}
+
+export interface IssuedMainServerCertificate {
+  readonly certificatePem: string;
+  readonly certificateAuthorityPem: string;
+  readonly serialNumber: string;
+  readonly issuedAt: number;
+  readonly notBefore: number;
+  readonly notAfter: number;
 }
 
 export interface CreateEnrollmentGrant {
@@ -247,11 +263,112 @@ export class DeviceIdentityAuthority {
         spkiSha256: await certificateSpkiFingerprint(certificate),
         status: "active" as const,
         createdAt: now,
-        notBefore: now - CLOCK_SKEW_MS,
-        notAfter: safeTimestampAfter(now, CA_VALIDITY_MS),
+        notBefore: certificate.notBefore.getTime(),
+        notAfter: certificate.notAfter.getTime(),
       });
       await transaction.setCertificateAuthority(record);
       return record;
+    });
+  }
+
+  public async issueMainServerCertificate(
+    request: IssueMainServerCertificate,
+  ): Promise<IssuedMainServerCertificate> {
+    const hostnames = validateServerHostnames(request.hostnames);
+    validateServerPublicKey(request.publicKey);
+    return this.repository.transaction(async (transaction) => {
+      const now = readClock(this.clock);
+      const certificateAuthority = await transaction.getCertificateAuthority();
+      if (certificateAuthority === null) {
+        throw new DeviceIdentityError(
+          "CERTIFICATE_AUTHORITY_KEY_UNAVAILABLE",
+          "The certificate authority has not been bootstrapped.",
+        );
+      }
+      let issuer: X509Certificate;
+      try {
+        issuer = new X509Certificate(certificateAuthority.certificatePem);
+      } catch {
+        throw new DeviceIdentityError(
+          "CERTIFICATE_AUTHORITY_KEY_UNAVAILABLE",
+          "The certificate authority public identity is invalid.",
+        );
+      }
+      const signingKey = await this.secrets.getPrivateKey(certificateAuthority.keyId);
+      if (
+        signingKey === null ||
+        !(await isValidCertificateAuthority(certificateAuthority, issuer, now))
+      ) {
+        throw new DeviceIdentityError(
+          "CERTIFICATE_AUTHORITY_KEY_UNAVAILABLE",
+          "The certificate authority is unavailable for Main listener issuance.",
+        );
+      }
+      const notBefore = now - CLOCK_SKEW_MS;
+      const notAfter = Math.min(
+        safeTimestampAfter(now, MAIN_SERVER_CERTIFICATE_VALIDITY_MS),
+        certificateAuthority.notAfter,
+      );
+      if (notAfter <= now) {
+        throw new DeviceIdentityError(
+          "CERTIFICATE_AUTHORITY_KEY_UNAVAILABLE",
+          "The certificate authority is no longer valid for Main listener issuance.",
+        );
+      }
+      const serialNumber = nextCertificateSerial(this.random);
+      const certificate = await X509CertificateGenerator.create(
+        {
+          serialNumber,
+          subject: "CN=OpenDelegate Main Device listener",
+          issuer: issuer.subject,
+          notBefore: new Date(notBefore),
+          notAfter: new Date(notAfter),
+          publicKey: request.publicKey,
+          signingKey,
+          signingAlgorithm: ECDSA_SHA256,
+          extensions: [
+            new BasicConstraintsExtension(false, undefined, true),
+            new KeyUsagesExtension(KeyUsageFlags.digitalSignature, true),
+            new ExtendedKeyUsageExtension([ExtendedKeyUsage.serverAuth], true),
+            new SubjectAlternativeNameExtension(
+              hostnames.map((hostname) => ({
+                type: isIP(hostname) === 0 ? ("dns" as const) : ("ip" as const),
+                value: hostname,
+              })),
+              false,
+            ),
+            await SubjectKeyIdentifierExtension.create(request.publicKey, false, identityWebCrypto),
+            await AuthorityKeyIdentifierExtension.create(
+              issuer.publicKey,
+              false,
+              identityWebCrypto,
+            ),
+          ],
+        },
+        identityWebCrypto,
+      );
+      if (
+        !(await certificate.verify(
+          {
+            publicKey: issuer.publicKey,
+            date: new Date(now),
+          },
+          identityWebCrypto,
+        ))
+      ) {
+        throw new DeviceIdentityError(
+          "CERTIFICATE_AUTHORITY_KEY_UNAVAILABLE",
+          "The certificate authority signing key does not match its public identity.",
+        );
+      }
+      return deepFreeze({
+        certificatePem: certificate.toString("pem"),
+        certificateAuthorityPem: certificateAuthority.certificatePem,
+        serialNumber,
+        issuedAt: now,
+        notBefore: certificate.notBefore.getTime(),
+        notAfter: certificate.notAfter.getTime(),
+      });
     });
   }
 
@@ -499,7 +616,10 @@ export class DeviceIdentityAuthority {
           signingKey,
         });
         if (
-          !(await certificate.verify({ publicKey: issuerCertificate.publicKey }, identityWebCrypto))
+          !(await certificate.verify(
+            { publicKey: issuerCertificate.publicKey, date: new Date(now) },
+            identityWebCrypto,
+          ))
         ) {
           throw new DeviceIdentityError(
             "CERTIFICATE_AUTHORITY_KEY_UNAVAILABLE",
@@ -507,6 +627,8 @@ export class DeviceIdentityAuthority {
           );
         }
         const publicKeySpkiSha256 = await publicKeyFingerprint(certificate.publicKey.rawData);
+        const certificateNotBefore = certificate.notBefore.getTime();
+        const certificateNotAfter = certificate.notAfter.getTime();
         const certificateRecord: PersistedDeviceCertificate = deepFreeze({
           deviceId,
           serialNumber,
@@ -514,8 +636,8 @@ export class DeviceIdentityAuthority {
           certificatePem: certificate.toString("pem"),
           publicKeySpkiSha256,
           status: "active" as const,
-          notBefore,
-          notAfter,
+          notBefore: certificateNotBefore,
+          notAfter: certificateNotAfter,
           issuedAt: now,
         });
         const deviceRecord: PersistedDeviceIdentity = deepFreeze({
@@ -555,8 +677,8 @@ export class DeviceIdentityAuthority {
             generation: 1,
             status: "active" as const,
             issuedAt: now,
-            notBefore,
-            notAfter,
+            notBefore: certificateNotBefore,
+            notAfter: certificateNotAfter,
           }),
         };
       });
@@ -681,7 +803,10 @@ export class DeviceIdentityAuthority {
         signingKey,
       });
       if (
-        !(await certificate.verify({ publicKey: issuerCertificate.publicKey }, identityWebCrypto))
+        !(await certificate.verify(
+          { publicKey: issuerCertificate.publicKey, date: new Date(now) },
+          identityWebCrypto,
+        ))
       ) {
         throw new DeviceIdentityError(
           "CERTIFICATE_AUTHORITY_KEY_UNAVAILABLE",
@@ -691,6 +816,8 @@ export class DeviceIdentityAuthority {
       const activationChallenge = base64Url(this.random.bytes(32));
       const activationExpiresAt = safeTimestampAfter(now, this.rotationActivationTtlMs);
       const publicKeySpkiSha256 = await publicKeyFingerprint(certificate.publicKey.rawData);
+      const certificateNotBefore = certificate.notBefore.getTime();
+      const certificateNotAfter = certificate.notAfter.getTime();
       const certificateRecord: PersistedDeviceCertificate = deepFreeze({
         deviceId,
         serialNumber,
@@ -698,8 +825,8 @@ export class DeviceIdentityAuthority {
         certificatePem: certificate.toString("pem"),
         publicKeySpkiSha256,
         status: "pending" as const,
-        notBefore,
-        notAfter,
+        notBefore: certificateNotBefore,
+        notAfter: certificateNotAfter,
         issuedAt: now,
         activationChallengeDigest: await sha256Hex(new TextEncoder().encode(activationChallenge)),
         activationExpiresAt,
@@ -723,8 +850,8 @@ export class DeviceIdentityAuthority {
         generation,
         status: "pending" as const,
         issuedAt: now,
-        notBefore,
-        notAfter,
+        notBefore: certificateNotBefore,
+        notAfter: certificateNotAfter,
         activationChallenge,
         activationExpiresAt,
       });
@@ -767,7 +894,7 @@ export class DeviceIdentityAuthority {
       let certificateSignatureValid: boolean;
       try {
         certificateSignatureValid = await certificate.verify(
-          { publicKey: issuer.publicKey },
+          { publicKey: issuer.publicKey, date: new Date(now) },
           identityWebCrypto,
         );
       } catch {
@@ -962,7 +1089,10 @@ export class DeviceIdentityAuthority {
       let signatureValid: boolean;
       try {
         signatureValid = await certificate.verify(
-          { publicKey: issuer.publicKey },
+          {
+            publicKey: issuer.publicKey,
+            date: certificateSignatureVerificationDate(certificate),
+          },
           identityWebCrypto,
         );
       } catch {
@@ -1150,6 +1280,69 @@ function validateIdentifier(value: string, label: string): string {
     );
   }
   return value;
+}
+
+function validateServerHostnames(values: readonly string[]): readonly string[] {
+  if (!Array.isArray(values) || values.length < 1 || values.length > 16) {
+    throw new DeviceIdentityError(
+      "IDENTITY_CONFIGURATION_INVALID",
+      "Main listener certificate hosts must contain between 1 and 16 entries.",
+    );
+  }
+  const hostnames = values.map((value) => {
+    if (
+      typeof value !== "string" ||
+      value.length < 1 ||
+      value.length > 253 ||
+      value !== value.trim() ||
+      hasControlCharacter(value)
+    ) {
+      throw new DeviceIdentityError(
+        "IDENTITY_CONFIGURATION_INVALID",
+        "A Main listener certificate host is invalid.",
+      );
+    }
+    if (isIP(value) !== 0) {
+      return value;
+    }
+    const labels = value.split(".");
+    if (
+      labels.some(
+        (label) =>
+          label.length < 1 ||
+          label.length > 63 ||
+          !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/u.test(label),
+      )
+    ) {
+      throw new DeviceIdentityError(
+        "IDENTITY_CONFIGURATION_INVALID",
+        "A Main listener certificate host is invalid.",
+      );
+    }
+    return value.toLowerCase();
+  });
+  if (new Set(hostnames).size !== hostnames.length) {
+    throw new DeviceIdentityError(
+      "IDENTITY_CONFIGURATION_INVALID",
+      "Main listener certificate hosts must be unique.",
+    );
+  }
+  return Object.freeze(hostnames);
+}
+
+function validateServerPublicKey(publicKey: CryptoKey): void {
+  const algorithm = publicKey?.algorithm;
+  if (
+    publicKey?.type !== "public" ||
+    algorithm?.name !== "ECDSA" ||
+    !("namedCurve" in algorithm) ||
+    algorithm.namedCurve !== "P-256"
+  ) {
+    throw new DeviceIdentityError(
+      "IDENTITY_CONFIGURATION_INVALID",
+      "The Main listener public key must be ECDSA P-256.",
+    );
+  }
 }
 
 function hasControlCharacter(value: string): boolean {
@@ -1368,7 +1561,7 @@ async function isValidCertificateAuthority(
   let selfSignatureValid: boolean;
   try {
     selfSignatureValid = await certificate.verify(
-      { publicKey: certificate.publicKey },
+      { publicKey: certificate.publicKey, date: new Date(now) },
       identityWebCrypto,
     );
   } catch {
@@ -1392,6 +1585,19 @@ async function isValidCertificateAuthority(
     now >= certificate.notBefore.getTime() &&
     now < certificate.notAfter.getTime()
   );
+}
+
+function certificateSignatureVerificationDate(certificate: X509Certificate): Date {
+  const notBefore = certificate.notBefore.getTime();
+  const notAfter = certificate.notAfter.getTime();
+  if (
+    !Number.isSafeInteger(notBefore) ||
+    !Number.isSafeInteger(notAfter) ||
+    notAfter <= notBefore
+  ) {
+    return new Date(0);
+  }
+  return new Date(notBefore + Math.floor((notAfter - notBefore) / 2));
 }
 
 function readCertificateDeviceId(certificate: X509Certificate): string {

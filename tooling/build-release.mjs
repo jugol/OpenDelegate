@@ -16,11 +16,27 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { auditReleaseEvidence, summarizeReleaseEvidence } from "./check-release-evidence.mjs";
+import { stageNativeReleaseAssets } from "./native-release-assets.mjs";
+import {
+  finalizePlatformNativeAuthenticity,
+  readPlatformAuthenticityPolicy,
+  verifyFinalPlatformNativeAuthenticity,
+} from "./platform-native-authenticity.mjs";
+import { captureFrozenPayload, verifyFrozenPayload } from "./release-smoke-payload-seal.mjs";
+import { withLinuxReleaseSmokeSecretFixture } from "./release-smoke-secret.mjs";
+import { authorizeCredentialUse } from "./release-credential-authorization.mjs";
+import {
+  assertPinnedReleaseGitFilesMatchCommit,
+  pinReleaseGitProvenance,
+  readPinnedReleaseSourceIdentity,
+  revalidatePinnedReleaseGitProvenance,
+  runPinnedReleaseGit,
+} from "./release-git-provenance.mjs";
+import { canonicalizeTemporaryEnvironment, hashStableRegularFile } from "./release-tooling-io.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const releaseToolRoot = resolve(dirname(currentFile), "..");
@@ -37,7 +53,18 @@ export const PINNED_PNPM_ARCHIVE_INTEGRITY =
 const pinnedPnpmArchiveUrl = `https://registry.npmjs.org/pnpm/-/pnpm-${PINNED_PNPM_VERSION}.tgz`;
 const maximumPnpmArchiveBytes = 25 * 1024 * 1024;
 const maximumNodeArchiveBytes = 128 * 1024 * 1024;
-const runningReleaseToolPaths = ["tooling/build-release.mjs", "tooling/check-release-evidence.mjs"];
+const runningReleaseToolPaths = [
+  "tooling/build-release.mjs",
+  "tooling/check-release-evidence.mjs",
+  "tooling/native-release-assets.mjs",
+  "tooling/native-payload-inventory.mjs",
+  "tooling/platform-native-authenticity.mjs",
+  "tooling/release-credential-authorization.mjs",
+  "tooling/release-git-provenance.mjs",
+  "tooling/release-smoke-payload-seal.mjs",
+  "tooling/release-smoke-secret.mjs",
+  "tooling/release-tooling-io.mjs",
+];
 const nodeDistributionRoot = `https://nodejs.org/dist/v${REQUIRED_RELEASE_NODE_VERSION}`;
 const nodeShasumsUrl = `${nodeDistributionRoot}/SHASUMS256.txt`;
 const officialRuntimeArchives = new Map([
@@ -86,6 +113,7 @@ const officialRuntimeArchives = new Map([
 ]);
 const supportedPlatforms = new Set(["darwin", "linux", "win32"]);
 const supportedArchitectures = new Set(["arm64", "x64"]);
+const releaseCandidateTargets = new Set(["darwin-arm64", "linux-x64", "win32-x64"]);
 const curatedRuntimeLicenseFiles = new Map([
   [
     "abstract-logging@2.0.1",
@@ -94,12 +122,21 @@ const curatedRuntimeLicenseFiles = new Map([
       source: "https://raw.githubusercontent.com/jsumners/abstract-logging/v2.0.1/Readme.md",
     },
   ],
+  [
+    "standardwebhooks@1.0.0",
+    {
+      path: "docs/legal/runtime-license-overrides/standardwebhooks-1.0.0-LICENSE.txt",
+      source:
+        "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/c7cd8a9eadf9879d6dca345e168dc8d15d19e487/libraries/LICENSE",
+    },
+  ],
 ]);
 const acceptanceLedgerPath = "docs/release/acceptance-evidence.json";
 const attestationEvidencePrefix = "docs/release/evidence/";
 const fullGitCommitPattern = /^[0-9a-f]{40}$/;
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const regularFileMode = "100644";
+export const RELEASE_SKILL_DIRECTORIES = Object.freeze(["opendelegate-init", "opendelegate-join"]);
 
 export async function isDirectReleaseInvocation(invokedPath, modulePath = currentFile) {
   if (invokedPath === undefined) {
@@ -117,6 +154,20 @@ export async function isDirectReleaseInvocation(invokedPath, modulePath = curren
     }
     throw error;
   }
+}
+
+export async function createCommittedReleaseRunnerTempState(
+  environment = process.env,
+  dependencies = {},
+) {
+  const temporary = await canonicalizeTemporaryEnvironment(environment, dependencies);
+  const runnerParent = await (dependencies.makeTemporaryDirectory ?? mkdtemp)(
+    join(temporary.directory, "opendelegate-release-runner-"),
+  );
+  return Object.freeze({
+    environment: temporary.environment,
+    runnerParent,
+  });
 }
 
 function compareCodeUnits(left, right) {
@@ -137,12 +188,83 @@ export function officialRuntimeArchiveFor(platform, architecture) {
 
 export function parseReleaseArguments(values) {
   let destination;
+  let gitExecutable;
+  let gitExecutableSha256;
   let internalPreview = false;
+  let platformSigningPolicy;
+  let platformSigningPolicySha256;
+  let runnerExecutableSha256;
 
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
     if (value === "--internal-preview") {
       internalPreview = true;
+      continue;
+    }
+    if (value === "--git-executable") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || candidate.startsWith("--") || !isAbsolute(candidate)) {
+        throw new Error("--git-executable requires an explicit absolute path.");
+      }
+      if (gitExecutable !== undefined) {
+        throw new Error("--git-executable may be specified only once.");
+      }
+      gitExecutable = resolve(candidate);
+      index += 1;
+      continue;
+    }
+    if (value === "--git-executable-sha256") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || !sha256Pattern.test(candidate)) {
+        throw new Error("--git-executable-sha256 requires a lowercase SHA-256.");
+      }
+      if (gitExecutableSha256 !== undefined) {
+        throw new Error("--git-executable-sha256 may be specified only once.");
+      }
+      gitExecutableSha256 = candidate;
+      index += 1;
+      continue;
+    }
+    if (value === "--runner-executable-sha256") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || !sha256Pattern.test(candidate)) {
+        throw new Error("--runner-executable-sha256 requires a lowercase SHA-256.");
+      }
+      if (runnerExecutableSha256 !== undefined) {
+        throw new Error("--runner-executable-sha256 may be specified only once.");
+      }
+      runnerExecutableSha256 = candidate;
+      index += 1;
+      continue;
+    }
+    if (value === "--platform-signing-policy") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || candidate.startsWith("--")) {
+        throw new Error("--platform-signing-policy requires an absolute path.");
+      }
+      if (!isAbsolute(candidate)) {
+        throw new Error("--platform-signing-policy must be an absolute path.");
+      }
+      if (platformSigningPolicy !== undefined) {
+        throw new Error("--platform-signing-policy may be specified only once.");
+      }
+      platformSigningPolicy = resolve(candidate);
+      index += 1;
+      continue;
+    }
+    if (value === "--platform-signing-policy-sha256") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || candidate.startsWith("--")) {
+        throw new Error("--platform-signing-policy-sha256 requires a lowercase SHA-256.");
+      }
+      if (!/^[0-9a-f]{64}$/u.test(candidate)) {
+        throw new Error("--platform-signing-policy-sha256 must be a lowercase SHA-256.");
+      }
+      if (platformSigningPolicySha256 !== undefined) {
+        throw new Error("--platform-signing-policy-sha256 may be specified only once.");
+      }
+      platformSigningPolicySha256 = candidate;
+      index += 1;
       continue;
     }
     if (value === "--destination") {
@@ -163,7 +285,202 @@ export function parseReleaseArguments(values) {
   if (destination === undefined) {
     throw new Error("--destination is required.");
   }
-  return { destination, help: false, internalPreview };
+  if ((platformSigningPolicy === undefined) !== (platformSigningPolicySha256 === undefined)) {
+    throw new Error(
+      "The platform-signing policy path and lowercase SHA-256 must be provided together.",
+    );
+  }
+  if ((gitExecutable === undefined) !== (gitExecutableSha256 === undefined)) {
+    throw new Error("The Git executable path and lowercase SHA-256 must be provided together.");
+  }
+  if (
+    (!internalPreview || platformSigningPolicy !== undefined) &&
+    (gitExecutable === undefined || runnerExecutableSha256 === undefined)
+  ) {
+    throw new Error(
+      "Supported or credential-bearing release builds require pinned Git and Node runner executables.",
+    );
+  }
+  return {
+    destination,
+    help: false,
+    internalPreview,
+    ...(gitExecutable === undefined ? {} : { gitExecutable }),
+    ...(gitExecutableSha256 === undefined ? {} : { gitExecutableSha256 }),
+    ...(runnerExecutableSha256 === undefined ? {} : { runnerExecutableSha256 }),
+    ...(platformSigningPolicy === undefined ? {} : { platformSigningPolicy }),
+    ...(platformSigningPolicySha256 === undefined ? {} : { platformSigningPolicySha256 }),
+  };
+}
+
+const bundleReadmeLanguages = Object.freeze([
+  Object.freeze({ filename: "README.md", label: "English", locale: "en" }),
+  Object.freeze({ filename: "README.ko.md", label: "한국어", locale: "ko" }),
+  Object.freeze({ filename: "README.ja.md", label: "日本語", locale: "ja" }),
+  Object.freeze({ filename: "README.fr.md", label: "Français", locale: "fr" }),
+  Object.freeze({ filename: "README.es.md", label: "Español", locale: "es" }),
+  Object.freeze({ filename: "README.zh-CN.md", label: "简体中文", locale: "zh-CN" }),
+]);
+
+const bundleReadmeCopy = Object.freeze({
+  en: Object.freeze({
+    agentStep:
+      "Ask Codex, Claude, or another capable local agent to follow\n   `skills/opendelegate-init/SKILL.md`.",
+    candidateWarning:
+      "This candidate is not a supported release until it is promoted through the documented release channel.",
+    cliIntroduction: "For deterministic CLI inspection:",
+    documentation:
+      "See `docs/release/README.md` for release semantics, `SECURITY.md` for private\nvulnerability reporting, and `THIRD_PARTY_NOTICES.json` for the complete bundled\ndependency legal inventory.",
+    implementationLabel: "Implementation",
+    integrity:
+      "Verify `SHA256SUMS` against a digest obtained through a trusted publication channel\nbefore relying on the payload. The enclosed manifest proves only internal\nconsistency, not publisher identity.",
+    languageLabel: "Languages",
+    ledgerIntroduction: "The acceptance ledger state recorded during assembly was:",
+    liveProofLabel: "Live proof",
+    packageDescription: (target) =>
+      `This directory is a self-contained, platform-specific OpenDelegate bundle for\n${target}. It includes its audited Node.js runtime; do not install pnpm or run\nsource-checkout commands here.`,
+    previewTitle: "unsupported internal preview",
+    previewWarning:
+      "Read `INTERNAL_PREVIEW.md`. This bundle is unsupported and must not be published under a release tag.",
+    candidateTitle: "unpublished release candidate",
+    startHeading: "Start with an agent",
+    stateStep:
+      "Keep runtime state, databases, credentials, logs, and generated Artifacts outside\n   this bundle.",
+    supportStatusLabel: "Support status",
+  }),
+  ko: Object.freeze({
+    agentStep:
+      "Codex, Claude 또는 기능을 갖춘 다른 로컬 Agent에게\n   `skills/opendelegate-init/SKILL.md`를 따르도록 요청하세요.",
+    candidateWarning:
+      "이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다.",
+    cliIntroduction: "결정적인 CLI 인터페이스를 확인하려면 다음을 사용하세요.",
+    documentation:
+      "릴리스 의미는 `docs/release/README.md`, 비공개 취약점 신고 방법은 `SECURITY.md`,\n번들된 의존성의 전체 법적 목록은 `THIRD_PARTY_NOTICES.json`을 확인하세요.",
+    implementationLabel: "구현",
+    integrity:
+      "이 payload를 신뢰하기 전에 신뢰할 수 있는 배포 채널에서 얻은 digest와\n`SHA256SUMS`를 대조하세요. 포함된 manifest는 내부 일관성만 증명하며 게시자 신원은\n증명하지 않습니다.",
+    languageLabel: "언어",
+    ledgerIntroduction: "조립 시 기록된 acceptance ledger 상태는 다음과 같습니다.",
+    liveProofLabel: "실제 증거",
+    packageDescription: (target) =>
+      `이 디렉터리는 ${target}용 자체 완결형 플랫폼별 OpenDelegate 번들입니다.\n감사된 Node.js runtime이 포함되어 있으므로 여기에서 pnpm을 설치하거나 source checkout\n명령을 실행하지 마세요.`,
+    previewTitle: "지원되지 않는 내부 프리뷰",
+    previewWarning:
+      "`INTERNAL_PREVIEW.md`를 먼저 읽으세요. 이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다.",
+    candidateTitle: "게시되지 않은 릴리스 후보",
+    startHeading: "Agent로 시작하기",
+    stateStep:
+      "runtime 상태, 데이터베이스, 자격 증명, 로그 및 생성된 Artifact는 이 번들 밖에\n   보관하세요.",
+    supportStatusLabel: "지원 상태",
+  }),
+  ja: Object.freeze({
+    agentStep:
+      "Codex、Claude、または対応可能な別のローカル Agent に\n   `skills/opendelegate-init/SKILL.md` の手順を実行するよう依頼してください。",
+    candidateWarning:
+      "この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません。",
+    cliIntroduction: "決定的な CLI インターフェースを確認するには、次を実行します。",
+    documentation:
+      "リリースの意味は `docs/release/README.md`、非公開の脆弱性報告は `SECURITY.md`、\nバンドルされた依存関係の完全な法的一覧は `THIRD_PARTY_NOTICES.json` を確認してください。",
+    implementationLabel: "実装",
+    integrity:
+      "この payload を信頼する前に、信頼できる公開チャネルから取得した digest と\n`SHA256SUMS` を照合してください。同梱の manifest が証明するのは内部整合性のみで、\n公開者の身元ではありません。",
+    languageLabel: "言語",
+    ledgerIntroduction: "アセンブリ時に記録された acceptance ledger の状態は次のとおりです。",
+    liveProofLabel: "実環境の証拠",
+    packageDescription: (target) =>
+      `このディレクトリは ${target} 向けの自己完結型プラットフォーム別 OpenDelegate\nバンドルです。監査済みの Node.js runtime が含まれているため、ここで pnpm をインストールしたり\nsource checkout 用のコマンドを実行したりしないでください。`,
+    previewTitle: "サポート対象外の内部プレビュー",
+    previewWarning:
+      "`INTERNAL_PREVIEW.md` を先に読んでください。このバンドルはサポート対象外であり、リリースタグで公開してはいけません。",
+    candidateTitle: "未公開のリリース候補",
+    startHeading: "Agent から始める",
+    stateStep:
+      "runtime 状態、データベース、認証情報、ログ、生成された Artifact はこのバンドルの\n   外に保存してください。",
+    supportStatusLabel: "サポート状況",
+  }),
+  fr: Object.freeze({
+    agentStep:
+      "Demandez à Codex, Claude ou à un autre Agent local compatible de suivre\n   `skills/opendelegate-init/SKILL.md`.",
+    candidateWarning:
+      "Ce candidat n’est pas une version prise en charge tant qu’il n’a pas été promu par le canal de publication documenté.",
+    cliIntroduction: "Pour inspecter l’interface CLI déterministe :",
+    documentation:
+      "Consultez `docs/release/README.md` pour la sémantique des releases, `SECURITY.md`\npour signaler une vulnérabilité en privé et `THIRD_PARTY_NOTICES.json` pour\nl’inventaire juridique complet des dépendances incluses.",
+    implementationLabel: "Implémentation",
+    integrity:
+      "Avant d’utiliser ce payload, comparez `SHA256SUMS` à un digest obtenu par un canal\nde publication fiable. Le manifest inclus prouve uniquement la cohérence interne,\npas l’identité de l’éditeur.",
+    languageLabel: "Langues",
+    ledgerIntroduction: "L’état de l’acceptance ledger enregistré pendant l’assemblage était :",
+    liveProofLabel: "Preuves réelles",
+    packageDescription: (target) =>
+      `Ce répertoire contient un bundle OpenDelegate autonome et propre à la plateforme\n${target}. Il inclut son runtime Node.js audité ; n’installez pas pnpm et n’exécutez\npas ici de commandes destinées au source checkout.`,
+    previewTitle: "aperçu interne non pris en charge",
+    previewWarning:
+      "Lisez d’abord `INTERNAL_PREVIEW.md`. Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release.",
+    candidateTitle: "candidat de version non publié",
+    startHeading: "Démarrer avec un Agent",
+    stateStep:
+      "Conservez l’état du runtime, les bases de données, les identifiants, les logs et les\n   Artifacts générés en dehors de ce bundle.",
+    supportStatusLabel: "Statut de prise en charge",
+  }),
+  es: Object.freeze({
+    agentStep:
+      "Pide a Codex, Claude u otro Agent local compatible que siga\n   `skills/opendelegate-init/SKILL.md`.",
+    candidateWarning:
+      "Este candidato no es una versión con soporte hasta que se promocione mediante el canal de publicación documentado.",
+    cliIntroduction: "Para inspeccionar la interfaz CLI determinista:",
+    documentation:
+      "Consulta `docs/release/README.md` para conocer la semántica de las releases,\n`SECURITY.md` para informar de vulnerabilidades en privado y\n`THIRD_PARTY_NOTICES.json` para ver el inventario legal completo de las dependencias incluidas.",
+    implementationLabel: "Implementación",
+    integrity:
+      "Antes de confiar en este payload, compara `SHA256SUMS` con un digest obtenido por\nun canal de publicación fiable. El manifest incluido solo demuestra la coherencia\ninterna, no la identidad de quien lo publica.",
+    languageLabel: "Idiomas",
+    ledgerIntroduction: "El estado del acceptance ledger registrado durante el ensamblado fue:",
+    liveProofLabel: "Evidencia real",
+    packageDescription: (target) =>
+      `Este directorio contiene un bundle OpenDelegate autónomo y específico para\n${target}. Incluye su runtime Node.js auditado; no instales pnpm ni ejecutes aquí\ncomandos propios del source checkout.`,
+    previewTitle: "vista previa interna sin soporte",
+    previewWarning:
+      "Lee primero `INTERNAL_PREVIEW.md`. Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release.",
+    candidateTitle: "candidato de versión no publicado",
+    startHeading: "Empezar con un Agent",
+    stateStep:
+      "Mantén el estado del runtime, las bases de datos, las credenciales, los logs y los\n   Artifacts generados fuera de este bundle.",
+    supportStatusLabel: "Estado de soporte",
+  }),
+  "zh-CN": Object.freeze({
+    agentStep:
+      "请让 Codex、Claude 或其他具备相应能力的本地 Agent 按照\n   `skills/opendelegate-init/SKILL.md` 操作。",
+    candidateWarning: "在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release。",
+    cliIntroduction: "如需检查确定性的 CLI 界面，请运行：",
+    documentation:
+      "Release 语义请参阅 `docs/release/README.md`，私下报告安全漏洞请参阅\n`SECURITY.md`，随附依赖项的完整法律清单请参阅 `THIRD_PARTY_NOTICES.json`。",
+    implementationLabel: "实现",
+    integrity:
+      "在信任此 payload 之前，请使用从可信发布渠道获得的 digest 校验 `SHA256SUMS`。\n随附的 manifest 只能证明内部一致性，不能证明发布者身份。",
+    languageLabel: "语言",
+    ledgerIntroduction: "组装时记录的 acceptance ledger 状态如下：",
+    liveProofLabel: "真实证据",
+    packageDescription: (target) =>
+      `此目录是面向 ${target} 的自包含 OpenDelegate 平台捆绑包，其中包含经过审计的\nNode.js runtime；请勿在此安装 pnpm，也不要运行面向 source checkout 的命令。`,
+    previewTitle: "不受支持的内部预览版",
+    previewWarning:
+      "请先阅读 `INTERNAL_PREVIEW.md`。此捆绑包不受支持，且不得在 Release tag 下发布。",
+    candidateTitle: "未发布的候选版本",
+    startHeading: "从 Agent 开始",
+    stateStep: "请将 runtime 状态、数据库、凭据、日志和生成的 Artifact 保存在此捆绑包之外。",
+    supportStatusLabel: "支持状态",
+  }),
+});
+
+function renderBundleReadmeLanguageNavigation(locale) {
+  const copy = bundleReadmeCopy[locale];
+  return `${copy.languageLabel}: ${bundleReadmeLanguages
+    .map((language) => {
+      const link = `[${language.label}](${language.filename})`;
+      return language.locale === locale ? `**${link}**` : link;
+    })
+    .join(" · ")}`;
 }
 
 export function renderBundleReadme(
@@ -172,29 +489,33 @@ export function renderBundleReadme(
   platform = process.platform,
   architecture = process.arch,
   productVersion,
+  locale = "en",
 ) {
   assertProductVersion(productVersion);
+  const copy = bundleReadmeCopy[locale];
+  if (copy === undefined) {
+    throw new Error(`Unsupported bundle README locale: ${String(locale)}.`);
+  }
   const preview = supportStatus.startsWith("internal-preview");
   const launcher = platform === "win32" ? "opendelegate.cmd" : "./opendelegate";
-  const statusLabel = preview ? "unsupported internal preview" : "unpublished release candidate";
-  const previewStep = preview
-    ? "1. Read `INTERNAL_PREVIEW.md`. This bundle is unsupported and must not be published under a release tag.\n2."
-    : "1. This candidate is not a supported release until it is promoted through the documented release channel.\n2.";
+  const statusLabel = preview ? copy.previewTitle : copy.candidateTitle;
+  const firstStep = preview ? copy.previewWarning : copy.candidateWarning;
 
   return `# OpenDelegate ${productVersion} ${statusLabel}
 
-This directory is a self-contained, platform-specific OpenDelegate bundle for
-${platform}/${architecture}. It includes its audited Node.js runtime; do not install
-pnpm or run source-checkout commands here.
+${renderBundleReadmeLanguageNavigation(locale)}
 
-## Start with an agent
+${copy.packageDescription(`${platform}/${architecture}`)}
 
-${previewStep} Ask Codex, Claude, or another capable local agent to follow
-   \`skills/opendelegate-init/SKILL.md\`.
-3. Keep runtime state, databases, credentials, logs, and generated Artifacts outside
-   this bundle.
+${copy.supportStatusLabel}: \`${supportStatus}\`.
 
-For deterministic CLI inspection:
+## ${copy.startHeading}
+
+1. ${firstStep}
+2. ${copy.agentStep}
+3. ${copy.stateStep}
+
+${copy.cliIntroduction}
 
 \`\`\`text
 ${launcher} help
@@ -202,19 +523,41 @@ ${launcher} init
 ${launcher} status
 \`\`\`
 
-The acceptance ledger state recorded during assembly was:
+${copy.ledgerIntroduction}
 
-- Implementation: ${formatCounts(summary.implementation)}
-- Live proof: ${formatCounts(summary.liveProof)}
+- ${copy.implementationLabel}: ${formatCounts(summary.implementation)}
+- ${copy.liveProofLabel}: ${formatCounts(summary.liveProof)}
 
-Verify \`SHA256SUMS\` against a digest obtained through a trusted publication channel
-before relying on the payload. The enclosed manifest proves only internal
-consistency, not publisher identity.
+${copy.integrity}
 
-See \`docs/release/README.md\` for release semantics, \`SECURITY.md\` for private
-vulnerability reporting, and \`THIRD_PARTY_NOTICES.json\` for the complete bundled
-dependency legal inventory.
+${copy.documentation}
 `;
+}
+
+export async function writeBundleReadmes(
+  staging,
+  supportStatus,
+  summary,
+  platform = process.platform,
+  architecture = process.arch,
+  productVersion,
+) {
+  await Promise.all(
+    bundleReadmeLanguages.map((language) =>
+      writeFile(
+        join(staging, language.filename),
+        renderBundleReadme(
+          supportStatus,
+          summary,
+          platform,
+          architecture,
+          productVersion,
+          language.locale,
+        ),
+        "utf8",
+      ),
+    ),
+  );
 }
 
 export function validateReleaseDestination(sourceRoot, destination) {
@@ -233,6 +576,24 @@ export function validateReleaseDestination(sourceRoot, destination) {
     throw new Error("Release artifacts must be written outside the source checkout.");
   }
   return normalizedDestination;
+}
+
+async function validateExternalReleaseInput(sourceRoot, input, label) {
+  if (!isAbsolute(input)) {
+    throw new Error(`The ${label} must use an absolute path.`);
+  }
+  const [normalizedSource, normalizedInput] = await Promise.all([
+    realpath(sourceRoot),
+    realpath(input),
+  ]);
+  const relationship = relative(normalizedSource, normalizedInput);
+  if (
+    relationship === "" ||
+    (!isAbsolute(relationship) && relationship !== ".." && !relationship.startsWith(`..${sep}`))
+  ) {
+    throw new Error(`The ${label} must remain outside the source checkout.`);
+  }
+  return normalizedInput;
 }
 
 export function validateReleaseDestinationName(destination, internalPreview) {
@@ -262,6 +623,17 @@ export function determineSupportStatus(summary, internalPreview) {
     );
   }
   return "internal-preview-blocked";
+}
+
+export function assertSupportMatrixTarget(platform, architecture, supportStatus) {
+  if (
+    supportStatus === "release-candidate" &&
+    !releaseCandidateTargets.has(`${platform}-${architecture}`)
+  ) {
+    throw new Error(
+      `Release candidates are limited to the declared support-matrix targets; ${platform}-${architecture} may create an internal preview only.`,
+    );
+  }
 }
 
 export function collectShaBoundAttestationPaths(ledger) {
@@ -471,7 +843,12 @@ export async function writeIntegrityManifests(root) {
   await writeFile(join(root, "SHA256SUMS"), await createChecksumManifest(root), "utf8");
 }
 
-export async function inspectReleaseCandidateProvenance(sourceRoot, ledger, source) {
+export async function inspectReleaseCandidateProvenance(
+  sourceRoot,
+  ledger,
+  source,
+  gitProvenance = null,
+) {
   if (typeof ledger.sourceCommit !== "string" || !fullGitCommitPattern.test(ledger.sourceCommit)) {
     throw new Error("The audited source commit must be an exact 40-character lowercase Git SHA.");
   }
@@ -487,10 +864,16 @@ export async function inspectReleaseCandidateProvenance(sourceRoot, ledger, sour
     );
   }
 
-  await assertGitCommitExists(sourceRoot, ledger.sourceCommit, "audited source commit A");
-  await assertGitCommitExists(sourceRoot, source.commit, "build commit B");
+  await assertGitCommitExists(
+    sourceRoot,
+    ledger.sourceCommit,
+    "audited source commit A",
+    gitProvenance,
+  );
+  await assertGitCommitExists(sourceRoot, source.commit, "build commit B", gitProvenance);
   try {
-    await runProvenanceGit(
+    await runBoundProvenanceGit(
+      gitProvenance,
       ["merge-base", "--is-ancestor", ledger.sourceCommit, source.commit],
       sourceRoot,
       { capture: true },
@@ -503,7 +886,8 @@ export async function inspectReleaseCandidateProvenance(sourceRoot, ledger, sour
   }
 
   const rawDiff = (
-    await runProvenanceGit(
+    await runBoundProvenanceGit(
+      gitProvenance,
       [
         "diff",
         "--raw",
@@ -528,7 +912,12 @@ export async function inspectReleaseCandidateProvenance(sourceRoot, ledger, sour
   };
 }
 
-export async function createCommittedSourceSnapshot(sourceRoot, commit, parent) {
+export async function createCommittedSourceSnapshot(
+  sourceRoot,
+  commit,
+  parent,
+  gitProvenance = null,
+) {
   if (!fullGitCommitPattern.test(commit)) {
     throw new Error(
       "A committed source snapshot requires an exact 40-character lowercase Git SHA.",
@@ -537,9 +926,12 @@ export async function createCommittedSourceSnapshot(sourceRoot, commit, parent) 
   const snapshot = await mkdtemp(join(parent, ".od-committed-source-"));
   const archivePath = join(parent, `.od-source-${process.pid}-${randomUUID().slice(0, 8)}.tar`);
   try {
-    await runProvenanceGit(["archive", "--format=tar", "-o", archivePath, commit], sourceRoot, {
-      capture: true,
-    });
+    await runBoundProvenanceGit(
+      gitProvenance,
+      ["archive", "--format=tar", "-o", archivePath, commit],
+      sourceRoot,
+      { capture: true },
+    );
     await runCommand("tar", ["-xf", archivePath, "-C", snapshot], sourceRoot, {
       capture: true,
     });
@@ -552,8 +944,21 @@ export async function createCommittedSourceSnapshot(sourceRoot, commit, parent) 
   }
 }
 
-export async function withCommittedSourceSnapshot(sourceRoot, commit, parent, operation) {
-  const snapshot = await createCommittedSourceSnapshot(sourceRoot, commit, parent);
+export async function withCommittedSourceSnapshot(
+  sourceRoot,
+  commit,
+  parent,
+  gitProvenanceOrOperation,
+  maybeOperation,
+) {
+  const gitProvenance =
+    typeof gitProvenanceOrOperation === "function" ? null : gitProvenanceOrOperation;
+  const operation =
+    typeof gitProvenanceOrOperation === "function" ? gitProvenanceOrOperation : maybeOperation;
+  if (typeof operation !== "function") {
+    throw new Error("A committed source snapshot requires an operation callback.");
+  }
+  const snapshot = await createCommittedSourceSnapshot(sourceRoot, commit, parent, gitProvenance);
   try {
     return await operation(snapshot);
   } finally {
@@ -566,6 +971,7 @@ export async function verifyRunningReleaseToolFiles(
   commit,
   paths = runningReleaseToolPaths,
   runningRoot = sourceRoot,
+  gitProvenance = null,
 ) {
   if (!/^[0-9a-f]{40}$/u.test(commit)) {
     throw new Error("A running release-tool verification requires a full Git commit ID.");
@@ -580,7 +986,9 @@ export async function verifyRunningReleaseToolFiles(
     }
     const [runningBytes, committed] = await Promise.all([
       readFile(join(runningRoot, ...segments), "utf8"),
-      runProvenanceGit(["show", `${commit}:${path}`], sourceRoot, { capture: true }),
+      runBoundProvenanceGit(gitProvenance, ["show", `${commit}:${path}`], sourceRoot, {
+        capture: true,
+      }),
     ]);
     if (runningBytes !== committed.stdout) {
       throw new Error(
@@ -715,11 +1123,20 @@ async function createFileEntries(root, excluded) {
   return entries;
 }
 
-export async function buildRelease(options) {
+export async function buildRelease(options, dependencies = {}) {
   assertReleaseHost();
-  const source = await readSourceIdentity();
+  const runnerIdentity = await pinBuildRunnerIdentity(options, dependencies);
+  const gitProvenance = await pinBuildGitProvenance(options, dependencies);
+  const source =
+    gitProvenance === null
+      ? await readSourceIdentity()
+      : await readPinnedReleaseSourceIdentity(gitProvenance);
   assertCleanBundleSource(source);
-  await assertCommittedReleaseRunner(source);
+  if (gitProvenance !== null) {
+    await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
+    await revalidatePinnedReleaseGitProvenance(gitProvenance);
+  }
+  await assertCommittedReleaseRunner(source, gitProvenance);
 
   const lexicalDestination = validateReleaseDestination(repositoryRoot, options.destination);
   validateReleaseDestinationName(lexicalDestination, options.internalPreview);
@@ -735,9 +1152,21 @@ export async function buildRelease(options) {
   }
   const summary = summarizeReleaseEvidence(ledger);
   const supportStatus = determineSupportStatus(summary, options.internalPreview);
+  assertSupportMatrixTarget(process.platform, process.arch, supportStatus);
+  const platformAuthenticityPolicyInput =
+    options.platformSigningPolicy === undefined
+      ? undefined
+      : await readPlatformAuthenticityPolicy(
+          await validateExternalReleaseInput(
+            repositoryRoot,
+            options.platformSigningPolicy,
+            "platform-signing policy",
+          ),
+          options.platformSigningPolicySha256,
+        );
   const provenance =
     supportStatus === "release-candidate"
-      ? await inspectReleaseCandidateProvenance(repositoryRoot, ledger, source)
+      ? await inspectReleaseCandidateProvenance(repositoryRoot, ledger, source, gitProvenance)
       : {
           auditedSourceCommit: ledger.sourceCommit,
           buildCommit: source.commit,
@@ -748,6 +1177,20 @@ export async function buildRelease(options) {
   await mkdir(parent, { recursive: true });
   const staging = join(parent, `.od-${process.pid}-${randomUUID().slice(0, 8)}`);
   await mkdir(staging);
+  const authorizeStagedPlatformCredentialUse =
+    platformAuthenticityPolicyInput === undefined
+      ? undefined
+      : createBuildPlatformCredentialAuthorizer({
+          dependencies,
+          destination,
+          gitProvenance,
+          ledgerDigest: createHash("sha256").update(ledgerText).digest("hex"),
+          ledgerPath,
+          platformAuthenticityPolicyInput,
+          runnerIdentity,
+          source,
+          staging,
+        });
 
   try {
     await withPinnedPnpm(parent, async (bootstrapPnpmCli) => {
@@ -755,6 +1198,7 @@ export async function buildRelease(options) {
         repositoryRoot,
         source.commit,
         parent,
+        gitProvenance,
         async (assemblySourceRoot) => {
           const snapshotLedger = await readFile(
             join(assemblySourceRoot, "docs", "release", "acceptance-evidence.json"),
@@ -790,12 +1234,23 @@ export async function buildRelease(options) {
             staging,
             summary,
             supportStatus,
+            platformAuthenticityPolicyInput,
+            authorizePlatformCredentialUse: authorizeStagedPlatformCredentialUse,
           });
         },
       );
     });
 
-    const finalSource = await readSourceIdentity();
+    await platformAuthenticityPolicyInput?.verifyStable();
+    const finalSource =
+      gitProvenance === null
+        ? await readSourceIdentity()
+        : await readPinnedReleaseSourceIdentity(gitProvenance);
+    if (gitProvenance !== null) {
+      await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
+      await revalidatePinnedReleaseGitProvenance(gitProvenance);
+    }
+    await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
     if (finalSource.dirty || finalSource.commit !== source.commit) {
       throw new Error("The source checkout changed while the bundle was assembled.");
     }
@@ -804,6 +1259,7 @@ export async function buildRelease(options) {
         repositoryRoot,
         ledger,
         finalSource,
+        gitProvenance,
       );
       if (JSON.stringify(finalProvenance) !== JSON.stringify(provenance)) {
         throw new Error(
@@ -826,7 +1282,7 @@ export async function buildRelease(options) {
   };
 }
 
-async function assertCommittedReleaseRunner(source) {
+async function assertCommittedReleaseRunner(source, gitProvenance = null) {
   if (
     configuredReleaseSource === undefined ||
     !isAbsolute(configuredReleaseSource) ||
@@ -850,6 +1306,7 @@ async function assertCommittedReleaseRunner(source) {
     source.commit,
     runningReleaseToolPaths,
     canonicalToolRoot,
+    gitProvenance,
   );
 }
 
@@ -903,6 +1360,8 @@ async function assembleRelease({
   staging,
   summary,
   supportStatus,
+  platformAuthenticityPolicyInput,
+  authorizePlatformCredentialUse,
 }) {
   const assemblyRequire = createRequire(join(assemblySourceRoot, "package.json"));
   const assemblyPnpmCli = join(dirname(assemblyRequire.resolve("pnpm")), "bin", "pnpm.cjs");
@@ -916,9 +1375,19 @@ async function assembleRelease({
   await runCommand("pnpm", createMainDeployArguments(mainDirectory), assemblySourceRoot, {
     pnpmCli: assemblyPnpmCli,
   });
-  await removePackageManagerBinDirectories(join(mainDirectory, "node_modules"));
+  const mainNodeModules = join(mainDirectory, "node_modules");
+  await prunePackageManagerMetadata(mainNodeModules);
+  await pruneRuntimeNativePackageArtifacts(mainNodeModules);
+  const workerDirectory = join(staging, "apps", "worker");
+  await mkdir(workerDirectory, { recursive: true });
+  await runCommand("pnpm", createWorkerDeployArguments(workerDirectory), assemblySourceRoot, {
+    pnpmCli: assemblyPnpmCli,
+  });
+  const workerNodeModules = join(workerDirectory, "node_modules");
+  await prunePackageManagerMetadata(workerNodeModules);
+  await pruneRuntimeNativePackageArtifacts(workerNodeModules);
 
-  await bundle({
+  const mainBundle = await bundle({
     absWorkingDir: assemblySourceRoot,
     banner: {
       js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
@@ -928,10 +1397,80 @@ async function assembleRelease({
     external: ["@node-rs/argon2", "@node-rs/argon2-*", "better-sqlite3", "pg"],
     format: "esm",
     logLevel: "info",
+    metafile: true,
     outfile: join(mainDirectory, "opendelegate.mjs"),
     platform: "node",
     target: "node24.18",
   });
+  assertNoBundledWorkspaceExternalImports(mainBundle.metafile, "Main");
+  const workerBundle = await bundle({
+    absWorkingDir: assemblySourceRoot,
+    banner: {
+      js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    },
+    bundle: true,
+    entryPoints: ["apps/worker/src/cli.ts"],
+    external: ["better-sqlite3"],
+    format: "esm",
+    logLevel: "info",
+    metafile: true,
+    outfile: join(workerDirectory, "opendelegate-worker.mjs"),
+    platform: "node",
+    target: "node24.18",
+  });
+  assertNoBundledWorkspaceExternalImports(workerBundle.metafile, "Worker");
+  const serviceHostExternalDependencies = [
+    "@node-rs/argon2",
+    "@node-rs/argon2-*",
+    "better-sqlite3",
+    "pg",
+  ];
+  for (const directory of [mainDirectory, workerDirectory]) {
+    const coreServiceBundle = await bundle({
+      absWorkingDir: assemblySourceRoot,
+      banner: {
+        js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+      },
+      bundle: true,
+      entryPoints: ["apps/service-host/src/core-entry.ts"],
+      external: serviceHostExternalDependencies,
+      format: "esm",
+      logLevel: "info",
+      metafile: true,
+      outfile: join(directory, "opendelegate-service-host.mjs"),
+      platform: "node",
+      target: "node24.18",
+    });
+    assertNoBundledWorkspaceExternalImports(coreServiceBundle.metafile, "service host");
+    const sessionHelperBundle = await bundle({
+      absWorkingDir: assemblySourceRoot,
+      banner: {
+        js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+      },
+      bundle: true,
+      entryPoints: ["apps/service-host/src/helper-entry.ts"],
+      external: serviceHostExternalDependencies,
+      format: "esm",
+      logLevel: "info",
+      metafile: true,
+      outfile: join(directory, "opendelegate-session-helper.mjs"),
+      platform: "node",
+      target: "node24.18",
+    });
+    assertNoBundledWorkspaceExternalImports(sessionHelperBundle.metafile, "session helper");
+  }
+  await pruneBundledWorkspacePackages(mainNodeModules);
+  await pruneBundledWorkspacePackages(workerNodeModules);
+  await pruneBundledApplicationPayload(mainDirectory, [
+    "opendelegate.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ]);
+  await pruneBundledApplicationPayload(workerDirectory, [
+    "opendelegate-worker.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ]);
 
   const adminTarget = join(staging, "apps", "admin-web", "dist");
   await mkdir(dirname(adminTarget), { recursive: true });
@@ -939,17 +1478,36 @@ async function assembleRelease({
     recursive: true,
   });
 
+  const stagedNativeComponents = await stageNativeReleaseAssets({
+    platform: process.platform,
+    architecture: process.arch,
+    sourceRoot: assemblySourceRoot,
+    stagingRoot: staging,
+  });
   await copyReleaseMaterials(staging, assemblySourceRoot);
   const runtimeProvenance = await copyRuntime(staging, assemblySourceRoot);
-  await writeThirdPartyNotices(staging, mainDirectory, assemblySourceRoot);
-  await writeFile(
-    join(staging, "README.md"),
-    renderBundleReadme(supportStatus, summary, process.platform, process.arch, productVersion),
-    "utf8",
+  await writeThirdPartyNotices(staging, mainDirectory, assemblySourceRoot, workerDirectory);
+  await writeBundleReadmes(
+    staging,
+    supportStatus,
+    summary,
+    process.platform,
+    process.arch,
+    productVersion,
   );
 
   const buildId = createBuildId(source, supportStatus);
   await writeLaunchers(staging);
+  const finalizedNativeAuthenticity = await finalizePlatformNativeAuthenticity({
+    authorizeCredentialUse: authorizePlatformCredentialUse,
+    platform: process.platform,
+    architecture: process.arch,
+    nativeComponents: stagedNativeComponents,
+    policyInput: platformAuthenticityPolicyInput,
+    stagingRoot: staging,
+    supportStatus,
+  });
+  const { nativeComponents } = finalizedNativeAuthenticity;
   await assertPortableTree(staging);
 
   const metadata = {
@@ -976,6 +1534,7 @@ async function assembleRelease({
     dependencyLockSha256: await sha256File(join(assemblySourceRoot, "pnpm-lock.yaml")),
     sourcePackageManifestSha256: await sha256File(join(assemblySourceRoot, "package.json")),
     runtimeExternals: await readRuntimeExternalVersions(assemblySourceRoot),
+    nativeComponents,
     buildCommit: provenance.buildCommit,
     auditedSourceCommit: provenance.auditedSourceCommit,
     changedAttestationPaths: provenance.changedAttestationPaths,
@@ -993,7 +1552,9 @@ async function assembleRelease({
       complete: summary.complete,
     },
     entrypoints:
-      process.platform === "win32" ? ["opendelegate.cmd"] : ["opendelegate", "opendelegate.cmd"],
+      process.platform === "win32"
+        ? ["opendelegate.cmd", "opendelegate-worker.cmd"]
+        : ["opendelegate", "opendelegate-worker", "opendelegate.cmd", "opendelegate-worker.cmd"],
     fileManifest: "payload-manifest.json",
     checksumManifest: "SHA256SUMS",
   };
@@ -1024,12 +1585,34 @@ Run \`opendelegate help\` for the deterministic CLI surface. Review
   }
 
   await writeIntegrityManifests(staging);
+  const frozenPayload = await captureFrozenPayload(staging);
   const smokeEvidence = await smokeBundle(staging, buildId, productVersion);
+  await verifyFrozenPayload(staging, frozenPayload);
   await writeFile(
     join(staging, "smoke-evidence.json"),
     `${JSON.stringify(smokeEvidence, null, 2)}\n`,
     "utf8",
   );
+  await verifyFinalPlatformNativeAuthenticity({
+    ...finalizedNativeAuthenticity,
+    policyInput: platformAuthenticityPolicyInput,
+    stagingRoot: staging,
+  });
+  await assertBundledApplicationPayload(mainDirectory, [
+    "opendelegate.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ]);
+  await assertBundledApplicationPayload(workerDirectory, [
+    "opendelegate-worker.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ]);
+  await assertNoBundledWorkspacePackages(mainNodeModules);
+  await assertNoBundledWorkspacePackages(workerNodeModules);
+  await assertNoPackageManagerMetadata(mainNodeModules);
+  await assertNoPackageManagerMetadata(workerNodeModules);
+  await assertPortableTree(staging);
   await writeIntegrityManifests(staging);
 }
 
@@ -1045,8 +1628,361 @@ export function createMainDeployArguments(mainDirectory) {
   ];
 }
 
+export function createWorkerDeployArguments(workerDirectory) {
+  return [
+    "--config.node-linker=hoisted",
+    "--filter",
+    "@opendelegate/worker",
+    "deploy",
+    "--legacy",
+    "--prod",
+    workerDirectory,
+  ];
+}
+
 export async function removePackageManagerBinDirectories(root) {
   await removePackageManagerBinsFromTree(root, basename(root) === "node_modules");
+}
+
+export async function prunePackageManagerMetadata(nodeModules) {
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "application node_modules root",
+  );
+  await removePackageManagerBinsFromTree(canonicalNodeModules, true);
+  for (const entry of [
+    { kind: "file", name: ".modules.yaml" },
+    { kind: "file", name: ".package-map.json" },
+    { kind: "directory", name: ".pnpm" },
+  ]) {
+    await removePackageManagerMetadataEntry(canonicalNodeModules, entry);
+  }
+  await assertNoPackageManagerMetadata(canonicalNodeModules);
+}
+
+export async function assertNoPackageManagerMetadata(nodeModules) {
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "application node_modules root",
+  );
+  await assertNoPackageManagerBinsFromTree(canonicalNodeModules, true);
+  for (const name of [".modules.yaml", ".package-map.json", ".pnpm"]) {
+    try {
+      await lstat(join(canonicalNodeModules, name));
+    } catch (error) {
+      if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    throw new Error(`The bundled application payload retains pnpm metadata: ${name}.`);
+  }
+}
+
+async function removePackageManagerMetadataEntry(root, entry) {
+  const path = join(root, entry.name);
+  let metadata;
+  try {
+    metadata = await lstat(path);
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const canonical = await realpath(path);
+  const validKind = entry.kind === "directory" ? metadata.isDirectory() : metadata.isFile();
+  if (!validKind || metadata.isSymbolicLink() || !isStrictPathDescendant(root, canonical)) {
+    throw new Error(
+      `The deployed pnpm metadata escaped its release staging boundary: ${entry.name}.`,
+    );
+  }
+  if (entry.kind === "directory") {
+    await assertPortableTree(canonical);
+    await rm(canonical, { force: true, recursive: true });
+  } else {
+    await rm(canonical, { force: true });
+  }
+}
+
+export function assertNoBundledWorkspaceExternalImports(metafile, label) {
+  if (metafile === undefined || metafile === null || typeof metafile.outputs !== "object") {
+    throw new Error(`The ${label} bundle did not return an auditable dependency metafile.`);
+  }
+  const workspaceImports = Object.values(metafile.outputs)
+    .flatMap((output) => (Array.isArray(output.imports) ? output.imports : []))
+    .filter(
+      (entry) =>
+        entry !== null &&
+        typeof entry === "object" &&
+        entry.external === true &&
+        typeof entry.path === "string" &&
+        entry.path.startsWith("@opendelegate/"),
+    )
+    .map((entry) => entry.path)
+    .sort(compareCodeUnits);
+  if (workspaceImports.length > 0) {
+    throw new Error(
+      `The ${label} bundle left first-party workspace imports external: ${workspaceImports.join(", ")}.`,
+    );
+  }
+}
+
+export async function pruneBundledWorkspacePackages(nodeModules) {
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "application node_modules root",
+  );
+  const scope = join(canonicalNodeModules, "@opendelegate");
+  let metadata;
+  try {
+    metadata = await lstat(scope);
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const canonicalScope = await realpath(scope);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    !isStrictPathDescendant(canonicalNodeModules, canonicalScope)
+  ) {
+    throw new Error("The deployed workspace package scope escaped its release staging boundary.");
+  }
+  await assertPortableTree(canonicalScope);
+  await rm(canonicalScope, { force: true, recursive: true });
+  await assertNoBundledWorkspacePackages(canonicalNodeModules);
+}
+
+export async function assertNoBundledWorkspacePackages(nodeModules) {
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "application node_modules root",
+  );
+  try {
+    await lstat(join(canonicalNodeModules, "@opendelegate"));
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("The bundled application payload retains first-party workspace packages.");
+}
+
+export async function pruneBundledApplicationPayload(root, retainedBundleNames) {
+  const canonicalRoot = await requireSafePruneDirectory(
+    root,
+    undefined,
+    "bundled application root",
+  );
+  const retained = validateBundledApplicationNames(retainedBundleNames);
+
+  await requireSafePruneDirectory(
+    join(canonicalRoot, "node_modules"),
+    canonicalRoot,
+    "application node_modules root",
+  );
+  for (const name of retainedBundleNames) {
+    await requireSafePruneFile(
+      join(canonicalRoot, name),
+      canonicalRoot,
+      `application bundle ${name}`,
+    );
+  }
+  const entries = await readdir(canonicalRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (retained.has(entry.name)) {
+      continue;
+    }
+    const path = join(canonicalRoot, entry.name);
+    const [metadata, canonicalEntry] = await Promise.all([lstat(path), realpath(path)]);
+    if (
+      metadata.isSymbolicLink() ||
+      (!metadata.isDirectory() && !metadata.isFile()) ||
+      !isStrictPathDescendant(canonicalRoot, canonicalEntry)
+    ) {
+      throw new Error(
+        `The deployed application package entry escaped its release staging boundary: ${entry.name}.`,
+      );
+    }
+    if (metadata.isDirectory()) {
+      await assertPortableTree(canonicalEntry);
+      await rm(canonicalEntry, { force: true, recursive: true });
+    } else {
+      await rm(canonicalEntry, { force: true });
+    }
+  }
+
+  await assertBundledApplicationPayload(canonicalRoot, retainedBundleNames);
+}
+
+export async function assertBundledApplicationPayload(root, retainedBundleNames) {
+  const canonicalRoot = await requireSafePruneDirectory(
+    root,
+    undefined,
+    "bundled application root",
+  );
+  const retained = validateBundledApplicationNames(retainedBundleNames);
+  await requireSafePruneDirectory(
+    join(canonicalRoot, "node_modules"),
+    canonicalRoot,
+    "application node_modules root",
+  );
+  for (const name of retainedBundleNames) {
+    await requireSafePruneFile(
+      join(canonicalRoot, name),
+      canonicalRoot,
+      `application bundle ${name}`,
+    );
+  }
+  const finalEntries = (await readdir(canonicalRoot)).sort(compareCodeUnits);
+  const expectedEntries = [...retained].sort(compareCodeUnits);
+  if (JSON.stringify(finalEntries) !== JSON.stringify(expectedEntries)) {
+    throw new Error("The bundled application payload contains an unexpected root entry.");
+  }
+}
+
+function validateBundledApplicationNames(retainedBundleNames) {
+  const retained = new Set(["node_modules"]);
+  for (const name of retainedBundleNames) {
+    if (
+      typeof name !== "string" ||
+      name === "" ||
+      basename(name) !== name ||
+      !/^opendelegate(?:-[a-z-]+)?\.mjs$/u.test(name)
+    ) {
+      throw new Error("Bundled application entrypoints must be explicit .mjs basenames.");
+    }
+    retained.add(name);
+  }
+  return retained;
+}
+
+export async function pruneRuntimeNativePackageArtifacts(
+  nodeModules,
+  platform = process.platform,
+  architecture = process.arch,
+) {
+  if (!supportedPlatforms.has(platform) || !supportedArchitectures.has(architecture)) {
+    throw new Error(
+      `Runtime native package pruning is unsupported for ${platform}/${architecture}.`,
+    );
+  }
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "node_modules root",
+  );
+  const packageDirectory = await requireSafePruneDirectory(
+    join(canonicalNodeModules, "better-sqlite3"),
+    canonicalNodeModules,
+    "better-sqlite3 package",
+  );
+  const manifestPath = await requireSafePruneFile(
+    join(packageDirectory, "package.json"),
+    packageDirectory,
+    "better-sqlite3 manifest",
+  );
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  if (manifest.name !== "better-sqlite3" || manifest.version !== "13.0.1") {
+    throw new Error("The deployed better-sqlite3 package identity is invalid.");
+  }
+  const targetPrebuild = `${platform}-${architecture}.node`;
+  const prebuildsDirectory = await requireSafePruneDirectory(
+    join(packageDirectory, "prebuilds"),
+    packageDirectory,
+    "better-sqlite3 prebuild inventory",
+  );
+  const buildDirectory = await requireSafePruneDirectory(
+    join(packageDirectory, "build"),
+    packageDirectory,
+    "better-sqlite3 generated build directory",
+    true,
+  );
+  const prebuildEntries = await readdir(prebuildsDirectory, { withFileTypes: true });
+  const validatedPrebuilds = [];
+  let retainedTarget = false;
+  for (const entry of prebuildEntries) {
+    if (!entry.isFile() || !/^[a-z0-9-]+\.node$/u.test(entry.name)) {
+      throw new Error(
+        `The deployed better-sqlite3 prebuild inventory contains an unsupported entry: ${entry.name}.`,
+      );
+    }
+    const path = await requireSafePruneFile(
+      join(prebuildsDirectory, entry.name),
+      prebuildsDirectory,
+      `better-sqlite3 prebuild ${entry.name}`,
+    );
+    const metadata = await lstat(path);
+    validatedPrebuilds.push({ name: entry.name, path });
+    if (entry.name === targetPrebuild) {
+      if (metadata.size <= 0) {
+        throw new Error(`The target better-sqlite3 prebuild is empty: ${targetPrebuild}.`);
+      }
+      retainedTarget = true;
+    }
+  }
+  if (!retainedTarget) {
+    throw new Error(`The target better-sqlite3 prebuild is unavailable: ${targetPrebuild}.`);
+  }
+  for (const entry of validatedPrebuilds) {
+    if (entry.name !== targetPrebuild) {
+      await rm(entry.path, { force: true });
+    }
+  }
+  if (buildDirectory !== undefined) {
+    await rm(buildDirectory, { force: true, recursive: true });
+  }
+}
+
+async function requireSafePruneDirectory(path, parent, label, optional = false) {
+  let metadata;
+  try {
+    metadata = await lstat(path);
+  } catch (error) {
+    if (optional && error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  const canonical = await realpath(path);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    (parent !== undefined && !isStrictPathDescendant(parent, canonical))
+  ) {
+    throw new Error(`The deployed ${label} escaped its release staging boundary.`);
+  }
+  return canonical;
+}
+
+async function requireSafePruneFile(path, parent, label) {
+  const [metadata, canonical] = await Promise.all([lstat(path), realpath(path)]);
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    !isStrictPathDescendant(parent, canonical)
+  ) {
+    throw new Error(`The deployed ${label} escaped its release staging boundary.`);
+  }
+  return canonical;
+}
+
+function isStrictPathDescendant(parent, candidate) {
+  const relationship = relative(resolve(parent), resolve(candidate));
+  return (
+    relationship !== "" &&
+    !isAbsolute(relationship) &&
+    relationship !== ".." &&
+    !relationship.startsWith(`..${sep}`)
+  );
 }
 
 async function removePackageManagerBinsFromTree(root, rootIsNodeModules) {
@@ -1059,6 +1995,19 @@ async function removePackageManagerBinsFromTree(root, rootIsNodeModules) {
     }
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
       await removePackageManagerBinsFromTree(path, entry.name === "node_modules");
+    }
+  }
+}
+
+async function assertNoPackageManagerBinsFromTree(root, rootIsNodeModules) {
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (rootIsNodeModules && entry.name === ".bin") {
+      throw new Error("The bundled application payload retains a package-manager .bin directory.");
+    }
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      await assertNoPackageManagerBinsFromTree(path, entry.name === "node_modules");
     }
   }
 }
@@ -1096,11 +2045,11 @@ async function copyReleaseMaterials(staging, sourceRoot) {
     await copyFile(join(sourceRoot, file), join(staging, file));
   }
   await cp(join(sourceRoot, "docs"), join(staging, "docs"), { recursive: true });
-  await cp(
-    join(sourceRoot, "skills", "opendelegate-init"),
-    join(staging, "skills", "opendelegate-init"),
-    { recursive: true },
-  );
+  for (const skill of RELEASE_SKILL_DIRECTORIES) {
+    await cp(join(sourceRoot, "skills", skill), join(staging, "skills", skill), {
+      recursive: true,
+    });
+  }
 }
 
 async function copyRuntime(staging, sourceRoot) {
@@ -1185,11 +2134,22 @@ ${input.shasumsUrl}
   }
 }
 
-export async function writeThirdPartyNotices(staging, mainDirectory, sourceRoot = repositoryRoot) {
+export async function writeThirdPartyNotices(
+  staging,
+  mainDirectory,
+  sourceRoot = repositoryRoot,
+  workerDirectory,
+) {
   const packages = [];
-  const nodeModules = join(mainDirectory, "node_modules");
-  for (const packageDirectory of await listRuntimePackageDirectories(nodeModules)) {
-    await addPackageNotice(packages, packageDirectory, staging);
+  const runtimeDirectories = [
+    mainDirectory,
+    ...(workerDirectory === undefined ? [] : [workerDirectory]),
+  ];
+  for (const runtimeDirectory of runtimeDirectories) {
+    const nodeModules = join(runtimeDirectory, "node_modules");
+    for (const packageDirectory of await listRuntimePackageDirectories(nodeModules)) {
+      await addPackageNotice(packages, packageDirectory, staging);
+    }
   }
   const adminManifestPath = join(sourceRoot, "apps", "admin-web", "package.json");
   for (const packageDirectory of await listProductionPackageDirectories(adminManifestPath)) {
@@ -1558,7 +2518,7 @@ export function renderWindowsLauncher() {
   return `@echo off\r
 set "OPENDELEGATE_BUILD_ID="\r
 set "OPENDELEGATE_VERSION="\r
-"%~dp0runtime\\node.exe" "%~dp0apps\\main\\opendelegate.mjs" %*\r
+"%~dp0runtime\\node.exe" "%~dp0apps\\launcher\\opendelegate.mjs" %*\r
 `;
 }
 
@@ -1566,17 +2526,53 @@ export function renderUnixLauncher() {
   return `#!/bin/sh
 unset OPENDELEGATE_BUILD_ID OPENDELEGATE_VERSION
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$ROOT_DIR/runtime/node" "$ROOT_DIR/apps/main/opendelegate.mjs" "$@"
+exec "$ROOT_DIR/runtime/node" "$ROOT_DIR/apps/launcher/opendelegate.mjs" "$@"
+`;
+}
+
+export function renderReleaseRouter() {
+  return `import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const arguments_ = process.argv.slice(2);
+const worker = arguments_[0] === "worker";
+const target = worker
+  ? join(root, "apps", "worker", "opendelegate-worker.mjs")
+  : join(root, "apps", "main", "opendelegate.mjs");
+process.argv = [process.execPath, target, ...(worker ? arguments_.slice(1) : arguments_)];
+await import(pathToFileURL(target).href);
 `;
 }
 
 async function writeLaunchers(staging) {
+  const launcherDirectory = join(staging, "apps", "launcher");
+  await mkdir(launcherDirectory, { recursive: true });
+  await writeFile(join(launcherDirectory, "opendelegate.mjs"), renderReleaseRouter(), "utf8");
   await writeFile(join(staging, "opendelegate.cmd"), renderWindowsLauncher(), "utf8");
+  await writeFile(
+    join(staging, "opendelegate-worker.cmd"),
+    renderWindowsLauncher().replace(
+      '"%~dp0apps\\launcher\\opendelegate.mjs" %*',
+      '"%~dp0apps\\launcher\\opendelegate.mjs" worker %*',
+    ),
+    "utf8",
+  );
 
   if (process.platform !== "win32") {
     const path = join(staging, "opendelegate");
     await writeFile(path, renderUnixLauncher(), "utf8");
     await chmod(path, 0o755);
+    const workerPath = join(staging, "opendelegate-worker");
+    await writeFile(
+      workerPath,
+      renderUnixLauncher().replace(
+        '"$ROOT_DIR/apps/launcher/opendelegate.mjs" "$@"',
+        '"$ROOT_DIR/apps/launcher/opendelegate.mjs" worker "$@"',
+      ),
+      "utf8",
+    );
+    await chmod(workerPath, 0o755);
   }
 }
 
@@ -1598,10 +2594,35 @@ export function evaluateSmokeShutdown(input) {
   };
 }
 
+export async function waitForPackagedMainReadiness({
+  exited,
+  output,
+  platform = process.platform,
+  wait = waitUntil,
+}) {
+  const phaseTimeoutMilliseconds = platform === "win32" ? 60_000 : 20_000;
+  const initialized = () => output().includes('"event":"main.initialized"');
+  const ready = () => output().includes('"event":"owner.claim.ready"');
+
+  await wait(() => initialized() || ready() || exited(), phaseTimeoutMilliseconds);
+  if (exited() || (!initialized() && !ready())) {
+    throw new Error("The packaged init smoke test exited before initialization readiness.");
+  }
+  if (ready()) {
+    return;
+  }
+
+  await wait(() => ready() || exited(), phaseTimeoutMilliseconds);
+  if (exited() || !ready()) {
+    throw new Error("The packaged init smoke test exited before owner-claim readiness.");
+  }
+}
+
 async function smokeBundle(staging, buildId, productVersion) {
   assertProductVersion(productVersion);
   const runtime = join(staging, "runtime", process.platform === "win32" ? "node.exe" : "node");
-  const entrypoint = join(staging, "apps", "main", "opendelegate.mjs");
+  const entrypoint = join(staging, "apps", "launcher", "opendelegate.mjs");
+  const workerEntrypoint = join(staging, "apps", "worker", "opendelegate-worker.mjs");
   const releaseEnvironment = {
     ...process.env,
     OPENDELEGATE_BUILD_ID: "caller-controlled-release-candidate",
@@ -1615,6 +2636,26 @@ async function smokeBundle(staging, buildId, productVersion) {
   if (!result.stdout.includes("Runtime state and credentials are never written")) {
     throw new Error("The packaged CLI help smoke test returned an unexpected result.");
   }
+  const backupHelp = await runCommand(runtime, [entrypoint, "backup", "help"], staging, {
+    capture: true,
+    environment: releaseEnvironment,
+  });
+  if (
+    !backupHelp.stdout.includes("Main metadata backup") ||
+    !backupHelp.stdout.includes("new absent target home")
+  ) {
+    throw new Error("The packaged backup CLI help smoke test returned an unexpected result.");
+  }
+  const serviceHelp = await runCommand(runtime, [entrypoint, "service", "help"], staging, {
+    capture: true,
+    environment: releaseEnvironment,
+  });
+  if (
+    !serviceHelp.stdout.includes("native service lifecycle") ||
+    !serviceHelp.stdout.includes("require an approved platform-specific")
+  ) {
+    throw new Error("The packaged service CLI help smoke test returned an unexpected result.");
+  }
   const version = await runCommand(runtime, [entrypoint, "version"], staging, {
     capture: true,
     environment: releaseEnvironment,
@@ -1622,14 +2663,115 @@ async function smokeBundle(staging, buildId, productVersion) {
   if (version.stdout.trim() !== `OpenDelegate ${productVersion}`) {
     throw new Error("The packaged CLI version smoke returned an unexpected result.");
   }
-
-  const smokeHome = await mkdtemp(join(dirname(staging), ".od-home-"));
-  const child = spawn(runtime, [entrypoint, "init", "--home", smokeHome], {
-    cwd: staging,
-    env: releaseEnvironment,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
+  const workerHelp = await runCommand(runtime, [entrypoint, "worker", "help"], staging, {
+    capture: true,
+    environment: releaseEnvironment,
   });
+  if (
+    !workerHelp.stdout.includes("opendelegate worker join --grant-file") ||
+    !workerHelp.stdout.includes("never accepted in argv")
+  ) {
+    throw new Error("The packaged Worker CLI help smoke returned an unexpected result.");
+  }
+  const workerVersion = await runCommand(runtime, [workerEntrypoint, "version"], staging, {
+    capture: true,
+    environment: releaseEnvironment,
+  });
+  if (workerVersion.stdout.trim() !== `OpenDelegate Worker ${productVersion}`) {
+    throw new Error("The packaged Worker CLI version smoke returned an unexpected result.");
+  }
+  const workerSmokeHome = await mkdtemp(join(dirname(staging), ".od-worker-home-"));
+  try {
+    const workerStatus = await runCommand(
+      runtime,
+      [entrypoint, "worker", "status", "--home", workerSmokeHome],
+      staging,
+      {
+        capture: true,
+        environment: releaseEnvironment,
+      },
+    );
+    const workerStatusBody = JSON.parse(workerStatus.stdout);
+    if (workerStatusBody?.enrolled !== false || workerStatusBody?.home !== workerSmokeHome) {
+      throw new Error("The packaged Worker unenrolled status smoke was invalid.");
+    }
+  } finally {
+    await rm(workerSmokeHome, { force: true, recursive: true });
+  }
+
+  const runMainSmoke = (fixture) =>
+    runPackagedMainSmoke({
+      buildId,
+      entrypoint,
+      fixture,
+      productVersion,
+      releaseEnvironment,
+      runtime,
+      staging,
+    });
+  const mainSmoke =
+    process.platform === "linux"
+      ? await withLinuxReleaseSmokeSecretFixture(staging, runMainSmoke)
+      : (await runMainSmoke({ environment: {}, initArguments: [] })).value;
+  const { recoveryCodeCount, shutdownEvaluation } = mainSmoke;
+  return {
+    schemaVersion: 1,
+    platform: process.platform,
+    architecture: process.arch,
+    bundledNodeVersion: process.versions.node,
+    buildId,
+    productVersion,
+    checks: {
+      cliHelp: "passed",
+      backupCliHelp: "passed",
+      serviceCliHelp: "passed",
+      workerCliHelp: "passed",
+      workerCliVersion: "passed",
+      workerUnenrolledStatus: "passed",
+      cleanHomeInitialization: "passed",
+      mainHealth: "passed",
+      adminStaticApp: "passed",
+      loopbackOwnerClaim: "passed",
+      ownerLogin: "passed",
+      ownerSessionCookieContract: "passed",
+      ownerSessionRoundTrip: "passed",
+      recoveryCredentialsIssued: recoveryCodeCount,
+      cleanShutdown: {
+        status: "passed",
+        markerObserved: shutdownEvaluation.markerObserved,
+        naturalExit: shutdownEvaluation.naturalExit,
+        exitCode: shutdownEvaluation.exitCode,
+        signal: shutdownEvaluation.signal,
+        shutdownTimedOut: shutdownEvaluation.shutdownTimedOut,
+        forcedTermination: shutdownEvaluation.forcedTermination,
+      },
+    },
+  };
+}
+
+async function runPackagedMainSmoke({
+  buildId,
+  entrypoint,
+  fixture,
+  productVersion,
+  releaseEnvironment,
+  runtime,
+  staging,
+}) {
+  const smokeHome = await mkdtemp(join(dirname(staging), ".od-home-"));
+  const child = spawn(
+    runtime,
+    [entrypoint, "init", "--home", smokeHome, ...fixture.initArguments],
+    {
+      cwd: staging,
+      env: {
+        ...releaseEnvironment,
+        ...fixture.environment,
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
@@ -1646,15 +2788,10 @@ async function smokeBundle(staging, buildId, productVersion) {
   let forcedTermination = false;
   let shutdownEvaluation;
   try {
-    await waitUntil(
-      () => stdout.includes('"event":"owner.claim.ready"') || hasChildExited(child),
-      20_000,
-    );
-    if (hasChildExited(child) || !stdout.includes('"event":"owner.claim.ready"')) {
-      throw new Error(
-        `The packaged init smoke test exited before readiness.${stderr === "" ? "" : `\n${stderr}`}`,
-      );
-    }
+    await waitForPackagedMainReadiness({
+      exited: () => hasChildExited(child),
+      output: () => stdout,
+    });
 
     const [health, admin, claim] = await Promise.all([
       fetch("http://127.0.0.1:4380/health/live", {
@@ -1779,31 +2916,10 @@ async function smokeBundle(staging, buildId, productVersion) {
     );
   }
   return {
-    schemaVersion: 1,
-    platform: process.platform,
-    architecture: process.arch,
-    bundledNodeVersion: process.versions.node,
-    buildId,
-    productVersion,
-    checks: {
-      cliHelp: "passed",
-      cleanHomeInitialization: "passed",
-      mainHealth: "passed",
-      adminStaticApp: "passed",
-      loopbackOwnerClaim: "passed",
-      ownerLogin: "passed",
-      ownerSessionCookieContract: "passed",
-      ownerSessionRoundTrip: "passed",
-      recoveryCredentialsIssued: recoveryCodeCount,
-      cleanShutdown: {
-        status: "passed",
-        markerObserved: shutdownEvaluation.markerObserved,
-        naturalExit: shutdownEvaluation.naturalExit,
-        exitCode: shutdownEvaluation.exitCode,
-        signal: shutdownEvaluation.signal,
-        shutdownTimedOut: shutdownEvaluation.shutdownTimedOut,
-        forcedTermination: shutdownEvaluation.forcedTermination,
-      },
+    observedOutput: [stdout, stderr],
+    value: {
+      recoveryCodeCount,
+      shutdownEvaluation,
     },
   };
 }
@@ -1850,11 +2966,16 @@ async function assertPathAbsent(path) {
   throw new Error("The release destination already exists; refusing to overwrite it.");
 }
 
-async function assertGitCommitExists(sourceRoot, commit, label) {
+async function assertGitCommitExists(sourceRoot, commit, label, gitProvenance = null) {
   try {
-    await runProvenanceGit(["cat-file", "-e", `${commit}^{commit}`], sourceRoot, {
-      capture: true,
-    });
+    await runBoundProvenanceGit(
+      gitProvenance,
+      ["cat-file", "-e", `${commit}^{commit}`],
+      sourceRoot,
+      {
+        capture: true,
+      },
+    );
   } catch (error) {
     throw new Error(`The ${label} does not exist as a Git commit in this repository.`, {
       cause: error,
@@ -1905,6 +3026,134 @@ function buildTimestamp(source, supportStatus) {
   return new Date(seconds * 1000).toISOString();
 }
 
+async function pinBuildGitProvenance(options, dependencies = {}) {
+  const hasExecutable = options.gitExecutable !== undefined;
+  const hasDigest = options.gitExecutableSha256 !== undefined;
+  if (hasExecutable !== hasDigest) {
+    throw new Error("The Git executable path and lowercase SHA-256 must be provided together.");
+  }
+  if (!hasExecutable) {
+    if (!options.internalPreview || options.platformSigningPolicy !== undefined) {
+      throw new Error(
+        "Supported or credential-bearing release builds require a pinned Git executable.",
+      );
+    }
+    return null;
+  }
+  return (dependencies.pinGitProvenance ?? pinReleaseGitProvenance)({
+    expectedExecutableSha256: options.gitExecutableSha256,
+    executablePath: options.gitExecutable,
+    repositoryRoot,
+  });
+}
+
+async function pinBuildRunnerIdentity(options, dependencies = {}) {
+  const expectedSha256 = options.runnerExecutableSha256;
+  if (expectedSha256 === undefined) {
+    if (!options.internalPreview || options.platformSigningPolicy !== undefined) {
+      throw new Error(
+        "Supported or credential-bearing release builds require a pinned Node runner executable.",
+      );
+    }
+    return null;
+  }
+  if (!sha256Pattern.test(expectedSha256)) {
+    throw new Error("The Node runner executable requires a lowercase SHA-256 pin.");
+  }
+  if (process.versions.node !== REQUIRED_RELEASE_NODE_VERSION) {
+    throw new Error(
+      `The pinned release runner requires Node.js ${REQUIRED_RELEASE_NODE_VERSION}; received ${process.versions.node}.`,
+    );
+  }
+  const identity = await hashBuildRunnerExecutable(dependencies);
+  if (identity.sha256 !== expectedSha256) {
+    throw new Error("The Node runner executable does not match its required SHA-256 pin.");
+  }
+  return Object.freeze(identity);
+}
+
+async function revalidateBuildRunnerIdentity(identity, dependencies = {}) {
+  if (identity === null) {
+    return;
+  }
+  if (process.versions.node !== REQUIRED_RELEASE_NODE_VERSION) {
+    throw new Error("The pinned Node runner version changed during release assembly.");
+  }
+  const current = await hashBuildRunnerExecutable(dependencies);
+  if (current.sha256 !== identity.sha256 || current.size !== identity.size) {
+    throw new Error("The pinned Node runner executable changed during release assembly.");
+  }
+}
+
+async function hashBuildRunnerExecutable(dependencies) {
+  const identity = await (
+    dependencies.hashRuntimeExecutable ?? (() => hashStableRegularFile(process.execPath))
+  )();
+  if (
+    typeof identity !== "object" ||
+    identity === null ||
+    !sha256Pattern.test(identity.sha256) ||
+    !Number.isSafeInteger(identity.size) ||
+    identity.size < 1
+  ) {
+    throw new Error("The Node runner executable identity is invalid.");
+  }
+  return { sha256: identity.sha256, size: identity.size };
+}
+
+function createBuildPlatformCredentialAuthorizer({
+  dependencies,
+  destination,
+  gitProvenance,
+  ledgerDigest,
+  ledgerPath,
+  platformAuthenticityPolicyInput,
+  runnerIdentity,
+  source,
+  staging,
+}) {
+  if (gitProvenance === null || runnerIdentity === null) {
+    throw new Error("Platform credential use requires pinned Git and Node runner identities.");
+  }
+  return async (request) =>
+    (dependencies.authorizeCredentialUse ?? authorizeCredentialUse)({
+      domain: request.domain,
+      inputSha256: request.inputSha256,
+      revalidate: async () => {
+        await request.revalidate();
+        await platformAuthenticityPolicyInput.verifyStable();
+        await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
+        await revalidatePinnedReleaseGitProvenance(gitProvenance);
+        await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
+        const currentSource = await readPinnedReleaseSourceIdentity(gitProvenance);
+        if (currentSource.dirty || currentSource.commit !== source.commit) {
+          throw new Error("The source checkout changed before platform credential use.");
+        }
+        await assertCommittedReleaseRunner(currentSource, gitProvenance);
+        const currentLedgerDigest = createHash("sha256")
+          .update(await readFile(ledgerPath))
+          .digest("hex");
+        if (currentLedgerDigest !== ledgerDigest) {
+          throw new Error("The release evidence ledger changed before platform credential use.");
+        }
+        await Promise.all([
+          assertPathAbsent(destination),
+          assertPathAbsent(join(staging, "native-components.json")),
+          assertPathAbsent(join(staging, "platform-authenticity.json")),
+        ]);
+      },
+      role: request.role,
+      snapshot: {
+        ...request.snapshot,
+        gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
+        ledgerSha256: ledgerDigest,
+        runnerExecutableSha256: runnerIdentity.sha256,
+        sourceCommit: source.commit,
+        target: `${process.platform}-${process.arch}`,
+      },
+    });
+}
+
 function formatCounts(counts) {
   return Object.entries(counts)
     .sort(([left], [right]) => compareCodeUnits(left, right))
@@ -1921,6 +3170,13 @@ async function runProvenanceGit(arguments_, cwd, options = {}) {
       GIT_NO_REPLACE_OBJECTS: "1",
     },
   });
+}
+
+async function runBoundProvenanceGit(gitProvenance, arguments_, cwd, options = {}) {
+  if (gitProvenance === null) {
+    return runProvenanceGit(arguments_, cwd, options);
+  }
+  return runPinnedReleaseGit(gitProvenance, arguments_);
 }
 
 export async function resolveExternalPnpmCli(sourceRoot, candidate) {
@@ -1984,6 +3240,8 @@ async function listFiles(directory) {
       paths.push(...(await listFiles(path)));
     } else if (entry.isFile()) {
       paths.push(path);
+    } else {
+      throw new Error("Release integrity manifests reject non-regular filesystem entries.");
     }
   }
   return paths.sort(compareCodeUnits);
@@ -2006,8 +3264,9 @@ function printHelp() {
   process.stdout.write(`Build an OpenDelegate platform bundle.
 
 Usage:
-  node tooling/build-release.mjs --destination ABSOLUTE_PATH
+  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256 --runner-executable-sha256 LOWERCASE_SHA256
   node tooling/build-release.mjs --destination ABSOLUTE_PATH --internal-preview
+  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256 --runner-executable-sha256 LOWERCASE_SHA256 --platform-signing-policy ABSOLUTE_PATH --platform-signing-policy-sha256 LOWERCASE_SHA256
 
 An incomplete first-milestone ledger can only produce a clearly marked unsupported
 internal preview. Existing destinations and paths inside the source checkout are
@@ -2015,21 +3274,33 @@ always rejected.
 `);
 }
 
-async function runCommittedReleaseCli(rawArguments) {
-  const source = await readSourceIdentity(releaseToolRoot);
+async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) {
+  const runnerIdentity = await pinBuildRunnerIdentity(options, dependencies);
+  const gitProvenance = await pinBuildGitProvenance(options, dependencies);
+  const source =
+    gitProvenance === null
+      ? await readSourceIdentity(releaseToolRoot)
+      : await readPinnedReleaseSourceIdentity(gitProvenance);
   assertCleanBundleSource(source);
-  const runnerParent = await mkdtemp(join(tmpdir(), "opendelegate-release-runner-"));
+  if (gitProvenance !== null) {
+    await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
+    await revalidatePinnedReleaseGitProvenance(gitProvenance);
+  }
+  await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
+  const runnerTempState = await createCommittedReleaseRunnerTempState(process.env, dependencies);
+  const { runnerParent } = runnerTempState;
   try {
     const runnerRoot = await createCommittedSourceSnapshot(
       releaseToolRoot,
       source.commit,
       runnerParent,
+      gitProvenance,
     );
     const runnerFile = join(runnerRoot, "tooling", "build-release.mjs");
     const child = spawn(process.execPath, [runnerFile, ...rawArguments], {
       cwd: releaseToolRoot,
       env: {
-        ...process.env,
+        ...runnerTempState.environment,
         [releaseRunnerSourceEnvironment]: releaseToolRoot,
         [releaseRunnerCommitEnvironment]: source.commit,
       },
@@ -2045,6 +3316,7 @@ async function runCommittedReleaseCli(rawArguments) {
         `The committed release runner exited without producing a bundle (exit ${String(exitCode)}).`,
       );
     }
+    await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
   } finally {
     await rm(runnerParent, { force: true, recursive: true });
   }
@@ -2056,7 +3328,7 @@ if (await isDirectReleaseInvocation(process.argv[1])) {
     if (arguments_.help) {
       printHelp();
     } else if (expectedReleaseCommit === undefined && configuredReleaseSource === undefined) {
-      await runCommittedReleaseCli(process.argv.slice(2));
+      await runCommittedReleaseCli(arguments_, process.argv.slice(2));
     } else {
       const result = await buildRelease(arguments_);
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

@@ -102,6 +102,13 @@ function evaluateDefault(request: ActionRequest): PolicyDecision {
         "Computer Use input requires owner approval or an explicit Policy grant.",
       );
 
+    case "sandbox-boundary-escalation":
+      return decision(
+        "require-approval",
+        "POLICY_SANDBOX_BOUNDARY_APPROVAL_REQUIRED",
+        "Crossing an Agent sandbox boundary requires owner approval.",
+      );
+
     case "package-repository-addition":
     case "remote-installer-script":
     case "untrusted-installer":

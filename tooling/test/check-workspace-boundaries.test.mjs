@@ -24,28 +24,74 @@ test("Phase 2 services keep their accepted inward dependency directions", () => 
     "@opendelegate/task-service",
   ]);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/main"], [
+    "@opendelegate/agent-adapters",
+    "@opendelegate/artifact-gateway",
+    "@opendelegate/artifact-store",
+    "@opendelegate/configuration",
     "@opendelegate/control-plane",
+    "@opendelegate/device-channel",
+    "@opendelegate/device-identity",
+    "@opendelegate/discord-adapter",
+    "@opendelegate/domain",
+    "@opendelegate/event-store",
     "@opendelegate/owner-auth",
+    "@opendelegate/platform-services",
+    "@opendelegate/policy",
+    "@opendelegate/protocol",
+    "@opendelegate/release-integrity",
+    "@opendelegate/scheduler",
+    "@opendelegate/secrets",
     "@opendelegate/storage-sql",
     "@opendelegate/task-service",
   ]);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/owner-auth"], []);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/storage-sql"], [
+    "@opendelegate/artifact-store",
+    "@opendelegate/configuration",
+    "@opendelegate/device-channel",
+    "@opendelegate/device-identity",
+    "@opendelegate/discord-adapter",
     "@opendelegate/event-store",
     "@opendelegate/owner-auth",
+    "@opendelegate/policy",
   ]);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/task-service"], [
     "@opendelegate/domain",
     "@opendelegate/event-store",
     "@opendelegate/protocol",
   ]);
+  assert.ok(
+    EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/worker"].includes(
+      "@opendelegate/computer-use-os",
+    ),
+  );
+  assert.ok(
+    EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/worker"].includes(
+      "@opendelegate/computer-use-mcp",
+    ),
+  );
+  assert.ok(
+    EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/worker"].includes(
+      "@opendelegate/run-capability-broker",
+    ),
+  );
+  assert.ok(
+    EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/worker"].includes(
+      "@opendelegate/platform-services",
+    ),
+  );
 });
 
 test("platform and external adapter packages keep injected ports at their edges", () => {
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/agent-adapters"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/computer-use-mcp"], []);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/computer-use-os"], []);
   assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/discord-adapter"], []);
-  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/platform-services"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/platform-services"], [
+    "@opendelegate/release-integrity",
+  ]);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/run-capability-broker"], []);
+  assert.deepEqual(EXPECTED_WORKSPACE_DEPENDENCIES["@opendelegate/session-helper-ipc"], []);
 });
 
 test("an undeclared workspace dependency fails the boundary check", () => {

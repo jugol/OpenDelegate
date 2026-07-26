@@ -16,7 +16,14 @@ import { japaneseMessages } from "./messages.ja";
 import { koreanMessages } from "./messages.ko";
 import { simplifiedChineseMessages } from "./messages.zh-CN";
 import type { Messages, SupportedLocale } from "./types";
-import type { CapabilityState, PresentationText } from "../view-model";
+import type { ApprovalActionCategory, ArtifactDetail, ArtifactExposureMode } from "../admin-api";
+import type {
+  AgentAdapterView,
+  CapabilityState,
+  CurrentRunView,
+  DevicePolicyView,
+  PresentationText,
+} from "../view-model";
 
 export type { Messages, SupportedLocale } from "./types";
 
@@ -193,8 +200,111 @@ export function localizeCapabilityState(state: CapabilityState, messages: Messag
   return messages.known[keys[state]];
 }
 
+export function localizeCurrentRunState(
+  state: CurrentRunView["state"],
+  messages: Messages,
+): string {
+  return {
+    cancelling: messages.device.runStateCancelling,
+    running: messages.device.runStateRunning,
+    starting: messages.device.runStateStarting,
+  }[state];
+}
+
+export function localizePolicyScope(
+  scope: DevicePolicyView["effectiveScope"],
+  messages: Messages,
+): string {
+  return {
+    device: messages.device.policyScopeDevice,
+    instance: messages.device.policyScopeInstance,
+    main: messages.device.policyScopeMain,
+  }[scope];
+}
+
+export function localizeAdapterReadiness(
+  readiness: AgentAdapterView["readiness"],
+  messages: Messages,
+): string {
+  return {
+    degraded: messages.device.adapterReadinessDegraded,
+    ready: messages.device.adapterReadinessReady,
+    unavailable: messages.device.adapterReadinessUnavailable,
+  }[readiness];
+}
+
+export function localizeAdapterCompatibility(
+  compatibility: AgentAdapterView["compatibility"],
+  messages: Messages,
+): string {
+  return {
+    compatible: messages.device.adapterCompatibilityCompatible,
+    incompatible: messages.device.adapterCompatibilityIncompatible,
+    tested: messages.device.adapterCompatibilityTested,
+    untested: messages.device.adapterCompatibilityUntested,
+  }[compatibility];
+}
+
+export function localizeArtifactExposure(
+  exposure: ArtifactExposureMode,
+  messages: Messages,
+): string {
+  return {
+    authenticated: messages.artifact.exposureAuthenticated,
+    custom: messages.artifact.exposureCustom,
+    "private-network": messages.artifact.exposurePrivateNetwork,
+    public: messages.artifact.exposurePublic,
+    "signed-link": messages.artifact.exposureSignedLink,
+  }[exposure];
+}
+
+export function localizeArtifactPresentation(
+  presentation: ArtifactDetail["presentation"],
+  messages: Messages,
+): string {
+  return {
+    download: messages.artifact.presentationDownload,
+    inline: messages.artifact.presentationInline,
+    "interactive-html": messages.artifact.presentationInteractiveHtml,
+    "static-html": messages.artifact.presentationStaticHtml,
+  }[presentation];
+}
+
+const approvalCategoryMessageKeys = {
+  "computer-use-input": "computerUseInput",
+  "configured-official-package-install": "configuredOfficialPackageInstall",
+  "cross-device-knowledge-transfer": "crossDeviceKnowledgeTransfer",
+  "driver-installation": "driverInstallation",
+  "firewall-change": "firewallChange",
+  "kernel-extension-installation": "kernelExtensionInstallation",
+  "opendelegate-process-restart": "opendelegateProcessRestart",
+  "opendelegate-process-retry": "opendelegateProcessRetry",
+  "os-network-change": "osNetworkChange",
+  "package-repository-addition": "packageRepositoryAddition",
+  "policy-bypass-attempt": "policyBypassAttempt",
+  "policy-relaxation": "policyRelaxation",
+  "project-dependency-install": "projectDependencyInstall",
+  "read-only-observation": "readOnlyObservation",
+  "remote-installer-script": "remoteInstallerScript",
+  "secret-export": "secretExport",
+  "untrusted-installer": "untrustedInstaller",
+  "vpn-change": "vpnChange",
+} as const satisfies Readonly<Record<ApprovalActionCategory, keyof Messages["approvalCategory"]>>;
+
+export function localizeApprovalActionCategory(category: string, messages: Messages): string {
+  if (!Object.hasOwn(approvalCategoryMessageKeys, category)) {
+    return category;
+  }
+  const messageKey = approvalCategoryMessageKeys[category as ApprovalActionCategory];
+  return messages.approvalCategory[messageKey];
+}
+
 export function localizePresentationText(value: PresentationText, messages: Messages): string {
-  return typeof value === "string" ? value : messages.known[value.messageKey];
+  if (typeof value === "string") {
+    return value;
+  }
+  const message = messages.known[value.messageKey];
+  return value.values === undefined ? message : formatMessage(message, value.values);
 }
 
 function browserStorage(): Pick<Storage, "getItem"> | undefined {

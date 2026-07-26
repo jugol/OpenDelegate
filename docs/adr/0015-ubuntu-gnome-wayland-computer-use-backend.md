@@ -12,9 +12,11 @@ while AT-SPI exposes application accessibility semantics. The first milestone ne
 one precise candidate graphical environment rather than an unbounded promise across
 distributions, desktops, display servers, and headless hosts.
 
-This proposal selects Ubuntu 24.04 with GNOME on Wayland as that environment. No
-production Linux native driver or complete live portal evidence exists yet, so this
-ADR does not declare graphical Linux Computer Use supported.
+This proposal selects Ubuntu 24.04 with GNOME on Wayland as that environment. A
+production-candidate driver, private native child, and visible GTK conformance
+fixture now exist under `packages/computer-use-os`, but no clean-host live portal
+evidence exists yet. This ADR therefore does not declare graphical Linux Computer
+Use supported.
 
 ## Proposed decision
 
@@ -94,8 +96,9 @@ needed for scheduling or Task context.
 - Monitor changes, suspend/resume, portal restoration, locked sessions, and
   accessibility bus failure need real fixtures.
 - This ADR remains Proposed, and graphical Linux Computer Use remains a release
-  blocker, until the native helper and real-host proof exist. Headless unavailable
-  behavior remains an independently required acceptance case.
+  blocker, until the candidate is composed into the immutable service bundle and
+  the real-host proof passes. Headless unavailable behavior remains an independently
+  required acceptance case.
 
 ## Verification required for acceptance
 

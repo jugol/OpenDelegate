@@ -313,6 +313,11 @@ test("a standalone Work Order parses through its public contract", () => {
     },
     requiredCapabilities: ["artifact-rendering"],
     requiredSecretRefs: [],
+    requiredAgent: {
+      provider: "claude",
+      adapterId: "claude-agent-sdk",
+      allowedCompatibilities: ["tested", "compatible"],
+    },
     requiredOsFamily: "linux",
     workspaceId: "workspace-release",
   });
@@ -332,9 +337,103 @@ test("a standalone Work Order parses through its public contract", () => {
     },
     requiredCapabilities: ["artifact-rendering"],
     requiredSecretRefs: [],
+    requiredAgent: {
+      provider: "claude",
+      adapterId: "claude-agent-sdk",
+      allowedCompatibilities: ["tested", "compatible"],
+    },
     requiredOsFamily: "linux",
     workspaceId: "workspace-release",
   });
+});
+
+test("a Work Order Agent requirement fails closed on unsafe compatibility policy", () => {
+  const base = {
+    protocolVersion: "v1",
+    workOrderId: "work-order-provider-bound",
+    title: "Use one provider",
+    brief: "Run only with the explicitly required provider.",
+    completionCriteria: ["Return one provider-bound result."],
+    constraints: [],
+    selectedInputIds: [],
+    dependsOn: [],
+    schedulingHints: {
+      preferredDeviceIds: [],
+      preferredRoles: [],
+    },
+    requiredCapabilities: [],
+    requiredSecretRefs: [],
+  };
+
+  assert.throws(
+    () =>
+      parseWorkOrder({
+        ...base,
+        requiredAgent: {
+          provider: "codex",
+          allowedCompatibilities: ["tested", "incompatible"],
+        },
+      }),
+    (error: unknown) =>
+      error instanceof ProtocolValidationError &&
+      error.path === "requiredAgent.allowedCompatibilities[1]",
+  );
+  assert.throws(
+    () =>
+      parseWorkOrder({
+        ...base,
+        requiredAgent: {
+          provider: "codex",
+          allowedCompatibilities: [],
+        },
+      }),
+    (error: unknown) =>
+      error instanceof ProtocolValidationError &&
+      error.path === "requiredAgent.allowedCompatibilities",
+  );
+});
+
+test("a Work Order may request only a finite smaller Budget contract", () => {
+  const workOrder = parseWorkOrder({
+    protocolVersion: "v1",
+    workOrderId: "work-order-bounded",
+    title: "Run bounded work",
+    brief: "Complete the work within its child Budget.",
+    completionCriteria: ["Return one result."],
+    constraints: [],
+    selectedInputIds: [],
+    dependsOn: [],
+    schedulingHints: {
+      preferredDeviceIds: [],
+      preferredRoles: [],
+    },
+    requiredCapabilities: [],
+    requiredSecretRefs: [],
+    budgetLimits: {
+      wallTimeMs: { soft: 30_000, hard: 60_000 },
+      nativeTurns: { hard: 2 },
+      tokens: { hard: 20_000 },
+      costUsdMicros: { hard: 500_000 },
+    },
+  });
+
+  assert.deepEqual(workOrder.budgetLimits, {
+    wallTimeMs: { soft: 30_000, hard: 60_000 },
+    nativeTurns: { hard: 2 },
+    tokens: { hard: 20_000 },
+    costUsdMicros: { hard: 500_000 },
+  });
+  assert.throws(
+    () =>
+      parseWorkOrder({
+        ...workOrder,
+        budgetLimits: {
+          tokens: { soft: 30_000, hard: 20_000 },
+        },
+      }),
+    (error: unknown) =>
+      error instanceof ProtocolValidationError && error.path === "budgetLimits.tokens.soft",
+  );
 });
 
 test("an openable Artifact reference parses without storage details", () => {

@@ -12,9 +12,11 @@ synthetic input, and User Interface Privilege Isolation (UIPI) prevents ordinary
 processes from injecting input into higher-integrity applications. OpenDelegate must
 not bypass UAC, the secure desktop, a locked session, or user capture consent.
 
-This proposal selects the native stack to implement and validate. No production
-Windows native driver or complete live platform evidence exists yet, so this ADR
-does not declare Windows Computer Use supported.
+This proposal selects the native stack to implement and validate. A native candidate
+and authenticated driver seam now exist under `packages/computer-use-os`, but they
+have not been composed into the signed service/helper bundle or passed the complete
+clean-host platform matrix. This ADR therefore does not declare Windows Computer Use
+supported.
 
 ## Proposed decision
 
@@ -83,7 +85,25 @@ helper owns an input-ready desktop.
 - Remote desktop, Fast User Switching, HDR capture, multiple displays, and DPI
   scaling need explicit fixtures before their behavior can be advertised.
 - This ADR remains Proposed, and Windows Computer Use remains a release blocker,
-  until the native helper and real-host proof exist.
+  until the final packaged helper and complete real-host proof exist.
+
+## Candidate implementation status
+
+As of 2026-07-25, the repository contains:
+
+- a warnings-as-errors C++ helper using Windows UI Automation,
+  Windows.Graphics.Capture, guarded `SendInput`, positive input-desktop checks, and
+  higher-integrity rejection;
+- a deterministic Win32 graphical fixture;
+- a mutually authenticated, bounded named-pipe protocol whose bootstrap Secret is
+  inherited rather than accepted through argv or environment variables; and
+- a TypeScript native-driver adapter plus a local engineering conformance command.
+
+An explicit nonrelease direct-fixture run has exercised the candidate end to end on
+one development host. Its output is intentionally labeled `supportClaim: false`.
+Publisher signing, immutable bundle composition, the owner capture picker, service
+and helper lifecycle, negative security cases, clean declared Windows builds, and
+release-ledger linkage remain required.
 
 ## Verification required for acceptance
 

@@ -11,10 +11,12 @@ OpenDelegate는 하나의 고정 Main Device와 여러 macOS, Windows, Linux Dev
 하나의 결과를 받을 수 있습니다.
 
 > [!WARNING] 이 저장소는 현재 지원되는 OpenDelegate 릴리스가 아니라 **지원되지 않는 내부 프리뷰**를
-> 빌드합니다. Main 런타임, 인증된 Admin Task 화면, 그리고 프로덕션 형태를 갖춘 여러 계약은 구현되어
-> 있지만, 프로덕션 Worker/Discord/서비스/Agent/Computer Use 실행 연결과 실제 3개 OS 인수 매트릭스는
-> 완성되지 않았습니다. 아직 OpenDelegate를 완성된 제품으로 표방하거나 무인 프로덕션 Control
-> Plane으로 사용해서는 안 됩니다.
+> 빌드합니다. 이제 소스에는 Main–Worker 오케스트레이션, 프로그래밍 방식 Agent Adapter, 정확한 Action
+> Approval, Device-local Knowledge, Native Service Supervision 및 Computer Use를 위한 프로덕션
+> 형태의 실행 경로가 구현되어 있습니다. 그러나 소스 구현은 릴리스 증거가 아닙니다. macOS, Windows,
+> Linux, Discord, Provider, Private Network, 재시작, 권한 및 패키징에 필요한 실제 증거는 아직
+> 완성되지 않았습니다. OpenDelegate를 릴리스된 제품으로 표방하거나 무인 프로덕션 Control Plane으로
+> 사용하지 마십시오.
 
 ## OpenDelegate를 만드는 이유
 
@@ -32,18 +34,18 @@ OpenDelegate는 하나의 고정 Main Device와 여러 macOS, Windows, Linux Dev
 
 ```mermaid
 flowchart LR
-    owner["Owner<br/>phone or laptop"] --> discord["Discord Forum<br/>one post = one Task"]
-    owner --> admin["Admin Web<br/>setup and operations"]
-    discord --> main["Fixed Main Device<br/>Control Plane + Main Agent"]
+    owner["Owner<br/>휴대폰 또는 노트북"] --> discord["Discord Forum<br/>게시글 하나 = Task 하나"]
+    owner --> admin["Admin Web<br/>설정 및 운영"]
+    discord --> main["고정 Main Device<br/>Control Plane + Main Agent"]
     admin --> main
-    main --> database[("Main-owned SQLite or PostgreSQL")]
+    main --> database[("Main 전용 SQLite 또는 PostgreSQL")]
     main --> artifacts["Artifact Gateway"]
-    main <-->|"authenticated Device API<br/>configured route"| mac["macOS Worker"]
-    main <-->|"authenticated Device API<br/>configured route"| windows["Windows Worker"]
-    main <-->|"authenticated Device API<br/>configured route"| linux["Linux Worker / NAS"]
-    mac -. "local only" .-> macKnowledge["Markdown Knowledge"]
-    windows -. "local only" .-> windowsKnowledge["Markdown Knowledge"]
-    linux -. "local only" .-> linuxKnowledge["Markdown Knowledge"]
+    main <-->|"인증된 Device API<br/>설정된 연결 경로"| mac["macOS Worker"]
+    main <-->|"인증된 Device API<br/>설정된 연결 경로"| windows["Windows Worker"]
+    main <-->|"인증된 Device API<br/>설정된 연결 경로"| linux["Linux Worker / NAS"]
+    mac -. "Device 로컬 전용" .-> macKnowledge["Markdown Knowledge"]
+    windows -. "Device 로컬 전용" .-> windowsKnowledge["Markdown Knowledge"]
+    linux -. "Device 로컬 전용" .-> linuxKnowledge["Markdown Knowledge"]
 ```
 
 Worker는 OpenDelegate Control Mesh의 일부로 데이터베이스나 서로에게 연결되지 않습니다. LAN, Omada,
@@ -52,19 +54,31 @@ Profile 옵션입니다.
 
 ## 현재 소스 상태
 
-다음 표는 지금 실행 가능한 코드와 릴리스에 유효한 외부 시스템에 아직 연결되지 않은 경계를
+다음 표는 프로덕션 형태로 구현된 소스 경로와 지원을 표방하기 전에 여전히 필요한 외부 증거를
 구분합니다.
 
-| 영역             | 현재 구현되어 테스트할 수 있는 범위                                                                                                                                                                                                                                                     | 첫 Milestone에 여전히 필요한 범위                                                                                                  |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Main 및 영속성   | `init`, `serve`, `status`를 제공하는 번들 `opendelegate` CLI, Main 구성, Control Plane 상태, 인증된 Task 점검/긴급 제어 API, 내장 SQLite, PostgreSQL 구성 및 동등한 Storage 계약                                                                                                        | 연결된 오케스트레이션/실행, 지원하는 모든 OS의 깨끗한 Host 및 재시작 증명, 백업/복원 증명, 완전한 Runtime Reconciliation           |
-| Owner 접근       | Loopback 전용 최초 Claim, Passphrase 로그인, 복구 코드, 세션 폐기, CSRF 방어 및 SQL 영속성                                                                                                                                                                                              | 릴리스에 유효한 Remote Route, 재시작, 도난 세션 폐기 및 복구 증거                                                                  |
-| Admin Web        | 인증된 로그인/복구, 지속성 있는 Task 점검, Pause/Cancel 긴급 제어, 반응형 Device 및 읽기 전용 Configuration Chat 화면, 선택 상태가 유지되는 영어·한국어·일본어·프랑스어·스페인어·중국어(간체) UI. Create/Resume/Retry Fixture는 있지만 실행이 불가능한 동안 패키징된 Main이 이를 차단함 | 연결된 Task 실행 및 Configuration Agent 메시징, 실제 Device Projection, Approval/Audit Inspector 및 실제 장애 인수 테스트          |
-| Device Runtime   | Device ID 및 일회용 Enrollment 계약, Worker의 지속성 있는 Inbox/Outbox와 Run Supervision 계약, Discovery, Transport, Lock 및 로컬 Knowledge                                                                                                                                             | 인증된 End-to-End Main–Worker 채널, Enrollment가 완료된 실제 Device, 서비스 설치 및 연결 끊김/재시작 증명                          |
-| Agent 및 Discord | Codex CLI, Claude CLI 및 Generic Command Adapter Lifecycle 패키지, 지속성 있는 Discord Forum Mapping, Authorization, Reconciliation, Control 및 Projection 계약                                                                                                                         | 인증된 실제 Provider Session, 프로덕션 Discord HTTP/Gateway Driver, 전용 Community Server, Forum, Bot, Token, Intent 및 Permission |
-| Artifact         | Hostile Content 테스트가 포함된 로컬 Artifact Store 및 격리된 Artifact Gateway 계약                                                                                                                                                                                                     | 재개 가능한 Worker Upload, 실제 Discord 표시, Owner Route 노출 및 Cross-network 인수 테스트                                        |
-| 플랫폼 서비스    | Windows SCM, macOS launchd 및 Linux systemd Service Plan, Renderer, Readiness Model 및 읽기 전용 Validation Seam                                                                                                                                                                        | 권한이 필요한 Native 설치, 패키징된 Service Executor, 재부팅/Login/Logout 테스트, Upgrade Rollback 및 Signing/Notarization         |
-| Computer Use     | Resource-lock Kernel, OS-driver 계약 패키지, Permission/Readiness Probe 및 결정론적 Conformance Fixture                                                                                                                                                                                 | macOS, Windows 및 지원되는 그래픽 Linux에서 동작하는 실제 Input Backend와 Reference Workflow(취소 및 Permission Failure 증명 포함) |
+| 영역             | 소스에 구현되어 테스트할 수 있는 범위                                                                                                                                                                                                                                                      | 첫 Milestone에 여전히 필요한 범위                                                                                                                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main 및 영속성   | 번들 `opendelegate` CLI, 구성된 Control Plane, SQLite/PostgreSQL Storage 계약(호스팅 PostgreSQL 증명은 현재 17로 고정), 지속성 있는 Task 실행·Approval·Audit·Artifact·Enrollment·Discord·Device Channel 서비스, 중단된 Action의 결과가 불명확하면 안전하게 실패하는 시작 시 Reconciliation | 지원을 선언할 각 Main 플랫폼에서의 깨끗한 Host 설치, Database Migration/Restore, Service Restart 및 완전한 Reconciliation 증거. 다른 PostgreSQL 메이저 버전은 아직 검증되지 않음 |
+| Owner 접근       | Loopback 전용 최초 Claim, Passphrase 로그인, 복구 코드, 세션 폐기, CSRF 방어 및 SQL 영속성                                                                                                                                                                                                 | 릴리스에 유효한 Remote Route, 재시작, 탈취된 Browser Session 폐기 및 Discord와 독립적인 복구 증거                                                                                |
+| Admin Web        | 인증된 Device·Task·Approval·Enrollment·Artifact·Audit·Emergency Control·Configuration Chat 화면, Capability-aware Control, 선택 상태가 유지되는 반응형 영어·한국어·일본어·프랑스어·스페인어·중국어(간체) UI                                                                                | 실제 Device Onboarding 및 장애 상황 Journey, Release Bundle의 Accessibility/Overflow 증거, 실제 운영자 인수 테스트                                                               |
+| Device Runtime   | 일회용 Enrollment, Device-scoped Identity, 인증된 Outbound Main–Worker Channel, Lease 기반 Dispatch, 지속성 있는 Inbox/Outbox, Run Supervision, Workspace, 로컬 Agent 실행, 로컬 Knowledge MCP, Computer Use MCP 및 Artifact Upload                                                        | Enrollment가 완료된 실제 Device, Route Loss/Restart Recovery, Omada/Tailscale 형태의 혼합 Route 증거 및 세 OS 계열의 Persistent Service 증거                                     |
+| Agent 및 Discord | Codex App Server와 Claude Agent SDK를 우선 사용하는 Adapter, 기능이 제한된 CLI Fallback, Generic Command, Native Session 연속성, Single-writer Enforcement 및 정확한 Action Authorization, Discord HTTP/Gateway·Forum Reconciliation·Control·Main 구성                                     | 고정된 버전의 인증된 실제 Codex/Claude 실행, 전용 Community Server·Forum·Bot·Token·Intent·Permission·Reconnect·Mobile·Outage 증거                                                |
+| Knowledge        | Device-local Linked Markdown Discovery, 제한된 Retrieval, 결정론적 Indexing, Admission Check 및 내용을 Main 계약 밖에 유지하는 Agent용 MCP Tool                                                                                                                                            | 각 실제 Device 계열에서 Packet 수준 No-egress 증거와 Create/Update/Rebuild Journey                                                                                               |
+| Artifact         | Main 소유 Local Store, 인증된 재개 가능 Worker Upload, 격리된 Static/Interactive Gateway 경로, Signed Access, Exposure Policy 계약 및 Admin 점검                                                                                                                                           | 실제 Discord 표시, Retention/Exposure Journey, 패키징된 Build의 Hostile-content 검증 및 Owner Device에서의 Cross-network 열기                                                    |
+| 플랫폼 서비스    | Windows SCM, macOS launchd, Linux systemd/Foreground 소스 구현, 분리된 Core/Owner-session Helper Host, 인증된 Local IPC, Install/Start/Stop/Restart/Upgrade/Rollback/Diagnose/Uninstall 명령 경로                                                                                          | 권한이 필요한 깨끗한 Host 실행, Reboot/Login/Logout Persistence, 실패 Rollback, Permission Onboarding, 필요한 플랫폼의 Signing/Notarization 및 Lab 증거                          |
+| Computer Use     | Device-wide Desktop Lock, 정확한 Action Authorization, 일회용 Local Capability Broker, Session-helper IPC, Native Windows/macOS/Linux Backend 소스, Readiness/Permission Probe, Capture/Input/Cancel/Emergency-stop 계약 및 결정론적·Native Fixture 테스트                                 | 실제 macOS·Windows·선언된 그래픽 Linux 환경의 Reference Interaction과 Screenshot·Exclusivity·Cancellation·Permission Failure·Locked-session·Headless Linux 증거                  |
+
+필요한 Sandbox를 강제할 수 있을 때까지 Native Windows의 Claude SDK 실행은 의도적으로 지원 대상으로
+표방하지 않습니다. Windows에서는 Codex, WSL2 또는 설정된 Container를 사용하십시오. WSL2나 Container
+Worker는 Native Windows Service, Restart, Permission 또는 Computer Use 릴리스 기준을 대체하지
+않습니다.
+
+프로젝트 의존성 자동 설치는 현재 자격 증명이 없는 공식 Registry Staging 경계에서 Script를 끈 npm만
+지원합니다. OpenDelegate는 명시적으로 설정된 System Package Manager의 설치 전용 요청도 수락하며,
+해당 Manager 실행 파일을 고정한 뒤 실행 직전에 다시 검증합니다. 저장소 추가와 원격 설치 프로그램은
+계속 승인 대상입니다. 이는 구현 증거일 뿐이며, 기존 Source와 권한 동작이 대상 Clean-host Lab을
+통과하기 전에는 어떤 System Package Manager도 Release 지원 대상으로 표방하지 않습니다.
 
 기계가 읽을 수 있는 Release Ledger는
 [`docs/release/acceptance-evidence.json`](docs/release/acceptance-evidence.json)에 있습니다.
@@ -73,12 +87,12 @@ Profile 옵션입니다.
 
 릴리스 관련 용어는 의도적으로 좁은 의미를 가집니다.
 
-| Label                       | 의미                                                               |
-| --------------------------- | ------------------------------------------------------------------ |
-| Public source pre-alpha     | 검토 가능한 소스. 지원되지 않으며 완성된 설치본이 아님             |
-| `internal-preview-*` bundle | 로컬 검증 Payload. 로컬 Smoke Test를 통과해도 항상 지원되지 않음   |
-| `release-candidate` bundle  | 36개 Gate를 모두 통과했지만 아직 승격되거나 지원되지 않은 Artifact |
-| `released`                  | 별도로 Attestation을 거쳐 지원되는 Channel에 게시된 Artifact       |
+| Label                       | 의미                                                                                                                                          |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public source pre-alpha     | 검토 가능한 소스. 지원되지 않으며 완성된 설치본이 아님                                                                                        |
+| `internal-preview-*` bundle | 로컬 검증 Payload. 로컬 Smoke Test를 통과해도 항상 지원되지 않음                                                                              |
+| `release-candidate` bundle  | 36개 Gate를 모두 통과했지만 아직 승격되거나 지원되지 않은 Artifact                                                                            |
+| `released`                  | 유효한 불변 Candidate와 신뢰된 게시자, Platform Authenticity, Promotion, Supported Channel, Revocation Policy 전체 Chain으로 계산된 실효 상태 |
 
 현재 `released` Artifact는 없습니다.
 
@@ -92,8 +106,8 @@ Suite에서 캡처했습니다. UI는 인증된 Admin API 계약을 호출하지
 
 ![구현된 OpenDelegate Task 작업 화면](docs/design/admin-tasks-implemented.png)
 
-_Task 작업 Design Fixture: 인증된 목록/상세 데이터 및 제어 기능. 패키징된 Main은 Orchestration
-Runtime이 연결될 때까지 실행을 시작하는 동작을 비활성화합니다._
+_Task 작업 Design Fixture: 인증된 목록/상세 데이터 및 제어 기능. 각 제어 기능은 Main이 보고한
+Capability 상태를 따릅니다. 이 Fixture는 실제 외부 Runtime이 준비되었다는 증거가 아닙니다._
 
 ![구현된 OpenDelegate Owner 로그인](docs/design/admin-login-implemented.png)
 
@@ -122,10 +136,10 @@ pnpm release:build --destination ABSOLUTE_PATH --internal-preview
 합니다. `ABSOLUTE_PATH`는 소스 Checkout 외부에 있는, 아직 존재하지 않는 경로여야 합니다. Builder는
 기존 Destination을 덮어쓰지 않습니다. 최소 Launcher는 깨끗한 Commit을 내보낸 뒤 Assembly 전에 일회용
 Snapshot에서 Release Logic을 다시 실행합니다. Builder는 고정된 공식 Node Archive를 내려받고 감사된
-SHA-256을 검증하여 플랫폼별 Bundle을 생성합니다. 여기에는 Admin Asset, Init Skill, Release Metadata,
-Dependency-instance Legal Inventory, Checksum과 더불어 CLI Help, 깨끗한 Home Initialization, Main
-Health, Admin Serving, Owner Claim/Login, Session-cookie Round-trip 및 정상 종료에 대한 Smoke
-Evidence가 포함됩니다.
+SHA-256을 검증하여 플랫폼별 Bundle을 생성합니다. 여기에는 Main/Worker Launcher, Admin Asset,
+Init/Join Skill, Release Metadata, Dependency-instance Legal Inventory, Checksum과 더불어
+CLI/Service/Worker Command, 깨끗한 Home Initialization, Main Health, Admin Serving, Owner
+Claim/Login, Session-cookie Round-trip 및 정상 종료에 대한 제한된 Smoke Evidence가 포함됩니다.
 
 Destination 이름에는 `internal-preview`가 포함되어야 합니다. 생성된 `INTERNAL_PREVIEW.md`와
 `release-metadata.json`에는 Bundle이 지원되지 않는다는 사실과 정확한 Release Evidence 상태가
@@ -146,10 +160,41 @@ Bundle이 빌드된 플랫폼에 맞는 Launcher를 사용하십시오. 내부 �
 
 ```sh
 pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
+pnpm release:build \
+  --destination ABSOLUTE_PATH \
+  --git-executable ABSOLUTE_UNLINKED_GIT \
+  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
+  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
 ```
 
-두 명령은 36개 구현 Gate와 실제 증거 Gate를 모두 통과한 뒤에만 성공할 수 있습니다.
+위 `release:build` 호출은 Linux x64 Candidate에서만 표시된 그대로 사용할 수 있습니다. macOS와
+Windows에서는 대상 플랫폼별 필수 Credential Policy를 다음과 같이 추가해야 합니다.
+
+```sh
+  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
+  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
+```
+
+`pnpm release:sign`은 명시적으로 확인된 지원되지 않는 Preview에만 의도적으로 제한되며 Release
+Candidate를 거부합니다. 36개 Criterion Gate가 완료되면 깨끗하고 Hash가 고정된 대상 네이티브 Runner가
+`pnpm release:finalize`를 사용해 각 Production Candidate를 Freeze하고 Candidate-v2 게시자
+Attestation을 생성합니다. 구성된 외부 Promotion과 Supported Channel Receipt Chain을 검증해야만 이
+불변 Candidate의 실효 상태가 `released`가 될 수 있습니다. 자세한 내용은
+[Release Trust 절차](docs/release/README.md#supported-promotion-trust-path)를 참고하십시오.
+
+Credential이 없는 운영자 입력 골격은 다음 명령으로 생성할 수 있습니다.
+
+```sh
+pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
+```
+
+모든 생성물에는 `PLACEHOLDER`와 `NOT-A-RELEASE`가 표시되며 Credential, 서명, Artifact, Release
+증거를 포함하지 않습니다. 자세한 내용은 [Release 입력 예시 가이드](docs/release/EXAMPLES.md)를
+참고하십시오.
+
+프로덕션 `release:gate`와 Candidate 모드 `release:build` 명령은 36개 구현 Gate와 실제 증거 Gate를
+모두 통과한 뒤에만 성공할 수 있습니다. 지원되지 않는 Preview에 대한 서명은 이 프로덕션 Gate를
+충족하지도 우회하지도 않습니다. [정확한 첫 Milestone 지원 Matrix](docs/release/SUPPORT_MATRIX.md),
 [릴리스 증거 가이드](docs/release/README.md)와
 [플랫폼 Lab 체크리스트](docs/release/PLATFORM_LAB.md)를 참고하십시오.
 
@@ -175,27 +220,42 @@ pnpm dev:admin
 이 개발 서버는 Owner 설치 경로가 아닙니다. 번들 Main을 검증할 때는 생성된 Internal-preview
 Launcher를 사용하십시오.
 
+Codex와 Claude 인증은 기본적으로 각 OpenDelegate Device의 `state/providers/codex` 및
+`state/providers/claude`에 격리됩니다. 설정이 끝나면 바로 그 controlled home에서 대화형으로
+인증하십시오. OpenDelegate는 사용자의 전역 provider home에서 로그인을 복사하거나 상속하지 않으며,
+first-class provider Run은 자격 증명 환경 변수를 거부합니다.
+
 ## 저장소 구성
 
-- `apps/main` — Main 구성 및 결정론적 CLI.
+- `apps/main` — Main 구성, 결정론적 CLI, Action Authorization, Device Channel, Discord, Artifact 및
+  Agent Runtime 연결.
+- `apps/worker`, `apps/service-host` — Enrollment된 Worker Runtime과 Platform Service 정의가
+  사용하는 지속성 있는 Core/Session Process Host.
 - `apps/control-plane` — 인증된 HTTP 및 Local-claim 경계.
-- `apps/admin-web` — Owner 로그인, Task 작업, Device 화면 및 Configuration Chat.
+- `apps/admin-web` — Owner 로그인, Device, Task, Approval, Enrollment, Artifact, Audit, 긴급 작업 및
+  Configuration Chat.
 - `apps/artifact-gateway` — 격리된 Artifact 전달 경계.
 - `packages/domain`, `packages/policy`, `packages/scheduler` — 결정론적 Domain Mechanic 및 실행
   가능한 Policy.
 - `packages/storage-sql`, `packages/owner-auth`, `packages/task-service`, `packages/configuration` —
   Main 영속성 및 Application Service.
-- `packages/device-identity`, `packages/worker-runtime`, `packages/transport`,
-  `packages/device-discovery` — Device Enrollment 및 Worker-side 계약.
-- `packages/agent-adapters`, `packages/discord-adapter` — 여전히 실제 Integration Proof가 필요한
-  Provider 및 Forum Adapter 구현.
+- `packages/device-identity`, `packages/device-channel`, `packages/worker-runtime`,
+  `packages/transport`, `packages/device-discovery` — Device Enrollment, 인증된 Main–Worker 통신 및
+  Worker 실행.
+- `packages/agent-adapters`, `packages/discord-adapter` — 여전히 자격 증명을 사용하는 실제 증거가
+  필요한 프로그래밍 방식 Provider 및 Discord Forum 통합.
 - `packages/artifact-store` — Main이 소유하는 Artifact Byte 및 Metadata 경계.
-- `packages/platform-services`, `packages/computer-use-os` — OS Service 및 Graphical-runtime 계약.
-  설치된 서비스나 실제 Desktop Control의 증거는 아닙니다.
-- `packages/knowledge` — Device-local Markdown Discovery, 연결형 Retrieval 및 Indexing.
+- `packages/platform-services`, `packages/computer-use-os` — OS Service 및 Graphical Runtime 구현.
+  소스와 Fixture 결과는 지원되는 설치 서비스나 3개 OS Desktop Control의 증거가 아닙니다.
+- `packages/session-helper-ipc`, `packages/session-helper-runtime`, `packages/computer-use-mcp`,
+  `packages/run-capability-broker` — Run별로 제한되고 인증된 Owner-session Capability.
+- `packages/knowledge`, `packages/knowledge-mcp` — Device-local Markdown Discovery, 연결형
+  Retrieval, Indexing 및 Agent Tool.
 - `packages/acceptance`, `packages/simulator` — 결정론적 Task Journey, Restart Case 및 Replay
   Fixture.
 - `skills/opendelegate-init` — 명시적인 Internal-preview Gate를 갖춘 Agent 대상 초기화 Workflow.
+- `skills/opendelegate-join` — 자격 증명을 노출하지 않는 Outbound-only Worker Enrollment 및 복구
+  Workflow.
 - `docs` — Product, Architecture, Security, Design, Research 및 Release Evidence.
 
 ## 정식 제품 문서
@@ -211,7 +271,9 @@ Launcher를 사용하십시오.
    기반 Platform Constraint.
 
 Contributor Workflow는 [CONTRIBUTING.md](CONTRIBUTING.md)에 문서화되어 있습니다. Security Boundary와
-검증된 비공개 취약점 신고 경로는 [SECURITY.md](SECURITY.md)에 있습니다.
+검증된 비공개 취약점 신고 경로는 [SECURITY.md](SECURITY.md)에 있습니다. 안전한 Main Metadata
+Snapshot과 새 Target 복원 절차는 [Backup 및 Restore 가이드](docs/BACKUP_AND_RESTORE.md)를
+참고하십시오.
 
 OpenDelegate는 [Apache License 2.0](LICENSE)으로 배포됩니다. 저장소 콘텐츠, Domain Term, API, Log 및
 UI 기본값에는 영어를 사용합니다. 이 README와 Owner 대상 Admin UI는 위에 링크한 다섯 가지 번역으로도

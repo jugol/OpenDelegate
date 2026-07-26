@@ -87,7 +87,10 @@ export function createServiceDiagnostic(input: CreateServiceDiagnosticInput): Se
       bootSemantics: "login",
       identity: input.configuration.ownerSession.userName,
     },
-    readiness: input.readiness,
+    readiness: {
+      ...input.readiness,
+      headlessWorkAvailable: input.coreSupervisorState === "running",
+    },
     versions: {
       ...(input.activeVersion === undefined ? {} : { active: input.activeVersion }),
       retained: [...input.retainedVersions].sort((left, right) => left.localeCompare(right)),

@@ -5,9 +5,11 @@ export {
 } from "./artifact-gateway-app.ts";
 export type {
   ArtifactAuthorizationPort,
+  ArtifactBrowserSessionPort,
   ArtifactGatewayAppOptions,
   ArtifactGatewayPlane,
   CustomArtifactAuthorization,
   OwnerArtifactAuthorization,
   PrivateNetworkArtifactAuthorization,
+  ArtifactWorkerUploadPort,
 } from "./contracts.ts";

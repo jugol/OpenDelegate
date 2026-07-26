@@ -2,7 +2,18 @@ import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
 import Database from "better-sqlite3";
-import { Kysely, PostgresDialect, SqliteDialect, type Dialect } from "kysely";
+import {
+  Kysely,
+  PostgresDialect,
+  SqliteDialect,
+  sql,
+  type DatabaseIntrospector,
+  type DatabaseMetadataOptions,
+  type Dialect,
+  type SchemaMetadata,
+  type TableMetadata,
+} from "kysely";
+import type { PostgresDialectConfig } from "kysely";
 import { Pool } from "pg";
 
 import { SqlStorageError } from "./errors.ts";
@@ -119,13 +130,129 @@ export async function createPostgresDatabase(
     ...(options.schema === undefined ? {} : { options: `-c search_path=${options.schema}` }),
   });
 
-  return createContext(
-    "postgres",
-    new PostgresDialect({ pool }),
-    undefined,
-    undefined,
-    options.schema,
-  );
+  const dialect =
+    options.schema === undefined
+      ? new PostgresDialect({ pool })
+      : new SchemaScopedPostgresDialect({ pool }, options.schema);
+
+  return createContext("postgres", dialect, undefined, undefined, options.schema);
+}
+
+/**
+ * Kysely's stock PostgreSQL introspector traverses every schema the database
+ * role can access. Besides doing unnecessary work, its catalog query can race
+ * an unrelated schema being dropped and make this schema's migration fail.
+ * Repository connections are deliberately schema-bound, so their introspection
+ * boundary must be schema-bound as well.
+ */
+class SchemaScopedPostgresDialect extends PostgresDialect {
+  readonly #schema: string;
+
+  public constructor(config: PostgresDialectConfig, schema: string) {
+    super(config);
+    this.#schema = schema;
+  }
+
+  public override createIntrospector(database: Kysely<unknown>): DatabaseIntrospector {
+    return new SchemaScopedPostgresIntrospector(database, this.#schema);
+  }
+}
+
+interface PostgresSchemaRow {
+  readonly name: string;
+}
+
+interface PostgresColumnMetadataRow {
+  readonly auto_incrementing: string | null;
+  readonly column: string;
+  readonly column_description: string | null;
+  readonly has_default: boolean;
+  readonly not_null: boolean;
+  readonly schema: string;
+  readonly table: string;
+  readonly table_type: "f" | "p" | "r" | "v";
+  readonly type: string;
+  readonly type_schema: string;
+}
+
+class SchemaScopedPostgresIntrospector implements DatabaseIntrospector {
+  readonly #database: Kysely<unknown>;
+  readonly #schema: string;
+
+  public constructor(database: Kysely<unknown>, schema: string) {
+    this.#database = database;
+    this.#schema = schema;
+  }
+
+  public async getSchemas(): Promise<SchemaMetadata[]> {
+    const result = await sql<PostgresSchemaRow>`
+      SELECT nspname AS name
+      FROM pg_catalog.pg_namespace
+      WHERE nspname = ${this.#schema}
+    `.execute(this.#database);
+    return result.rows.map((row) => ({ name: row.name }));
+  }
+
+  public async getTables(options?: DatabaseMetadataOptions): Promise<TableMetadata[]> {
+    const result = await sql<PostgresColumnMetadataRow>`
+      SELECT
+        a.attname AS column,
+        a.attnotnull AS not_null,
+        a.atthasdef AS has_default,
+        c.relname AS table,
+        c.relkind AS table_type,
+        ns.nspname AS schema,
+        typ.typname AS type,
+        dtns.nspname AS type_schema,
+        col_description(a.attrelid, a.attnum) AS column_description,
+        pg_get_serial_sequence(
+          quote_ident(ns.nspname) || '.' || quote_ident(c.relname),
+          a.attname
+        ) AS auto_incrementing
+      FROM pg_catalog.pg_attribute AS a
+      INNER JOIN pg_catalog.pg_class AS c ON a.attrelid = c.oid
+      INNER JOIN pg_catalog.pg_namespace AS ns ON c.relnamespace = ns.oid
+      INNER JOIN pg_catalog.pg_type AS typ ON a.atttypid = typ.oid
+      INNER JOIN pg_catalog.pg_namespace AS dtns ON typ.typnamespace = dtns.oid
+      WHERE c.relkind IN ('r', 'v', 'p', 'f')
+        AND ns.nspname = ${this.#schema}
+        AND a.attnum >= 0
+        AND a.attisdropped <> TRUE
+      ORDER BY c.relname, a.attnum
+    `.execute(this.#database);
+
+    const tables = new Map<string, TableMetadata>();
+    for (const row of result.rows) {
+      if (
+        options?.withInternalKyselyTables !== true &&
+        (row.table === "kysely_migration" || row.table === "kysely_migration_lock")
+      ) {
+        continue;
+      }
+
+      let table = tables.get(row.table);
+      if (table === undefined) {
+        table = {
+          columns: [],
+          isForeign: row.table_type === "f",
+          isView: row.table_type === "v",
+          name: row.table,
+          schema: row.schema,
+        };
+        tables.set(row.table, table);
+      }
+      table.columns.push({
+        ...(row.column_description === null ? {} : { comment: row.column_description }),
+        dataType: row.type,
+        dataTypeSchema: row.type_schema,
+        hasDefaultValue: row.has_default,
+        isAutoIncrementing: row.auto_incrementing !== null,
+        isNullable: !row.not_null,
+        name: row.column,
+      });
+    }
+    return [...tables.values()];
+  }
 }
 
 function createContext(

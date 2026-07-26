@@ -49,6 +49,46 @@ test("rejects relative or source-checkout runtime state paths", () => {
     (error: unknown) =>
       error instanceof PlatformServiceError && error.code === "PATH_INSIDE_CHECKOUT",
   );
+  assert.throws(
+    () =>
+      createPlatformServiceDefinition(
+        linuxConfiguration({
+          systemdCredential: {
+            credentialName: "opendelegate-vault-key",
+            encryptedSourcePath: "/var/lib/opendelegate/credentials/opendelegate-vault-key.cred",
+          },
+        }),
+      ),
+    (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
+  );
+});
+
+test("rejects overlapping mutable roots and bundle sources", () => {
+  const linux = linuxConfiguration();
+  assert.throws(
+    () =>
+      createPlatformServiceDefinition(
+        linuxConfiguration({
+          paths: {
+            ...linux.paths,
+            stateRoot: `${linux.paths.installRoot}/state`,
+          },
+        }),
+      ),
+    (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
+  );
+  assert.throws(
+    () =>
+      createPlatformServiceDefinition(
+        linuxConfiguration({
+          bundle: {
+            ...linux.bundle,
+            sourceDirectory: `${linux.paths.stateRoot}/incoming`,
+          },
+        }),
+      ),
+    (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
+  );
 });
 
 test("accepts only opaque Secret references and never a raw Secret field", () => {
@@ -57,7 +97,23 @@ test("accepts only opaque Secret references and never a raw Secret field", () =>
       createPlatformServiceDefinition(
         linuxConfiguration({
           secretReferences: {
-            helperIpc: "raw-super-secret",
+            coreIpcSigningKey: "raw-super-secret",
+            helperIpcSigningKey: "secret://linux/helper-ipc-signing-v2",
+          },
+        }),
+      ),
+    (error: unknown) =>
+      error instanceof PlatformServiceError && error.code === "INVALID_SECRET_REFERENCE",
+  );
+
+  assert.throws(
+    () =>
+      createPlatformServiceDefinition(
+        linuxConfiguration({
+          secretReferences: {
+            coreIpcSigningKey: "secret://linux/core-ipc-signing-v2",
+            helperIpcSigningKey: "secret://linux/helper-ipc-signing-v2",
+            helperIpc: "secret://linux/legacy-shared-key",
           },
         }),
       ),
@@ -74,4 +130,124 @@ test("accepts only opaque Secret references and never a raw Secret field", () =>
     (error: unknown) =>
       error instanceof PlatformServiceError && error.code === "UNKNOWN_CONFIGURATION_FIELD",
   );
+});
+
+test("accepts only a non-secret external systemd encrypted credential mapping", () => {
+  const configuration = linuxConfiguration({
+    systemdCredential: {
+      credentialName: "opendelegate-vault-key",
+      encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+    },
+  });
+  const accepted = createPlatformServiceDefinition(configuration).configuration;
+  assert.equal(accepted.platform, "linux");
+  assert.deepEqual(
+    accepted.platform === "linux" ? accepted.systemdCredential : undefined,
+    configuration.systemdCredential,
+  );
+  assert.throws(
+    () =>
+      createPlatformServiceDefinition(
+        linuxConfiguration({
+          systemdCredential: {
+            credentialName: "bad credential",
+            encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+          },
+        }),
+      ),
+    (error: unknown) =>
+      error instanceof PlatformServiceError && error.code === "INVALID_SECRET_REFERENCE",
+  );
+  assert.throws(
+    () =>
+      createPlatformServiceDefinition(
+        linuxConfiguration({
+          systemdCredential: {
+            credentialName: "opendelegate-vault-key",
+            encryptedSourcePath: "/home/owner/src/OpenDelegate/runtime/vault-key.cred",
+          },
+        }),
+      ),
+    (error: unknown) =>
+      error instanceof PlatformServiceError && error.code === "PATH_INSIDE_CHECKOUT",
+  );
+});
+
+test("a Windows Main may stage the SCM Secret binding needed by its co-located Worker", () => {
+  const configuration = windowsConfiguration({
+    role: "main",
+    serviceSecretBinding: {
+      backend: "windows-service-dpapi",
+      handoffRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\handoff",
+      serviceName: "OpenDelegate-personal",
+      serviceSid: "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702",
+      vaultRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service",
+    },
+  });
+
+  const accepted = createPlatformServiceDefinition(configuration).configuration;
+  assert.equal(accepted.role, "main");
+  assert.deepEqual(
+    accepted.platform === "windows" ? accepted.serviceSecretBinding : undefined,
+    configuration.serviceSecretBinding,
+  );
+});
+
+test("Admin auto-open is an explicit Main-only safe-origin preference", () => {
+  const main = windowsConfiguration({
+    ownerSession: {
+      ...windowsConfiguration().ownerSession,
+      adminAutoOpen: {
+        enabled: true,
+        url: "https://admin.example.test/",
+      },
+    },
+  });
+  assert.deepEqual(createPlatformServiceDefinition(main).configuration.ownerSession.adminAutoOpen, {
+    enabled: true,
+    url: "https://admin.example.test/",
+  });
+
+  for (const configuration of [
+    {
+      ...main,
+      role: "worker" as const,
+    },
+    {
+      ...main,
+      ownerSession: {
+        ...main.ownerSession,
+        adminAutoOpen: {
+          enabled: true as const,
+          url: "http://admin.example.test/",
+        },
+      },
+    },
+    {
+      ...main,
+      ownerSession: {
+        ...main.ownerSession,
+        adminAutoOpen: {
+          enabled: true as const,
+          url: "file:///C:/Windows/System32/calc.exe",
+        },
+      },
+    },
+    {
+      ...main,
+      ownerSession: {
+        ...main.ownerSession,
+        adminAutoOpen: {
+          enabled: true as const,
+          url: "https://admin.example.test/path",
+        },
+      },
+    },
+  ]) {
+    assert.throws(
+      () => createPlatformServiceDefinition(configuration),
+      (error: unknown) =>
+        error instanceof PlatformServiceError && error.code === "INVALID_CONFIGURATION",
+    );
+  }
 });

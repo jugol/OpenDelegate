@@ -18,9 +18,14 @@
         "tooling/build-release.mjs",
         "tooling/test/build-release.test.mjs",
         "apps/main/src/cli.ts",
-        "apps/main/test/main-runtime.test.ts"
+        "apps/main/test/main-runtime.test.ts",
+        "apps/main/src/main-service-configuration.ts",
+        "apps/main/test/main-service-configuration.test.ts",
+        "apps/main/test/service-lifecycle.test.ts",
+        "apps/service-host/src/admin-auto-open.ts",
+        "apps/service-host/test/admin-auto-open.test.ts"
       ],
-      "nextGate": "Run the pinned bundle and init skill on clean macOS, Windows, and Linux hosts; implement and install the production service commands, then record startup and Admin auto-open proof."
+      "nextGate": "Build a clean, signed or notarized platform bundle, invoke the init skill on clean macOS, Windows, and Linux hosts, install and start Main plus the co-located Worker through the packaged native lifecycle, and record Main/Admin readiness plus disabled and enabled Admin auto-open behavior across login and explicit service reconfiguration."
     },
     {
       "id": 2,
@@ -44,11 +49,26 @@
         "docs/adr/0005-sql-portability-and-transaction-semantics.md",
         "packages/storage-sql/test/sql-event-store.contract.test.ts",
         "packages/storage-sql/test/sql-owner-auth-repository.contract.test.ts",
+        "packages/storage-sql/src/sql-action-authorization-repository.ts",
+        "packages/storage-sql/test/sql-action-authorization-repository.contract.test.ts",
+        "apps/main/src/action-authorization-runtime.ts",
+        "apps/main/test/action-authorization-runtime.test.ts",
         "packages/acceptance/test/phase2-sql-persistence.test.ts",
+        "apps/main/src/backup.ts",
+        "apps/main/src/backup-cli.ts",
+        "apps/main/test/backup.test.ts",
+        "apps/main/test/backup-cli.test.ts",
+        "docs/BACKUP_AND_RESTORE.md",
+        "packages/device-channel/src/channel-repository.ts",
+        "packages/device-channel/test/sqlite-channel-repository.test.ts",
+        "packages/storage-sql/src/sql-artifact-index-repository.ts",
+        "packages/storage-sql/test/sql-artifact-index-repository.contract.test.ts",
+        "packages/storage-sql/src/sql-device-observation-repository.ts",
+        "packages/storage-sql/test/sql-device-observation-repository.contract.test.ts",
         "apps/main/test/main-runtime.test.ts",
         ".github/workflows/ci.yml"
       ],
-      "nextGate": "Run the final-commit PostgreSQL CI job and clean-bundle SQLite and external-PostgreSQL smokes, then capture migration and backup/restore proof for both deployment choices."
+      "nextGate": "Capture immutable final-commit SQLite and PostgreSQL contract results for every composed repository, including configuration, Artifact metadata, Device observations, owner authentication, action authorization, Discord state, and Device channels. Then run the packaged backup, verify, and fresh-target restore CLI on clean hosts and prove migration integrity, exact Worker-action once-consumption, channel replay, and post-restore reconciliation for both deployment choices."
     },
     {
       "id": 4,
@@ -58,9 +78,15 @@
       "evidence": [
         "packages/discord-adapter/README.md",
         "packages/discord-adapter/src/discord-forum-adapter.ts",
-        "packages/discord-adapter/test/discord-forum-adapter.test.ts"
+        "packages/discord-adapter/src/fetch-discord-api-port.ts",
+        "packages/discord-adapter/src/ws-discord-gateway-port.ts",
+        "packages/discord-adapter/test/discord-forum-adapter.test.ts",
+        "packages/discord-adapter/test/fetch-discord-api-port.test.ts",
+        "packages/discord-adapter/test/ws-discord-gateway-port.test.ts",
+        "packages/storage-sql/src/sql-discord-state-repository.ts",
+        "packages/storage-sql/test/sql-discord-state-repository.contract.test.ts"
       ],
-      "nextGate": "Implement the production Discord HTTP, Gateway, Main SQL-state, and Secret-backed credential ports, then bind a dedicated Community Forum and record permission, intent, Gateway Resume, and HTTP reconciliation proof."
+      "nextGate": "Bind the composed production Discord runtime to a real approved Community Forum using the final managed credential path, then record permission, intent, Gateway Resume, HTTP reconciliation, rate-limit, mobile-control, and Components v2 proof across Main restart."
     },
     {
       "id": 5,
@@ -71,9 +97,19 @@
         "docs/adr/0008-device-identity-enrollment-and-channel-authentication.md",
         "packages/device-identity/README.md",
         "packages/device-identity/src/device-identity-authority.ts",
-        "packages/device-identity/test/device-identity.test.ts"
+        "packages/device-identity/test/device-identity.test.ts",
+        "packages/device-channel/src/enrollment-grant-file.ts",
+        "packages/device-channel/src/enrollment.ts",
+        "packages/device-channel/src/main-device-channel-server.ts",
+        "packages/device-channel/src/worker-device-channel-client.ts",
+        "packages/device-channel/test/enrollment-flow.test.ts",
+        "packages/device-channel/test/mtls-device-channel.test.ts",
+        "apps/worker/src/worker-app.ts",
+        "apps/worker/src/cli.ts",
+        "apps/worker/test/worker-cli.test.ts",
+        "skills/opendelegate-join/SKILL.md"
       ],
-      "nextGate": "Compose the identity core with persistent Main and OS Secret Stores, pinned enrollment HTTP, active-channel revocation, and a join skill, then enroll real macOS, Windows, and Linux Devices."
+      "nextGate": "Build and sign the final platform bundles, invoke the packaged join skill, and use the composed enrollment HTTPS and mutual-TLS WSS runtime to enroll real macOS, Windows, and Linux Devices; include signed macOS helper and clean-host lifecycle proof."
     },
     {
       "id": 6,
@@ -85,9 +121,17 @@
         "packages/platform-services/README.md",
         "packages/platform-services/test/renderers.test.ts",
         "packages/platform-services/test/plans.test.ts",
-        "tooling/build-release.mjs"
+        "packages/platform-services/test/native-service-runtime.test.ts",
+        "packages/platform-services/src/core-health-contract.ts",
+        "apps/service-host/src/core-host.ts",
+        "apps/service-host/src/session-helper-host.ts",
+        "apps/service-host/test/core-host.test.ts",
+        "apps/service-host/test/service-host.test.ts",
+        "tooling/build-release.mjs",
+        "tooling/sign-release.mjs",
+        "tooling/test/sign-release.test.mjs"
       ],
-      "nextGate": "Implement the privileged filesystem and supervisor adapters, durable operation journal, service hosts, and authenticated IPC, then capture clean install, restart, reboot, login/logout, upgrade, rollback, and uninstall proof on all three OS families."
+      "nextGate": "Build, sign, and where applicable notarize final platform bundles containing the target-native core and session-helper hosts, then use the packaged lifecycle to capture privileged clean install, exact-identity health, process restart, reboot, login/logout, upgrade, failed-health rollback, and uninstall proof on all three OS families."
     },
     {
       "id": 7,
@@ -98,10 +142,15 @@
         "packages/device-discovery/test/device-discovery-service.test.ts",
         "packages/worker-runtime/test/worker-runtime.test.ts",
         "packages/platform-services/test/readiness.test.ts",
+        "packages/storage-sql/src/sql-device-observation-repository.ts",
+        "packages/storage-sql/test/sql-device-observation-repository.contract.test.ts",
+        "apps/admin-web/src/device-overview.ts",
+        "apps/admin-web/src/DeviceSurface.tsx",
+        "apps/admin-web/src/App.test.tsx",
         "apps/main/test/main-runtime.test.ts",
         "apps/admin-web/src/AdminApplication.test.tsx"
       ],
-      "nextGate": "Compose enrolled Worker observations, profile revisions, routes, locks, load, and current Runs into durable Main projections and verify the complete Device surface against real Devices."
+      "nextGate": "Run the packaged Main and enrolled macOS, Windows, and Linux Workers, then compare the durable observation and Admin projections with each host's real Facts, Capabilities, Roles, Instructions, Policies, route health, named Resource Locks, load, outbox depth, and current Runs across reconnect and restart."
     },
     {
       "id": 8,
@@ -111,9 +160,13 @@
       "evidence": [
         "packages/transport/test/transport-resolver.test.ts",
         "packages/worker-runtime/test/worker-runtime.test.ts",
-        "packages/worker-runtime/test/state-boundaries.test.ts"
+        "packages/worker-runtime/test/state-boundaries.test.ts",
+        "packages/device-channel/src/worker-device-channel-client.ts",
+        "packages/device-channel/src/main-device-channel-server.ts",
+        "packages/device-channel/test/mtls-device-channel.test.ts",
+        "apps/worker/src/worker-app.ts"
       ],
-      "nextGate": "Compose authenticated Worker channels over configured endpoints and prove different real Tailscale, Omada, and direct profiles, including redacted diagnostics and prompt inspection after deterministic exhaustion."
+      "nextGate": "Using the composed Main Device channel and Worker transport resolver, run enrolled Devices over distinct real Tailscale, Omada, and direct WSS profiles; force preferred-route failure and record deterministic fallback, redacted attempt traces, and proof that route mechanics never enter Main Agent prompts."
     },
     {
       "id": 9,
@@ -122,10 +175,13 @@
       "liveProofStatus": "blocked-external",
       "evidence": [
         "packages/discord-adapter/test/discord-forum-adapter.test.ts",
+        "packages/discord-adapter/test/fetch-discord-api-port.test.ts",
+        "packages/discord-adapter/test/ws-discord-gateway-port.test.ts",
+        "packages/storage-sql/test/sql-discord-state-repository.contract.test.ts",
         "packages/task-service/test/task-service.test.ts",
         "packages/acceptance/test/canonical-task-journey.test.ts"
       ],
-      "nextGate": "Compose the Discord adapter with the durable Main Task service and production Gateway/HTTP ports, then prove post and reply identity through live ingestion, reconnect, and archived-thread reconciliation."
+      "nextGate": "Run the composed production Discord, SQL, and Main Task path with a real approved Community Forum; prove starter and thread event reordering, one post to one durable Task, replies to the same Task, Gateway reconnect, archived-thread HTTP reconciliation, and Main restart without duplication."
     },
     {
       "id": 10,
@@ -149,7 +205,7 @@
         "packages/configuration/test/configuration-service.test.ts",
         "packages/acceptance/test/phase1-public-contracts.test.ts"
       ],
-      "nextGate": "Compose a real Coordinator adapter and Discord projection so clear Auto work starts and ambiguous work persists and presents exactly one targeted owner question."
+      "nextGate": "Run the composed pinned Coordinator adapter and Discord projection against a real provider and Forum; record one clear Auto Task entering execution without plan approval and one materially ambiguous Task persisting and presenting exactly one targeted owner question."
     },
     {
       "id": 12,
@@ -161,7 +217,7 @@
         "packages/acceptance/test/phase1-public-contracts.test.ts",
         "packages/worker-runtime/test/worker-runtime.test.ts"
       ],
-      "nextGate": "Compose the Worker protocol and real Agent adapters, then run one Task through parallel Work Orders on two enrolled real Devices and record Main's synthesized result."
+      "nextGate": "Run the composed authoritative Main, Device channel, and Worker path with pinned live adapters on two enrolled real Devices, force parallel Work Orders, and record both authoritative reports plus the Coordinator's completion-criteria synthesis."
     },
     {
       "id": 13,
@@ -185,11 +241,20 @@
       "evidence": [
         "packages/agent-adapters/README.md",
         "packages/agent-adapters/src/contracts.ts",
+        "packages/agent-adapters/src/codex-app-server-adapter.ts",
+        "packages/agent-adapters/src/claude-agent-sdk-adapter.ts",
+        "packages/agent-adapters/src/steering.ts",
+        "packages/agent-adapters/test/codex-app-server-adapter.test.ts",
+        "packages/agent-adapters/test/claude-agent-sdk-adapter.test.ts",
+        "packages/agent-adapters/test/steering.test.ts",
         "packages/agent-adapters/test/codex-cli-adapter.test.ts",
         "packages/agent-adapters/test/claude-cli-adapter.test.ts",
-        "packages/agent-adapters/test/subprocess-lifecycle.test.ts"
+        "packages/agent-adapters/test/subprocess-lifecycle.test.ts",
+        "apps/worker/src/worker-app.ts",
+        "packages/worker-runtime/src/native-session-reference-store.ts",
+        "packages/worker-runtime/src/agent-run-process-factory.ts"
       ],
-      "nextGate": "Add the SDK-native approval and steering paths, compose adapters into the Worker and durable Main session registry, then run authenticated pinned Codex and Claude start, stream, resume, cancel, and restart smokes."
+      "nextGate": "Run authenticated, pinned Codex App Server and Claude Agent SDK start, stream, exact-session steering, resume, cancel, checkpoint continuation, and process-restart smokes through the packaged Main and Worker path on every target OS where each provider is advertised."
     },
     {
       "id": 15,
@@ -200,9 +265,18 @@
         "packages/domain/test/agent-session.test.ts",
         "packages/agent-adapter/test/agent-adapter.test.ts",
         "packages/agent-adapters/src/session-reference.ts",
-        "packages/agent-adapters/test/generic-command-adapter.test.ts"
+        "packages/agent-adapters/test/generic-command-adapter.test.ts",
+        "packages/protocol/test/protocol-contracts.test.ts",
+        "packages/device-channel/test/protocol.test.ts",
+        "packages/worker-runtime/src/agent-run-process-factory.ts",
+        "packages/worker-runtime/test/agent-run-process-factory.test.ts",
+        "packages/worker-runtime/test/worker-runtime.test.ts",
+        "packages/task-service/src/authoritative-worker-task-executor.ts",
+        "packages/task-service/test/authoritative-worker-task-executor.test.ts",
+        "apps/main/src/worker-target-resolver.ts",
+        "apps/main/test/worker-target-resolver.test.ts"
       ],
-      "nextGate": "Persist Coordinator and Worker session references in Main, compose provider selection with dispatch, and prove a pinned live Coordinator remains unchanged while the other provider participates as a Worker."
+      "nextGate": "Commit and attest the provider-binding, safe-lineage, Worker-restart, and Main-restart implementation tests; then prove a pinned live Coordinator remains unchanged while the other provider completes a provider-bound Worker workstream."
     },
     {
       "id": 16,
@@ -212,9 +286,18 @@
       "evidence": [
         "packages/agent-adapter/test/agent-adapter.test.ts",
         "packages/agent-adapters/README.md",
-        "packages/agent-adapters/test/generic-command-adapter.test.ts"
+        "packages/agent-adapters/test/generic-command-adapter.test.ts",
+        "packages/protocol/src/task-continuation-checkpoint.ts",
+        "packages/protocol/test/task-continuation-checkpoint.test.ts",
+        "packages/task-service/src/task-continuation-checkpoint.ts",
+        "packages/task-service/test/task-continuation-checkpoint.test.ts",
+        "apps/main/src/agent-task-executor.ts",
+        "apps/main/test/agent-task-executor.test.ts",
+        "packages/worker-runtime/src/agent-run-process-factory.ts",
+        "packages/worker-runtime/test/agent-run-process-factory.test.ts",
+        "packages/worker-runtime/test/native-session-reference-store.test.ts"
       ],
-      "nextGate": "Persist bounded checkpoint packages and lineage through Main and Worker restart, then force native-session loss in each authenticated live provider and prove continuation."
+      "nextGate": "Delete or make unavailable live Codex and Claude Coordinator and Worker sessions across packaged Main and Worker restart, then prove each new native session continues only from the bounded, hash-verified Task checkpoint, records an explicit parent lineage, and receives no Secret, Device Knowledge, private path, or unrelated Task content."
     },
     {
       "id": 17,
@@ -225,9 +308,14 @@
         "packages/knowledge/README.md",
         "packages/knowledge/test/local-knowledge-service.test.ts",
         "packages/acceptance/test/phase1-public-contracts.test.ts",
-        "packages/worker-runtime/test/state-boundaries.test.ts"
+        "packages/worker-runtime/test/state-boundaries.test.ts",
+        "packages/worker-runtime/src/knowledge-initial-context.ts",
+        "packages/worker-runtime/test/knowledge-initial-context.test.ts",
+        "packages/worker-runtime/src/agent-run-process-factory.ts",
+        "packages/worker-runtime/test/agent-run-process-factory.test.ts",
+        "apps/worker/src/worker-app.ts"
       ],
-      "nextGate": "Integrate bounded Knowledge search and explicit open into real Worker Work Order startup, then inspect SQL, protocol traffic, prompts, Admin, and diagnostics to prove no local metadata or content reaches Main."
+      "nextGate": "Build the packaged Worker and inspect live SQL, protocol traffic, first-turn and resumed provider prompts, Admin, and diagnostics to prove no local metadata or content reaches Main and no automatic reinjection occurs."
     },
     {
       "id": 18,
@@ -239,7 +327,7 @@
         "packages/knowledge/src/local-knowledge-service.ts",
         "packages/knowledge/test/local-knowledge-service.test.ts"
       ],
-      "nextGate": "Wire qualifying Agent-maintained Markdown updates and deterministic rebuild into the supervised Worker lifecycle, then record an end-to-end local update without Main-visible Knowledge metadata."
+      "nextGate": "Use the composed one-time Knowledge MCP in a packaged Worker Run to create and update a qualifying Markdown note, record deterministic immediate index visibility and restart rebuild, and inspect protocol, SQL, and diagnostics to prove no filename, title, link, preview, index, or content reaches Main."
     },
     {
       "id": 19,
@@ -251,10 +339,30 @@
         "docs/adr/0013-windows-computer-use-backend.md",
         "docs/adr/0014-macos-computer-use-backend.md",
         "docs/adr/0015-ubuntu-gnome-wayland-computer-use-backend.md",
+        ".github/workflows/ci.yml",
         "packages/computer-use-os/test/computer-use-os.test.ts",
-        "packages/computer-use-os/test/conformance-lab.test.ts"
+        "packages/computer-use-os/test/conformance-lab.test.ts",
+        "packages/computer-use-os/src/macos-native-driver.ts",
+        "packages/computer-use-os/src/macos-native-helper-process.ts",
+        "packages/computer-use-os/test/macos-native-driver.test.ts",
+        "packages/computer-use-os/test/macos-native-helper-process.test.ts",
+        "packages/computer-use-os/native/macos/README.md",
+        "packages/computer-use-os/native/macos/Package.swift",
+        "packages/computer-use-os/native/macos/Sources/OpenDelegateMacComputerUseProtocol/WireProtocol.swift",
+        "packages/computer-use-os/native/macos/Sources/OpenDelegateMacComputerUseHelper/PrivateStdioRuntime.swift",
+        "packages/computer-use-os/native/macos/Sources/OpenDelegateMacComputerUseHelper/MacNativeComputerUseDriver.swift",
+        "packages/computer-use-os/native/macos/Sources/OpenDelegateMacComputerUseFixture/main.swift",
+        "packages/computer-use-os/native/macos/Tests/OpenDelegateMacComputerUseProtocolTests/WireProtocolTests.swift",
+        "packages/computer-use-os/src/windows-native-driver.ts",
+        "packages/computer-use-os/src/windows-helper-ipc.ts",
+        "packages/computer-use-os/test/windows-native-driver.test.ts",
+        "packages/computer-use-os/test/windows-helper-ipc.test.ts",
+        "packages/computer-use-os/native/windows/README.md",
+        "packages/computer-use-os/native/windows/OpenDelegate.WindowsComputerUseHelper.vcxproj",
+        "packages/computer-use-os/native/windows/OpenDelegate.WindowsComputerUseFixture.vcxproj",
+        "packages/computer-use-os/native/windows/run-live-conformance.mjs"
       ],
-      "nextGate": "Accept the three OS backend ADRs, implement real authenticated native helpers and drivers, and pass the fixture, screenshot, permission, cancellation, emergency-stop, and lock tests on real Windows, macOS, and Ubuntu 24.04 GNOME Wayland hosts."
+      "nextGate": "Keep all three OS ADRs proposed until final-commit native builds and clean-host proof exist. Compose each native candidate behind the authenticated session-helper and exact lease/fence/Policy authority, package and sign it, then pass fixture, screenshot, permission denial/revocation, lock/logout, cancellation, emergency-stop, helper replacement, and capacity-one desktop-lock tests on real Windows, macOS, and Ubuntu 24.04 GNOME Wayland hosts. Windows additionally requires publisher-signed immutable bundles, owner-picker consent and withdrawal, service/helper login and reboot recovery, locked and switched sessions, UAC secure desktop and UIPI denial, partial SendInput, display/DPI change, and helper-crash evidence. macOS additionally requires a stable signed/notarized identity, owner-granted TCC, active Aqua and Secure Event Input cases, and real ScreenCaptureKit, AXUIElement, and CGEvent evidence."
     },
     {
       "id": 20,
@@ -277,11 +385,17 @@
       "liveProofStatus": "blocked-external",
       "evidence": [
         "packages/artifact-store/test/local-artifact-store.test.ts",
+        "packages/storage-sql/src/sql-artifact-index-repository.ts",
+        "packages/storage-sql/test/sql-artifact-index-repository.contract.test.ts",
         "apps/artifact-gateway/test/artifact-gateway.test.ts",
+        "apps/main/src/artifact-runtime.ts",
+        "apps/main/test/artifact-runtime.test.ts",
+        "apps/main/src/discord-artifact-presentation.ts",
+        "apps/main/test/discord-artifact-presentation.test.ts",
         "packages/discord-adapter/test/discord-forum-adapter.test.ts",
         "packages/orchestrator/test/orchestration-lifecycle.test.ts"
       ],
-      "nextGate": "Compose authenticated resumable Worker upload, durable Main Artifact metadata, the isolated Gateway, and the production Discord driver, then prove a real Worker result appears as both a concise native result and openable Artifact link."
+      "nextGate": "Using the packaged composed runtime, upload a report from a real enrolled Worker, persist its authoritative metadata in SQLite and PostgreSQL, and prove that the same result appears in a live Discord Forum as a concise native presentation plus an openable isolated Artifact link."
     },
     {
       "id": 22,
@@ -292,9 +406,15 @@
         "docs/adr/0009-artifact-origin-and-content-isolation.md",
         "packages/domain/test/artifact-audit.test.ts",
         "packages/artifact-store/test/local-artifact-store.test.ts",
-        "apps/artifact-gateway/test/artifact-gateway.test.ts"
+        "packages/artifact-store/test/local-artifact-access-broker.test.ts",
+        "packages/storage-sql/test/sql-artifact-index-repository.contract.test.ts",
+        "apps/artifact-gateway/test/artifact-gateway.test.ts",
+        "apps/main/src/artifact-prepare-service.ts",
+        "apps/main/test/artifact-prepare-service.test.ts",
+        "apps/admin-web/src/ArtifactSurface.tsx",
+        "apps/admin-web/src/OperationsSurfaces.test.tsx"
       ],
-      "nextGate": "Compose exposure precedence and audit with real owner routes and credentials, then prove private-network, authenticated, signed-link, and explicit public access from the required mixed-network viewers."
+      "nextGate": "Run the packaged Gateway through real owner routes and credentials, then prove private-network, authenticated, revocable and expiring signed-link, and intentionally public access from the required mixed-network viewers with durable exposure audit."
     },
     {
       "id": 23,
@@ -316,9 +436,18 @@
       "evidence": [
         "packages/policy/test/evaluate-action.test.ts",
         "packages/configuration/test/configuration-service.test.ts",
-        "packages/agent-adapters/test/subprocess-lifecycle.test.ts"
+        "packages/platform-services/src/platform-mutation-executor.ts",
+        "packages/platform-services/test/platform-mutation-executor.test.ts",
+        "apps/worker/src/configured-system-package-verifier.ts",
+        "apps/worker/src/platform-mutation-safety-boundary.ts",
+        "apps/worker/test/configured-system-package-verifier.test.ts",
+        "apps/worker/test/platform-mutation-safety-boundary.test.ts",
+        "apps/main/src/configuration-runtime-policy.ts",
+        "apps/main/test/configuration-runtime-policy.test.ts",
+        "apps/main/src/action-authorization-runtime.ts",
+        "apps/main/test/action-authorization-runtime.test.ts"
       ],
-      "nextGate": "Connect deterministic package-source classification and Policy to a real package-manager executor and prove official-package allowance plus protected repository and remote-installer prompts on supported hosts."
+      "nextGate": "On clean supported hosts, run one install-only request through each advertised configured manager and current Configuration Policy, then prove an executable replacement fails closed and repository additions, remote installers, widened argv, and denied approvals execute no subprocess. Record the exact manager source state and required narrow service privilege as live evidence."
     },
     {
       "id": 25,
@@ -326,7 +455,7 @@
       "implementationStatus": "partial",
       "liveProofStatus": "not-run",
       "evidence": ["packages/policy/test/evaluate-action.test.ts"],
-      "nextGate": "Enforce Policy at real OS mutation executors."
+      "nextGate": "On packaged disposable Workers for each OS, request an exact network or firewall mutation through the composed platform-mutation capability, present the pending Approval in Discord and Admin, deny it, and prove zero subprocess execution plus durable denial and audit across reconnect and restart; then prove an approved exact grant cannot authorize a widened target or argv."
     },
     {
       "id": 26,
@@ -335,13 +464,20 @@
       "liveProofStatus": "not-run",
       "evidence": [
         "packages/secrets/test/secret-lifecycle.test.ts",
+        "packages/secrets/test/managed-secret-store.test.ts",
+        "packages/secrets/test/native-secret-command.test.ts",
+        "packages/secrets/README.md",
+        "docs/adr/0017-device-local-secret-store-backends.md",
         "packages/acceptance/test/phase1-public-contracts.test.ts",
+        "packages/discord-adapter/test/fetch-discord-api-port.test.ts",
+        "packages/discord-adapter/test/ws-discord-gateway-port.test.ts",
+        "packages/storage-sql/test/sql-discord-state-repository.contract.test.ts",
         "packages/storage-sql/test/sql-owner-auth-repository.contract.test.ts",
         "packages/worker-runtime/test/state-boundaries.test.ts",
         "packages/agent-adapters/test/subprocess-lifecycle.test.ts",
         "packages/knowledge/test/local-knowledge-service.test.ts"
       ],
-      "nextGate": "Compose real OS Secret Stores and credential injection, then run adversarial leak scans through the integrated database, provider prompts and output, logs, diagnostics, Discord, Admin, and Artifacts on every OS."
+      "nextGate": "Compose the implemented Device-local stores and scoped credential injection, build/sign/notarize and prove the macOS helper, prove graphical and headless Linux lifecycle, then run adversarial leak scans through the integrated database, provider prompts and output, logs, diagnostics, Discord, Admin, and Artifacts on every OS."
     },
     {
       "id": 27,
@@ -351,7 +487,9 @@
       "evidence": [
         "packages/transport/test/transport-resolver.test.ts",
         "packages/worker-runtime/test/worker-runtime.test.ts",
-        "packages/worker-runtime/test/state-boundaries.test.ts"
+        "packages/worker-runtime/test/state-boundaries.test.ts",
+        "packages/device-channel/test/mtls-device-channel.test.ts",
+        "apps/worker/src/worker-app.ts"
       ],
       "nextGate": "Run authenticated Worker traffic across real mixed routes, force the preferred path to fail, and record deterministic fallback, bounded exhaustion, redacted evidence, and only then Agent escalation."
     },
@@ -364,9 +502,18 @@
         "packages/worker-runtime/README.md",
         "packages/worker-runtime/src/sqlite-worker-state-repository.ts",
         "packages/worker-runtime/test/worker-runtime.test.ts",
-        "packages/worker-runtime/test/state-boundaries.test.ts"
+        "packages/worker-runtime/test/state-boundaries.test.ts",
+        "packages/task-service/src/authoritative-worker-task-executor.ts",
+        "packages/task-service/test/authoritative-worker-task-executor.test.ts",
+        "packages/device-channel/src/channel-repository.ts",
+        "packages/device-channel/src/worker-channel-state.ts",
+        "packages/device-channel/test/inbound-effect-delivery.test.ts",
+        "packages/device-channel/test/sqlite-channel-repository.test.ts",
+        "packages/device-channel/test/sqlite-worker-channel-state.test.ts",
+        "packages/device-channel/test/mtls-device-channel.test.ts",
+        "apps/main/test/device-channel-runtime.test.ts"
       ],
-      "nextGate": "Compose the local outbox with the authenticated Main channel and durable Main inbox, then force real network and process interruption and prove ordered acknowledgment, replay, and exactly-once external effects."
+      "nextGate": "Source tests cover durable rejection and acknowledgement of well-formed terminal events for expired or replaced Runs while malformed or unknown identifiers fail closed. The remaining gate is to force real network and process interruption through the packaged composed channel, then prove strict-prefix Worker outbox delivery, replay after both endpoints restart, continued draining of later valid events, and exactly-once external effects."
     },
     {
       "id": 29,
@@ -376,11 +523,18 @@
       "evidence": [
         "packages/orchestrator/test/orchestration-restart.test.ts",
         "packages/storage-sql/test/sql-event-store.contract.test.ts",
+        "packages/storage-sql/test/sql-discord-state-repository.contract.test.ts",
         "packages/worker-runtime/test/worker-runtime.test.ts",
         "packages/discord-adapter/test/discord-forum-adapter.test.ts",
-        "apps/main/test/main-runtime.test.ts"
+        "packages/task-service/src/task-execution-coordinator.ts",
+        "packages/task-service/test/task-execution-coordinator.test.ts",
+        "apps/main/src/main-singleton-ownership.ts",
+        "apps/main/test/main-singleton-ownership.test.ts",
+        "apps/main/test/main-runtime.test.ts",
+        "apps/main/test/discord-runtime.test.ts",
+        "docs/adr/0020-main-singleton-ownership.md"
       ],
-      "nextGate": "Compose Discord, Worker, Run, lease, outbox, and external singleton-authority state in the production Main, then force process and host restarts and prove reconciliation occurs before dispatch without a second coordinator."
+      "nextGate": "Capture immutable-commit live evidence on Windows, macOS, and Linux plus PostgreSQL: force process and host restarts, crash the active Main, start a second contender, and prove singleton exclusion plus Discord, Run, lease, and outbox reconciliation before dispatch."
     },
     {
       "id": 30,
@@ -392,9 +546,10 @@
         "apps/control-plane/test/control-plane-http.test.ts",
         "apps/main/test/main-runtime.test.ts",
         "apps/admin-web/src/AdminApplication.test.tsx",
+        "apps/admin-web/src/i18n/i18n.test.tsx",
         "apps/admin-web/e2e/admin-overview.spec.ts"
       ],
-      "nextGate": "Run the browser suite against the packaged Main rather than mocked HTTP, disable Discord, and prove authenticated inspection, emergency Task creation, pause, resume, cancel, retry, and restart persistence."
+      "nextGate": "Run the complete six-locale browser suite against the packaged Main rather than mocked HTTP, disable Discord, and prove authenticated inspection, emergency Task creation, pause, resume, cancel, retry, locale persistence, untranslated owner content, accessibility, responsive overflow safety, and restart persistence."
     },
     {
       "id": 31,
@@ -406,23 +561,34 @@
         "packages/domain/test/artifact-audit.test.ts",
         "packages/configuration/test/configuration-service.test.ts",
         "packages/artifact-store/test/local-artifact-store.test.ts",
-        "packages/storage-sql/test/sql-owner-auth-repository.contract.test.ts"
+        "packages/storage-sql/test/sql-owner-auth-repository.contract.test.ts",
+        "packages/policy/src/approval-service.ts",
+        "packages/storage-sql/test/sql-approval-repository.contract.test.ts",
+        "apps/main/src/action-authorization-runtime.ts",
+        "apps/main/test/action-authorization-runtime.test.ts",
+        "apps/main/src/admin-operations.ts",
+        "apps/main/test/admin-operations.test.ts",
+        "apps/admin-web/src/AuditSurface.tsx",
+        "apps/admin-web/src/OperationsSurfaces.test.tsx"
       ],
-      "nextGate": "Persist and query one complete audit projection covering enrollment, scheduling, profile and Policy changes, approvals, execution, Artifact exposure, Admin controls, and failures through the production composition."
+      "nextGate": "Complete and query one production audit projection that also binds Worker action authorization/consumption, platform-mutation receipts, Admin Task controls, resource-lock and lease decisions, and system incidents to their exact Task, Run, Device, principal, and outcome across SQLite and PostgreSQL restart."
     },
     {
       "id": 32,
-      "title": "Automated and live smoke matrices pass on declared OS versions",
+      "title": "Automated, six-locale Admin, and live smoke matrices pass on declared OS versions",
       "implementationStatus": "partial",
       "liveProofStatus": "blocked-external",
       "evidence": [
         ".github/workflows/ci.yml",
+        "apps/admin-web/src/i18n/i18n.test.tsx",
+        "apps/admin-web/e2e/admin-overview.spec.ts",
         "docs/adr/0010-reproducible-platform-bundles-and-provenance.md",
+        "docs/release/SUPPORT_MATRIX.md",
         "tooling/build-release.mjs",
         "tooling/test/build-release.test.mjs",
         "docs/release/PLATFORM_LAB.md"
       ],
-      "nextGate": "Run final-commit hosted CI and target-native bundle smokes, then complete and attach the owner-controlled macOS, Windows, Linux, Discord, provider, mixed-route, service, and Computer Use lab matrix."
+      "nextGate": "Run final-commit hosted CI, the complete six-locale Admin unit/browser matrix, and target-native bundle smokes, then complete and attach the owner-controlled macOS, Windows, Linux, Discord, provider, mixed-route, service, and Computer Use lab matrix."
     },
     {
       "id": 33,
@@ -434,9 +600,18 @@
         "packages/agent-adapter/test/agent-adapter.test.ts",
         "packages/agent-adapters/src/session-reference.ts",
         "packages/agent-adapters/test/codex-cli-adapter.test.ts",
-        "packages/agent-adapters/test/generic-command-adapter.test.ts"
+        "packages/agent-adapters/test/generic-command-adapter.test.ts",
+        "packages/worker-runtime/src/workspace-registry.ts",
+        "packages/worker-runtime/test/workspace-registry.test.ts",
+        "packages/worker-runtime/src/managed-git-worktree.ts",
+        "packages/worker-runtime/test/managed-git-worktree.test.ts",
+        "packages/worker-runtime/src/native-session-reference-store.ts",
+        "packages/worker-runtime/test/native-session-reference-store.test.ts",
+        "packages/worker-runtime/src/agent-run-process-factory.ts",
+        "packages/worker-runtime/test/agent-run-process-factory.test.ts",
+        "apps/worker/src/worker-app.ts"
       ],
-      "nextGate": "Implement the persistent Worker Workspace registry and safe worktree lifecycle, compose it with dispatch, and prove live native-session resume rejects a changed Device, Workspace, cwd, or worktree."
+      "nextGate": "Build the packaged Worker, register real Workspaces, and prove live native-session resume and cleanup reject a changed Device, Workspace, cwd, worktree, or unapproved dirty state on every supported OS."
     },
     {
       "id": 34,
@@ -448,7 +623,7 @@
         "packages/agent-adapters/test/file-session-lease-store.test.ts",
         "packages/agent-adapters/test/subprocess-lifecycle.test.ts"
       ],
-      "nextGate": "Compose the file-backed session lease with the Worker session registry and run concurrent append attempts against live Codex and Claude sessions through process restart."
+      "nextGate": "Run concurrent appends against live Codex and Claude native sessions through Worker restart using the composed shared file-backed session lease, and verify one writer with no transcript interleaving plus acquire, renew, release, and crash-expiry behavior."
     },
     {
       "id": 35,
@@ -458,9 +633,20 @@
       "evidence": [
         "packages/domain/test/budget.test.ts",
         "packages/agent-adapters/test/subprocess-lifecycle.test.ts",
-        "packages/acceptance/test/phase1-public-contracts.test.ts"
+        "packages/acceptance/test/phase1-public-contracts.test.ts",
+        "packages/task-service/src/durable-budget-enforcer.ts",
+        "packages/task-service/src/task-execution-coordinator.ts",
+        "packages/task-service/src/authoritative-worker-task-executor.ts",
+        "packages/task-service/test/durable-budget-enforcer.test.ts",
+        "packages/task-service/test/task-execution-coordinator.test.ts",
+        "packages/task-service/test/authoritative-worker-task-executor.test.ts",
+        "apps/control-plane/src/task-budget-admin-port.ts",
+        "apps/main/src/task-budget-admin.ts",
+        "apps/main/test/task-budget-admin.test.ts",
+        "apps/admin-web/src/TaskBudgetPanel.tsx",
+        "apps/admin-web/src/TaskBudgetPanel.test.tsx"
       ],
-      "nextGate": "Implement hierarchical budget accounting in the production Task and Run services, add a deliberately runaway adapter to the integrated Main/Worker journey, and prove hard stop plus bounded child creation."
+      "nextGate": "Run a deliberately runaway adapter through the composed packaged Main and Worker journey with very small Task and Work Order limits; prove the durable hard Budget cancels the active Run and process tree, blocks retries and excess child Work Orders across restart, records the limit event, and resumes only after an owner-authorized extension."
     },
     {
       "id": 36,

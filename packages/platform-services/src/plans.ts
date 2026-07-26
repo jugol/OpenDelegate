@@ -1,6 +1,7 @@
 import { posix, win32 } from "node:path";
 
 import { renderPlatformServiceArtifacts } from "./render.ts";
+import { stableJson } from "./render-common.ts";
 import {
   PlatformServiceError,
   type CommandInvocation,
@@ -137,6 +138,12 @@ export type CreateServicePlanInput =
       readonly configuration: PlatformServiceConfiguration;
     }
   | {
+      readonly operation: "reconfigure";
+      readonly configuration: PlatformServiceConfiguration;
+      readonly previousConfiguration: PlatformServiceConfiguration;
+      readonly activeVersion: string;
+    }
+  | {
       readonly operation: "restart" | "start" | "stop";
       readonly configuration: PlatformServiceConfiguration;
       readonly activeVersion: string;
@@ -159,6 +166,17 @@ export function createServicePlan(input: CreateServicePlanInput): ServicePlan {
     return installPlan(artifacts);
   }
   validateActiveVersion(input.activeVersion);
+  if (input.operation !== "upgrade" && input.activeVersion !== input.configuration.bundle.version) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Lifecycle commands require the configured bundle version to match the active version.",
+    );
+  }
+  if (input.operation === "reconfigure") {
+    const previousArtifacts = renderPlatformServiceArtifacts(input.previousConfiguration);
+    assertAdminAutoOpenOnlyReconfiguration(input.configuration, input.previousConfiguration);
+    return reconfigurePlan(artifacts, previousArtifacts, input.activeVersion);
+  }
   if (input.operation === "start") {
     return lifecyclePlan(artifacts, "start", input.activeVersion);
   }
@@ -195,7 +213,7 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       },
     });
   } else {
-    steps.push(supervisorStep("install-core", artifacts, "core", "install"));
+    steps.push(supervisorStep("install-core", artifacts, "core", "install", "remove"));
   }
   steps.push(
     directoryStep(
@@ -208,6 +226,12 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       "ensure-state-root",
       configuration.paths.stateRoot,
       "0750",
+      directoryAccess(configuration, "state"),
+    ),
+    directoryStep(
+      "ensure-authority-root",
+      configuration.paths.authorityRoot,
+      "0700",
       directoryAccess(configuration, "state"),
     ),
     directoryStep(
@@ -243,10 +267,10 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
     })),
   );
   if (configuration.platform !== "windows") {
-    steps.push(supervisorStep("install-core", artifacts, "core", "install"));
+    steps.push(supervisorStep("install-core", artifacts, "core", "install", "remove"));
   }
   steps.push(
-    supervisorStep("install-helper", artifacts, "session-helper", "install"),
+    supervisorStep("install-helper", artifacts, "session-helper", "install", "remove"),
     supervisorStep("start-core", artifacts, "core", "start", "stop"),
     supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
     healthStep("health-core", artifacts, "core"),
@@ -267,8 +291,8 @@ function lifecyclePlan(
   const steps =
     operation === "start"
       ? [
-          supervisorStep("start-core", artifacts, "core", "start"),
-          supervisorStep("start-helper", artifacts, "session-helper", "start"),
+          supervisorStep("start-core", artifacts, "core", "start", "stop"),
+          supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
           healthStep("health-core", artifacts, "core"),
           healthStep("health-helper", artifacts, "session-helper"),
         ]
@@ -292,6 +316,46 @@ function restartPlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
       healthStep("health-helper", artifacts, "session-helper"),
     ],
     [],
+    activeVersion,
+  );
+}
+
+function reconfigurePlan(
+  artifacts: PlatformServiceArtifacts,
+  previousArtifacts: PlatformServiceArtifacts,
+  activeVersion: string,
+): ServicePlan {
+  const runtimeConfiguration = requireRenderedFile(artifacts, "runtime-configuration");
+  const previousRuntimeConfiguration = requireRenderedFile(
+    previousArtifacts,
+    "runtime-configuration",
+  );
+  return plan(
+    "reconfigure",
+    artifacts,
+    [
+      supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start"),
+      {
+        id: "update-runtime-configuration",
+        description: "Atomically update the effective owner-session runtime configuration.",
+        action: {
+          kind: "file.write",
+          file: runtimeConfiguration,
+          atomic: true,
+        },
+        rollback: {
+          kind: "file.write",
+          file: previousRuntimeConfiguration,
+          atomic: true,
+        },
+      },
+      supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
+      healthStep("health-helper", artifacts, "session-helper"),
+    ],
+    [
+      "Only the persisted Main owner Admin auto-open preference may change.",
+      "The headless core remains running while the owner-session helper reloads its configuration.",
+    ],
     activeVersion,
   );
 }
@@ -416,6 +480,15 @@ function uninstallPlan(
       },
     },
     {
+      id: "remove-active-link",
+      description: "Remove the stable current release link without following it.",
+      action: {
+        kind: "path.remove",
+        path: artifacts.definition.activeDirectory,
+        recursive: false,
+      },
+    },
+    {
       id: "remove-installation",
       description: "Remove installed release binaries.",
       action: {
@@ -447,6 +520,15 @@ function uninstallPlan(
         },
       },
       {
+        id: "purge-desktop-authority",
+        description: "Explicitly purge the external monotonic desktop authority watermark.",
+        action: {
+          kind: "path.remove",
+          path: configuration.paths.authorityRoot,
+          recursive: true,
+        },
+      },
+      {
         id: "purge-logs",
         description: "Explicitly purge OpenDelegate service logs.",
         action: {
@@ -468,10 +550,12 @@ function uninstallPlan(
         },
       });
     }
-    notes.push("Persistent state and logs are purged because purgeState was explicit.");
+    notes.push(
+      "Persistent state, external desktop authority, and logs are purged because purgeState was explicit.",
+    );
   } else {
     notes.push(
-      `Persistent state at ${configuration.paths.stateRoot} and logs at ${configuration.paths.logRoot} are preserved for reinstall or recovery.`,
+      `Persistent state at ${configuration.paths.stateRoot}, desktop authority at ${configuration.paths.authorityRoot}, and logs at ${configuration.paths.logRoot} are preserved for reinstall or recovery.`,
     );
   }
   return plan("uninstall", artifacts, steps, notes, activeVersion);
@@ -617,6 +701,50 @@ function pruneStep(artifacts: PlatformServiceArtifacts): ServicePlanStep {
       retainPreviousVersions: configuration.retainPreviousVersions,
     },
   };
+}
+
+function requireRenderedFile(
+  artifacts: PlatformServiceArtifacts,
+  purpose: RenderedFile["purpose"],
+): RenderedFile {
+  const file = artifacts.files.find((candidate) => candidate.purpose === purpose);
+  if (file === undefined) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      `The ${purpose} artifact is unavailable.`,
+    );
+  }
+  return file;
+}
+
+function assertAdminAutoOpenOnlyReconfiguration(
+  configuration: PlatformServiceConfiguration,
+  previousConfiguration: PlatformServiceConfiguration,
+): void {
+  if (configuration.role !== "main" || previousConfiguration.role !== "main") {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Only the fixed Main owner Admin auto-open preference can be reconfigured.",
+    );
+  }
+  const currentChoice = configuration.ownerSession.adminAutoOpen;
+  const previousChoice = previousConfiguration.ownerSession.adminAutoOpen;
+  const normalize = (value: PlatformServiceConfiguration) => ({
+    ...value,
+    ownerSession: {
+      ...value.ownerSession,
+      adminAutoOpen: { enabled: false as const },
+    },
+  });
+  if (
+    stableJson(normalize(configuration)) !== stableJson(normalize(previousConfiguration)) ||
+    stableJson(currentChoice) === stableJson(previousChoice)
+  ) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Service reconfiguration may change only the Main Admin auto-open preference.",
+    );
+  }
 }
 
 function directoryStep(

@@ -27,8 +27,11 @@ export function renderLinuxServiceArtifacts(
   const ipc: LocalIpcDefinition = {
     kind: "unix-domain-socket",
     endpoint: posix.join(configuration.paths.runtimeRoot, "session-helper.sock"),
-    authentication: "hmac-sha256-challenge",
-    credentialReference: configuration.secretReferences.helperIpc ?? "",
+    authentication: "ed25519-mutual-signature-v2",
+    corePrivateKeyReference: configuration.secretReferences.coreIpcSigningKey ?? "",
+    helperPrivateKeyReference: configuration.secretReferences.helperIpcSigningKey ?? "",
+    corePublicKey: configuration.ipcTrust.core,
+    helperPublicKey: configuration.ipcTrust.helper,
     allowedPeers: [configuration.serviceIdentity.userName, configuration.ownerSession.stableUserId],
     socketMode: "0660",
   };
@@ -71,11 +74,10 @@ export function renderLinuxServiceArtifacts(
       privilege: "owner-session",
       availabilityPolicy: "defer-if-logged-out",
     }),
-    command("/usr/bin/systemctl", ["--user", "enable", helperUnitName], {
+    command("/usr/bin/systemctl", ["--user", "--no-reload", "enable", helperUnitName], {
       plane: "session-helper",
       verb: "enable",
       privilege: "owner-session",
-      availabilityPolicy: "defer-if-logged-out",
     }),
   ] as const;
   const startCommands = [
@@ -105,11 +107,10 @@ export function renderLinuxServiceArtifacts(
     }),
   ] as const;
   const removeCommands = [
-    command("/usr/bin/systemctl", ["--user", "disable", helperUnitName], {
+    command("/usr/bin/systemctl", ["--user", "--no-reload", "disable", helperUnitName], {
       plane: "session-helper",
       verb: "remove",
       privilege: "owner-session",
-      availabilityPolicy: "defer-if-logged-out",
       expectedExitCodes: [0, 1],
     }),
     command("/usr/bin/systemctl", ["disable", coreUnitName], {
@@ -165,6 +166,14 @@ function renderSystemUnit(definition: PlatformServiceDefinition): string {
   if (configuration.platform !== "linux") {
     throw new TypeError("Linux system unit requires Linux configuration.");
   }
+  const credential =
+    configuration.systemdCredential == null
+      ? ""
+      : `LoadCredentialEncrypted=${systemdArgument(
+          `${configuration.systemdCredential.credentialName}:${configuration.systemdCredential.encryptedSourcePath}`,
+        )}
+PrivateMounts=yes
+`;
   return `[Unit]
 Description=OpenDelegate ${configuration.role} core service
 Documentation=https://github.com/opendelegate/opendelegate
@@ -180,10 +189,11 @@ WorkingDirectory=${systemdArgument(configuration.paths.runtimeRoot)}
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
+KillMode=control-group
 UMask=0027
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
+${credential}ProtectSystem=strict
 ProtectHome=read-only
 ProtectControlGroups=yes
 ProtectKernelModules=yes
@@ -221,6 +231,7 @@ WorkingDirectory=${systemdArgument(configuration.paths.runtimeRoot)}
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=10s
+KillMode=control-group
 UMask=0027
 NoNewPrivileges=yes
 PrivateTmp=yes

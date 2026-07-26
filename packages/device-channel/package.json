@@ -1,0 +1,26 @@
+{
+  "name": "@opendelegate/device-channel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@opendelegate/device-identity": "workspace:*",
+    "@opendelegate/protocol": "workspace:*",
+    "@opendelegate/worker-runtime": "workspace:*",
+    "better-sqlite3": "13.0.1",
+    "ws": "8.21.1"
+  },
+  "devDependencies": {
+    "@peculiar/x509": "2.0.0",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/ws": "8.18.1",
+    "reflect-metadata": "0.2.2"
+  }
+}

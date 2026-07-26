@@ -9,12 +9,14 @@ import {
   type NativeCapture,
   type NativeComputerUseAction,
   type NativeComputerUseDriver,
+  type NativeDriverAuthorizedInputContext,
   type NativeDriverControlContext,
   type NativeDriverExecutionContext,
   type NativeDriverProbe,
   type NativeObservation,
   type ReadinessCheck,
 } from "./contracts.ts";
+import { requireExactNativeInputAuthorization } from "./input-authorization.ts";
 
 const WIDTH = 320;
 const HEIGHT = 180;
@@ -140,10 +142,11 @@ export function createFixtureNativeDriver(
     },
 
     async act(
-      context: NativeDriverExecutionContext,
+      context: NativeDriverAuthorizedInputContext,
       action: NativeComputerUseAction,
     ): Promise<{ readonly displayFingerprint: string; readonly sequence: number }> {
       requireActive(context);
+      requireExactNativeInputAuthorization(context, action);
       if (action.kind === "type-text" && action.controlId === "task-text") {
         textValue += action.text;
       } else if (action.kind === "click" && action.controlId === "option-alpha") {

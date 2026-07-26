@@ -24,8 +24,10 @@ product behavior from an earlier chat summary or from implementation convenience
 - Record changes to accepted product decisions in `docs/DECISIONS.md`.
 - Keep runtime state, credentials, generated artifacts, and device Knowledge outside
   the source checkout.
-- Use English for source code, documentation, UI defaults, API fields, schemas, logs,
-  and domain terms.
+- Use English for source code, canonical product and contributor documentation, UI
+  defaults, API fields, schemas, logs, and domain terms. Owner-facing README and
+  Admin Web translations explicitly accepted by `CONTEXT.md` invariant 20 and
+  D-041 are the only first-milestone documentation/UI exceptions.
 - Do not reduce the first milestone to a two-device or single-platform prototype. Its
   release gate includes macOS, Windows, Linux, and Computer Use support as defined in
   the implementation plan.

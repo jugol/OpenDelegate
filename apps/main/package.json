@@ -10,19 +10,38 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "node --experimental-strip-types --test",
+    "test": "node --experimental-strip-types --test --test-concurrency=2",
+    "test:serial": "node --experimental-strip-types --test --test-concurrency=1",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
     "@node-rs/argon2": "2.0.2",
+    "@opendelegate/agent-adapters": "workspace:*",
+    "@opendelegate/artifact-gateway": "workspace:*",
+    "@opendelegate/artifact-store": "workspace:*",
+    "@opendelegate/configuration": "workspace:*",
     "@opendelegate/control-plane": "workspace:*",
+    "@opendelegate/device-channel": "workspace:*",
+    "@opendelegate/device-identity": "workspace:*",
+    "@opendelegate/discord-adapter": "workspace:*",
+    "@opendelegate/domain": "workspace:*",
+    "@opendelegate/event-store": "workspace:*",
     "@opendelegate/owner-auth": "workspace:*",
+    "@opendelegate/platform-services": "workspace:*",
+    "@opendelegate/policy": "workspace:*",
+    "@opendelegate/protocol": "workspace:*",
+    "@opendelegate/release-integrity": "workspace:*",
+    "@opendelegate/scheduler": "workspace:*",
+    "@opendelegate/secrets": "workspace:*",
     "@opendelegate/storage-sql": "workspace:*",
     "@opendelegate/task-service": "workspace:*",
     "better-sqlite3": "13.0.1",
     "pg": "8.22.0"
   },
   "devDependencies": {
-    "@types/pg": "8.20.0"
+    "@peculiar/x509": "2.0.0",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/pg": "8.20.0",
+    "reflect-metadata": "0.2.2"
   }
 }

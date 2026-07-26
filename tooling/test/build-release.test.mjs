@@ -1,23 +1,42 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  copyFile,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { createMacOsSwiftPackageReleaseArguments } from "../../packages/computer-use-os/native/macos/build.mjs";
+import { createMacOsSwiftPathRemappingArguments } from "../../packages/secrets/native/macos/build.mjs";
 import {
   PINNED_PNPM_ARCHIVE_INTEGRITY,
   PINNED_PNPM_VERSION,
   REQUIRED_RELEASE_NODE_VERSION,
+  RELEASE_SKILL_DIRECTORIES,
   assertCleanBundleSource,
+  assertBundledApplicationPayload,
+  assertNoBundledWorkspaceExternalImports,
+  assertNoBundledWorkspacePackages,
+  assertNoPackageManagerMetadata,
   assertPortableTree,
+  assertSupportMatrixTarget,
   collectShaBoundAttestationPaths,
   createCommittedSourceSnapshot,
   createChecksumManifest,
   createMainDeployArguments,
+  createWorkerDeployArguments,
   createPayloadManifest,
   determineSupportStatus,
   evaluateSmokeShutdown,
@@ -27,6 +46,10 @@ import {
   officialRuntimeArchiveFor,
   parseRawGitDiff,
   parseReleaseArguments,
+  pruneBundledApplicationPayload,
+  pruneBundledWorkspacePackages,
+  prunePackageManagerMetadata,
+  pruneRuntimeNativePackageArtifacts,
   readBoundedResponseBody,
   readSourceIdentity,
   removePackageManagerBinDirectories,
@@ -34,22 +57,326 @@ import {
   renderBundleReadme,
   renderUnixLauncher,
   renderWindowsLauncher,
+  renderReleaseRouter,
   resolvePackageLegalFiles,
   validateReleaseDestination,
   validateReleaseDestinationName,
   validateReleaseAttestationDiff,
   verifyPinnedPnpmArchive,
   verifyRunningReleaseToolFiles,
+  waitForPackagedMainReadiness,
   withCommittedSourceSnapshot,
+  writeBundleReadmes,
   writeIntegrityManifests,
   writeThirdPartyNotices,
 } from "../build-release.mjs";
+import { stageNativeReleaseAssets } from "../native-release-assets.mjs";
+import { withLinuxReleaseSmokeSecretFixture } from "../release-smoke-secret.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 const execFile = promisify(execFileCallback);
 const auditedCommit = "a".repeat(40);
 const zeroObject = "0".repeat(40);
 const changedObject = "b".repeat(40);
+
+test("macOS Swift release builders disable debug metadata and remap private paths", () => {
+  const sourceRoot = resolve("private-source");
+  const buildRoot = resolve("private-build");
+  const sourceMapping = `${sourceRoot}=/opendelegate/source`;
+  const buildMapping = `${buildRoot}=/opendelegate/build`;
+
+  assert.deepEqual(createMacOsSwiftPathRemappingArguments(sourceRoot, buildRoot), [
+    "-file-prefix-map",
+    sourceMapping,
+    "-file-prefix-map",
+    buildMapping,
+    "-prefix-serialized-debugging-options",
+    "-file-compilation-dir",
+    "/opendelegate/source",
+  ]);
+  assert.deepEqual(createMacOsSwiftPackageReleaseArguments(sourceRoot, buildRoot), [
+    "-debug-info-format",
+    "none",
+    "-Xswiftc",
+    "-file-prefix-map",
+    "-Xswiftc",
+    sourceMapping,
+    "-Xswiftc",
+    "-file-prefix-map",
+    "-Xswiftc",
+    buildMapping,
+    "-Xswiftc",
+    "-prefix-serialized-debugging-options",
+    "-Xswiftc",
+    "-file-compilation-dir",
+    "-Xswiftc",
+    "/opendelegate/source",
+  ]);
+  for (const createArguments of [
+    createMacOsSwiftPathRemappingArguments,
+    createMacOsSwiftPackageReleaseArguments,
+  ]) {
+    assert.throws(
+      () => createArguments(resolve("ambiguous=source"), buildRoot),
+      /requires unambiguous absolute paths/u,
+    );
+  }
+});
+
+test("release bundles carry both agent-facing installation skills", () => {
+  assert.deepEqual(RELEASE_SKILL_DIRECTORIES, ["opendelegate-init", "opendelegate-join"]);
+});
+
+test("target-native release assets stage stable production paths without freezing hashes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-release-assets-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const sourceRoot = join(root, "source");
+  await mkdir(sourceRoot);
+
+  for (const platform of ["win32", "linux", "darwin"]) {
+    const stagingRoot = join(root, `staging-${platform}`);
+    await mkdir(stagingRoot);
+    const writeNative = async (outputRoot, filename, content) => {
+      await mkdir(outputRoot, { recursive: true });
+      const path = join(outputRoot, filename);
+      await writeFile(path, content, "utf8");
+      return path;
+    };
+    const result = await stageNativeReleaseAssets({
+      platform,
+      architecture: "x64",
+      sourceRoot,
+      stagingRoot,
+      builders: {
+        async linux({ outputRoot }) {
+          const directory = join(outputRoot, "libexec");
+          await mkdir(directory, { recursive: true });
+          const helperExecutable = join(directory, "opendelegate-linux-computer-use");
+          const fixtureExecutable = join(directory, "opendelegate-linux-computer-use-fixture");
+          await writeFile(helperExecutable, "linux-helper\n", "utf8");
+          await writeFile(fixtureExecutable, "linux-fixture\n", "utf8");
+          return { helperExecutable, fixtureExecutable };
+        },
+        async macosComputerUse({ outputRoot }) {
+          return {
+            helperExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-macos-computer-use",
+              "mac-helper\n",
+            ),
+            fixtureExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-computer-use-fixture",
+              "mac-fixture\n",
+            ),
+          };
+        },
+        async macosKeychain({ outputRoot }) {
+          return {
+            helperExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-keychain-helper",
+              "keychain-helper\n",
+            ),
+          };
+        },
+        async windows({ outputRoot }) {
+          return {
+            helperExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-windows-computer-use-helper.exe",
+              "windows-helper\n",
+            ),
+            fixtureExecutable: await writeNative(
+              outputRoot,
+              "opendelegate-windows-computer-use-fixture.exe",
+              "windows-fixture\n",
+            ),
+          };
+        },
+        async serviceHost({ outputRoot, hostPlatform }) {
+          const suffix = hostPlatform === "win32" ? ".exe" : "";
+          return {
+            coreExecutable: await writeNative(
+              outputRoot,
+              `opendelegate-service-host${suffix}`,
+              `${hostPlatform}-core-host\n`,
+            ),
+            helperExecutable: await writeNative(
+              outputRoot,
+              `opendelegate-session-helper${suffix}`,
+              `${hostPlatform}-session-helper\n`,
+            ),
+          };
+        },
+      },
+    });
+
+    assert.equal(result.platform, platform);
+    assert.equal(result.architecture, "x64");
+    assert.equal(
+      result.components.every((component) => !("sha256" in component)),
+      true,
+    );
+    assert.equal(
+      result.components.every(
+        (component) => !component.path.includes("\\") && !component.path.startsWith("/"),
+      ),
+      true,
+    );
+    for (const component of result.components) {
+      const stagedBytes = await readFile(join(stagingRoot, ...component.path.split("/")));
+      assert.equal(
+        stagedBytes.toString("utf8"),
+        component.kind === "core-service-host"
+          ? `${platform}-core-host\n`
+          : component.kind === "session-helper-host"
+            ? `${platform}-session-helper\n`
+            : platform === "darwin" && component.kind === "secret-store-helper"
+              ? "keychain-helper\n"
+              : platform === "win32" && component.kind === "computer-use-helper"
+                ? "windows-helper\n"
+                : platform === "win32"
+                  ? "windows-fixture\n"
+                  : platform === "linux" && component.kind === "computer-use-helper"
+                    ? "linux-helper\n"
+                    : platform === "linux"
+                      ? "linux-fixture\n"
+                      : component.kind === "computer-use-helper"
+                        ? "mac-helper\n"
+                        : "mac-fixture\n",
+      );
+    }
+    await assert.rejects(
+      access(join(stagingRoot, "native-components.json")),
+      (error) => error?.code === "ENOENT",
+    );
+  }
+});
+
+test("native release assets reject private build paths in UTF-8 and UTF-16LE", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-path-disclosure-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const sourceRoot = join(root, "source");
+  await mkdir(sourceRoot);
+
+  for (const disclosure of [
+    "source-utf8",
+    "source-case-utf8",
+    "build-utf16le",
+    "service-source-utf8",
+  ]) {
+    const stagingRoot = join(root, `staging-${disclosure}`);
+    await mkdir(stagingRoot);
+    await assert.rejects(
+      stageNativeReleaseAssets({
+        platform: "win32",
+        architecture: "x64",
+        sourceRoot,
+        stagingRoot,
+        builders: {
+          async windows({ outputRoot }) {
+            await mkdir(outputRoot, { recursive: true });
+            const helperExecutable = join(outputRoot, "helper.exe");
+            const fixtureExecutable = join(outputRoot, "fixture.exe");
+            const leakedPath =
+              disclosure === "source-utf8"
+                ? sourceRoot
+                : disclosure === "source-case-utf8"
+                  ? sourceRoot.replace(/[a-z]/giu, (character) =>
+                      character === character.toUpperCase()
+                        ? character.toLowerCase()
+                        : character.toUpperCase(),
+                    )
+                  : outputRoot;
+            const encoding = disclosure === "build-utf16le" ? "utf16le" : "utf8";
+            await writeFile(
+              helperExecutable,
+              disclosure === "service-source-utf8"
+                ? "safe helper\n"
+                : Buffer.from(leakedPath, encoding),
+            );
+            await writeFile(fixtureExecutable, "safe fixture\n");
+            return { helperExecutable, fixtureExecutable };
+          },
+          async serviceHost({ outputRoot }) {
+            await mkdir(outputRoot, { recursive: true });
+            const coreExecutable = join(outputRoot, "core.exe");
+            const helperExecutable = join(outputRoot, "session.exe");
+            await writeFile(
+              coreExecutable,
+              disclosure === "service-source-utf8" ? sourceRoot : "safe core\n",
+            );
+            await writeFile(helperExecutable, "safe session\n");
+            return { coreExecutable, helperExecutable };
+          },
+        },
+      }),
+      (error) => {
+        const expectedKind =
+          disclosure === "service-source-utf8" ? "core-service-host" : "computer-use-helper";
+        const expectedRootKind = disclosure === "build-utf16le" ? "build-root" : "source-root";
+        assert.match(
+          error?.message ?? "",
+          new RegExp(
+            `Native release component "${expectedKind}" contains a private ${expectedRootKind} path`,
+            "u",
+          ),
+        );
+        assert.equal(error.message.toLowerCase().includes(root.toLowerCase()), false);
+        return true;
+      },
+    );
+  }
+});
+
+test("native release assets reject a private physical path behind a source alias", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-path-alias-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const physicalSource = join(root, "physical-source");
+  const sourceRoot = join(root, "source-alias");
+  const stagingRoot = join(root, "staging");
+  await mkdir(physicalSource);
+  await mkdir(stagingRoot);
+  await symlink(physicalSource, sourceRoot, process.platform === "win32" ? "junction" : "dir");
+  const physicalDisclosure = await realpath(sourceRoot);
+
+  await assert.rejects(
+    stageNativeReleaseAssets({
+      platform: "win32",
+      architecture: "x64",
+      sourceRoot,
+      stagingRoot,
+      builders: {
+        async windows({ outputRoot }) {
+          await mkdir(outputRoot, { recursive: true });
+          const helperExecutable = join(outputRoot, "helper.exe");
+          const fixtureExecutable = join(outputRoot, "fixture.exe");
+          await writeFile(helperExecutable, physicalDisclosure, "utf8");
+          await writeFile(fixtureExecutable, "safe fixture\n");
+          return { helperExecutable, fixtureExecutable };
+        },
+        async serviceHost({ outputRoot }) {
+          await mkdir(outputRoot, { recursive: true });
+          const coreExecutable = join(outputRoot, "core.exe");
+          const helperExecutable = join(outputRoot, "session.exe");
+          await writeFile(coreExecutable, "safe core\n");
+          await writeFile(helperExecutable, "safe session\n");
+          return { coreExecutable, helperExecutable };
+        },
+      },
+    }),
+    (error) => {
+      assert.match(
+        error?.message ?? "",
+        /Native release component "computer-use-helper" contains a private source-root path/u,
+      );
+      assert.equal(error.message.includes(physicalDisclosure), false);
+      assert.equal(error.message.includes(sourceRoot), false);
+      return true;
+    },
+  );
+});
 
 function attestationLedger() {
   const reference = (path, character) => ({ path, sha256: character.repeat(64) });
@@ -106,14 +433,103 @@ async function git(root, arguments_) {
 }
 
 test("release arguments require an explicit absolute destination", () => {
+  const signingPolicy = resolve("platform-signing-policy.json");
+  const signingPolicySha256 = "a".repeat(64);
+  const gitExecutable = resolve("git");
+  const gitExecutableSha256 = "b".repeat(64);
+  const runnerExecutableSha256 = "c".repeat(64);
   assert.throws(() => parseReleaseArguments([]), /--destination is required/);
   assert.deepEqual(
-    parseReleaseArguments(["--destination", resolve("release"), "--internal-preview"]),
+    parseReleaseArguments([
+      "--destination",
+      resolve("release"),
+      "--internal-preview",
+      "--git-executable",
+      gitExecutable,
+      "--git-executable-sha256",
+      gitExecutableSha256,
+      "--runner-executable-sha256",
+      runnerExecutableSha256,
+      "--platform-signing-policy",
+      signingPolicy,
+      "--platform-signing-policy-sha256",
+      signingPolicySha256,
+    ]),
     {
       destination: resolve("release"),
+      gitExecutable,
+      gitExecutableSha256,
+      help: false,
+      internalPreview: true,
+      platformSigningPolicy: signingPolicy,
+      platformSigningPolicySha256: signingPolicySha256,
+      runnerExecutableSha256,
+    },
+  );
+  assert.deepEqual(
+    parseReleaseArguments(["--destination", resolve("preview"), "--internal-preview"]),
+    {
+      destination: resolve("preview"),
       help: false,
       internalPreview: true,
     },
+  );
+  assert.throws(
+    () => parseReleaseArguments(["--destination", resolve("release")]),
+    /require pinned Git and Node runner executables/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--internal-preview",
+        "--runner-executable-sha256",
+        runnerExecutableSha256.toUpperCase(),
+      ]),
+    /requires a lowercase SHA-256/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--platform-signing-policy",
+        "relative-policy.json",
+      ]),
+    /platform-signing-policy must be an absolute path/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--platform-signing-policy",
+        signingPolicy,
+      ]),
+    /policy path and lowercase SHA-256 must be provided together/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--platform-signing-policy-sha256",
+        signingPolicySha256,
+      ]),
+    /policy path and lowercase SHA-256 must be provided together/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--platform-signing-policy",
+        signingPolicy,
+        "--platform-signing-policy-sha256",
+        signingPolicySha256.toUpperCase(),
+      ]),
+    /must be a lowercase SHA-256/u,
   );
   assert.throws(() => parseReleaseArguments(["--wat"]), /Unknown release-build option/);
 });
@@ -134,6 +550,61 @@ test("release CLI detection follows canonical filesystem paths", async (t) => {
   );
   assert.equal(await isDirectReleaseInvocation(undefined, modulePath), false);
   assert.equal(await isDirectReleaseInvocation(join(root, "missing.mjs"), modulePath), false);
+});
+
+test("Linux packaged smoke credentials stay outside the bundle and are always removed", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-linux-smoke-secret-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const staging = join(root, "staging");
+  await mkdir(staging);
+  await writeFile(join(staging, "payload.txt"), "safe payload\n", "utf8");
+  let fixtureRoot;
+
+  const value = await withLinuxReleaseSmokeSecretFixture(staging, async (fixture) => {
+    assert.deepEqual(fixture.initArguments.slice(0, 1), ["--secret-backend-config"]);
+    const configPath = fixture.initArguments[1];
+    fixtureRoot = resolve(configPath, "..");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    assert.deepEqual(Object.keys(config), ["backend", "credentialName", "vaultRoot"]);
+    assert.equal(config.backend, "linux-systemd-credential-vault");
+    assert.equal(config.credentialName, "opendelegate-release-smoke-vault-key");
+    assert.equal(config.vaultRoot.startsWith(fixtureRoot), true);
+    assert.equal(fixture.environment.CREDENTIALS_DIRECTORY.startsWith(fixtureRoot), true);
+    const credential = await readFile(
+      join(fixture.environment.CREDENTIALS_DIRECTORY, config.credentialName),
+    );
+    assert.equal(credential.byteLength, 32);
+    return {
+      observedOutput: ["safe stdout", "safe stderr"],
+      value: "completed",
+    };
+  });
+
+  assert.equal(value, "completed");
+  await assert.rejects(access(fixtureRoot), (error) => error?.code === "ENOENT");
+
+  await assert.rejects(
+    withLinuxReleaseSmokeSecretFixture(staging, async (fixture) => {
+      const config = JSON.parse(await readFile(fixture.initArguments[1], "utf8"));
+      const credential = await readFile(
+        join(fixture.environment.CREDENTIALS_DIRECTORY, config.credentialName),
+      );
+      await writeFile(join(staging, "leaked-key.bin"), credential);
+      return { observedOutput: [], value: undefined };
+    }),
+    /credential material entered the release payload/u,
+  );
+});
+
+test("workspace bin entrypoints are committed executable before pnpm links them", async () => {
+  const { stdout } = await execFile(
+    "git",
+    ["ls-files", "--stage", "--", "apps/main/src/cli.ts", "apps/worker/src/cli.ts"],
+    { cwd: repositoryRoot },
+  );
+
+  assert.match(stdout, /^100755 [0-9a-f]+ 0\tapps\/main\/src\/cli\.ts$/mu);
+  assert.match(stdout, /^100755 [0-9a-f]+ 0\tapps\/worker\/src\/cli\.ts$/mu);
 });
 
 test("the release runtime pin matches local and hosted build configuration", async () => {
@@ -238,6 +709,18 @@ test("Main deployment opts into pnpm's pinned non-injected workspace behavior", 
   ]);
 });
 
+test("Worker deployment uses the same pinned portable production layout", () => {
+  assert.deepEqual(createWorkerDeployArguments("release/apps/worker"), [
+    "--config.node-linker=hoisted",
+    "--filter",
+    "@opendelegate/worker",
+    "deploy",
+    "--legacy",
+    "--prod",
+    "release/apps/worker",
+  ]);
+});
+
 test("release deployment removes package-manager bins without following their links", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-deploy-bin-"));
   t.after(() => rm(root, { force: true, recursive: true }));
@@ -268,6 +751,371 @@ test("release deployment removes package-manager bins without following their li
     code: "ENOENT",
   });
   await assert.rejects(readFile(join(nestedBin, "tool"), "utf8"), { code: "ENOENT" });
+});
+
+test("release deployment removes pnpm metadata while retaining runtime package data", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-pnpm-metadata-prune-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const packageDirectory = join(nodeModules, "runtime-package");
+  const nestedBin = join(packageDirectory, "node_modules", ".bin");
+  const packageDataBin = join(packageDirectory, "assets", ".bin");
+  await mkdir(join(nodeModules, ".pnpm"), { recursive: true });
+  await mkdir(nestedBin, { recursive: true });
+  await mkdir(packageDataBin, { recursive: true });
+  await writeFile(
+    join(nodeModules, ".modules.yaml"),
+    'storeDir: "C:\\\\Users\\\\builder\\\\pnpm-store"\n',
+    "utf8",
+  );
+  await writeFile(
+    join(nodeModules, ".package-map.json"),
+    '{"source":"C:\\\\Users\\\\builder\\\\source"}\n',
+    "utf8",
+  );
+  await writeFile(join(nodeModules, ".pnpm", "lock.yaml"), "importers: {}\n", "utf8");
+  await writeFile(join(packageDirectory, "index.js"), "module.exports = {};\n", "utf8");
+  await writeFile(join(nestedBin, "tool"), "unused executable shim\n", "utf8");
+  await writeFile(join(packageDataBin, "retained.bin"), "runtime package data\n", "utf8");
+
+  await prunePackageManagerMetadata(nodeModules);
+
+  await assertNoPackageManagerMetadata(nodeModules);
+  assert.equal(
+    await readFile(join(packageDirectory, "index.js"), "utf8"),
+    "module.exports = {};\n",
+  );
+  assert.equal(
+    await readFile(join(packageDataBin, "retained.bin"), "utf8"),
+    "runtime package data\n",
+  );
+  for (const removed of [
+    ".bin",
+    ".modules.yaml",
+    ".package-map.json",
+    ".pnpm",
+    join("runtime-package", "node_modules", ".bin"),
+  ]) {
+    await assert.rejects(access(join(nodeModules, removed)), { code: "ENOENT" });
+  }
+
+  await writeFile(join(nodeModules, ".package-map.json"), "{}\n", "utf8");
+  await assert.rejects(
+    assertNoPackageManagerMetadata(nodeModules),
+    /retains pnpm metadata: \.package-map\.json/u,
+  );
+});
+
+test("pnpm metadata pruning rejects a linked virtual store without touching its target", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-pnpm-metadata-link-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const outside = join(root, "outside");
+  await Promise.all([mkdir(nodeModules), mkdir(outside)]);
+  await writeFile(join(outside, "sentinel.txt"), "outside\n", "utf8");
+  await symlink(
+    outside,
+    join(nodeModules, ".pnpm"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  await assert.rejects(
+    prunePackageManagerMetadata(nodeModules),
+    /pnpm metadata escaped its release staging boundary: \.pnpm/u,
+  );
+  assert.equal(await readFile(join(outside, "sentinel.txt"), "utf8"), "outside\n");
+});
+
+test("release bundles cannot depend on deployed first-party workspace source", () => {
+  assert.doesNotThrow(() =>
+    assertNoBundledWorkspaceExternalImports(
+      {
+        outputs: {
+          "release.mjs": {
+            imports: [
+              { external: true, path: "better-sqlite3" },
+              { external: true, path: "node:fs" },
+            ],
+          },
+        },
+      },
+      "fixture",
+    ),
+  );
+  assert.throws(
+    () =>
+      assertNoBundledWorkspaceExternalImports(
+        {
+          outputs: {
+            "release.mjs": {
+              imports: [{ external: true, path: "@opendelegate/secrets" }],
+            },
+          },
+        },
+        "fixture",
+      ),
+    /left first-party workspace imports external/u,
+  );
+});
+
+test("release deployment removes bundled first-party workspace packages", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-workspace-package-prune-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const workspaceScope = join(nodeModules, "@opendelegate");
+  await mkdir(join(workspaceScope, "main", "src"), { recursive: true });
+  await mkdir(join(nodeModules, "better-sqlite3"), { recursive: true });
+  await writeFile(
+    join(workspaceScope, "main", "src", "internal.ts"),
+    "export const testAccess = true;\n",
+    "utf8",
+  );
+  await writeFile(join(nodeModules, "better-sqlite3", "index.js"), "module.exports = {};\n");
+
+  await pruneBundledWorkspacePackages(nodeModules);
+
+  await assertNoBundledWorkspacePackages(nodeModules);
+  await assert.rejects(access(workspaceScope), { code: "ENOENT" });
+  assert.equal(
+    await readFile(join(nodeModules, "better-sqlite3", "index.js"), "utf8"),
+    "module.exports = {};\n",
+  );
+});
+
+test("workspace package pruning rejects a linked scope without touching its target", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-workspace-package-link-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const outside = join(root, "outside");
+  await Promise.all([mkdir(nodeModules), mkdir(outside)]);
+  await writeFile(join(outside, "sentinel.ts"), "outside\n", "utf8");
+  await symlink(
+    outside,
+    join(nodeModules, "@opendelegate"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  await assert.rejects(
+    pruneBundledWorkspacePackages(nodeModules),
+    /escaped its release staging boundary/u,
+  );
+  assert.equal(await readFile(join(outside, "sentinel.ts"), "utf8"), "outside\n");
+});
+
+test("bundled application payloads retain only generated entrypoints and runtime dependencies", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-application-prune-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await mkdir(join(root, "node_modules"));
+  for (const directory of ["src", "test", "test-fixtures"]) {
+    await mkdir(join(root, directory));
+    await writeFile(join(root, directory, "unused.ts"), "export {};\n", "utf8");
+  }
+  for (const file of ["package.json", "tsconfig.json"]) {
+    await writeFile(join(root, file), "{}\n", "utf8");
+  }
+  const retainedBundles = [
+    "opendelegate.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ];
+  for (const file of retainedBundles) {
+    await writeFile(join(root, file), "export {};\n", "utf8");
+  }
+
+  await pruneBundledApplicationPayload(root, retainedBundles);
+
+  assert.equal(await readFile(join(root, "opendelegate.mjs"), "utf8"), "export {};\n");
+  await access(join(root, "node_modules"));
+  for (const removed of ["src", "test", "test-fixtures", "package.json", "tsconfig.json"]) {
+    await assert.rejects(access(join(root, removed)), { code: "ENOENT" });
+  }
+  await assertBundledApplicationPayload(root, retainedBundles);
+  await writeFile(join(root, "unexpected.ts"), "export {};\n", "utf8");
+  await assert.rejects(
+    assertBundledApplicationPayload(root, retainedBundles),
+    /unexpected root entry/u,
+  );
+});
+
+test("bundled application pruning rejects linked package content without touching its target", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-application-prune-link-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const application = join(root, "application");
+  const outside = join(root, "outside");
+  await Promise.all([
+    mkdir(join(application, "node_modules"), { recursive: true }),
+    mkdir(outside),
+  ]);
+  await writeFile(join(outside, "sentinel.ts"), "outside\n", "utf8");
+  await symlink(
+    outside,
+    join(application, "src"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const retainedBundles = [
+    "opendelegate.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ];
+  for (const file of retainedBundles) {
+    await writeFile(join(application, file), "export {};\n", "utf8");
+  }
+
+  await assert.rejects(
+    pruneBundledApplicationPayload(application, retainedBundles),
+    /escaped its release staging boundary/u,
+  );
+  assert.equal(await readFile(join(outside, "sentinel.ts"), "utf8"), "outside\n");
+});
+
+test("release deployment retains only the target better-sqlite3 prebuild", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-package-prune-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const packageDirectory = join(nodeModules, "better-sqlite3");
+  const prebuilds = join(packageDirectory, "prebuilds");
+  const buildDirectory = join(packageDirectory, "build");
+  await mkdir(prebuilds, { recursive: true });
+  await mkdir(buildDirectory);
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({ name: "better-sqlite3", version: "13.0.1" }),
+    "utf8",
+  );
+  await writeFile(join(packageDirectory, "LICENSE"), "MIT fixture\n", "utf8");
+  await writeFile(
+    join(buildDirectory, "better_sqlite3.vcxproj"),
+    "C:\\Users\\builder\\AppData\\Local\\node-gyp\\Cache\\24.18.0\n",
+    "utf8",
+  );
+  await writeFile(join(prebuilds, "darwin-arm64.node"), "darwin", "utf8");
+  await writeFile(join(prebuilds, "linux-x64.node"), "linux", "utf8");
+  await writeFile(join(prebuilds, "win32-x64.node"), "windows", "utf8");
+
+  await pruneRuntimeNativePackageArtifacts(nodeModules, "win32", "x64");
+
+  assert.equal(await readFile(join(prebuilds, "win32-x64.node"), "utf8"), "windows");
+  assert.equal(await readFile(join(packageDirectory, "LICENSE"), "utf8"), "MIT fixture\n");
+  await assert.rejects(readFile(join(prebuilds, "darwin-arm64.node"), "utf8"), {
+    code: "ENOENT",
+  });
+  await assert.rejects(readFile(join(prebuilds, "linux-x64.node"), "utf8"), {
+    code: "ENOENT",
+  });
+  await assert.rejects(readFile(join(buildDirectory, "better_sqlite3.vcxproj"), "utf8"), {
+    code: "ENOENT",
+  });
+});
+
+test("native package pruning rejects linked roots without touching external targets", async (t) => {
+  for (const linkedRoot of ["node-modules", "package", "prebuilds", "build"]) {
+    const root = await mkdtemp(join(tmpdir(), `opendelegate-native-package-link-${linkedRoot}-`));
+    t.after(() => rm(root, { force: true, recursive: true }));
+    const ordinaryNodeModules = join(root, "node_modules");
+    const external = join(root, "external");
+    const nodeModules =
+      linkedRoot === "node-modules" ? join(root, "linked-node-modules") : ordinaryNodeModules;
+    const packageDirectory = join(nodeModules, "better-sqlite3");
+    const externalPackage = join(external, "better-sqlite3");
+    const physicalPackage = linkedRoot === "package" ? externalPackage : packageDirectory;
+    const physicalPrebuilds =
+      linkedRoot === "prebuilds" ? join(external, "prebuilds") : join(physicalPackage, "prebuilds");
+    const physicalBuild =
+      linkedRoot === "build" ? join(external, "build") : join(physicalPackage, "build");
+
+    if (linkedRoot === "node-modules") {
+      await mkdir(externalPackage, { recursive: true });
+      await symlink(external, nodeModules, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      await mkdir(ordinaryNodeModules, { recursive: true });
+      if (linkedRoot === "package") {
+        await mkdir(externalPackage, { recursive: true });
+        await symlink(
+          externalPackage,
+          packageDirectory,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      } else {
+        await mkdir(packageDirectory, { recursive: true });
+      }
+    }
+    await mkdir(physicalPrebuilds, { recursive: true });
+    await mkdir(physicalBuild, { recursive: true });
+    await writeFile(
+      join(physicalPackage, "package.json"),
+      JSON.stringify({ name: "better-sqlite3", version: "13.0.1" }),
+      "utf8",
+    );
+    await writeFile(join(physicalPrebuilds, "win32-x64.node"), "windows", "utf8");
+    await writeFile(join(physicalPrebuilds, "linux-x64.node"), "linux", "utf8");
+    await writeFile(join(physicalBuild, "sentinel.txt"), "outside staging\n", "utf8");
+
+    if (linkedRoot === "prebuilds") {
+      await symlink(
+        physicalPrebuilds,
+        join(packageDirectory, "prebuilds"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } else if (linkedRoot === "build") {
+      await symlink(
+        physicalBuild,
+        join(packageDirectory, "build"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+
+    await assert.rejects(
+      pruneRuntimeNativePackageArtifacts(nodeModules, "win32", "x64"),
+      /escaped its release staging boundary/u,
+    );
+    assert.equal(await readFile(join(physicalPrebuilds, "linux-x64.node"), "utf8"), "linux");
+    assert.equal(await readFile(join(physicalBuild, "sentinel.txt"), "utf8"), "outside staging\n");
+  }
+});
+
+test("native package pruning fails closed without one exact non-empty target prebuild", async (t) => {
+  for (const targetContent of [undefined, ""]) {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-native-package-invalid-"));
+    t.after(() => rm(root, { force: true, recursive: true }));
+    const nodeModules = join(root, "node_modules");
+    const packageDirectory = join(nodeModules, "better-sqlite3");
+    const prebuilds = join(packageDirectory, "prebuilds");
+    await mkdir(prebuilds, { recursive: true });
+    await writeFile(
+      join(packageDirectory, "package.json"),
+      JSON.stringify({ name: "better-sqlite3", version: "13.0.1" }),
+      "utf8",
+    );
+    await writeFile(join(prebuilds, "linux-x64.node"), "linux", "utf8");
+    if (targetContent !== undefined) {
+      await writeFile(join(prebuilds, "win32-x64.node"), targetContent, "utf8");
+    }
+
+    await assert.rejects(
+      pruneRuntimeNativePackageArtifacts(nodeModules, "win32", "x64"),
+      /target better-sqlite3 prebuild is (?:empty|unavailable)/u,
+    );
+  }
+});
+
+test("native package pruning is pinned to the reviewed better-sqlite3 layout", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-package-version-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const packageDirectory = join(nodeModules, "better-sqlite3");
+  const prebuilds = join(packageDirectory, "prebuilds");
+  await mkdir(prebuilds, { recursive: true });
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({ name: "better-sqlite3", version: "13.0.2" }),
+    "utf8",
+  );
+  await writeFile(join(prebuilds, "win32-x64.node"), "windows", "utf8");
+
+  await assert.rejects(
+    pruneRuntimeNativePackageArtifacts(nodeModules, "win32", "x64"),
+    /package identity is invalid/u,
+  );
 });
 
 test("every supported release target has a pinned official Node.js archive", () => {
@@ -332,6 +1180,77 @@ test("a missing unrelated license file fails closed", () => {
   );
 });
 
+test("the exact standardwebhooks release retains its curated upstream license", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-standardwebhooks-license-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const staging = join(root, "staging");
+  const mainDirectory = join(staging, "apps", "main");
+  const packageDirectory = join(mainDirectory, "node_modules", "standardwebhooks");
+  const sourceRoot = join(root, "source");
+  const adminManifestDirectory = join(sourceRoot, "apps", "admin-web");
+  const curatedLicensePath =
+    "docs/legal/runtime-license-overrides/standardwebhooks-1.0.0-LICENSE.txt";
+  await mkdir(packageDirectory, { recursive: true });
+  await mkdir(adminManifestDirectory, { recursive: true });
+  await mkdir(join(staging, "docs", "legal", "runtime-license-overrides"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({
+      name: "standardwebhooks",
+      version: "1.0.0",
+      license: "MIT",
+      repository: "https://github.com/standard-webhooks/standard-webhooks",
+    }),
+    "utf8",
+  );
+  await writeFile(
+    join(adminManifestDirectory, "package.json"),
+    JSON.stringify({ name: "admin-fixture", version: "1.0.0", dependencies: {} }),
+    "utf8",
+  );
+  await copyFile(
+    join(repositoryRoot, ...curatedLicensePath.split("/")),
+    join(staging, curatedLicensePath),
+  );
+
+  await writeThirdPartyNotices(staging, mainDirectory, sourceRoot);
+
+  const inventory = JSON.parse(await readFile(join(staging, "THIRD_PARTY_NOTICES.json"), "utf8"));
+  const standardWebhooks = inventory.packages.find(
+    (packageEntry) => packageEntry.name === "standardwebhooks",
+  );
+  assert.deepEqual(standardWebhooks?.legalFilesSource, {
+    type: "curated-versioned-upstream-copy",
+    source:
+      "https://raw.githubusercontent.com/standard-webhooks/standard-webhooks/c7cd8a9eadf9879d6dca345e168dc8d15d19e487/libraries/LICENSE",
+  });
+  assert.equal(standardWebhooks?.legalFiles.length, 1);
+  assert.equal(standardWebhooks?.legalFiles[0]?.path, curatedLicensePath);
+  assert.equal(
+    standardWebhooks?.legalFiles[0]?.sha256,
+    createHash("sha256")
+      .update(await readFile(join(staging, curatedLicensePath)))
+      .digest("hex"),
+  );
+
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({
+      name: "standardwebhooks",
+      version: "1.0.1",
+      license: "MIT",
+      repository: "https://github.com/standard-webhooks/standard-webhooks",
+    }),
+    "utf8",
+  );
+  await assert.rejects(
+    writeThirdPartyNotices(staging, mainDirectory, sourceRoot),
+    /standardwebhooks@1\.0\.1/,
+  );
+});
+
 test("release output cannot overwrite or enter the source checkout", () => {
   const source = resolve("repository");
   assert.throws(
@@ -382,6 +1301,31 @@ test("an incomplete ledger can only create an explicitly unsupported preview", (
     () => determineSupportStatus({ complete: false, releaseStatus: "candidate" }, true),
     /inconsistent/,
   );
+});
+
+test("release candidates are limited to the exact declared support-matrix targets", () => {
+  for (const [platform, architecture] of [
+    ["darwin", "arm64"],
+    ["linux", "x64"],
+    ["win32", "x64"],
+  ]) {
+    assert.doesNotThrow(() =>
+      assertSupportMatrixTarget(platform, architecture, "release-candidate"),
+    );
+  }
+  for (const [platform, architecture] of [
+    ["darwin", "x64"],
+    ["linux", "arm64"],
+    ["win32", "arm64"],
+  ]) {
+    assert.throws(
+      () => assertSupportMatrixTarget(platform, architecture, "release-candidate"),
+      /may create an internal preview only/,
+    );
+    assert.doesNotThrow(() =>
+      assertSupportMatrixTarget(platform, architecture, "internal-preview-complete"),
+    );
+  }
 });
 
 test("attestation diff permits only the ledger and SHA-bound verification artifacts", () => {
@@ -779,6 +1723,166 @@ test("bundle guidance is launcher-first and never presents source-checkout comma
   assert.doesNotMatch(readme, /CONTRIBUTING\.md/u);
 });
 
+test("assembled bundle documentation includes complete localized launcher guidance", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-bundle-readmes-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const summary = {
+    implementation: { partial: 36 },
+    liveProof: { "blocked-external": 15, "not-run": 21 },
+  };
+  const readmes = [
+    {
+      activeLanguage: "English",
+      filename: "README.md",
+      implementationLabel: "Implementation",
+      liveProofLabel: "Live proof",
+      locale: "en",
+      supportStatusLabel: "Support status",
+      unsupported: /This bundle is unsupported and must not be published under a release tag/u,
+      candidate:
+        /This candidate is not a supported release until it is promoted through the documented release channel/u,
+    },
+    {
+      activeLanguage: "한국어",
+      filename: "README.ko.md",
+      implementationLabel: "구현",
+      liveProofLabel: "실제 증거",
+      locale: "ko",
+      supportStatusLabel: "지원 상태",
+      unsupported: /이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다/u,
+      candidate: /이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다/u,
+    },
+    {
+      activeLanguage: "日本語",
+      filename: "README.ja.md",
+      implementationLabel: "実装",
+      liveProofLabel: "実環境の証拠",
+      locale: "ja",
+      supportStatusLabel: "サポート状況",
+      unsupported: /このバンドルはサポート対象外であり、リリースタグで公開してはいけません/u,
+      candidate:
+        /この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません/u,
+    },
+    {
+      activeLanguage: "Français",
+      filename: "README.fr.md",
+      implementationLabel: "Implémentation",
+      liveProofLabel: "Preuves réelles",
+      locale: "fr",
+      supportStatusLabel: "Statut de prise en charge",
+      unsupported:
+        /Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release/u,
+      candidate:
+        /Ce candidat n’est pas une version prise en charge tant qu’il n’a pas été promu par le canal de publication documenté/u,
+    },
+    {
+      activeLanguage: "Español",
+      filename: "README.es.md",
+      implementationLabel: "Implementación",
+      liveProofLabel: "Evidencia real",
+      locale: "es",
+      supportStatusLabel: "Estado de soporte",
+      unsupported:
+        /Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release/u,
+      candidate:
+        /Este candidato no es una versión con soporte hasta que se promocione mediante el canal de publicación documentado/u,
+    },
+    {
+      activeLanguage: "简体中文",
+      filename: "README.zh-CN.md",
+      implementationLabel: "实现",
+      liveProofLabel: "真实证据",
+      locale: "zh-CN",
+      supportStatusLabel: "支持状态",
+      unsupported: /此捆绑包不受支持，且不得在 Release tag 下发布/u,
+      candidate: /在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release/u,
+    },
+  ];
+
+  await writeBundleReadmes(
+    root,
+    "internal-preview-blocked",
+    summary,
+    "win32",
+    "arm64",
+    "0.1.0-alpha.1",
+  );
+  await writeIntegrityManifests(root);
+
+  const payload = JSON.parse(await readFile(join(root, "payload-manifest.json"), "utf8"));
+  const checksums = await readFile(join(root, "SHA256SUMS"), "utf8");
+  for (const readme of readmes) {
+    const content = await readFile(join(root, readme.filename), "utf8");
+    assert.match(
+      content,
+      new RegExp(
+        String.raw`\*\*\[${readme.activeLanguage}\]\(${readme.filename.replaceAll(".", String.raw`\.`)}\)\*\*`,
+        "u",
+      ),
+    );
+    for (const filename of readmes.map((entry) => entry.filename)) {
+      assert.match(content, new RegExp(filename.replaceAll(".", String.raw`\.`), "u"));
+    }
+    assert.match(content, readme.unsupported);
+    assert.equal(
+      content.includes(`${readme.supportStatusLabel}: \`internal-preview-blocked\`.`),
+      true,
+    );
+    assert.match(content, /opendelegate\.cmd init/u);
+    assert.match(content, /skills\/opendelegate-init\/SKILL\.md/u);
+    assert.equal(content.includes(`- ${readme.implementationLabel}: partial=36`), true);
+    assert.equal(
+      content.includes(`- ${readme.liveProofLabel}: blocked-external=15, not-run=21`),
+      true,
+    );
+    if (readme.locale !== "en") {
+      assert.doesNotMatch(content, /^Support status:/mu);
+      assert.doesNotMatch(content, /^- Implementation:/mu);
+      assert.doesNotMatch(content, /^- Live proof:/mu);
+    }
+    assert.match(content, /docs\/release\/README\.md/u);
+    assert.match(content, /SECURITY\.md/u);
+    assert.match(content, /THIRD_PARTY_NOTICES\.json/u);
+    assert.equal(
+      payload.files.some((file) => file.path === readme.filename),
+      true,
+      `${readme.filename} is missing from payload-manifest.json`,
+    );
+    assert.match(
+      checksums,
+      new RegExp(String.raw`\s{2}${readme.filename.replaceAll(".", String.raw`\.`)}$`, "mu"),
+    );
+
+    const candidate = renderBundleReadme(
+      "release-candidate",
+      summary,
+      "linux",
+      "x64",
+      "0.1.0-alpha.1",
+      readme.locale,
+    );
+    assert.match(candidate, readme.candidate);
+    assert.equal(candidate.includes(`${readme.supportStatusLabel}: \`release-candidate\`.`), true);
+    assert.match(candidate, /\.\/opendelegate init/u);
+    assert.doesNotMatch(candidate, /INTERNAL_PREVIEW\.md/u);
+
+    const completePreview = renderBundleReadme(
+      "internal-preview-complete",
+      summary,
+      "darwin",
+      "arm64",
+      "0.1.0-alpha.1",
+      readme.locale,
+    );
+    assert.match(completePreview, readme.unsupported);
+    assert.equal(
+      completePreview.includes(`${readme.supportStatusLabel}: \`internal-preview-complete\`.`),
+      true,
+    );
+    assert.match(completePreview, /INTERNAL_PREVIEW\.md/u);
+  }
+});
+
 test("compiled Admin assets retain their complete production dependency licenses", async () => {
   const adminManifestPath = join(repositoryRoot, "apps", "admin-web", "package.json");
   const productionPackageDirectories = await listProductionPackageDirectories(adminManifestPath);
@@ -908,12 +2012,17 @@ test("integrity manifests can be regenerated after packaged smoke evidence", asy
 test("release launchers clear caller-controlled identity variables", () => {
   const windows = renderWindowsLauncher();
   const unix = renderUnixLauncher();
+  const router = renderReleaseRouter();
 
   assert.match(windows, /set "OPENDELEGATE_BUILD_ID="/u);
   assert.match(windows, /set "OPENDELEGATE_VERSION="/u);
   assert.doesNotMatch(windows, /release-candidate|0\.1\.0/u);
   assert.match(unix, /unset OPENDELEGATE_BUILD_ID OPENDELEGATE_VERSION/u);
   assert.doesNotMatch(unix, /export OPENDELEGATE_(?:BUILD_ID|VERSION)/u);
+  assert.match(windows, /apps\\launcher\\opendelegate\.mjs/u);
+  assert.match(unix, /apps\/launcher\/opendelegate\.mjs/u);
+  assert.match(router, /arguments_\[0\] === "worker"/u);
+  assert.match(router, /apps", "worker", "opendelegate-worker\.mjs/u);
 });
 
 test("release smoke accepts only a natural zero exit with the shutdown marker", () => {
@@ -970,6 +2079,62 @@ test("release smoke accepts only a natural zero exit with the shutdown marker", 
     assert.equal(result.accepted, false);
     assert.equal(result.naturalExit && result.markerObserved, false);
   }
+});
+
+test("packaged Main smoke keeps Windows ACL initialization and listener readiness separately bounded", async () => {
+  let output = "";
+  const observedTimeouts = [];
+  const advances = [
+    () => {
+      output = '{"event":"main.initialized"}\n';
+    },
+    () => {
+      output += '{"event":"owner.claim.ready"}\n';
+    },
+  ];
+
+  await waitForPackagedMainReadiness({
+    exited: () => false,
+    output: () => output,
+    platform: "win32",
+    wait: async (predicate, timeoutMilliseconds) => {
+      observedTimeouts.push(timeoutMilliseconds);
+      advances.shift()?.();
+      assert.equal(predicate(), true);
+    },
+  });
+
+  assert.deepEqual(observedTimeouts, [60_000, 60_000]);
+});
+
+test("packaged Main smoke retains the portable readiness bound and fails on an early exit", async () => {
+  let output = "";
+  const observedTimeouts = [];
+
+  await waitForPackagedMainReadiness({
+    exited: () => false,
+    output: () => output,
+    platform: "linux",
+    wait: async (predicate, timeoutMilliseconds) => {
+      observedTimeouts.push(timeoutMilliseconds);
+      output = '{"event":"owner.claim.ready"}\n';
+      assert.equal(predicate(), true);
+    },
+  });
+  assert.deepEqual(observedTimeouts, [20_000]);
+
+  await assert.rejects(
+    waitForPackagedMainReadiness({
+      exited: () => true,
+      output: () => "",
+      platform: "win32",
+      wait: async (predicate, timeoutMilliseconds) => {
+        assert.equal(timeoutMilliseconds, 60_000);
+        assert.equal(predicate(), true);
+      },
+    }),
+    /exited before initialization readiness/u,
+  );
 });
 
 test("portable release payloads reject directory symlinks or Windows junctions", async (t) => {

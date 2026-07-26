@@ -1,0 +1,4 @@
+interface:
+  display_name: "Join OpenDelegate Device"
+  short_description: "Enroll this Device as an OpenDelegate Worker"
+  default_prompt: "Use $opendelegate-join to enroll this Device with my fixed OpenDelegate Main."

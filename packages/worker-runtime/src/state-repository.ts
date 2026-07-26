@@ -2,6 +2,9 @@ import type {
   WorkerConfiguration,
   WorkerOutboundEventV1,
   WorkerOperationalState,
+  WorkerRunSteeringCommandV1,
+  WorkerRunSteeringReceiptV1,
+  WorkerRouteIncidentV1,
   WorkerRunAssignmentV1,
 } from "./contracts.ts";
 
@@ -29,6 +32,15 @@ export interface PersistedOutboxEntry {
   readonly event: WorkerOutboundEventV1;
 }
 
+export interface PersistedRunSteeringAttempt {
+  readonly requestId: string;
+  readonly commandFingerprint: `sha256:${string}`;
+  readonly command: WorkerRunSteeringCommandV1;
+  readonly state: "completed" | "delivering";
+  readonly startedAtMs: number;
+  readonly receipt?: WorkerRunSteeringReceiptV1;
+}
+
 export interface PersistedWorkerState {
   readonly schemaVersion: 1;
   readonly generation: number;
@@ -40,6 +52,16 @@ export interface PersistedWorkerState {
   readonly runs: readonly PersistedWorkerRun[];
   readonly outbox: readonly PersistedOutboxEntry[];
   readonly nextOutboxSequence: number;
+  /**
+   * Optional for backwards-compatible decoding of schemaVersion 1 states
+   * written before authenticated Run steering was introduced.
+   */
+  readonly steeringAttempts?: readonly PersistedRunSteeringAttempt[];
+  /**
+   * Optional for backwards-compatible decoding of schemaVersion 1 states
+   * written before route incidents gained their dedicated durable queue.
+   */
+  readonly routeIncidents?: readonly WorkerRouteIncidentV1[];
 }
 
 export interface WorkerStateRepository {

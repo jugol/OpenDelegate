@@ -103,7 +103,10 @@ test("Main bootstraps one durable public certificate authority without persistin
   const certificate = new X509Certificate(first.certificatePem);
   assert.equal(certificate.subject, "CN=OpenDelegate instance instance-personal");
   assert.equal(certificate.issuer, certificate.subject);
-  assert.equal(await certificate.verify({ publicKey: certificate.publicKey }), true);
+  assert.equal(
+    await certificate.verify({ publicKey: certificate.publicKey, date: new Date(now) }),
+    true,
+  );
 
   const snapshot = await repository.snapshot();
   assert.deepEqual(snapshot.certificateAuthority, first);
@@ -245,6 +248,15 @@ test("a single-use enrollment grant issues one Device-bound client certificate a
     protocolVersion: 1,
     token: rawToken,
   });
+  const verifiedIdentity = await worker.verifyIssuedDeviceIdentity({
+    certificateAuthorityPem: identity.certificateAuthorityPem,
+    certificatePem: identity.certificatePem,
+    certificateRequestPem: enrollmentRequest.certificateRequestPem,
+    deviceId: identity.deviceId,
+    expectedMainSpkiSha256: grant.expectedMainSpkiSha256,
+    generation: identity.generation,
+    keyId: enrollmentRequest.keyId,
+  });
 
   assert.equal(identity.deviceId, "device-linux-nas");
   assert.equal(identity.generation, 1);
@@ -254,10 +266,23 @@ test("a single-use enrollment grant issues one Device-bound client certificate a
   assert.match(identity.serialNumber, /^[0-9a-f]{32}$/);
   assert.match(identity.publicKeySpkiSha256, /^sha256:[A-Za-z0-9_-]{43}$/);
   assert.equal(identity.certificateAuthorityPem, certificateAuthority.certificatePem);
+  assert.deepEqual(verifiedIdentity, {
+    deviceId: "device-linux-nas",
+    generation: 1,
+    keyId: enrollmentRequest.keyId,
+    certificatePem: identity.certificatePem,
+    certificateAuthorityPem: identity.certificateAuthorityPem,
+    serialNumber: identity.serialNumber,
+    notBefore: identity.notBefore,
+    notAfter: identity.notAfter,
+  });
 
   const certificate = new X509Certificate(identity.certificatePem);
   const issuer = new X509Certificate(identity.certificateAuthorityPem);
-  assert.equal(await certificate.verify({ publicKey: issuer.publicKey }), true);
+  assert.equal(
+    await certificate.verify({ publicKey: issuer.publicKey, date: new Date(now) }),
+    true,
+  );
   assert.equal(certificate.subject, "CN=device-linux-nas");
   assert.equal(certificate.issuer, issuer.subject);
   assert.equal(certificate.getExtension(BasicConstraintsExtension)?.ca, false);

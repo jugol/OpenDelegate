@@ -7,10 +7,23 @@ production socket or install a service.
 `createMainControlPlaneApp` contains:
 
 - detail-free `GET /health/live`;
-- owner-authenticated `GET /api/v1/readiness`;
+- owner-authenticated readiness, runtime-feature, and Device projections. Runtime features keep
+  enclosed `declaredReleaseChannel`, effective `releaseChannel`, and sanitized
+  `releaseVerification` separate; the response schema rejects impossible combinations;
 - owner login, session, reauthentication, session listing, revocation, and logout;
-  and
-- independent recovery-code begin and complete operations.
+- independent recovery-code begin and complete operations;
+- Discord-independent Task creation, inspection, pause, resume, cancel, and retry;
+- Device-scoped Configuration Agent messages and bounded secure Secret ingest;
+- Approval inspection and decisions;
+- Device enrollment overview and single-use grant issuance;
+- Artifact metadata and open instructions; and
+- bounded, redacted Audit and diagnostic projections.
+
+Every operational surface is an injected port. Production Main composes those ports
+with its SQLite or PostgreSQL repositories, Agent and Device-channel runtimes,
+Artifact isolation boundary, and OS-managed Secret Store. This package owns HTTP
+validation and browser security, not domain persistence or native service
+supervision.
 
 `createLocalClaimApp` is a separate temporary loopback application. It registers
 only `POST /api/v1/auth/claim`; the normal Main application never registers or
@@ -27,6 +40,7 @@ Browser bearer tokens are sent only through
 `__Host-opendelegate_session` with `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`,
 and no `Domain`.
 
-The composition currently consumes `OwnerAuth` through its backend-neutral
-contract. SQL persistence and production listener/service supervision remain
-separate Phase 2 and Phase 4 composition work.
+The composition consumes `OwnerAuth` and every operational capability through
+backend-neutral contracts. `apps/main` owns production TLS listener binding and SQL
+composition; `@opendelegate/platform-services` owns native service planning and
+supervision. Neither concern is inferred inside the HTTP adapter.

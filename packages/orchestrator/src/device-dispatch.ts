@@ -261,8 +261,8 @@ function assertSelectedCandidateEligible(
 function createScheduleRequest(workOrder: PlannedWorkOrder): ScheduleRequest {
   return {
     workOrderId: workOrder.workOrderId,
-    requiredCapabilities: workOrder.requiredCapabilities,
-    preferredCapabilities: workOrder.requiredCapabilities,
+    requiredCapabilities: providerCapabilities(workOrder),
+    preferredCapabilities: providerCapabilities(workOrder),
     preferredDeviceIds: workOrder.schedulingHints.preferredDeviceIds,
     preferredRoles: workOrder.schedulingHints.preferredRoles,
     requiredSecretRefs: workOrder.requiredSecretRefs,
@@ -271,6 +271,18 @@ function createScheduleRequest(workOrder: PlannedWorkOrder): ScheduleRequest {
       : { requiredOsFamily: workOrder.requiredOsFamily }),
     ...(workOrder.workspaceId === undefined ? {} : { workspaceId: workOrder.workspaceId }),
   };
+}
+
+function providerCapabilities(workOrder: PlannedWorkOrder): readonly string[] {
+  const required = new Set(workOrder.requiredCapabilities);
+  if (workOrder.requiredAgent !== undefined) {
+    required.add(
+      workOrder.requiredAgent.provider === "claude"
+        ? "claude-code"
+        : workOrder.requiredAgent.provider,
+    );
+  }
+  return Object.freeze([...required]);
 }
 
 function selectSchedule(

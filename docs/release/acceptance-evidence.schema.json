@@ -23,7 +23,7 @@
       "type": "string",
       "pattern": "^[0-9a-f]{40}$"
     },
-    "releaseStatus": { "enum": ["blocked", "candidate", "released"] },
+    "releaseStatus": { "enum": ["blocked", "candidate"] },
     "candidateAttestation": { "$ref": "#/$defs/proof" },
     "criteria": {
       "type": "array",

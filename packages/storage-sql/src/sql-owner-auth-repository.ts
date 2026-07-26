@@ -91,6 +91,12 @@ export class SqlOwnerAuthRepository implements OwnerAuthRepository {
     });
   }
 
+  public async listAuditRecords(): Promise<readonly OwnerAuthAuditRecord[]> {
+    return this.transactionRunner.write(async (transaction) => {
+      return new SqlOwnerAuthTransaction(transaction).listAuditRecords();
+    });
+  }
+
   public async close(): Promise<void> {
     await this.context.close();
   }
