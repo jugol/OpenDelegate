@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { discoverThirdPartyNativeComponents } from "./native-payload-inventory.mjs";
-import { consumeCredentialAuthorization } from "./release-credential-authorization.mjs";
+import {
+  consumeCredentialAuthorization,
+  revalidateCredentialAuthorization,
+} from "./release-credential-authorization.mjs";
 
 const supportedPlatforms = new Set(["darwin", "linux", "win32"]);
 const supportedArchitectures = new Set(["arm64", "x64"]);
@@ -495,13 +498,14 @@ async function authenticateComponents({
     await authorizePlatformSigningCredential({
       authorizeCredentialUse,
       component,
+      execute: () =>
+        runner.signAndVerify(signingRunnerInput(component, platform, policy, pinnedTool)),
       pinnedTool,
       platform,
       policy,
       policyInput,
       stagingRoot,
     });
-    await runner.signAndVerify(signingRunnerInput(component, platform, policy, pinnedTool));
   }
   for (const component of componentFiles) {
     component.absolutePath = await requireContainedRegularFile(stagingRoot, component.path);
@@ -587,15 +591,16 @@ async function authenticateThirdPartyComponents({
         authorizeCredentialUse,
         component,
         entitlements,
+        execute: () =>
+          runner.signAndVerify(
+            signingRunnerInput(component, platform, policy, pinnedTool, entitlements?.path),
+          ),
         pinnedTool,
         platform,
         policy,
         policyInput,
         stagingRoot,
       });
-      await runner.signAndVerify(
-        signingRunnerInput(component, platform, policy, pinnedTool, entitlements?.path),
-      );
     }
   }
   for (const component of componentFiles) {
@@ -635,6 +640,7 @@ async function authorizePlatformSigningCredential({
   authorizeCredentialUse,
   component,
   entitlements = null,
+  execute,
   pinnedTool,
   platform,
   policy,
@@ -643,6 +649,9 @@ async function authorizePlatformSigningCredential({
 }) {
   if (typeof authorizeCredentialUse !== "function") {
     throw new Error("Platform-native signing requires a precredential authorization callback.");
+  }
+  if (typeof execute !== "function") {
+    throw new Error("Platform-native signing requires an immediate execution callback.");
   }
   const inputSha256 = component.inputSha256?.startsWith("sha256:")
     ? component.inputSha256.slice("sha256:".length)
@@ -687,11 +696,13 @@ async function authorizePlatformSigningCredential({
       toolSha256: pinnedTool.sha256,
     },
   });
+  await revalidateCredentialAuthorization(authorization);
   consumeCredentialAuthorization(authorization, {
     domain,
     inputSha256,
     role: "platform",
   });
+  return execute();
 }
 
 async function verifyFinalThirdPartyComponents({

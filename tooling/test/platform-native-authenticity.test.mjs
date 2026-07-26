@@ -506,7 +506,7 @@ test("final native sealing rejects a component changed by packaged smoke", async
   );
 });
 
-test("platform signing never invokes a signer after its component changes before authorization", async (t) => {
+test("platform signing never invokes a signer after post-authorization component mutation", async (t) => {
   const fixture = await createNativeFixture(t, "darwin", "arm64");
   const policy = await createMacPolicy(fixture, "developer-id");
   const policyInput = await createPinnedPolicyInput(fixture, policy);
@@ -521,11 +521,12 @@ test("platform signing never invokes a signer after its component changes before
     finalizePlatformNativeAuthenticity({
       architecture: "arm64",
       authorizeCredentialUse: async (input) => {
+        const authorization = await authorizeCredentialUse(input);
         if (!mutated) {
           mutated = true;
-          await appendFile(firstComponent, "changed-before-authorization\n", "utf8");
+          await appendFile(firstComponent, "changed-after-authorization\n", "utf8");
         }
-        return authorizeCredentialUse(input);
+        return authorization;
       },
       nativeComponents: fixture.nativeComponents,
       platform: "darwin",
