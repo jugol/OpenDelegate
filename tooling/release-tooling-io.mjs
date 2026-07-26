@@ -12,10 +12,37 @@ import {
   rmdir,
   unlink,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const DEFAULT_MAXIMUM_BYTES = 4 * 1024 * 1024;
+const TEMPORARY_ENVIRONMENT_KEYS = new Set(["TEMP", "TMP", "TMPDIR"]);
+
+export async function canonicalizeTemporaryEnvironment(
+  environment = process.env,
+  dependencies = {},
+) {
+  const temporaryDirectory = (dependencies.temporaryDirectory ?? tmpdir)();
+  const canonicalDirectory = await (dependencies.realPath ?? realpath)(temporaryDirectory);
+  const platform = dependencies.platform ?? process.platform;
+  const canonicalEnvironment = {};
+
+  for (const [key, value] of Object.entries(environment)) {
+    if (platform === "win32" && TEMPORARY_ENVIRONMENT_KEYS.has(key.toUpperCase())) {
+      continue;
+    }
+    canonicalEnvironment[key] = value;
+  }
+  canonicalEnvironment.TEMP = canonicalDirectory;
+  canonicalEnvironment.TMP = canonicalDirectory;
+  canonicalEnvironment.TMPDIR = canonicalDirectory;
+
+  return Object.freeze({
+    directory: canonicalDirectory,
+    environment: Object.freeze(canonicalEnvironment),
+  });
+}
 
 export async function readPinnedCanonicalJson(input) {
   const file = await readPinnedBytes(input);

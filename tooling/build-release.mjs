@@ -16,7 +16,6 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,7 +36,7 @@ import {
   revalidatePinnedReleaseGitProvenance,
   runPinnedReleaseGit,
 } from "./release-git-provenance.mjs";
-import { hashStableRegularFile } from "./release-tooling-io.mjs";
+import { canonicalizeTemporaryEnvironment, hashStableRegularFile } from "./release-tooling-io.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const releaseToolRoot = resolve(dirname(currentFile), "..");
@@ -155,6 +154,20 @@ export async function isDirectReleaseInvocation(invokedPath, modulePath = curren
     }
     throw error;
   }
+}
+
+export async function createCommittedReleaseRunnerTempState(
+  environment = process.env,
+  dependencies = {},
+) {
+  const temporary = await canonicalizeTemporaryEnvironment(environment, dependencies);
+  const runnerParent = await (dependencies.makeTemporaryDirectory ?? mkdtemp)(
+    join(temporary.directory, "opendelegate-release-runner-"),
+  );
+  return Object.freeze({
+    environment: temporary.environment,
+    runnerParent,
+  });
 }
 
 function compareCodeUnits(left, right) {
@@ -2985,7 +2998,8 @@ async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) 
     await revalidatePinnedReleaseGitProvenance(gitProvenance);
   }
   await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
-  const runnerParent = await mkdtemp(join(tmpdir(), "opendelegate-release-runner-"));
+  const runnerTempState = await createCommittedReleaseRunnerTempState(process.env, dependencies);
+  const { runnerParent } = runnerTempState;
   try {
     const runnerRoot = await createCommittedSourceSnapshot(
       releaseToolRoot,
@@ -2997,7 +3011,7 @@ async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) 
     const child = spawn(process.execPath, [runnerFile, ...rawArguments], {
       cwd: releaseToolRoot,
       env: {
-        ...process.env,
+        ...runnerTempState.environment,
         [releaseRunnerSourceEnvironment]: releaseToolRoot,
         [releaseRunnerCommitEnvironment]: source.commit,
       },
