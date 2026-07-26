@@ -6,6 +6,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "dependencies": {
+    "@opendelegate/release-integrity": "workspace:*"
+  },
   "scripts": {
     "native:service-host:build": "node native/service-host/build.mjs",
     "test": "node --experimental-strip-types --test",

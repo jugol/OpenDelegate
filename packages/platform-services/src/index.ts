@@ -165,10 +165,24 @@ export {
   type NativeSessionBoundary,
 } from "./native-service-boundaries.ts";
 export {
+  assertMatchingNativeReleaseVerification,
   createNativeReleaseVerifier,
+  encodeNativeReleaseVerification,
+  parseNativeReleaseVerification,
+  type CandidateV2ReleaseVerification,
+  type LegacyPreviewReleaseVerification,
   type NativeReleaseVerification,
   type NativeReleaseVerifier,
 } from "./native-release-verifier.ts";
+export {
+  assertCandidateReleaseVerificationSeal,
+  createCandidateReleaseVerificationSeal,
+  encodeCandidateReleaseVerificationSeal,
+  nativeReleaseVerificationSealDirectory,
+  nativeReleaseVerificationSealPath,
+  parseCandidateReleaseVerificationSeal,
+  type CandidateReleaseVerificationSeal,
+} from "./release-verification-seal.ts";
 export {
   createNativeServiceExecutor,
   createNativeServiceInspector,

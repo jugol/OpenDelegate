@@ -26,10 +26,17 @@ import {
 } from "./plans.ts";
 import { evaluateSessionHelperReadiness } from "./readiness.ts";
 import {
+  assertMatchingNativeReleaseVerification,
   createNativeReleaseVerifier,
+  encodeNativeReleaseVerification,
+  parseNativeReleaseVerification,
   type NativeReleaseVerification,
   type NativeReleaseVerifier,
 } from "./native-release-verifier.ts";
+import {
+  nativeReleaseVerificationSealDirectory,
+  nativeReleaseVerificationSealPath,
+} from "./release-verification-seal.ts";
 import {
   ServiceCommandExecutionError,
   executeIdempotentServicePlan,
@@ -271,6 +278,29 @@ export async function preflightNativeServiceOperation(input: {
     );
   }
   if (input.plan.operation !== "install" && input.plan.operation !== "upgrade") {
+    if (
+      input.plan.operation === "start" ||
+      input.plan.operation === "restart" ||
+      input.plan.operation === "reconfigure"
+    ) {
+      const persisted = await readPersistedReleaseVerificationSeal(
+        configuration,
+        input.boundaries.fileSystem,
+        false,
+      );
+      const installed = await input.releaseVerifier.verifyInstalled(
+        configuration,
+        definition.releaseDirectory,
+        persisted,
+      );
+      await assertReleaseHostExecutables(
+        configuration,
+        definition.releaseDirectory,
+        input.boundaries.process,
+        true,
+      );
+      return installed;
+    }
     return undefined;
   }
   const verification = await input.releaseVerifier.preflight(configuration);
@@ -349,7 +379,7 @@ function createNativeFilesystemAdapter(
             await releaseVerifier.verifyStaged(
               configuration,
               action.stagingDirectory,
-              requireReleaseVerification(verification).manifestSha256,
+              requireReleaseVerification(verification),
             );
             await assertReleaseHostExecutables(
               configuration,
@@ -379,7 +409,7 @@ function createNativeFilesystemAdapter(
             await releaseVerifier.verifyStaged(
               configuration,
               temporary,
-              requireReleaseVerification(verification).manifestSha256,
+              requireReleaseVerification(verification),
             );
             await assertReleaseHostExecutables(configuration, temporary, boundaries.process, true);
             await fileSystem.renameAtomic(temporary, action.stagingDirectory, false);
@@ -393,7 +423,7 @@ function createNativeFilesystemAdapter(
           await releaseVerifier.verifyStaged(
             configuration,
             action.stagingDirectory,
-            requireReleaseVerification(verification).manifestSha256,
+            requireReleaseVerification(verification),
           );
           await assertReleaseHostExecutables(
             configuration,
@@ -408,7 +438,7 @@ function createNativeFilesystemAdapter(
             await releaseVerifier.verifyStaged(
               configuration,
               action.releaseDirectory,
-              requireReleaseVerification(verification).manifestSha256,
+              requireReleaseVerification(verification),
             );
             await assertReleaseHostExecutables(
               configuration,
@@ -416,6 +446,7 @@ function createNativeFilesystemAdapter(
               boundaries.process,
               true,
             );
+            await persistReleaseVerificationSeal(configuration, verification, fileSystem);
             await fileSystem.remove(action.stagingDirectory, true);
             return { disposition: "unchanged" };
           }
@@ -425,7 +456,7 @@ function createNativeFilesystemAdapter(
           await releaseVerifier.verifyStaged(
             configuration,
             action.stagingDirectory,
-            requireReleaseVerification(verification).manifestSha256,
+            requireReleaseVerification(verification),
           );
           await assertReleaseHostExecutables(
             configuration,
@@ -434,9 +465,29 @@ function createNativeFilesystemAdapter(
             true,
           );
           await fileSystem.renameAtomic(action.stagingDirectory, action.releaseDirectory, false);
+          try {
+            await persistReleaseVerificationSeal(configuration, verification, fileSystem);
+          } catch {
+            await fileSystem.remove(action.releaseDirectory, true).catch(() => undefined);
+            await fileSystem
+              .remove(nativeReleaseVerificationSealPath(configuration), false)
+              .catch(() => undefined);
+            throw uncertain(
+              "The promoted release could not be bound to its durable verification seal.",
+            );
+          }
           return { disposition: "changed" };
         }
         case "activation.switch": {
+          if (context.phase === "forward") {
+            const expected = requireReleaseVerification(verification);
+            await assertPersistedReleaseVerificationSeal(configuration, expected, fileSystem);
+            await releaseVerifier.verifyBeforeActivation(
+              configuration,
+              action.targetReleaseDirectory,
+              expected,
+            );
+          }
           const disposition = await fileSystem.createDirectoryLinkAtomic(
             action.targetReleaseDirectory,
             action.activeDirectory,
@@ -454,10 +505,20 @@ function createNativeFilesystemAdapter(
               fileSystem,
             ),
           };
-        case "release.remove":
-          return {
-            disposition: await fileSystem.remove(action.releaseDirectory, true),
-          };
+        case "release.remove": {
+          const disposition = await fileSystem.remove(action.releaseDirectory, true);
+          if (
+            verification !== undefined &&
+            equalPath(
+              configuration.platform,
+              action.releaseDirectory,
+              createPlatformServiceDefinition(configuration).releaseDirectory,
+            )
+          ) {
+            await fileSystem.remove(nativeReleaseVerificationSealPath(configuration), false);
+          }
+          return { disposition };
+        }
         case "path.remove":
           return {
             disposition: await fileSystem.remove(action.path, action.recursive),
@@ -465,6 +526,66 @@ function createNativeFilesystemAdapter(
       }
     },
   };
+}
+
+async function persistReleaseVerificationSeal(
+  configuration: PlatformServiceConfiguration,
+  verification: NativeReleaseVerification | undefined,
+  fileSystem: NativeFileSystemBoundary,
+): Promise<void> {
+  const required = requireReleaseVerification(verification);
+  await fileSystem.ensureDirectory(nativeReleaseVerificationSealDirectory(configuration), 0o700);
+  await fileSystem.writeAtomic(
+    nativeReleaseVerificationSealPath(configuration),
+    encodeNativeReleaseVerification(required),
+    0o600,
+  );
+}
+
+async function assertPersistedReleaseVerificationSeal(
+  configuration: PlatformServiceConfiguration,
+  verification: NativeReleaseVerification,
+  fileSystem: NativeFileSystemBoundary,
+): Promise<void> {
+  const actual = await readPersistedReleaseVerificationSeal(configuration, fileSystem, true);
+  assertMatchingNativeReleaseVerification(verification, actual);
+}
+
+async function readPersistedReleaseVerificationSeal(
+  configuration: PlatformServiceConfiguration,
+  fileSystem: NativeFileSystemBoundary,
+  required: true,
+): Promise<NativeReleaseVerification>;
+async function readPersistedReleaseVerificationSeal(
+  configuration: PlatformServiceConfiguration,
+  fileSystem: NativeFileSystemBoundary,
+  required: false,
+): Promise<NativeReleaseVerification | undefined>;
+async function readPersistedReleaseVerificationSeal(
+  configuration: PlatformServiceConfiguration,
+  fileSystem: NativeFileSystemBoundary,
+  required: boolean,
+): Promise<NativeReleaseVerification | undefined> {
+  const path = nativeReleaseVerificationSealPath(configuration);
+  const metadata = await fileSystem.inspect(path);
+  if (metadata.kind === "missing" && !required) {
+    return undefined;
+  }
+  if (
+    metadata.kind !== "regular-file" ||
+    metadata.size === undefined ||
+    metadata.size <= 0 ||
+    metadata.size > 128 * 1024
+  ) {
+    failPreflight("The installed release verification seal is missing or unsafe.");
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await fileSystem.read(path, metadata.size);
+  } catch {
+    failPreflight("The installed release verification seal cannot be read safely.");
+  }
+  return parseNativeReleaseVerification(bytes);
 }
 
 function createNativeAccountAdapter(

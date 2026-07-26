@@ -523,6 +523,14 @@ test("preflight checks every native tool and publisher trust before mutation", a
         false,
       );
     },
+    async verifyBeforeActivation() {},
+    async verifyInstalled() {
+      throw new ServiceCommandExecutionError(
+        "SERVICE_COMMAND_PREFLIGHT_FAILED",
+        "publisher signature absent",
+        false,
+      );
+    },
     async verifyStaged() {},
   };
   const trustExecutor = createNativeServiceExecutor({
@@ -1160,6 +1168,256 @@ test("native inspection binds core health to the exact configured service identi
   assert.equal(diagnostic.readiness.headlessWorkAvailable, false);
 });
 
+test("candidate v2 preflight accepts publisher-only authority and exposes a full channel seal", async () => {
+  const fileSystem = new FakeFileSystem();
+  const configuration = linuxConfiguration();
+  prepareReleaseTrack(fileSystem, configuration, "release-candidate");
+  const calls: string[] = [];
+  const verifier = createNativeReleaseVerifier(fileSystem, {
+    architecture: "x64",
+    async resolveConfiguredRelease(input) {
+      calls.push(input.root);
+      assert.equal(input.stateRoot, configuration.paths.stateRoot);
+      assert.equal(input.expectedManifestSha256, "a".repeat(64));
+      assert.deepEqual(input.expectedTarget, { platform: "linux", architecture: "x64" });
+      return configuredCandidateResolution("publisher-verified");
+    },
+  });
+
+  const verification = await verifier.preflight(configuration);
+
+  assert.equal(verification.verificationKind, "candidate-v2");
+  assert.equal(verification.declaredChannel, "release-candidate");
+  assert.equal(verification.effectiveChannel, "release-candidate");
+  assert.equal(verification.supportStatus, "release-candidate");
+  assert.equal(verification.seal?.external.status, "publisher-verified");
+  assert.equal(verification.seal?.externalVerificationSha256.length, 64);
+  assert.deepEqual(calls, [configuration.bundle.sourceDirectory]);
+});
+
+test("candidate v2 preflight fails closed on absent, invalid, promotion-invalid, or revoked authority", async () => {
+  for (const status of ["absent", "invalid", "promotion-invalid", "revoked"] as const) {
+    const fileSystem = new FakeFileSystem();
+    const configuration = linuxConfiguration();
+    prepareReleaseTrack(fileSystem, configuration, "release-candidate");
+    const verifier = createNativeReleaseVerifier(fileSystem, {
+      architecture: "x64",
+      async resolveConfiguredRelease() {
+        return configuredCandidateResolution(status);
+      },
+    });
+
+    await assert.rejects(
+      verifier.preflight(configuration),
+      (error: unknown) =>
+        isPreflightFailure(error) &&
+        error.message.includes("external release authority") &&
+        !error.message.includes("/var/lib"),
+    );
+  }
+});
+
+test("candidate v2 never falls back to the legacy preview verifier", async () => {
+  const fileSystem = new FakeFileSystem();
+  const base = linuxConfiguration();
+  const prepared = prepareSignedBundle(fileSystem, base, {
+    mutateMetadata(metadata) {
+      metadata.supportStatus = "release-candidate";
+      metadata.buildMode = "release-candidate";
+    },
+  });
+  const configuration = linuxConfiguration({
+    bundle: {
+      ...base.bundle,
+      checksum: `sha256:${prepared.manifestSha256}`,
+    },
+  });
+  const verifier = createNativeReleaseVerifier(fileSystem, {
+    architecture: "x64",
+    async resolveConfiguredRelease() {
+      throw new Error("candidate-v2-rejected");
+    },
+  });
+
+  await assert.rejects(
+    verifier.preflight(configuration),
+    (error: unknown) =>
+      isPreflightFailure(error) &&
+      error.message.includes("candidate v2") &&
+      !error.message.includes("candidate-v2-rejected"),
+  );
+});
+
+test("candidate staged verification re-inspects copied bytes and rejects a changed seal", async () => {
+  const fileSystem = new FakeFileSystem();
+  const configuration = linuxConfiguration();
+  prepareReleaseTrack(fileSystem, configuration, "release-candidate");
+  let calls = 0;
+  const verifier = createNativeReleaseVerifier(fileSystem, {
+    architecture: "x64",
+    async resolveConfiguredRelease() {
+      calls += 1;
+      return configuredCandidateResolution(
+        "publisher-verified",
+        calls === 1 ? {} : { payloadManifestSha256: "9".repeat(64) },
+      );
+    },
+  });
+  const verification = await verifier.preflight(configuration);
+
+  await assert.rejects(
+    verifier.verifyStaged(configuration, "/opt/opendelegate/.staging/1.2.3", verification),
+    (error: unknown) => isPreflightFailure(error) && error.message.includes("verification seal"),
+  );
+  assert.equal(calls, 2);
+});
+
+test("candidate activation re-runs external authority immediately against installed bytes", async () => {
+  const fileSystem = new FakeFileSystem();
+  const configuration = linuxConfiguration();
+  prepareReleaseTrack(fileSystem, configuration, "release-candidate");
+  const roots: string[] = [];
+  const verifier = createNativeReleaseVerifier(fileSystem, {
+    architecture: "x64",
+    async resolveConfiguredRelease(input) {
+      roots.push(input.root);
+      return roots.length < 2
+        ? configuredCandidateResolution("released")
+        : configuredCandidateResolution("revoked");
+    },
+  });
+  const verification = await verifier.preflight(configuration);
+
+  await assert.rejects(
+    verifier.verifyBeforeActivation(
+      configuration,
+      "/opt/opendelegate/releases/1.2.3",
+      verification,
+    ),
+    (error: unknown) =>
+      isPreflightFailure(error) && error.message.includes("external release authority"),
+  );
+  assert.deepEqual(roots, [
+    configuration.bundle.sourceDirectory,
+    "/opt/opendelegate/releases/1.2.3",
+  ]);
+});
+
+test("failed candidate activation removes only the new seal and preserves a prior release seal", async () => {
+  const configuration = windowsConfigurationWithServiceBinding("main");
+  const fileSystem = new FakeFileSystem();
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (request.arguments[0] === "showsid") {
+      return processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`);
+    }
+    return processResult(0);
+  };
+  const releaseDirectory = "C:\\Program Files\\OpenDelegate\\releases\\1.2.3";
+  const stagingDirectory = "C:\\Program Files\\OpenDelegate\\.staging\\1.2.3";
+  const priorSealPath = "C:\\ProgramData\\OpenDelegate\\state\\release-verification\\1.2.2.json";
+  const newSealPath = "C:\\ProgramData\\OpenDelegate\\state\\release-verification\\1.2.3.json";
+  const priorSeal = Buffer.from("prior-authenticated-seal", "utf8");
+  fileSystem.files.set(priorSealPath, priorSeal);
+  fileSystem.kinds.set(priorSealPath, "regular-file");
+  fileSystem.kinds.set(`${configuration.bundle.sourceDirectory}\\INTERNAL_PREVIEW.md`, "missing");
+  fileSystem.kinds.set(configuration.bundle.sourceDirectory, "directory");
+  fileSystem.kinds.set("C:\\Program Files\\OpenDelegate\\releases", "missing");
+  fileSystem.kinds.set("C:\\Program Files\\OpenDelegate\\.staging", "missing");
+  fileSystem.kinds.set(stagingDirectory, "missing");
+  fileSystem.kinds.set(releaseDirectory, "missing");
+  const resolverRoots: string[] = [];
+  const releaseVerifier = createNativeReleaseVerifier(fileSystem, {
+    architecture: "x64",
+    async resolveConfiguredRelease(input) {
+      resolverRoots.push(input.root);
+      return input.root === releaseDirectory
+        ? configuredCandidateResolution("revoked", {
+            target: { platform: "win32", architecture: "x64" },
+          })
+        : configuredCandidateResolution("released", {
+            target: { platform: "win32", architecture: "x64" },
+          });
+    },
+  });
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: true,
+    fileSystem,
+    process,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier,
+  });
+
+  const result = await executor.execute({
+    commandId: "service-install-candidate-revoked-before-activation",
+    configuration,
+    plan: createServicePlan({ operation: "install", configuration }),
+  });
+
+  assert.equal(result.report.outcome, "rolled-back", JSON.stringify(result.report));
+  assert.equal(fileSystem.links.has("C:\\Program Files\\OpenDelegate\\current"), false);
+  assert.deepEqual(fileSystem.files.get(priorSealPath), priorSeal);
+  assert.equal(fileSystem.files.has(newSealPath), false);
+  assert.equal(resolverRoots.at(-1), releaseDirectory);
+});
+
+test("legacy preview start re-authenticates publisher evidence when no persisted seal exists", async () => {
+  const fileSystem = new FakeFileSystem();
+  const base = linuxConfiguration();
+  const prepared = prepareSignedBundle(fileSystem, base);
+  const configuration = linuxConfiguration({
+    bundle: {
+      ...base.bundle,
+      checksum: `sha256:${prepared.manifestSha256}`,
+    },
+  });
+  const releaseDirectory = "/opt/opendelegate/releases/1.2.3";
+  copyFakeReleaseTree(fileSystem, configuration.bundle.sourceDirectory, releaseDirectory, "/");
+  const verifier = createNativeReleaseVerifier(fileSystem, { architecture: "x64" });
+
+  const authenticated = await verifier.verifyInstalled(configuration, releaseDirectory);
+
+  assert.equal(authenticated.verificationKind, "legacy-preview");
+  assert.equal(authenticated.publisherKeyId, prepared.publisherKeyId);
+  assert.notEqual(authenticated.publisherKeyId, `sha256:${"0".repeat(64)}`);
+
+  fileSystem.files.delete(`${configuration.bundle.sourceDirectory}.publisher-attestation.json`);
+  await verifier.verifyInstalled(configuration, releaseDirectory, authenticated);
+  await assert.rejects(
+    verifier.verifyInstalled(configuration, releaseDirectory, {
+      ...authenticated,
+      publisherAttestation: {
+        ...authenticated.publisherAttestation,
+        signature: "A".repeat(86),
+      },
+    }),
+    (error: unknown) => isPreflightFailure(error) && error.message.includes("publisher trust root"),
+  );
+  const rotatedPublisher = generateKeyPairSync("ed25519").publicKey.export({
+    format: "pem",
+    type: "spki",
+  });
+  fileSystem.files.set(
+    "/var/lib/opendelegate/trust/publisher-ed25519.pem",
+    Buffer.from(rotatedPublisher),
+  );
+  await assert.rejects(
+    verifier.verifyInstalled(configuration, releaseDirectory, authenticated),
+    (error: unknown) => isPreflightFailure(error) && error.message.includes("publisher trust root"),
+  );
+  await assert.rejects(
+    verifier.verifyInstalled(configuration, releaseDirectory),
+    isPreflightFailure,
+  );
+});
+
 test("release preflight verifies the complete payload and detached Ed25519 publisher attestation", async () => {
   const fileSystem = new FakeFileSystem();
   const source = "/mnt/releases/opendelegate-1.2.3";
@@ -1476,18 +1734,166 @@ function fakeBoundaries(input: {
 }
 
 function trustedRelease(onPreflight?: () => void): NativeReleaseVerifier {
+  const verification = (configuration: PlatformServiceConfiguration) => ({
+    verificationKind: "legacy-preview" as const,
+    declaredChannel: "internal-preview" as const,
+    effectiveChannel: "internal-preview" as const,
+    manifestSha256: "a".repeat(64),
+    publisherAttestation: {
+      algorithm: "ed25519" as const,
+      signature: "A".repeat(86),
+    },
+    publisherKeyId: `sha256:${"b".repeat(64)}`,
+    productVersion: configuration.bundle.version,
+    supportStatus: "internal-preview-blocked" as const,
+  });
   return {
     async preflight(configuration: PlatformServiceConfiguration) {
       onPreflight?.();
-      return {
-        manifestSha256: "a".repeat(64),
-        publisherKeyId: `sha256:${"b".repeat(64)}`,
-        productVersion: configuration.bundle.version,
-        supportStatus: "internal-preview-blocked",
-      };
+      return verification(configuration);
+    },
+    async verifyBeforeActivation() {},
+    async verifyInstalled(configuration) {
+      return verification(configuration);
     },
     async verifyStaged() {},
   };
+}
+
+function prepareReleaseTrack(
+  fileSystem: FakeFileSystem,
+  configuration: PlatformServiceConfiguration,
+  supportStatus: "internal-preview-blocked" | "release-candidate",
+): void {
+  const metadataPath = `${configuration.bundle.sourceDirectory}/release-metadata.json`;
+  fileSystem.files.set(metadataPath, Buffer.from(JSON.stringify({ supportStatus }), "utf8"));
+  fileSystem.kinds.set(metadataPath, "regular-file");
+  fileSystem.kinds.set(
+    `${configuration.bundle.sourceDirectory}/INTERNAL_PREVIEW.md`,
+    supportStatus === "release-candidate" ? "missing" : "regular-file",
+  );
+  fileSystem.kinds.set(configuration.bundle.sourceDirectory, "directory");
+}
+
+function copyFakeReleaseTree(
+  fileSystem: FakeFileSystem,
+  source: string,
+  destination: string,
+  separator: "/" | "\\",
+): void {
+  const prefix = `${source}${separator}`;
+  fileSystem.kinds.set(destination, "directory");
+  for (const [path, bytes] of [...fileSystem.files]) {
+    if (path.startsWith(prefix)) {
+      const target = `${destination}${separator}${path.slice(prefix.length)}`;
+      fileSystem.files.set(target, Buffer.from(bytes));
+      fileSystem.kinds.set(target, "regular-file");
+    }
+  }
+  for (const [path, entries] of [...fileSystem.directories]) {
+    if (path === source || path.startsWith(prefix)) {
+      const suffix = path === source ? "" : `${separator}${path.slice(prefix.length)}`;
+      const target = `${destination}${suffix}`;
+      fileSystem.directories.set(
+        target,
+        entries.map((entry) => ({ ...entry })),
+      );
+      fileSystem.kinds.set(target, "directory");
+    }
+  }
+}
+
+function configuredCandidateResolution(
+  status:
+    "absent" | "invalid" | "promotion-invalid" | "publisher-verified" | "released" | "revoked",
+  overrides: {
+    readonly payloadManifestSha256?: string;
+    readonly target?: {
+      readonly architecture: "arm64" | "x64";
+      readonly platform: "darwin" | "linux" | "win32";
+    };
+  } = {},
+) {
+  const candidate = Object.freeze({
+    acceptanceLedgerSha256: "1".repeat(64),
+    auditedSourceCommit: "2".repeat(40),
+    buildCommit: "3".repeat(40),
+    buildId: "release-candidate-333333333333-linux-x64",
+    candidateAttestationId: "candidate:fixture:linux-x64",
+    checksumManifestSha256: "a".repeat(64),
+    declaredChannel: "release-candidate" as const,
+    nativeComponentsSha256: "4".repeat(64),
+    payloadManifestSha256: overrides.payloadManifestSha256 ?? "5".repeat(64),
+    platformAuthenticitySha256: "6".repeat(64),
+    platformCertificateIdentities: Object.freeze([]),
+    platformProductCertificateIdentity: null,
+    productVersion: "1.2.3",
+    publisherStatement: Object.freeze({
+      canonicalBytes: new Uint8Array([1, 2, 3]),
+      domain: "opendelegate.release.publisher-candidate.v2" as const,
+      sha256: "7".repeat(64),
+    }),
+    releaseMetadataSha256: "8".repeat(64),
+    target: Object.freeze(
+      overrides.target ?? { platform: "linux" as const, architecture: "x64" as const },
+    ),
+  });
+  const base = {
+    candidate,
+    declaredChannel: "release-candidate" as const,
+  };
+  if (status === "publisher-verified" || status === "promotion-invalid") {
+    return Object.freeze({
+      ...base,
+      effectiveChannel: "release-candidate" as const,
+      external: Object.freeze({
+        archive: Object.freeze({
+          path: "opendelegate-linux-x64.tar.gz",
+          size: 1_024,
+          sha256: "9".repeat(64),
+        }),
+        configurationSha256: "b".repeat(64),
+        ...(status === "promotion-invalid"
+          ? { diagnosticCode: "PROMOTION_TRUST_INVALID" as const }
+          : {}),
+        publisherAttestationSha256: "c".repeat(64),
+        publisherKeyId: `sha256:${"d".repeat(64)}`,
+        status,
+      }),
+    });
+  }
+  if (status === "released") {
+    return Object.freeze({
+      ...base,
+      effectiveChannel: "released" as const,
+      external: Object.freeze({
+        archive: Object.freeze({
+          path: "opendelegate-linux-x64.tar.gz",
+          size: 1_024,
+          sha256: "9".repeat(64),
+        }),
+        configurationSha256: "b".repeat(64),
+        promotionStatementId: "promotion:fixture:release",
+        publisherAttestationSha256: "c".repeat(64),
+        publisherKeyId: `sha256:${"d".repeat(64)}`,
+        receiptId: "receipt:fixture:release",
+        status,
+      }),
+    });
+  }
+  return Object.freeze({
+    ...base,
+    effectiveChannel: "release-candidate" as const,
+    external: Object.freeze({
+      ...(status === "invalid"
+        ? {
+            configurationSha256: "b".repeat(64),
+            diagnosticCode: "RELEASE_CONFIGURATION_INVALID" as const,
+          }
+        : {}),
+      status,
+    }),
+  });
 }
 
 function prepareSignedBundle(
@@ -1556,7 +1962,9 @@ function prepareSignedBundle(
   };
   options.mutateMetadata?.(metadataValue);
   const metadata = Buffer.from(`${JSON.stringify(metadataValue)}\n`, "utf8");
+  const previewMarker = Buffer.from("# Unsupported OpenDelegate internal preview\n", "utf8");
   const payloadEntries = [
+    payloadEntry("INTERNAL_PREVIEW.md", previewMarker),
     ...launcherFiles.map((launcher) => payloadEntry(launcher.path, launcher.bytes)),
     ...nativeComponentFiles.map((component) => {
       const entry = payloadEntry(component.path, component.bytes);
@@ -1616,6 +2024,7 @@ function prepareSignedBundle(
     ),
     [fixturePath(configuration.platform, source, "native-components.json"), nativeManifest],
     [fixturePath(configuration.platform, source, "release-metadata.json"), metadata],
+    [fixturePath(configuration.platform, source, "INTERNAL_PREVIEW.md"), previewMarker],
     [fixturePath(configuration.platform, source, "payload-manifest.json"), payloadManifest],
     [fixturePath(configuration.platform, source, "SHA256SUMS"), checksumManifest],
     [`${source}.publisher-attestation.json`, attestation],
@@ -1636,6 +2045,7 @@ function prepareSignedBundle(
   for (const path of [
     ...launcherFiles.map((launcher) => launcher.path),
     ...nativeComponentFiles.map((component) => component.path),
+    "INTERNAL_PREVIEW.md",
     "native-components.json",
     "release-metadata.json",
     "payload-manifest.json",

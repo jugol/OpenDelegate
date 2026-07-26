@@ -1,7 +1,20 @@
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
 import { posix, win32 } from "node:path";
 
+import {
+  resolveConfiguredRelease,
+  type ConfiguredReleaseResolution,
+  type ResolveConfiguredReleaseInput,
+} from "@opendelegate/release-integrity";
+
 import type { NativeFileSystemBoundary } from "./native-service-boundaries.ts";
+import {
+  assertCandidateReleaseVerificationSeal,
+  createCandidateReleaseVerificationSeal,
+  encodeCandidateReleaseVerificationSeal,
+  parseCandidateReleaseVerificationSeal,
+  type CandidateReleaseVerificationSeal,
+} from "./release-verification-seal.ts";
 import { ServiceCommandExecutionError } from "./service-command.ts";
 import {
   createPlatformServiceDefinition,
@@ -37,30 +50,198 @@ interface NativeComponentsManifest {
   readonly components: readonly NativeComponent[];
 }
 
-export interface NativeReleaseVerification {
+export interface LegacyPreviewReleaseVerification {
+  readonly declaredChannel: "internal-preview";
+  readonly effectiveChannel: "internal-preview";
   readonly manifestSha256: string;
+  readonly publisherAttestation: {
+    readonly algorithm: "ed25519";
+    readonly signature: string;
+  };
   readonly publisherKeyId: string;
   readonly productVersion: string;
-  readonly supportStatus:
-    "internal-preview-blocked" | "internal-preview-complete" | "release-candidate";
+  readonly seal?: undefined;
+  readonly supportStatus: "internal-preview-blocked" | "internal-preview-complete";
+  readonly verificationKind: "legacy-preview";
 }
+
+export interface CandidateV2ReleaseVerification {
+  readonly declaredChannel: "release-candidate";
+  readonly effectiveChannel: "release-candidate" | "released";
+  readonly manifestSha256: string;
+  readonly productVersion: string;
+  readonly publisherKeyId: string;
+  readonly seal: CandidateReleaseVerificationSeal;
+  readonly supportStatus: "release-candidate";
+  readonly verificationKind: "candidate-v2";
+}
+
+export type NativeReleaseVerification =
+  CandidateV2ReleaseVerification | LegacyPreviewReleaseVerification;
 
 export interface NativeReleaseVerifier {
   preflight(configuration: PlatformServiceConfiguration): Promise<NativeReleaseVerification>;
   verifyStaged(
     configuration: PlatformServiceConfiguration,
     stagingDirectory: string,
-    expectedManifestSha256: string,
+    expected: NativeReleaseVerification,
   ): Promise<void>;
+  verifyBeforeActivation(
+    configuration: PlatformServiceConfiguration,
+    releaseDirectory: string,
+    expected: NativeReleaseVerification,
+  ): Promise<void>;
+  verifyInstalled(
+    configuration: PlatformServiceConfiguration,
+    releaseDirectory: string,
+    expected?: NativeReleaseVerification,
+  ): Promise<NativeReleaseVerification>;
+}
+
+export function assertMatchingNativeReleaseVerification(
+  expected: NativeReleaseVerification,
+  actual: NativeReleaseVerification,
+): void {
+  if (expected.verificationKind === "candidate-v2") {
+    assertMatchingCandidateVerification(expected, actual);
+    return;
+  }
+  if (
+    actual.verificationKind !== "legacy-preview" ||
+    expected.declaredChannel !== actual.declaredChannel ||
+    expected.effectiveChannel !== actual.effectiveChannel ||
+    expected.manifestSha256 !== actual.manifestSha256 ||
+    expected.productVersion !== actual.productVersion ||
+    expected.publisherAttestation.algorithm !== actual.publisherAttestation.algorithm ||
+    expected.publisherAttestation.signature !== actual.publisherAttestation.signature ||
+    expected.publisherKeyId !== actual.publisherKeyId ||
+    expected.supportStatus !== actual.supportStatus
+  ) {
+    failPreflight("The authenticated preview release verification seal no longer matches.");
+  }
+}
+
+export function encodeNativeReleaseVerification(verification: NativeReleaseVerification): Buffer {
+  assertNativeReleaseVerification(verification);
+  return Buffer.from(`${JSON.stringify(verification)}\n`, "utf8");
+}
+
+export function parseNativeReleaseVerification(bytes: Buffer): NativeReleaseVerification {
+  if (bytes.byteLength === 0 || bytes.byteLength > 128 * 1024) {
+    failPreflight("The installed release verification seal has an invalid size.");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(bytes.toString("utf8")) as unknown;
+  } catch {
+    failPreflight("The installed release verification seal is invalid.");
+  }
+  assertNativeReleaseVerification(value);
+  const record = value as NativeReleaseVerification;
+  if (record.verificationKind === "candidate-v2") {
+    const seal = parseCandidateReleaseVerificationSeal(
+      Buffer.from(JSON.stringify(record.seal), "utf8"),
+    );
+    return Object.freeze({ ...record, seal });
+  }
+  return Object.freeze({ ...record });
 }
 
 export function createNativeReleaseVerifier(
   fileSystem: NativeFileSystemBoundary,
   options: {
     readonly architecture?: string;
+    readonly resolveConfiguredRelease?: (
+      input: ResolveConfiguredReleaseInput,
+    ) => Promise<ConfiguredReleaseResolution>;
   } = {},
 ): NativeReleaseVerifier {
   const architecture = options.architecture ?? process.arch;
+  const configuredResolver = options.resolveConfiguredRelease ?? resolveConfiguredRelease;
+  const previewVerifier = createLegacyPreviewReleaseVerifier(fileSystem, { architecture });
+  return {
+    async preflight(configurationInput) {
+      const configuration = parsePlatformServiceConfiguration(configurationInput);
+      const track = await readReleaseTrack(
+        fileSystem,
+        configuration,
+        configuration.bundle.sourceDirectory,
+      );
+      if (track === "legacy-preview") {
+        return await previewVerifier.preflight(configuration);
+      }
+      return await resolveCandidateV2(
+        configuration,
+        configuration.bundle.sourceDirectory,
+        architecture,
+        configuredResolver,
+      );
+    },
+
+    async verifyStaged(configurationInput, stagingDirectory, expected) {
+      const configuration = parsePlatformServiceConfiguration(configurationInput);
+      if (expected.verificationKind === "legacy-preview") {
+        await previewVerifier.verifyStaged(configuration, stagingDirectory, expected);
+        return;
+      }
+      const actual = await resolveCandidateV2(
+        configuration,
+        stagingDirectory,
+        architecture,
+        configuredResolver,
+      );
+      assertMatchingCandidateVerification(expected, actual);
+    },
+
+    async verifyBeforeActivation(configurationInput, releaseDirectory, expected) {
+      const configuration = parsePlatformServiceConfiguration(configurationInput);
+      if (expected.verificationKind === "legacy-preview") {
+        await previewVerifier.verifyBeforeActivation(configuration, releaseDirectory, expected);
+        return;
+      }
+      const actual = await resolveCandidateV2(
+        configuration,
+        releaseDirectory,
+        architecture,
+        configuredResolver,
+      );
+      assertMatchingCandidateVerification(expected, actual);
+    },
+
+    async verifyInstalled(configurationInput, releaseDirectory, expected) {
+      const configuration = parsePlatformServiceConfiguration(configurationInput);
+      if (expected === undefined) {
+        const track = await readReleaseTrack(fileSystem, configuration, releaseDirectory);
+        if (track === "candidate-v2") {
+          failPreflight("The installed candidate v2 release verification seal is missing.");
+        }
+        const authenticated = await previewVerifier.preflight(configuration);
+        await previewVerifier.verifyInstalled(configuration, releaseDirectory, authenticated);
+        return authenticated;
+      }
+      if (expected.verificationKind === "legacy-preview") {
+        await previewVerifier.verifyInstalled(configuration, releaseDirectory, expected);
+        return expected;
+      }
+      const actual = await resolveCandidateV2(
+        configuration,
+        releaseDirectory,
+        architecture,
+        configuredResolver,
+      );
+      assertMatchingCandidateVerification(expected, actual);
+      return actual;
+    },
+  };
+}
+
+function createLegacyPreviewReleaseVerifier(
+  fileSystem: NativeFileSystemBoundary,
+  options: {
+    readonly architecture: string;
+  },
+): NativeReleaseVerifier {
+  const architecture = options.architecture;
   return {
     async preflight(configuration) {
       const validated = parsePlatformServiceConfiguration(configuration);
@@ -123,26 +304,312 @@ export function createNativeReleaseVerifier(
       if (sha256(payload.checksumBytes) !== manifestSha256) {
         failPreflight("The release checksum manifest changed after publisher verification.");
       }
+      if (payload.supportStatus === "release-candidate") {
+        failPreflight("A candidate v2 release cannot fall back to legacy preview verification.");
+      }
       return {
+        declaredChannel: "internal-preview",
+        effectiveChannel: "internal-preview",
         manifestSha256,
+        publisherAttestation: {
+          algorithm: "ed25519",
+          signature: attestation.signature,
+        },
         publisherKeyId: keyId,
         productVersion: payload.productVersion,
         supportStatus: payload.supportStatus,
+        verificationKind: "legacy-preview",
       };
     },
 
-    async verifyStaged(configuration, stagingDirectory, expectedManifestSha256) {
+    async verifyStaged(configuration, stagingDirectory, expected) {
+      if (expected.verificationKind !== "legacy-preview") {
+        failPreflight("A candidate v2 release cannot use the legacy preview verifier.");
+      }
       const payload = await verifyPayload(
         fileSystem,
         configuration,
         stagingDirectory,
         architecture,
       );
-      if (sha256(payload.checksumBytes) !== expectedManifestSha256) {
+      if (sha256(payload.checksumBytes) !== expected.manifestSha256) {
         throw uncertain("The staged release no longer matches its trusted publisher attestation.");
       }
     },
+
+    async verifyBeforeActivation(configuration, releaseDirectory, expected) {
+      if (expected.verificationKind !== "legacy-preview") {
+        failPreflight("A candidate v2 release cannot use the legacy preview verifier.");
+      }
+      await verifyLegacyPreviewAuthority(fileSystem, configuration, expected);
+      const payload = await verifyPayload(
+        fileSystem,
+        configuration,
+        releaseDirectory,
+        architecture,
+      );
+      if (sha256(payload.checksumBytes) !== expected.manifestSha256) {
+        failPreflight("The installed preview release no longer matches its verified manifest.");
+      }
+    },
+
+    async verifyInstalled(configuration, releaseDirectory, expected) {
+      if (expected?.verificationKind !== "legacy-preview") {
+        failPreflight("A candidate v2 release cannot use legacy installed verification.");
+      }
+      await verifyLegacyPreviewAuthority(fileSystem, configuration, expected);
+      const payload = await verifyPayload(
+        fileSystem,
+        configuration,
+        releaseDirectory,
+        architecture,
+      );
+      if (sha256(payload.checksumBytes) !== expected.manifestSha256) {
+        failPreflight("The installed preview release no longer matches its verified manifest.");
+      }
+      if (
+        payload.supportStatus === "release-candidate" ||
+        payload.supportStatus !== expected.supportStatus ||
+        payload.productVersion !== expected.productVersion
+      ) {
+        failPreflight("The installed preview release no longer matches its authenticated seal.");
+      }
+      return expected;
+    },
   };
+}
+
+async function verifyLegacyPreviewAuthority(
+  fileSystem: NativeFileSystemBoundary,
+  configuration: PlatformServiceConfiguration,
+  expected: LegacyPreviewReleaseVerification,
+): Promise<void> {
+  if (configuration.bundle.checksum !== `sha256:${expected.manifestSha256}`) {
+    failPreflight("The installed preview seal does not match the configured release checksum.");
+  }
+  const trustRoot = pathJoin(
+    configuration.platform,
+    configuration.paths.stateRoot,
+    "trust",
+    "publisher-ed25519.pem",
+  );
+  const keyBytes = await readRequiredRegularFile(
+    fileSystem,
+    trustRoot,
+    MAXIMUM_KEY_BYTES,
+    "publisher trust root",
+  );
+  const key = parsePublisherKey(keyBytes);
+  const keyDer = key.export({ format: "der", type: "spki" });
+  const currentKeyId = `sha256:${sha256(Buffer.from(keyDer))}`;
+  if (
+    currentKeyId !== expected.publisherKeyId ||
+    expected.publisherAttestation.algorithm !== "ed25519" ||
+    !BASE64_URL_PATTERN.test(expected.publisherAttestation.signature) ||
+    !verifySignature(
+      null,
+      signatureInput(expected.manifestSha256),
+      key,
+      Buffer.from(expected.publisherAttestation.signature, "base64url"),
+    )
+  ) {
+    failPreflight(
+      "The authenticated preview seal is invalid under the current publisher trust root.",
+    );
+  }
+}
+
+async function readReleaseTrack(
+  fileSystem: NativeFileSystemBoundary,
+  configuration: PlatformServiceConfiguration,
+  root: string,
+): Promise<"candidate-v2" | "legacy-preview"> {
+  const marker = await fileSystem.inspect(
+    pathJoin(configuration.platform, root, "INTERNAL_PREVIEW.md"),
+  );
+  if (marker.kind === "regular-file") {
+    return "legacy-preview";
+  }
+  if (marker.kind === "missing") {
+    return "candidate-v2";
+  }
+  failPreflight("The explicit internal-preview marker is linked or unsafe.");
+}
+
+async function resolveCandidateV2(
+  configuration: PlatformServiceConfiguration,
+  root: string,
+  architecture: string,
+  resolver: (input: ResolveConfiguredReleaseInput) => Promise<ConfiguredReleaseResolution>,
+): Promise<CandidateV2ReleaseVerification> {
+  const expectedTarget = expectedCandidateTarget(configuration.platform, architecture);
+  let resolution: ConfiguredReleaseResolution;
+  try {
+    resolution = await resolver({
+      root,
+      expectedTarget,
+      stateRoot: configuration.paths.stateRoot,
+      expectedManifestSha256: configuration.bundle.checksum.slice("sha256:".length),
+    });
+  } catch {
+    failPreflight("The release candidate v2 failed authenticated integrity inspection.");
+  }
+  if (
+    resolution.external.status !== "publisher-verified" &&
+    resolution.external.status !== "released"
+  ) {
+    failPreflight(
+      "The configured external release authority does not authorize this installation.",
+    );
+  }
+  if (
+    resolution.candidate.productVersion !== configuration.bundle.version ||
+    resolution.candidate.checksumManifestSha256 !==
+      configuration.bundle.checksum.slice("sha256:".length) ||
+    resolution.candidate.target.platform !== expectedTarget.platform ||
+    resolution.candidate.target.architecture !== expectedTarget.architecture
+  ) {
+    failPreflight("The release candidate v2 does not match the configured bundle identity.");
+  }
+  let seal: CandidateReleaseVerificationSeal;
+  try {
+    seal = createCandidateReleaseVerificationSeal(resolution);
+  } catch {
+    failPreflight("The configured external release authority is invalid.");
+  }
+  return Object.freeze({
+    declaredChannel: "release-candidate" as const,
+    effectiveChannel: resolution.effectiveChannel,
+    manifestSha256: resolution.candidate.checksumManifestSha256,
+    productVersion: resolution.candidate.productVersion,
+    publisherKeyId: resolution.external.publisherKeyId,
+    seal,
+    supportStatus: "release-candidate" as const,
+    verificationKind: "candidate-v2" as const,
+  });
+}
+
+function assertMatchingCandidateVerification(
+  expected: NativeReleaseVerification,
+  actual: NativeReleaseVerification,
+): void {
+  if (
+    expected.verificationKind !== "candidate-v2" ||
+    actual.verificationKind !== "candidate-v2" ||
+    expected.declaredChannel !== actual.declaredChannel ||
+    expected.effectiveChannel !== actual.effectiveChannel ||
+    expected.manifestSha256 !== actual.manifestSha256 ||
+    expected.productVersion !== actual.productVersion ||
+    expected.publisherKeyId !== actual.publisherKeyId
+  ) {
+    failPreflight("The release verification seal no longer matches the authenticated candidate.");
+  }
+  assertCandidateReleaseVerificationSeal(expected.seal, actual.seal);
+}
+
+function assertNativeReleaseVerification(
+  value: unknown,
+): asserts value is NativeReleaseVerification {
+  const record = requireRecord(value, "release verification seal");
+  const kind = record["verificationKind"];
+  if (kind === "legacy-preview") {
+    assertExactKeys(
+      record,
+      [
+        "declaredChannel",
+        "effectiveChannel",
+        "manifestSha256",
+        "productVersion",
+        "publisherAttestation",
+        "publisherKeyId",
+        "supportStatus",
+        "verificationKind",
+      ],
+      "preview release verification seal",
+    );
+    if (
+      record["declaredChannel"] !== "internal-preview" ||
+      record["effectiveChannel"] !== "internal-preview" ||
+      typeof record["manifestSha256"] !== "string" ||
+      !SHA256_PATTERN.test(record["manifestSha256"]) ||
+      !isLegacyPublisherAttestation(record["publisherAttestation"]) ||
+      typeof record["publisherKeyId"] !== "string" ||
+      !QUALIFIED_SHA256_PATTERN.test(record["publisherKeyId"]) ||
+      typeof record["productVersion"] !== "string" ||
+      !SEMVER_PATTERN.test(record["productVersion"]) ||
+      (record["supportStatus"] !== "internal-preview-blocked" &&
+        record["supportStatus"] !== "internal-preview-complete")
+    ) {
+      failPreflight("The authenticated preview release verification seal is invalid.");
+    }
+    return;
+  }
+  if (kind !== "candidate-v2") {
+    failPreflight("The installed release verification seal kind is invalid.");
+  }
+  assertExactKeys(
+    record,
+    [
+      "declaredChannel",
+      "effectiveChannel",
+      "manifestSha256",
+      "productVersion",
+      "publisherKeyId",
+      "seal",
+      "supportStatus",
+      "verificationKind",
+    ],
+    "candidate release verification seal",
+  );
+  const seal = parseCandidateReleaseVerificationSeal(
+    Buffer.from(JSON.stringify(record["seal"]), "utf8"),
+  );
+  if (
+    record["declaredChannel"] !== "release-candidate" ||
+    record["effectiveChannel"] !== seal.effectiveChannel ||
+    record["manifestSha256"] !== seal.candidate.checksumManifestSha256 ||
+    record["productVersion"] !== seal.candidate.productVersion ||
+    record["publisherKeyId"] !== seal.external.publisherKeyId ||
+    record["supportStatus"] !== "release-candidate"
+  ) {
+    failPreflight("The candidate release verification seal binding is invalid.");
+  }
+  encodeCandidateReleaseVerificationSeal(seal);
+}
+
+function isLegacyPublisherAttestation(value: unknown): value is {
+  readonly algorithm: "ed25519";
+  readonly signature: string;
+} {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  const keys = Object.keys(record).sort();
+  return (
+    keys.length === 2 &&
+    keys[0] === "algorithm" &&
+    keys[1] === "signature" &&
+    record["algorithm"] === "ed25519" &&
+    typeof record["signature"] === "string" &&
+    BASE64_URL_PATTERN.test(record["signature"])
+  );
+}
+
+function expectedCandidateTarget(
+  platform: PlatformFamily,
+  architecture: string,
+): ResolveConfiguredReleaseInput["expectedTarget"] {
+  if (platform === "macos" && architecture === "arm64") {
+    return { platform: "darwin", architecture: "arm64" };
+  }
+  if (platform === "linux" && architecture === "x64") {
+    return { platform: "linux", architecture: "x64" };
+  }
+  if (platform === "windows" && architecture === "x64") {
+    return { platform: "win32", architecture: "x64" };
+  }
+  failPreflight("The candidate v2 target is outside the supported release matrix.");
 }
 
 async function verifyPayload(
