@@ -76,6 +76,22 @@ test("hosted CI uses named OS images that match the declared compatibility matri
   }
 });
 
+test("Main integration tests retain bounded hosted-runner concurrency and wall time", async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL("../../apps/main/package.json", import.meta.url), "utf8"),
+  );
+  const workflow = await readFile(
+    new URL("../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(
+    manifest.scripts?.test,
+    "node --experimental-strip-types --test --test-concurrency=2",
+  );
+  assert.match(workflow, /jobs:\s*\n\s*verify:[\s\S]*?\n\s+timeout-minutes:\s*30\s*$/mu);
+});
+
 test("secret scanning verifies a pinned Gitleaks binary against the full Git history", async () => {
   const workflow = await readFile(
     new URL("../../.github/workflows/security.yml", import.meta.url),
