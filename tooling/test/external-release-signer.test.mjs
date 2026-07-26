@@ -174,6 +174,16 @@ test("endpoint substitution and transcript replay fail before release-key use", 
     /does not match request field requestId/u,
   );
   assert.equal(trusted.metrics.releaseKeyUseCount, keyUsesBeforeReplay);
+
+  trusted.behavior.replayAuthorizationResponse = undefined;
+  trusted.behavior.replaySignResponse = Buffer.from(trusted.signResponses.at(-1));
+  const thirdAuthorization = createCredentialAuthorization(signingBytes);
+  trusted.approve(thirdAuthorization);
+  await assert.rejects(
+    invokePinnedReleaseSigner(validSignerInput(trusted, signingBytes, thirdAuthorization)),
+    /does not match request field requestId/u,
+  );
+  assert.equal(trusted.metrics.releaseKeyUseCount, keyUsesBeforeReplay);
 });
 
 test("the broker parser requires an independently approved authorization tuple and exact endpoint", async (t) => {
