@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -56,6 +56,84 @@ test("native-looking suffixes with unknown magic fail instead of disappearing", 
   );
 });
 
+test("native payload discovery ignores empty inert regular files", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-inventory-empty-inert-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await writeNativeFile(root, "runtime/node", "linux");
+  await writePortableFile(root, "apps/main/assets/empty.txt", "");
+
+  const discovered = await discoverThirdPartyNativeComponents({
+    ownedPaths: [],
+    platform: "linux",
+    stagingRoot: root,
+  });
+
+  assert.deepEqual(discovered, [
+    {
+      kind: "bundled-node-runtime",
+      path: "runtime/node",
+    },
+  ]);
+});
+
+test("empty native-looking payload files still fail closed", async (t) => {
+  for (const suffix of [".node", ".so"]) {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-native-inventory-empty-native-"));
+    t.after(() => rm(root, { force: true, recursive: true }));
+    const portablePath = `apps/main/native/empty${suffix}`;
+    await writeNativeFile(root, "runtime/node", "linux");
+    await writePortableFile(root, portablePath, "");
+
+    await assert.rejects(
+      discoverThirdPartyNativeComponents({
+        ownedPaths: [],
+        platform: "linux",
+        stagingRoot: root,
+      }),
+      {
+        message: `Native-looking payload file has unsupported executable magic: ${portablePath}.`,
+        name: "Error",
+      },
+    );
+  }
+});
+
+test("native payload discovery rejects oversized regular files", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-inventory-oversized-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await writeNativeFile(root, "runtime/node", "linux");
+  await writeSparseFile(root, "apps/main/assets/oversized.bin", 512 * 1024 * 1024 + 1);
+
+  await assert.rejects(
+    discoverThirdPartyNativeComponents({
+      ownedPaths: [],
+      platform: "linux",
+      stagingRoot: root,
+    }),
+    /not one bounded regular file/u,
+  );
+});
+
+test("native payload discovery rejects symbolic links and junctions", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-native-inventory-linked-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const target = join(root, "apps", "main", "target");
+  const link = join(root, "apps", "main", "native", "linked");
+  await writeNativeFile(root, "runtime/node", "linux");
+  await mkdir(target, { recursive: true });
+  await mkdir(dirname(link), { recursive: true });
+  await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+
+  await assert.rejects(
+    discoverThirdPartyNativeComponents({
+      ownedPaths: [],
+      platform: "linux",
+      stagingRoot: root,
+    }),
+    /rejects symbolic links and junctions/u,
+  );
+});
+
 test("native discovery fails when the mandatory bundled runtime is omitted", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-native-inventory-missing-"));
   t.after(() => rm(root, { force: true, recursive: true }));
@@ -87,6 +165,17 @@ async function writePortableFile(root, portablePath, value) {
   const path = join(root, ...portablePath.split("/"));
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, value, "utf8");
+}
+
+async function writeSparseFile(root, portablePath, size) {
+  const path = join(root, ...portablePath.split("/"));
+  await mkdir(dirname(path), { recursive: true });
+  const handle = await open(path, "w");
+  try {
+    await handle.truncate(size);
+  } finally {
+    await handle.close();
+  }
 }
 
 function createPeFixture() {

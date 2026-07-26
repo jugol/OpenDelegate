@@ -86,12 +86,7 @@ export async function discoverThirdPartyNativeComponents(options) {
 
 async function detectStableNativeFormat(path, root) {
   const before = await lstat(path, { bigint: true });
-  if (
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.size <= 0n ||
-    before.size > BigInt(maximumNativeFileBytes)
-  ) {
+  if (!before.isFile() || before.isSymbolicLink() || before.size > BigInt(maximumNativeFileBytes)) {
     throw new Error("A native discovery candidate is not one bounded regular file.");
   }
   const canonicalPath = await realpath(path);
