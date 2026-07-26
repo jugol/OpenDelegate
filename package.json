@@ -20,6 +20,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
     "release:build": "node tooling/build-release.mjs",
+    "release:finalize": "node --experimental-strip-types tooling/finalize-release-candidate.mjs",
     "release:gate": "node tooling/check-release-evidence.mjs --require-complete",
     "release:sign": "node tooling/sign-release.mjs",
     "release:status": "node tooling/check-release-evidence.mjs",
