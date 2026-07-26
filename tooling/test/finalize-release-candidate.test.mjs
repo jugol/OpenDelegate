@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
-import {
-  createHash,
-  createPublicKey,
-  generateKeyPairSync,
-  verify as verifySignature,
-} from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -14,6 +9,12 @@ import {
   finalizeReleaseCandidate,
   parseReleaseFinalizationArguments,
 } from "../finalize-release-candidate.mjs";
+import { releaseSignerBrokerProtocol } from "../external-release-signer.mjs";
+import {
+  authorizeCredentialUse,
+  describeCredentialAuthorization,
+} from "../release-credential-authorization.mjs";
+import { createReleaseSignerBrokerFixture } from "./support/release-signer-broker-fixture.mjs";
 
 test("finalization archives, externally signs, verifies, and publishes an atomic candidate set", async (t) => {
   const fixture = await createFinalizationFixture(t);
@@ -47,6 +48,11 @@ test("finalization archives, externally signs, verifies, and publishes an atomic
     runnerRecord.outputs.publisherAttestation.sha256,
     result.publisherAttestation.sha256,
   );
+  assert.equal(runnerRecord.runner.brokerEndpointSha256, fixture.signing.broker.endpointSha256);
+  assert.equal(runnerRecord.runner.brokerProtocol, releaseSignerBrokerProtocol);
+  assert.equal(runnerRecord.runner.brokerTransportKeyId, fixture.signing.broker.transportKeyId);
+  assert.equal(Object.hasOwn(runnerRecord.runner, "signerExecutableSha256"), false);
+  assert.equal(Object.hasOwn(runnerRecord.runner, "invocationArtifactSha256"), false);
   assert.equal(JSON.stringify(runnerRecord).includes(fixture.root), false);
   assert.deepEqual(
     (await readdirNames(fixture.destination)).sort(),
@@ -100,7 +106,7 @@ test(
         source: sourceIdentity,
       }),
     });
-    const signing = await createSigningPolicy(workRoot);
+    const signing = await createSigningPolicy(t, workRoot);
     const result = await finalizeReleaseCandidate(
       {
         candidateRoot: candidateFixture.root,
@@ -116,6 +122,11 @@ test(
       },
       {
         assertGitFilesMatchCommit: async () => {},
+        authorizeCredentialUse: async (input) => {
+          const authorization = await authorizeCredentialUse(input);
+          signing.broker.approve(describeCredentialAuthorization(authorization));
+          return authorization;
+        },
         hashRuntimeExecutable: async () => ({
           sha256: metadata.bundledRuntime.executableSha256,
           size: 1,
@@ -231,6 +242,31 @@ test("finalization rejects a dirty or different release source before signing", 
   assert.deepEqual(await readdirNames(different.destination), []);
 });
 
+test("finalization never invokes a signer after a precredential candidate mutation", async (t) => {
+  const fixture = await createFinalizationFixture(t);
+  let signerInvocations = 0;
+
+  await assert.rejects(
+    finalizeReleaseCandidate(fixture.input, {
+      ...fixture.dependencies,
+      authorizeCredentialUse: async (input) => {
+        fixture.integrity.changeCandidateAfterFirstInspection = true;
+        return authorizeCredentialUse(input);
+      },
+      integrity: fixture.integrity,
+      readSourceIdentity: fixture.readSourceIdentity,
+      runner: fixture.runner,
+      async signWithPolicy() {
+        signerInvocations += 1;
+        throw new Error("The signer must not be invoked.");
+      },
+    }),
+    /candidate.*(?:digest|changed)/iu,
+  );
+  assert.equal(signerInvocations, 0);
+  assert.deepEqual(await readdirNames(fixture.destination), []);
+});
+
 test("release finalization arguments require exact absolute pinned inputs", () => {
   const root = process.cwd();
   assert.deepEqual(
@@ -322,7 +358,7 @@ async function createFinalizationFixture(t) {
   );
   await writeFile(join(candidateRoot, "payload.txt"), "immutable candidate\n", "utf8");
 
-  const signing = await createSigningPolicy(root);
+  const signing = await createSigningPolicy(t, root);
   const target = currentTarget();
   const candidateDigest = "a".repeat(64);
   const manifestSha256 = "b".repeat(64);
@@ -366,6 +402,11 @@ async function createFinalizationFixture(t) {
     destination,
     dependencies: {
       assertGitFilesMatchCommit: async () => {},
+      authorizeCredentialUse: async (input) => {
+        const authorization = await authorizeCredentialUse(input);
+        signing.broker.approve(describeCredentialAuthorization(authorization));
+        return authorization;
+      },
       hashRuntimeExecutable: async () => ({
         sha256: runnerExecutableSha256,
         size: 1,
@@ -435,7 +476,20 @@ function createFakeIntegrity(candidate, expectedPublicKey) {
         schemaVersion: 2,
         product: "OpenDelegate",
         domain: "opendelegate.release.publisher-attestation.v2",
-        candidateDigest: inspected.publisherStatement.sha256,
+        candidate: {
+          publisherCandidateStatementSha256: inspected.publisherStatement.sha256,
+          target: inspected.target,
+          productVersion: inspected.productVersion,
+          buildCommit: inspected.buildCommit,
+          auditedSourceCommit: inspected.auditedSourceCommit,
+          acceptanceLedgerSha256: inspected.acceptanceLedgerSha256,
+          candidateAttestationId: inspected.candidateAttestationId,
+          checksumManifestSha256: inspected.checksumManifestSha256,
+          payloadManifestSha256: inspected.payloadManifestSha256,
+          releaseMetadataSha256: inspected.releaseMetadataSha256,
+          nativeComponentsSha256: inspected.nativeComponentsSha256,
+          platformAuthenticitySha256: inspected.platformAuthenticitySha256,
+        },
         archive,
       };
       const canonicalBytes = Buffer.from(`${JSON.stringify(statement, null, 2)}\n`, "utf8");
@@ -504,80 +558,45 @@ function createFakeIntegrity(candidate, expectedPublicKey) {
   };
 }
 
-async function createSigningPolicy(root) {
+async function createSigningPolicy(t, root) {
+  const broker = await createReleaseSignerBrokerFixture(t, {
+    domain: "publisher-attestation-v2",
+    role: "publisher",
+  });
   const signingRoot = join(root, "external-signing");
   await mkdir(signingRoot);
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const privateKeyPath = join(signingRoot, "private.pem");
   const publicKeyPath = join(signingRoot, "public.pem");
-  const helperPath = join(signingRoot, "helper.mjs");
+  const transportPublicKeyPath = join(signingRoot, "transport-public.pem");
   const policyPath = join(signingRoot, "publisher-policy.json");
-  const publicKeyPem = Buffer.from(publicKey.export({ format: "pem", type: "spki" }));
-  await writeFile(privateKeyPath, privateKey.export({ format: "pem", type: "pkcs8" }), {
-    mode: 0o600,
-  });
-  await writeFile(publicKeyPath, publicKeyPem, { mode: 0o644 });
-  await writeFile(
-    helperPath,
-    `import { createHash, createPrivateKey, createPublicKey, sign } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-const chunks = [];
-let total = 0;
-for await (const chunk of process.stdin) {
-  total += chunk.byteLength;
-  chunks.push(chunk);
-}
-const key = createPrivateKey(
-  await readFile(join(dirname(fileURLToPath(import.meta.url)), "private.pem")),
-);
-const publicKey = createPublicKey(key);
-process.stdout.write(\`\${JSON.stringify({
-  schemaVersion: 1,
-  algorithm: "ed25519",
-  keyId: \`sha256:\${createHash("sha256")
-    .update(publicKey.export({ format: "der", type: "spki" }))
-    .digest("hex")}\`,
-  signature: sign(null, Buffer.concat(chunks, total), key).toString("base64url"),
-})}\\n\`);
-`,
-    { mode: 0o700 },
-  );
-  if (process.platform !== "win32") {
-    await Promise.all([
-      chmod(privateKeyPath, 0o600),
-      chmod(publicKeyPath, 0o644),
-      chmod(helperPath, 0o700),
-    ]);
-  }
+  await Promise.all([
+    writeFile(publicKeyPath, broker.releasePublicKeyPem, { mode: 0o644 }),
+    writeFile(transportPublicKeyPath, broker.transportPublicKeyPem, { mode: 0o644 }),
+  ]);
   const policy = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     product: "OpenDelegate",
     role: "publisher",
     publicKey: {
       path: publicKeyPath,
       sha256: await sha256File(publicKeyPath),
     },
-    signer: {
-      executable: {
-        path: process.execPath,
-        sha256: await sha256File(process.execPath),
+    broker: {
+      protocol: releaseSignerBrokerProtocol,
+      endpoint: broker.endpoint,
+      transportPublicKey: {
+        path: transportPublicKeyPath,
+        sha256: await sha256File(transportPublicKeyPath),
       },
-      invocationArtifacts: [
-        {
-          path: helperPath,
-          sha256: await sha256File(helperPath),
-        },
-      ],
       timeoutMs: 30_000,
     },
   };
   await writeFile(policyPath, `${JSON.stringify(policy)}\n`, "utf8");
+  broker.setPolicySha256(await sha256File(policyPath));
   return {
-    keyId: `sha256:${sha256(publicKey.export({ format: "der", type: "spki" }))}`,
+    broker,
+    keyId: broker.releaseKeyId,
     policyPath,
-    publicKeyPem,
+    publicKeyPem: Buffer.from(broker.releasePublicKeyPem),
   };
 }
 

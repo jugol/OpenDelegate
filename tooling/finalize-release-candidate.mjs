@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { REQUIRED_RELEASE_NODE_VERSION } from "./build-release.mjs";
 import { createDeterministicReleaseArchive } from "./create-release-archive.mjs";
+import { authorizeCredentialUse } from "./release-credential-authorization.mjs";
 import {
   assertPinnedReleaseGitFilesMatchCommit,
   pinReleaseGitProvenance,
@@ -237,10 +238,84 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       archive,
       candidate: secondCandidate,
     });
-    const signed = await signWithPinnedReleasePolicy({
+    const revalidateCredentialUse = async () => {
+      const currentCandidate = await integrity.inspectCandidate({
+        expectedManifestSha256: input.expectedManifestSha256,
+        expectedTarget: input.target,
+        root: candidateRoot,
+      });
+      assertCandidateDigest(currentCandidate, input.expectedCandidateDigest);
+      if (
+        currentCandidate.buildCommit !== secondCandidate.buildCommit ||
+        currentCandidate.publisherStatement.sha256 !== secondCandidate.publisherStatement.sha256
+      ) {
+        throw new Error("The release candidate changed before publisher credential use.");
+      }
+      const currentSource = await sourceIdentityReader();
+      assertCleanFinalizationSource(currentSource, secondCandidate.buildCommit);
+      if (
+        currentSource.commit !== sourceBefore.commit ||
+        JSON.stringify(await hashReleaseLogic()) !== JSON.stringify(releaseLogicBefore)
+      ) {
+        throw new Error("The committed release finalization logic changed before signing.");
+      }
+      await assertGitFiles(
+        gitProvenance,
+        releaseLogicBefore.map(({ path }) => path),
+      );
+      await revalidateGit(gitProvenance);
+      await revalidateReleaseRunnerIdentity(runnerIdentity);
+      if ((await runtimeExecutableHasher()).sha256 !== runnerExecutableBefore.sha256) {
+        throw new Error("The release runtime changed before publisher credential use.");
+      }
+      const currentPolicy = await readPinnedReleaseSigningPolicy({
+        expectedRole: "publisher",
+        path: input.signingPolicyPath,
+        sha256: input.signingPolicySha256,
+      });
+      assertPinnedReleaseSigningPolicyExternal(currentPolicy, [
+        candidateRoot,
+        destinationDirectory,
+      ]);
+      if (
+        JSON.stringify(describePinnedReleaseSigningPolicy(currentPolicy)) !==
+        JSON.stringify(policyDescription)
+      ) {
+        throw new Error("The publisher signing policy changed before credential use.");
+      }
+      await Promise.all(
+        Object.values(finalPaths).map((path) =>
+          assertPathAbsent(path, "A release-finalization output"),
+        ),
+      );
+      const currentArchive = await hashStableRegularFile(temporaryPaths.archive);
+      if (currentArchive.sha256 !== archive.sha256 || currentArchive.size !== archive.size) {
+        throw new Error("The release archive changed before publisher credential use.");
+      }
+    };
+    const signingInputSha256 = sha256(composed.signingBytes);
+    const authorization = await (dependencies.authorizeCredentialUse ?? authorizeCredentialUse)({
+      domain: "publisher-attestation-v2",
+      inputSha256: signingInputSha256,
+      revalidate: revalidateCredentialUse,
+      role: "publisher",
+      snapshot: {
+        archiveSha256: archive.sha256,
+        candidateDigest: input.expectedCandidateDigest,
+        gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
+        policySha256: policyDescription.policySha256,
+        publisherKeyId: signingTrust.keyId,
+        releaseLogicSha256: sha256(Buffer.from(JSON.stringify(releaseLogicBefore), "utf8")),
+        runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
+        sourceCommit: sourceBefore.commit,
+      },
+    });
+    const signed = await (dependencies.signWithPolicy ?? signWithPinnedReleasePolicy)({
+      authorization,
       policy: signingPolicy,
       signingBytes: composed.signingBytes,
     });
+    await revalidateCredentialUse();
     const envelope = integrity.composeSignedReleaseEnvelope({
       composed,
       keyId: signed.keyId,
@@ -310,8 +385,9 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
         runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
         gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
         signingInputSha256: signed.inputSha256,
-        signerExecutableSha256: signed.runner.executableSha256,
-        invocationArtifactSha256: signed.runner.invocationArtifactSha256,
+        brokerEndpointSha256: signed.runner.brokerEndpointSha256,
+        brokerProtocol: signed.runner.brokerProtocol,
+        brokerTransportKeyId: signed.runner.brokerTransportKeyId,
       },
       outputs: {
         archive,

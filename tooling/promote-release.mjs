@@ -7,6 +7,7 @@ import {
   readPinnedReleaseSourceIdentity,
   revalidatePinnedReleaseGitProvenance,
 } from "./release-git-provenance.mjs";
+import { authorizeCredentialUse } from "./release-credential-authorization.mjs";
 import {
   preparePromotionAuthorization,
   promotionPreparationExternalRoots,
@@ -159,23 +160,68 @@ export async function promoteRelease(input, dependencies = {}) {
     throw new Error("The promotion trust root is revoked by release policy.");
   }
 
-  await revalidateReleaseRunnerIdentity(runnerIdentity);
-  await revalidateGit(gitProvenance);
-  const signed = await signWithPinnedReleasePolicy({
+  const revalidateCredentialUse = async () => {
+    await revalidatePreparedPromotion(prepared);
+    await revalidateReleaseRunnerIdentity(runnerIdentity);
+    await assertGitFiles(
+      gitProvenance,
+      prepared.releaseLogic.map(({ path }) => path),
+    );
+    await revalidateGit(gitProvenance);
+    await Promise.all([
+      assertPathAbsent(attestationDestination, "A release-promotion output"),
+      assertPathAbsent(runnerRecordDestination, "A release-promotion output"),
+    ]);
+    const currentPolicy = await readPinnedReleaseSigningPolicy({
+      expectedRole: "promotion",
+      path: input.signingPolicyPath,
+      sha256: input.signingPolicySha256,
+    });
+    assertPinnedReleaseSigningPolicyExternal(
+      currentPolicy,
+      promotionPreparationExternalRoots(prepared),
+    );
+    if (
+      JSON.stringify(describePinnedReleaseSigningPolicy(currentPolicy)) !==
+        JSON.stringify(policyDescription) ||
+      prepared.verifiedCandidates.some(({ publisherKeyId }) => publisherKeyId === trust.keyId) ||
+      prepared.revocations.revokedPromotionKeyIds.includes(trust.keyId) ||
+      prepared.revocations.revokedStatementIds.includes(prepared.statementId)
+    ) {
+      throw new Error("The promotion credential authority or revocation policy changed.");
+    }
+  };
+  const signingInputSha256 = digestBytes(prepared.composed.signingBytes);
+  const authorization = await (dependencies.authorizeCredentialUse ?? authorizeCredentialUse)({
+    domain: "promotion-authorization-v1",
+    inputSha256: signingInputSha256,
+    revalidate: revalidateCredentialUse,
+    role: "promotion",
+    snapshot: {
+      gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
+      planSha256: prepared.planSha256,
+      policySha256: policyDescription.policySha256,
+      promotionKeyId: trust.keyId,
+      releaseLogicSha256: digestBytes(Buffer.from(JSON.stringify(prepared.releaseLogic), "utf8")),
+      runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
+      sourceCommit: prepared.source.buildCommit,
+      statementId: prepared.statementId,
+    },
+  });
+  const signed = await (dependencies.signWithPolicy ?? signWithPinnedReleasePolicy)({
+    authorization,
     policy,
     signingBytes: prepared.composed.signingBytes,
   });
   if (signed.role !== "promotion" || signed.keyId !== trust.keyId) {
     throw new Error("The external signer did not preserve the promotion authority.");
   }
-  await revalidateReleaseRunnerIdentity(runnerIdentity);
-  await revalidateGit(gitProvenance);
+  await revalidateCredentialUse();
   const envelope = integrity.composeSignedReleaseEnvelope({
     composed: prepared.composed,
     keyId: signed.keyId,
     signature: signed.signature,
   });
-  await revalidatePreparedPromotion(prepared);
   const recordedAt = (dependencies.now?.() ?? new Date()).toISOString();
   const runnerRecord = createPromotionRunnerRecord({
     envelope,
@@ -295,8 +341,9 @@ function createPromotionRunnerRecord({
       runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
       gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
       signingInputSha256: signed.inputSha256,
-      signerExecutableSha256: signed.runner.executableSha256,
-      invocationArtifactSha256: signed.runner.invocationArtifactSha256,
+      brokerEndpointSha256: signed.runner.brokerEndpointSha256,
+      brokerProtocol: signed.runner.brokerProtocol,
+      brokerTransportKeyId: signed.runner.brokerTransportKeyId,
     },
     outputs: {
       promotionAttestation: {

@@ -29,6 +29,7 @@ import {
 } from "./platform-native-authenticity.mjs";
 import { captureFrozenPayload, verifyFrozenPayload } from "./release-smoke-payload-seal.mjs";
 import { withLinuxReleaseSmokeSecretFixture } from "./release-smoke-secret.mjs";
+import { authorizeCredentialUse } from "./release-credential-authorization.mjs";
 import {
   assertPinnedReleaseGitFilesMatchCommit,
   pinReleaseGitProvenance,
@@ -36,6 +37,7 @@ import {
   revalidatePinnedReleaseGitProvenance,
   runPinnedReleaseGit,
 } from "./release-git-provenance.mjs";
+import { hashStableRegularFile } from "./release-tooling-io.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const releaseToolRoot = resolve(dirname(currentFile), "..");
@@ -178,6 +180,7 @@ export function parseReleaseArguments(values) {
   let internalPreview = false;
   let platformSigningPolicy;
   let platformSigningPolicySha256;
+  let runnerExecutableSha256;
 
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
@@ -206,6 +209,18 @@ export function parseReleaseArguments(values) {
         throw new Error("--git-executable-sha256 may be specified only once.");
       }
       gitExecutableSha256 = candidate;
+      index += 1;
+      continue;
+    }
+    if (value === "--runner-executable-sha256") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || !sha256Pattern.test(candidate)) {
+        throw new Error("--runner-executable-sha256 requires a lowercase SHA-256.");
+      }
+      if (runnerExecutableSha256 !== undefined) {
+        throw new Error("--runner-executable-sha256 may be specified only once.");
+      }
+      runnerExecutableSha256 = candidate;
       index += 1;
       continue;
     }
@@ -265,9 +280,12 @@ export function parseReleaseArguments(values) {
   if ((gitExecutable === undefined) !== (gitExecutableSha256 === undefined)) {
     throw new Error("The Git executable path and lowercase SHA-256 must be provided together.");
   }
-  if ((!internalPreview || platformSigningPolicy !== undefined) && gitExecutable === undefined) {
+  if (
+    (!internalPreview || platformSigningPolicy !== undefined) &&
+    (gitExecutable === undefined || runnerExecutableSha256 === undefined)
+  ) {
     throw new Error(
-      "Supported or credential-bearing release builds require --git-executable and --git-executable-sha256.",
+      "Supported or credential-bearing release builds require pinned Git and Node runner executables.",
     );
   }
   return {
@@ -276,6 +294,7 @@ export function parseReleaseArguments(values) {
     internalPreview,
     ...(gitExecutable === undefined ? {} : { gitExecutable }),
     ...(gitExecutableSha256 === undefined ? {} : { gitExecutableSha256 }),
+    ...(runnerExecutableSha256 === undefined ? {} : { runnerExecutableSha256 }),
     ...(platformSigningPolicy === undefined ? {} : { platformSigningPolicy }),
     ...(platformSigningPolicySha256 === undefined ? {} : { platformSigningPolicySha256 }),
   };
@@ -1075,6 +1094,7 @@ async function createFileEntries(root, excluded) {
 
 export async function buildRelease(options, dependencies = {}) {
   assertReleaseHost();
+  const runnerIdentity = await pinBuildRunnerIdentity(options, dependencies);
   const gitProvenance = await pinBuildGitProvenance(options, dependencies);
   const source =
     gitProvenance === null
@@ -1126,6 +1146,20 @@ export async function buildRelease(options, dependencies = {}) {
   await mkdir(parent, { recursive: true });
   const staging = join(parent, `.od-${process.pid}-${randomUUID().slice(0, 8)}`);
   await mkdir(staging);
+  const authorizeStagedPlatformCredentialUse =
+    platformAuthenticityPolicyInput === undefined
+      ? undefined
+      : createBuildPlatformCredentialAuthorizer({
+          dependencies,
+          destination,
+          gitProvenance,
+          ledgerDigest: createHash("sha256").update(ledgerText).digest("hex"),
+          ledgerPath,
+          platformAuthenticityPolicyInput,
+          runnerIdentity,
+          source,
+          staging,
+        });
 
   try {
     await withPinnedPnpm(parent, async (bootstrapPnpmCli) => {
@@ -1170,6 +1204,7 @@ export async function buildRelease(options, dependencies = {}) {
             summary,
             supportStatus,
             platformAuthenticityPolicyInput,
+            authorizePlatformCredentialUse: authorizeStagedPlatformCredentialUse,
           });
         },
       );
@@ -1184,6 +1219,7 @@ export async function buildRelease(options, dependencies = {}) {
       await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
       await revalidatePinnedReleaseGitProvenance(gitProvenance);
     }
+    await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
     if (finalSource.dirty || finalSource.commit !== source.commit) {
       throw new Error("The source checkout changed while the bundle was assembled.");
     }
@@ -1294,6 +1330,7 @@ async function assembleRelease({
   summary,
   supportStatus,
   platformAuthenticityPolicyInput,
+  authorizePlatformCredentialUse,
 }) {
   const assemblyRequire = createRequire(join(assemblySourceRoot, "package.json"));
   const assemblyPnpmCli = join(dirname(assemblyRequire.resolve("pnpm")), "bin", "pnpm.cjs");
@@ -1411,6 +1448,7 @@ async function assembleRelease({
   const buildId = createBuildId(source, supportStatus);
   await writeLaunchers(staging);
   const finalizedNativeAuthenticity = await finalizePlatformNativeAuthenticity({
+    authorizeCredentialUse: authorizePlatformCredentialUse,
     platform: process.platform,
     architecture: process.arch,
     nativeComponents: stagedNativeComponents,
@@ -2689,6 +2727,113 @@ async function pinBuildGitProvenance(options, dependencies = {}) {
   });
 }
 
+async function pinBuildRunnerIdentity(options, dependencies = {}) {
+  const expectedSha256 = options.runnerExecutableSha256;
+  if (expectedSha256 === undefined) {
+    if (!options.internalPreview || options.platformSigningPolicy !== undefined) {
+      throw new Error(
+        "Supported or credential-bearing release builds require a pinned Node runner executable.",
+      );
+    }
+    return null;
+  }
+  if (!sha256Pattern.test(expectedSha256)) {
+    throw new Error("The Node runner executable requires a lowercase SHA-256 pin.");
+  }
+  if (process.versions.node !== REQUIRED_RELEASE_NODE_VERSION) {
+    throw new Error(
+      `The pinned release runner requires Node.js ${REQUIRED_RELEASE_NODE_VERSION}; received ${process.versions.node}.`,
+    );
+  }
+  const identity = await hashBuildRunnerExecutable(dependencies);
+  if (identity.sha256 !== expectedSha256) {
+    throw new Error("The Node runner executable does not match its required SHA-256 pin.");
+  }
+  return Object.freeze(identity);
+}
+
+async function revalidateBuildRunnerIdentity(identity, dependencies = {}) {
+  if (identity === null) {
+    return;
+  }
+  if (process.versions.node !== REQUIRED_RELEASE_NODE_VERSION) {
+    throw new Error("The pinned Node runner version changed during release assembly.");
+  }
+  const current = await hashBuildRunnerExecutable(dependencies);
+  if (current.sha256 !== identity.sha256 || current.size !== identity.size) {
+    throw new Error("The pinned Node runner executable changed during release assembly.");
+  }
+}
+
+async function hashBuildRunnerExecutable(dependencies) {
+  const identity = await (
+    dependencies.hashRuntimeExecutable ?? (() => hashStableRegularFile(process.execPath))
+  )();
+  if (
+    typeof identity !== "object" ||
+    identity === null ||
+    !sha256Pattern.test(identity.sha256) ||
+    !Number.isSafeInteger(identity.size) ||
+    identity.size < 1
+  ) {
+    throw new Error("The Node runner executable identity is invalid.");
+  }
+  return { sha256: identity.sha256, size: identity.size };
+}
+
+function createBuildPlatformCredentialAuthorizer({
+  dependencies,
+  destination,
+  gitProvenance,
+  ledgerDigest,
+  ledgerPath,
+  platformAuthenticityPolicyInput,
+  runnerIdentity,
+  source,
+  staging,
+}) {
+  if (gitProvenance === null || runnerIdentity === null) {
+    throw new Error("Platform credential use requires pinned Git and Node runner identities.");
+  }
+  return async (request) =>
+    (dependencies.authorizeCredentialUse ?? authorizeCredentialUse)({
+      domain: request.domain,
+      inputSha256: request.inputSha256,
+      revalidate: async () => {
+        await request.revalidate();
+        await platformAuthenticityPolicyInput.verifyStable();
+        await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
+        await revalidatePinnedReleaseGitProvenance(gitProvenance);
+        await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
+        const currentSource = await readPinnedReleaseSourceIdentity(gitProvenance);
+        if (currentSource.dirty || currentSource.commit !== source.commit) {
+          throw new Error("The source checkout changed before platform credential use.");
+        }
+        await assertCommittedReleaseRunner(currentSource, gitProvenance);
+        const currentLedgerDigest = createHash("sha256")
+          .update(await readFile(ledgerPath))
+          .digest("hex");
+        if (currentLedgerDigest !== ledgerDigest) {
+          throw new Error("The release evidence ledger changed before platform credential use.");
+        }
+        await Promise.all([
+          assertPathAbsent(destination),
+          assertPathAbsent(join(staging, "native-components.json")),
+          assertPathAbsent(join(staging, "platform-authenticity.json")),
+        ]);
+      },
+      role: request.role,
+      snapshot: {
+        ...request.snapshot,
+        gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
+        ledgerSha256: ledgerDigest,
+        runnerExecutableSha256: runnerIdentity.sha256,
+        sourceCommit: source.commit,
+        target: `${process.platform}-${process.arch}`,
+      },
+    });
+}
+
 function formatCounts(counts) {
   return Object.entries(counts)
     .sort(([left], [right]) => compareCodeUnits(left, right))
@@ -2799,9 +2944,9 @@ function printHelp() {
   process.stdout.write(`Build an OpenDelegate platform bundle.
 
 Usage:
-  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256
+  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256 --runner-executable-sha256 LOWERCASE_SHA256
   node tooling/build-release.mjs --destination ABSOLUTE_PATH --internal-preview
-  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256 --platform-signing-policy ABSOLUTE_PATH --platform-signing-policy-sha256 LOWERCASE_SHA256
+  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256 --runner-executable-sha256 LOWERCASE_SHA256 --platform-signing-policy ABSOLUTE_PATH --platform-signing-policy-sha256 LOWERCASE_SHA256
 
 An incomplete first-milestone ledger can only produce a clearly marked unsupported
 internal preview. Existing destinations and paths inside the source checkout are
@@ -2810,6 +2955,7 @@ always rejected.
 }
 
 async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) {
+  const runnerIdentity = await pinBuildRunnerIdentity(options, dependencies);
   const gitProvenance = await pinBuildGitProvenance(options, dependencies);
   const source =
     gitProvenance === null
@@ -2820,6 +2966,7 @@ async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) 
     await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
     await revalidatePinnedReleaseGitProvenance(gitProvenance);
   }
+  await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
   const runnerParent = await mkdtemp(join(tmpdir(), "opendelegate-release-runner-"));
   try {
     const runnerRoot = await createCommittedSourceSnapshot(
@@ -2848,6 +2995,7 @@ async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) 
         `The committed release runner exited without producing a bundle (exit ${String(exitCode)}).`,
       );
     }
+    await revalidateBuildRunnerIdentity(runnerIdentity, dependencies);
   } finally {
     await rm(runnerParent, { force: true, recursive: true });
   }

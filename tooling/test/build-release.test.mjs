@@ -349,6 +349,7 @@ test("release arguments require an explicit absolute destination", () => {
   const signingPolicySha256 = "a".repeat(64);
   const gitExecutable = resolve("git");
   const gitExecutableSha256 = "b".repeat(64);
+  const runnerExecutableSha256 = "c".repeat(64);
   assert.throws(() => parseReleaseArguments([]), /--destination is required/);
   assert.deepEqual(
     parseReleaseArguments([
@@ -359,6 +360,8 @@ test("release arguments require an explicit absolute destination", () => {
       gitExecutable,
       "--git-executable-sha256",
       gitExecutableSha256,
+      "--runner-executable-sha256",
+      runnerExecutableSha256,
       "--platform-signing-policy",
       signingPolicy,
       "--platform-signing-policy-sha256",
@@ -372,6 +375,7 @@ test("release arguments require an explicit absolute destination", () => {
       internalPreview: true,
       platformSigningPolicy: signingPolicy,
       platformSigningPolicySha256: signingPolicySha256,
+      runnerExecutableSha256,
     },
   );
   assert.deepEqual(
@@ -384,7 +388,18 @@ test("release arguments require an explicit absolute destination", () => {
   );
   assert.throws(
     () => parseReleaseArguments(["--destination", resolve("release")]),
-    /require --git-executable/u,
+    /require pinned Git and Node runner executables/u,
+  );
+  assert.throws(
+    () =>
+      parseReleaseArguments([
+        "--destination",
+        resolve("release"),
+        "--internal-preview",
+        "--runner-executable-sha256",
+        runnerExecutableSha256.toUpperCase(),
+      ]),
+    /requires a lowercase SHA-256/u,
   );
   assert.throws(
     () =>

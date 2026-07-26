@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { discoverThirdPartyNativeComponents } from "./native-payload-inventory.mjs";
+import { consumeCredentialAuthorization } from "./release-credential-authorization.mjs";
 
 const supportedPlatforms = new Set(["darwin", "linux", "win32"]);
 const supportedArchitectures = new Set(["arm64", "x64"]);
@@ -175,18 +176,22 @@ export async function finalizePlatformNativeAuthenticity(options) {
   let verification;
   if (policy.mode === "developer-id" || policy.mode === "authenticode") {
     ({ publicIdentity, tool } = await authenticateComponents({
+      authorizeCredentialUse: options.authorizeCredentialUse,
       componentFiles,
       platform,
       policy,
+      policyInput: options.policyInput,
       runner,
       stagingRoot,
     }));
     verification = "signed";
   } else if (policy.mode === "ad-hoc" || policy.mode === "self-signed") {
     ({ publicIdentity, tool } = await authenticateComponents({
+      authorizeCredentialUse: options.authorizeCredentialUse,
       componentFiles,
       platform,
       policy,
+      policyInput: options.policyInput,
       runner,
       stagingRoot,
     }));
@@ -202,9 +207,11 @@ export async function finalizePlatformNativeAuthenticity(options) {
     policy.mode === "self-signed"
   ) {
     await authenticateThirdPartyComponents({
+      authorizeCredentialUse: options.authorizeCredentialUse,
       componentFiles: thirdPartyFiles,
       platform,
       policy,
+      policyInput: options.policyInput,
       runner,
       stagingRoot,
     });
@@ -447,7 +454,15 @@ export function createRealPlatformSigningRunner({ execute = executeSigningTool }
   });
 }
 
-async function authenticateComponents({ componentFiles, platform, policy, runner, stagingRoot }) {
+async function authenticateComponents({
+  authorizeCredentialUse,
+  componentFiles,
+  platform,
+  policy,
+  policyInput,
+  runner,
+  stagingRoot,
+}) {
   if (
     runner === null ||
     typeof runner !== "object" ||
@@ -477,6 +492,15 @@ async function authenticateComponents({ componentFiles, platform, policy, runner
     throw new Error("The platform signing tool changed after its allowlist was verified.");
   }
   for (const component of componentFiles) {
+    await authorizePlatformSigningCredential({
+      authorizeCredentialUse,
+      component,
+      pinnedTool,
+      platform,
+      policy,
+      policyInput,
+      stagingRoot,
+    });
     await runner.signAndVerify(signingRunnerInput(component, platform, policy, pinnedTool));
   }
   for (const component of componentFiles) {
@@ -507,9 +531,11 @@ async function authenticateComponents({ componentFiles, platform, policy, runner
 }
 
 async function authenticateThirdPartyComponents({
+  authorizeCredentialUse,
   componentFiles,
   platform,
   policy,
+  policyInput,
   runner,
   stagingRoot,
 }) {
@@ -557,6 +583,16 @@ async function authenticateThirdPartyComponents({
         stagingRoot,
       });
     } else {
+      await authorizePlatformSigningCredential({
+        authorizeCredentialUse,
+        component,
+        entitlements,
+        pinnedTool,
+        platform,
+        policy,
+        policyInput,
+        stagingRoot,
+      });
       await runner.signAndVerify(
         signingRunnerInput(component, platform, policy, pinnedTool, entitlements?.path),
       );
@@ -593,6 +629,69 @@ async function authenticateThirdPartyComponents({
       "macOS entitlements file",
     );
   }
+}
+
+async function authorizePlatformSigningCredential({
+  authorizeCredentialUse,
+  component,
+  entitlements = null,
+  pinnedTool,
+  platform,
+  policy,
+  policyInput,
+  stagingRoot,
+}) {
+  if (typeof authorizeCredentialUse !== "function") {
+    throw new Error("Platform-native signing requires a precredential authorization callback.");
+  }
+  const inputSha256 = component.inputSha256?.startsWith("sha256:")
+    ? component.inputSha256.slice("sha256:".length)
+    : undefined;
+  if (typeof inputSha256 !== "string" || !sha256Pattern.test(inputSha256)) {
+    throw new Error("The platform-native signing input digest is invalid.");
+  }
+  const domain =
+    platform === "darwin" ? "platform-native-macos-sign-v1" : "platform-native-windows-sign-v1";
+  const revalidate = async () => {
+    await verifyPolicyInputStable(policyInput);
+    component.absolutePath = await requireContainedRegularFile(stagingRoot, component.path);
+    const currentInput = await sha256StableFile(
+      component.absolutePath,
+      maximumNativeComponentBytes,
+      "native component before credential use",
+    );
+    if (currentInput !== inputSha256) {
+      throw new Error("A native component changed before platform credential use.");
+    }
+    await assertPinnedFileUnchanged(pinnedTool, maximumSigningToolBytes, "platform signing tool");
+    if (entitlements !== null) {
+      await assertPinnedFileUnchanged(
+        entitlements,
+        maximumEntitlementsBytes,
+        "macOS entitlements file",
+      );
+    }
+    for (const name of manifestNames) {
+      await assertPathAbsent(join(stagingRoot, name), name);
+    }
+  };
+  const authorization = await authorizeCredentialUse({
+    domain,
+    inputSha256,
+    revalidate,
+    role: "platform",
+    snapshot: {
+      componentKind: component.kind,
+      componentSha256: inputSha256,
+      policySha256: policy.sha256,
+      toolSha256: pinnedTool.sha256,
+    },
+  });
+  consumeCredentialAuthorization(authorization, {
+    domain,
+    inputSha256,
+    role: "platform",
+  });
 }
 
 async function verifyFinalThirdPartyComponents({

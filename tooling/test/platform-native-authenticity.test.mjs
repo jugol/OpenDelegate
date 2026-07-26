@@ -22,9 +22,11 @@ import {
   readPlatformAuthenticityPolicy,
   verifyFinalPlatformNativeAuthenticity,
 } from "../platform-native-authenticity.mjs";
+import { authorizeCredentialUse } from "../release-credential-authorization.mjs";
 import { inspectBundleForPublisherSigning } from "../sign-release.mjs";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const authorizePlatformCredentialUse = (input) => authorizeCredentialUse(input);
 
 test("candidate signing mutates every native component before exact manifests are frozen", async (t) => {
   const fixture = await createNativeFixture(t, "darwin", "arm64");
@@ -50,6 +52,7 @@ test("candidate signing mutates every native component before exact manifests ar
 
   const result = await finalizePlatformNativeAuthenticity({
     architecture: "arm64",
+    authorizeCredentialUse: authorizePlatformCredentialUse,
     nativeComponents: fixture.nativeComponents,
     platform: "darwin",
     policyInput,
@@ -373,6 +376,7 @@ test("ad-hoc and self-signed preview mechanics remain explicitly support-ineligi
         : await createWindowsPolicy(fixture, mode);
     const result = await finalizePlatformNativeAuthenticity({
       architecture: "x64",
+      authorizeCredentialUse: authorizePlatformCredentialUse,
       nativeComponents: fixture.nativeComponents,
       platform,
       policyInput: await createPinnedPolicyInput(fixture, policy),
@@ -477,6 +481,7 @@ test("final native sealing rejects a component changed by packaged smoke", async
   };
   const finalized = await finalizePlatformNativeAuthenticity({
     architecture: "arm64",
+    authorizeCredentialUse: authorizePlatformCredentialUse,
     nativeComponents: fixture.nativeComponents,
     platform: "darwin",
     policyInput,
@@ -499,6 +504,47 @@ test("final native sealing rejects a component changed by packaged smoke", async
     }),
     /digest no longer matches its frozen native manifest/u,
   );
+});
+
+test("platform signing never invokes a signer after its component changes before authorization", async (t) => {
+  const fixture = await createNativeFixture(t, "darwin", "arm64");
+  const policy = await createMacPolicy(fixture, "developer-id");
+  const policyInput = await createPinnedPolicyInput(fixture, policy);
+  const firstComponent = join(
+    fixture.stagingRoot,
+    ...fixture.nativeComponents.components[0].path.split("/"),
+  );
+  let signerInvocations = 0;
+  let mutated = false;
+
+  await assert.rejects(
+    finalizePlatformNativeAuthenticity({
+      architecture: "arm64",
+      authorizeCredentialUse: async (input) => {
+        if (!mutated) {
+          mutated = true;
+          await appendFile(firstComponent, "changed-before-authorization\n", "utf8");
+        }
+        return authorizeCredentialUse(input);
+      },
+      nativeComponents: fixture.nativeComponents,
+      platform: "darwin",
+      policyInput,
+      runner: {
+        async readToolVersion() {
+          return policy.tool.version;
+        },
+        async signAndVerify() {
+          signerInvocations += 1;
+        },
+        async verify() {},
+      },
+      stagingRoot: fixture.stagingRoot,
+      supportStatus: "release-candidate",
+    }),
+    /changed before platform credential use/u,
+  );
+  assert.equal(signerInvocations, 0);
 });
 
 test("real macOS and Windows adapters use only public keychain or certificate-store selectors", async (t) => {
