@@ -2594,6 +2594,30 @@ export function evaluateSmokeShutdown(input) {
   };
 }
 
+export async function waitForPackagedMainReadiness({
+  exited,
+  output,
+  platform = process.platform,
+  wait = waitUntil,
+}) {
+  const phaseTimeoutMilliseconds = platform === "win32" ? 60_000 : 20_000;
+  const initialized = () => output().includes('"event":"main.initialized"');
+  const ready = () => output().includes('"event":"owner.claim.ready"');
+
+  await wait(() => initialized() || ready() || exited(), phaseTimeoutMilliseconds);
+  if (exited() || (!initialized() && !ready())) {
+    throw new Error("The packaged init smoke test exited before initialization readiness.");
+  }
+  if (ready()) {
+    return;
+  }
+
+  await wait(() => ready() || exited(), phaseTimeoutMilliseconds);
+  if (exited() || !ready()) {
+    throw new Error("The packaged init smoke test exited before owner-claim readiness.");
+  }
+}
+
 async function smokeBundle(staging, buildId, productVersion) {
   assertProductVersion(productVersion);
   const runtime = join(staging, "runtime", process.platform === "win32" ? "node.exe" : "node");
@@ -2764,13 +2788,10 @@ async function runPackagedMainSmoke({
   let forcedTermination = false;
   let shutdownEvaluation;
   try {
-    await waitUntil(
-      () => stdout.includes('"event":"owner.claim.ready"') || hasChildExited(child),
-      20_000,
-    );
-    if (hasChildExited(child) || !stdout.includes('"event":"owner.claim.ready"')) {
-      throw new Error("The packaged init smoke test exited before readiness.");
-    }
+    await waitForPackagedMainReadiness({
+      exited: () => hasChildExited(child),
+      output: () => stdout,
+    });
 
     const [health, admin, claim] = await Promise.all([
       fetch("http://127.0.0.1:4380/health/live", {

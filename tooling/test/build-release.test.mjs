@@ -64,6 +64,7 @@ import {
   validateReleaseAttestationDiff,
   verifyPinnedPnpmArchive,
   verifyRunningReleaseToolFiles,
+  waitForPackagedMainReadiness,
   withCommittedSourceSnapshot,
   writeBundleReadmes,
   writeIntegrityManifests,
@@ -2078,6 +2079,62 @@ test("release smoke accepts only a natural zero exit with the shutdown marker", 
     assert.equal(result.accepted, false);
     assert.equal(result.naturalExit && result.markerObserved, false);
   }
+});
+
+test("packaged Main smoke keeps Windows ACL initialization and listener readiness separately bounded", async () => {
+  let output = "";
+  const observedTimeouts = [];
+  const advances = [
+    () => {
+      output = '{"event":"main.initialized"}\n';
+    },
+    () => {
+      output += '{"event":"owner.claim.ready"}\n';
+    },
+  ];
+
+  await waitForPackagedMainReadiness({
+    exited: () => false,
+    output: () => output,
+    platform: "win32",
+    wait: async (predicate, timeoutMilliseconds) => {
+      observedTimeouts.push(timeoutMilliseconds);
+      advances.shift()?.();
+      assert.equal(predicate(), true);
+    },
+  });
+
+  assert.deepEqual(observedTimeouts, [60_000, 60_000]);
+});
+
+test("packaged Main smoke retains the portable readiness bound and fails on an early exit", async () => {
+  let output = "";
+  const observedTimeouts = [];
+
+  await waitForPackagedMainReadiness({
+    exited: () => false,
+    output: () => output,
+    platform: "linux",
+    wait: async (predicate, timeoutMilliseconds) => {
+      observedTimeouts.push(timeoutMilliseconds);
+      output = '{"event":"owner.claim.ready"}\n';
+      assert.equal(predicate(), true);
+    },
+  });
+  assert.deepEqual(observedTimeouts, [20_000]);
+
+  await assert.rejects(
+    waitForPackagedMainReadiness({
+      exited: () => true,
+      output: () => "",
+      platform: "win32",
+      wait: async (predicate, timeoutMilliseconds) => {
+        assert.equal(timeoutMilliseconds, 60_000);
+        assert.equal(predicate(), true);
+      },
+    }),
+    /exited before initialization readiness/u,
+  );
 });
 
 test("portable release payloads reject directory symlinks or Windows junctions", async (t) => {
