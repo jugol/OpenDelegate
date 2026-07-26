@@ -79,12 +79,12 @@ gate 都不能豁免。
 
 Release 术语刻意采用严格定义：
 
-| 标签                        | 含义                                                   |
-| --------------------------- | ------------------------------------------------------ |
-| Public source pre-alpha     | 可审查的源代码；不受支持，且不是完整安装               |
-| `internal-preview-*` bundle | 本地验证载荷；即使本地 smoke test 通过，也始终不受支持 |
-| `release-candidate` bundle  | 36 项 gate 全部通过，但 Artifact 尚未被提升或获得支持  |
-| `released`                  | 经过独立证明并通过受支持渠道发布的 Artifact            |
+| 标签                        | 含义                                                                                                                         |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Public source pre-alpha     | 可审查的源代码；不受支持，且不是完整安装                                                                                     |
+| `internal-preview-*` bundle | 本地验证载荷；即使本地 smoke test 通过，也始终不受支持                                                                       |
+| `release-candidate` bundle  | 36 项 gate 全部通过，但 Artifact 尚未被提升或获得支持                                                                        |
+| `released`                  | 根据有效的不可变 Candidate，以及可信发布者、平台真实性、Promotion、Supported Channel 和撤销策略的完整 Chain 计算出的有效状态 |
 
 目前不存在任何 `released` Artifact。
 
@@ -147,10 +147,12 @@ pnpm release:gate
 pnpm release:build --destination ABSOLUTE_PATH
 ```
 
-完整的目标 bundle 通过打包 smoke test 后，可使用 `pnpm release:sign`
-创建分离的 Ed25519 发布者 attestation，以及通过独立渠道配置的公开信任根。签名绝不会把
-`internal-preview-*` 或 `release-candidate` 变成受支持的 Release；请参阅
-[发布者 attestation 流程](docs/release/README.md#publisher-attestation-for-service-installation)。
+`pnpm release:sign` 被刻意限制为仅用于已明确确认且不受支持的 Preview，并会拒绝 Release
+Candidate。36 项 Criterion Gate 全部完成后，干净且 Hash 固定的目标平台原生 Runner 使用
+`pnpm release:finalize` 冻结每个 Production
+Candidate，并创建 Candidate-v2 发布者 Attestation。只有对已配置的外部 Promotion 和 Supported Channel
+Receipt Chain 的验证，才能使该不可变 Candidate 的有效状态成为 `released`；请参阅
+[Release Trust 流程](docs/release/README.md#supported-promotion-trust-path)。
 
 只有在全部 36 项实现和真实证据 gate 都通过后，这两个命令才可以成功。请参阅
 [精确的首个里程碑支持矩阵](docs/release/SUPPORT_MATRIX.md)、

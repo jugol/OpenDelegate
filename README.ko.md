@@ -87,12 +87,12 @@ Worker는 Native Windows Service, Restart, Permission 또는 Computer Use 릴리
 
 릴리스 관련 용어는 의도적으로 좁은 의미를 가집니다.
 
-| Label                       | 의미                                                               |
-| --------------------------- | ------------------------------------------------------------------ |
-| Public source pre-alpha     | 검토 가능한 소스. 지원되지 않으며 완성된 설치본이 아님             |
-| `internal-preview-*` bundle | 로컬 검증 Payload. 로컬 Smoke Test를 통과해도 항상 지원되지 않음   |
-| `release-candidate` bundle  | 36개 Gate를 모두 통과했지만 아직 승격되거나 지원되지 않은 Artifact |
-| `released`                  | 별도로 Attestation을 거쳐 지원되는 Channel에 게시된 Artifact       |
+| Label                       | 의미                                                                                                                                          |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public source pre-alpha     | 검토 가능한 소스. 지원되지 않으며 완성된 설치본이 아님                                                                                        |
+| `internal-preview-*` bundle | 로컬 검증 Payload. 로컬 Smoke Test를 통과해도 항상 지원되지 않음                                                                              |
+| `release-candidate` bundle  | 36개 Gate를 모두 통과했지만 아직 승격되거나 지원되지 않은 Artifact                                                                            |
+| `released`                  | 유효한 불변 Candidate와 신뢰된 게시자, Platform Authenticity, Promotion, Supported Channel, Revocation Policy 전체 Chain으로 계산된 실효 상태 |
 
 현재 `released` Artifact는 없습니다.
 
@@ -163,11 +163,12 @@ pnpm release:gate
 pnpm release:build --destination ABSOLUTE_PATH
 ```
 
-완전한 대상 Bundle이 패키지 Smoke를 통과한 뒤에는 `pnpm release:sign`으로 분리된 Ed25519 게시자
-Attestation과 별도로 배포할 공개 Trust Root를 만들 수 있습니다. 서명은 `internal-preview-*`나
-`release-candidate`를 지원 릴리스로 바꾸지 않습니다. 자세한 절차는
-[게시자 Attestation 절차](docs/release/README.md#publisher-attestation-for-service-installation)를
-참고하십시오.
+`pnpm release:sign`은 명시적으로 확인된 지원되지 않는 Preview에만 의도적으로 제한되며 Release
+Candidate를 거부합니다. 36개 Criterion Gate가 완료되면 깨끗하고 Hash가 고정된 대상 네이티브 Runner가
+`pnpm release:finalize`를 사용해 각 Production Candidate를 Freeze하고 Candidate-v2 게시자
+Attestation을 생성합니다. 구성된 외부 Promotion과 Supported Channel Receipt Chain을 검증해야만 이
+불변 Candidate의 실효 상태가 `released`가 될 수 있습니다. 자세한 내용은
+[Release Trust 절차](docs/release/README.md#supported-promotion-trust-path)를 참고하십시오.
 
 두 명령은 36개 구현 Gate와 실제 증거 Gate를 모두 통과한 뒤에만 성공할 수 있습니다.
 [정확한 첫 Milestone 지원 Matrix](docs/release/SUPPORT_MATRIX.md),

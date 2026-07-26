@@ -83,12 +83,12 @@ Criteria はすべて証拠を必要とし、Platform または Computer Use の
 
 リリースに関する用語は、意図的に狭い意味で使用しています。
 
-| Label                       | 意味                                                                           |
-| --------------------------- | ------------------------------------------------------------------------------ |
-| Public source pre-alpha     | レビュー可能なソース。サポート対象外で、完成したインストールではない           |
-| `internal-preview-*` bundle | ローカル検証用 Payload。ローカル Smoke に合格しても常にサポート対象外          |
-| `release-candidate` bundle  | 36 個の Gate をすべて通過しているが、まだ昇格もサポートもされていない Artifact |
-| `released`                  | 個別に Attestation され、サポート対象 Channel を通じて公開された Artifact      |
+| Label                       | 意味                                                                                                                                                           |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public source pre-alpha     | レビュー可能なソース。サポート対象外で、完成したインストールではない                                                                                           |
+| `internal-preview-*` bundle | ローカル検証用 Payload。ローカル Smoke に合格しても常にサポート対象外                                                                                          |
+| `release-candidate` bundle  | 36 個の Gate をすべて通過しているが、まだ昇格もサポートもされていない Artifact                                                                                 |
+| `released`                  | 有効な不変 Candidate と、信頼された Publisher、Platform Authenticity、Promotion、Supported Channel、Revocation Policy の完全な Chain から算出される実効 Status |
 
 現在、`released` Artifact は存在しません。
 
@@ -161,11 +161,14 @@ pnpm release:gate
 pnpm release:build --destination ABSOLUTE_PATH
 ```
 
-完全な対象 Bundle が Packaged Smoke に合格した後、`pnpm release:sign` で分離された Ed25519 Publisher
-Attestation と、別経路で配布する Public Trust Root を作成できます。署名によって `internal-preview-*`
-や `release-candidate` がサポート対象の Release に変わることはありません。詳細は
-[Publisher Attestation の手順](docs/release/README.md#publisher-attestation-for-service-installation)
-を参照してください。
+`pnpm release:sign` は、明示的に確認されたサポート対象外の Preview 専用に意図的に制限され、Release
+Candidate を拒否します。36 個の Criterion
+Gate が完了すると、Clean かつ Hash-pinned な対象ネイティブ Runner が `pnpm release:finalize`
+を使用して各 Production Candidate を Freeze し、Candidate-v2 Publisher
+Attestation を作成します。構成済みの外部 Promotion と Supported Channel
+Receipt の Chain を検証した場合にのみ、その不変 Candidate の実効 Status が `released`
+になります。詳細は
+[Release Trust の手順](docs/release/README.md#supported-promotion-trust-path)を参照してください。
 
 どちらのコマンドも、36 個すべての Implementation Gate と Live-evidence
 Gate が通過した後にのみ成功します。[正確な First Milestone Support Matrix](docs/release/SUPPORT_MATRIX.md)、

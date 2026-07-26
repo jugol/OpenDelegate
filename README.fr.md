@@ -95,12 +95,12 @@ preuves ; aucune gate de plateforme ou de Computer Use ne peut être contournée
 
 Les termes de release ont volontairement des significations précises :
 
-| Libellé                     | Signification                                                                                         |
-| --------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Public source pre-alpha     | Code source examinable ; non pris en charge et non installé complètement                              |
-| Bundle `internal-preview-*` | Charge utile de validation locale ; toujours non prise en charge, même si le smoke test local réussit |
-| Bundle `release-candidate`  | Les 36 gates ont réussi, mais l’Artifact n’est pas encore promu ni pris en charge                     |
-| `released`                  | Artifact attesté séparément et publié par un canal pris en charge                                     |
+| Libellé                     | Signification                                                                                                                                                                                                   |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public source pre-alpha     | Code source examinable ; non pris en charge et non installé complètement                                                                                                                                        |
+| Bundle `internal-preview-*` | Charge utile de validation locale ; toujours non prise en charge, même si le smoke test local réussit                                                                                                           |
+| Bundle `release-candidate`  | Les 36 gates ont réussi, mais l’Artifact n’est pas encore promu ni pris en charge                                                                                                                               |
+| `released`                  | Statut effectif calculé à partir d’un Candidate immuable valide et de la chaîne complète et fiable d’éditeur, d’authenticité de plateforme, de promotion, de canal pris en charge et de politique de révocation |
 
 Aucun Artifact `released` n’existe actuellement.
 
@@ -178,11 +178,13 @@ pnpm release:gate
 pnpm release:build --destination ABSOLUTE_PATH
 ```
 
-Après qu’un bundle cible complet a réussi le smoke test empaqueté, `pnpm release:sign` peut créer
-son attestation Ed25519 détachée de l’éditeur et une racine de confiance publique à distribuer
-séparément. La signature ne transforme jamais un `internal-preview-*` ou un `release-candidate` en
-release prise en charge ; consultez la
-[procédure d’attestation de l’éditeur](docs/release/README.md#publisher-attestation-for-service-installation).
+`pnpm release:sign` est délibérément limité aux previews non prises en charge explicitement
+acceptées et rejette les Release Candidates. Une fois le gate des 36 critères complet, un runner
+natif à la cible, propre et épinglé par hachage, utilise `pnpm release:finalize` pour figer chaque
+Production Candidate et créer son attestation d’éditeur Candidate-v2. Seule la vérification
+configurée de la chaîne externe de promotion et de reçu du canal pris en charge peut donner à ce
+Candidate immuable le statut effectif `released` ; consultez la
+[procédure de confiance des releases](docs/release/README.md#supported-promotion-trust-path).
 
 Ces deux commandes ne peuvent réussir qu’après le passage des 36 gates d’implémentation et de
 preuves réelles. Consultez

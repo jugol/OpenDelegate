@@ -94,12 +94,12 @@ no se puede omitir ninguna gate de plataforma ni de Computer Use.
 
 Los términos de release tienen significados deliberadamente precisos:
 
-| Etiqueta                    | Significado                                                                               |
-| --------------------------- | ----------------------------------------------------------------------------------------- |
-| Public source pre-alpha     | Código fuente revisable; sin soporte y no constituye una instalación completa             |
-| Bundle `internal-preview-*` | Carga de validación local; siempre sin soporte, aunque supere el smoke test local         |
-| Bundle `release-candidate`  | Se han superado las 36 gates, pero el Artifact aún no se ha promocionado ni tiene soporte |
-| `released`                  | Artifact certificado por separado y publicado mediante un canal con soporte               |
+| Etiqueta                    | Significado                                                                                                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public source pre-alpha     | Código fuente revisable; sin soporte y no constituye una instalación completa                                                                                                                            |
+| Bundle `internal-preview-*` | Carga de validación local; siempre sin soporte, aunque supere el smoke test local                                                                                                                        |
+| Bundle `release-candidate`  | Se han superado las 36 gates, pero el Artifact aún no se ha promocionado ni tiene soporte                                                                                                                |
+| `released`                  | Estado efectivo calculado a partir de un Candidate inmutable válido y de la cadena completa y confiable de publicador, autenticidad de plataforma, promoción, canal con soporte y política de revocación |
 
 Actualmente no existe ningún Artifact `released`.
 
@@ -177,11 +177,13 @@ pnpm release:gate
 pnpm release:build --destination ABSOLUTE_PATH
 ```
 
-Después de que un bundle de destino completo supere el smoke test empaquetado, `pnpm release:sign`
-puede crear su attestation Ed25519 separada del publicador y una raíz pública de confianza para
-distribuir por otro canal. La firma nunca convierte un `internal-preview-*` ni un
-`release-candidate` en una release con soporte; consulta el
-[procedimiento de attestation del publicador](docs/release/README.md#publisher-attestation-for-service-installation).
+`pnpm release:sign` está limitado deliberadamente a previews sin soporte aceptadas de forma
+explícita y rechaza los Release Candidates. Una vez completada la gate de 36 criterios, un runner
+nativo del destino, limpio y fijado por hash, usa `pnpm release:finalize` para congelar cada
+Production Candidate y crear su attestation de publicador Candidate-v2. Solo la verificación
+configurada de la cadena externa de promoción y del recibo del canal con soporte puede dar a ese
+Candidate inmutable el estado efectivo `released`; consulta el
+[procedimiento de confianza de releases](docs/release/README.md#supported-promotion-trust-path).
 
 Ambos comandos solo pueden completarse después de superar las 36 gates de implementación y de
 evidencia real. Consulta
