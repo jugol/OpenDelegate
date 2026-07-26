@@ -87,12 +87,7 @@ export async function buildNativeServiceHosts(options = {}) {
             "-o",
             coreExecutable,
           ];
-    await execFileAsync(compiler, arguments_, {
-      cwd: scriptDirectory,
-      encoding: "utf8",
-      maxBuffer: 2 * 1024 * 1024,
-      timeout: 120_000,
-    });
+    await execFileAsync(compiler, arguments_, createPosixCompilerOptions());
     await copyFile(coreExecutable, helperExecutable);
   }
   await Promise.all([access(coreExecutable), access(helperExecutable)]);
@@ -109,6 +104,15 @@ export async function buildNativeServiceHosts(options = {}) {
     }
   }
   return Object.freeze({ platform, architecture, coreExecutable, helperExecutable });
+}
+
+export function createPosixCompilerOptions() {
+  return Object.freeze({
+    cwd: scriptDirectory,
+    encoding: "utf8",
+    maxBuffer: 2 * 1024 * 1024,
+    timeout: 10 * 60 * 1000,
+  });
 }
 
 async function validateExternalOutputRoot(outputRoot) {
