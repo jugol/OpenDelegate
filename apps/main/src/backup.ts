@@ -958,6 +958,7 @@ async function executeWithEphemeralPostgresService(
 }
 
 async function enforceWindowsOwnerOnlyDirectory(root: string): Promise<void> {
+  let stage = "identity resolution";
   let sid: string | undefined;
   try {
     const identity = await execFileAsync("whoami.exe", ["/user", "/fo", "csv", "/nh"], {
@@ -969,28 +970,54 @@ async function enforceWindowsOwnerOnlyDirectory(root: string): Promise<void> {
     if (sid === undefined) {
       throw new Error("identity unavailable");
     }
-    for (const arguments_ of [
-      [root, "/inheritance:r", "/L", "/Q"],
-      [root, "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "/L", "/Q"],
-    ]) {
-      await execFileAsync("icacls.exe", arguments_, {
+    for (const [commandStage, commandArguments] of [
+      ["ACL reset", [root, "/reset", "/L", "/Q"]],
+      ["ACL grant", [root, "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "/L", "/Q"]],
+      ["inheritance removal", [root, "/inheritance:r", "/L", "/Q"]],
+      ["child ACL reset", [join(root, "*"), "/reset", "/T", "/L", "/Q"]],
+      ["ownership assignment", [root, "/setowner", `*${sid}`, "/T", "/L", "/Q"]],
+    ] as const) {
+      stage = commandStage;
+      await execFileAsync("icacls.exe", [...commandArguments], {
         encoding: "utf8",
         windowsHide: true,
         env: nativeToolEnvironment(),
+        maxBuffer: 1024 * 1024,
       });
     }
+    stage = "ACL verification";
     const script = String.raw`
 $ErrorActionPreference = "Stop"
+Import-Module (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1")
 $path = $env:OPENDELEGATE_PRIVATE_PATH
 $ownerSid = $env:OPENDELEGATE_PRIVATE_SID
 $systemSid = "S-1-5-18"
-$acl = Get-Acl -LiteralPath $path
-if (-not $acl.AreAccessRulesProtected) { throw "ACL inheritance remains enabled." }
-foreach ($rule in @($acl.Access)) {
-  $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-  if (($ruleSid -ne $ownerSid -and $ruleSid -ne $systemSid) -or
-      $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
-    throw "Unexpected ACL entry."
+$items = @((Get-Item -LiteralPath $path -Force)) + @(Get-ChildItem -LiteralPath $path -Force -Recurse)
+foreach ($item in $items) {
+  if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "The private directory contains a reparse point."
+  }
+  $acl = Get-Acl -LiteralPath $item.FullName
+  $actualOwner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  if ($actualOwner -ne $ownerSid -and $actualOwner -ne $systemSid) {
+    throw "Unexpected ACL owner."
+  }
+  if ($item.FullName -eq $path -and -not $acl.AreAccessRulesProtected) {
+    throw "ACL inheritance remains enabled."
+  }
+  $observed = @{}
+  foreach ($rule in @($acl.Access)) {
+    $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    if (($ruleSid -ne $ownerSid -and $ruleSid -ne $systemSid) -or
+        $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+        (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne
+          [System.Security.AccessControl.FileSystemRights]::FullControl)) {
+      throw "Unexpected ACL entry."
+    }
+    $observed[$ruleSid] = $true
+  }
+  if (-not $observed.ContainsKey($ownerSid) -or -not $observed.ContainsKey($systemSid)) {
+    throw "Required ACL entry is missing."
   }
 }
 `;
@@ -1005,12 +1032,13 @@ foreach ($rule in @($acl.Access)) {
           OPENDELEGATE_PRIVATE_PATH: root,
           OPENDELEGATE_PRIVATE_SID: sid,
         },
+        maxBuffer: 1024 * 1024,
       },
     );
   } catch {
     throw new MainBackupError(
       "BACKUP_PATH_UNSAFE",
-      "OpenDelegate could not enforce an owner-only PostgreSQL credential directory.",
+      `OpenDelegate could not enforce an owner-only PostgreSQL credential directory during ${stage}.`,
     );
   }
 }

@@ -1,8 +1,20 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, open, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import Database from "better-sqlite3";
 import type {
@@ -23,6 +35,8 @@ import {
   type MainBackupToolRunner,
 } from "../src/backup.ts";
 
+const execFileAsync = promisify(execFile);
+
 test("PostgreSQL child environment contains only a non-secret service selector", () => {
   const environment = postgresToolEnvironment({
     serviceFile: join(tmpdir(), "opendelegate-test-service.conf"),
@@ -33,6 +47,58 @@ test("PostgreSQL child environment contains only a non-secret service selector",
   assert.equal(environment["PGSERVICE"], "opendelegate");
   assert.equal(environment["PGSERVICEFILE"], join(tmpdir(), "opendelegate-test-service.conf"));
 });
+
+test(
+  "Windows backup ACL removes explicit third-party grants before secret access",
+  { skip: process.platform !== "win32" },
+  async (t) => {
+    const fixture = await createFixture("postgresql");
+    t.after(() => rm(fixture.root, { recursive: true, force: true }));
+    const exportsRoot = join(fixture.root, "exports");
+    const destination = join(exportsRoot, "windows-private-backup");
+    let stagedRoot: string | undefined;
+    const store = new BackupSecretStore(
+      fixture.configuration.deviceId,
+      "postgresql://owner:password@db.example.test:5432/opendelegate",
+      async () => {
+        const candidates = (await readdir(exportsRoot, { withFileTypes: true })).filter(
+          (entry) => entry.isDirectory() && entry.name.startsWith(".opendelegate-backup-"),
+        );
+        assert.equal(candidates.length, 1);
+        stagedRoot = join(exportsRoot, candidates[0]!.name);
+        await execFileAsync(
+          "icacls.exe",
+          [stagedRoot, "/grant", "*S-1-5-11:(OI)(CI)RX", "/L", "/Q"],
+          {
+            encoding: "utf8",
+            windowsHide: true,
+          },
+        );
+      },
+    );
+    const tools: MainBackupToolRunner = {
+      async dumpPostgres(input) {
+        await writeFile(input.destination, "postgres-custom-archive", {
+          flag: "wx",
+          mode: 0o600,
+        });
+      },
+      async verifyPostgresArchive() {},
+      async assertPostgresTargetEmpty() {},
+      async restorePostgres() {},
+    };
+
+    await createMainBackup({
+      source: fixture.source,
+      destination,
+      managedSecretStore: store,
+      tools,
+    });
+
+    assert.notEqual(stagedRoot, undefined);
+    await assertWindowsOwnerOnlyTree(destination);
+  },
+);
 
 test("backup preserves every secret-free production composition including Device enrollment", async (t) => {
   const fixture = await createFixture("sqlite");
@@ -636,11 +702,13 @@ async function createFixture(adapter: "postgresql" | "sqlite"): Promise<{
 class BackupSecretStore implements ManagedSecretStore {
   public readonly backend = "windows-dpapi";
   public readonly deviceId: string;
+  readonly #beforeExecute: (() => void | Promise<void>) | undefined;
   #value: Buffer | undefined;
 
-  public constructor(deviceId: string, value?: string) {
+  public constructor(deviceId: string, value?: string, beforeExecute?: () => void | Promise<void>) {
     this.deviceId = deviceId;
     this.#value = value === undefined ? undefined : Buffer.from(value, "utf8");
+    this.#beforeExecute = beforeExecute;
   }
 
   public async health(): Promise<ManagedSecretStoreHealth> {
@@ -675,6 +743,7 @@ class BackupSecretStore implements ManagedSecretStore {
     if (this.#value === undefined) {
       throw new Error("Secret is unavailable.");
     }
+    await this.#beforeExecute?.();
     const copy = Buffer.from(this.#value);
     try {
       await executor(copy);
@@ -687,4 +756,51 @@ class BackupSecretStore implements ManagedSecretStore {
     this.#value?.fill(0);
     this.#value = Buffer.from(value);
   }
+}
+
+async function assertWindowsOwnerOnlyTree(root: string): Promise<void> {
+  const script = String.raw`
+$ErrorActionPreference = "Stop"
+Import-Module (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1")
+$root = $env:OPENDELEGATE_TEST_PRIVATE_ROOT
+$ownerSid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+$systemSid = "S-1-5-18"
+$items = @((Get-Item -LiteralPath $root -Force)) + @(Get-ChildItem -LiteralPath $root -Force -Recurse)
+foreach ($item in $items) {
+  if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "The private backup contains a reparse point."
+  }
+  $acl = Get-Acl -LiteralPath $item.FullName
+  if ($item.FullName -eq $root -and -not $acl.AreAccessRulesProtected) {
+    throw "The private backup still inherits access rules."
+  }
+  $observed = @{}
+  foreach ($rule in @($acl.Access)) {
+    $ruleSid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    if (($ruleSid -ne $ownerSid -and $ruleSid -ne $systemSid) -or
+        $rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+        (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne
+          [System.Security.AccessControl.FileSystemRights]::FullControl)) {
+      throw "The private backup grants access outside its owner boundary."
+    }
+    $observed[$ruleSid] = $true
+  }
+  if (-not $observed.ContainsKey($ownerSid) -or -not $observed.ContainsKey($systemSid)) {
+    throw "The private backup is missing an owner boundary entry."
+  }
+}
+`;
+  await execFileAsync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENDELEGATE_TEST_PRIVATE_ROOT: root,
+      },
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    },
+  );
 }
