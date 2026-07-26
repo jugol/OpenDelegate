@@ -7,7 +7,7 @@ import {
   type KeyObject,
 } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 
@@ -17,16 +17,23 @@ import {
   composePublisherAttestationStatement,
   composeSignedReleaseEnvelope,
   composeSupportedChannelReceiptStatement,
+  externalReleaseVerificationPath,
   inspectCandidate,
+  nodeReleaseFileReader,
+  resolveConfiguredRelease,
   verifyRelease,
   type CandidateDescription,
   type ReleaseFileReader,
   type VerifiedRelease,
 } from "../src/index.ts";
 import { createStableNodeFileRead } from "../src/stable-node-file-read.ts";
+import { createReleasedConfiguredReleaseTestFixture } from "./support/release-fixture.ts";
 
 const missingReader: ReleaseFileReader = {
   async inspect() {
+    throw new Error("missing");
+  },
+  async inspectIfPresent() {
     throw new Error("missing");
   },
   async list() {
@@ -932,6 +939,247 @@ test("verifyRelease rejects incomplete promotion, role confusion, revocation, an
   }
 });
 
+test("resolveConfiguredRelease distinguishes absent, publisher-verified, and released state", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  const promotion = await createPromotionFixture(releaseSet);
+  const linuxIndex = releaseSet.releases.findIndex(
+    (release) => release.candidate.target.platform === "linux",
+  );
+  const absentStateRoot = await mkdtemp(join(tmpdir(), "opendelegate-release-state-absent-"));
+  const publisherState = await createConfiguredReleaseState(releaseSet, linuxIndex, null);
+  const releasedState = await createConfiguredReleaseState(releaseSet, linuxIndex, promotion);
+  try {
+    const release = releaseSet.releases[linuxIndex]!;
+    assert.equal(
+      externalReleaseVerificationPath({
+        stateRoot: absentStateRoot,
+        productVersion: release.candidate.productVersion,
+        target: release.candidate.target,
+        checksumManifestSha256: release.candidate.checksumManifestSha256,
+      }),
+      join(
+        absentStateRoot,
+        "trust",
+        "releases",
+        "0.1.0-alpha.1",
+        "linux-x64",
+        release.candidate.checksumManifestSha256,
+        "release-verification.json",
+      ),
+    );
+    const absent = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: absentStateRoot,
+    });
+    assert.equal(absent.effectiveChannel, "release-candidate");
+    assert.deepEqual(absent.external, { status: "absent" });
+
+    const publisherVerified = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: publisherState.stateRoot,
+    });
+    assert.equal(publisherVerified.effectiveChannel, "release-candidate");
+    assert.equal(publisherVerified.external.status, "publisher-verified");
+    assert.equal(
+      publisherVerified.external.publisherKeyId,
+      releaseSet.publishers[linuxIndex]!.keyId,
+    );
+
+    const released = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: releasedState.stateRoot,
+    });
+    assert.equal(released.effectiveChannel, "released");
+    assert.equal(released.external.status, "released");
+    assert.equal(released.external.promotionStatementId, promotion.statementId);
+    assert.equal(released.external.receiptId, promotion.receiptId);
+    assert.ok(Object.isFrozen(released));
+    assert.ok(Object.isFrozen(released.external));
+  } finally {
+    await Promise.all([
+      releaseSet.cleanup(),
+      promotion.cleanup(),
+      publisherState.cleanup(),
+      releasedState.cleanup(),
+      rm(absentStateRoot, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("resolveConfiguredRelease fails closed for configuration and promotion failures", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  const promotion = await createPromotionFixture(releaseSet);
+  const linuxIndex = releaseSet.releases.findIndex(
+    (release) => release.candidate.target.platform === "linux",
+  );
+  const malformed = await createConfiguredReleaseState(releaseSet, linuxIndex, null);
+  const missingPromotionFile = await createConfiguredReleaseState(
+    releaseSet,
+    linuxIndex,
+    promotion,
+  );
+  const invalidPromotion = await createConfiguredReleaseState(releaseSet, linuxIndex, promotion);
+  const revoked = await createConfiguredReleaseState(releaseSet, linuxIndex, promotion, {
+    revokedCertificateIdentities: ["apple-team:HX7739G8FX"],
+  });
+  try {
+    await writeFile(malformed.configurationPath, '{"schemaVersion":1}\n', "utf8");
+    const malformedResult = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: malformed.stateRoot,
+    });
+    assert.equal(malformedResult.external.status, "invalid");
+    assert.equal(malformedResult.external.diagnosticCode, "RELEASE_CONFIGURATION_INVALID");
+
+    await rm(missingPromotionFile.promotionAttestationPath!, { force: true });
+    const missingResult = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: missingPromotionFile.stateRoot,
+    });
+    assert.equal(missingResult.external.status, "invalid");
+
+    await writeFile(invalidPromotion.promotionAttestationPath!, "invalid\n", "utf8");
+    const promotionResult = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: invalidPromotion.stateRoot,
+    });
+    assert.equal(promotionResult.external.status, "promotion-invalid");
+    assert.equal(promotionResult.external.diagnosticCode, "PROMOTION_TRUST_INVALID");
+    assert.equal(promotionResult.external.publisherKeyId, releaseSet.publishers[linuxIndex]!.keyId);
+
+    const revokedResult = await resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot: revoked.stateRoot,
+    });
+    assert.equal(revokedResult.external.status, "revoked");
+    assert.equal(revokedResult.external.diagnosticCode, "RELEASE_REVOKED");
+  } finally {
+    await Promise.all([
+      releaseSet.cleanup(),
+      promotion.cleanup(),
+      malformed.cleanup(),
+      missingPromotionFile.cleanup(),
+      invalidPromotion.cleanup(),
+      revoked.cleanup(),
+    ]);
+  }
+});
+
+test("resolveConfiguredRelease rejects path escapes, incomplete evidence, policy disorder, and case collisions", async () => {
+  const releaseSet = await createVerifiedReleaseSet();
+  const promotion = await createPromotionFixture(releaseSet);
+  const linuxIndex = releaseSet.releases.findIndex(
+    (release) => release.candidate.target.platform === "linux",
+  );
+  const escaped = await createConfiguredReleaseState(releaseSet, linuxIndex, null);
+  const incomplete = await createConfiguredReleaseState(releaseSet, linuxIndex, promotion);
+  const disordered = await createConfiguredReleaseState(releaseSet, linuxIndex, null);
+  const collision = await createConfiguredReleaseState(releaseSet, linuxIndex, null);
+  const resolveLinux = (stateRoot: string, reader?: ReleaseFileReader) =>
+    resolveConfiguredRelease({
+      root: releaseSet.fixtures[linuxIndex]!.root,
+      expectedTarget: { platform: "linux", architecture: "x64" },
+      stateRoot,
+      ...(reader === undefined ? {} : { reader }),
+    });
+  try {
+    const escapedValue = JSON.parse(await readFile(escaped.configurationPath, "utf8")) as {
+      candidate: { archiveFile: string };
+    };
+    escapedValue.candidate.archiveFile = "../outside.tar.gz";
+    await writeFile(escaped.configurationPath, canonicalJson(escapedValue));
+    assert.equal((await resolveLinux(escaped.stateRoot)).external.status, "invalid");
+
+    const incompleteValue = JSON.parse(await readFile(incomplete.configurationPath, "utf8")) as {
+      promotion: { liveEvidence: unknown[] };
+    };
+    incompleteValue.promotion.liveEvidence.pop();
+    await writeFile(incomplete.configurationPath, canonicalJson(incompleteValue));
+    assert.equal((await resolveLinux(incomplete.stateRoot)).external.status, "invalid");
+
+    const disorderedValue = JSON.parse(await readFile(disordered.configurationPath, "utf8")) as {
+      policy: { revokedStatementIds: string[] };
+    };
+    disorderedValue.policy.revokedStatementIds = ["statement:z-release", "statement:a-release"];
+    await writeFile(disordered.configurationPath, canonicalJson(disorderedValue));
+    assert.equal((await resolveLinux(disordered.stateRoot)).external.status, "invalid");
+
+    const collisionReader: ReleaseFileReader = {
+      ...nodeReleaseFileReader,
+      async list(path) {
+        const entries = await nodeReleaseFileReader.list(path);
+        return path === join(collision.stateRoot, "trust")
+          ? [...entries, { kind: "directory", name: "Publisher" }]
+          : entries;
+      },
+    };
+    assert.equal(
+      (await resolveLinux(collision.stateRoot, collisionReader)).external.status,
+      "invalid",
+    );
+  } finally {
+    await Promise.all([
+      releaseSet.cleanup(),
+      promotion.cleanup(),
+      escaped.cleanup(),
+      incomplete.cleanup(),
+      disordered.cleanup(),
+      collision.cleanup(),
+    ]);
+  }
+});
+
+test("resolveConfiguredRelease never downgrades candidate corruption into external status", async () => {
+  const fixture = await createCandidateFixture({
+    platform: "linux",
+    architecture: "x64",
+  });
+  const stateRoot = await mkdtemp(join(tmpdir(), "opendelegate-release-state-"));
+  try {
+    await writeFile(
+      join(fixture.root, "bin", "opendelegate-service-host"),
+      "candidate corruption\n",
+      "utf8",
+    );
+    await assert.rejects(
+      resolveConfiguredRelease({
+        root: fixture.root,
+        expectedTarget: { platform: "linux", architecture: "x64" },
+        stateRoot,
+      }),
+      (error: unknown) =>
+        error instanceof ReleaseIntegrityError && error.code === "CANDIDATE_INTEGRITY_INVALID",
+    );
+  } finally {
+    await Promise.all([
+      rm(fixture.root, { recursive: true, force: true }),
+      rm(stateRoot, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test("the reusable test-only fixture exercises the real configured verifier", async () => {
+  const fixture = await createReleasedConfiguredReleaseTestFixture();
+  try {
+    const resolved = await resolveConfiguredRelease({
+      root: fixture.root,
+      expectedTarget: fixture.expectedTarget,
+      stateRoot: fixture.stateRoot,
+    });
+    assert.equal(resolved.external.status, "released");
+    assert.equal(resolved.candidate.buildId, fixture.candidate.buildId);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 interface CandidateFixture {
   readonly acceptanceLedgerSha256: string;
   readonly checksumManifestSha256: string;
@@ -1314,6 +1562,123 @@ async function createPromotionFixture(
     receiptPath,
     statementId,
     supportMatrix,
+  };
+}
+
+interface ConfiguredReleaseStateFixture {
+  readonly cleanup: () => Promise<void>;
+  readonly configurationPath: string;
+  readonly promotionAttestationPath?: string;
+  readonly stateRoot: string;
+}
+
+async function createConfiguredReleaseState(
+  releaseSet: VerifiedReleaseSet,
+  releaseIndex: number,
+  promotion: PromotionFixture | null,
+  policy: {
+    readonly revokedCertificateIdentities?: readonly string[];
+    readonly revokedPromotionKeyIds?: readonly string[];
+    readonly revokedPublisherKeyIds?: readonly string[];
+    readonly revokedStatementIds?: readonly string[];
+  } = {},
+): Promise<ConfiguredReleaseStateFixture> {
+  const stateRoot = await mkdtemp(join(tmpdir(), "opendelegate-release-state-"));
+  const trustRoot = join(stateRoot, "trust");
+  const release = releaseSet.releases[releaseIndex]!;
+  const publisher = releaseSet.publishers[releaseIndex]!;
+  const targetKey = `${release.candidate.target.platform}-${release.candidate.target.architecture}`;
+  const publisherRoot = `publisher/${targetKey}`;
+  const archiveFile = `${publisherRoot}/${basename(publisher.archivePath)}`;
+  const publisherAttestationFile = `${publisherRoot}/${basename(publisher.attestationPath)}`;
+  const publisherTrustRootFile = `${publisherRoot}/publisher-public.pem`;
+  const writeTrustFile = async (path: string, bytes: Uint8Array): Promise<string> => {
+    const absolutePath = join(trustRoot, ...path.split("/"));
+    await mkdir(dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, bytes);
+    return absolutePath;
+  };
+  await Promise.all([
+    writeTrustFile(archiveFile, await readFile(publisher.archivePath)),
+    writeTrustFile(publisherAttestationFile, await readFile(publisher.attestationPath)),
+    writeTrustFile(publisherTrustRootFile, publisher.publicKeyPem),
+  ]);
+
+  let promotionConfiguration: object | null = null;
+  let promotionAttestationPath: string | undefined;
+  if (promotion !== null) {
+    const promotionAttestationFile = "promotion/promotion-attestation.json";
+    const supportedChannelReceiptFile = "promotion/supported-channel-receipt.json";
+    const promotionTrustRootFile = "promotion/promotion-public.pem";
+    const supportMatrixFile = "promotion/support-matrix.md";
+    const notarizationReceiptFile = "promotion/macos-notarization.json";
+    promotionAttestationPath = await writeTrustFile(
+      promotionAttestationFile,
+      await readFile(promotion.attestationPath),
+    );
+    await Promise.all([
+      writeTrustFile(supportedChannelReceiptFile, await readFile(promotion.receiptPath)),
+      writeTrustFile(promotionTrustRootFile, promotion.publicKeyPem),
+      writeTrustFile(supportMatrixFile, promotion.supportMatrix.bytes),
+      writeTrustFile(notarizationReceiptFile, await readFile(promotion.notarizationReceiptPath)),
+    ]);
+    const liveEvidence = [];
+    for (const evidence of promotion.liveEvidence) {
+      const file = `promotion/live/${String(evidence.criterionId).padStart(2, "0")}.json`;
+      await writeTrustFile(file, evidence.bytes);
+      liveEvidence.push({
+        criterionId: evidence.criterionId,
+        statementPath: evidence.path,
+        file,
+      });
+    }
+    promotionConfiguration = {
+      promotionAttestationFile,
+      supportedChannelReceiptFile,
+      promotionTrustRootFile,
+      supportMatrix: {
+        statementPath: promotion.supportMatrix.path,
+        file: supportMatrixFile,
+      },
+      notarizationReceiptFile,
+      liveEvidence,
+    };
+  }
+
+  const configuration = {
+    schemaVersion: 1,
+    product: "OpenDelegate",
+    target: release.candidate.target,
+    candidate: {
+      expectedManifestSha256: release.candidate.checksumManifestSha256,
+      expectedCandidateDigest: release.candidate.publisherStatement.sha256,
+      archiveFile,
+      publisherAttestationFile,
+      publisherTrustRootFile,
+    },
+    promotion: promotionConfiguration,
+    policy: {
+      revokedCertificateIdentities: policy.revokedCertificateIdentities ?? [],
+      revokedPromotionKeyIds: policy.revokedPromotionKeyIds ?? [],
+      revokedPublisherKeyIds: policy.revokedPublisherKeyIds ?? [],
+      revokedStatementIds: policy.revokedStatementIds ?? [],
+    },
+  };
+  const configurationPath = externalReleaseVerificationPath({
+    stateRoot,
+    productVersion: release.candidate.productVersion,
+    target: release.candidate.target,
+    checksumManifestSha256: release.candidate.checksumManifestSha256,
+  });
+  await mkdir(dirname(configurationPath), { recursive: true });
+  await writeFile(configurationPath, canonicalJson(configuration));
+  return {
+    async cleanup() {
+      await rm(stateRoot, { recursive: true, force: true });
+    },
+    configurationPath,
+    ...(promotionAttestationPath === undefined ? {} : { promotionAttestationPath }),
+    stateRoot,
   };
 }
 

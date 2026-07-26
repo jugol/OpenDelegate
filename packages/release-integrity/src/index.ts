@@ -2,7 +2,23 @@ import { createHash, createPublicKey, verify as verifySignature } from "node:cry
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import {
+  externalReleaseVerificationPath,
+  resolveConfiguredReleaseWithDependencies,
+  type ConfiguredReleaseDiagnosticCode,
+  type ConfiguredReleaseExternalStatus,
+  type ConfiguredReleaseResolution,
+  type ResolveConfiguredReleaseInput,
+} from "./configured-release.ts";
 import { readStableNodeFile } from "./stable-node-file-read.ts";
+
+export {
+  externalReleaseVerificationPath,
+  type ConfiguredReleaseDiagnosticCode,
+  type ConfiguredReleaseExternalStatus,
+  type ConfiguredReleaseResolution,
+  type ResolveConfiguredReleaseInput,
+};
 
 export type ReleasePlatform = "darwin" | "linux" | "win32";
 export type ReleaseArchitecture = "arm64" | "x64";
@@ -24,6 +40,7 @@ export interface ReleaseDirectoryEntry {
 
 export interface ReleaseFileReader {
   inspect(path: string): Promise<ReleaseFileMetadata>;
+  inspectIfPresent(path: string): Promise<ReleaseFileMetadata | undefined>;
   list(path: string): Promise<readonly ReleaseDirectoryEntry[]>;
   read(path: string, maximumBytes: number): Promise<Uint8Array>;
   realPath(path: string): Promise<string>;
@@ -54,6 +71,32 @@ export class ReleaseIntegrityError extends Error {
 export const nodeReleaseFileReader: ReleaseFileReader = Object.freeze({
   async inspect(path: string): Promise<ReleaseFileMetadata> {
     const metadata = await lstat(path);
+    return {
+      kind: metadata.isSymbolicLink()
+        ? "symbolic-link"
+        : metadata.isDirectory()
+          ? "directory"
+          : metadata.isFile()
+            ? "file"
+            : "special",
+      size: metadata.size,
+    };
+  },
+  async inspectIfPresent(path: string): Promise<ReleaseFileMetadata | undefined> {
+    let metadata;
+    try {
+      metadata = await lstat(path);
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
     return {
       kind: metadata.isSymbolicLink()
         ? "symbolic-link"
@@ -1962,6 +2005,19 @@ export async function verifyRelease(input: VerifyReleaseInput): Promise<Verified
   });
   verifiedReleaseObjects.add(verified);
   return verified;
+}
+
+export async function resolveConfiguredRelease(
+  input: ResolveConfiguredReleaseInput,
+): Promise<ConfiguredReleaseResolution> {
+  return resolveConfiguredReleaseWithDependencies(input, {
+    defaultReader: nodeReleaseFileReader,
+    inspectCandidate,
+    releaseErrorCode(error) {
+      return error instanceof ReleaseIntegrityError ? error.code : undefined;
+    },
+    verifyRelease,
+  });
 }
 
 interface VerifiedPublisherEvidence {
