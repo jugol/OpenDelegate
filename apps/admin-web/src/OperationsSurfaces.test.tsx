@@ -139,8 +139,8 @@ describe("owner operations surfaces", () => {
     render(<JoinSurface api={api} />);
 
     expect(await screen.findByRole("heading", { level: 1, name: "Join a device" })).toBeTruthy();
-    await user.type(screen.getByLabelText("Device ID"), "device_worker");
-    await user.click(screen.getByRole("button", { name: "Generate grant" }));
+    await user.type(await screen.findByLabelText("Device ID"), "device_worker");
+    await user.click(await screen.findByRole("button", { name: "Generate grant" }));
 
     await waitFor(() => {
       expect(api.issueEnrollmentGrant).toHaveBeenCalledWith({
