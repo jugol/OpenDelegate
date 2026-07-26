@@ -37,6 +37,10 @@ export async function pinReleaseGitProvenance(input, dependencies = {}) {
   if (typeof execute !== "function") {
     throw new Error("The pinned Git process boundary must be callable.");
   }
+  const openGitMarker = dependencies.openGitMarker ?? open;
+  if (typeof openGitMarker !== "function") {
+    throw new Error("The pinned Git marker open boundary must be callable.");
+  }
 
   const repositoryRoot = await requireCanonicalDirectory(
     input.repositoryRoot,
@@ -51,7 +55,7 @@ export async function pinReleaseGitProvenance(input, dependencies = {}) {
   if (executable.sha256 !== input.expectedExecutableSha256) {
     throw new Error("The Git executable does not match its required SHA-256 pin.");
   }
-  const gitBinding = await resolveGitDirectory(repositoryRoot);
+  const gitBinding = await resolveGitDirectory(repositoryRoot, openGitMarker);
   assertPathOutsideRoots(
     executablePath,
     [repositoryRoot, gitBinding.gitDirectory],
@@ -64,6 +68,7 @@ export async function pinReleaseGitProvenance(input, dependencies = {}) {
     executablePath,
     executableSha256: executable.sha256,
     gitBinding,
+    openGitMarker,
     repositoryIdentity,
     repositoryRoot,
   };
@@ -232,45 +237,44 @@ async function revalidatePhysicalBindings(details) {
   ) {
     throw new Error("The pinned release checkout changed its canonical directory identity.");
   }
-  const gitBinding = await resolveGitDirectory(repositoryRoot);
+  const gitBinding = await resolveGitDirectory(repositoryRoot, details.openGitMarker);
   if (
     comparablePath(gitBinding.gitDirectory) !== comparablePath(details.gitBinding.gitDirectory) ||
     gitBinding.marker.kind !== details.gitBinding.marker.kind ||
     !sameFile(gitBinding.gitDirectoryIdentity, details.gitBinding.gitDirectoryIdentity) ||
-    !sameFile(gitBinding.marker.identity, details.gitBinding.marker.identity) ||
+    !sameGitMarker(gitBinding.marker, details.gitBinding.marker) ||
     gitBinding.marker.sha256 !== details.gitBinding.marker.sha256
   ) {
     throw new Error("The pinned release checkout Git-directory binding changed.");
   }
 }
 
-async function resolveGitDirectory(repositoryRoot) {
+async function resolveGitDirectory(repositoryRoot, openGitMarker) {
   const markerPath = join(repositoryRoot, ".git");
-  await assertNoLinkedPathComponents(markerPath, "release checkout Git marker");
-  const markerIdentity = await lstat(markerPath, { bigint: true });
-  if (markerIdentity.isDirectory() && !markerIdentity.isSymbolicLink()) {
+  const marker = await readStableGitMarker(markerPath, maximumGitPointerBytes, openGitMarker);
+  if (marker.kind === "directory") {
     const gitDirectory = await requireCanonicalDirectory(
       markerPath,
       "release checkout Git directory",
     );
+    const gitDirectoryIdentity = await requireDirectoryIdentity(
+      gitDirectory,
+      "release checkout Git directory",
+    );
+    if (!sameFile(marker.identity, gitDirectoryIdentity)) {
+      throw new Error("The release checkout Git directory changed during binding.");
+    }
     return Object.freeze({
       gitDirectory,
-      gitDirectoryIdentity: await requireDirectoryIdentity(
-        gitDirectory,
-        "release checkout Git directory",
-      ),
+      gitDirectoryIdentity,
       marker: Object.freeze({
-        identity: markerIdentity,
+        identity: marker.identity,
         kind: "directory",
         sha256: null,
       }),
     });
   }
-  if (!markerIdentity.isFile() || markerIdentity.isSymbolicLink()) {
-    throw new Error("The release checkout must have an unlinked regular .git marker.");
-  }
-  const pointer = await readStableRegularFile(markerPath, maximumGitPointerBytes);
-  const match = /^gitdir: ([^\0\r\n]+)\r?\n?$/u.exec(pointer.bytes.toString("utf8"));
+  const match = /^gitdir: ([^\0\r\n]+)\r?\n?$/u.exec(marker.bytes.toString("utf8"));
   if (match === null || match[1].trim() !== match[1] || match[1] === "") {
     throw new Error("The linked-worktree .git marker is invalid.");
   }
@@ -288,9 +292,9 @@ async function resolveGitDirectory(repositoryRoot) {
       "release linked-worktree Git directory",
     ),
     marker: Object.freeze({
-      identity: markerIdentity,
+      identity: marker.identity,
       kind: "file",
-      sha256: pointer.sha256,
+      sha256: marker.sha256,
     }),
   });
 }
@@ -314,24 +318,41 @@ async function requireDirectoryIdentity(path, label) {
   return identity;
 }
 
-async function readStableRegularFile(path, maximumBytes) {
-  const before = await lstat(path, { bigint: true });
-  if (
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.size < 1n ||
-    before.size > BigInt(maximumBytes)
-  ) {
-    throw new Error("The linked-worktree .git marker must be a bounded regular file.");
-  }
+async function readStableGitMarker(path, maximumBytes, openGitMarker) {
   const flags =
     process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
-  const handle = await open(path, flags);
+  const handle = await openGitMarker(path, flags);
   try {
     const opened = await handle.stat({ bigint: true });
-    if (!sameFile(before, opened)) {
-      throw new Error("The linked-worktree .git marker changed before it was read.");
+    const kind = opened.isDirectory() ? "directory" : opened.isFile() ? "file" : null;
+    if (kind === null || opened.isSymbolicLink() || opened.ino === 0n) {
+      throw new Error(
+        "The release checkout must have an unlinked regular .git marker or directory.",
+      );
     }
+    if (
+      kind === "file" &&
+      (opened.size < 1n ||
+        opened.size > BigInt(maximumBytes) ||
+        opened.size > BigInt(Number.MAX_SAFE_INTEGER))
+    ) {
+      throw new Error("The linked-worktree .git marker must be a bounded regular file.");
+    }
+    await assertStableGitMarkerBinding(path, opened, kind, "before it was read");
+    if (kind === "directory") {
+      const after = await handle.stat({ bigint: true });
+      if (!sameFile(opened, after)) {
+        throw new Error("The release checkout Git directory changed during binding.");
+      }
+      await assertStableGitMarkerBinding(path, after, kind, "during binding");
+      return Object.freeze({
+        bytes: null,
+        identity: opened,
+        kind,
+        sha256: null,
+      });
+    }
+
     const bytes = Buffer.alloc(Number(opened.size));
     let position = 0;
     while (position < bytes.byteLength) {
@@ -346,15 +367,30 @@ async function readStableRegularFile(path, maximumBytes) {
       }
       position += bytesRead;
     }
-    if (!sameFile(opened, await handle.stat({ bigint: true }))) {
+    const after = await handle.stat({ bigint: true });
+    if (!sameStableRegularFile(opened, after)) {
       throw new Error("The linked-worktree .git marker changed while it was read.");
     }
+    await assertStableGitMarkerBinding(path, after, kind, "while it was read");
     return Object.freeze({
       bytes,
+      identity: opened,
+      kind,
       sha256: createHash("sha256").update(bytes).digest("hex"),
     });
   } finally {
     await handle.close();
+  }
+}
+
+async function assertStableGitMarkerBinding(path, opened, kind, phase) {
+  await assertNoLinkedPathComponents(path, "release checkout Git marker");
+  const current = await lstat(path, { bigint: true });
+  const hasExpectedKind = kind === "directory" ? current.isDirectory() : current.isFile();
+  const isSame =
+    kind === "directory" ? sameFile(opened, current) : sameStableRegularFile(opened, current);
+  if (current.isSymbolicLink() || !hasExpectedKind || !isSame) {
+    throw new Error(`The release checkout Git marker changed ${phase}.`);
   }
 }
 
@@ -494,6 +530,16 @@ function sameFile(left, right) {
     left.size === right.size &&
     left.mode === right.mode
   );
+}
+
+function sameStableRegularFile(left, right) {
+  return sameFile(left, right) && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+
+function sameGitMarker(left, right) {
+  return left.kind === "file"
+    ? sameStableRegularFile(left.identity, right.identity)
+    : sameFile(left.identity, right.identity);
 }
 
 function comparablePath(path) {

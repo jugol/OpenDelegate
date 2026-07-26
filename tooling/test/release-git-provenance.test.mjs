@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdtemp,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -144,6 +155,71 @@ test("pinned Git provenance supports an explicitly bound linked worktree", async
   await revalidatePinnedReleaseGitProvenance(handle);
 });
 
+test("pinned Git provenance rejects an in-place linked-worktree marker race", async (t) => {
+  const fixture = await createGitFixture(t);
+  const firstWorktree = join(fixture.root, "linked-worktree-a");
+  const secondWorktree = join(fixture.root, "linked-worktree-b");
+  await execFile(
+    fixture.gitExecutable,
+    ["-C", fixture.repository.repositoryRoot, "worktree", "add", "--detach", firstWorktree, "HEAD"],
+    { windowsHide: true },
+  );
+  await writeFile(join(fixture.repository.repositoryRoot, "next.txt"), "next\n", "utf8");
+  await commitAll(fixture.gitExecutable, fixture.repository.repositoryRoot, "next");
+  await execFile(
+    fixture.gitExecutable,
+    [
+      "-C",
+      fixture.repository.repositoryRoot,
+      "worktree",
+      "add",
+      "--detach",
+      secondWorktree,
+      "HEAD",
+    ],
+    { windowsHide: true },
+  );
+  const firstMarker = join(firstWorktree, ".git");
+  await chmod(firstMarker, 0o600);
+  const originalMarker = await readFile(firstMarker);
+  const replacementMarker = await readFile(join(secondWorktree, ".git"));
+  assert.equal(originalMarker.byteLength, replacementMarker.byteLength);
+  assert.notDeepEqual(originalMarker, replacementMarker);
+  let markerStats = 0;
+  const openGitMarker = async (path, flags) => {
+    const handle = await open(path, path === firstMarker ? "r+" : flags);
+    if (path !== firstMarker) {
+      return handle;
+    }
+    return {
+      close: async () => handle.close(),
+      read: async (...arguments_) => handle.read(...arguments_),
+      stat: async (...arguments_) => {
+        const metadata = await handle.stat(...arguments_);
+        markerStats += 1;
+        if (markerStats === 1) {
+          await handle.write(replacementMarker, 0, replacementMarker.byteLength, 0);
+          await handle.utimes(new Date(1_000), new Date(1_000));
+          await handle.sync();
+        }
+        return metadata;
+      },
+    };
+  };
+
+  await assert.rejects(
+    pinReleaseGitProvenance(
+      {
+        expectedExecutableSha256: fixture.gitSha256,
+        executablePath: fixture.gitExecutable,
+        repositoryRoot: firstWorktree,
+      },
+      { openGitMarker },
+    ),
+    /Git marker changed|marker changed/iu,
+  );
+});
+
 test("pinned Git provenance rejects linked executable and repository ancestors", async (t) => {
   const fixture = await createGitFixture(t);
   const executableDirectory = join(fixture.root, "git-real");
@@ -192,6 +268,7 @@ test("pinned Git provenance detects executable and checkout changes", async (t) 
     process.platform === "win32" ? "pinned-git.exe" : "pinned-git",
   );
   await copyFile(fixture.gitExecutable, copiedGit);
+  await chmod(copiedGit, 0o700);
   const copiedGitSha256 = (await hashStableRegularFile(copiedGit)).sha256;
   const execute = async (input) => {
     const command = input.arguments.find((argument) =>
