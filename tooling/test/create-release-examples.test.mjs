@@ -156,6 +156,37 @@ test("release example validation rejects schema drift and removed placeholder sa
   );
 });
 
+test("release example validation rejects mutation between handle validation and read", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-release-examples-race-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const destination = join(root, "generated");
+  await createReleaseExamples({ destination });
+
+  const target = join(destination, "README.md");
+  const originalBytes = await readFile(target);
+  let mutated = false;
+
+  await assert.rejects(
+    validateReleaseExampleSet(
+      {
+        expectedDestination: destination,
+        root: destination,
+      },
+      {
+        async afterFileMetadata(path) {
+          if (path !== target || mutated) {
+            return;
+          }
+          mutated = true;
+          await writeFile(target, originalBytes);
+        },
+      },
+    ),
+    /changed before it could be read/u,
+  );
+  assert.equal(mutated, true);
+});
+
 test("release example help identifies the safe create-new workflow", () => {
   const help = renderReleaseExamplesHelp();
   assert.match(help, /pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY/u);

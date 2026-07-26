@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -97,7 +98,7 @@ export async function createReleaseExamples(input, dependencies = {}) {
   });
 }
 
-export async function validateReleaseExampleSet(input) {
+export async function validateReleaseExampleSet(input, dependencies = {}) {
   requireExactKeys(input, ["expectedDestination", "root"], "release-example validation input");
   for (const [value, label] of [
     [input.expectedDestination, "expected release-example destination"],
@@ -113,7 +114,7 @@ export async function validateReleaseExampleSet(input) {
   if (JSON.stringify(paths) !== JSON.stringify(RELEASE_EXAMPLE_PATHS)) {
     throw new Error("The release-example file inventory does not match the strict schema.");
   }
-  const readme = await readBoundedText(join(root, "README.md"));
+  const readme = await readBoundedText(join(root, "README.md"), dependencies);
   if (
     readme !== renderReleaseExampleReadme() ||
     !readme.includes("NOT-A-RELEASE") ||
@@ -122,16 +123,19 @@ export async function validateReleaseExampleSet(input) {
     throw new Error("The release-example safety README is invalid.");
   }
 
-  const files = Object.fromEntries(
+  const documents = Object.fromEntries(
     await Promise.all(
       RELEASE_EXAMPLE_PATHS.filter((path) => path.endsWith(".json")).map(async (path) => [
         path,
-        await readCanonicalExampleJson(join(root, ...path.split("/"))),
+        await readCanonicalExampleJson(join(root, ...path.split("/")), dependencies),
       ]),
     ),
   );
+  const files = Object.fromEntries(
+    Object.entries(documents).map(([path, document]) => [path, document.value]),
+  );
   const promotion = validatePromotionPlan(files["plans/promotion-plan.json"]);
-  const promotionBytes = await readFile(join(root, "plans", "promotion-plan.json"));
+  const promotionBytes = Buffer.from(documents["plans/promotion-plan.json"].text, "utf8");
   const readBack = validateReadBackPlan(
     files["plans/read-back-plan.json"],
     promotion,
@@ -171,7 +175,7 @@ export async function validateReleaseExampleSet(input) {
 
   for (const [path, value] of Object.entries(files)) {
     assertCredentialFreeJson(value, path);
-    const text = await readBoundedText(join(root, ...path.split("/")));
+    const { text } = documents[path];
     if (!text.includes("PLACEHOLDER") || privateKeyPattern.test(text)) {
       throw new Error(`The ${path} PLACEHOLDER credential-free safeguard is missing.`);
     }
@@ -1099,8 +1103,8 @@ async function listRegularExampleFiles(root) {
   return files.sort(compareCodeUnits);
 }
 
-async function readCanonicalExampleJson(path) {
-  const text = await readBoundedText(path);
+async function readCanonicalExampleJson(path, dependencies) {
+  const text = await readBoundedText(path, dependencies);
   let value;
   try {
     value = JSON.parse(text);
@@ -1110,25 +1114,89 @@ async function readCanonicalExampleJson(path) {
   if (`${JSON.stringify(value)}\n` !== text) {
     throw new Error("A release-example JSON file is not canonical.");
   }
-  return value;
+  return Object.freeze({ text, value });
 }
 
-async function readBoundedText(path) {
-  const metadata = await lstat(path);
-  if (
-    !metadata.isFile() ||
-    metadata.isSymbolicLink() ||
-    metadata.size < 1 ||
-    metadata.size > maximumExampleFileBytes
-  ) {
-    throw new Error("A release-example file is not a bounded regular file.");
+async function readBoundedText(path, dependencies = {}) {
+  const flags =
+    process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
+  const handle = await open(path, flags);
+  let bytes;
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || opened.size < 1n || opened.size > BigInt(maximumExampleFileBytes)) {
+      throw new Error("A release-example file is not a bounded regular file.");
+    }
+    await dependencies.afterFileMetadata?.(path);
+    const canonicalPath = await realpath(path);
+    const [pathBefore, canonicalBefore] = await Promise.all([
+      lstat(path, { bigint: true }),
+      lstat(canonicalPath, { bigint: true }),
+    ]);
+    if (
+      pathBefore.isSymbolicLink() ||
+      canonicalBefore.isSymbolicLink() ||
+      !sameStableFile(opened, pathBefore) ||
+      !sameStableFile(opened, canonicalBefore)
+    ) {
+      throw new Error("A release-example file changed before it could be read.");
+    }
+    bytes = Buffer.alloc(Number(opened.size));
+    let position = 0;
+    while (position < bytes.byteLength) {
+      const { bytesRead } = await handle.read(
+        bytes,
+        position,
+        bytes.byteLength - position,
+        position,
+      );
+      if (bytesRead < 1) {
+        throw new Error("A release-example file ended while it was being read.");
+      }
+      position += bytesRead;
+    }
+    const after = await handle.stat({ bigint: true });
+    const canonicalPathAfter = await realpath(path);
+    const [pathAfter, canonicalAfter] = await Promise.all([
+      lstat(path, { bigint: true }),
+      lstat(canonicalPathAfter, { bigint: true }),
+    ]);
+    if (
+      pathAfter.isSymbolicLink() ||
+      canonicalAfter.isSymbolicLink() ||
+      !sameCanonicalPath(canonicalPath, canonicalPathAfter) ||
+      !sameStableFile(opened, after) ||
+      !sameStableFile(after, pathAfter) ||
+      !sameStableFile(after, canonicalAfter)
+    ) {
+      bytes.fill(0);
+      throw new Error("A release-example file changed while it was being read.");
+    }
+  } finally {
+    await handle.close();
   }
-  const bytes = await readFile(path);
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
     throw new Error("A release-example file is not valid UTF-8.", { cause: error });
   }
+}
+
+function sameCanonicalPath(left, right) {
+  return process.platform === "win32"
+    ? resolve(left).toLowerCase() === resolve(right).toLowerCase()
+    : resolve(left) === resolve(right);
+}
+
+function sameStableFile(left, right) {
+  return (
+    (left.dev === 0n || right.dev === 0n || left.dev === right.dev) &&
+    left.ino !== 0n &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
 }
 
 function requireCanonicalKeys(value, expected, label) {
