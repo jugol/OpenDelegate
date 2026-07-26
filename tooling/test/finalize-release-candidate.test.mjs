@@ -18,6 +18,7 @@ import {
 test("finalization archives, externally signs, verifies, and publishes an atomic candidate set", async (t) => {
   const fixture = await createFinalizationFixture(t);
   const result = await finalizeReleaseCandidate(fixture.input, {
+    ...fixture.dependencies,
     integrity: fixture.integrity,
     now: () => new Date("2026-07-25T12:34:56.000Z"),
     readSourceIdentity: fixture.readSourceIdentity,
@@ -88,6 +89,17 @@ test(
     const metadata = JSON.parse(
       await readFile(join(candidateFixture.root, "release-metadata.json"), "utf8"),
     );
+    const sourceIdentity = Object.freeze({
+      commit: buildCommit,
+      commitEpoch: 1_753_315_324,
+      dirty: false,
+    });
+    const gitProvenance = Object.freeze({
+      description: Object.freeze({
+        gitExecutableSha256: metadata.bundledRuntime.executableSha256,
+        source: sourceIdentity,
+      }),
+    });
     const signing = await createSigningPolicy(workRoot);
     const result = await finalizeReleaseCandidate(
       {
@@ -95,21 +107,23 @@ test(
         destinationDirectory: destination,
         expectedCandidateDigest: candidate.publisherStatement.sha256,
         expectedManifestSha256: candidate.checksumManifestSha256,
+        gitExecutablePath: process.execPath,
+        gitExecutableSha256: metadata.bundledRuntime.executableSha256,
+        runnerExecutableSha256: metadata.bundledRuntime.executableSha256,
         signingPolicyPath: signing.policyPath,
         signingPolicySha256: await sha256File(signing.policyPath),
         target,
       },
       {
+        assertGitFilesMatchCommit: async () => {},
         hashRuntimeExecutable: async () => ({
           sha256: metadata.bundledRuntime.executableSha256,
           size: 1,
         }),
         integrity,
-        readSourceIdentity: async () => ({
-          commit: buildCommit,
-          commitEpoch: 1_753_315_324,
-          dirty: false,
-        }),
+        pinGitProvenance: async () => gitProvenance,
+        readSourceIdentity: async () => sourceIdentity,
+        revalidateGitProvenance: async () => sourceIdentity,
         runner: {
           platform: target.platform,
           architecture: target.architecture,
@@ -144,6 +158,7 @@ test("finalization refuses existing outputs without publishing a partial set", a
 
   await assert.rejects(
     finalizeReleaseCandidate(fixture.input, {
+      ...fixture.dependencies,
       integrity: fixture.integrity,
       readSourceIdentity: fixture.readSourceIdentity,
       runner: fixture.runner,
@@ -159,6 +174,7 @@ test("finalization detects candidate changes and verifier failure before exposin
   changed.integrity.changeCandidateAfterFirstInspection = true;
   await assert.rejects(
     finalizeReleaseCandidate(changed.input, {
+      ...changed.dependencies,
       integrity: changed.integrity,
       readSourceIdentity: changed.readSourceIdentity,
       runner: changed.runner,
@@ -171,6 +187,7 @@ test("finalization detects candidate changes and verifier failure before exposin
   rejected.integrity.rejectVerification = true;
   await assert.rejects(
     finalizeReleaseCandidate(rejected.input, {
+      ...rejected.dependencies,
       integrity: rejected.integrity,
       readSourceIdentity: rejected.readSourceIdentity,
       runner: rejected.runner,
@@ -184,6 +201,7 @@ test("finalization rejects a dirty or different release source before signing", 
   const dirty = await createFinalizationFixture(t);
   await assert.rejects(
     finalizeReleaseCandidate(dirty.input, {
+      ...dirty.dependencies,
       integrity: dirty.integrity,
       readSourceIdentity: async () => ({
         commit: dirty.candidate.buildCommit,
@@ -199,6 +217,7 @@ test("finalization rejects a dirty or different release source before signing", 
   const different = await createFinalizationFixture(t);
   await assert.rejects(
     finalizeReleaseCandidate(different.input, {
+      ...different.dependencies,
       integrity: different.integrity,
       readSourceIdentity: async () => ({
         commit: "0".repeat(40),
@@ -220,6 +239,12 @@ test("release finalization arguments require exact absolute pinned inputs", () =
       join(root, "candidate"),
       "--destination",
       join(root, "output"),
+      "--git-executable",
+      process.execPath,
+      "--git-executable-sha256",
+      "d".repeat(64),
+      "--runner-executable-sha256",
+      "e".repeat(64),
       "--target",
       targetName(currentTarget()),
       "--expected-manifest-sha256",
@@ -236,7 +261,10 @@ test("release finalization arguments require exact absolute pinned inputs", () =
       destinationDirectory: join(root, "output"),
       expectedCandidateDigest: "b".repeat(64),
       expectedManifestSha256: "a".repeat(64),
+      gitExecutablePath: process.execPath,
+      gitExecutableSha256: "d".repeat(64),
       help: false,
+      runnerExecutableSha256: "e".repeat(64),
       signingPolicyPath: join(root, "publisher-policy.json"),
       signingPolicySha256: "c".repeat(64),
       target: currentTarget(),
@@ -249,6 +277,12 @@ test("release finalization arguments require exact absolute pinned inputs", () =
         "relative",
         "--destination",
         join(root, "output"),
+        "--git-executable",
+        process.execPath,
+        "--git-executable-sha256",
+        "d".repeat(64),
+        "--runner-executable-sha256",
+        "e".repeat(64),
         "--target",
         targetName(currentTarget()),
         "--expected-manifest-sha256",
@@ -314,26 +348,45 @@ async function createFinalizationFixture(t) {
     releaseMetadataSha256: "3".repeat(64),
     target,
   });
+  const sourceIdentity = Object.freeze({
+    commit: candidate.buildCommit,
+    commitEpoch: 1_753_315_324,
+    dirty: false,
+  });
+  const gitProvenance = Object.freeze({
+    description: Object.freeze({
+      gitExecutableSha256: runnerExecutableSha256,
+      source: sourceIdentity,
+    }),
+  });
   const integrity = createFakeIntegrity(candidate, signing.publicKeyPem);
   return {
     candidate,
     candidateDigest,
     destination,
+    dependencies: {
+      assertGitFilesMatchCommit: async () => {},
+      hashRuntimeExecutable: async () => ({
+        sha256: runnerExecutableSha256,
+        size: 1,
+      }),
+      pinGitProvenance: async () => gitProvenance,
+      revalidateGitProvenance: async () => sourceIdentity,
+    },
     input: {
       candidateRoot,
       destinationDirectory: destination,
       expectedCandidateDigest: candidateDigest,
       expectedManifestSha256: manifestSha256,
+      gitExecutablePath: process.execPath,
+      gitExecutableSha256: runnerExecutableSha256,
+      runnerExecutableSha256,
       signingPolicyPath: signing.policyPath,
       signingPolicySha256: await sha256File(signing.policyPath),
       target,
     },
     integrity,
-    readSourceIdentity: async () => ({
-      commit: candidate.buildCommit,
-      commitEpoch: 1_753_315_324,
-      dirty: false,
-    }),
+    readSourceIdentity: async () => sourceIdentity,
     root,
     runner: {
       platform: target.platform,

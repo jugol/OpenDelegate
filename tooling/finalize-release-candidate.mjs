@@ -4,8 +4,19 @@ import { link, lstat, mkdtemp, open, realpath, rm, rmdir, unlink } from "node:fs
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readSourceIdentity, REQUIRED_RELEASE_NODE_VERSION } from "./build-release.mjs";
+import { REQUIRED_RELEASE_NODE_VERSION } from "./build-release.mjs";
 import { createDeterministicReleaseArchive } from "./create-release-archive.mjs";
+import {
+  assertPinnedReleaseGitFilesMatchCommit,
+  pinReleaseGitProvenance,
+  readPinnedReleaseSourceIdentity,
+  revalidatePinnedReleaseGitProvenance,
+} from "./release-git-provenance.mjs";
+import {
+  hashCurrentNodeExecutable,
+  pinReleaseRunnerIdentity,
+  revalidateReleaseRunnerIdentity,
+} from "./release-runner-identity.mjs";
 import {
   assertPinnedReleaseSigningPolicyExternal,
   describePinnedReleaseSigningPolicy,
@@ -32,11 +43,14 @@ export function parseReleaseFinalizationArguments(values) {
   const supported = new Set([
     "--candidate",
     "--destination",
+    "--git-executable",
+    "--git-executable-sha256",
     "--target",
     "--expected-manifest-sha256",
     "--expected-candidate-digest",
     "--signing-policy",
     "--signing-policy-sha256",
+    "--runner-executable-sha256",
   ]);
   for (let index = 0; index < values.length; index += 2) {
     const name = values[index];
@@ -51,7 +65,7 @@ export function parseReleaseFinalizationArguments(values) {
       throw new Error(`${name} is required.`);
     }
   }
-  for (const name of ["--candidate", "--destination", "--signing-policy"]) {
+  for (const name of ["--candidate", "--destination", "--git-executable", "--signing-policy"]) {
     if (!isAbsolute(parsed.get(name))) {
       throw new Error(`${name} must be an absolute path.`);
     }
@@ -59,6 +73,8 @@ export function parseReleaseFinalizationArguments(values) {
   for (const name of [
     "--expected-manifest-sha256",
     "--expected-candidate-digest",
+    "--git-executable-sha256",
+    "--runner-executable-sha256",
     "--signing-policy-sha256",
   ]) {
     if (!SHA256_PATTERN.test(parsed.get(name))) {
@@ -74,7 +90,10 @@ export function parseReleaseFinalizationArguments(values) {
     destinationDirectory: resolve(parsed.get("--destination")),
     expectedCandidateDigest: parsed.get("--expected-candidate-digest"),
     expectedManifestSha256: parsed.get("--expected-manifest-sha256"),
+    gitExecutablePath: resolve(parsed.get("--git-executable")),
+    gitExecutableSha256: parsed.get("--git-executable-sha256"),
     help: false,
+    runnerExecutableSha256: parsed.get("--runner-executable-sha256"),
     signingPolicyPath: resolve(parsed.get("--signing-policy")),
     signingPolicySha256: parsed.get("--signing-policy-sha256"),
     target: { ...target },
@@ -97,6 +116,26 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       `Release candidates must be finalized on their target-native Node.js ${REQUIRED_RELEASE_NODE_VERSION} runner.`,
     );
   }
+  const runnerIdentity = await pinReleaseRunnerIdentity({
+    expectedExecutableSha256: input.runnerExecutableSha256,
+    hashRuntimeExecutable: dependencies.hashRuntimeExecutable ?? hashCurrentNodeExecutable,
+    runner: {
+      architecture: runner.architecture,
+      nodeVersion: runner.nodeVersion,
+      platform: runner.platform,
+    },
+  });
+  const gitProvenance = await (dependencies.pinGitProvenance ?? pinReleaseGitProvenance)({
+    expectedExecutableSha256: input.gitExecutableSha256,
+    executablePath: input.gitExecutablePath,
+    repositoryRoot,
+  });
+  const sourceIdentityReader =
+    dependencies.readSourceIdentity ?? (() => readPinnedReleaseSourceIdentity(gitProvenance));
+  const revalidateGit =
+    dependencies.revalidateGitProvenance ?? revalidatePinnedReleaseGitProvenance;
+  const assertGitFiles =
+    dependencies.assertGitFilesMatchCommit ?? assertPinnedReleaseGitFilesMatchCommit;
   const integrity =
     dependencies.integrity ?? (await import("../packages/release-integrity/src/index.ts"));
   requireIntegrityBoundary(integrity);
@@ -125,10 +164,14 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     root: candidateRoot,
   });
   assertCandidateDigest(firstCandidate, input.expectedCandidateDigest);
-  const sourceIdentityReader = dependencies.readSourceIdentity ?? readSourceIdentity;
   const sourceBefore = await sourceIdentityReader();
   assertCleanFinalizationSource(sourceBefore, firstCandidate.buildCommit);
   const releaseLogicBefore = await hashReleaseLogic();
+  await assertGitFiles(
+    gitProvenance,
+    releaseLogicBefore.map(({ path }) => path),
+  );
+  await revalidateGit(gitProvenance);
   const archiveName = releaseArchiveName(firstCandidate);
   const finalPaths = Object.freeze({
     archive: join(destinationDirectory, archiveName),
@@ -221,6 +264,12 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     assertVerifiedPublisherResult(verified, archive, envelope.sha256, signed.keyId);
     const sourceAfter = await sourceIdentityReader();
     assertCleanFinalizationSource(sourceAfter, secondCandidate.buildCommit);
+    await assertGitFiles(
+      gitProvenance,
+      releaseLogicBefore.map(({ path }) => path),
+    );
+    await revalidateGit(gitProvenance);
+    await revalidateReleaseRunnerIdentity(runnerIdentity);
     if (
       sourceAfter.commit !== sourceBefore.commit ||
       JSON.stringify(await hashReleaseLogic()) !== JSON.stringify(releaseLogicBefore) ||
@@ -255,10 +304,11 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
         keyId: policyDescription.keyId,
       },
       runner: {
-        platform: runner.platform,
-        architecture: runner.architecture,
-        nodeVersion: runner.nodeVersion,
-        runtimeExecutableSha256: runnerExecutableBefore.sha256,
+        platform: runnerIdentity.description.platform,
+        architecture: runnerIdentity.description.architecture,
+        nodeVersion: runnerIdentity.description.nodeVersion,
+        runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
+        gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
         signingInputSha256: signed.inputSha256,
         signerExecutableSha256: signed.runner.executableSha256,
         invocationArtifactSha256: signed.runner.invocationArtifactSha256,
@@ -342,6 +392,9 @@ function validateFinalizationInput(input) {
       "destinationDirectory",
       "expectedCandidateDigest",
       "expectedManifestSha256",
+      "gitExecutablePath",
+      "gitExecutableSha256",
+      "runnerExecutableSha256",
       "signingPolicyPath",
       "signingPolicySha256",
       "target",
@@ -351,6 +404,7 @@ function validateFinalizationInput(input) {
   for (const [value, label] of [
     [input.candidateRoot, "candidate root"],
     [input.destinationDirectory, "release output directory"],
+    [input.gitExecutablePath, "Git executable"],
     [input.signingPolicyPath, "release signing policy"],
   ]) {
     if (typeof value !== "string" || !isAbsolute(value) || value.includes("\0")) {
@@ -360,6 +414,8 @@ function validateFinalizationInput(input) {
   for (const [value, label] of [
     [input.expectedCandidateDigest, "expected candidate digest"],
     [input.expectedManifestSha256, "expected manifest digest"],
+    [input.gitExecutableSha256, "Git executable digest"],
+    [input.runnerExecutableSha256, "release-runner executable digest"],
     [input.signingPolicySha256, "release signing policy digest"],
   ]) {
     if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
@@ -417,6 +473,9 @@ async function hashReleaseLogic() {
     "tooling/create-release-archive.mjs",
     "tooling/external-release-signer.mjs",
     "tooling/finalize-release-candidate.mjs",
+    "tooling/release-credential-authorization.mjs",
+    "tooling/release-git-provenance.mjs",
+    "tooling/release-runner-identity.mjs",
     "tooling/release-signing-policy.mjs",
   ];
   return Promise.all(
@@ -657,6 +716,8 @@ Usage:
   node --experimental-strip-types tooling/finalize-release-candidate.mjs \\
     --candidate ABSOLUTE_CANDIDATE_DIRECTORY \\
     --destination ABSOLUTE_OUTPUT_DIRECTORY \\
+    --git-executable ABSOLUTE_UNLINKED_GIT --git-executable-sha256 LOWERCASE_SHA256 \\
+    --runner-executable-sha256 LOWERCASE_SHA256 \\
     --target darwin-arm64|linux-x64|win32-x64 \\
     --expected-manifest-sha256 LOWERCASE_SHA256 \\
     --expected-candidate-digest LOWERCASE_SHA256 \\

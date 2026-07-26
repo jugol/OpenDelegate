@@ -13,7 +13,7 @@ const prohibitedSnapshotKeyPattern =
 const domainRoles = new Map([
   ["publisher-attestation-v2", "publisher"],
   ["promotion-authorization-v1", "promotion"],
-  ["supported-channel-receipt-v1", "promotion"],
+  ["supported-channel-receipt-v2", "promotion"],
   ["platform-native-macos-sign-v1", "platform"],
   ["platform-native-macos-notarization-v1", "platform"],
   ["platform-native-windows-sign-v1", "platform"],

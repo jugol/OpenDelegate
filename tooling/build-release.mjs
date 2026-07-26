@@ -29,6 +29,13 @@ import {
 } from "./platform-native-authenticity.mjs";
 import { captureFrozenPayload, verifyFrozenPayload } from "./release-smoke-payload-seal.mjs";
 import { withLinuxReleaseSmokeSecretFixture } from "./release-smoke-secret.mjs";
+import {
+  assertPinnedReleaseGitFilesMatchCommit,
+  pinReleaseGitProvenance,
+  readPinnedReleaseSourceIdentity,
+  revalidatePinnedReleaseGitProvenance,
+  runPinnedReleaseGit,
+} from "./release-git-provenance.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const releaseToolRoot = resolve(dirname(currentFile), "..");
@@ -51,8 +58,11 @@ const runningReleaseToolPaths = [
   "tooling/native-release-assets.mjs",
   "tooling/native-payload-inventory.mjs",
   "tooling/platform-native-authenticity.mjs",
+  "tooling/release-credential-authorization.mjs",
+  "tooling/release-git-provenance.mjs",
   "tooling/release-smoke-payload-seal.mjs",
   "tooling/release-smoke-secret.mjs",
+  "tooling/release-tooling-io.mjs",
 ];
 const nodeDistributionRoot = `https://nodejs.org/dist/v${REQUIRED_RELEASE_NODE_VERSION}`;
 const nodeShasumsUrl = `${nodeDistributionRoot}/SHASUMS256.txt`;
@@ -163,6 +173,8 @@ export function officialRuntimeArchiveFor(platform, architecture) {
 
 export function parseReleaseArguments(values) {
   let destination;
+  let gitExecutable;
+  let gitExecutableSha256;
   let internalPreview = false;
   let platformSigningPolicy;
   let platformSigningPolicySha256;
@@ -171,6 +183,30 @@ export function parseReleaseArguments(values) {
     const value = values[index];
     if (value === "--internal-preview") {
       internalPreview = true;
+      continue;
+    }
+    if (value === "--git-executable") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || candidate.startsWith("--") || !isAbsolute(candidate)) {
+        throw new Error("--git-executable requires an explicit absolute path.");
+      }
+      if (gitExecutable !== undefined) {
+        throw new Error("--git-executable may be specified only once.");
+      }
+      gitExecutable = resolve(candidate);
+      index += 1;
+      continue;
+    }
+    if (value === "--git-executable-sha256") {
+      const candidate = values[index + 1];
+      if (candidate === undefined || !sha256Pattern.test(candidate)) {
+        throw new Error("--git-executable-sha256 requires a lowercase SHA-256.");
+      }
+      if (gitExecutableSha256 !== undefined) {
+        throw new Error("--git-executable-sha256 may be specified only once.");
+      }
+      gitExecutableSha256 = candidate;
+      index += 1;
       continue;
     }
     if (value === "--platform-signing-policy") {
@@ -226,10 +262,20 @@ export function parseReleaseArguments(values) {
       "The platform-signing policy path and lowercase SHA-256 must be provided together.",
     );
   }
+  if ((gitExecutable === undefined) !== (gitExecutableSha256 === undefined)) {
+    throw new Error("The Git executable path and lowercase SHA-256 must be provided together.");
+  }
+  if ((!internalPreview || platformSigningPolicy !== undefined) && gitExecutable === undefined) {
+    throw new Error(
+      "Supported or credential-bearing release builds require --git-executable and --git-executable-sha256.",
+    );
+  }
   return {
     destination,
     help: false,
     internalPreview,
+    ...(gitExecutable === undefined ? {} : { gitExecutable }),
+    ...(gitExecutableSha256 === undefined ? {} : { gitExecutableSha256 }),
     ...(platformSigningPolicy === undefined ? {} : { platformSigningPolicy }),
     ...(platformSigningPolicySha256 === undefined ? {} : { platformSigningPolicySha256 }),
   };
@@ -747,7 +793,12 @@ export async function writeIntegrityManifests(root) {
   await writeFile(join(root, "SHA256SUMS"), await createChecksumManifest(root), "utf8");
 }
 
-export async function inspectReleaseCandidateProvenance(sourceRoot, ledger, source) {
+export async function inspectReleaseCandidateProvenance(
+  sourceRoot,
+  ledger,
+  source,
+  gitProvenance = null,
+) {
   if (typeof ledger.sourceCommit !== "string" || !fullGitCommitPattern.test(ledger.sourceCommit)) {
     throw new Error("The audited source commit must be an exact 40-character lowercase Git SHA.");
   }
@@ -763,10 +814,16 @@ export async function inspectReleaseCandidateProvenance(sourceRoot, ledger, sour
     );
   }
 
-  await assertGitCommitExists(sourceRoot, ledger.sourceCommit, "audited source commit A");
-  await assertGitCommitExists(sourceRoot, source.commit, "build commit B");
+  await assertGitCommitExists(
+    sourceRoot,
+    ledger.sourceCommit,
+    "audited source commit A",
+    gitProvenance,
+  );
+  await assertGitCommitExists(sourceRoot, source.commit, "build commit B", gitProvenance);
   try {
-    await runProvenanceGit(
+    await runBoundProvenanceGit(
+      gitProvenance,
       ["merge-base", "--is-ancestor", ledger.sourceCommit, source.commit],
       sourceRoot,
       { capture: true },
@@ -779,7 +836,8 @@ export async function inspectReleaseCandidateProvenance(sourceRoot, ledger, sour
   }
 
   const rawDiff = (
-    await runProvenanceGit(
+    await runBoundProvenanceGit(
+      gitProvenance,
       [
         "diff",
         "--raw",
@@ -804,7 +862,12 @@ export async function inspectReleaseCandidateProvenance(sourceRoot, ledger, sour
   };
 }
 
-export async function createCommittedSourceSnapshot(sourceRoot, commit, parent) {
+export async function createCommittedSourceSnapshot(
+  sourceRoot,
+  commit,
+  parent,
+  gitProvenance = null,
+) {
   if (!fullGitCommitPattern.test(commit)) {
     throw new Error(
       "A committed source snapshot requires an exact 40-character lowercase Git SHA.",
@@ -813,9 +876,12 @@ export async function createCommittedSourceSnapshot(sourceRoot, commit, parent) 
   const snapshot = await mkdtemp(join(parent, ".od-committed-source-"));
   const archivePath = join(parent, `.od-source-${process.pid}-${randomUUID().slice(0, 8)}.tar`);
   try {
-    await runProvenanceGit(["archive", "--format=tar", "-o", archivePath, commit], sourceRoot, {
-      capture: true,
-    });
+    await runBoundProvenanceGit(
+      gitProvenance,
+      ["archive", "--format=tar", "-o", archivePath, commit],
+      sourceRoot,
+      { capture: true },
+    );
     await runCommand("tar", ["-xf", archivePath, "-C", snapshot], sourceRoot, {
       capture: true,
     });
@@ -828,8 +894,21 @@ export async function createCommittedSourceSnapshot(sourceRoot, commit, parent) 
   }
 }
 
-export async function withCommittedSourceSnapshot(sourceRoot, commit, parent, operation) {
-  const snapshot = await createCommittedSourceSnapshot(sourceRoot, commit, parent);
+export async function withCommittedSourceSnapshot(
+  sourceRoot,
+  commit,
+  parent,
+  gitProvenanceOrOperation,
+  maybeOperation,
+) {
+  const gitProvenance =
+    typeof gitProvenanceOrOperation === "function" ? null : gitProvenanceOrOperation;
+  const operation =
+    typeof gitProvenanceOrOperation === "function" ? gitProvenanceOrOperation : maybeOperation;
+  if (typeof operation !== "function") {
+    throw new Error("A committed source snapshot requires an operation callback.");
+  }
+  const snapshot = await createCommittedSourceSnapshot(sourceRoot, commit, parent, gitProvenance);
   try {
     return await operation(snapshot);
   } finally {
@@ -842,6 +921,7 @@ export async function verifyRunningReleaseToolFiles(
   commit,
   paths = runningReleaseToolPaths,
   runningRoot = sourceRoot,
+  gitProvenance = null,
 ) {
   if (!/^[0-9a-f]{40}$/u.test(commit)) {
     throw new Error("A running release-tool verification requires a full Git commit ID.");
@@ -856,7 +936,9 @@ export async function verifyRunningReleaseToolFiles(
     }
     const [runningBytes, committed] = await Promise.all([
       readFile(join(runningRoot, ...segments), "utf8"),
-      runProvenanceGit(["show", `${commit}:${path}`], sourceRoot, { capture: true }),
+      runBoundProvenanceGit(gitProvenance, ["show", `${commit}:${path}`], sourceRoot, {
+        capture: true,
+      }),
     ]);
     if (runningBytes !== committed.stdout) {
       throw new Error(
@@ -991,11 +1073,19 @@ async function createFileEntries(root, excluded) {
   return entries;
 }
 
-export async function buildRelease(options) {
+export async function buildRelease(options, dependencies = {}) {
   assertReleaseHost();
-  const source = await readSourceIdentity();
+  const gitProvenance = await pinBuildGitProvenance(options, dependencies);
+  const source =
+    gitProvenance === null
+      ? await readSourceIdentity()
+      : await readPinnedReleaseSourceIdentity(gitProvenance);
   assertCleanBundleSource(source);
-  await assertCommittedReleaseRunner(source);
+  if (gitProvenance !== null) {
+    await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
+    await revalidatePinnedReleaseGitProvenance(gitProvenance);
+  }
+  await assertCommittedReleaseRunner(source, gitProvenance);
 
   const lexicalDestination = validateReleaseDestination(repositoryRoot, options.destination);
   validateReleaseDestinationName(lexicalDestination, options.internalPreview);
@@ -1025,7 +1115,7 @@ export async function buildRelease(options) {
         );
   const provenance =
     supportStatus === "release-candidate"
-      ? await inspectReleaseCandidateProvenance(repositoryRoot, ledger, source)
+      ? await inspectReleaseCandidateProvenance(repositoryRoot, ledger, source, gitProvenance)
       : {
           auditedSourceCommit: ledger.sourceCommit,
           buildCommit: source.commit,
@@ -1043,6 +1133,7 @@ export async function buildRelease(options) {
         repositoryRoot,
         source.commit,
         parent,
+        gitProvenance,
         async (assemblySourceRoot) => {
           const snapshotLedger = await readFile(
             join(assemblySourceRoot, "docs", "release", "acceptance-evidence.json"),
@@ -1085,7 +1176,14 @@ export async function buildRelease(options) {
     });
 
     await platformAuthenticityPolicyInput?.verifyStable();
-    const finalSource = await readSourceIdentity();
+    const finalSource =
+      gitProvenance === null
+        ? await readSourceIdentity()
+        : await readPinnedReleaseSourceIdentity(gitProvenance);
+    if (gitProvenance !== null) {
+      await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
+      await revalidatePinnedReleaseGitProvenance(gitProvenance);
+    }
     if (finalSource.dirty || finalSource.commit !== source.commit) {
       throw new Error("The source checkout changed while the bundle was assembled.");
     }
@@ -1094,6 +1192,7 @@ export async function buildRelease(options) {
         repositoryRoot,
         ledger,
         finalSource,
+        gitProvenance,
       );
       if (JSON.stringify(finalProvenance) !== JSON.stringify(provenance)) {
         throw new Error(
@@ -1116,7 +1215,7 @@ export async function buildRelease(options) {
   };
 }
 
-async function assertCommittedReleaseRunner(source) {
+async function assertCommittedReleaseRunner(source, gitProvenance = null) {
   if (
     configuredReleaseSource === undefined ||
     !isAbsolute(configuredReleaseSource) ||
@@ -1140,6 +1239,7 @@ async function assertCommittedReleaseRunner(source) {
     source.commit,
     runningReleaseToolPaths,
     canonicalToolRoot,
+    gitProvenance,
   );
 }
 
@@ -2508,11 +2608,16 @@ async function assertPathAbsent(path) {
   throw new Error("The release destination already exists; refusing to overwrite it.");
 }
 
-async function assertGitCommitExists(sourceRoot, commit, label) {
+async function assertGitCommitExists(sourceRoot, commit, label, gitProvenance = null) {
   try {
-    await runProvenanceGit(["cat-file", "-e", `${commit}^{commit}`], sourceRoot, {
-      capture: true,
-    });
+    await runBoundProvenanceGit(
+      gitProvenance,
+      ["cat-file", "-e", `${commit}^{commit}`],
+      sourceRoot,
+      {
+        capture: true,
+      },
+    );
   } catch (error) {
     throw new Error(`The ${label} does not exist as a Git commit in this repository.`, {
       cause: error,
@@ -2563,6 +2668,27 @@ function buildTimestamp(source, supportStatus) {
   return new Date(seconds * 1000).toISOString();
 }
 
+async function pinBuildGitProvenance(options, dependencies = {}) {
+  const hasExecutable = options.gitExecutable !== undefined;
+  const hasDigest = options.gitExecutableSha256 !== undefined;
+  if (hasExecutable !== hasDigest) {
+    throw new Error("The Git executable path and lowercase SHA-256 must be provided together.");
+  }
+  if (!hasExecutable) {
+    if (!options.internalPreview || options.platformSigningPolicy !== undefined) {
+      throw new Error(
+        "Supported or credential-bearing release builds require a pinned Git executable.",
+      );
+    }
+    return null;
+  }
+  return (dependencies.pinGitProvenance ?? pinReleaseGitProvenance)({
+    expectedExecutableSha256: options.gitExecutableSha256,
+    executablePath: options.gitExecutable,
+    repositoryRoot,
+  });
+}
+
 function formatCounts(counts) {
   return Object.entries(counts)
     .sort(([left], [right]) => compareCodeUnits(left, right))
@@ -2579,6 +2705,13 @@ async function runProvenanceGit(arguments_, cwd, options = {}) {
       GIT_NO_REPLACE_OBJECTS: "1",
     },
   });
+}
+
+async function runBoundProvenanceGit(gitProvenance, arguments_, cwd, options = {}) {
+  if (gitProvenance === null) {
+    return runProvenanceGit(arguments_, cwd, options);
+  }
+  return runPinnedReleaseGit(gitProvenance, arguments_);
 }
 
 export async function resolveExternalPnpmCli(sourceRoot, candidate) {
@@ -2666,9 +2799,9 @@ function printHelp() {
   process.stdout.write(`Build an OpenDelegate platform bundle.
 
 Usage:
-  node tooling/build-release.mjs --destination ABSOLUTE_PATH
+  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256
   node tooling/build-release.mjs --destination ABSOLUTE_PATH --internal-preview
-  node tooling/build-release.mjs --destination ABSOLUTE_PATH --platform-signing-policy ABSOLUTE_PATH --platform-signing-policy-sha256 LOWERCASE_SHA256
+  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256 --platform-signing-policy ABSOLUTE_PATH --platform-signing-policy-sha256 LOWERCASE_SHA256
 
 An incomplete first-milestone ledger can only produce a clearly marked unsupported
 internal preview. Existing destinations and paths inside the source checkout are
@@ -2676,15 +2809,24 @@ always rejected.
 `);
 }
 
-async function runCommittedReleaseCli(rawArguments) {
-  const source = await readSourceIdentity(releaseToolRoot);
+async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) {
+  const gitProvenance = await pinBuildGitProvenance(options, dependencies);
+  const source =
+    gitProvenance === null
+      ? await readSourceIdentity(releaseToolRoot)
+      : await readPinnedReleaseSourceIdentity(gitProvenance);
   assertCleanBundleSource(source);
+  if (gitProvenance !== null) {
+    await assertPinnedReleaseGitFilesMatchCommit(gitProvenance, runningReleaseToolPaths);
+    await revalidatePinnedReleaseGitProvenance(gitProvenance);
+  }
   const runnerParent = await mkdtemp(join(tmpdir(), "opendelegate-release-runner-"));
   try {
     const runnerRoot = await createCommittedSourceSnapshot(
       releaseToolRoot,
       source.commit,
       runnerParent,
+      gitProvenance,
     );
     const runnerFile = join(runnerRoot, "tooling", "build-release.mjs");
     const child = spawn(process.execPath, [runnerFile, ...rawArguments], {
@@ -2717,7 +2859,7 @@ if (await isDirectReleaseInvocation(process.argv[1])) {
     if (arguments_.help) {
       printHelp();
     } else if (expectedReleaseCommit === undefined && configuredReleaseSource === undefined) {
-      await runCommittedReleaseCli(process.argv.slice(2));
+      await runCommittedReleaseCli(arguments_, process.argv.slice(2));
     } else {
       const result = await buildRelease(arguments_);
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

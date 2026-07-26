@@ -1,7 +1,12 @@
 import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readSourceIdentity } from "./build-release.mjs";
+import {
+  assertPinnedReleaseGitFilesMatchCommit,
+  pinReleaseGitProvenance,
+  readPinnedReleaseSourceIdentity,
+  revalidatePinnedReleaseGitProvenance,
+} from "./release-git-provenance.mjs";
 import { hashPromotionReleaseLogic } from "./release-promotion-plan.mjs";
 import {
   hashCurrentNodeExecutable,
@@ -42,6 +47,8 @@ export function parseReleaseConfigurationArguments(values) {
   }
   const supported = new Set([
     "--repository",
+    "--git-executable",
+    "--git-executable-sha256",
     "--plan",
     "--plan-sha256",
     "--destination-root",
@@ -61,7 +68,7 @@ export function parseReleaseConfigurationArguments(values) {
       throw new Error(`${name} is required.`);
     }
   }
-  for (const name of ["--repository", "--plan", "--destination-root"]) {
+  for (const name of ["--repository", "--git-executable", "--plan", "--destination-root"]) {
     if (!isAbsolute(parsed.get(name)) || parsed.get(name).includes("\0")) {
       throw new Error(`${name} must be an absolute path.`);
     }
@@ -69,11 +76,16 @@ export function parseReleaseConfigurationArguments(values) {
   if (!SHA256_PATTERN.test(parsed.get("--plan-sha256"))) {
     throw new Error("--plan-sha256 must be a lowercase SHA-256 digest.");
   }
+  if (!SHA256_PATTERN.test(parsed.get("--git-executable-sha256"))) {
+    throw new Error("--git-executable-sha256 must be a lowercase SHA-256 digest.");
+  }
   if (!SHA256_PATTERN.test(parsed.get("--runner-executable-sha256"))) {
     throw new Error("--runner-executable-sha256 must be a lowercase SHA-256 digest.");
   }
   return {
     destinationRoot: resolve(parsed.get("--destination-root")),
+    gitExecutablePath: resolve(parsed.get("--git-executable")),
+    gitExecutableSha256: parsed.get("--git-executable-sha256"),
     planPath: resolve(parsed.get("--plan")),
     planSha256: parsed.get("--plan-sha256"),
     repositoryRoot: resolve(parsed.get("--repository")),
@@ -92,6 +104,17 @@ export async function composeReleaseConfiguration(input, dependencies = {}) {
       platform: process.platform,
     },
   });
+  const gitProvenance = await (dependencies.pinGitProvenance ?? pinReleaseGitProvenance)({
+    expectedExecutableSha256: input.gitExecutableSha256,
+    executablePath: input.gitExecutablePath,
+    repositoryRoot: input.repositoryRoot,
+  });
+  const sourceReader =
+    dependencies.readSourceIdentity ?? (() => readPinnedReleaseSourceIdentity(gitProvenance));
+  const revalidateGit =
+    dependencies.revalidateGitProvenance ?? revalidatePinnedReleaseGitProvenance;
+  const assertGitFiles =
+    dependencies.assertGitFilesMatchCommit ?? assertPinnedReleaseGitFilesMatchCommit;
   const [destinationRoot, repositoryRoot] = await Promise.all([
     requireCanonicalNewPath(input.destinationRoot, "release configuration destination"),
     requireCanonicalDirectory(input.repositoryRoot, "release repository"),
@@ -138,11 +161,15 @@ export async function composeReleaseConfiguration(input, dependencies = {}) {
     throw new Error("The release configuration output cannot contain the candidate.");
   }
 
-  const sourceReader = dependencies.readSourceIdentity ?? readSourceIdentity;
   const logicHasher = dependencies.hashReleaseLogic ?? hashPromotionReleaseLogic;
   const sourceBefore = await sourceReader(repositoryRoot);
   assertCleanConfigurationSource(sourceBefore, plan.source.buildCommit);
   const releaseLogic = await logicHasher(runningRepositoryRoot);
+  await assertGitFiles(
+    gitProvenance,
+    releaseLogic.map(({ path }) => path),
+  );
+  await revalidateGit(gitProvenance);
   const integrity =
     dependencies.integrity ?? (await import("../packages/release-integrity/src/index.ts"));
   requireConfigurationIntegrityBoundary(integrity);
@@ -160,6 +187,7 @@ export async function composeReleaseConfiguration(input, dependencies = {}) {
     releaseLogic,
     recordedAt: (dependencies.now?.() ?? new Date()).toISOString(),
     runnerIdentity,
+    gitProvenance,
     verified,
   });
 
@@ -169,6 +197,11 @@ export async function composeReleaseConfiguration(input, dependencies = {}) {
     if (JSON.stringify(await logicHasher(runningRepositoryRoot)) !== JSON.stringify(releaseLogic)) {
       throw new Error("The committed release-configuration logic changed during composition.");
     }
+    await assertGitFiles(
+      gitProvenance,
+      releaseLogic.map(({ path }) => path),
+    );
+    await revalidateGit(gitProvenance);
     await revalidateConfigurationInputs(planFile, plan, loaded);
     await revalidateReleaseRunnerIdentity(runnerIdentity);
   };
@@ -413,6 +446,7 @@ async function verifyConfigurationSource(integrity, plan, loaded, candidateRoot)
 }
 
 function createConfigurationTree({
+  gitProvenance,
   integrity,
   loaded,
   plan,
@@ -566,6 +600,7 @@ function createConfigurationTree({
       architecture: runnerIdentity.description.architecture,
       nodeVersion: runnerIdentity.description.nodeVersion,
       runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
+      gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
     },
     outputs: {
       configuration: {
@@ -910,11 +945,20 @@ function allPinnedPlanFiles(plan) {
 function validateConfigurationInput(input) {
   requireExactKeys(
     input,
-    ["destinationRoot", "planPath", "planSha256", "repositoryRoot", "runnerExecutableSha256"],
+    [
+      "destinationRoot",
+      "gitExecutablePath",
+      "gitExecutableSha256",
+      "planPath",
+      "planSha256",
+      "repositoryRoot",
+      "runnerExecutableSha256",
+    ],
     "release configuration input",
   );
   for (const [value, label] of [
     [input.destinationRoot, "release configuration destination"],
+    [input.gitExecutablePath, "Git executable"],
     [input.planPath, "release configuration plan"],
     [input.repositoryRoot, "release repository"],
   ]) {
@@ -922,6 +966,7 @@ function validateConfigurationInput(input) {
       throw new Error(`The ${label} path must be absolute.`);
     }
   }
+  assertSha256(input.gitExecutableSha256, "Git executable");
   if (typeof input.planSha256 !== "string" || !SHA256_PATTERN.test(input.planSha256)) {
     throw new Error("The release configuration plan must have a lowercase SHA-256 pin.");
   }
@@ -991,6 +1036,7 @@ This command creates a standalone external bundle. It never installs into a Devi
 Usage:
   pnpm release:configure -- \\
     --repository <absolute-clean-checkout> \\
+    --git-executable <absolute-unlinked-git> --git-executable-sha256 <sha256> \\
     --plan <absolute-canonical-plan> --plan-sha256 <sha256> \\
     --destination-root <absolute-new-directory> \\
     --runner-executable-sha256 <sha256>

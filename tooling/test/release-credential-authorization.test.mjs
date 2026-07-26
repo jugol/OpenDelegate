@@ -183,7 +183,7 @@ test("expired credential authorization is consumed without invoking a signer", a
 
 test("authorization snapshots reject secret-bearing or non-canonical values", async () => {
   const base = {
-    domain: "supported-channel-receipt-v1",
+    domain: "supported-channel-receipt-v2",
     inputSha256,
     revalidate: async () => {},
     role: "promotion",

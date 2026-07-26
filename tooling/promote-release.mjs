@@ -1,7 +1,12 @@
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readSourceIdentity } from "./build-release.mjs";
+import {
+  assertPinnedReleaseGitFilesMatchCommit,
+  pinReleaseGitProvenance,
+  readPinnedReleaseSourceIdentity,
+  revalidatePinnedReleaseGitProvenance,
+} from "./release-git-provenance.mjs";
 import {
   preparePromotionAuthorization,
   promotionPreparationExternalRoots,
@@ -39,6 +44,8 @@ export function parseReleasePromotionArguments(values) {
   }
   const names = new Set([
     "--repository",
+    "--git-executable",
+    "--git-executable-sha256",
     "--plan",
     "--plan-sha256",
     "--signing-policy",
@@ -50,18 +57,22 @@ export function parseReleasePromotionArguments(values) {
   const parsed = parseExactOptions(arguments_, names, "release-promotion");
   assertAbsoluteOptions(parsed, [
     "--repository",
+    "--git-executable",
     "--plan",
     "--signing-policy",
     "--attestation-destination",
     "--runner-record-destination",
   ]);
   assertDigestOptions(parsed, [
+    "--git-executable-sha256",
     "--plan-sha256",
     "--runner-executable-sha256",
     "--signing-policy-sha256",
   ]);
   return {
     attestationDestination: resolve(parsed.get("--attestation-destination")),
+    gitExecutablePath: resolve(parsed.get("--git-executable")),
+    gitExecutableSha256: parsed.get("--git-executable-sha256"),
     planPath: resolve(parsed.get("--plan")),
     planSha256: parsed.get("--plan-sha256"),
     repositoryRoot: resolve(parsed.get("--repository")),
@@ -83,6 +94,17 @@ export async function promoteRelease(input, dependencies = {}) {
       platform: process.platform,
     },
   });
+  const gitProvenance = await (dependencies.pinGitProvenance ?? pinReleaseGitProvenance)({
+    expectedExecutableSha256: input.gitExecutableSha256,
+    executablePath: input.gitExecutablePath,
+    repositoryRoot: input.repositoryRoot,
+  });
+  const readGitSource =
+    dependencies.readSourceIdentity ?? (() => readPinnedReleaseSourceIdentity(gitProvenance));
+  const revalidateGit =
+    dependencies.revalidateGitProvenance ?? revalidatePinnedReleaseGitProvenance;
+  const assertGitFiles =
+    dependencies.assertGitFilesMatchCommit ?? assertPinnedReleaseGitFilesMatchCommit;
   const [attestationDestination, runnerRecordDestination, repositoryRoot] = await Promise.all([
     requireCanonicalNewPath(input.attestationDestination, "promotion attestation destination"),
     requireCanonicalNewPath(input.runnerRecordDestination, "promotion runner-record destination"),
@@ -109,10 +131,15 @@ export async function promoteRelease(input, dependencies = {}) {
     {
       hashReleaseLogic: dependencies.hashReleaseLogic,
       integrity,
-      readSourceIdentity: dependencies.readSourceIdentity ?? readSourceIdentity,
+      readSourceIdentity: readGitSource,
       runningRepositoryRoot: dependencies.runningRepositoryRoot,
     },
   );
+  await assertGitFiles(
+    gitProvenance,
+    prepared.releaseLogic.map(({ path }) => path),
+  );
+  await revalidateGit(gitProvenance);
 
   const policy = await readPinnedReleaseSigningPolicy({
     expectedRole: "promotion",
@@ -133,6 +160,7 @@ export async function promoteRelease(input, dependencies = {}) {
   }
 
   await revalidateReleaseRunnerIdentity(runnerIdentity);
+  await revalidateGit(gitProvenance);
   const signed = await signWithPinnedReleasePolicy({
     policy,
     signingBytes: prepared.composed.signingBytes,
@@ -141,6 +169,7 @@ export async function promoteRelease(input, dependencies = {}) {
     throw new Error("The external signer did not preserve the promotion authority.");
   }
   await revalidateReleaseRunnerIdentity(runnerIdentity);
+  await revalidateGit(gitProvenance);
   const envelope = integrity.composeSignedReleaseEnvelope({
     composed: prepared.composed,
     keyId: signed.keyId,
@@ -150,6 +179,7 @@ export async function promoteRelease(input, dependencies = {}) {
   const recordedAt = (dependencies.now?.() ?? new Date()).toISOString();
   const runnerRecord = createPromotionRunnerRecord({
     envelope,
+    gitProvenance,
     policyDescription,
     prepared,
     recordedAt,
@@ -174,6 +204,11 @@ export async function promoteRelease(input, dependencies = {}) {
       async verifyPublished() {
         await revalidatePreparedPromotion(prepared);
         await revalidateReleaseRunnerIdentity(runnerIdentity);
+        await assertGitFiles(
+          gitProvenance,
+          prepared.releaseLogic.map(({ path }) => path),
+        );
+        await revalidateGit(gitProvenance);
         const currentPolicy = await readPinnedReleaseSigningPolicy({
           expectedRole: "promotion",
           path: input.signingPolicyPath,
@@ -213,6 +248,7 @@ export async function promoteRelease(input, dependencies = {}) {
 
 function createPromotionRunnerRecord({
   envelope,
+  gitProvenance,
   policyDescription,
   prepared,
   recordedAt,
@@ -257,6 +293,7 @@ function createPromotionRunnerRecord({
       architecture: runnerIdentity.description.architecture,
       nodeVersion: runnerIdentity.description.nodeVersion,
       runtimeExecutableSha256: runnerIdentity.description.runtimeExecutableSha256,
+      gitExecutableSha256: gitProvenance.description.gitExecutableSha256,
       signingInputSha256: signed.inputSha256,
       signerExecutableSha256: signed.runner.executableSha256,
       invocationArtifactSha256: signed.runner.invocationArtifactSha256,
@@ -274,6 +311,8 @@ function validatePromotionInput(input) {
     input,
     [
       "attestationDestination",
+      "gitExecutablePath",
+      "gitExecutableSha256",
       "planPath",
       "planSha256",
       "repositoryRoot",
@@ -286,6 +325,7 @@ function validatePromotionInput(input) {
   );
   for (const [value, label] of [
     [input.attestationDestination, "promotion attestation destination"],
+    [input.gitExecutablePath, "Git executable"],
     [input.planPath, "promotion plan"],
     [input.repositoryRoot, "release repository"],
     [input.runnerRecordDestination, "promotion runner-record destination"],
@@ -296,6 +336,7 @@ function validatePromotionInput(input) {
     }
   }
   for (const [value, label] of [
+    [input.gitExecutableSha256, "Git executable"],
     [input.planSha256, "promotion plan"],
     [input.runnerExecutableSha256, "release-runner executable"],
     [input.signingPolicySha256, "promotion signing policy"],
@@ -358,6 +399,7 @@ function renderHelp() {
 Usage:
   pnpm release:promote -- \\
     --repository <absolute-clean-checkout> \\
+    --git-executable <absolute-unlinked-git> --git-executable-sha256 <sha256> \\
     --plan <absolute-canonical-plan> --plan-sha256 <sha256> \\
     --signing-policy <absolute-policy> --signing-policy-sha256 <sha256> \\
     --attestation-destination <absolute-new-file> \\

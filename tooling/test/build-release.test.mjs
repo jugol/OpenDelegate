@@ -347,12 +347,18 @@ async function git(root, arguments_) {
 test("release arguments require an explicit absolute destination", () => {
   const signingPolicy = resolve("platform-signing-policy.json");
   const signingPolicySha256 = "a".repeat(64);
+  const gitExecutable = resolve("git");
+  const gitExecutableSha256 = "b".repeat(64);
   assert.throws(() => parseReleaseArguments([]), /--destination is required/);
   assert.deepEqual(
     parseReleaseArguments([
       "--destination",
       resolve("release"),
       "--internal-preview",
+      "--git-executable",
+      gitExecutable,
+      "--git-executable-sha256",
+      gitExecutableSha256,
       "--platform-signing-policy",
       signingPolicy,
       "--platform-signing-policy-sha256",
@@ -360,11 +366,25 @@ test("release arguments require an explicit absolute destination", () => {
     ]),
     {
       destination: resolve("release"),
+      gitExecutable,
+      gitExecutableSha256,
       help: false,
       internalPreview: true,
       platformSigningPolicy: signingPolicy,
       platformSigningPolicySha256: signingPolicySha256,
     },
+  );
+  assert.deepEqual(
+    parseReleaseArguments(["--destination", resolve("preview"), "--internal-preview"]),
+    {
+      destination: resolve("preview"),
+      help: false,
+      internalPreview: true,
+    },
+  );
+  assert.throws(
+    () => parseReleaseArguments(["--destination", resolve("release")]),
+    /require --git-executable/u,
   );
   assert.throws(
     () =>

@@ -2,7 +2,6 @@ import { readdir } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { readSourceIdentity } from "./build-release.mjs";
 import {
   assertDisjointPaths,
   assertPathOutsideRoots,
@@ -95,7 +94,10 @@ export async function preparePromotionAuthorization(input, dependencies = {}) {
     );
   }
 
-  const sourceReader = dependencies.readSourceIdentity ?? readSourceIdentity;
+  const sourceReader = dependencies.readSourceIdentity;
+  if (typeof sourceReader !== "function") {
+    throw new Error("Promotion requires an explicitly pinned Git source-identity reader.");
+  }
   const sourceBefore = await sourceReader(requestedRepositoryRoot);
   assertCleanPromotionSource(sourceBefore, plan.source.buildCommit);
   const logicHasher = dependencies.hashReleaseLogic ?? hashPromotionReleaseLogic;
@@ -260,6 +262,8 @@ export async function hashPromotionReleaseLogic(repositoryRoot = moduleRepositor
     "tooling/create-supported-channel-receipt.mjs",
     "tooling/external-release-signer.mjs",
     "tooling/promote-release.mjs",
+    "tooling/release-credential-authorization.mjs",
+    "tooling/release-git-provenance.mjs",
     "tooling/release-promotion-plan.mjs",
     "tooling/release-read-back-plan.mjs",
     "tooling/release-runner-identity.mjs",
