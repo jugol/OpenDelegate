@@ -185,6 +185,9 @@ importers:
       '@opendelegate/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@opendelegate/release-integrity':
+        specifier: workspace:*
+        version: link:../../packages/release-integrity
       '@opendelegate/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
@@ -454,7 +457,11 @@ importers:
         specifier: 2.0.2
         version: 2.0.2
 
-  packages/platform-services: {}
+  packages/platform-services:
+    dependencies:
+      '@opendelegate/release-integrity':
+        specifier: workspace:*
+        version: link:../release-integrity
 
   packages/policy: {}
 
