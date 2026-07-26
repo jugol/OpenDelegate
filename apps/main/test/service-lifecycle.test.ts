@@ -17,7 +17,6 @@ import {
 } from "@opendelegate/platform-services";
 
 import { parseArguments } from "../src/cli.ts";
-import { createMainRuntime, initializeMainHome } from "../src/index.ts";
 import {
   ServiceLifecycleCliError,
   loadServiceConfigurationFile,
@@ -26,6 +25,7 @@ import {
   type ServiceLifecycleAdapters,
 } from "../src/service-lifecycle.ts";
 import { createMainProcessTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
+import { createMainRuntime, initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
 const execFileAsync = promisify(execFile);
 const DEVELOPMENT_RELEASE_IDENTITY = {

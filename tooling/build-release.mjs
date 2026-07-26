@@ -1376,7 +1376,7 @@ async function assembleRelease({
     pnpmCli: assemblyPnpmCli,
   });
   const mainNodeModules = join(mainDirectory, "node_modules");
-  await removePackageManagerBinDirectories(mainNodeModules);
+  await prunePackageManagerMetadata(mainNodeModules);
   await pruneRuntimeNativePackageArtifacts(mainNodeModules);
   const workerDirectory = join(staging, "apps", "worker");
   await mkdir(workerDirectory, { recursive: true });
@@ -1384,10 +1384,10 @@ async function assembleRelease({
     pnpmCli: assemblyPnpmCli,
   });
   const workerNodeModules = join(workerDirectory, "node_modules");
-  await removePackageManagerBinDirectories(workerNodeModules);
+  await prunePackageManagerMetadata(workerNodeModules);
   await pruneRuntimeNativePackageArtifacts(workerNodeModules);
 
-  await bundle({
+  const mainBundle = await bundle({
     absWorkingDir: assemblySourceRoot,
     banner: {
       js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
@@ -1397,11 +1397,13 @@ async function assembleRelease({
     external: ["@node-rs/argon2", "@node-rs/argon2-*", "better-sqlite3", "pg"],
     format: "esm",
     logLevel: "info",
+    metafile: true,
     outfile: join(mainDirectory, "opendelegate.mjs"),
     platform: "node",
     target: "node24.18",
   });
-  await bundle({
+  assertNoBundledWorkspaceExternalImports(mainBundle.metafile, "Main");
+  const workerBundle = await bundle({
     absWorkingDir: assemblySourceRoot,
     banner: {
       js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
@@ -1411,10 +1413,12 @@ async function assembleRelease({
     external: ["better-sqlite3"],
     format: "esm",
     logLevel: "info",
+    metafile: true,
     outfile: join(workerDirectory, "opendelegate-worker.mjs"),
     platform: "node",
     target: "node24.18",
   });
+  assertNoBundledWorkspaceExternalImports(workerBundle.metafile, "Worker");
   const serviceHostExternalDependencies = [
     "@node-rs/argon2",
     "@node-rs/argon2-*",
@@ -1422,7 +1426,7 @@ async function assembleRelease({
     "pg",
   ];
   for (const directory of [mainDirectory, workerDirectory]) {
-    await bundle({
+    const coreServiceBundle = await bundle({
       absWorkingDir: assemblySourceRoot,
       banner: {
         js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
@@ -1432,11 +1436,13 @@ async function assembleRelease({
       external: serviceHostExternalDependencies,
       format: "esm",
       logLevel: "info",
+      metafile: true,
       outfile: join(directory, "opendelegate-service-host.mjs"),
       platform: "node",
       target: "node24.18",
     });
-    await bundle({
+    assertNoBundledWorkspaceExternalImports(coreServiceBundle.metafile, "service host");
+    const sessionHelperBundle = await bundle({
       absWorkingDir: assemblySourceRoot,
       banner: {
         js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
@@ -1446,11 +1452,25 @@ async function assembleRelease({
       external: serviceHostExternalDependencies,
       format: "esm",
       logLevel: "info",
+      metafile: true,
       outfile: join(directory, "opendelegate-session-helper.mjs"),
       platform: "node",
       target: "node24.18",
     });
+    assertNoBundledWorkspaceExternalImports(sessionHelperBundle.metafile, "session helper");
   }
+  await pruneBundledWorkspacePackages(mainNodeModules);
+  await pruneBundledWorkspacePackages(workerNodeModules);
+  await pruneBundledApplicationPayload(mainDirectory, [
+    "opendelegate.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ]);
+  await pruneBundledApplicationPayload(workerDirectory, [
+    "opendelegate-worker.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ]);
 
   const adminTarget = join(staging, "apps", "admin-web", "dist");
   await mkdir(dirname(adminTarget), { recursive: true });
@@ -1578,6 +1598,20 @@ Run \`opendelegate help\` for the deterministic CLI surface. Review
     policyInput: platformAuthenticityPolicyInput,
     stagingRoot: staging,
   });
+  await assertBundledApplicationPayload(mainDirectory, [
+    "opendelegate.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ]);
+  await assertBundledApplicationPayload(workerDirectory, [
+    "opendelegate-worker.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ]);
+  await assertNoBundledWorkspacePackages(mainNodeModules);
+  await assertNoBundledWorkspacePackages(workerNodeModules);
+  await assertNoPackageManagerMetadata(mainNodeModules);
+  await assertNoPackageManagerMetadata(workerNodeModules);
   await assertPortableTree(staging);
   await writeIntegrityManifests(staging);
 }
@@ -1608,6 +1642,227 @@ export function createWorkerDeployArguments(workerDirectory) {
 
 export async function removePackageManagerBinDirectories(root) {
   await removePackageManagerBinsFromTree(root, basename(root) === "node_modules");
+}
+
+export async function prunePackageManagerMetadata(nodeModules) {
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "application node_modules root",
+  );
+  await removePackageManagerBinsFromTree(canonicalNodeModules, true);
+  for (const entry of [
+    { kind: "file", name: ".modules.yaml" },
+    { kind: "file", name: ".package-map.json" },
+    { kind: "directory", name: ".pnpm" },
+  ]) {
+    await removePackageManagerMetadataEntry(canonicalNodeModules, entry);
+  }
+  await assertNoPackageManagerMetadata(canonicalNodeModules);
+}
+
+export async function assertNoPackageManagerMetadata(nodeModules) {
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "application node_modules root",
+  );
+  await assertNoPackageManagerBinsFromTree(canonicalNodeModules, true);
+  for (const name of [".modules.yaml", ".package-map.json", ".pnpm"]) {
+    try {
+      await lstat(join(canonicalNodeModules, name));
+    } catch (error) {
+      if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    throw new Error(`The bundled application payload retains pnpm metadata: ${name}.`);
+  }
+}
+
+async function removePackageManagerMetadataEntry(root, entry) {
+  const path = join(root, entry.name);
+  let metadata;
+  try {
+    metadata = await lstat(path);
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const canonical = await realpath(path);
+  const validKind = entry.kind === "directory" ? metadata.isDirectory() : metadata.isFile();
+  if (!validKind || metadata.isSymbolicLink() || !isStrictPathDescendant(root, canonical)) {
+    throw new Error(
+      `The deployed pnpm metadata escaped its release staging boundary: ${entry.name}.`,
+    );
+  }
+  if (entry.kind === "directory") {
+    await assertPortableTree(canonical);
+    await rm(canonical, { force: true, recursive: true });
+  } else {
+    await rm(canonical, { force: true });
+  }
+}
+
+export function assertNoBundledWorkspaceExternalImports(metafile, label) {
+  if (metafile === undefined || metafile === null || typeof metafile.outputs !== "object") {
+    throw new Error(`The ${label} bundle did not return an auditable dependency metafile.`);
+  }
+  const workspaceImports = Object.values(metafile.outputs)
+    .flatMap((output) => (Array.isArray(output.imports) ? output.imports : []))
+    .filter(
+      (entry) =>
+        entry !== null &&
+        typeof entry === "object" &&
+        entry.external === true &&
+        typeof entry.path === "string" &&
+        entry.path.startsWith("@opendelegate/"),
+    )
+    .map((entry) => entry.path)
+    .sort(compareCodeUnits);
+  if (workspaceImports.length > 0) {
+    throw new Error(
+      `The ${label} bundle left first-party workspace imports external: ${workspaceImports.join(", ")}.`,
+    );
+  }
+}
+
+export async function pruneBundledWorkspacePackages(nodeModules) {
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "application node_modules root",
+  );
+  const scope = join(canonicalNodeModules, "@opendelegate");
+  let metadata;
+  try {
+    metadata = await lstat(scope);
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  const canonicalScope = await realpath(scope);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    !isStrictPathDescendant(canonicalNodeModules, canonicalScope)
+  ) {
+    throw new Error("The deployed workspace package scope escaped its release staging boundary.");
+  }
+  await assertPortableTree(canonicalScope);
+  await rm(canonicalScope, { force: true, recursive: true });
+  await assertNoBundledWorkspacePackages(canonicalNodeModules);
+}
+
+export async function assertNoBundledWorkspacePackages(nodeModules) {
+  const canonicalNodeModules = await requireSafePruneDirectory(
+    nodeModules,
+    undefined,
+    "application node_modules root",
+  );
+  try {
+    await lstat(join(canonicalNodeModules, "@opendelegate"));
+  } catch (error) {
+    if (error !== null && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  throw new Error("The bundled application payload retains first-party workspace packages.");
+}
+
+export async function pruneBundledApplicationPayload(root, retainedBundleNames) {
+  const canonicalRoot = await requireSafePruneDirectory(
+    root,
+    undefined,
+    "bundled application root",
+  );
+  const retained = validateBundledApplicationNames(retainedBundleNames);
+
+  await requireSafePruneDirectory(
+    join(canonicalRoot, "node_modules"),
+    canonicalRoot,
+    "application node_modules root",
+  );
+  for (const name of retainedBundleNames) {
+    await requireSafePruneFile(
+      join(canonicalRoot, name),
+      canonicalRoot,
+      `application bundle ${name}`,
+    );
+  }
+  const entries = await readdir(canonicalRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (retained.has(entry.name)) {
+      continue;
+    }
+    const path = join(canonicalRoot, entry.name);
+    const [metadata, canonicalEntry] = await Promise.all([lstat(path), realpath(path)]);
+    if (
+      metadata.isSymbolicLink() ||
+      (!metadata.isDirectory() && !metadata.isFile()) ||
+      !isStrictPathDescendant(canonicalRoot, canonicalEntry)
+    ) {
+      throw new Error(
+        `The deployed application package entry escaped its release staging boundary: ${entry.name}.`,
+      );
+    }
+    if (metadata.isDirectory()) {
+      await assertPortableTree(canonicalEntry);
+      await rm(canonicalEntry, { force: true, recursive: true });
+    } else {
+      await rm(canonicalEntry, { force: true });
+    }
+  }
+
+  await assertBundledApplicationPayload(canonicalRoot, retainedBundleNames);
+}
+
+export async function assertBundledApplicationPayload(root, retainedBundleNames) {
+  const canonicalRoot = await requireSafePruneDirectory(
+    root,
+    undefined,
+    "bundled application root",
+  );
+  const retained = validateBundledApplicationNames(retainedBundleNames);
+  await requireSafePruneDirectory(
+    join(canonicalRoot, "node_modules"),
+    canonicalRoot,
+    "application node_modules root",
+  );
+  for (const name of retainedBundleNames) {
+    await requireSafePruneFile(
+      join(canonicalRoot, name),
+      canonicalRoot,
+      `application bundle ${name}`,
+    );
+  }
+  const finalEntries = (await readdir(canonicalRoot)).sort(compareCodeUnits);
+  const expectedEntries = [...retained].sort(compareCodeUnits);
+  if (JSON.stringify(finalEntries) !== JSON.stringify(expectedEntries)) {
+    throw new Error("The bundled application payload contains an unexpected root entry.");
+  }
+}
+
+function validateBundledApplicationNames(retainedBundleNames) {
+  const retained = new Set(["node_modules"]);
+  for (const name of retainedBundleNames) {
+    if (
+      typeof name !== "string" ||
+      name === "" ||
+      basename(name) !== name ||
+      !/^opendelegate(?:-[a-z-]+)?\.mjs$/u.test(name)
+    ) {
+      throw new Error("Bundled application entrypoints must be explicit .mjs basenames.");
+    }
+    retained.add(name);
+  }
+  return retained;
 }
 
 export async function pruneRuntimeNativePackageArtifacts(
@@ -1740,6 +1995,19 @@ async function removePackageManagerBinsFromTree(root, rootIsNodeModules) {
     }
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
       await removePackageManagerBinsFromTree(path, entry.name === "node_modules");
+    }
+  }
+}
+
+async function assertNoPackageManagerBinsFromTree(root, rootIsNodeModules) {
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const path = join(root, entry.name);
+    if (rootIsNodeModules && entry.name === ".bin") {
+      throw new Error("The bundled application payload retains a package-manager .bin directory.");
+    }
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      await assertNoPackageManagerBinsFromTree(path, entry.name === "node_modules");
     }
   }
 }

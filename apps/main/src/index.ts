@@ -1,18 +1,7 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import {
-  access,
-  chmod,
-  lstat,
-  mkdir,
-  readFile,
-  readdir,
-  realpath,
-  writeFile,
-} from "node:fs/promises";
+import { access, lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { arch, homedir, hostname, platform, release } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
 
 import {
   createMainControlPlaneApp,
@@ -151,6 +140,10 @@ import {
   type MainSingletonOwnership,
   type MainSingletonOwnershipFactory,
 } from "./main-singleton-ownership.ts";
+import {
+  enforceHostRuntimePermissions,
+  RuntimePermissionEnforcementError,
+} from "./internal/runtime-permissions.ts";
 
 export {
   AgentBackedConfigurationAgent,
@@ -325,8 +318,6 @@ const DEFAULT_MAIN_PORT = 4380;
 const MAX_ADMIN_FILES = 2_000;
 const MAX_ADMIN_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_ADMIN_TOTAL_BYTES = 64 * 1024 * 1024;
-const execFileAsync = promisify(execFile);
-
 export interface MainListenerConfiguration {
   readonly host: string;
   readonly port: number;
@@ -2299,15 +2290,15 @@ async function ensureRuntimeDirectories(
 async function sealRuntimeState(paths: RuntimePaths, resolvedHome?: string): Promise<void> {
   const actualHome = resolvedHome ?? (await realpath(paths.home));
   await assertManagedTreeHasNoLinks(actualHome);
-  if (process.platform === "win32") {
-    await enforceWindowsRuntimeAcl(actualHome);
-  } else {
-    await enforcePosixRuntimePermissions([
-      actualHome,
-      paths.configDirectory,
-      paths.stateDirectory,
-      paths.logsDirectory,
-    ]);
+  try {
+    await enforceHostRuntimePermissions({
+      root: actualHome,
+    });
+  } catch (error) {
+    if (error instanceof RuntimePermissionEnforcementError) {
+      throw new MainRuntimeError("RUNTIME_PATH_UNSAFE", error.message, { cause: error });
+    }
+    throw error;
   }
 }
 
@@ -2340,126 +2331,6 @@ async function assertManagedTreeHasNoLinks(root: string): Promise<void> {
       await assertManagedTreeHasNoLinks(path);
     }
   }
-}
-
-async function enforcePosixRuntimePermissions(paths: readonly string[]): Promise<void> {
-  const currentUid = process.getuid?.();
-  for (const path of paths) {
-    await chmod(path, 0o700);
-    const metadata = await lstat(path);
-    if (
-      (metadata.mode & 0o077) !== 0 ||
-      (currentUid !== undefined && metadata.uid !== currentUid)
-    ) {
-      throw new MainRuntimeError(
-        "RUNTIME_PATH_UNSAFE",
-        "Runtime state permissions must grant access only to the current operating-system owner.",
-      );
-    }
-  }
-}
-
-async function enforceWindowsRuntimeAcl(root: string): Promise<void> {
-  let identityOutput: string;
-  try {
-    const result = await execFileAsync("whoami.exe", ["/user", "/fo", "csv", "/nh"], {
-      encoding: "utf8",
-      env: runtimeNativeToolEnvironment(),
-      windowsHide: true,
-    });
-    identityOutput = result.stdout;
-  } catch {
-    throw new MainRuntimeError(
-      "RUNTIME_PATH_UNSAFE",
-      "OpenDelegate could not resolve the current Windows security identity.",
-    );
-  }
-  const userSid = identityOutput.match(/S-\d(?:-\d+)+/u)?.[0];
-  if (userSid === undefined) {
-    throw new MainRuntimeError(
-      "RUNTIME_PATH_UNSAFE",
-      "OpenDelegate could not parse the current Windows security identity.",
-    );
-  }
-  const verificationScript = String.raw`
-$ErrorActionPreference = "Stop"
-Import-Module (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1")
-$root = $env:OPENDELEGATE_ACL_ROOT
-$userSidText = $env:OPENDELEGATE_ACL_USER_SID
-$systemSidText = "S-1-5-18"
-$items = @((Get-Item -LiteralPath $root -Force)) + @(Get-ChildItem -LiteralPath $root -Force -Recurse)
-foreach ($item in $items) {
-  if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw "Runtime state contains a reparse point."
-  }
-  $acl = Get-Acl -LiteralPath $item.FullName
-  $ownerSidText = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-  if ($ownerSidText -ne $userSidText -and $ownerSidText -ne $systemSidText) {
-    throw "Runtime state item '$($item.FullName)' is owned by '$ownerSidText', not the current user or LocalSystem."
-  }
-  if ($item.FullName -eq $root -and -not $acl.AreAccessRulesProtected) {
-    throw "Runtime state still inherits access rules."
-  }
-  foreach ($existingRule in @($acl.Access)) {
-    $ruleSidText = $existingRule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
-    if (
-      ($ruleSidText -ne $userSidText -and $ruleSidText -ne $systemSidText) -or
-      $existingRule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
-      (($existingRule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::FullControl) -ne
-        [System.Security.AccessControl.FileSystemRights]::FullControl)
-    ) {
-      throw "Runtime state grants access outside the current user and LocalSystem."
-    }
-  }
-}
-`;
-  try {
-    for (const arguments_ of [
-      [root, "/reset", "/L", "/Q"],
-      [root, "/grant:r", `*${userSid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "/L", "/Q"],
-      [root, "/inheritance:r", "/L", "/Q"],
-      [join(root, "*"), "/reset", "/T", "/L", "/Q"],
-      [root, "/setowner", `*${userSid}`, "/T", "/L", "/Q"],
-    ]) {
-      await execFileAsync("icacls.exe", arguments_, {
-        encoding: "utf8",
-        env: runtimeNativeToolEnvironment(),
-        maxBuffer: 1024 * 1024,
-        windowsHide: true,
-      });
-    }
-    await execFileAsync(
-      "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", verificationScript],
-      {
-        encoding: "utf8",
-        env: {
-          ...runtimeNativeToolEnvironment(),
-          OPENDELEGATE_ACL_ROOT: root,
-          OPENDELEGATE_ACL_USER_SID: userSid,
-        },
-        maxBuffer: 1024 * 1024,
-        windowsHide: true,
-      },
-    );
-  } catch (error) {
-    throw new MainRuntimeError(
-      "RUNTIME_PATH_UNSAFE",
-      "OpenDelegate could not enforce a private Windows ACL on runtime state.",
-      { cause: error },
-    );
-  }
-}
-
-function runtimeNativeToolEnvironment(): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
-  for (const key of ["PATH", "Path", "PATHEXT", "SystemRoot", "SYSTEMROOT", "WINDIR"]) {
-    const value = process.env[key];
-    if (value !== undefined) {
-      environment[key] = value;
-    }
-  }
-  return environment;
 }
 
 function isAlreadyExists(error: unknown): boolean {

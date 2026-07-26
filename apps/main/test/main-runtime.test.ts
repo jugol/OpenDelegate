@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { arch, hostname, platform, release, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { promisify } from "node:util";
 
 import { Pool } from "pg";
 import type {
@@ -18,8 +16,6 @@ import type {
 
 import { browserOpenCommand, openBrowser, parseArguments } from "../src/cli.ts";
 import {
-  createMainRuntime,
-  initializeMainHome,
   listenMainRuntime,
   loadMainConfiguration,
   MainSingletonOwnershipError,
@@ -28,9 +24,9 @@ import {
   type MainSingletonOwnership,
 } from "../src/index.ts";
 import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
+import { createMainRuntime, initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
 const postgresUri = process.env["OPENDELEGATE_TEST_POSTGRES_URI"];
-const execFileAsync = promisify(execFile);
 const DEVELOPMENT_RELEASE_IDENTITY = {
   declaredReleaseChannel: "development",
   releaseChannel: "development",
@@ -255,8 +251,6 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
     secretBackend: mainSecrets.configuration,
     managedSecretStore: mainSecrets.store,
   });
-  await assertWindowsRuntimeOwnership(home);
-
   assert.equal(initialized.created, true);
   assert.equal(initialized.configuration.database.adapter, "sqlite");
   assert.equal(initialized.configuration.main.origin, "http://127.0.0.1:4380");
@@ -352,7 +346,6 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     assert.ok(stateEntries.includes("main.sqlite3-wal"));
     assert.ok(stateEntries.includes("main.sqlite3-shm"));
   }
-  await assertWindowsRuntimeOwnership(home);
   const claim = await runtime.ownerAuth.issueInitialClaim({ channel: "local-bootstrap" });
   const claimed = await runtime.ownerAuth.claimOwner({
     channel: "local-bootstrap",
@@ -1139,38 +1132,6 @@ class ControllableMainSingletonOwnership implements MainSingletonOwnership {
       listener(this.#loss);
     }
   }
-}
-
-async function assertWindowsRuntimeOwnership(root: string): Promise<void> {
-  if (process.platform !== "win32") {
-    return;
-  }
-  const verificationScript = String.raw`
-$ErrorActionPreference = "Stop"
-Import-Module (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1")
-$root = $env:OPENDELEGATE_TEST_ACL_ROOT
-$currentSid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-$items = @((Get-Item -LiteralPath $root -Force)) + @(Get-ChildItem -LiteralPath $root -Force -Recurse)
-foreach ($item in $items) {
-  $ownerSid = (Get-Acl -LiteralPath $item.FullName).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-  if ($ownerSid -ne $currentSid) {
-    throw "Expected '$($item.FullName)' to be owned by '$currentSid', but found '$ownerSid'."
-  }
-}
-`;
-  await execFileAsync(
-    "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", verificationScript],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENDELEGATE_TEST_ACL_ROOT: root,
-      },
-      maxBuffer: 1024 * 1024,
-      windowsHide: true,
-    },
-  );
 }
 
 async function createAdminFixture(parent: string): Promise<string> {

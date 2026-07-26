@@ -25,15 +25,12 @@ import type {
 } from "@opendelegate/secrets";
 import { SqlConfigurationRepository } from "@opendelegate/storage-sql";
 
-import {
-  createMainRuntime,
-  initializeMainHome,
-  inspectPersistedMainConfiguration,
-} from "../src/index.ts";
+import { inspectPersistedMainConfiguration } from "../src/index.ts";
 import {
   createMainTestSecretContext,
   mainTestSecretBackendConfiguration,
 } from "../test-fixtures/main-test-secrets.ts";
+import { createMainRuntime, initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
 const DEVELOPMENT_RELEASE_IDENTITY = {
   declaredReleaseChannel: "development",

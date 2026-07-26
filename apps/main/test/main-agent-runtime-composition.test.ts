@@ -12,8 +12,8 @@ import type {
   NormalizedAgentEvent,
 } from "@opendelegate/agent-adapters";
 
-import { createMainRuntime, initializeMainHome } from "../src/index.ts";
 import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
+import { createMainRuntime, initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
 const DEVELOPMENT_RELEASE_IDENTITY = {
   declaredReleaseChannel: "development",

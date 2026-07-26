@@ -100,7 +100,7 @@ const defaultAdminRoot = bundledRelease
   ? resolve(installationRoot, "apps/admin-web/dist")
   : resolve(cliDirectory, "../../admin-web/dist");
 
-async function run(arguments_: readonly string[]): Promise<void> {
+export async function runCli(arguments_: readonly string[]): Promise<void> {
   const parsed = parseArguments(arguments_);
   switch (parsed.command) {
     case "backup":
@@ -1463,5 +1463,5 @@ function printVersion(identity: RuntimeIdentity): void {
 
 const invokedFile = process.argv[1] === undefined ? undefined : resolve(process.argv[1]);
 if (invokedFile === resolve(cliPath)) {
-  void run(process.argv.slice(2)).catch(reportCliFailure);
+  void runCli(process.argv.slice(2)).catch(reportCliFailure);
 }

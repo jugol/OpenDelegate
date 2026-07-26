@@ -28,13 +28,13 @@ import {
   LateBoundApprovalExecutionPort,
   LateBoundMainActionRunAuthorityPort,
 } from "../src/action-authorization-composition.ts";
-import { createMainRuntime, initializeMainHome } from "../src/index.ts";
 import type {
   CreateProductionMainDeviceChannelRuntimeOptions,
   MainDeviceChannelConfiguration,
   ProductionMainDeviceChannelRuntime,
 } from "../src/device-channel-runtime.ts";
 import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
+import { createMainRuntime, initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
 const WORKER_DEVICE_ID = "device-worker-action";
 const WORKER_ID = "worker-action";

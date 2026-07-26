@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+import { build as bundle } from "esbuild";
 
 test("release scratch and accidentally rooted host paths stay outside the checkout", async () => {
   const rootEntries = await readdir(new URL("../../", import.meta.url), {
@@ -105,6 +108,128 @@ test("Main integration tests retain bounded hosted-runner concurrency and wall t
     assert.match(
       workflow,
       new RegExp(`- os: ${os.replaceAll(".", "\\.")}\\s+timeout_minutes: ${timeout}`, "u"),
+    );
+  }
+});
+
+test("the Main host-permission override remains test-only with native security coverage", async () => {
+  const manifest = JSON.parse(
+    await readFile(new URL("../../apps/main/package.json", import.meta.url), "utf8"),
+  );
+  assert.deepEqual(manifest.exports, { ".": "./src/index.ts" });
+  const runtimeBoundary = await readFile(
+    new URL("../../apps/main/src/internal/runtime-permissions.ts", import.meta.url),
+    "utf8",
+  );
+  const publicRuntime = await readFile(
+    new URL("../../apps/main/src/index.ts", import.meta.url),
+    "utf8",
+  );
+  const productionCli = await readFile(
+    new URL("../../apps/main/src/cli.ts", import.meta.url),
+    "utf8",
+  );
+  const portableFixture = await readFile(
+    new URL("../../apps/main/test-fixtures/portable-main-runtime.ts", import.meta.url),
+    "utf8",
+  );
+  const nativeSecuritySmoke = await readFile(
+    new URL("../../apps/main/test/runtime-permissions-native.test.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(runtimeBoundary, /withHostRuntimePermissionEnforcerForTest/u);
+  assert.doesNotMatch(runtimeBoundary, /OPENDELEGATE_TEST|NODE_ENV/u);
+  assert.doesNotMatch(publicRuntime, /withHostRuntimePermissionEnforcerForTest/u);
+  assert.doesNotMatch(publicRuntime, /runtimePermissionEnforcer|hostPermissionEnforcer/u);
+  assert.doesNotMatch(productionCli, /withHostRuntimePermissionEnforcerForTest/u);
+  assert.match(portableFixture, /withHostRuntimePermissionEnforcerForTest/u);
+  assert.match(nativeSecuritySmoke, /from "\.\.\/src\/index\.ts"/u);
+  assert.doesNotMatch(
+    nativeSecuritySmoke,
+    /portable-main-runtime|withHostRuntimePermissionEnforcerForTest/u,
+  );
+  for (const invariant of [
+    /createMainRuntime/u,
+    /initializeMainHome/u,
+    /main\.sqlite3-wal/u,
+    /main\.sqlite3-shm/u,
+    /\*S-1-5-11:\(OI\)\(CI\)RX/u,
+    /AreAccessRulesProtected/u,
+    /FileSystemRights\]::FullControl/u,
+    /RUNTIME_PATH_UNSAFE/u,
+    /"junction"/u,
+  ]) {
+    assert.match(nativeSecuritySmoke, invariant);
+  }
+});
+
+test("production application bundles exclude first-party test access paths", async () => {
+  const repositoryRoot = new URL("../../", import.meta.url);
+  const mainExternals = ["@node-rs/argon2", "@node-rs/argon2-*", "better-sqlite3", "pg"];
+  const configurations = [
+    {
+      entryPoint: "apps/main/src/cli.ts",
+      externals: mainExternals,
+      label: "Main",
+    },
+    {
+      entryPoint: "apps/worker/src/cli.ts",
+      externals: ["better-sqlite3"],
+      label: "Worker",
+    },
+    {
+      entryPoint: "apps/service-host/src/core-entry.ts",
+      externals: mainExternals,
+      label: "service host",
+    },
+    {
+      entryPoint: "apps/service-host/src/helper-entry.ts",
+      externals: mainExternals,
+      label: "session helper",
+    },
+  ];
+
+  for (const configuration of configurations) {
+    const result = await bundle({
+      absWorkingDir: fileURLToPath(repositoryRoot),
+      bundle: true,
+      entryPoints: [configuration.entryPoint],
+      external: configuration.externals,
+      format: "esm",
+      logLevel: "silent",
+      metafile: true,
+      platform: "node",
+      target: "node24.18",
+      treeShaking: true,
+      write: false,
+    });
+    const source = result.outputFiles.map((output) => output.text).join("\n");
+    const testInputs = Object.keys(result.metafile.inputs)
+      .map((path) => path.replaceAll("\\", "/"))
+      .filter((path) => /(?:^|\/)(?:test|test-fixtures|test-support)(?:\/|$)/u.test(path));
+    const firstPartyExternalImports = Object.values(result.metafile.outputs)
+      .flatMap((output) => output.imports)
+      .filter((entry) => entry.external && entry.path.startsWith("@opendelegate/"))
+      .map((entry) => entry.path)
+      .sort();
+
+    assert.notEqual(source, "", `${configuration.label} should emit a production bundle`);
+    assert.deepEqual(testInputs, [], `${configuration.label} should not bundle test inputs`);
+    assert.deepEqual(
+      firstPartyExternalImports,
+      [],
+      `${configuration.label} should not retain first-party package imports`,
+    );
+    assert.equal(
+      source.includes("withHostRuntimePermissionEnforcerForTest"),
+      false,
+      `${configuration.label} should tree-shake the test permission setter`,
+    );
+    assert.equal(
+      source.includes("portable-main-runtime"),
+      false,
+      `${configuration.label} should not include the portable test fixture`,
     );
   }
 });

@@ -26,6 +26,10 @@ import {
   REQUIRED_RELEASE_NODE_VERSION,
   RELEASE_SKILL_DIRECTORIES,
   assertCleanBundleSource,
+  assertBundledApplicationPayload,
+  assertNoBundledWorkspaceExternalImports,
+  assertNoBundledWorkspacePackages,
+  assertNoPackageManagerMetadata,
   assertPortableTree,
   assertSupportMatrixTarget,
   collectShaBoundAttestationPaths,
@@ -42,6 +46,9 @@ import {
   officialRuntimeArchiveFor,
   parseRawGitDiff,
   parseReleaseArguments,
+  pruneBundledApplicationPayload,
+  pruneBundledWorkspacePackages,
+  prunePackageManagerMetadata,
   pruneRuntimeNativePackageArtifacts,
   readBoundedResponseBody,
   readSourceIdentity,
@@ -743,6 +750,221 @@ test("release deployment removes package-manager bins without following their li
     code: "ENOENT",
   });
   await assert.rejects(readFile(join(nestedBin, "tool"), "utf8"), { code: "ENOENT" });
+});
+
+test("release deployment removes pnpm metadata while retaining runtime package data", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-pnpm-metadata-prune-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const packageDirectory = join(nodeModules, "runtime-package");
+  const nestedBin = join(packageDirectory, "node_modules", ".bin");
+  const packageDataBin = join(packageDirectory, "assets", ".bin");
+  await mkdir(join(nodeModules, ".pnpm"), { recursive: true });
+  await mkdir(nestedBin, { recursive: true });
+  await mkdir(packageDataBin, { recursive: true });
+  await writeFile(
+    join(nodeModules, ".modules.yaml"),
+    'storeDir: "C:\\\\Users\\\\builder\\\\pnpm-store"\n',
+    "utf8",
+  );
+  await writeFile(
+    join(nodeModules, ".package-map.json"),
+    '{"source":"C:\\\\Users\\\\builder\\\\source"}\n',
+    "utf8",
+  );
+  await writeFile(join(nodeModules, ".pnpm", "lock.yaml"), "importers: {}\n", "utf8");
+  await writeFile(join(packageDirectory, "index.js"), "module.exports = {};\n", "utf8");
+  await writeFile(join(nestedBin, "tool"), "unused executable shim\n", "utf8");
+  await writeFile(join(packageDataBin, "retained.bin"), "runtime package data\n", "utf8");
+
+  await prunePackageManagerMetadata(nodeModules);
+
+  await assertNoPackageManagerMetadata(nodeModules);
+  assert.equal(
+    await readFile(join(packageDirectory, "index.js"), "utf8"),
+    "module.exports = {};\n",
+  );
+  assert.equal(
+    await readFile(join(packageDataBin, "retained.bin"), "utf8"),
+    "runtime package data\n",
+  );
+  for (const removed of [
+    ".bin",
+    ".modules.yaml",
+    ".package-map.json",
+    ".pnpm",
+    join("runtime-package", "node_modules", ".bin"),
+  ]) {
+    await assert.rejects(access(join(nodeModules, removed)), { code: "ENOENT" });
+  }
+
+  await writeFile(join(nodeModules, ".package-map.json"), "{}\n", "utf8");
+  await assert.rejects(
+    assertNoPackageManagerMetadata(nodeModules),
+    /retains pnpm metadata: \.package-map\.json/u,
+  );
+});
+
+test("pnpm metadata pruning rejects a linked virtual store without touching its target", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-pnpm-metadata-link-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const outside = join(root, "outside");
+  await Promise.all([mkdir(nodeModules), mkdir(outside)]);
+  await writeFile(join(outside, "sentinel.txt"), "outside\n", "utf8");
+  await symlink(
+    outside,
+    join(nodeModules, ".pnpm"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  await assert.rejects(
+    prunePackageManagerMetadata(nodeModules),
+    /pnpm metadata escaped its release staging boundary: \.pnpm/u,
+  );
+  assert.equal(await readFile(join(outside, "sentinel.txt"), "utf8"), "outside\n");
+});
+
+test("release bundles cannot depend on deployed first-party workspace source", () => {
+  assert.doesNotThrow(() =>
+    assertNoBundledWorkspaceExternalImports(
+      {
+        outputs: {
+          "release.mjs": {
+            imports: [
+              { external: true, path: "better-sqlite3" },
+              { external: true, path: "node:fs" },
+            ],
+          },
+        },
+      },
+      "fixture",
+    ),
+  );
+  assert.throws(
+    () =>
+      assertNoBundledWorkspaceExternalImports(
+        {
+          outputs: {
+            "release.mjs": {
+              imports: [{ external: true, path: "@opendelegate/secrets" }],
+            },
+          },
+        },
+        "fixture",
+      ),
+    /left first-party workspace imports external/u,
+  );
+});
+
+test("release deployment removes bundled first-party workspace packages", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-workspace-package-prune-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const workspaceScope = join(nodeModules, "@opendelegate");
+  await mkdir(join(workspaceScope, "main", "src"), { recursive: true });
+  await mkdir(join(nodeModules, "better-sqlite3"), { recursive: true });
+  await writeFile(
+    join(workspaceScope, "main", "src", "internal.ts"),
+    "export const testAccess = true;\n",
+    "utf8",
+  );
+  await writeFile(join(nodeModules, "better-sqlite3", "index.js"), "module.exports = {};\n");
+
+  await pruneBundledWorkspacePackages(nodeModules);
+
+  await assertNoBundledWorkspacePackages(nodeModules);
+  await assert.rejects(access(workspaceScope), { code: "ENOENT" });
+  assert.equal(
+    await readFile(join(nodeModules, "better-sqlite3", "index.js"), "utf8"),
+    "module.exports = {};\n",
+  );
+});
+
+test("workspace package pruning rejects a linked scope without touching its target", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-workspace-package-link-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const nodeModules = join(root, "node_modules");
+  const outside = join(root, "outside");
+  await Promise.all([mkdir(nodeModules), mkdir(outside)]);
+  await writeFile(join(outside, "sentinel.ts"), "outside\n", "utf8");
+  await symlink(
+    outside,
+    join(nodeModules, "@opendelegate"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  await assert.rejects(
+    pruneBundledWorkspacePackages(nodeModules),
+    /escaped its release staging boundary/u,
+  );
+  assert.equal(await readFile(join(outside, "sentinel.ts"), "utf8"), "outside\n");
+});
+
+test("bundled application payloads retain only generated entrypoints and runtime dependencies", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-application-prune-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await mkdir(join(root, "node_modules"));
+  for (const directory of ["src", "test", "test-fixtures"]) {
+    await mkdir(join(root, directory));
+    await writeFile(join(root, directory, "unused.ts"), "export {};\n", "utf8");
+  }
+  for (const file of ["package.json", "tsconfig.json"]) {
+    await writeFile(join(root, file), "{}\n", "utf8");
+  }
+  const retainedBundles = [
+    "opendelegate.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ];
+  for (const file of retainedBundles) {
+    await writeFile(join(root, file), "export {};\n", "utf8");
+  }
+
+  await pruneBundledApplicationPayload(root, retainedBundles);
+
+  assert.equal(await readFile(join(root, "opendelegate.mjs"), "utf8"), "export {};\n");
+  await access(join(root, "node_modules"));
+  for (const removed of ["src", "test", "test-fixtures", "package.json", "tsconfig.json"]) {
+    await assert.rejects(access(join(root, removed)), { code: "ENOENT" });
+  }
+  await assertBundledApplicationPayload(root, retainedBundles);
+  await writeFile(join(root, "unexpected.ts"), "export {};\n", "utf8");
+  await assert.rejects(
+    assertBundledApplicationPayload(root, retainedBundles),
+    /unexpected root entry/u,
+  );
+});
+
+test("bundled application pruning rejects linked package content without touching its target", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-application-prune-link-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const application = join(root, "application");
+  const outside = join(root, "outside");
+  await Promise.all([
+    mkdir(join(application, "node_modules"), { recursive: true }),
+    mkdir(outside),
+  ]);
+  await writeFile(join(outside, "sentinel.ts"), "outside\n", "utf8");
+  await symlink(
+    outside,
+    join(application, "src"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const retainedBundles = [
+    "opendelegate.mjs",
+    "opendelegate-service-host.mjs",
+    "opendelegate-session-helper.mjs",
+  ];
+  for (const file of retainedBundles) {
+    await writeFile(join(application, file), "export {};\n", "utf8");
+  }
+
+  await assert.rejects(
+    pruneBundledApplicationPayload(application, retainedBundles),
+    /escaped its release staging boundary/u,
+  );
+  assert.equal(await readFile(join(outside, "sentinel.ts"), "utf8"), "outside\n");
 });
 
 test("release deployment retains only the target better-sqlite3 prebuild", async (t) => {

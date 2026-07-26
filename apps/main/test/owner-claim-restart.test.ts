@@ -91,7 +91,7 @@ function startInit(input: {
     process.execPath,
     [
       "--experimental-strip-types",
-      fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
+      fileURLToPath(new URL("../test-fixtures/owner-claim-child.ts", import.meta.url)),
       "init",
       "--home",
       input.home,

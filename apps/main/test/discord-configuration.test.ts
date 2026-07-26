@@ -22,8 +22,9 @@ import {
   type MainDiscordConfiguration,
   type MainDiscordSecretBackendConfiguration,
 } from "../src/discord-configuration.ts";
-import { initializeMainHome, loadMainConfiguration } from "../src/index.ts";
+import { loadMainConfiguration } from "../src/index.ts";
 import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
+import { initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
 test("a stable owner-selected Discord file persists only IDs, backend metadata, and an alias", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-discord-config-"));

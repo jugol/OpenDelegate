@@ -35,8 +35,8 @@ import {
   ManagedDiscordBotCredentialProvider,
   ManagedDiscordInteractionTokenVault,
 } from "../src/discord-runtime.ts";
-import { createMainRuntime, initializeMainHome } from "../src/index.ts";
 import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
+import { createMainRuntime, initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
 const NOW = "2026-07-25T12:00:00.000Z";
 const APPLICATION_ID = "100000000000000001";
