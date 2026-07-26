@@ -339,6 +339,9 @@ test("an explicit signed-out language choice persists without replacing the Engl
 test("all Admin locales update loaded chrome while preserving owner content", async ({
   page,
 }, testInfo) => {
+  // This matrix intentionally navigates every major surface for all six locales
+  // on one loaded page, so it needs Playwright's slow-test budget on loaded CI hosts.
+  test.slow();
   const consoleErrors = collectConsoleErrors(page);
   await installApi(page, { signedIn: true });
   await page.goto("/");
