@@ -1298,11 +1298,11 @@ function requireCanonicalKeys(value, expected, label) {
 }
 
 function isCanonicalTimestamp(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const milliseconds = Date.parse(value);
-  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value) &&
+    Number.isFinite(Date.parse(value))
+  );
 }
 
 function hasControlCharacters(value) {

@@ -388,6 +388,17 @@ test("the statement parser enforces exact nested promotion and receipt grammar",
   assert.doesNotThrow(() =>
     validateReleaseSigningStatement(promotionBytes, "promotion-authorization-v1"),
   );
+  const noMillisecondsPromotion = parseSigningStatement(
+    promotionBytes,
+    "OpenDelegate promotion authorization v1\n",
+  );
+  noMillisecondsPromotion.issuedAt = "2026-07-25T00:00:00Z";
+  assert.doesNotThrow(() =>
+    validateReleaseSigningStatement(
+      statementSigningBytes("OpenDelegate promotion authorization v1\n", noMillisecondsPromotion),
+      "promotion-authorization-v1",
+    ),
+  );
   const malformedPromotion = parseSigningStatement(
     promotionBytes,
     "OpenDelegate promotion authorization v1\n",
@@ -405,6 +416,20 @@ test("the statement parser enforces exact nested promotion and receipt grammar",
   const receiptBytes = receiptSigningBytes();
   assert.doesNotThrow(() =>
     validateReleaseSigningStatement(receiptBytes, "supported-channel-receipt-v2"),
+  );
+  const noMillisecondsReceipt = parseSigningStatement(
+    receiptBytes,
+    "OpenDelegate supported channel receipt v2\n",
+  );
+  noMillisecondsReceipt.observedAt = "2026-07-25T00:02:00Z";
+  for (const asset of noMillisecondsReceipt.publishedAssets) {
+    asset.observedAt = "2026-07-25T00:01:00Z";
+  }
+  assert.doesNotThrow(() =>
+    validateReleaseSigningStatement(
+      statementSigningBytes("OpenDelegate supported channel receipt v2\n", noMillisecondsReceipt),
+      "supported-channel-receipt-v2",
+    ),
   );
   const malformedReceipt = parseSigningStatement(
     receiptBytes,
