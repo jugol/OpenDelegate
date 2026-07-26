@@ -1,4 +1,5 @@
-# Exact false-positive fingerprints from the reviewed initial implementation commit.
+# Exact false-positive fingerprints from the reviewed implementation commits before
+# and after the squash merge.
 # These are deterministic protocol identifiers, synthetic API-key fixtures, and
 # test-only private keys. New commits, locations, rules, or line numbers remain
 # unignored and fail the full-history scan.
@@ -28,3 +29,29 @@ a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/policy/test/approval-service.t
 a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/task-service/test/task-service.test.ts:generic-api-key:360
 a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/task-service/test/task-service.test.ts:generic-api-key:369
 a5ba2c415d8444471c6a554384e2af5f852b31fa:packages/task-service/test/task-service.test.ts:generic-api-key:379
+03b11178532aa62d2ded78eef3013e93ed7925f0:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:1005
+03b11178532aa62d2ded78eef3013e93ed7925f0:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:1014
+03b11178532aa62d2ded78eef3013e93ed7925f0:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:1034
+03b11178532aa62d2ded78eef3013e93ed7925f0:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:1040
+03b11178532aa62d2ded78eef3013e93ed7925f0:apps/main/test/device-channel-runtime.test.ts:private-key:249
+03b11178532aa62d2ded78eef3013e93ed7925f0:apps/service-host/test/service-host.test.ts:generic-api-key:129
+03b11178532aa62d2ded78eef3013e93ed7925f0:apps/service-host/src/configuration.ts:generic-api-key:64
+03b11178532aa62d2ded78eef3013e93ed7925f0:apps/service-host/src/configuration.ts:generic-api-key:471
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/device-channel/test/enrollment-flow.test.ts:private-key:180
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/discord-adapter/test/task-port-adapter.test.ts:generic-api-key:55
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/discord-adapter/test/task-port-adapter.test.ts:generic-api-key:70
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/discord-adapter/test/task-port-adapter.test.ts:generic-api-key:91
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/discord-adapter/test/task-port-adapter.test.ts:generic-api-key:111
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/platform-services/test/renderers.test.ts:generic-api-key:22
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/platform-services/src/render-macos.ts:generic-api-key:35
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/platform-services/src/render-linux.ts:generic-api-key:30
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/platform-services/src/render-windows.ts:generic-api-key:33
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/device-channel/test/inbound-effect-delivery.test.ts:private-key:798
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/device-channel/test/mtls-device-channel.test.ts:private-key:470
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/platform-services/src/types.ts:generic-api-key:189
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/device-channel/test/protocol.test.ts:generic-api-key:395
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/policy/test/approval-service.test.ts:generic-api-key:192
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/policy/test/approval-service.test.ts:generic-api-key:201
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/task-service/test/task-service.test.ts:generic-api-key:360
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/task-service/test/task-service.test.ts:generic-api-key:369
+03b11178532aa62d2ded78eef3013e93ed7925f0:packages/task-service/test/task-service.test.ts:generic-api-key:379
