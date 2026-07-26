@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  lstat,
   stat,
   symlink,
   utimes,
@@ -141,6 +142,53 @@ test("archive creation rejects mutable destinations, linked payloads, and unsafe
     }),
     /symbolic link or junction/u,
   );
+});
+
+test("archive creation rejects an entry replaced after its file handle opens", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-release-archive-race-"));
+  t.after(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+  const source = join(root, "bundle");
+  const payload = join(source, "payload.txt");
+  const replacement = join(source, "replacement.txt");
+  const destination = join(root, "raced.zip");
+  await mkdir(source);
+  await writeFile(payload, "trusted payload\n", "utf8");
+  await writeFile(replacement, "replacement payload\n", "utf8");
+  const replacementMetadata = await lstat(replacement, { bigint: true });
+  // Windows forbids the reliable rename of an open file, so model the same
+  // pathname-to-inode swap at the injected lstat boundary.
+  let hookCalls = 0;
+  let raced = false;
+
+  await assert.rejects(
+    createDeterministicReleaseArchive(
+      {
+        destination,
+        sourceDirectory: source,
+        timestamp: fixedTimestamp,
+      },
+      {
+        async afterEntryOpen(path) {
+          if (path !== payload || hookCalls > 0) {
+            return;
+          }
+          hookCalls += 1;
+          raced = true;
+        },
+        async lstat(path, options) {
+          if (path === payload && raced) {
+            return replacementMetadata;
+          }
+          return lstat(path, options);
+        },
+      },
+    ),
+    /changed/u,
+  );
+  assert.equal(hookCalls, 1);
+  await assert.rejects(readFile(destination), { code: "ENOENT" });
 });
 
 function inspectDeterministicZip(bytes) {

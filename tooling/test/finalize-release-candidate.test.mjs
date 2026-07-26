@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash, createPublicKey, verify as verifySignature } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -178,6 +178,55 @@ test("finalization refuses existing outputs without publishing a partial set", a
   );
   assert.deepEqual(await readdirNames(fixture.destination), [basename(occupied)]);
   assert.equal(await readFile(occupied, "utf8"), "owner data\n");
+});
+
+test("finalization rejects an archive path replaced after its file handle opens", async (t) => {
+  const fixture = await createFinalizationFixture(t);
+  const replacement = join(fixture.root, "replacement.zip");
+  await writeFile(replacement, "replacement archive\n", "utf8");
+  const replacementMetadata = await lstat(replacement, { bigint: true });
+  // Keep the path replacement deterministic on Windows, where an open file
+  // cannot be renamed reliably during the test.
+  let hookCalls = 0;
+  let openedArchive;
+  let raced = false;
+  let signerInvocations = 0;
+
+  await assert.rejects(
+    finalizeReleaseCandidate(fixture.input, {
+      ...fixture.dependencies,
+      integrity: fixture.integrity,
+      readSourceIdentity: fixture.readSourceIdentity,
+      runner: fixture.runner,
+      async signWithPolicy() {
+        signerInvocations += 1;
+        throw new Error("The signer must not be invoked.");
+      },
+      stableFile: {
+        async afterOpen(path) {
+          if (
+            hookCalls === 0 &&
+            basename(path).endsWith(".zip") &&
+            basename(dirname(path)).startsWith(".opendelegate-finalize-")
+          ) {
+            openedArchive = path;
+            hookCalls += 1;
+            raced = true;
+          }
+        },
+        async lstat(path, options) {
+          if (path === openedArchive && raced) {
+            return replacementMetadata;
+          }
+          return lstat(path, options);
+        },
+      },
+    }),
+    /changed/u,
+  );
+  assert.equal(hookCalls, 1);
+  assert.equal(signerInvocations, 0);
+  assert.deepEqual(await readdirNames(fixture.destination), []);
 });
 
 test("finalization detects candidate changes and verifier failure before exposing outputs", async (t) => {

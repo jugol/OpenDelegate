@@ -103,6 +103,7 @@ export function parseReleaseFinalizationArguments(values) {
 
 export async function finalizeReleaseCandidate(input, dependencies = {}) {
   validateFinalizationInput(input);
+  const stableFileDependencies = dependencies.stableFile ?? {};
   const runner = dependencies.runner ?? {
     platform: process.platform,
     architecture: process.arch,
@@ -167,7 +168,7 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
   assertCandidateDigest(firstCandidate, input.expectedCandidateDigest);
   const sourceBefore = await sourceIdentityReader();
   assertCleanFinalizationSource(sourceBefore, firstCandidate.buildCommit);
-  const releaseLogicBefore = await hashReleaseLogic();
+  const releaseLogicBefore = await hashReleaseLogic(stableFileDependencies);
   await assertGitFiles(
     gitProvenance,
     releaseLogicBefore.map(({ path }) => path),
@@ -203,7 +204,8 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
   );
   const releaseMetadata = releaseMetadataForFinalization(metadataBytes);
   const runtimeExecutableHasher =
-    dependencies.hashRuntimeExecutable ?? (() => hashStableRegularFile(process.execPath));
+    dependencies.hashRuntimeExecutable ??
+    (() => hashStableRegularFile(process.execPath, stableFileDependencies));
   const runnerExecutableBefore = await runtimeExecutableHasher();
   if (runnerExecutableBefore.sha256 !== releaseMetadata.runtimeExecutableSha256) {
     throw new Error("The finalization runtime does not match the candidate's pinned Node.js.");
@@ -255,7 +257,8 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
       assertCleanFinalizationSource(currentSource, secondCandidate.buildCommit);
       if (
         currentSource.commit !== sourceBefore.commit ||
-        JSON.stringify(await hashReleaseLogic()) !== JSON.stringify(releaseLogicBefore)
+        JSON.stringify(await hashReleaseLogic(stableFileDependencies)) !==
+          JSON.stringify(releaseLogicBefore)
       ) {
         throw new Error("The committed release finalization logic changed before signing.");
       }
@@ -288,7 +291,10 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
           assertPathAbsent(path, "A release-finalization output"),
         ),
       );
-      const currentArchive = await hashStableRegularFile(temporaryPaths.archive);
+      const currentArchive = await hashStableRegularFile(
+        temporaryPaths.archive,
+        stableFileDependencies,
+      );
       if (currentArchive.sha256 !== archive.sha256 || currentArchive.size !== archive.size) {
         throw new Error("The release archive changed before publisher credential use.");
       }
@@ -347,7 +353,8 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
     await revalidateReleaseRunnerIdentity(runnerIdentity);
     if (
       sourceAfter.commit !== sourceBefore.commit ||
-      JSON.stringify(await hashReleaseLogic()) !== JSON.stringify(releaseLogicBefore) ||
+      JSON.stringify(await hashReleaseLogic(stableFileDependencies)) !==
+        JSON.stringify(releaseLogicBefore) ||
       (await runtimeExecutableHasher()).sha256 !== runnerExecutableBefore.sha256
     ) {
       throw new Error("The committed release finalization logic changed while signing.");
@@ -416,9 +423,9 @@ export async function finalizeReleaseCandidate(input, dependencies = {}) {
 
     const runnerSha256 = sha256(runnerBytes);
     const verifiedOutputs = await Promise.all([
-      hashStableRegularFile(finalPaths.archive),
-      hashStableRegularFile(finalPaths.attestation),
-      hashStableRegularFile(finalPaths.runnerRecord),
+      hashStableRegularFile(finalPaths.archive, stableFileDependencies),
+      hashStableRegularFile(finalPaths.attestation, stableFileDependencies),
+      hashStableRegularFile(finalPaths.runnerRecord, stableFileDependencies),
     ]);
     if (
       verifiedOutputs[0].sha256 !== archive.sha256 ||
@@ -540,7 +547,7 @@ function assertCleanFinalizationSource(source, expectedCommit) {
   }
 }
 
-async function hashReleaseLogic() {
+async function hashReleaseLogic(stableFileDependencies) {
   const files = [
     "pnpm-lock.yaml",
     "packages/release-integrity/src/index.ts",
@@ -558,7 +565,12 @@ async function hashReleaseLogic() {
     files.map(async (path) =>
       Object.freeze({
         path,
-        sha256: (await hashStableRegularFile(join(repositoryRoot, ...path.split("/")))).sha256,
+        sha256: (
+          await hashStableRegularFile(
+            join(repositoryRoot, ...path.split("/")),
+            stableFileDependencies,
+          )
+        ).sha256,
       }),
     ),
   );
@@ -658,19 +670,30 @@ async function syncDirectory(path) {
   }
 }
 
-async function hashStableRegularFile(path) {
-  const before = await lstat(path, { bigint: true });
-  if (!before.isFile() || before.isSymbolicLink() || before.size <= 0n) {
-    throw new Error("A finalized release output is not a regular file.");
-  }
+async function hashStableRegularFile(path, dependencies = {}) {
+  const pathLstat = dependencies.lstat ?? lstat;
+  const pathRealpath = dependencies.realpath ?? realpath;
   const flags =
     process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
   const handle = await open(path, flags);
   try {
     const opened = await handle.stat({ bigint: true });
-    if (!sameFile(before, opened) || opened.size > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new Error("A finalized release output changed before verification.");
+    if (
+      !opened.isFile() ||
+      opened.isSymbolicLink() ||
+      opened.size <= 0n ||
+      opened.size > BigInt(Number.MAX_SAFE_INTEGER)
+    ) {
+      throw new Error("A finalized release output is not a bounded regular file.");
     }
+    const canonical = await verifyOpenedFinalizedPath({
+      errorMessage: "A finalized release output changed before verification.",
+      opened,
+      path,
+      pathLstat,
+      pathRealpath,
+    });
+    await dependencies.afterOpen?.(path);
     const hash = createHash("sha256");
     const buffer = Buffer.allocUnsafe(64 * 1024);
     const size = Number(opened.size);
@@ -692,10 +715,45 @@ async function hashStableRegularFile(path) {
     if (!sameFile(opened, after)) {
       throw new Error("A finalized release output changed during verification.");
     }
+    await verifyOpenedFinalizedPath({
+      canonical,
+      errorMessage: "A finalized release output changed during verification.",
+      opened: after,
+      path,
+      pathLstat,
+      pathRealpath,
+    });
     return { sha256: hash.digest("hex"), size };
   } finally {
     await handle.close();
   }
+}
+
+async function verifyOpenedFinalizedPath({
+  canonical,
+  errorMessage,
+  opened,
+  path,
+  pathLstat,
+  pathRealpath,
+}) {
+  const named = await pathLstat(path, { bigint: true });
+  if (!named.isFile() || named.isSymbolicLink() || !sameFile(opened, named)) {
+    throw new Error(errorMessage);
+  }
+  const currentCanonical = await pathRealpath(path);
+  if (canonical !== undefined && comparablePath(canonical) !== comparablePath(currentCanonical)) {
+    throw new Error(errorMessage);
+  }
+  const canonicalMetadata = await pathLstat(currentCanonical, { bigint: true });
+  if (
+    !canonicalMetadata.isFile() ||
+    canonicalMetadata.isSymbolicLink() ||
+    !sameFile(opened, canonicalMetadata)
+  ) {
+    throw new Error(errorMessage);
+  }
+  return currentCanonical;
 }
 
 async function cleanupPublishedOutputs(published) {
@@ -743,6 +801,11 @@ function sameFileIdentity(left, right) {
     left.ino !== 0n &&
     left.ino === right.ino
   );
+}
+
+function comparablePath(path) {
+  const normalized = resolve(path);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function isSameOrDescendant(root, candidate) {

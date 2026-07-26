@@ -16,7 +16,7 @@ const ZIP_MAXIMUM_UINT16 = 0xffff;
 const ZIP_MAXIMUM_UINT32 = 0xffffffff;
 const MAXIMUM_ENTRY_BYTES = 1024 * 1024 * 1024;
 
-export async function createDeterministicReleaseArchive(input) {
+export async function createDeterministicReleaseArchive(input, dependencies = {}) {
   const sourceDirectory = await requireCanonicalDirectory(
     input?.sourceDirectory,
     "release source directory",
@@ -39,7 +39,7 @@ export async function createDeterministicReleaseArchive(input) {
     const centralDirectory = [];
     let offset = 0;
     for (const entry of entries) {
-      const stable = await readStableRegularFile(entry.absolutePath, sourceDirectory);
+      const stable = await readStableRegularFile(entry, sourceDirectory, dependencies);
       if (stable.bytes.byteLength > MAXIMUM_ENTRY_BYTES) {
         stable.bytes.fill(0);
         throw new Error(`The release archive entry is oversized: ${entry.path}.`);
@@ -153,13 +153,12 @@ async function discoverEntries(root) {
       }
       caseFolded.set(folded, path);
       const absolutePath = resolve(directory, child.name);
-      const metadata = await lstat(absolutePath);
-      if (metadata.isSymbolicLink()) {
+      if (child.isSymbolicLink()) {
         throw new Error(`The release archive contains a symbolic link or junction: ${path}.`);
       }
-      if (metadata.isDirectory()) {
+      if (child.isDirectory()) {
         await visit(absolutePath, path);
-      } else if (metadata.isFile()) {
+      } else if (child.isFile()) {
         entries.push({ absolutePath, path });
       } else {
         throw new Error(`The release archive contains a special payload entry: ${path}.`);
@@ -170,44 +169,117 @@ async function discoverEntries(root) {
   return entries.sort((left, right) => compareCodeUnits(left.path, right.path));
 }
 
-async function readStableRegularFile(path, root) {
-  const before = await lstat(path, { bigint: true });
-  if (!before.isFile() || before.isSymbolicLink()) {
-    throw new Error("A release archive entry stopped being a regular file.");
-  }
-  const canonical = await realpath(path);
-  if (!isDescendant(root, canonical)) {
-    throw new Error("A release archive entry escaped its canonical source root.");
-  }
+async function readStableRegularFile(entry, root, dependencies) {
+  const path = entry.absolutePath;
+  const pathLstat = dependencies.lstat ?? lstat;
+  const pathRealpath = dependencies.realpath ?? realpath;
   const flags =
     process.platform === "win32" ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW;
   const handle = await open(path, flags);
   let bytes;
   try {
     const opened = await handle.stat({ bigint: true });
-    if (!sameFile(before, opened) || opened.size > BigInt(MAXIMUM_ENTRY_BYTES)) {
+    if (!opened.isFile() || opened.isSymbolicLink() || opened.size > BigInt(MAXIMUM_ENTRY_BYTES)) {
       throw new Error("A release archive entry changed before it could be read.");
     }
+    const canonical = await verifyOpenedArchivePath({
+      errorMessage: "A release archive entry changed before it could be read.",
+      opened,
+      path,
+      pathLstat,
+      pathRealpath,
+      root,
+    });
+    await dependencies.afterEntryOpen?.(path);
     bytes = await handle.readFile();
     const after = await handle.stat({ bigint: true });
     if (!sameFile(opened, after) || after.size !== BigInt(bytes.byteLength)) {
-      bytes.fill(0);
       throw new Error("A release archive entry changed while it was being read.");
     }
+    await verifyOpenedArchivePath({
+      canonical,
+      errorMessage: "A release archive entry changed while it was being read.",
+      opened: after,
+      path,
+      pathLstat,
+      pathRealpath,
+      root,
+    });
     return { bytes, mode: Number(after.mode & 0o777n) };
+  } catch (error) {
+    bytes?.fill(0);
+    throw error;
   } finally {
     await handle.close();
+  }
+}
+
+async function verifyOpenedArchivePath({
+  canonical,
+  errorMessage,
+  opened,
+  path,
+  pathLstat,
+  pathRealpath,
+  root,
+}) {
+  await assertNoLinkedArchiveComponents(root, path, pathLstat);
+  const named = await pathLstat(path, { bigint: true });
+  if (!named.isFile() || named.isSymbolicLink() || !sameFile(opened, named)) {
+    throw new Error(errorMessage);
+  }
+  const currentCanonical = await pathRealpath(path);
+  if (!isDescendant(root, currentCanonical)) {
+    throw new Error("A release archive entry escaped its canonical source root.");
+  }
+  if (canonical !== undefined && comparablePath(canonical) !== comparablePath(currentCanonical)) {
+    throw new Error(errorMessage);
+  }
+  const canonicalMetadata = await pathLstat(currentCanonical, { bigint: true });
+  if (
+    !canonicalMetadata.isFile() ||
+    canonicalMetadata.isSymbolicLink() ||
+    !sameFile(opened, canonicalMetadata)
+  ) {
+    throw new Error(errorMessage);
+  }
+  return currentCanonical;
+}
+
+async function assertNoLinkedArchiveComponents(root, path, pathLstat) {
+  const difference = relative(root, path);
+  if (
+    difference === "" ||
+    difference === ".." ||
+    difference.startsWith(`..${sep}`) ||
+    isAbsolute(difference)
+  ) {
+    throw new Error("A release archive entry escaped its canonical source root.");
+  }
+  let current = root;
+  for (const segment of difference.split(sep)) {
+    current = resolve(current, segment);
+    const metadata = await pathLstat(current, { bigint: true });
+    if (metadata.isSymbolicLink()) {
+      throw new Error("A release archive entry changed into a symbolic link or junction.");
+    }
   }
 }
 
 function sameFile(left, right) {
   return (
     (left.dev === 0n || right.dev === 0n || left.dev === right.dev) &&
+    left.ino !== 0n &&
     left.ino === right.ino &&
     left.size === right.size &&
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
   );
+}
+
+function comparablePath(path) {
+  const normalized = resolve(path);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function createLocalHeader(input) {
