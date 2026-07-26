@@ -2104,7 +2104,58 @@ test("packaged Main smoke keeps Windows ACL initialization and listener readines
     },
   });
 
-  assert.deepEqual(observedTimeouts, [60_000, 60_000]);
+  assert.deepEqual(observedTimeouts, [180_000, 180_000]);
+});
+
+test("packaged Main smoke identifies the bounded readiness phase that timed out", async () => {
+  const timeout = new Error("synthetic timeout");
+  await assert.rejects(
+    waitForPackagedMainReadiness({
+      exited: () => false,
+      output: () => "",
+      platform: "win32",
+      wait: async (_predicate, timeoutMilliseconds) => {
+        assert.equal(timeoutMilliseconds, 180_000);
+        throw timeout;
+      },
+    }),
+    (error) => {
+      assert.match(
+        error.message,
+        /did not reach initialization readiness within the bounded 180000ms window/u,
+      );
+      assert.equal(error.cause, timeout);
+      return true;
+    },
+  );
+
+  let output = "";
+  let phase = 0;
+  await assert.rejects(
+    waitForPackagedMainReadiness({
+      exited: () => false,
+      output: () => output,
+      platform: "win32",
+      wait: async (predicate, timeoutMilliseconds) => {
+        assert.equal(timeoutMilliseconds, 180_000);
+        phase += 1;
+        if (phase === 1) {
+          output = '{"event":"main.initialized"}\n';
+          assert.equal(predicate(), true);
+          return;
+        }
+        throw timeout;
+      },
+    }),
+    (error) => {
+      assert.match(
+        error.message,
+        /did not reach owner-claim readiness within the bounded 180000ms window/u,
+      );
+      assert.equal(error.cause, timeout);
+      return true;
+    },
+  );
 });
 
 test("packaged Main smoke retains the portable readiness bound and fails on an early exit", async () => {
@@ -2129,7 +2180,7 @@ test("packaged Main smoke retains the portable readiness bound and fails on an e
       output: () => "",
       platform: "win32",
       wait: async (predicate, timeoutMilliseconds) => {
-        assert.equal(timeoutMilliseconds, 60_000);
+        assert.equal(timeoutMilliseconds, 180_000);
         assert.equal(predicate(), true);
       },
     }),
