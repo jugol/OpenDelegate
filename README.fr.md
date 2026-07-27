@@ -6,21 +6,55 @@ Langues : [English](README.md) · [한국어](README.ko.md) · [日本語](READM
 OpenDelegate est un plan de contrôle personnel et auto-hébergé qui coordonne des agents d’IA entre
 un Main Device fixe et plusieurs Devices sous macOS, Windows et Linux.
 
+> [!TIP]
+> **Commencez ici :** [Démarrage rapide](#démarrage-rapide) ·
+> [Guide de configuration complet (anglais)](docs/GETTING_STARTED.md) ·
+> [Configuration de Discord Forum](docs/DISCORD_SETUP.md)
+
+## Démarrage rapide
+
+> [!WARNING]
+> Ce dépôt produit une **préversion interne non prise en charge**, et non une release
+> prise en charge. Les preuves réelles de plateforme, Provider, Discord, réseau, permissions et
+> packaging restent incomplètes. Ne la présentez pas comme publiée et ne l’utilisez pas comme plan
+> de contrôle de production sans surveillance. Voir
+> [État actuel du code source](#état-actuel-du-code-source).
+
+OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Owner n’utilise pas
+`npm run start`.
+
+1. Procurez-vous le bundle correspondant au système et à l’architecture, puis vérifiez `SHA256SUMS`
+   avec le digest obtenu séparément par le canal de publication fiable. Le dépôt ne produit
+   actuellement que des bundles de préversion interne clairement identifiés ; consultez
+   [Construire une préversion interne](#construire-une-préversion-interne).
+2. Si vous utilisez Discord, suivez le
+   [guide de configuration de Discord Forum](docs/DISCORD_SETUP.md) et préparez le Binding complet
+   avant la première initialisation du Main. Cette préversion ne peut ni ajouter ni remplacer un
+   Binding après l’initialisation.
+3. Ouvrez le répertoire du bundle extrait dans Codex ou Claude, puis envoyez exactement : _“Read
+   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
+   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
+   if a required safety check fails.”_
+4. Suivez l’Agent pour revendiquer l’accès Owner et conservez en lieu sûr les dix codes de
+   récupération à usage unique.
+5. Dans Configuration Chat, en bas à droite d’Admin Web, vérifiez les Devices, Agents, Routes et
+   Artifacts ainsi que l’état Discord préparé avant l’initialisation.
+6. Pour ajouter un Device, demandez à Configuration Chat un Device Grant de courte durée et à usage
+   unique. Transférez le fichier sans l’ouvrir par un moyen sûr contrôlé par l’Owner, puis demandez
+   à l’Agent du Device cible de suivre `skills/opendelegate-join/SKILL.md`.
+7. Si Discord est configuré, créez une publication Forum pour chaque Task indépendante. Les réponses
+   poursuivent la même Task et sa native Agent Session ; une nouvelle publication démarre avec un
+   Context propre. Si Discord est désactivé ou indisponible, ouvrez **Admin Web → Tasks → Nouvelle
+   tâche**.
+
+Consultez le [guide de configuration complet (en anglais)](docs/GETTING_STARTED.md), qui couvre la
+récupération de l’Owner, les Devices supplémentaires, la première Task et le dépannage.
+
+## Pourquoi OpenDelegate
+
 Créez une Task depuis un téléphone ou un ordinateur, laissez le Main Agent la diviser en Work
 Orders, acheminer ces Work Orders vers les Devices éligibles, puis recevez un résultat unique,
 durable et inspectable sans avoir à rouvrir manuellement chaque session d’agent.
-
-> [!WARNING] Ce dépôt produit actuellement une **préversion interne non prise en charge**, et non
-> une release OpenDelegate prise en charge. Le code source comporte désormais des parcours proches
-> de la production pour l’orchestration Main–Worker, les Agent Adapters programmatiques, les
-> approbations d’actions exactes, le Knowledge local au Device, la supervision native des services
-> et Computer Use. Une implémentation dans le code source ne vaut pas preuve de release : les
-> preuves réelles requises pour macOS, Windows, Linux, Discord, les fournisseurs, les réseaux
-> privés, les redémarrages, les permissions et le packaging restent incomplètes. Ne présentez pas
-> OpenDelegate comme publié et ne l’utilisez pas encore comme plan de contrôle de production sans
-> surveillance.
-
-## Pourquoi OpenDelegate
 
 - Une publication Discord Forum correspond à une Task durable et à une frontière de contexte.
 - Un logiciel déterministe gère l’identité, les Policies, l’état de santé, le routage, les leases,
@@ -157,19 +191,11 @@ revendication/connexion de l’Owner, l’aller-retour du cookie de session et l
 
 Le nom de la destination doit contenir `internal-preview`. Les fichiers générés
 `INTERNAL_PREVIEW.md` et `release-metadata.json` indiquent que le bundle n’est pas pris en charge et
-conservent l’état exact des preuves de release. Pour inspecter le runtime au premier plan :
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-Utilisez le launcher correspondant à la plateforme sur laquelle le bundle a été construit. La
-préversion interne n’installe aucun service OS persistant et ne doit pas être publiée sous un tag de
-release.
+conservent l’état exact des preuves de release. Initialisez le bundle assemblé uniquement via le
+[Démarrage rapide](#démarrage-rapide) Agent-first ci-dessus afin que Discord et chaque choix de
+l’Owner soient résolus avant la création de la configuration durable du Main. La préversion interne
+s’exécute au premier plan, n’installe aucun service OS persistant et ne doit pas être publiée sous
+un tag de release.
 
 Un build de production échoue intentionnellement tant qu’un critère d’acceptation reste incomplet :
 

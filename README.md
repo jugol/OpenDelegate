@@ -6,19 +6,47 @@ Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](
 OpenDelegate is a personal, self-hosted control plane for coordinating AI agents across one fixed
 Main Device and multiple macOS, Windows, and Linux Devices.
 
+> [!TIP]
+> **Start here:** [Quick Start](#quick-start) ·
+> [Complete setup guide](docs/GETTING_STARTED.md) ·
+> [Discord Forum setup](docs/DISCORD_SETUP.md)
+
+## Quick Start
+
+> [!WARNING]
+> This repository currently builds an **unsupported internal preview**, not a supported OpenDelegate
+> release. Required live platform, provider, Discord, network, permission, and
+> packaging evidence is incomplete. Do not represent it as released or run it as an unattended
+> production control plane. See [Current source state](#current-source-state).
+
+OpenDelegate is installed with an Agent; there is no `npm run start` owner workflow.
+
+1. Get the platform-specific bundle and verify `SHA256SUMS` against the digest from its trusted
+   publication channel. The current repository produces marked internal-preview bundles only; see
+   [Build an internal preview](#build-an-internal-preview).
+2. If you want Discord, complete the [Discord Forum setup guide](docs/DISCORD_SETUP.md) before the
+   first Main initialization. This preview cannot add or replace a Discord binding later.
+3. Open the extracted bundle directory in Codex or Claude.
+4. Send: _“Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed
+   OpenDelegate Main Device. Guide me through every owner decision, keep runtime state outside this
+   bundle, and stop if a required safety check fails.”_
+5. Follow the Agent through owner claim, save the ten recovery codes, and finish Device, Agent,
+   route, and Artifact setup in Admin Web Configuration Chat.
+6. To add a computer, ask Configuration Chat for a short-lived Device grant, transfer the unopened
+   file through an owner-controlled secure handoff, and ask the Agent on that computer to follow
+   `skills/opendelegate-join/SKILL.md`.
+7. If Discord is configured, create a Discord Forum post. One post is one durable Task; replies
+   continue its native Agent session, while a new post starts a clean context. If Discord is
+   unavailable or disabled, use **Admin Web → Tasks → New task** to create a minimal Task.
+
+Read the [complete setup guide](docs/GETTING_STARTED.md), including owner recovery, additional
+Devices, the first Task, and troubleshooting.
+
+## Why OpenDelegate
+
 Create a Task from a phone or computer, let the Main Agent divide it into Work Orders, route those
 Work Orders to eligible Devices, and receive one durable, inspectable result without manually
 reopening every agent session.
-
-> [!WARNING] This repository currently builds an **unsupported internal preview**, not a supported
-> OpenDelegate release. Production-shaped source paths now cover Main–Worker orchestration,
-> programmatic Agent Adapters, exact action approvals, Device-local Knowledge, native service
-> supervision, and Computer Use. Implementation in source is not release proof: the required live
-> macOS, Windows, Linux, Discord, provider, private-network, restart, permission, and packaging
-> evidence is not complete. Do not represent OpenDelegate as released or use it as an unattended
-> production control plane yet.
-
-## Why OpenDelegate
 
 - One Discord Forum post maps to one durable Task and context boundary.
 - Deterministic software owns identity, policy, health, routing, leases, retries, persistence, and
@@ -146,18 +174,10 @@ claim/login, session-cookie round-trip, and clean shutdown.
 
 The destination name must contain `internal-preview`. Generated `INTERNAL_PREVIEW.md` and
 `release-metadata.json` record that the bundle is unsupported and preserve the exact release
-evidence state. To inspect the foreground runtime:
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-Use the launcher for the platform on which the bundle was built. The internal preview does not
-install a persistent OS service and must not be published under a release tag.
+evidence state. Initialize the assembled bundle only through the Agent-first [Quick Start](#quick-start)
+above so Discord and every other owner choice are resolved before the durable Main configuration is
+created. The internal preview runs in the foreground, does not install a persistent OS service, and
+must not be published under a release tag.
 
 A production build intentionally fails while any acceptance criterion is incomplete:
 

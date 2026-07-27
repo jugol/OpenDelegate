@@ -6,19 +6,48 @@
 OpenDelegate는 하나의 고정 Main Device와 여러 macOS, Windows, Linux Device에서 AI Agent를 조율하기
 위한 개인용 셀프 호스팅 Control Plane입니다.
 
+> [!TIP]
+> **여기서 시작하세요:** [빠른 시작](#빠른-시작) ·
+> [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
+
+## 빠른 시작
+
+> [!WARNING]
+> 이 저장소는 지원되는 릴리스가 아니라 **지원되지 않는 내부 프리뷰**를 빌드합니다. 실제
+> 플랫폼, Provider, Discord, Network, 권한 및 패키징 증거가 아직 완성되지 않았습니다. 릴리스된
+> 제품으로 표방하거나 무인 프로덕션 Control Plane으로 사용하지 마십시오. 자세한 내용은
+> [현재 소스 상태](#현재-소스-상태)를 확인하십시오.
+
+OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run start`는 없습니다.
+
+1. 운영체제와 아키텍처에 맞는 bundle을 준비하고, 신뢰할 수 있는 배포 채널에서 bundle과 별도로 받은
+   digest로 `SHA256SUMS`를 검증합니다. 현재 저장소가 만드는 것은 명시적으로 표시된 내부 프리뷰
+   bundle뿐입니다. [내부 프리뷰 빌드](#내부-프리뷰-빌드)를 참고하십시오.
+2. Discord를 사용하려면 [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따라 최초 Main 초기화
+   전에 완전한 Binding을 준비합니다. 현재 프리뷰는 초기화 후 Binding을 추가하거나 교체할 수
+   없습니다.
+3. 압축을 푼 bundle 디렉터리를 Codex 또는 Claude에서 열고 다음 문장을 그대로 보냅니다: _“Read
+   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
+   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
+   if a required safety check fails.”_
+4. Agent의 안내에 따라 Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
+5. Admin Web 우측 하단의 Configuration Chat에서 Device, Agent, Route, Artifact 설정과 미리 준비한
+   Discord 상태를 검토합니다.
+6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
+   파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
+   `skills/opendelegate-join/SKILL.md`를 따르도록 요청합니다.
+7. Discord를 설정했다면 독립된 Task마다 Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은
+   동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
+   Discord를 사용하지 않거나 사용할 수 없으면 **Admin Web → Tasks → 새 작업**에서 만듭니다.
+
+Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
+[전체 설정 가이드(영문)](docs/GETTING_STARTED.md)를 참고하십시오.
+
+## OpenDelegate를 만드는 이유
+
 휴대폰이나 컴퓨터에서 Task를 만들면 Main Agent가 이를 Work Order로 나누고, 해당 Work Order를 수행할
 수 있는 Device로 전달합니다. 사용자는 Agent 세션을 하나씩 다시 열지 않아도 지속성 있고 점검 가능한
 하나의 결과를 받을 수 있습니다.
-
-> [!WARNING] 이 저장소는 현재 지원되는 OpenDelegate 릴리스가 아니라 **지원되지 않는 내부 프리뷰**를
-> 빌드합니다. 이제 소스에는 Main–Worker 오케스트레이션, 프로그래밍 방식 Agent Adapter, 정확한 Action
-> Approval, Device-local Knowledge, Native Service Supervision 및 Computer Use를 위한 프로덕션
-> 형태의 실행 경로가 구현되어 있습니다. 그러나 소스 구현은 릴리스 증거가 아닙니다. macOS, Windows,
-> Linux, Discord, Provider, Private Network, 재시작, 권한 및 패키징에 필요한 실제 증거는 아직
-> 완성되지 않았습니다. OpenDelegate를 릴리스된 제품으로 표방하거나 무인 프로덕션 Control Plane으로
-> 사용하지 마십시오.
-
-## OpenDelegate를 만드는 이유
 
 - Discord Forum 게시글 하나는 지속성 있는 Task 하나와 하나의 컨텍스트 경계에 대응합니다.
 - 결정론적 소프트웨어가 ID, Policy, 상태, 라우팅, Lease, 재시도, 영속성, 상태 전이를 담당합니다.
@@ -143,18 +172,9 @@ Claim/Login, Session-cookie Round-trip 및 정상 종료에 대한 제한된 Smo
 
 Destination 이름에는 `internal-preview`가 포함되어야 합니다. 생성된 `INTERNAL_PREVIEW.md`와
 `release-metadata.json`에는 Bundle이 지원되지 않는다는 사실과 정확한 Release Evidence 상태가
-기록됩니다. Foreground Runtime을 점검하려면 다음을 실행합니다.
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-Bundle이 빌드된 플랫폼에 맞는 Launcher를 사용하십시오. 내부 프리뷰는 지속성 있는 OS 서비스를
-설치하지 않으며 Release Tag로 게시해서는 안 됩니다.
+기록됩니다. Discord와 기타 Owner 선택이 지속성 있는 Main 설정 생성 전에 모두 확정되도록, 조립된
+Bundle은 위의 Agent-first [빠른 시작](#빠른-시작)을 통해서만 초기화하십시오. 내부 프리뷰는
+Foreground에서 실행되고 지속성 있는 OS 서비스를 설치하지 않으며 Release Tag로 게시해서는 안 됩니다.
 
 인수 기준이 하나라도 미완료이면 프로덕션 빌드는 의도적으로 실패합니다.
 

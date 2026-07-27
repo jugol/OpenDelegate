@@ -1714,8 +1714,11 @@ test("bundle guidance is launcher-first and never presents source-checkout comma
 
   assert.match(readme, /unsupported internal preview/u);
   assert.match(readme, /win32\/arm64/u);
-  assert.match(readme, /opendelegate\.cmd init/u);
+  assert.match(readme, /\.\\opendelegate\.cmd help/u);
+  assert.doesNotMatch(readme, /\.\\opendelegate\.cmd init(?:\s|$)/u);
   assert.match(readme, /skills\/opendelegate-init\/SKILL\.md/u);
+  assert.match(readme, /before the first Main initialization/u);
+  assert.match(readme, /cannot add or replace a Discord binding later/u);
   assert.match(readme, /Implementation: partial=36/u);
   assert.match(readme, /THIRD_PARTY_NOTICES\.json/u);
   assert.doesNotMatch(readme, /THIRD_PARTY_NOTICES\.md/u);
@@ -1734,68 +1737,112 @@ test("assembled bundle documentation includes complete localized launcher guidan
     {
       activeLanguage: "English",
       filename: "README.md",
+      addDeviceHeading: "## Add another Device",
+      firstTaskHeading: "## Create your first Task",
       implementationLabel: "Implementation",
       liveProofLabel: "Live proof",
       locale: "en",
       supportStatusLabel: "Support status",
+      adminTask: /Admin Web → Tasks → New task/u,
+      previewRestriction: /cannot add or replace a Discord binding later/u,
       unsupported: /This bundle is unsupported and must not be published under a release tag/u,
       candidate:
         /This candidate is not a supported release until it is promoted through the documented release channel/u,
+      candidateDiscordPath:
+        /If you want Discord, follow `docs\/DISCORD_SETUP\.md` and this candidate's verified Configuration Chat flow/u,
+      claimStep: /Complete owner claim and save all 10 one-time recovery codes/u,
+      preconfiguredDiscord: /inspect any preconfigured Discord binding/u,
     },
     {
       activeLanguage: "한국어",
       filename: "README.ko.md",
+      addDeviceHeading: "## 다른 Device 추가",
+      firstTaskHeading: "## 첫 Task 만들기",
       implementationLabel: "구현",
       liveProofLabel: "실제 증거",
       locale: "ko",
       supportStatusLabel: "지원 상태",
+      adminTask: /Admin Web → Tasks → 새 작업/u,
+      previewRestriction: /나중에 Discord Binding을 추가하거나 교체할 수 없습니다/u,
       unsupported: /이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다/u,
       candidate: /이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다/u,
+      candidateDiscordPath: /Discord를 사용하려면.*검증된 Configuration Chat 절차를 따르세요/u,
+      claimStep: /Owner Claim을 완료하고.*복구 코드 10개/u,
+      preconfiguredDiscord: /미리 준비한 Discord Binding/u,
     },
     {
       activeLanguage: "日本語",
       filename: "README.ja.md",
+      addDeviceHeading: "## 別の Device を追加",
+      firstTaskHeading: "## 最初の Task を作成",
       implementationLabel: "実装",
       liveProofLabel: "実環境の証拠",
       locale: "ja",
       supportStatusLabel: "サポート状況",
+      adminTask: /Admin Web → Tasks → 新しいタスク/u,
+      previewRestriction: /後から Discord Binding を追加または置換できません/u,
       unsupported: /このバンドルはサポート対象外であり、リリースタグで公開してはいけません/u,
       candidate:
         /この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません/u,
+      candidateDiscordPath:
+        /Discord を使用する場合は.*検証済みの Configuration Chat 手順に従ってください/u,
+      claimStep: /Owner Claim を完了し.*10 個/u,
+      preconfiguredDiscord: /事前に用意した Discord Binding/u,
     },
     {
       activeLanguage: "Français",
       filename: "README.fr.md",
+      addDeviceHeading: "## Ajouter un autre Device",
+      firstTaskHeading: "## Créer votre première Task",
       implementationLabel: "Implémentation",
       liveProofLabel: "Preuves réelles",
       locale: "fr",
       supportStatusLabel: "Statut de prise en charge",
+      adminTask: /Admin Web → Tasks → Nouvelle tâche/u,
+      previewRestriction: /ne peut ni ajouter ni remplacer un Binding Discord ensuite/u,
       unsupported:
         /Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release/u,
       candidate:
         /Ce candidat n’est pas une version prise en charge tant qu’il n’a pas été promu par le canal de publication documenté/u,
+      candidateDiscordPath: /Pour utiliser Discord.*parcours Configuration Chat vérifié/u,
+      claimStep: /Revendiquez l’accès Owner.*10 codes/u,
+      preconfiguredDiscord: /Binding Discord préparé/u,
     },
     {
       activeLanguage: "Español",
       filename: "README.es.md",
+      addDeviceHeading: "## Añadir otro Device",
+      firstTaskHeading: "## Crear tu primera Task",
       implementationLabel: "Implementación",
       liveProofLabel: "Evidencia real",
       locale: "es",
       supportStatusLabel: "Estado de soporte",
+      adminTask: /Admin Web → Tasks → Nueva tarea/u,
+      previewRestriction: /no puede añadir ni sustituir después un Binding de Discord/u,
       unsupported:
         /Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release/u,
       candidate:
         /Este candidato no es una versión con soporte hasta que se promocione mediante el canal de publicación documentado/u,
+      candidateDiscordPath: /Para usar Discord.*flujo de Configuration Chat verificado/u,
+      claimStep: /Reclama el acceso de Owner.*10 códigos/u,
+      preconfiguredDiscord: /Binding de Discord ya preparado/u,
     },
     {
       activeLanguage: "简体中文",
       filename: "README.zh-CN.md",
+      addDeviceHeading: "## 添加另一台 Device",
+      firstTaskHeading: "## 创建首个 Task",
       implementationLabel: "实现",
       liveProofLabel: "真实证据",
       locale: "zh-CN",
       supportStatusLabel: "支持状态",
+      adminTask: /Admin Web → Tasks → 新建任务/u,
+      previewRestriction: /无法在之后添加或替换 Discord Binding/u,
       unsupported: /此捆绑包不受支持，且不得在 Release tag 下发布/u,
       candidate: /在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release/u,
+      candidateDiscordPath: /如需使用 Discord.*已验证的 Configuration Chat 流程/u,
+      claimStep: /完成 Owner Claim.*10 个/u,
+      preconfiguredDiscord: /预先准备的 Discord Binding/u,
     },
   ];
 
@@ -1824,12 +1871,25 @@ test("assembled bundle documentation includes complete localized launcher guidan
       assert.match(content, new RegExp(filename.replaceAll(".", String.raw`\.`), "u"));
     }
     assert.match(content, readme.unsupported);
+    assert.match(content, readme.previewRestriction);
     assert.equal(
       content.includes(`${readme.supportStatusLabel}: \`internal-preview-blocked\`.`),
       true,
     );
-    assert.match(content, /opendelegate\.cmd init/u);
+    assert.match(content, /\.\\opendelegate\.cmd help/u);
+    assert.doesNotMatch(content, /\.\\opendelegate\.cmd init(?:\s|$)/u);
     assert.match(content, /skills\/opendelegate-init\/SKILL\.md/u);
+    assert.match(content, /skills\/opendelegate-join\/SKILL\.md/u);
+    assert.match(content, /docs\/GETTING_STARTED\.md/u);
+    assert.match(content, /docs\/DISCORD_SETUP\.md/u);
+    assert.match(content, /Discord Forum/u);
+    assert.match(content, /Configuration Chat/u);
+    assert.match(content, /opendelegate\.cmd device grant/u);
+    assert.match(content, readme.adminTask);
+    assert.equal(
+      content.indexOf(readme.addDeviceHeading) < content.indexOf(readme.firstTaskHeading),
+      true,
+    );
     assert.equal(content.includes(`- ${readme.implementationLabel}: partial=36`), true);
     assert.equal(
       content.includes(`- ${readme.liveProofLabel}: blocked-external=15, not-run=21`),
@@ -1862,9 +1922,25 @@ test("assembled bundle documentation includes complete localized launcher guidan
       readme.locale,
     );
     assert.match(candidate, readme.candidate);
+    assert.match(candidate, readme.candidateDiscordPath);
+    assert.match(candidate, readme.claimStep);
+    assert.doesNotMatch(candidate, readme.previewRestriction);
+    assert.doesNotMatch(candidate, readme.preconfiguredDiscord);
     assert.equal(candidate.includes(`${readme.supportStatusLabel}: \`release-candidate\`.`), true);
-    assert.match(candidate, /\.\/opendelegate init/u);
+    assert.doesNotMatch(candidate, /\bthis preview\b/iu);
+    assert.match(candidate, /\.\/opendelegate help/u);
+    assert.doesNotMatch(candidate, /\.\/opendelegate init(?:\s|$)/u);
+    assert.match(candidate, /\.\/opendelegate device grant/u);
+    assert.match(candidate, readme.adminTask);
     assert.doesNotMatch(candidate, /INTERNAL_PREVIEW\.md/u);
+    const agentOffset = candidate.indexOf("Read `skills/opendelegate-init/SKILL.md`");
+    const claimOffset = readme.claimStep.exec(candidate)?.index ?? -1;
+    const discordOffset = readme.candidateDiscordPath.exec(candidate)?.index ?? -1;
+    assert.notEqual(agentOffset, -1);
+    assert.notEqual(claimOffset, -1);
+    assert.notEqual(discordOffset, -1);
+    assert.equal(agentOffset < claimOffset, true);
+    assert.equal(claimOffset < discordOffset, true);
 
     const completePreview = renderBundleReadme(
       "internal-preview-complete",

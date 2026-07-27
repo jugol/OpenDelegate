@@ -6,17 +6,47 @@
 OpenDelegate は、1 台の固定 Main Device と複数の macOS、Windows、Linux Device にまたがる AI
 Agent を連携させる、個人向けのセルフホスト型 Control Plane です。
 
-スマートフォンやコンピューターから Task を作成すると、Main Agent が Task を Work
-Order に分割し、実行可能な Device へ振り分けます。すべての Agent セッションを手作業で開き直すことなく、永続的で検証可能な 1 つの結果を受け取れます。
+> [!TIP]
+> **ここから始めてください:** [クイックスタート](#クイックスタート) ·
+> [完全セットアップガイド（英語）](docs/GETTING_STARTED.md) ·
+> [Discord Forum セットアップ](docs/DISCORD_SETUP.md)
 
-> [!WARNING] このリポジトリが現在ビルドするのは、サポート対象の OpenDelegate リリースではなく、**サポート対象外の内部プレビュー**です。ソースには、Main–Worker
-> Orchestration、プログラム型 Agent Adapter、厳密な Action Approval、Device-local Knowledge、Native
-> Service Supervision、および Computer
-> Use の本番環境を想定した実行経路が実装されています。ただし、ソース実装はリリース証拠ではありません。macOS、Windows、Linux、Discord、Provider、Private
-> Network、Restart、Permission、および Packaging に必要な実環境の証拠は未完成です。OpenDelegate をリリース済みと表示したり、無人の本番 Control
-> Plane として使用したりしないでください。
+## クイックスタート
+
+> [!WARNING]
+> このリポジトリがビルドするのは、**サポート対象外の内部プレビュー**です。実環境の Platform、Provider、Discord、Network、Permission、Packaging の証拠は未完成です。リリース済みと表示したり、無人の本番 Control
+> Plane として使用したりしないでください。詳細は[現在のソースの状態](#現在のソースの状態)を確認してください。
+
+OpenDelegate は Agent とともにインストールします。Owner 向けの導入手順に `npm run start`
+はありません。
+
+1. OS とアーキテクチャに合う bundle を用意し、信頼できる公開チャネルから bundle とは別に取得した digest と
+   `SHA256SUMS`
+   を照合します。現在作成できるのは明示的に表示された内部プレビューの bundle だけです。[内部プレビューのビルド](#内部プレビューのビルド)を参照してください。
+2. Discord を使用する場合は、[Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従い、最初の Main 初期化前に完全な Binding を用意します。現在のプレビューでは初期化後に Binding を追加または置換できません。
+3. 展開した bundle ディレクトリを Codex または Claude で開き、次の文をそのまま送信します: _“Read
+   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
+   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
+   if a required safety check fails.”_
+4. Agent の案内に従って Owner Claim を完了し、10 個の one-time Recovery
+   Code をすべて安全に保存します。
+5. Admin Web 右下の Configuration
+   Chat で Device、Agent、Route、Artifact の設定と、事前に準備した Discord の状態を確認します。
+6. Device を追加する際は、Configuration Chat で有効期間の短い Single-use Device
+   Grant を発行します。ファイルを開かずに Owner が管理する安全な方法で転送し、対象 Device の Agent に
+   `skills/opendelegate-join/SKILL.md` の手順を実行するよう依頼してください。
+7. Discord を設定した場合は、独立した Task ごとに Forum へ新しい投稿を作成します。同じ投稿への返信は同じ Task と native
+   Agent
+   Session を継続し、新しい投稿はクリーンな Context から始まります。Discord を使用しない場合や利用できない場合は、**Admin
+   Web → Tasks →新しいタスク**から作成します。
+
+Owner Recovery、追加 Device、最初の Task、トラブルシューティングを含む
+[完全なセットアップガイド（英語）](docs/GETTING_STARTED.md)を参照してください。
 
 ## OpenDelegate が必要な理由
+
+スマートフォンやコンピューターから Task を作成すると、Main Agent が Task を Work
+Order に分割し、実行可能な Device へ振り分けます。すべての Agent セッションを手作業で開き直すことなく、永続的で検証可能な 1 つの結果を受け取れます。
 
 - Discord Forum の 1 つの投稿が、1 つの永続的な Task と Context Boundary に対応します。
 - 決定論的なソフトウェアが ID、Policy、Health、Routing、Lease、Retry、Persistence、State
@@ -141,17 +171,8 @@ Round-trip、Clean Shutdown の限定的な Smoke Evidence が含まれます。
 
 Destination 名には `internal-preview` を含める必要があります。生成される `INTERNAL_PREVIEW.md` と
 `release-metadata.json` は、Bundle がサポート対象外であることと、正確な Release Evidence
-State を記録します。Foreground Runtime を確認するには、次を実行します。
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-Bundle をビルドした Platform に対応する Launcher を使用してください。内部プレビューは永続的な OS
+State を記録します。Discord とその他の Owner の選択を永続的な Main 設定の作成前に確定できるよう、組み立て済み Bundle は上記の Agent-first
+[クイックスタート](#クイックスタート)からのみ初期化してください。内部プレビューは Foreground で動作し、永続的な OS
 Service をインストールせず、Release Tag として公開してはいけません。
 
 Acceptance Criterion が 1 つでも未完了の場合、Production Build は意図的に失敗します。
