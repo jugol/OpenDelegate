@@ -59,6 +59,8 @@ represents a supported release or completed first milestone.
   changes.
 - An agent-facing `opendelegate-init` skill that preserves release gating and keeps runtime state
   outside the checkout.
+- An agent-first owner Quick Start in all six README languages, a complete Getting Started journey,
+  and a least-privilege Discord Forum setup guide carried into every platform bundle.
 - A platform-specific internal-preview bundle builder that downloads and verifies the exact official
   Node.js 24.18.0 archive, bundles Main and Admin, writes source/runtime/lockfile provenance, a
   package-instance legal inventory with retained runtime and compiled Admin production-dependency

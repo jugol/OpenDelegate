@@ -18,6 +18,30 @@ reopening every agent session.
 > evidence is not complete. Do not represent OpenDelegate as released or use it as an unattended
 > production control plane yet.
 
+## Quick Start
+
+OpenDelegate is installed with an Agent; there is no `npm run start` owner workflow.
+
+1. Get the platform-specific bundle and verify `SHA256SUMS` against the digest from its trusted
+   publication channel. The current repository produces marked internal-preview bundles only; see
+   [Build an internal preview](#build-an-internal-preview).
+2. If you want Discord, complete the [Discord Forum setup guide](docs/DISCORD_SETUP.md) before the
+   first Main initialization. This preview cannot add or replace a Discord binding later.
+3. Open the extracted bundle directory in Codex or Claude.
+4. Send: _“Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed
+   OpenDelegate Main Device.”_
+5. Follow the Agent through owner claim, save the ten recovery codes, and finish Device, Agent,
+   route, and Artifact setup in Admin Web Configuration Chat.
+6. Create a Discord Forum post. One post is one durable Task; replies continue its native Agent
+   session, while a new post starts a clean context.
+
+To add a computer, ask Configuration Chat for a short-lived Device grant, transfer the unopened file
+through an owner-controlled secure handoff, and ask the Agent on that computer to follow
+`skills/opendelegate-join/SKILL.md`.
+
+Read the [complete setup guide](docs/GETTING_STARTED.md), including owner recovery, additional
+Devices, the first Task, and troubleshooting.
+
 ## Why OpenDelegate
 
 - One Discord Forum post maps to one durable Task and context boundary.

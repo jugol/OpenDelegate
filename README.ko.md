@@ -18,6 +18,32 @@ OpenDelegate는 하나의 고정 Main Device와 여러 macOS, Windows, Linux Dev
 > 완성되지 않았습니다. OpenDelegate를 릴리스된 제품으로 표방하거나 무인 프로덕션 Control Plane으로
 > 사용하지 마십시오.
 
+## 빠른 시작
+
+OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run start`는 없습니다.
+
+1. 운영체제와 아키텍처에 맞는 bundle을 준비하고, 신뢰할 수 있는 배포 채널에서 bundle과 별도로 받은
+   digest로 `SHA256SUMS`를 검증합니다. 현재 저장소가 만드는 것은 명시적으로 표시된 내부 프리뷰
+   bundle뿐입니다. [내부 프리뷰 빌드](#내부-프리뷰-빌드)를 참고하십시오.
+2. Discord를 사용하려면 [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따라 최초 Main 초기화
+   전에 완전한 Binding을 준비합니다. 현재 프리뷰는 초기화 후 Binding을 추가하거나 교체할 수
+   없습니다.
+3. 압축을 푼 bundle 디렉터리를 Codex 또는 Claude에서 열고 다음 문장을 그대로 보냅니다: _“Read
+   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
+   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
+   if a required safety check fails.”_
+4. Agent의 안내에 따라 Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
+5. Admin Web 우측 하단의 Configuration Chat에서 Device, Agent, Route, Artifact 설정과 미리 준비한
+   Discord 상태를 검토합니다.
+6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
+   파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
+   `skills/opendelegate-join/SKILL.md`를 따르도록 요청합니다.
+7. 독립된 Task마다 Discord Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은 동일한 Task와
+   native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
+
+Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
+[전체 설정 가이드(영문)](docs/GETTING_STARTED.md)를 참고하십시오.
+
 ## OpenDelegate를 만드는 이유
 
 - Discord Forum 게시글 하나는 지속성 있는 Task 하나와 하나의 컨텍스트 경계에 대응합니다.

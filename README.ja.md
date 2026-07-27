@@ -16,6 +16,33 @@ Order に分割し、実行可能な Device へ振り分けます。すべての
 > Network、Restart、Permission、および Packaging に必要な実環境の証拠は未完成です。OpenDelegate をリリース済みと表示したり、無人の本番 Control
 > Plane として使用したりしないでください。
 
+## クイックスタート
+
+OpenDelegate は Agent とともにインストールします。Owner 向けの導入手順に `npm run start`
+はありません。
+
+1. OS とアーキテクチャに合う bundle を用意し、信頼できる公開チャネルから bundle とは別に取得した digest と
+   `SHA256SUMS`
+   を照合します。現在作成できるのは明示的に表示された内部プレビューの bundle だけです。[内部プレビューのビルド](#内部プレビューのビルド)を参照してください。
+2. Discord を使用する場合は、[Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従い、最初の Main 初期化前に完全な Binding を用意します。現在のプレビューでは初期化後に Binding を追加または置換できません。
+3. 展開した bundle ディレクトリを Codex または Claude で開き、次の文をそのまま送信します: _“Read
+   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
+   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
+   if a required safety check fails.”_
+4. Agent の案内に従って Owner Claim を完了し、10 個の one-time Recovery
+   Code をすべて安全に保存します。
+5. Admin Web 右下の Configuration
+   Chat で Device、Agent、Route、Artifact の設定と、事前に準備した Discord の状態を確認します。
+6. Device を追加する際は、Configuration Chat で有効期間の短い Single-use Device
+   Grant を発行します。ファイルを開かずに Owner が管理する安全な方法で転送し、対象 Device の Agent に
+   `skills/opendelegate-join/SKILL.md` の手順を実行するよう依頼してください。
+7. 独立した Task ごとに Discord
+   Forum へ新しい投稿を作成します。同じ投稿への返信は同じ Task と native Agent
+   Session を継続し、新しい投稿はクリーンな Context から始まります。
+
+Owner Recovery、追加 Device、最初の Task、トラブルシューティングを含む
+[完全なセットアップガイド（英語）](docs/GETTING_STARTED.md)を参照してください。
+
 ## OpenDelegate が必要な理由
 
 - Discord Forum の 1 つの投稿が、1 つの永続的な Task と Context Boundary に対応します。

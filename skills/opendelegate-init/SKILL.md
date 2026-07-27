@@ -100,6 +100,14 @@ the runtime source of truth.
 
 ## 4. Configure Main
 
+Before the first deterministic `init`, ask whether Discord belongs in this installation. When it
+does, complete the manual App, Community Forum, intent, permission, workflow-tag ID, owner
+allowlist, and secret-safe token prerequisites in `docs/DISCORD_SETUP.md`, then include the complete
+binding in that first initialization. The current deterministic boundary cannot add or replace a
+Discord binding after Main exists: a different requested binding fails closed with `CONFIG_EXISTS`.
+Configuration Chat must not claim that it can perform that mutation. Re-running `init` may rotate
+the token only when the requested persisted configuration is otherwise identical.
+
 1. Prefer SQLite. Use `init --database sqlite` unless the owner selects PostgreSQL. Main persists
    one top-level, non-secret `secretBackend` descriptor. Windows and macOS, plus Linux graphical
    sessions with Secret Service, receive a platform default. Headless Linux has no implicit
@@ -262,9 +270,11 @@ not a Task conversation:
 3. configure Codex, Claude, or generic adapters without exposing credentials; authenticate each
    exact OpenDelegate-controlled Codex/Claude provider home interactively instead of copying or
    inheriting the user's global provider home;
-4. bind approved Discord owner identities and Forum Channels; provision a new or rotated Discord bot
-   token with `init --discord-config ABSOLUTE_PATH --discord-token-stdin`, writing bytes directly to
-   bounded stdin as above. The Discord configuration retains only the alias and non-secret IDs.
+4. inspect the Discord owner identities and Forum Channels that were bound during the first Main
+   initialization. Configuration Chat cannot add or replace that binding in the current build. For
+   an identical persisted binding, provision a new or rotated Discord bot token with
+   `init --discord-config ABSOLUTE_PATH --discord-token-stdin`, writing bytes directly to bounded
+   stdin as above. The Discord configuration retains only the alias and non-secret IDs.
 5. configure ordered routes per Device;
 6. enroll each additional Worker with a short-lived single-use grant (the fixed Main was already
    enrolled locally in section 4); and

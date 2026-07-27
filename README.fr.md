@@ -20,6 +20,37 @@ durable et inspectable sans avoir à rouvrir manuellement chaque session d’age
 > OpenDelegate comme publié et ne l’utilisez pas encore comme plan de contrôle de production sans
 > surveillance.
 
+## Démarrage rapide
+
+OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Owner n’utilise pas
+`npm run start`.
+
+1. Procurez-vous le bundle correspondant au système et à l’architecture, puis vérifiez `SHA256SUMS`
+   avec le digest obtenu séparément par le canal de publication fiable. Le dépôt ne produit
+   actuellement que des bundles de préversion interne clairement identifiés ; consultez
+   [Construire une préversion interne](#construire-une-préversion-interne).
+2. Si vous utilisez Discord, suivez le
+   [guide de configuration de Discord Forum](docs/DISCORD_SETUP.md) et préparez le Binding complet
+   avant la première initialisation du Main. Cette préversion ne peut ni ajouter ni remplacer un
+   Binding après l’initialisation.
+3. Ouvrez le répertoire du bundle extrait dans Codex ou Claude, puis envoyez exactement : _“Read
+   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
+   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
+   if a required safety check fails.”_
+4. Suivez l’Agent pour revendiquer l’accès Owner et conservez en lieu sûr les dix codes de
+   récupération à usage unique.
+5. Dans Configuration Chat, en bas à droite d’Admin Web, vérifiez les Devices, Agents, Routes et
+   Artifacts ainsi que l’état Discord préparé avant l’initialisation.
+6. Pour ajouter un Device, demandez à Configuration Chat un Device Grant de courte durée et à usage
+   unique. Transférez le fichier sans l’ouvrir par un moyen sûr contrôlé par l’Owner, puis demandez
+   à l’Agent du Device cible de suivre `skills/opendelegate-join/SKILL.md`.
+7. Créez une nouvelle publication Discord Forum pour chaque Task indépendante. Les réponses
+   poursuivent la même Task et sa native Agent Session ; une nouvelle publication démarre avec un
+   Context propre.
+
+Consultez le [guide de configuration complet (en anglais)](docs/GETTING_STARTED.md), qui couvre la
+récupération de l’Owner, les Devices supplémentaires, la première Task et le dépannage.
+
 ## Pourquoi OpenDelegate
 
 - Une publication Discord Forum correspond à une Task durable et à une frontière de contexte.

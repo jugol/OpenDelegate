@@ -1716,6 +1716,8 @@ test("bundle guidance is launcher-first and never presents source-checkout comma
   assert.match(readme, /win32\/arm64/u);
   assert.match(readme, /opendelegate\.cmd init/u);
   assert.match(readme, /skills\/opendelegate-init\/SKILL\.md/u);
+  assert.match(readme, /before the first Main initialization/u);
+  assert.match(readme, /cannot add or replace a Discord binding later/u);
   assert.match(readme, /Implementation: partial=36/u);
   assert.match(readme, /THIRD_PARTY_NOTICES\.json/u);
   assert.doesNotMatch(readme, /THIRD_PARTY_NOTICES\.md/u);
@@ -1830,6 +1832,12 @@ test("assembled bundle documentation includes complete localized launcher guidan
     );
     assert.match(content, /opendelegate\.cmd init/u);
     assert.match(content, /skills\/opendelegate-init\/SKILL\.md/u);
+    assert.match(content, /skills\/opendelegate-join\/SKILL\.md/u);
+    assert.match(content, /docs\/GETTING_STARTED\.md/u);
+    assert.match(content, /docs\/DISCORD_SETUP\.md/u);
+    assert.match(content, /Discord Forum/u);
+    assert.match(content, /Configuration Chat/u);
+    assert.match(content, /opendelegate\.cmd device grant/u);
     assert.equal(content.includes(`- ${readme.implementationLabel}: partial=36`), true);
     assert.equal(
       content.includes(`- ${readme.liveProofLabel}: blocked-external=15, not-run=21`),
@@ -1864,6 +1872,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
     assert.match(candidate, readme.candidate);
     assert.equal(candidate.includes(`${readme.supportStatusLabel}: \`release-candidate\`.`), true);
     assert.match(candidate, /\.\/opendelegate init/u);
+    assert.match(candidate, /\.\/opendelegate device grant/u);
     assert.doesNotMatch(candidate, /INTERNAL_PREVIEW\.md/u);
 
     const completePreview = renderBundleReadme(

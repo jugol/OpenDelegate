@@ -15,6 +15,30 @@ Session。
 > Approval、Device 本地 Knowledge、原生服务监管和 Computer
 > Use 执行路径。但源代码实现不等于 Release 证据：macOS、Windows、Linux、Discord、Provider、私有网络、重启、权限和打包所需的真实环境证据仍不完整。请勿将 OpenDelegate 描述为已发布产品，也不要将其用作无人值守的生产控制平面。
 
+## 快速开始
+
+OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run start`。
+
+1. 获取与操作系统和架构匹配的 bundle，并使用通过可信发布渠道独立取得的 digest 核验
+   `SHA256SUMS`。当前仓库只能生成带有明确标识的内部预览 bundle；请参阅
+   [构建内部预览版](#构建内部预览版)。
+2. 如需使用 Discord，请先按照
+   [Discord Forum 设置指南](docs/DISCORD_SETUP.md)，在首次 Main 初始化之前准备完整的 Binding。当前预览版无法在初始化后添加或替换 Binding。
+3. 在 Codex 或 Claude 中打开解压后的 bundle 目录，并原样发送以下内容： _“Read
+   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
+   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
+   if a required safety check fails.”_
+4. 按照 Agent 的引导完成 Owner Claim，并妥善保存全部十个一次性恢复代码。
+5. 在 Admin Web 右下角的 Configuration
+   Chat 中检查 Device、Agent、Route 和 Artifact 配置，以及初始化前准备的 Discord 状态。
+6. 添加 Device 时，请通过 Configuration Chat 签发一份短期、一次性的 Device
+   Grant。不要打开该文件；使用 Owner 控制的安全方式将其交给目标 Device，然后让该 Device 上的 Agent 按照
+   `skills/opendelegate-join/SKILL.md` 操作。
+7. 每个独立 Task 都应在 Discord Forum 中创建一个新帖子。同一帖子的回复会延续同一 Task 及其 native
+   Agent Session；新帖子则从干净的 Context 开始。
+
+请阅读[完整设置指南（英文）](docs/GETTING_STARTED.md)，其中包括 Owner 恢复、添加 Device、创建首个 Task 和故障排查。
+
 ## 为什么选择 OpenDelegate
 
 - 一个 Discord Forum 帖子对应一个持久的 Task 和一个上下文边界。
