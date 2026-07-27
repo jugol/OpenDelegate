@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { SystemdCredentialKeyProvider } from "../src/index.ts";
+import { SecretError, SystemdCredentialKeyProvider } from "../src/index.ts";
 
 test(
   "systemd credentials use the service-manager supplied runtime root",
@@ -12,19 +12,25 @@ test(
   async (t) => {
     const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-systemd-credential-"));
     t.after(async () => {
+      await chmod(join(fixtureRoot, "credentials", "opendelegate.service"), 0o700).catch(
+        () => undefined,
+      );
       await rm(fixtureRoot, { force: true, recursive: true });
     });
     const credentialRoot = join(fixtureRoot, "credentials");
     const credentialDirectory = join(credentialRoot, "opendelegate.service");
     const sourceCheckoutRoot = join(fixtureRoot, "checkout");
     const expected = Buffer.alloc(32, 91);
+    await mkdir(credentialRoot, { mode: 0o755, recursive: true });
     await Promise.all([
-      mkdir(credentialDirectory, { mode: 0o700, recursive: true }),
+      mkdir(credentialDirectory, { mode: 0o700 }),
       mkdir(sourceCheckoutRoot, { mode: 0o700 }),
     ]);
-    await writeFile(join(credentialDirectory, "opendelegate-vault-key"), expected, {
-      mode: 0o400,
+    const credentialPath = join(credentialDirectory, "opendelegate-vault-key");
+    await writeFile(credentialPath, expected, {
+      mode: 0o440,
     });
+    await chmod(credentialDirectory, 0o550);
 
     const provider = new SystemdCredentialKeyProvider({
       credentialDirectory,
@@ -40,5 +46,12 @@ test(
 
     assert.ok(observed);
     assert.deepEqual([...observed], new Array<number>(32).fill(0));
+
+    await chmod(credentialPath, 0o640);
+    await assert.rejects(
+      provider.executeWithKey(() => undefined),
+      (error: unknown) =>
+        error instanceof SecretError && error.code === "SECRET_BACKEND_UNAVAILABLE",
+    );
   },
 );

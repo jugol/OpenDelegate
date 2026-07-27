@@ -112,6 +112,12 @@ represents a supported release or completed first milestone.
   provider-owned contents as opaque, so supported Codex temporary executable links no longer make an
   otherwise safe Linux Main fail runtime-path validation.
 
+### Fixed
+
+- Accepted the exact private `0550` directory and `0440` file modes emitted by current systemd
+  credential mounts, allowing headless Linux vaults to become ready without permitting general
+  group-readable credential paths.
+
 ### Security
 
 - Kept owner claim on a separate loopback-only listener and excluded claim tokens, database URIs,
