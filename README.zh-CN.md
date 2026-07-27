@@ -6,16 +6,14 @@
 OpenDelegate 是一个个人自托管控制平面，用于在一台固定的 Main Device 与多台 macOS、Windows 和 Linux
 Device 之间协调 AI Agent。
 
-你可以通过手机或电脑创建 Task，让 Main Agent 将其拆分为 Work Order，把这些 Work
-Order 路由到符合条件的 Device，并获得一个持久、可检查的统一结果，而无需手动重新打开每个 Agent
-Session。
-
-> [!WARNING] 此仓库目前构建的是**不受支持的内部预览版**，而不是受支持的 OpenDelegate
-> Release。源代码现已包含接近生产形态的 Main–Worker 编排、编程式 Agent Adapter、精确 Action
-> Approval、Device 本地 Knowledge、原生服务监管和 Computer
-> Use 执行路径。但源代码实现不等于 Release 证据：macOS、Windows、Linux、Discord、Provider、私有网络、重启、权限和打包所需的真实环境证据仍不完整。请勿将 OpenDelegate 描述为已发布产品，也不要将其用作无人值守的生产控制平面。
+> [!TIP]
+> **从这里开始：** [快速开始](#快速开始) · [完整设置指南（英文）](docs/GETTING_STARTED.md) ·
+> [Discord Forum 设置](docs/DISCORD_SETUP.md)
 
 ## 快速开始
+
+> [!WARNING]
+> 此仓库构建的是**不受支持的内部预览版**，而不是受支持的 Release。平台、Provider、Discord、网络、权限和打包所需的真实环境证据仍不完整。请勿将其描述为已发布产品，也不要将其用作无人值守的生产控制平面。详情请参阅[当前源代码状态](#当前源代码状态)。
 
 OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run start`。
 
@@ -41,6 +39,10 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
 请阅读[完整设置指南（英文）](docs/GETTING_STARTED.md)，其中包括 Owner 恢复、添加 Device、创建首个 Task 和故障排查。
 
 ## 为什么选择 OpenDelegate
+
+你可以通过手机或电脑创建 Task，让 Main Agent 将其拆分为 Work Order，把这些 Work
+Order 路由到符合条件的 Device，并获得一个持久、可检查的统一结果，而无需手动重新打开每个 Agent
+Session。
 
 - 一个 Discord Forum 帖子对应一个持久的 Task 和一个上下文边界。
 - 确定性软件负责身份、Policy、健康状态、路由、lease、重试、持久化和状态转换。Agent负责语义判断和分配给它们的工作。

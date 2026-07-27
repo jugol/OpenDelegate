@@ -14,6 +14,15 @@ function assertAppearsBefore(content, first, second) {
   assert.equal(firstOffset < secondOffset, true, `${first} must appear before ${second}`);
 }
 
+function githubHeadingAnchor(heading) {
+  return heading
+    .replace(/^##\s+/u, "")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/[^\p{Letter}\p{Mark}\p{Number}\s-]/gu, "")
+    .replace(/\s+/gu, "-");
+}
+
 test("README leads owners into one complete agent-first setup journey", async () => {
   const [readme, guide, initSkill, supportMatrix] = await Promise.all([
     readRepositoryFile("README.md"),
@@ -22,11 +31,26 @@ test("README leads owners into one complete agent-first setup journey", async ()
     readRepositoryFile("docs/release/SUPPORT_MATRIX.md"),
   ]);
 
+  const readmeLead = readme.slice(0, readme.indexOf("## Quick Start"));
+  assert.match(readmeLead, /> \[!TIP\]\r?\n> \*\*Start here:/u);
+  assert.match(readmeLead, /\[Complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
+  assert.match(readmeLead, /\[Discord Forum setup\]\(docs\/DISCORD_SETUP\.md\)/u);
+  assert.equal(readmeLead.includes(`(#${githubHeadingAnchor("## Quick Start")})`), true);
+  assertAppearsBefore(readme, "**Start here:**", "## Quick Start");
   assertAppearsBefore(readme, "## Quick Start", "## Why OpenDelegate");
+  assert.equal(
+    readme.slice(0, readme.indexOf("## Quick Start")).split(/\r?\n/u).length <= 15,
+    true,
+    "Quick Start must be visible within the first 15 README lines",
+  );
   const quickStart = readme.slice(
     readme.indexOf("## Quick Start"),
     readme.indexOf("## Why OpenDelegate"),
   );
+  assert.match(quickStart, /> \[!WARNING\]\r?\n>/u);
+  assertAppearsBefore(quickStart, "> [!WARNING]", "OpenDelegate is installed with an Agent");
+  assert.equal(readme.includes("## Current source state"), true);
+  assert.equal(quickStart.includes(`(#${githubHeadingAnchor("## Current source state")})`), true);
   assert.match(quickStart, /\[complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
   assert.match(quickStart, /\(docs\/DISCORD_SETUP\.md\)/u);
   assert.match(quickStart, /skills\/opendelegate-init\/SKILL\.md/u);
@@ -170,6 +194,9 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       filename: "README.ko.md",
       heading: "## 빠른 시작",
       nextHeading: "## OpenDelegate를 만드는 이유",
+      startHere: "**여기서 시작하세요:**",
+      ownerIntroduction: "OpenDelegate는 Agent와 함께 설치합니다.",
+      statusHeading: "## 현재 소스 상태",
       firstInitPattern: /최초 Main 초기화\s+전에/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*새 작업/u,
     },
@@ -177,6 +204,9 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       filename: "README.ja.md",
       heading: "## クイックスタート",
       nextHeading: "## OpenDelegate が必要な理由",
+      startHere: "**ここから始めてください:**",
+      ownerIntroduction: "OpenDelegate は Agent とともにインストールします。",
+      statusHeading: "## 現在のソースの状態",
       firstInitPattern: /最初の Main 初期化前/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*新しいタスク/u,
     },
@@ -184,6 +214,9 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       filename: "README.fr.md",
       heading: "## Démarrage rapide",
       nextHeading: "## Pourquoi OpenDelegate",
+      startHere: "**Commencez ici :**",
+      ownerIntroduction: "OpenDelegate s’installe avec un Agent",
+      statusHeading: "## État actuel du code source",
       firstInitPattern: /avant la première initialisation du Main/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*Nouvelle\s+tâche/u,
     },
@@ -191,6 +224,9 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       filename: "README.es.md",
       heading: "## Inicio rápido",
       nextHeading: "## Por qué OpenDelegate",
+      startHere: "**Empieza aquí:**",
+      ownerIntroduction: "OpenDelegate se instala con un Agent",
+      statusHeading: "## Estado actual del código fuente",
       firstInitPattern: /antes de la primera inicialización del Main/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*Nueva\s+tarea/u,
     },
@@ -198,6 +234,9 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       filename: "README.zh-CN.md",
       heading: "## 快速开始",
       nextHeading: "## 为什么选择 OpenDelegate",
+      startHere: "**从这里开始：**",
+      ownerIntroduction: "OpenDelegate 由 Agent 协助安装",
+      statusHeading: "## 当前源代码状态",
       firstInitPattern: /首次 Main\s+初始化之前/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*新建任务/u,
     },
@@ -205,12 +244,35 @@ test("every localized README exposes the same launcher-free Quick Start", async 
 
   for (const locale of locales) {
     const content = await readRepositoryFile(locale.filename);
+    const readmeLead = content.slice(0, content.indexOf(locale.heading));
+    assert.match(readmeLead, /> \[!TIP\]\r?\n>/u);
+    assert.match(readmeLead, /\(docs\/GETTING_STARTED\.md\)/u);
+    assert.match(readmeLead, /\(docs\/DISCORD_SETUP\.md\)/u);
+    assert.equal(
+      readmeLead.includes(`(#${githubHeadingAnchor(locale.heading)})`),
+      true,
+      `${locale.filename} start panel must link to its Quick Start heading`,
+    );
+    assertAppearsBefore(content, locale.startHere, locale.heading);
     assertAppearsBefore(content, locale.heading, locale.nextHeading);
+    assert.equal(
+      content.slice(0, content.indexOf(locale.heading)).split(/\r?\n/u).length <= 15,
+      true,
+      `${locale.filename} Quick Start must be visible within the first 15 lines`,
+    );
     const quickStart = content.slice(
       content.indexOf(locale.heading),
       content.indexOf(locale.nextHeading),
     );
 
+    assert.match(quickStart, /> \[!WARNING\]\r?\n>/u);
+    assertAppearsBefore(quickStart, "> [!WARNING]", locale.ownerIntroduction);
+    assert.equal(content.includes(locale.statusHeading), true);
+    assert.equal(
+      quickStart.includes(`(#${githubHeadingAnchor(locale.statusHeading)})`),
+      true,
+      `${locale.filename} release warning must link to its source-status heading`,
+    );
     assert.match(quickStart, /\(docs\/GETTING_STARTED\.md\)/u);
     assert.match(quickStart, /\(docs\/DISCORD_SETUP\.md\)/u);
     assert.match(quickStart, /skills\/opendelegate-init\/SKILL\.md/u);

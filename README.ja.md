@@ -6,17 +6,16 @@
 OpenDelegate は、1 台の固定 Main Device と複数の macOS、Windows、Linux Device にまたがる AI
 Agent を連携させる、個人向けのセルフホスト型 Control Plane です。
 
-スマートフォンやコンピューターから Task を作成すると、Main Agent が Task を Work
-Order に分割し、実行可能な Device へ振り分けます。すべての Agent セッションを手作業で開き直すことなく、永続的で検証可能な 1 つの結果を受け取れます。
-
-> [!WARNING] このリポジトリが現在ビルドするのは、サポート対象の OpenDelegate リリースではなく、**サポート対象外の内部プレビュー**です。ソースには、Main–Worker
-> Orchestration、プログラム型 Agent Adapter、厳密な Action Approval、Device-local Knowledge、Native
-> Service Supervision、および Computer
-> Use の本番環境を想定した実行経路が実装されています。ただし、ソース実装はリリース証拠ではありません。macOS、Windows、Linux、Discord、Provider、Private
-> Network、Restart、Permission、および Packaging に必要な実環境の証拠は未完成です。OpenDelegate をリリース済みと表示したり、無人の本番 Control
-> Plane として使用したりしないでください。
+> [!TIP]
+> **ここから始めてください:** [クイックスタート](#クイックスタート) ·
+> [完全セットアップガイド（英語）](docs/GETTING_STARTED.md) ·
+> [Discord Forum セットアップ](docs/DISCORD_SETUP.md)
 
 ## クイックスタート
+
+> [!WARNING]
+> このリポジトリがビルドするのは、**サポート対象外の内部プレビュー**です。実環境の Platform、Provider、Discord、Network、Permission、Packaging の証拠は未完成です。リリース済みと表示したり、無人の本番 Control
+> Plane として使用したりしないでください。詳細は[現在のソースの状態](#現在のソースの状態)を確認してください。
 
 OpenDelegate は Agent とともにインストールします。Owner 向けの導入手順に `npm run start`
 はありません。
@@ -45,6 +44,9 @@ Owner Recovery、追加 Device、最初の Task、トラブルシューティン
 [完全なセットアップガイド（英語）](docs/GETTING_STARTED.md)を参照してください。
 
 ## OpenDelegate が必要な理由
+
+スマートフォンやコンピューターから Task を作成すると、Main Agent が Task を Work
+Order に分割し、実行可能な Device へ振り分けます。すべての Agent セッションを手作業で開き直すことなく、永続的で検証可能な 1 つの結果を受け取れます。
 
 - Discord Forum の 1 つの投稿が、1 つの永続的な Task と Context Boundary に対応します。
 - 決定論的なソフトウェアが ID、Policy、Health、Routing、Lease、Retry、Persistence、State

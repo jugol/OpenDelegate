@@ -6,19 +6,18 @@ Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](
 OpenDelegate is a personal, self-hosted control plane for coordinating AI agents across one fixed
 Main Device and multiple macOS, Windows, and Linux Devices.
 
-Create a Task from a phone or computer, let the Main Agent divide it into Work Orders, route those
-Work Orders to eligible Devices, and receive one durable, inspectable result without manually
-reopening every agent session.
-
-> [!WARNING] This repository currently builds an **unsupported internal preview**, not a supported
-> OpenDelegate release. Production-shaped source paths now cover Main–Worker orchestration,
-> programmatic Agent Adapters, exact action approvals, Device-local Knowledge, native service
-> supervision, and Computer Use. Implementation in source is not release proof: the required live
-> macOS, Windows, Linux, Discord, provider, private-network, restart, permission, and packaging
-> evidence is not complete. Do not represent OpenDelegate as released or use it as an unattended
-> production control plane yet.
+> [!TIP]
+> **Start here:** [Quick Start](#quick-start) ·
+> [Complete setup guide](docs/GETTING_STARTED.md) ·
+> [Discord Forum setup](docs/DISCORD_SETUP.md)
 
 ## Quick Start
+
+> [!WARNING]
+> This repository currently builds an **unsupported internal preview**, not a supported OpenDelegate
+> release. Required live platform, provider, Discord, network, permission, and
+> packaging evidence is incomplete. Do not represent it as released or run it as an unattended
+> production control plane. See [Current source state](#current-source-state).
 
 OpenDelegate is installed with an Agent; there is no `npm run start` owner workflow.
 
@@ -44,6 +43,10 @@ Read the [complete setup guide](docs/GETTING_STARTED.md), including owner recove
 Devices, the first Task, and troubleshooting.
 
 ## Why OpenDelegate
+
+Create a Task from a phone or computer, let the Main Agent divide it into Work Orders, route those
+Work Orders to eligible Devices, and receive one durable, inspectable result without manually
+reopening every agent session.
 
 - One Discord Forum post maps to one durable Task and context boundary.
 - Deterministic software owns identity, policy, health, routing, leases, retries, persistence, and

@@ -6,20 +6,18 @@ Idiomas: [English](README.md) · [한국어](README.ko.md) · [日本語](README
 OpenDelegate es un plano de control personal y autoalojado para coordinar agentes de IA entre un
 Main Device fijo y varios Devices con macOS, Windows y Linux.
 
-Crea una Task desde un teléfono o un ordenador, deja que el Main Agent la divida en Work Orders,
-dirija esos Work Orders a los Devices aptos y recibe un único resultado duradero e inspeccionable
-sin tener que reabrir manualmente cada sesión de agente.
-
-> [!WARNING] Este repositorio genera actualmente una **vista previa interna sin soporte**, no una
-> release de OpenDelegate con soporte. El código fuente ya incluye rutas con forma de producción
-> para la orquestación Main–Worker, los Agent Adapters programáticos, las aprobaciones de acciones
-> exactas, el Knowledge local al Device, la supervisión nativa de servicios y Computer Use. Una
-> implementación en el código fuente no constituye evidencia de release: aún faltan pruebas reales
-> de macOS, Windows, Linux, Discord, proveedores, redes privadas, reinicios, permisos y empaquetado.
-> No presentes OpenDelegate como publicado ni lo utilices todavía como plano de control de
-> producción sin supervisión.
+> [!TIP]
+> **Empieza aquí:** [Inicio rápido](#inicio-rápido) ·
+> [Guía de configuración completa (inglés)](docs/GETTING_STARTED.md) ·
+> [Configuración de Discord Forum](docs/DISCORD_SETUP.md)
 
 ## Inicio rápido
+
+> [!WARNING]
+> Este repositorio genera una **vista previa interna sin soporte**, no una release con
+> soporte. Aún faltan pruebas reales de plataforma, Provider, Discord, red, permisos y empaquetado.
+> No la presentes como publicada ni la utilices como plano de control de producción sin supervisión.
+> Consulta el [estado actual del código fuente](#estado-actual-del-código-fuente).
 
 OpenDelegate se instala con un Agent; el recorrido de instalación del Owner no utiliza
 `npm run start`.
@@ -51,6 +49,10 @@ Consulta la [guía de configuración completa (en inglés)](docs/GETTING_STARTED
 recuperación del Owner, Devices adicionales, la primera Task y la resolución de problemas.
 
 ## Por qué OpenDelegate
+
+Crea una Task desde un teléfono o un ordenador, deja que el Main Agent la divida en Work Orders,
+dirija esos Work Orders a los Devices aptos y recibe un único resultado duradero e inspeccionable
+sin tener que reabrir manualmente cada sesión de agente.
 
 - Una publicación de Discord Forum se corresponde con una Task duradera y un límite de contexto.
 - El software determinista se ocupa de la identidad, las Policies, el estado de salud, el
