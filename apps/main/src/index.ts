@@ -2425,10 +2425,12 @@ async function ensureRuntimeDirectories(
 
 async function sealRuntimeState(paths: RuntimePaths, resolvedHome?: string): Promise<void> {
   const actualHome = resolvedHome ?? (await realpath(paths.home));
-  await assertManagedTreeHasNoLinks(actualHome);
+  const opaqueDirectories = await existingControlledProviderHomes(paths);
+  await assertManagedTreeHasNoLinks(actualHome, opaqueDirectories);
   try {
     await enforceHostRuntimePermissions({
       root: actualHome,
+      ...(opaqueDirectories.length === 0 ? {} : { opaqueDirectories }),
     });
   } catch (error) {
     if (error instanceof RuntimePermissionEnforcementError) {
@@ -2436,6 +2438,18 @@ async function sealRuntimeState(paths: RuntimePaths, resolvedHome?: string): Pro
     }
     throw error;
   }
+}
+
+async function existingControlledProviderHomes(paths: RuntimePaths): Promise<readonly string[]> {
+  const providerRoot = join(paths.stateDirectory, "providers");
+  const homes = [join(providerRoot, "codex"), join(providerRoot, "claude")];
+  const existing: string[] = [];
+  for (const home of homes) {
+    if (await exists(home)) {
+      existing.push(home);
+    }
+  }
+  return existing;
 }
 
 async function assertPrivateDirectory(path: string, label: string): Promise<void> {
@@ -2452,7 +2466,10 @@ async function assertPrivateDirectory(path: string, label: string): Promise<void
   }
 }
 
-async function assertManagedTreeHasNoLinks(root: string): Promise<void> {
+async function assertManagedTreeHasNoLinks(
+  root: string,
+  opaqueDirectories: readonly string[] = [],
+): Promise<void> {
   const entries = await readdir(root, { withFileTypes: true });
   for (const entry of entries) {
     const path = join(root, entry.name);
@@ -2464,9 +2481,20 @@ async function assertManagedTreeHasNoLinks(root: string): Promise<void> {
       );
     }
     if (metadata.isDirectory()) {
-      await assertManagedTreeHasNoLinks(path);
+      if (opaqueDirectories.some((opaque) => sameRuntimePath(path, opaque))) {
+        continue;
+      }
+      await assertManagedTreeHasNoLinks(path, opaqueDirectories);
     }
   }
+}
+
+function sameRuntimePath(left: string, right: string): boolean {
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  return process.platform === "win32"
+    ? resolvedLeft.toLocaleLowerCase("en-US") === resolvedRight.toLocaleLowerCase("en-US")
+    : resolvedLeft === resolvedRight;
 }
 
 function isAlreadyExists(error: unknown): boolean {

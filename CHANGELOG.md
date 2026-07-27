@@ -106,6 +106,9 @@ represents a supported release or completed first milestone.
   platforms.
 - Overrode the Claude SDK's transitive Hono Node adapter to the compatible patched 2.0.10 release
   and made dependency review and audit reject every moderate-or-higher advisory.
+- Sealed OpenDelegate-controlled provider homes at their owner-only root while treating their
+  provider-owned contents as opaque, so supported Codex temporary executable links no longer make an
+  otherwise safe Linux Main fail runtime-path validation.
 
 ### Security
 

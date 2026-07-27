@@ -1,13 +1,19 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { chmod, lstat, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
 export interface RuntimePermissionTargets {
   readonly root: string;
+  /**
+   * Provider-owned homes are sealed at their root, but their internal layout is
+   * opaque to OpenDelegate. Codex and Claude may create private links and other
+   * provider-specific entries that OpenDelegate never traverses.
+   */
+  readonly opaqueDirectories?: readonly string[];
 }
 
 export type HostRuntimePermissionEnforcer = (targets: RuntimePermissionTargets) => Promise<void>;
@@ -30,10 +36,10 @@ export async function enforceHostRuntimePermissions(
     return;
   }
   if (process.platform === "win32") {
-    await enforceWindowsRuntimeAcl(targets.root);
+    await enforceWindowsRuntimeAcl(targets.root, targets.opaqueDirectories ?? []);
     return;
   }
-  await enforcePosixRuntimePermissions(targets.root);
+  await enforcePosixRuntimePermissions(targets.root, targets.opaqueDirectories ?? []);
 }
 
 /**
@@ -48,8 +54,12 @@ export function withHostRuntimePermissionEnforcerForTest<T>(
   return scopedTestEnforcer.run(enforcer, operation);
 }
 
-async function enforcePosixRuntimePermissions(root: string): Promise<void> {
+async function enforcePosixRuntimePermissions(
+  root: string,
+  opaqueDirectories: readonly string[],
+): Promise<void> {
   const currentUid = process.getuid?.();
+  const opaque = normalizeOpaqueDirectories(root, opaqueDirectories);
   const pending = [root];
   while (pending.length > 0) {
     const path = pending.pop();
@@ -82,6 +92,9 @@ async function enforcePosixRuntimePermissions(root: string): Promise<void> {
       );
     }
     if (sealedMetadata.isDirectory()) {
+      if (opaque.has(normalizeFilesystemPath(path))) {
+        continue;
+      }
       for (const entry of await readdir(path)) {
         pending.push(join(path, entry));
       }
@@ -89,7 +102,11 @@ async function enforcePosixRuntimePermissions(root: string): Promise<void> {
   }
 }
 
-async function enforceWindowsRuntimeAcl(root: string): Promise<void> {
+async function enforceWindowsRuntimeAcl(
+  root: string,
+  opaqueDirectories: readonly string[],
+): Promise<void> {
+  const opaque = [...normalizeOpaqueDirectories(root, opaqueDirectories)];
   let identityOutput: string;
   try {
     const result = await execFileAsync("whoami.exe", ["/user", "/fo", "csv", "/nh"], {
@@ -116,7 +133,32 @@ Import-Module (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\Module
 $root = $env:OPENDELEGATE_ACL_ROOT
 $userSidText = $env:OPENDELEGATE_ACL_USER_SID
 $systemSidText = "S-1-5-18"
-$items = @((Get-Item -LiteralPath $root -Force)) + @(Get-ChildItem -LiteralPath $root -Force -Recurse)
+$opaqueRoots = @(
+  ConvertFrom-Json -InputObject $env:OPENDELEGATE_ACL_OPAQUE_ROOTS
+)
+$pending = [System.Collections.Generic.Stack[string]]::new()
+$pending.Push($root)
+$items = [System.Collections.Generic.List[object]]::new()
+while ($pending.Count -gt 0) {
+  $item = Get-Item -LiteralPath $pending.Pop() -Force
+  $items.Add($item)
+  $isOpaque = $false
+  foreach ($opaqueRoot in $opaqueRoots) {
+    if ([string]::Equals(
+      $item.FullName,
+      $opaqueRoot,
+      [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+      $isOpaque = $true
+      break
+    }
+  }
+  if ($item.PSIsContainer -and -not $isOpaque) {
+    foreach ($child in @(Get-ChildItem -LiteralPath $item.FullName -Force)) {
+      $pending.Push($child.FullName)
+    }
+  }
+}
 foreach ($item in $items) {
   if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw "Runtime state contains a reparse point."
@@ -179,6 +221,7 @@ foreach ($item in $items) {
         env: {
           ...runtimeNativeToolEnvironment(),
           OPENDELEGATE_ACL_ROOT: root,
+          OPENDELEGATE_ACL_OPAQUE_ROOTS: JSON.stringify(opaque),
           OPENDELEGATE_ACL_USER_SID: userSid,
         },
         maxBuffer: 1024 * 1024,
@@ -191,6 +234,37 @@ foreach ($item in $items) {
       { cause: error },
     );
   }
+}
+
+function normalizeOpaqueDirectories(root: string, paths: readonly string[]): ReadonlySet<string> {
+  const canonicalRoot = resolve(root);
+  const normalized = new Set<string>();
+  for (const path of paths) {
+    if (!isAbsolute(path)) {
+      throw new RuntimePermissionEnforcementError(
+        "Opaque runtime directories must be absolute descendants of the runtime root.",
+      );
+    }
+    const canonicalPath = resolve(path);
+    const relationship = relative(canonicalRoot, canonicalPath);
+    if (
+      relationship === "" ||
+      relationship === ".." ||
+      relationship.startsWith(`..${sep}`) ||
+      isAbsolute(relationship)
+    ) {
+      throw new RuntimePermissionEnforcementError(
+        "Opaque runtime directories must be absolute descendants of the runtime root.",
+      );
+    }
+    normalized.add(normalizeFilesystemPath(canonicalPath));
+  }
+  return normalized;
+}
+
+function normalizeFilesystemPath(path: string): string {
+  const canonical = resolve(path);
+  return process.platform === "win32" ? canonical.toLocaleLowerCase("en-US") : canonical;
 }
 
 function runtimeNativeToolEnvironment(): NodeJS.ProcessEnv {
