@@ -558,3 +558,48 @@ Discord and provider credentials, notarization, and live proof remain external
 release blockers until their exact evidence is recorded. Configured release policy
 can revoke observer identities independently of publisher and promotion keys,
 platform identities, and promotion or receipt statement IDs.
+
+## D-048 — Live Discord binding replacement under owner Approval
+
+**Decision:** Discord binding is a nullable, Main-scoped Configuration value named
+`discord.binding`. It contains only the bot-token alias and the complete non-secret
+Forum binding; the credential remains in Main's managed Secret Store. After
+bootstrap, durable Configuration is authoritative and the owner may add, extend,
+replace, or disable the binding through Configuration Chat and the normal protected
+Approval flow without re-running `init`.
+
+Main owns exactly one serialized Discord Gateway lifecycle. Before committing an
+approved change, it validates the candidate value, verifies that its credential
+alias carries an explicit Discord-bot-token capability and is currently available,
+and composes the candidate runtime. It then closes the previous Gateway, activates
+the candidate, and commits the matching durable Configuration while holding the
+lifecycle lock. A new candidate must complete `start()` and still report Discord
+`READY` within a bounded activation window; a stale ready observation or merely
+entering a starting or reconnecting state is not enough. Candidate activation or
+Configuration commit failure restores the previous binding. A disabled binding is
+represented by explicit `null`, never an unset key or a second runtime mode.
+Initial durable Configuration always records an explicit binding or `null`, so
+the first-init alias capability is recorded once in the durable secure-ingest
+ledger and later bootstrap-file edits cannot authorize another alias or bypass
+Approval. The activation bound covers capability lookup, runtime composition,
+`start()`, and current `READY`; a runtime factory that resolves after cancellation
+must be closed before shutdown can report success. Main rechecks `READY` after the
+durable apply and before finalizing the prepared lifecycle transition; losing it
+causes durable compensation and runtime rollback. Authoritative startup and
+rollback retain a retry runtime through temporary Discord or Secret Store
+unavailability, while shutdown or singleton-ownership loss cancels startup,
+restoration, and queued replacement work before control-plane drain. Aborted
+prepared transitions release their lifecycle lock and reject any late commit.
+Discord binding Approvals are high-risk Main-targeted actions.
+
+**Rationale:** Treating Discord as first-init-only makes an ordinary token, bot,
+Guild, or Forum change require reinitializing the fixed Main Device. Starting old
+and new Gateways concurrently risks duplicate ingestion, while committing the new
+binding before it can run can strand the owner without the primary Task surface.
+
+**Consequence:** Existing Tasks, event history, Work Orders, and provider-native
+sessions survive a binding change because Main remains authoritative. External
+Discord thread identifiers are not silently migrated across Forums; new posts
+create new Tasks under the new binding. Failed candidates leave the prior
+credential and binding available for rollback, and Configuration Chat never
+receives or persists the raw bot token.

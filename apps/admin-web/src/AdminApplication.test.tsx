@@ -6,6 +6,7 @@ import { AdminApplication } from "./AdminApplication";
 import {
   AdminApiError,
   BrowserAdminApi,
+  parseMainSecretReference,
   type AdminApi,
   type ApprovalDetail,
   type DeviceSummary,
@@ -364,7 +365,7 @@ describe("Admin authentication and Task control", () => {
         observedMaterial = new TextDecoder().decode(secret);
         return {
           schemaVersion: 1,
-          secretRef: "secret://main/database_secure_fixture",
+          secretRef: parseMainSecretReference("secret://main/database_secure_fixture"),
           availability: "ready",
         };
       });
@@ -397,6 +398,62 @@ describe("Admin authentication and Task control", () => {
     expect(
       screen.getByText("Stored locally as secret://main/database_secure_fixture"),
     ).toBeTruthy();
+  });
+
+  it("stores a Discord bot token through secure ingest and sends only its alias reference to Configuration Chat", async () => {
+    const rawToken = "discord.bot.token.must-not-enter-chat";
+    let observedMaterial = "";
+    const ingestSecret = vi
+      .fn<AdminApi["ingestSecret"]>()
+      .mockImplementation(async (_purpose, secret) => {
+        observedMaterial = new TextDecoder().decode(secret);
+        return {
+          schemaVersion: 1,
+          secretRef: parseMainSecretReference("secret://main/discord_secure_fixture"),
+          availability: "ready",
+        };
+      });
+    const sendConfigurationMessage = vi
+      .fn<AdminApi["sendConfigurationMessage"]>()
+      .mockResolvedValue("The Discord credential alias is ready for binding setup.");
+    const api = createApi({ ingestSecret, sendConfigurationMessage });
+    const user = userEvent.setup();
+    render(<AdminApplication api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.selectOptions(screen.getByLabelText("Credential type"), "discord-bot-token");
+    const input = screen.getByLabelText("Discord bot token") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    await user.type(input, rawToken);
+    await user.click(screen.getByRole("button", { name: "Store securely" }));
+
+    expect(
+      await screen.findByText("The Discord credential alias is ready for binding setup."),
+    ).toBeTruthy();
+    expect(observedMaterial).toBe(rawToken);
+    expect(ingestSecret.mock.calls[0]?.[0]).toBe("discord-bot-token");
+    expect(ingestSecret.mock.calls[0]?.[1]?.every((byte) => byte === 0)).toBe(true);
+    expect(sendConfigurationMessage).toHaveBeenCalledWith(
+      windowsMain.deviceId,
+      "Use this secure Discord bot token reference: secret://main/discord_secure_fixture. Its botTokenAlias is discord_secure_fixture.",
+    );
+    expect(sendConfigurationMessage.mock.calls[0]?.[1]).not.toContain(rawToken);
+    expect(input.value).toBe("");
+  });
+
+  it("clears an unsubmitted secure credential when Configuration Chat closes", async () => {
+    const user = userEvent.setup();
+    render(<AdminApplication api={createApi()} />);
+
+    expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.selectOptions(screen.getByLabelText("Credential type"), "discord-bot-token");
+    await user.type(screen.getByLabelText("Discord bot token"), "unsubmitted.discord.token");
+    await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
+
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect((screen.getByLabelText("Discord bot token") as HTMLInputElement).value).toBe("");
   });
 
   it("re-renders a deterministic authentication error when the locale changes", async () => {
@@ -763,7 +820,7 @@ function createApi(overrides: Partial<AdminApi> = {}): AdminApi {
       .mockResolvedValue("Configuration response."),
     ingestSecret: vi.fn<AdminApi["ingestSecret"]>().mockResolvedValue({
       schemaVersion: 1,
-      secretRef: "secret://main/database_fixture",
+      secretRef: parseMainSecretReference("secret://main/database_fixture"),
       availability: "ready",
     }),
     listTasks: vi.fn<AdminApi["listTasks"]>().mockResolvedValue([runningTask]),

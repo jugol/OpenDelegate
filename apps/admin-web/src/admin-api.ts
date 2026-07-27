@@ -520,12 +520,41 @@ export interface RuntimeFeature {
 }
 
 export type SecureSecretIngestPurpose =
-  "api-token" | "database-uri" | "private-key" | "service-credential";
+  "api-token" | "database-uri" | "discord-bot-token" | "private-key" | "service-credential";
+
+declare const mainSecretReferenceBrand: unique symbol;
+declare const mainSecretAliasBrand: unique symbol;
+
+export type MainSecretReference = string & {
+  readonly [mainSecretReferenceBrand]: true;
+};
+
+export type MainSecretAlias = string & {
+  readonly [mainSecretAliasBrand]: true;
+};
 
 export interface SecureSecretIngestReceipt {
   readonly schemaVersion: 1;
-  readonly secretRef: string;
+  readonly secretRef: MainSecretReference;
   readonly availability: "ready";
+}
+
+export function parseMainSecretReference(input: unknown): MainSecretReference {
+  if (
+    typeof input !== "string" ||
+    !/^secret:\/\/main\/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u.test(input)
+  ) {
+    throw invalidSecretIngestResponse();
+  }
+  return input as MainSecretReference;
+}
+
+export function mainSecretAlias(reference: MainSecretReference): MainSecretAlias {
+  const match = /^secret:\/\/main\/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})$/u.exec(reference);
+  if (match?.[1] === undefined) {
+    throw invalidSecretIngestResponse();
+  }
+  return match[1] as MainSecretAlias;
 }
 
 export interface AdminApi {
@@ -873,6 +902,8 @@ function secureSecretMaximumBytes(purpose: SecureSecretIngestPurpose): number {
       return 8 * 1024;
     case "api-token":
       return 16 * 1024;
+    case "discord-bot-token":
+      return 4 * 1024;
     case "private-key":
     case "service-credential":
       return 64 * 1024;
@@ -899,17 +930,13 @@ function asSecureSecretIngestReceipt(value: unknown): SecureSecretIngestReceipt 
     throw invalidSecretIngestResponse();
   }
   const record = value as Record<string, unknown>;
-  if (
-    record["schemaVersion"] !== 1 ||
-    record["availability"] !== "ready" ||
-    typeof record["secretRef"] !== "string" ||
-    !/^secret:\/\/main\/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u.test(record["secretRef"])
-  ) {
+  if (record["schemaVersion"] !== 1 || record["availability"] !== "ready") {
     throw invalidSecretIngestResponse();
   }
+  const secretRef = parseMainSecretReference(record["secretRef"]);
   return {
     schemaVersion: 1,
-    secretRef: record["secretRef"],
+    secretRef: secretRef as MainSecretReference,
     availability: "ready",
   };
 }

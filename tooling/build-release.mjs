@@ -340,11 +340,11 @@ const bundleReadmeCopy = Object.freeze({
     claimStep: "Complete owner claim and save all 10 one-time recovery codes.",
     cliIntroduction: "For deterministic CLI inspection:",
     configurationStep:
-      "After owner claim, finish Device, Agent, route, and Artifact setup in Admin Web Configuration Chat and inspect any preconfigured Discord binding.",
+      "After owner claim, finish Device, Agent, route, Artifact, and optional Discord setup in Admin Web Configuration Chat.",
     documentation:
       "See `docs/release/README.md` for release semantics, `SECURITY.md` for private\nvulnerability reporting, and `THIRD_PARTY_NOTICES.json` for the complete bundled\ndependency legal inventory.",
     discordStep:
-      "If you want Discord, complete `docs/DISCORD_SETUP.md` before the first Main initialization. This package cannot add or replace a Discord binding later.",
+      "Discord may be deferred. After owner claim, follow `docs/DISCORD_SETUP.md`; put the token only in Configuration Chat's secure credential panel, then add or replace the approved binding.",
     firstTaskStep:
       "If Discord is configured, create one Discord Forum post for each independent Task. Replies continue that Task and its native Agent session; a new post starts a clean context. If Discord is unavailable or disabled, use Admin Web → Tasks → New task for a minimal Task.",
     firstTaskHeading: "Create your first Task",
@@ -386,11 +386,11 @@ const bundleReadmeCopy = Object.freeze({
     claimStep: "Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관하세요.",
     cliIntroduction: "결정적인 CLI 인터페이스를 확인하려면 다음을 사용하세요.",
     configurationStep:
-      "Owner Claim 후 Admin Web Configuration Chat에서 Device, Agent, Route 및 Artifact 설정을 마치고 미리 준비한 Discord Binding을 점검하세요.",
+      "Owner Claim 후 Admin Web Configuration Chat에서 Device, Agent, Route, Artifact 및 선택적 Discord 설정을 마치세요.",
     documentation:
       "릴리스 의미는 `docs/release/README.md`, 비공개 취약점 신고 방법은 `SECURITY.md`,\n번들된 의존성의 전체 법적 목록은 `THIRD_PARTY_NOTICES.json`을 확인하세요.",
     discordStep:
-      "Discord를 사용하려면 최초 Main 초기화 전에 `docs/DISCORD_SETUP.md`를 완료하세요. 이 패키지는 나중에 Discord Binding을 추가하거나 교체할 수 없습니다.",
+      "Discord 설정은 나중으로 미뤄도 됩니다. Owner Claim 후 `docs/DISCORD_SETUP.md`를 따르고, 토큰은 Configuration Chat의 보안 인증 정보 패널에만 입력한 뒤 승인된 Binding을 추가하거나 교체하세요.",
     firstTaskStep:
       "Discord를 설정했다면 독립된 Task마다 Discord Forum 게시글을 하나 만드세요. 같은 게시글의 답글은 해당 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context로 시작합니다. Discord를 사용하지 않거나 사용할 수 없으면 Admin Web → Tasks → 새 작업에서 만드세요.",
     firstTaskHeading: "첫 Task 만들기",
@@ -432,11 +432,11 @@ const bundleReadmeCopy = Object.freeze({
     claimStep: "Owner Claim を完了し、10 個の one-time Recovery Code をすべて安全に保存します。",
     cliIntroduction: "決定的な CLI インターフェースを確認するには、次を実行します。",
     configurationStep:
-      "Owner Claim 後、Admin Web の Configuration Chat で Device、Agent、Route、Artifact の設定を完了し、事前に用意した Discord Binding を確認します。",
+      "Owner Claim 後、Admin Web の Configuration Chat で Device、Agent、Route、Artifact、および任意の Discord 設定を完了します。",
     documentation:
       "リリースの意味は `docs/release/README.md`、非公開の脆弱性報告は `SECURITY.md`、\nバンドルされた依存関係の完全な法的一覧は `THIRD_PARTY_NOTICES.json` を確認してください。",
     discordStep:
-      "Discord を使用する場合は、最初の Main 初期化前に `docs/DISCORD_SETUP.md` を完了します。このパッケージでは後から Discord Binding を追加または置換できません。",
+      "Discord 設定は後回しにできます。Owner Claim 後に `docs/DISCORD_SETUP.md` に従い、トークンは Configuration Chat の安全な認証情報パネルにのみ入力して、承認済み Binding を追加または置換します。",
     firstTaskStep:
       "Discord を設定した場合は、独立した Task ごとに Discord Forum へ新しい投稿を作成します。同じ投稿への返信はその Task と native Agent Session を継続し、新しい投稿はクリーンな Context から始まります。Discord を使用しない場合や利用できない場合は、Admin Web → Tasks → 新しいタスクから作成します。",
     firstTaskHeading: "最初の Task を作成",
@@ -480,11 +480,11 @@ const bundleReadmeCopy = Object.freeze({
       "Revendiquez l’accès Owner et conservez en lieu sûr les 10 codes de récupération à usage unique.",
     cliIntroduction: "Pour inspecter l’interface CLI déterministe :",
     configurationStep:
-      "Après l’accès Owner, terminez la configuration des Devices, Agents, Routes et Artifacts dans Configuration Chat d’Admin Web et vérifiez le Binding Discord préparé.",
+      "Après l’accès Owner, terminez la configuration des Devices, Agents, Routes, Artifacts et, si souhaité, de Discord dans Configuration Chat d’Admin Web.",
     documentation:
       "Consultez `docs/release/README.md` pour la sémantique des releases, `SECURITY.md`\npour signaler une vulnérabilité en privé et `THIRD_PARTY_NOTICES.json` pour\nl’inventaire juridique complet des dépendances incluses.",
     discordStep:
-      "Pour utiliser Discord, terminez `docs/DISCORD_SETUP.md` avant la première initialisation du Main. Ce package ne peut ni ajouter ni remplacer un Binding Discord ensuite.",
+      "Discord peut être configuré plus tard. Après l’accès Owner, suivez `docs/DISCORD_SETUP.md`, saisissez le jeton uniquement dans le panneau sécurisé de Configuration Chat, puis ajoutez ou remplacez le Binding approuvé.",
     firstTaskStep:
       "Si Discord est configuré, créez une publication Discord Forum pour chaque Task indépendante. Les réponses poursuivent cette Task et sa native Agent Session ; une nouvelle publication démarre avec un Context propre. Si Discord est désactivé ou indisponible, ouvrez Admin Web → Tasks → Nouvelle tâche.",
     firstTaskHeading: "Créer votre première Task",
@@ -528,11 +528,11 @@ const bundleReadmeCopy = Object.freeze({
       "Reclama el acceso de Owner y guarda de forma segura los 10 códigos de recuperación de un solo uso.",
     cliIntroduction: "Para inspeccionar la interfaz CLI determinista:",
     configurationStep:
-      "Después de reclamar el acceso del Owner, completa la configuración de Devices, Agents, Routes y Artifacts en Configuration Chat de Admin Web y revisa el Binding de Discord ya preparado.",
+      "Después de reclamar el acceso del Owner, completa la configuración de Devices, Agents, Routes, Artifacts y, si quieres, Discord en Configuration Chat de Admin Web.",
     documentation:
       "Consulta `docs/release/README.md` para conocer la semántica de las releases,\n`SECURITY.md` para informar de vulnerabilidades en privado y\n`THIRD_PARTY_NOTICES.json` para ver el inventario legal completo de las dependencias incluidas.",
     discordStep:
-      "Para usar Discord, completa `docs/DISCORD_SETUP.md` antes de la primera inicialización del Main. Este paquete no puede añadir ni sustituir después un Binding de Discord.",
+      "Puedes configurar Discord más adelante. Después de reclamar el acceso del Owner, sigue `docs/DISCORD_SETUP.md`, introduce el token solo en el panel seguro de Configuration Chat y añade o sustituye el Binding aprobado.",
     firstTaskStep:
       "Si Discord está configurado, crea una publicación en Discord Forum para cada Task independiente. Las respuestas continúan esa Task y su native Agent Session; una publicación nueva empieza con un Context limpio. Si Discord está desactivado o no está disponible, abre Admin Web → Tasks → Nueva tarea.",
     firstTaskHeading: "Crear tu primera Task",
@@ -574,11 +574,11 @@ const bundleReadmeCopy = Object.freeze({
     claimStep: "完成 Owner Claim，并妥善保存全部 10 个一次性恢复代码。",
     cliIntroduction: "如需检查确定性的 CLI 界面，请运行：",
     configurationStep:
-      "完成 Owner Claim 后，在 Admin Web 的 Configuration Chat 中设置 Device、Agent、Route 和 Artifact，并检查预先准备的 Discord Binding。",
+      "完成 Owner Claim 后，在 Admin Web 的 Configuration Chat 中设置 Device、Agent、Route、Artifact 以及可选的 Discord。",
     documentation:
       "Release 语义请参阅 `docs/release/README.md`，私下报告安全漏洞请参阅\n`SECURITY.md`，随附依赖项的完整法律清单请参阅 `THIRD_PARTY_NOTICES.json`。",
     discordStep:
-      "如需使用 Discord，请在首次 Main 初始化之前完成 `docs/DISCORD_SETUP.md`。此软件包无法在之后添加或替换 Discord Binding。",
+      "Discord 可以稍后配置。完成 Owner Claim 后，请按照 `docs/DISCORD_SETUP.md` 操作，只在 Configuration Chat 的安全凭据面板中输入令牌，然后添加或替换获批的 Binding。",
     firstTaskStep:
       "如果已配置 Discord，请为每个独立 Task 创建一个 Discord Forum 新帖子。同一帖子的回复会继续该 Task 及其 Agent 原生 Session；新帖子则从干净的 Context 开始。如果 Discord 已禁用或不可用，请选择 Admin Web → Tasks → 新建任务。",
     firstTaskHeading: "创建首个 Task",

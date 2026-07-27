@@ -26,17 +26,19 @@ OpenDelegate se instala con un Agent; el recorrido de instalación del Owner no 
    con el digest recibido por separado mediante el canal de publicación de confianza. El repositorio
    solo genera por ahora bundles de vista previa interna claramente identificados; consulta
    [Compilar una vista previa interna](#compilar-una-vista-previa-interna).
-2. Si vas a usar Discord, sigue la [guía de configuración de Discord Forum](docs/DISCORD_SETUP.md) y
-   prepara el Binding completo antes de la primera inicialización del Main. Esta vista previa no
-   puede añadir ni sustituir un Binding después de inicializarlo.
+2. Puedes omitir Discord durante la primera inicialización del Main. Después podrás añadir,
+   sustituir, ampliar o desactivar el Binding de Forum desde Configuration Chat con autenticación
+   del Owner. Sigue la [guía de configuración de Discord Forum](docs/DISCORD_SETUP.md) para la App,
+   el Forum, los Tags y los Permissions necesarios.
 3. Abre el directorio del bundle extraído en Codex o Claude y envía exactamente: _“Read
    `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
    Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
    if a required safety check fails.”_
 4. Sigue al Agent para reclamar el acceso del Owner y guarda de forma segura los diez códigos de
    recuperación de un solo uso.
-5. En Configuration Chat, en la esquina inferior derecha de Admin Web, revisa los Devices, Agents,
-   Routes y Artifacts, además del estado de Discord preparado antes de la inicialización.
+5. En Configuration Chat, en la esquina inferior derecha de Admin Web, completa la configuración
+   de Devices, Agents, Routes, Artifacts y, si quieres, Discord. Introduce el token de Discord solo
+   en el panel seguro de credenciales, nunca en el cuadro de chat.
 6. Para añadir un Device, solicita en Configuration Chat un Device Grant de corta duración y un solo
    uso. Transfiere el archivo sin abrirlo mediante un mecanismo seguro controlado por el Owner y
    pide al Agent del Device de destino que siga `skills/opendelegate-join/SKILL.md`.

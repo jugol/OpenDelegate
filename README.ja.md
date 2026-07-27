@@ -23,15 +23,15 @@ OpenDelegate は Agent とともにインストールします。Owner 向けの
 1. OS とアーキテクチャに合う bundle を用意し、信頼できる公開チャネルから bundle とは別に取得した digest と
    `SHA256SUMS`
    を照合します。現在作成できるのは明示的に表示された内部プレビューの bundle だけです。[内部プレビューのビルド](#内部プレビューのビルド)を参照してください。
-2. Discord を使用する場合は、[Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従い、最初の Main 初期化前に完全な Binding を用意します。現在のプレビューでは初期化後に Binding を追加または置換できません。
+2. 最初の Main 初期化では Discord を省略できます。後から Owner 認証済みの Configuration Chat で Forum Binding を追加、置換、拡張、無効化できます。必要な App、Forum、Tag、Permission は [Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従ってください。
 3. 展開した bundle ディレクトリを Codex または Claude で開き、次の文をそのまま送信します: _“Read
    `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
    Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
    if a required safety check fails.”_
 4. Agent の案内に従って Owner Claim を完了し、10 個の one-time Recovery
    Code をすべて安全に保存します。
-5. Admin Web 右下の Configuration
-   Chat で Device、Agent、Route、Artifact の設定と、事前に準備した Discord の状態を確認します。
+5. Admin Web 右下の Configuration Chat で Device、Agent、Route、Artifact、および任意の Discord
+   設定を完了します。Discord トークンはチャット入力欄ではなく、安全な認証情報パネルにのみ入力します。
 6. Device を追加する際は、Configuration Chat で有効期間の短い Single-use Device
    Grant を発行します。ファイルを開かずに Owner が管理する安全な方法で転送し、対象 Device の Agent に
    `skills/opendelegate-join/SKILL.md` の手順を実行するよう依頼してください。

@@ -78,17 +78,24 @@ export const spanishMessages = {
       "El agente de configuración no pudo responder. No se cambió ninguna configuración.",
     secureStoreFailed:
       "No se pudo guardar la credencial de forma segura. No se envió al chat de configuración.",
-    secureTitle: "Guardar una credencial de base de datos",
+    secureTitle: "Guardar una credencial de forma segura",
     secureIntro:
       "El valor se envía directamente al almacén de secretos administrado de este dispositivo principal. El agente solo recibe una referencia opaca.",
+    secureKindLabel: "Tipo de credencial",
+    secureDatabaseOption: "URI de base de datos",
+    secureDiscordOption: "Token del bot de Discord",
     databaseUriLabel: "URI de la base de datos",
     databaseUriPlaceholder: "URI de conexión de PostgreSQL",
+    discordTokenLabel: "Token del bot de Discord",
+    discordTokenPlaceholder: "Token del bot del portal para desarrolladores de Discord",
     secureNotice:
       "Tras enviarlo, el valor original se borra de este formulario y nunca se convierte en un mensaje.",
     secureStore: "Guardar de forma segura",
     secureStoring: "Guardando de forma segura…",
     secureStored: "Guardado localmente como {reference}",
     secureReferenceMessage: "Usa esta referencia segura de base de datos: {reference}",
+    secureDiscordReferenceMessage:
+      "Usa esta referencia segura del token del bot de Discord: {reference}. Su botTokenAlias es {alias}.",
     title: "Chat de configuración",
     subtitle:
       "La configuración del dispositivo se mantiene separada de las conversaciones de tareas.",

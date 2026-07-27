@@ -101,28 +101,26 @@ the runtime source of truth.
 ## 4. Configure Main
 
 Before the first deterministic `init`, read `release-metadata.json`, select the path for its exact
-`supportStatus`, and ask whether Discord belongs in this installation.
+`supportStatus`, and ask whether Discord should be configured now, deferred until after owner claim,
+or kept disabled.
 
 When the owner selected Discord for an internal preview whose status begins with `internal-preview`,
 complete the manual App, Community Forum, intent, permission, workflow-tag ID, owner allowlist, and
-secret-safe token prerequisites in `docs/DISCORD_SETUP.md`, then include the complete binding in
-that first initialization. The preview's deterministic boundary cannot add or replace a Discord
-binding after Main exists: a different requested binding fails closed with `CONFIG_EXISTS`.
-Configuration Chat must not claim that it can perform that mutation. Re-running `init` may rotate
-the token only when the requested persisted configuration is otherwise identical.
+secret-safe token prerequisites in `docs/DISCORD_SETUP.md`. The owner may include a complete
+non-secret binding in first initialization or defer it. After claim, use the authenticated
+Configuration Chat lifecycle to add, replace, extend, or disable `discord.binding`. The internal
+preview remains unsupported even when that lifecycle succeeds.
 
 When the owner selected Discord for release-candidate bytes, including the exact same bytes after a
-verified external promotion, do not use the internal-preview manual first-init workaround. Record
-that intent, initialize and claim Main, then require the verified Configuration Chat → Discord path
-in section 6. If that selected path is unavailable or cannot complete and validate the binding, the
-candidate is invalid: stop, keep the release unsupported, and report the missing capability as a
-release blocker.
+verified external promotion, record that intent, initialize and claim Main, then require the
+verified Configuration Chat Discord path in section 6. If that selected path is unavailable or
+cannot complete and validate the binding, the candidate is invalid: stop, keep the release
+unsupported, and report the missing capability as a release blocker.
 
 When the owner declined Discord, record the Discord-disabled intent, initialize Main without a
-Discord binding, and continue. Do not run either setup path, reject the candidate, or imply that
-Discord is mandatory. Explain that an internal preview cannot add Discord to that existing Main
-later, while release-candidate bytes may use only their verified authenticated configuration path if
-the owner changes the choice.
+Discord binding, and continue. Do not reject the installation or imply that Discord is mandatory. If
+the owner changes the choice later, resume at `docs/DISCORD_SETUP.md` and use the same authenticated
+Configuration Chat path without re-running `init`.
 
 ### Bootstrap the Main Configuration Agent
 
@@ -342,19 +340,23 @@ not a Task conversation:
    adapters without exposing credentials. Authenticate each additional OpenDelegate-controlled
    Codex/Claude provider home through the same owner-interactive rule instead of copying or
    inheriting the user's global provider home;
-4. handle Discord according to `release-metadata.json`:
+4. handle Discord according to the owner's current choice:
    - When the owner declined Discord, preserve the explicit Discord-disabled state and continue. Do
      not reject the installation or present Discord as required.
-   - When the owner selected Discord for an internal preview, inspect the owner identities and Forum
-     Channels bound during the first Main initialization. Configuration Chat cannot add or replace
-     that binding. For an identical persisted binding, provision a new or rotated Discord bot token
-     with `init --discord-config ABSOLUTE_PATH --discord-token-stdin`, writing bytes directly to
-     bounded stdin as above. The Discord configuration retains only the alias and non-secret IDs.
-   - When the owner selected Discord for release-candidate bytes, run the verified Configuration
-     Chat → Discord path in `docs/DISCORD_SETUP.md`. It must complete and validate the App, bot,
-     Community Forum, workflow-tag IDs, required intents and permissions, owner allowlist,
-     secret-safe token ingress, and durable binding. If the feature is unavailable or any validation
-     fails, stop and reject the candidate instead of falling back to the preview workaround.
+   - When first init already seeded the owner's intended Discord binding and provisioned its token,
+     inspect the effective value, confirm every ID, and require `ready / DISCORD_READY`. Do not
+     upload a duplicate token or submit an identical no-op proposal.
+   - For deferred, new, or changed Discord setup, run the Configuration Chat path in
+     `docs/DISCORD_SETUP.md`. Put the raw token only into the secure credential panel, pass only its
+     opaque reference to the Agent, and propose the exact Main-scoped `discord.binding`. Review and
+     approve the protected mutation, then require `ready / DISCORD_READY`.
+   - Adding a Forum preserves existing `forumBindings`; replacing the bot, guild, or Forum proposes
+     the complete new object; disabling sets the value to `null`. Never edit `main.json` or re-run
+     `init` with different settings. Main preserves durable Tasks and native sessions but does not
+     silently migrate old Discord thread identities.
+   - On any candidate activation or Configuration commit failure, require the previous binding to be
+     restored. For release-candidate bytes, an unavailable path or failed validation is a release
+     blocker. For internal-preview bytes, report the failure without claiming support.
 5. configure ordered routes per Device;
 6. enroll each additional Worker with a short-lived single-use grant (the fixed Main was already
    enrolled locally in section 4); and

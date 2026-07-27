@@ -70,17 +70,24 @@ export const englishMessages = {
     failedMessage: "The Configuration Agent could not respond. No settings were changed.",
     secureStoreFailed:
       "The credential could not be stored securely. It was not sent to Configuration Chat.",
-    secureTitle: "Store a database credential",
+    secureTitle: "Store a credential",
     secureIntro:
       "The value goes directly to this Main Device's managed Secret Store. The Agent receives only an opaque reference.",
+    secureKindLabel: "Credential type",
+    secureDatabaseOption: "Database URI",
+    secureDiscordOption: "Discord bot token",
     databaseUriLabel: "Database URI",
     databaseUriPlaceholder: "PostgreSQL connection URI",
+    discordTokenLabel: "Discord bot token",
+    discordTokenPlaceholder: "Bot token from the Discord Developer Portal",
     secureNotice:
       "The original value is cleared from this form after submission and never becomes a chat message.",
     secureStore: "Store securely",
     secureStoring: "Storing securely…",
     secureStored: "Stored locally as {reference}",
     secureReferenceMessage: "Use this secure database reference: {reference}",
+    secureDiscordReferenceMessage:
+      "Use this secure Discord bot token reference: {reference}. Its botTokenAlias is {alias}.",
     title: "Configuration Chat",
     subtitle: "Device setup stays separate from Task conversations.",
     restore: "Restore Configuration Chat",

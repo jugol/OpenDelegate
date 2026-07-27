@@ -61,7 +61,7 @@ test("README leads owners into one complete agent-first setup journey", async ()
   assert.match(quickStart, /Discord Forum post/u);
   assert.match(quickStart, /Tasks → New task/u);
   assert.match(quickStart, /Task/u);
-  assert.match(quickStart, /before the\s+first Main initialization/u);
+  assert.match(quickStart, /Discord is optional during first initialization/u);
   assertAppearsBefore(quickStart, "skills/opendelegate-join/SKILL.md", "Discord Forum post");
   assert.equal(readme.includes(".\\opendelegate.cmd init --open"), false);
   assert.equal(readme.includes("./opendelegate init --open"), false);
@@ -99,9 +99,9 @@ test("README leads owners into one complete agent-first setup journey", async ()
   assert.match(guide, /release-metadata\.json/u);
   assert.match(guide, /supportStatus/u);
   assert.match(guide, /Release candidate or promoted supported release/u);
-  assert.match(guide, /verified Configuration Chat path/u);
-  assert.match(guide, /before the first deterministic `init`/u);
-  assert.match(guide, /cannot add or replace a Discord binding/u);
+  assert.match(guide, /authenticated\s+Configuration Chat path/u);
+  assert.match(guide, /Discord is optional during deterministic `init`/u);
+  assert.match(guide, /add, replace,\s+extend, or disable the live binding/u);
   assert.match(guide, /Internal\s+previews remain foreground-only/u);
   assertAppearsBefore(guide, "### Make the Configuration Agent ready", "## 3. Claim owner access");
   assert.match(guide, /CODEX_HOME/u);
@@ -121,33 +121,34 @@ test("README leads owners into one complete agent-first setup journey", async ()
     "From the authenticated owner session, read `GET /api/v1/runtime/features`",
   );
   assert.doesNotMatch(guide, /stop before owner claim/u);
-  assert.match(guide, /If you did not select Discord, skip this section/u);
+  assert.match(guide, /If you do not want Discord, skip this section/u);
   assert.doesNotMatch(guide, /README\.md#build-an-internal-preview/u);
 
   const initializationDecision = guide.slice(
     guide.indexOf("Before invoking the launcher for the first time"),
     guide.indexOf("The Agent will inspect the host"),
   );
-  assert.match(initializationDecision, /If you selected Discord/u);
-  assert.match(initializationDecision, /If you declined Discord/u);
-  assert.match(initializationDecision, /explicitly\s+Discord-disabled/u);
+  assert.match(initializationDecision, /configure\s+Discord now/u);
+  assert.match(initializationDecision, /defer it until after owner claim/u);
+  assert.match(initializationDecision, /Discord-disabled/u);
   assert.doesNotMatch(initializationDecision, /For an internal preview, the Agent must/u);
 
   const adminChecklist = guide.slice(
     guide.indexOf("Work through these items with the Configuration Agent"),
     guide.indexOf("The initial Main provider login already happened"),
   );
-  assert.match(adminChecklist, /when Discord was selected/u);
-  assert.match(adminChecklist, /When Discord was declined/u);
-  assert.match(adminChecklist, /confirm\s+that it remains disabled/u);
+  assert.match(adminChecklist, /inspect the current `discord\.binding`/u);
+  assert.match(adminChecklist, /do not\s+upload the token again or submit a no-op proposal/u);
+  assert.match(adminChecklist, /deferred, new, or changed Discord setup/u);
+  assert.match(adminChecklist, /secure credential\s+panel/u);
+  assert.match(adminChecklist, /confirm that the binding remains disabled/u);
 
   assert.match(initSkill, /Before the first deterministic `init`/u);
   assert.match(initSkill, /release-metadata\.json/u);
   assert.match(initSkill, /supportStatus/u);
   assert.match(initSkill, /When the owner selected Discord for an internal preview/u);
-  assert.match(initSkill, /CONFIG_EXISTS/u);
   assert.match(initSkill, /When the owner selected Discord for release-candidate bytes/u);
-  assert.match(initSkill, /verified Configuration Chat → Discord path/u);
+  assert.match(initSkill, /verified Configuration Chat Discord path/u);
   assertAppearsBefore(
     initSkill,
     "### Bootstrap the Main Configuration Agent",
@@ -197,7 +198,7 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       startHere: "**여기서 시작하세요:**",
       ownerIntroduction: "OpenDelegate는 Agent와 함께 설치합니다.",
       statusHeading: "## 현재 소스 상태",
-      firstInitPattern: /최초 Main 초기화\s+전에/u,
+      deferredDiscordPattern: /추가·교체·확장·비활성화/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*새 작업/u,
     },
     {
@@ -207,7 +208,7 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       startHere: "**ここから始めてください:**",
       ownerIntroduction: "OpenDelegate は Agent とともにインストールします。",
       statusHeading: "## 現在のソースの状態",
-      firstInitPattern: /最初の Main 初期化前/u,
+      deferredDiscordPattern: /追加、置換、拡張、無効化/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*新しいタスク/u,
     },
     {
@@ -217,7 +218,7 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       startHere: "**Commencez ici :**",
       ownerIntroduction: "OpenDelegate s’installe avec un Agent",
       statusHeading: "## État actuel du code source",
-      firstInitPattern: /avant la première initialisation du Main/u,
+      deferredDiscordPattern: /ajouter,\s+remplacer, étendre ou désactiver/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*Nouvelle\s+tâche/u,
     },
     {
@@ -227,7 +228,7 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       startHere: "**Empieza aquí:**",
       ownerIntroduction: "OpenDelegate se instala con un Agent",
       statusHeading: "## Estado actual del código fuente",
-      firstInitPattern: /antes de la primera inicialización del Main/u,
+      deferredDiscordPattern: /añadir,\s+sustituir, ampliar o desactivar/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*Nueva\s+tarea/u,
     },
     {
@@ -237,7 +238,7 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       startHere: "**从这里开始：**",
       ownerIntroduction: "OpenDelegate 由 Agent 协助安装",
       statusHeading: "## 当前源代码状态",
-      firstInitPattern: /首次 Main\s+初始化之前/u,
+      deferredDiscordPattern: /添加、替换、扩展或禁用/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*新建任务/u,
     },
   ];
@@ -279,7 +280,7 @@ test("every localized README exposes the same launcher-free Quick Start", async 
     assert.match(quickStart, /skills\/opendelegate-join\/SKILL\.md/u);
     assert.match(quickStart, /Discord Forum/u);
     assert.match(quickStart, /Task/u);
-    assert.match(quickStart, locale.firstInitPattern);
+    assert.match(quickStart, locale.deferredDiscordPattern);
     assert.match(quickStart, locale.adminTaskPattern);
     assert.doesNotMatch(quickStart, /pnpm (?:install|check|build)/u);
     assert.equal(content.includes(".\\opendelegate.cmd init --open"), false);
@@ -295,25 +296,21 @@ test("Discord setup documents the complete least-privilege Forum journey", async
     "### 3. Configure intents and permissions",
     "### 4. Collect the non-secret IDs",
     "### 5. Create the OpenDelegate binding",
-    "### 6. Provision the bot token",
+    "### 6. Provision or verify the bot token",
     "### 7. Verify the first Task",
   ];
   for (let index = 1; index < journey.length; index += 1) {
     assertAppearsBefore(guide, journey[index - 1], journey[index]);
   }
+  assertAppearsBefore(guide, "## Supported binding lifecycle", "## Discord-side preparation");
   assertAppearsBefore(
     guide,
-    "## Release-candidate and promoted-release path",
-    "## Internal-preview manual path",
-  );
-  assertAppearsBefore(
-    guide,
-    "## Internal-preview manual path",
+    "## Discord-side preparation",
     "### 1. Create the Discord App and bot",
   );
   assert.match(guide, /release-metadata\.json/u);
   assert.match(guide, /verified Configuration Chat/u);
-  assert.match(guide, /Do not apply the internal-preview manual workaround/u);
+  assert.match(guide, /serializes the one Gateway\s+transition/u);
   assert.match(guide, /Discord is optional/u);
   assert.match(guide, /Admin Web → Tasks → New task/u);
   assert.match(guide, /rules below apply only after the owner selects Discord/u);

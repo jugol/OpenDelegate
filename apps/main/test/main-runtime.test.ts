@@ -6,6 +6,10 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { Pool } from "pg";
+import {
+  ConfigurationService,
+  STANDARD_CONFIGURATION_DEFINITIONS,
+} from "@opendelegate/configuration";
 import type {
   ManagedSecretDeletion,
   ManagedSecretMutation,
@@ -13,9 +17,11 @@ import type {
   ManagedSecretStoreHealth,
   SecretAvailability,
 } from "@opendelegate/secrets";
+import { SqlConfigurationRepository } from "@opendelegate/storage-sql";
 
 import { browserOpenCommand, openBrowser, parseArguments } from "../src/cli.ts";
 import {
+  inspectPersistedMainConfiguration,
   listenMainRuntime,
   loadMainConfiguration,
   MainSingletonOwnershipError,
@@ -295,6 +301,107 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
   assert.equal(await readFile(resumed.paths.sqliteFile).then(Boolean), true);
 });
 
+test("a pre-dynamic Configuration database migrates Discord to explicit disabled state", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-discord-migration-"));
+  const cleanup: { runtime?: Awaited<ReturnType<typeof createMainRuntime>> } = {};
+  t.after(async () => {
+    await cleanup.runtime?.close();
+    await rm(home, { force: true, recursive: true });
+  });
+  const mainSecrets = createMainTestSecretContext(home);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot: await createAdminFixture(home),
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+    discord: {
+      schemaVersion: 1,
+      enabled: true,
+      botTokenAlias: "legacy-discord-token",
+      forum: {
+        applicationId: "11111111111111111",
+        botUserId: "22222222222222222",
+        guildId: "33333333333333333",
+        forumBindings: [
+          {
+            channelId: "44444444444444444",
+            workflowTagIds: {
+              done: "50000000000000001",
+              failed: "50000000000000002",
+              intake: "50000000000000003",
+              review: "50000000000000004",
+              running: "50000000000000005",
+              waiting: "50000000000000006",
+            },
+          },
+        ],
+        ownerUserIds: ["60000000000000001"],
+        allowedRoleIds: [],
+      },
+      secretBackend: {
+        backend: "windows-dpapi",
+        vaultRoot: join(home, "legacy-discord-vault"),
+      },
+    },
+  });
+  const repository = await SqlConfigurationRepository.openSqlite({
+    filename: initialized.paths.sqliteFile,
+    migrationMode: "verify",
+  });
+  try {
+    let sequence = 0;
+    const legacyService = new ConfigurationService({
+      definitions: STANDARD_CONFIGURATION_DEFINITIONS,
+      repository,
+      idSource: () => `legacy_configuration_${++sequence}`,
+      clock: () => new Date().toISOString(),
+    });
+    const proposal = await legacyService.propose({
+      actor: "legacy-opendelegate-init",
+      reason: "Create a pre-dynamic Configuration revision.",
+      changes: [
+        {
+          operation: "set",
+          key: "database.adapter",
+          scope: { kind: "main", id: initialized.configuration.deviceId },
+          value: "sqlite",
+        },
+      ],
+    });
+    await legacyService.apply({
+      proposalId: proposal.id,
+      expectedRevision: 0,
+      actor: "legacy-opendelegate-init",
+    });
+  } finally {
+    await repository.close();
+  }
+
+  const runtime = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "discord-migration" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+  cleanup.runtime = runtime;
+  assert.equal(runtime.discord, undefined);
+  const persisted = await inspectPersistedMainConfiguration({
+    configuration: initialized.configuration,
+    home,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+  assert.equal(persisted["discord.binding"]?.value, null);
+  assert.equal(persisted["discord.binding"]?.candidates.length, 1);
+  assert.equal(
+    persisted["discord.binding"]?.candidates[0]?.scope.id,
+    initialized.configuration.deviceId,
+  );
+});
+
 test("runtime state rejects a managed symlink or Windows junction before writing through it", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-main-links-"));
   t.after(() => rm(root, { force: true, recursive: true }));
@@ -341,6 +448,19 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
   });
+  const initialConfiguration = await inspectPersistedMainConfiguration({
+    configuration: initialized.configuration,
+    home,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+  assert.equal(initialConfiguration["discord.binding"]?.value, null);
+  assert.deepEqual(initialConfiguration["discord.binding"]?.candidates, [
+    {
+      scope: { kind: "main", id: initialized.configuration.deviceId },
+      value: null,
+    },
+  ]);
   if (process.platform === "win32") {
     const stateEntries = await readdir(initialized.paths.stateDirectory);
     assert.ok(stateEntries.includes("main.sqlite3-wal"));

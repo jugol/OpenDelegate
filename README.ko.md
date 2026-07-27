@@ -23,16 +23,16 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
 1. 운영체제와 아키텍처에 맞는 bundle을 준비하고, 신뢰할 수 있는 배포 채널에서 bundle과 별도로 받은
    digest로 `SHA256SUMS`를 검증합니다. 현재 저장소가 만드는 것은 명시적으로 표시된 내부 프리뷰
    bundle뿐입니다. [내부 프리뷰 빌드](#내부-프리뷰-빌드)를 참고하십시오.
-2. Discord를 사용하려면 [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따라 최초 Main 초기화
-   전에 완전한 Binding을 준비합니다. 현재 프리뷰는 초기화 후 Binding을 추가하거나 교체할 수
-   없습니다.
+2. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
+   Forum Binding을 추가·교체·확장·비활성화할 수 있습니다. 필요한 App, Forum, Tag, Permission은
+   [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따르세요.
 3. 압축을 푼 bundle 디렉터리를 Codex 또는 Claude에서 열고 다음 문장을 그대로 보냅니다: _“Read
    `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
    Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
    if a required safety check fails.”_
 4. Agent의 안내에 따라 Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
-5. Admin Web 우측 하단의 Configuration Chat에서 Device, Agent, Route, Artifact 설정과 미리 준비한
-   Discord 상태를 검토합니다.
+5. Admin Web 우측 하단의 Configuration Chat에서 Device, Agent, Route, Artifact와 선택적 Discord
+   설정을 마칩니다. Discord 토큰은 채팅 입력창이 아니라 보안 인증 정보 패널에만 입력합니다.
 6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
    파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
    `skills/opendelegate-join/SKILL.md`를 따르도록 요청합니다.

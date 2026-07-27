@@ -27,18 +27,19 @@ OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Ow
    avec le digest obtenu séparément par le canal de publication fiable. Le dépôt ne produit
    actuellement que des bundles de préversion interne clairement identifiés ; consultez
    [Construire une préversion interne](#construire-une-préversion-interne).
-2. Si vous utilisez Discord, suivez le
-   [guide de configuration de Discord Forum](docs/DISCORD_SETUP.md) et préparez le Binding complet
-   avant la première initialisation du Main. Cette préversion ne peut ni ajouter ni remplacer un
-   Binding après l’initialisation.
+2. Discord peut être omis lors de la première initialisation du Main. Vous pourrez ensuite ajouter,
+   remplacer, étendre ou désactiver le Binding Forum dans Configuration Chat après authentification
+   Owner. Suivez le [guide de configuration de Discord Forum](docs/DISCORD_SETUP.md) pour l’App, le
+   Forum, les Tags et les Permissions requis.
 3. Ouvrez le répertoire du bundle extrait dans Codex ou Claude, puis envoyez exactement : _“Read
    `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
    Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
    if a required safety check fails.”_
 4. Suivez l’Agent pour revendiquer l’accès Owner et conservez en lieu sûr les dix codes de
    récupération à usage unique.
-5. Dans Configuration Chat, en bas à droite d’Admin Web, vérifiez les Devices, Agents, Routes et
-   Artifacts ainsi que l’état Discord préparé avant l’initialisation.
+5. Dans Configuration Chat, en bas à droite d’Admin Web, terminez la configuration des Devices,
+   Agents, Routes, Artifacts et de Discord si souhaité. Saisissez le jeton Discord uniquement dans
+   le panneau d’identifiants sécurisé, jamais dans le champ de discussion.
 6. Pour ajouter un Device, demandez à Configuration Chat un Device Grant de courte durée et à usage
    unique. Transférez le fichier sans l’ouvrir par un moyen sûr contrôlé par l’Owner, puis demandez
    à l’Agent du Device cible de suivre `skills/opendelegate-join/SKILL.md`.

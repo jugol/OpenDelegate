@@ -596,6 +596,11 @@ test("Device configuration remains isolated from Task conversations", async ({ p
     dialog.getByText("Device setup stays separate from Task conversations."),
   ).toBeVisible();
   await expect(dialog.getByRole("region", { name: "Proposed change" })).toHaveCount(0);
+  await dialog.getByLabel("Credential type").selectOption("discord-bot-token");
+  await expect(dialog.getByLabel("Discord bot token")).toHaveAttribute("type", "password");
+  await expect(
+    dialog.getByPlaceholder("Bot token from the Discord Developer Portal"),
+  ).toBeVisible();
 
   await composer.fill("Recommend a safe role for this Device");
   await dialog.getByRole("button", { name: "Send message" }).click();

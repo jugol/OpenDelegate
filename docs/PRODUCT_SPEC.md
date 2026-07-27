@@ -436,6 +436,10 @@ inspectable result without manually operating every machine.
     marked broken.
 12. System incidents and recommendations may create their own Forum posts according
     to the Autonomy Profile.
+13. After bootstrap, the owner may add, extend, replace, or disable the Main-scoped
+    Discord binding through Configuration Chat and protected Approval. A replacement
+    becomes durable only after the candidate Gateway proves `READY`; failure restores
+    the prior binding without changing Task or native-session identity.
 
 ### FR-6 — Task intake and lifecycle
 

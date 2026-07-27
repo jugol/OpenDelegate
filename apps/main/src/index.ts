@@ -74,6 +74,11 @@ import {
   type MainArtifactRuntime,
 } from "./artifact-runtime.ts";
 import { DiscordArtifactPresentation } from "./discord-artifact-presentation.ts";
+import { DiscordBindingConfigurationLifecycle } from "./discord-binding-configuration-lifecycle.ts";
+import {
+  DiscordBindingController,
+  type DiscordBindingStatus,
+} from "./discord-binding-controller.ts";
 import {
   MainArtifactPrepareService,
   type MainArtifactPreparePolicyPort,
@@ -82,10 +87,14 @@ import {
   createProductionDiscordRuntime,
   type CreateProductionDiscordRuntimeOptions,
   type DiscordMainRuntime,
-  type DiscordRuntimeStatus,
 } from "./discord-runtime.ts";
 import {
+  MAIN_DISCORD_BINDING_CONFIGURATION_DEFINITION,
+  MAIN_DISCORD_BINDING_CONFIGURATION_KEY,
+  toMainDiscordBindingConfiguration,
+  validateMainDiscordBindingConfiguration,
   validateMainDiscordConfiguration,
+  type MainDiscordBindingConfiguration,
   type MainDiscordConfiguration,
 } from "./discord-configuration.ts";
 import {
@@ -230,12 +239,26 @@ export {
   DiscordArtifactPresentation,
   type DiscordArtifactPresentationOptions,
 } from "./discord-artifact-presentation.ts";
+export {
+  DiscordBindingController,
+  DiscordBindingControllerError,
+  type DiscordBindingControllerErrorCode,
+  type DiscordBindingControllerOptions,
+  type DiscordBindingRuntime,
+  type DiscordBindingStatus,
+  type PreparedDiscordBindingTransition,
+} from "./discord-binding-controller.ts";
 export { mergeMainDeviceSummary } from "./device-directory-projection.ts";
 export {
+  MAIN_DISCORD_BINDING_CONFIGURATION_DEFINITION,
+  MAIN_DISCORD_BINDING_CONFIGURATION_KEY,
   MainDiscordConfigurationError,
   createMainDiscordComposition,
+  isMainDiscordBindingConfiguration,
   loadMainDiscordConfigurationSource,
   provisionMainDiscordBotCredential,
+  toMainDiscordBindingConfiguration,
+  validateMainDiscordBindingConfiguration,
   validateMainDiscordConfiguration,
 } from "./discord-configuration.ts";
 export {
@@ -258,6 +281,7 @@ export {
   validateMainSecretReference,
 } from "./database-secret.ts";
 export type {
+  MainDiscordBindingConfiguration,
   MainDiscordComposition,
   MainDiscordConfiguration,
   MainDiscordSecretBackendConfiguration,
@@ -318,6 +342,10 @@ const DEFAULT_MAIN_PORT = 4380;
 const MAX_ADMIN_FILES = 2_000;
 const MAX_ADMIN_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_ADMIN_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAIN_CONFIGURATION_DEFINITIONS = Object.freeze([
+  ...STANDARD_CONFIGURATION_DEFINITIONS,
+  MAIN_DISCORD_BINDING_CONFIGURATION_DEFINITION,
+]);
 export interface MainListenerConfiguration {
   readonly host: string;
   readonly port: number;
@@ -434,8 +462,15 @@ export interface CreateMainRuntimeOptions {
   >;
   readonly discord?: Omit<
     CreateProductionDiscordRuntimeOptions,
-    "artifactPresentation" | "database" | "mainDeviceId" | "productVersion" | "tasks"
-  >;
+    | "artifactPresentation"
+    | "database"
+    | "mainDeviceId"
+    | "onStatusChange"
+    | "productVersion"
+    | "tasks"
+  > & {
+    readonly onStatusChange?: (status: DiscordBindingStatus) => void;
+  };
   readonly artifactPreparePolicy?: MainArtifactPreparePolicyPort;
   readonly deviceChannel?: {
     readonly identitySecrets: DeviceIdentitySecretStore;
@@ -451,7 +486,7 @@ export interface MainRuntime {
   readonly paths: RuntimePaths;
   readonly tasks: TaskService | TaskExecutionCoordinator;
   readonly taskExecution?: TaskExecutionCoordinator;
-  readonly discord?: DiscordMainRuntime;
+  readonly discord?: DiscordMainRuntime | undefined;
   readonly artifacts?: MainArtifactRuntime;
   readonly deviceChannel?: ProductionMainDeviceChannelRuntime;
   readonly budget?: TaskBudgetAdministrationPort;
@@ -659,7 +694,7 @@ export async function inspectPersistedMainConfiguration(input: {
   );
   try {
     const service = new ConfigurationService({
-      definitions: STANDARD_CONFIGURATION_DEFINITIONS,
+      definitions: MAIN_CONFIGURATION_DEFINITIONS,
       repository,
       idSource: () => `configuration_inspect_${randomUUID()}`,
       clock: () => new Date().toISOString(),
@@ -716,7 +751,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
   let actionAuthorization: MainActionAuthorizationRuntime | undefined;
   let app: Awaited<ReturnType<typeof createMainControlPlaneApp>> | undefined;
   let taskExecution: TaskExecutionCoordinator | undefined;
-  let discord: DiscordMainRuntime | undefined;
+  let discordBindingController: DiscordBindingController<DiscordMainRuntime> | undefined;
   let artifacts: MainArtifactRuntime | undefined;
   let artifactPrepare: MainArtifactPrepareService | undefined;
   let deviceChannel: ProductionMainDeviceChannelRuntime | undefined;
@@ -740,6 +775,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     }
     ownershipLossUnsubscribe = mainSingletonOwnership.onLost(() => {
       ownershipLossPending = true;
+      if (discordBindingController !== undefined) {
+        void discordBindingController.close().catch(() => undefined);
+      }
       if (closeAfterOwnershipLoss !== undefined) {
         void closeAfterOwnershipLoss().catch(() => undefined);
       }
@@ -772,7 +810,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     const configuredDatabaseReference =
       configuration.database.adapter === "postgresql" ? configuration.database.uriRef : undefined;
     const configurationService = new ConfigurationService({
-      definitions: STANDARD_CONFIGURATION_DEFINITIONS,
+      definitions: MAIN_CONFIGURATION_DEFINITIONS,
       repository: configurationRepository,
       idSource: () => `configuration_${randomUUID()}`,
       clock: () => clock.asEventClock().now(),
@@ -790,10 +828,17 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         },
       },
     });
+    const initialBinding = initialDiscordBinding(configuration, options.discord);
     await seedInitialMainConfiguration(
       configurationService,
       configuration,
       options.initialAdminAutoOpen,
+      initialBinding,
+      async () => {
+        if (initialBinding !== null) {
+          await secretIngest.registerInitialDiscordBotTokenAlias(initialBinding.botTokenAlias);
+        }
+      },
     );
     const runtimePolicy = new MainConfigurationRuntimePolicy({
       service: configurationService,
@@ -827,6 +872,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     );
     const actionApprovalExecutor = new LateBoundApprovalExecutionPort();
     const actionRunAuthority = new LateBoundMainActionRunAuthorityPort();
+    const discordBindingLifecycle = new DiscordBindingConfigurationLifecycle(
+      configuration.deviceId,
+    );
     approvalRuntime = createConfigurationApprovalRuntime({
       configuration: configurationService,
       repository: approvalRepository,
@@ -834,6 +882,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       idSource: {
         nextId: () => `approval_${randomUUID()}`,
       },
+      lifecycle: discordBindingLifecycle,
       ...(configuration.deviceChannel === undefined
         ? {}
         : {
@@ -845,9 +894,6 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             ],
           }),
     });
-    assertMainSingletonOwnership(mainSingletonOwnership);
-    await approvalRuntime.service.reconcileInterruptedExecutions();
-    assertMainSingletonOwnership(mainSingletonOwnership);
     if (configuration.deviceChannel !== undefined) {
       actionAuthorizationRepository = await openActionAuthorizationRepository(
         configuration.database,
@@ -1165,17 +1211,30 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         });
       }
     }
-    if (options.discord !== undefined) {
-      const ownerStatusObserver = options.discord.onStatusChange;
-      try {
-        assertMainSingletonOwnership(mainSingletonOwnership);
-        discord = await createDiscordRuntimeWithDatabase({
+    const ownerDiscordStatusObserver = options.discord?.onStatusChange;
+    const discordSecretStore = options.discord?.secretStore ?? managedSecretStore;
+    discordBindingController = new DiscordBindingController<DiscordMainRuntime>({
+      credentialCapability: async (alias) => {
+        if (!secretIngest.hasAliasPurpose(alias, "discord-bot-token")) {
+          return undefined;
+        }
+        const availability = await discordSecretStore.availability(alias).catch(() => undefined);
+        return {
+          purpose: "discord-bot-token",
+          available: availability?.alias === alias && availability.ready,
+        };
+      },
+      createRuntime: (binding, observeRuntimeStatus) =>
+        createDiscordRuntimeWithDatabase({
           configuration: configuration.database,
           paths,
           secretStore: managedSecretStore,
           create: (database) =>
             createProductionDiscordRuntime({
-              ...options.discord!,
+              ...(options.discord ?? {}),
+              config: binding.forum,
+              botTokenAlias: binding.botTokenAlias,
+              secretStore: discordSecretStore,
               mainDeviceId: configuration.deviceId,
               productVersion: options.build.version,
               database,
@@ -1189,24 +1248,41 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
                       store: artifacts.store,
                     }),
                   }),
-              onStatusChange: (status) => {
-                runtimeFeatures.discord = runtimeFeatureForDiscord(status);
-                ownerStatusObserver?.(status);
-              },
+              onStatusChange: observeRuntimeStatus,
             }),
+        }),
+      onStatusChange: (status) => {
+        runtimeFeatures.discord = Object.freeze({
+          status: status.status,
+          code: status.code,
         });
-        runtimeFeatures.discord = runtimeFeatureForDiscord(await discord.start());
-        assertMainSingletonOwnership(mainSingletonOwnership);
-      } catch (error) {
-        if (isMainSingletonOwnershipFailure(error)) {
-          throw mapMainSingletonOwnershipError(error);
-        }
-        runtimeFeatures.discord = {
-          status: "unavailable",
-          code: "DISCORD_COMPOSITION_UNAVAILABLE",
-        };
-      }
+        ownerDiscordStatusObserver?.(status);
+      },
+    });
+    if (ownershipLossPending) {
+      void discordBindingController.close().catch(() => undefined);
     }
+    discordBindingLifecycle.bind(discordBindingController);
+    const discordBinding = await resolveEffectiveDiscordBinding({
+      service: configurationService,
+      configuration,
+    });
+    try {
+      assertMainSingletonOwnership(mainSingletonOwnership);
+      await discordBindingController.start(discordBinding);
+      assertMainSingletonOwnership(mainSingletonOwnership);
+    } catch (error) {
+      if (isMainSingletonOwnershipFailure(error)) {
+        throw mapMainSingletonOwnershipError(error);
+      }
+      runtimeFeatures.discord = {
+        status: "unavailable",
+        code: "DISCORD_COMPOSITION_UNAVAILABLE",
+      };
+    }
+    assertMainSingletonOwnership(mainSingletonOwnership);
+    await approvalRuntime.service.reconcileInterruptedExecutions();
+    assertMainSingletonOwnership(mainSingletonOwnership);
     if (taskExecution !== undefined) {
       assertMainSingletonOwnership(mainSingletonOwnership);
       await taskExecution.start();
@@ -1332,9 +1408,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
 
     const activeMainSingletonOwnership = requireMainSingletonOwnership(mainSingletonOwnership);
     const cleanupOperations = (): Parameters<typeof closeMainResources>[0] => [
+      { operation: "discord", close: () => discordBindingController?.close() },
       { operation: "control-plane", close: () => app?.close() },
       { operation: "artifacts", close: () => artifacts?.close() },
-      { operation: "discord", close: () => discord?.close() },
       { operation: "task-execution", close: () => taskExecution?.close() },
       {
         operation: "device-channel-and-action-authorization",
@@ -1382,7 +1458,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       paths,
       tasks,
       ...(taskExecution === undefined ? {} : { taskExecution }),
-      ...(discord === undefined ? {} : { discord }),
+      get discord() {
+        return discordBindingController?.runtime;
+      },
       ...(artifacts === undefined ? {} : { artifacts }),
       ...(deviceChannel === undefined ? {} : { deviceChannel }),
       budget,
@@ -1397,9 +1475,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
   } catch (error) {
     const primaryError = mapMainSingletonOwnershipError(error);
     const cleanupOperations: Parameters<typeof closeMainResources>[0] = [
+      { operation: "discord", close: () => discordBindingController?.close() },
       { operation: "control-plane", close: () => app?.close() },
       { operation: "artifacts", close: () => artifacts?.close() },
-      { operation: "discord", close: () => discord?.close() },
       { operation: "task-execution", close: () => taskExecution?.close() },
       {
         operation: "device-channel-and-action-authorization",
@@ -1677,14 +1755,42 @@ async function closeMainSingletonOwnedResources(
   await ownership.release();
 }
 
-function runtimeFeatureForDiscord(status: DiscordRuntimeStatus): {
-  status: "ready" | "unavailable";
-  code: string;
-} {
-  return Object.freeze({
-    status: status.status,
-    code: status.code,
+async function resolveEffectiveDiscordBinding(input: {
+  readonly service: ConfigurationService;
+  readonly configuration: MainConfiguration;
+}): Promise<MainDiscordBindingConfiguration | null> {
+  const effective = await input.service.inspect({
+    instanceId: input.configuration.instanceId,
+    mainId: input.configuration.deviceId,
+    deviceId: input.configuration.deviceId,
   });
+  const configured = effective[MAIN_DISCORD_BINDING_CONFIGURATION_KEY];
+  if (configured !== undefined && configured.candidates.length > 0) {
+    return configured.value === null
+      ? null
+      : validateMainDiscordBindingConfiguration(configured.value);
+  }
+  throw new MainRuntimeError(
+    "CONFIG_MIGRATION_REQUIRED",
+    "The durable Discord binding marker is missing. Restart Main with a compatible release before changing Discord configuration.",
+  );
+}
+
+function initialDiscordBinding(
+  configuration: MainConfiguration,
+  runtimeOptions: CreateMainRuntimeOptions["discord"],
+): MainDiscordBindingConfiguration | null {
+  if (configuration.discord !== undefined) {
+    return toMainDiscordBindingConfiguration(configuration.discord);
+  }
+  return runtimeOptions === undefined
+    ? null
+    : validateMainDiscordBindingConfiguration({
+        schemaVersion: 1,
+        enabled: true,
+        botTokenAlias: runtimeOptions.botTokenAlias,
+        forum: runtimeOptions.config,
+      });
 }
 
 async function createDiscordRuntimeWithDatabase(input: {
@@ -1952,14 +2058,17 @@ async function seedInitialMainConfiguration(
   service: ConfigurationService,
   configuration: MainConfiguration,
   initialAdminAutoOpen?: boolean,
+  initialDiscordBindingConfiguration: MainDiscordBindingConfiguration | null = null,
+  beforeInitialApply?: () => Promise<void>,
 ): Promise<void> {
-  if ((await service.getRevision()) !== 0) {
+  const revision = await service.getRevision();
+  if (revision !== 0) {
+    const effective = await service.inspect({
+      instanceId: configuration.instanceId,
+      mainId: configuration.deviceId,
+      deviceId: configuration.deviceId,
+    });
     if (initialAdminAutoOpen !== undefined) {
-      const effective = await service.inspect({
-        instanceId: configuration.instanceId,
-        mainId: configuration.deviceId,
-        deviceId: configuration.deviceId,
-      });
       if (effective["admin.open-on-login"]?.value !== initialAdminAutoOpen) {
         throw new MainRuntimeError(
           "CONFIG_EXISTS",
@@ -1967,8 +2076,29 @@ async function seedInitialMainConfiguration(
         );
       }
     }
+    if (effective[MAIN_DISCORD_BINDING_CONFIGURATION_KEY]?.candidates.length === 0) {
+      const proposal = await service.propose({
+        actor: "opendelegate-runtime-migration",
+        reason:
+          "Mark the pre-dynamic Discord state as disabled; a new binding requires normal owner Approval.",
+        changes: [
+          {
+            operation: "set",
+            key: MAIN_DISCORD_BINDING_CONFIGURATION_KEY,
+            scope: { kind: "main", id: configuration.deviceId },
+            value: null,
+          },
+        ],
+      });
+      await service.apply({
+        proposalId: proposal.id,
+        expectedRevision: revision,
+        actor: "opendelegate-runtime-migration",
+      });
+    }
     return;
   }
+  await beforeInitialApply?.();
   const changes: ConfigurationChange[] = [
     {
       operation: "set",
@@ -2006,6 +2136,12 @@ async function seedInitialMainConfiguration(
             value: configuration.artifacts.exposure.defaultMode,
           },
         ]),
+    {
+      operation: "set",
+      key: MAIN_DISCORD_BINDING_CONFIGURATION_KEY,
+      scope: { kind: "main", id: configuration.deviceId },
+      value: initialDiscordBindingConfiguration,
+    },
   ];
   const proposal = await service.propose({
     actor: "opendelegate-init",

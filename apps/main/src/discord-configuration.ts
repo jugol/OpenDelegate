@@ -4,6 +4,7 @@ import {
   redactDiscordSecrets,
   type DiscordForumAdapterConfig,
 } from "@opendelegate/discord-adapter";
+import type { ConfigurationDefinition } from "@opendelegate/configuration";
 import {
   SystemdCredentialKeyProvider,
   createPlatformManagedSecretStore,
@@ -16,6 +17,8 @@ import { readStableRegularFile } from "./stable-file.ts";
 const DISCORD_CONFIGURATION_SCHEMA_VERSION = 1;
 const MAXIMUM_CONFIGURATION_BYTES = 64 * 1024;
 const WORKFLOW_STATUSES = ["done", "failed", "intake", "review", "running", "waiting"] as const;
+
+export const MAIN_DISCORD_BINDING_CONFIGURATION_KEY = "discord.binding";
 
 export type MainDiscordSecretBackendConfiguration =
   | {
@@ -49,11 +52,30 @@ export interface MainDiscordConfiguration {
   readonly secretBackend: MainDiscordSecretBackendConfiguration;
 }
 
+/**
+ * Durable, runtime-changeable Discord binding. The platform Secret backend is
+ * owned by Main itself, so replacing a Forum binding needs only the opaque
+ * credential alias and Discord identifiers.
+ */
+export interface MainDiscordBindingConfiguration {
+  readonly schemaVersion: typeof DISCORD_CONFIGURATION_SCHEMA_VERSION;
+  readonly enabled: true;
+  readonly botTokenAlias: string;
+  readonly forum: DiscordForumAdapterConfig;
+}
+
 export interface MainDiscordComposition {
   readonly config: DiscordForumAdapterConfig;
   readonly botTokenAlias: string;
   readonly secretStore: ManagedSecretStore;
 }
+
+export const MAIN_DISCORD_BINDING_CONFIGURATION_DEFINITION = Object.freeze({
+  key: MAIN_DISCORD_BINDING_CONFIGURATION_KEY,
+  defaultValue: null,
+  scopes: ["main"] as const,
+  validate: isMainDiscordBindingConfiguration,
+}) satisfies ConfigurationDefinition;
 
 export class MainDiscordConfigurationError extends Error {
   public readonly code = "CONFIG_INVALID";
@@ -84,21 +106,45 @@ export async function loadMainDiscordConfigurationSource(
 export function validateMainDiscordConfiguration(input: unknown): MainDiscordConfiguration {
   const record = requireRecord(input);
   assertExactKeys(record, ["schemaVersion", "enabled", "botTokenAlias", "forum", "secretBackend"]);
-  if (
-    record["schemaVersion"] !== DISCORD_CONFIGURATION_SCHEMA_VERSION ||
-    record["enabled"] !== true
-  ) {
-    throw configurationInvalid();
-  }
-  const botTokenAlias = requireIdentifier(record["botTokenAlias"], "Discord bot token alias");
-  const forum = validateForumConfiguration(record["forum"]);
+  const binding = validateMainDiscordBindingFields(record);
   const secretBackend = validateSecretBackend(record["secretBackend"]);
   return Object.freeze({
-    schemaVersion: DISCORD_CONFIGURATION_SCHEMA_VERSION,
-    enabled: true,
-    botTokenAlias,
-    forum,
+    ...binding,
     secretBackend,
+  });
+}
+
+export function validateMainDiscordBindingConfiguration(
+  input: unknown,
+): MainDiscordBindingConfiguration {
+  const record = requireRecord(input);
+  assertExactKeys(record, ["schemaVersion", "enabled", "botTokenAlias", "forum"]);
+  return validateMainDiscordBindingFields(record);
+}
+
+export function isMainDiscordBindingConfiguration(
+  input: unknown,
+): input is MainDiscordBindingConfiguration | null {
+  if (input === null) {
+    return true;
+  }
+  try {
+    validateMainDiscordBindingConfiguration(input);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function toMainDiscordBindingConfiguration(
+  configuration: MainDiscordConfiguration,
+): MainDiscordBindingConfiguration {
+  const validated = validateMainDiscordConfiguration(configuration);
+  return Object.freeze({
+    schemaVersion: validated.schemaVersion,
+    enabled: validated.enabled,
+    botTokenAlias: validated.botTokenAlias,
+    forum: validated.forum,
   });
 }
 
@@ -212,6 +258,23 @@ function secretStoreConfiguration(input: {
       };
     }
   }
+}
+
+function validateMainDiscordBindingFields(
+  record: Readonly<Record<string, unknown>>,
+): MainDiscordBindingConfiguration {
+  if (
+    record["schemaVersion"] !== DISCORD_CONFIGURATION_SCHEMA_VERSION ||
+    record["enabled"] !== true
+  ) {
+    throw configurationInvalid();
+  }
+  return Object.freeze({
+    schemaVersion: DISCORD_CONFIGURATION_SCHEMA_VERSION,
+    enabled: true,
+    botTokenAlias: requireIdentifier(record["botTokenAlias"], "Discord bot token alias"),
+    forum: validateForumConfiguration(record["forum"]),
+  });
 }
 
 function validateForumConfiguration(input: unknown): DiscordForumAdapterConfig {

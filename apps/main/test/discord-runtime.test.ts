@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
+import type {
+  AgentAdapter,
+  AgentResumeRequest,
+  AgentRunHandle,
+  AgentStartRequest,
+  NativeSessionReference,
+  NormalizedAgentEvent,
+} from "@opendelegate/agent-adapters";
 import {
   DiscordApiError,
   DiscordForumAdapter,
@@ -35,6 +43,12 @@ import {
   ManagedDiscordBotCredentialProvider,
   ManagedDiscordInteractionTokenVault,
 } from "../src/discord-runtime.ts";
+import type { MainDiscordBindingConfiguration } from "../src/discord-configuration.ts";
+import {
+  inspectPersistedMainConfiguration,
+  MainSingletonOwnershipError,
+  type MainSingletonOwnership,
+} from "../src/index.ts";
 import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
 import { createMainRuntime, initializeMainHome } from "../test-fixtures/portable-main-runtime.ts";
 
@@ -58,6 +72,16 @@ const STATUS_TAGS = {
   review: "200000000000000004",
   done: "200000000000000005",
   failed: "200000000000000006",
+} as const;
+const AGENT_LIMITS = {
+  wallTimeoutMs: 5_000,
+  idleTimeoutMs: 2_000,
+  cancellationGraceMs: 100,
+  leaseTtlMs: 1_000,
+  leaseRenewIntervalMs: 250,
+  maxBufferedEvents: 8,
+  maxLineBytes: 64 * 1024,
+  maxDiagnosticBytes: 64 * 1024,
 } as const;
 
 test("Main Discord runtime adds a Task Artifact link without making status projection depend on it", async () => {
@@ -375,6 +399,249 @@ test("Main process owns production Discord startup, dynamic feature state, and s
   assert.equal(gateway.closed, true);
 });
 
+test("singleton loss during Discord startup cancels and closes the in-flight runtime", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-discord-singleton-loss-"));
+  t.after(() => rm(home, { force: true, recursive: true }));
+  const adminRoot = join(home, "admin");
+  await mkdir(adminRoot);
+  await writeFile(join(adminRoot, "index.html"), "<!doctype html><title>OpenDelegate</title>");
+  const mainSecrets = createMainTestSecretContext(home);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot,
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+  });
+  const gateway = new DeferredStartupDiscordGateway();
+  const ownership = new TestMainSingletonOwnership();
+  const creating = createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "discord-singleton-loss-startup" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    mainSingletonOwnershipFactory: async () => ownership,
+    discord: {
+      config: discordConfiguration(),
+      botTokenAlias: "discord-bot-token",
+      secretStore: new TestManagedSecretStore(
+        "discord.bot.token.fixture",
+        initialized.configuration.deviceId,
+      ),
+      api: new TestDiscordApi(),
+      gateway,
+      synchronizationIntervalMs: 60_000,
+    },
+  });
+  await gateway.waitUntilConnecting();
+
+  ownership.lose();
+  gateway.releaseConnect();
+
+  await assert.rejects(
+    creating,
+    (error: unknown) =>
+      error !== null &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "MAIN_OWNERSHIP_LOST",
+  );
+  await ownership.released;
+  assert.equal(gateway.closed, true);
+  assert.equal(ownership.releaseCalls, 1);
+});
+
+test("an owner-approved Discord replacement commits one READY Gateway and survives restart", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-discord-rebinding-"));
+  const cleanup: { runtime?: Awaited<ReturnType<typeof createMainRuntime>> } = {};
+  t.after(async () => {
+    await cleanup.runtime?.close();
+    await rm(home, { force: true, recursive: true });
+  });
+  const adminRoot = join(home, "admin");
+  await mkdir(adminRoot);
+  await writeFile(join(adminRoot, "index.html"), "<!doctype html><title>OpenDelegate</title>");
+  const mainSecrets = createMainTestSecretContext(home);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot,
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+  });
+  await mainSecrets.store.store(
+    "discord-bot-token",
+    Buffer.from("discord.bot.token.fixture", "utf8"),
+  );
+  let replacement: MainDiscordBindingConfiguration = {
+    schemaVersion: 1,
+    enabled: true,
+    botTokenAlias: "pending-secure-discord-alias",
+    forum: discordConfiguration(),
+  };
+  const configurationAdapter = new DiscordReplacementConfigurationAdapter(replacement);
+  const gateway = new TestDiscordGateway();
+  const runtime = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "discord-rebinding" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    agentConfiguration: {
+      adapter: configurationAdapter,
+      workspace: {
+        workspaceId: "workspace_discord_rebinding",
+        cwd: await realpath("."),
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: { mode: "deny" },
+      limits: AGENT_LIMITS,
+    },
+    discord: {
+      config: discordConfiguration(),
+      botTokenAlias: "discord-bot-token",
+      secretStore: mainSecrets.store,
+      api: new TestDiscordApi(),
+      gateway,
+      synchronizationIntervalMs: 60_000,
+    },
+  });
+  cleanup.runtime = runtime;
+  assert.equal(gateway.connections, 1);
+
+  const claim = await runtime.ownerAuth.issueInitialClaim({ channel: "local-bootstrap" });
+  await runtime.ownerAuth.claimOwner({
+    channel: "local-bootstrap",
+    claimToken: claim.claimToken,
+    passphrase: "correct horse battery staple",
+  });
+  const login = await runtime.ownerAuth.login({
+    passphrase: "correct horse battery staple",
+    sourceKey: "127.0.0.1",
+  });
+  const cookie = `__Host-opendelegate_session=${login.sessionToken}`;
+  const replacementToken = Buffer.from("discord.bot.token.replacement", "utf8");
+  const ingested = await runtime.app.inject({
+    method: "POST",
+    url: "/api/v1/secrets/ingest",
+    headers: {
+      host: "127.0.0.1:4380",
+      origin: "http://127.0.0.1:4380",
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      cookie,
+      "x-opendelegate-csrf": login.csrfToken,
+      "idempotency-key": "discord-rebinding-secret",
+    },
+    payload: {
+      purpose: "discord-bot-token",
+      secretBase64: replacementToken.toString("base64"),
+    },
+  });
+  replacementToken.fill(0);
+  assert.equal(ingested.statusCode, 201, ingested.body);
+  const replacementAlias = (ingested.json().secretRef as string).slice("secret://main/".length);
+  replacement = { ...replacement, botTokenAlias: replacementAlias };
+  configurationAdapter.setReplacement(replacement);
+  const proposed = await runtime.app.inject({
+    method: "POST",
+    url: `/api/v1/devices/${initialized.configuration.deviceId}/configuration/messages`,
+    headers: {
+      host: "127.0.0.1:4380",
+      origin: "http://127.0.0.1:4380",
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      cookie,
+      "x-opendelegate-csrf": login.csrfToken,
+      "idempotency-key": "discord-rebinding-proposal",
+    },
+    payload: { message: "Replace the Discord bot using the securely stored alias." },
+  });
+  assert.equal(proposed.statusCode, 200, proposed.body);
+  assert.match(proposed.json().content, /awaits owner approval/u);
+
+  const listed = await runtime.app.inject({
+    method: "GET",
+    url: "/api/v1/approvals",
+    headers: { host: "127.0.0.1:4380", cookie },
+  });
+  assert.equal(listed.statusCode, 200, listed.body);
+  const approvals = listed.json().approvals as Array<{ readonly approvalId: string }>;
+  assert.equal(approvals.length, 1);
+  const approvalId = approvals[0]?.approvalId;
+  assert.ok(approvalId);
+  const decisionRequest = {
+    method: "POST" as const,
+    url: `/api/v1/approvals/${approvalId}/decision`,
+    headers: {
+      host: "127.0.0.1:4380",
+      origin: "http://127.0.0.1:4380",
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      cookie,
+      "x-opendelegate-csrf": login.csrfToken,
+      "idempotency-key": "discord-rebinding-approval",
+    },
+    payload: { decision: "approve", scope: "once" },
+  };
+  const decided = await runtime.app.inject(decisionRequest);
+  assert.equal(decided.statusCode, 200, decided.body);
+  assert.equal(decided.json().executionStatus, "succeeded");
+  assert.equal(runtime.discord?.status.code, "DISCORD_READY");
+  assert.equal(gateway.connections, 2);
+
+  const persisted = await inspectPersistedMainConfiguration({
+    configuration: initialized.configuration,
+    home,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+  assert.deepEqual(persisted["discord.binding"]?.value, replacement);
+
+  const replay = await runtime.app.inject(decisionRequest);
+  assert.equal(replay.statusCode, 200, replay.body);
+  assert.deepEqual(replay.json(), decided.json());
+  assert.equal(gateway.connections, 2);
+
+  await runtime.close();
+  delete cleanup.runtime;
+  const restartedGateway = new TestDiscordGateway();
+  const restarted = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "discord-rebinding-restart" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    discord: {
+      config: discordConfiguration(),
+      botTokenAlias: "discord-bot-token",
+      secretStore: mainSecrets.store,
+      api: new TestDiscordApi(),
+      gateway: restartedGateway,
+      synchronizationIntervalMs: 60_000,
+    },
+  });
+  cleanup.runtime = restarted;
+  assert.equal(restarted.discord?.status.code, "DISCORD_READY");
+  assert.equal(restartedGateway.connections, 1);
+  const restartedPersisted = await inspectPersistedMainConfiguration({
+    configuration: initialized.configuration,
+    home,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+  assert.equal(
+    (restartedPersisted["discord.binding"]?.value as { readonly botTokenAlias?: unknown })
+      .botTokenAlias,
+    replacementAlias,
+  );
+});
+
 test("Main finishes Discord reconciliation before dispatching recovered Forum Tasks", async (t) => {
   const home = await mkdtemp(join(tmpdir(), "opendelegate-main-discord-ordering-"));
   const cleanup: {
@@ -503,6 +770,181 @@ test("deferred Discord interaction credentials survive runtime replacement in th
   });
 });
 
+class DiscordReplacementConfigurationAdapter implements AgentAdapter {
+  public readonly adapterId = "fixture-discord-replacement-configuration";
+  public readonly provider = "generic" as const;
+  #replacement: MainDiscordBindingConfiguration;
+
+  public constructor(replacement: MainDiscordBindingConfiguration) {
+    this.#replacement = structuredClone(replacement);
+  }
+
+  public setReplacement(replacement: MainDiscordBindingConfiguration): void {
+    this.#replacement = structuredClone(replacement);
+  }
+
+  public async probe() {
+    return {
+      contractVersion: 1 as const,
+      adapterId: this.adapterId,
+      provider: this.provider,
+      installed: true,
+      version: "1.0.0",
+      compatibility: "tested" as const,
+      auth: { state: "ready" as const },
+      capabilities: {
+        start: true,
+        resume: true,
+        streaming: true,
+        cancellation: true,
+        approvalBridge: true,
+        steering: false,
+        checkpointContinuation: true,
+        workspaceIsolation: ["none" as const],
+      },
+      diagnostics: [],
+    };
+  }
+
+  public async start(input: AgentStartRequest): Promise<AgentRunHandle> {
+    return discordAgentHandle(
+      discordConfigurationSession(input, this.adapterId),
+      JSON.stringify({
+        schemaVersion: 1,
+        type: "tool",
+        toolCallId: "inspect-discord-binding",
+        request: { tool: "inspect" },
+      }),
+    );
+  }
+
+  public async resume(input: AgentResumeRequest): Promise<AgentRunHandle> {
+    const line = input.prompt.split("\n")[2];
+    assert.ok(line);
+    const result = JSON.parse(line) as {
+      readonly tool: "apply" | "inspect" | "propose";
+      readonly status: "failed" | "succeeded";
+      readonly error?: {
+        readonly code?: string;
+        readonly approvalId?: string;
+      };
+      readonly receipt?: {
+        readonly result?: {
+          readonly revision?: number;
+          readonly proposal?: {
+            readonly id?: string;
+            readonly baseRevision?: number;
+          };
+        };
+      };
+    };
+    if (result.tool === "inspect") {
+      assert.equal(result.status, "succeeded");
+      assert.equal(typeof result.receipt?.result?.revision, "number");
+      return discordAgentHandle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "tool",
+          toolCallId: "propose-discord-binding",
+          request: {
+            tool: "propose",
+            expectedRevision: result.receipt?.result?.revision,
+            reason: "Replace the Discord binding using a securely stored bot credential alias.",
+            changes: [
+              {
+                operation: "set",
+                key: "discord.binding",
+                scope: {
+                  kind: "main",
+                  id: input.session.taskId.slice("configuration:".length),
+                },
+                value: this.#replacement,
+              },
+            ],
+          },
+        }),
+      );
+    }
+    if (result.tool === "propose") {
+      assert.equal(result.status, "succeeded");
+      assert.ok(result.receipt?.result?.proposal?.id);
+      assert.equal(typeof result.receipt.result.proposal.baseRevision, "number");
+      return discordAgentHandle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "tool",
+          toolCallId: "apply-discord-binding",
+          request: {
+            tool: "apply",
+            proposalId: result.receipt.result.proposal.id,
+            expectedRevision: result.receipt.result.proposal.baseRevision,
+          },
+        }),
+      );
+    }
+    assert.equal(result.tool, "apply");
+    assert.equal(result.status, "failed");
+    assert.equal(result.error?.code, "CONFIGURATION_TOOL_APPROVAL_REQUIRED");
+    assert.match(result.error?.approvalId ?? "", /^approval_/u);
+    return discordAgentHandle(
+      input.session,
+      JSON.stringify({
+        schemaVersion: 1,
+        type: "final",
+        content: "The Discord replacement awaits owner approval.",
+        claimReceiptIds: [],
+      }),
+    );
+  }
+}
+
+function discordConfigurationSession(
+  input: AgentStartRequest,
+  adapterId: string,
+): NativeSessionReference {
+  return {
+    schemaVersion: 1,
+    provider: "generic",
+    adapterId,
+    adapterVersion: "1.0.0",
+    nativeSessionId: "native-discord-rebinding-configuration",
+    sessionKey: input.sessionKey,
+    taskId: input.taskId,
+    workstreamId: input.workstreamId,
+    deviceId: input.deviceId,
+    workspaceId: input.workspace.workspaceId,
+    cwd: input.workspace.cwd,
+    lineage: { lineageId: "lineage-discord-rebinding-configuration" },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function discordAgentHandle(reference: NativeSessionReference, finalText: string): AgentRunHandle {
+  const events: readonly NormalizedAgentEvent[] = [
+    {
+      sequence: 1,
+      observedAt: new Date().toISOString(),
+      type: "session_started",
+      session: reference,
+    },
+  ];
+  return {
+    events: {
+      async *[Symbol.asyncIterator]() {
+        yield* events;
+      },
+    },
+    result: Promise.resolve({
+      status: "succeeded" as const,
+      session: reference,
+      finalText,
+    }),
+    async cancel() {},
+  };
+}
+
 class TestClock {
   public value = 1_000;
 
@@ -534,6 +976,41 @@ class TestDiscordGateway implements DiscordGatewayPort {
   public async dispatch(dispatch: DiscordGatewayDispatch): Promise<void> {
     assert.ok(this.#options);
     await this.#options.onDispatch(dispatch);
+  }
+}
+
+class DeferredStartupDiscordGateway implements DiscordGatewayPort {
+  public closed = false;
+  readonly #connecting: Promise<void>;
+  readonly #connectGate: Promise<void>;
+  #resolveConnecting!: () => void;
+  #resolveConnectGate!: () => void;
+
+  public constructor() {
+    this.#connecting = new Promise<void>((resolve) => {
+      this.#resolveConnecting = resolve;
+    });
+    this.#connectGate = new Promise<void>((resolve) => {
+      this.#resolveConnectGate = resolve;
+    });
+  }
+
+  public waitUntilConnecting(): Promise<void> {
+    return this.#connecting;
+  }
+
+  public releaseConnect(): void {
+    this.#resolveConnectGate();
+  }
+
+  public async connect(): Promise<DiscordGatewayConnection> {
+    this.#resolveConnecting();
+    await this.#connectGate;
+    return {
+      close: async () => {
+        this.closed = true;
+      },
+    };
   }
 }
 
@@ -741,6 +1218,51 @@ class TestManagedSecretStore implements ManagedSecretStore {
       throw new SecretError("SECRET_EXECUTOR_FAILED", "The scoped Secret executor failed.");
     } finally {
       material.fill(0);
+    }
+  }
+}
+
+class TestMainSingletonOwnership implements MainSingletonOwnership {
+  public readonly backend = "sqlite" as const;
+  public releaseCalls = 0;
+  readonly #listeners = new Set<(error: MainSingletonOwnershipError) => void>();
+  readonly #released: Promise<void>;
+  #resolveReleased!: () => void;
+  #loss: MainSingletonOwnershipError | undefined;
+
+  public constructor() {
+    this.#released = new Promise<void>((resolve) => {
+      this.#resolveReleased = resolve;
+    });
+  }
+
+  public get released(): Promise<void> {
+    return this.#released;
+  }
+
+  public assertCurrent(): void {
+    if (this.#loss !== undefined) {
+      throw this.#loss;
+    }
+  }
+
+  public onLost(listener: (error: MainSingletonOwnershipError) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  public async release(): Promise<void> {
+    this.releaseCalls += 1;
+    this.#resolveReleased();
+  }
+
+  public lose(): void {
+    this.#loss = new MainSingletonOwnershipError(
+      "MAIN_OWNERSHIP_LOST",
+      "The test Main singleton authority was lost.",
+    );
+    for (const listener of this.#listeners) {
+      listener(this.#loss);
     }
   }
 }

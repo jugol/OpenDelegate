@@ -39,6 +39,7 @@ approved product specification.
 16. [`0019-durable-run-lease-renewal-and-clock-calibration.md`](0019-durable-run-lease-renewal-and-clock-calibration.md)
 17. [`0020-main-singleton-ownership.md`](0020-main-singleton-ownership.md)
 18. [`0021-supported-release-promotion-and-native-authenticity.md`](0021-supported-release-promotion-and-native-authenticity.md)
+19. [`0022-live-discord-binding-reconfiguration.md`](0022-live-discord-binding-reconfiguration.md)
 
 ## Proposed ADRs
 

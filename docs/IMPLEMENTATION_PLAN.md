@@ -535,6 +535,10 @@ Make Discord the complete primary Task interface.
 - Implement pause, resume, cancel, retry, approval, denial, and inspect interactions.
 - Implement system incident and recommendation post creation.
 - Handle archive, lock, reopen, delete, permission loss, rate limit, and reconnect.
+- Implement owner-approved live add, extension, replacement, and disable for the
+  Main-scoped Discord binding. Serialize one Gateway lifecycle, require bounded
+  `READY` proof before durable replacement commit, and restore the prior binding on
+  activation or Configuration failure.
 
 ### Exit gate
 
@@ -543,6 +547,8 @@ Make Discord the complete primary Task interface.
 - Main outage and Gateway reconnect reconcile without missing or duplicating work.
 - Unauthorized messages never reach an Agent.
 - A locked or deleted post degrades to Admin Web without losing Task state.
+- Approved binding changes survive Main restart, duplicate Approval replay opens no
+  second Gateway, and failed candidates preserve the prior live and durable binding.
 
 ## Phase 8 — Admin Web and Configuration Agent
 
@@ -564,6 +570,8 @@ Deliver the required visual setup, Device specification, and operational surface
 - Implement bottom-right Configuration Chat in a separate native Agent Session.
 - Give the Configuration Agent typed inspect, propose, validate, diff, apply, and
   rollback tools.
+- Add secure Discord-token intake and non-secret `discord.binding` proposals to
+  Configuration Chat without exposing the raw token to chat, SQL, or Agent context.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.

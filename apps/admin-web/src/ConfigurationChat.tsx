@@ -1,4 +1,5 @@
 import {
+  Bot,
   Check,
   Database,
   Expand,
@@ -25,10 +26,15 @@ import {
   localizePresentationText,
   useAdminI18n,
 } from "./i18n";
-import type { SecureSecretIngestPurpose, SecureSecretIngestReceipt } from "./admin-api";
+import {
+  mainSecretAlias,
+  type SecureSecretIngestPurpose,
+  type SecureSecretIngestReceipt,
+} from "./admin-api";
 import type { ConfigurationSessionView } from "./view-model";
 
 type ProposalState = "proposed" | "reviewing" | "dismissed";
+type SecureCredentialKind = "database-uri" | "discord-bot-token";
 
 type SystemChatMessageKey = "failedMessage" | "secureStoreFailed" | "unavailableMessage";
 
@@ -75,7 +81,9 @@ export function ConfigurationChat({
   const { messages: copy } = useAdminI18n();
   const [proposalState, setProposalState] = useState<ProposalState>("proposed");
   const [draft, setDraft] = useState("");
-  const [databaseUri, setDatabaseUri] = useState("");
+  const [secureCredentialKind, setSecureCredentialKind] =
+    useState<SecureCredentialKind>("database-uri");
+  const [secureCredential, setSecureCredential] = useState("");
   const [storedReference, setStoredReference] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [conversationMessages, setConversationMessages] = useState<readonly ChatMessage[]>(() => [
@@ -102,6 +110,13 @@ export function ConfigurationChat({
       (onSendMessage === undefined ? closeButtonRef.current : composerRef.current)?.focus();
     }
   }, [focusRequestId, onSendMessage, open]);
+
+  useEffect(() => {
+    if (!open) {
+      setSecureCredential("");
+      setStoredReference(null);
+    }
+  }, [open]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -175,27 +190,36 @@ export function ConfigurationChat({
     }
   }
 
-  async function submitDatabaseSecret(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function submitSecureSecret(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (
       onIngestSecret === undefined ||
       onSendMessage === undefined ||
       pending ||
-      databaseUri.length === 0
+      secureCredential.length === 0
     ) {
       return;
     }
 
-    const material = new TextEncoder().encode(databaseUri);
-    setDatabaseUri("");
+    const material = new TextEncoder().encode(secureCredential);
+    setSecureCredential("");
     setStoredReference(null);
     setPending(true);
     const sequence = conversationMessages.length;
     try {
-      const receipt = await onIngestSecret("database-uri", material);
-      const referenceMessage = formatMessage(copy.chat.secureReferenceMessage, {
-        reference: receipt.secretRef,
-      });
+      const receipt = await onIngestSecret(
+        secureCredentialKind === "database-uri" ? "database-uri" : "discord-bot-token",
+        material,
+      );
+      const referenceMessage =
+        secureCredentialKind === "database-uri"
+          ? formatMessage(copy.chat.secureReferenceMessage, {
+              reference: receipt.secretRef,
+            })
+          : formatMessage(copy.chat.secureDiscordReferenceMessage, {
+              reference: receipt.secretRef,
+              alias: mainSecretAlias(receipt.secretRef),
+            });
       setStoredReference(receipt.secretRef);
       setConversationMessages((current) => [
         ...current,
@@ -259,7 +283,7 @@ export function ConfigurationChat({
 
     const focusable = Array.from(
       dialog.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
       ),
     );
     const first = focusable.at(0);
@@ -350,7 +374,7 @@ export function ConfigurationChat({
             <section aria-labelledby="configuration-secret-title" className="secure-secret-panel">
               <div className="secure-secret-heading">
                 <span aria-hidden="true">
-                  <Database />
+                  {secureCredentialKind === "database-uri" ? <Database /> : <Bot />}
                 </span>
                 <div>
                   <h3 id="configuration-secret-title">{copy.chat.secureTitle}</h3>
@@ -359,33 +383,55 @@ export function ConfigurationChat({
               </div>
               <form
                 className="secure-secret-form"
-                onSubmit={(event) => void submitDatabaseSecret(event)}
+                onSubmit={(event) => void submitSecureSecret(event)}
               >
-                <label htmlFor="configuration-database-uri">{copy.chat.databaseUriLabel}</label>
+                <label htmlFor="configuration-secret-kind">{copy.chat.secureKindLabel}</label>
+                <select
+                  disabled={pending}
+                  id="configuration-secret-kind"
+                  onChange={(event) => {
+                    setSecureCredentialKind(event.target.value as SecureCredentialKind);
+                    setSecureCredential("");
+                    setStoredReference(null);
+                  }}
+                  value={secureCredentialKind}
+                >
+                  <option value="database-uri">{copy.chat.secureDatabaseOption}</option>
+                  <option value="discord-bot-token">{copy.chat.secureDiscordOption}</option>
+                </select>
+                <label htmlFor="configuration-secret-value">
+                  {secureCredentialKind === "database-uri"
+                    ? copy.chat.databaseUriLabel
+                    : copy.chat.discordTokenLabel}
+                </label>
                 <div>
                   <input
-                    aria-describedby="configuration-database-uri-notice"
+                    aria-describedby="configuration-secret-value-notice"
                     autoCapitalize="none"
                     autoComplete="off"
                     data-1p-ignore="true"
                     disabled={pending}
-                    id="configuration-database-uri"
-                    onChange={(event) => setDatabaseUri(event.target.value)}
-                    placeholder={copy.chat.databaseUriPlaceholder}
+                    id="configuration-secret-value"
+                    onChange={(event) => setSecureCredential(event.target.value)}
+                    placeholder={
+                      secureCredentialKind === "database-uri"
+                        ? copy.chat.databaseUriPlaceholder
+                        : copy.chat.discordTokenPlaceholder
+                    }
                     spellCheck={false}
                     type="password"
-                    value={databaseUri}
+                    value={secureCredential}
                   />
                   <button
                     className="secondary-button"
-                    disabled={pending || databaseUri.length === 0}
+                    disabled={pending || secureCredential.length === 0}
                     type="submit"
                   >
                     <LockKeyhole aria-hidden="true" />
                     {pending ? copy.chat.secureStoring : copy.chat.secureStore}
                   </button>
                 </div>
-                <p id="configuration-database-uri-notice">{copy.chat.secureNotice}</p>
+                <p id="configuration-secret-value-notice">{copy.chat.secureNotice}</p>
                 {storedReference === null ? null : (
                   <p className="secure-secret-receipt" role="status">
                     <Check aria-hidden="true" />

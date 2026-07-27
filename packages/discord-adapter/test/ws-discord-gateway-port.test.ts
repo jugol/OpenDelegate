@@ -119,6 +119,90 @@ test("the Gateway driver identifies, dispatches supported events, heartbeats wit
   assert.equal(fixture.scheduler.size, 0);
 });
 
+test("Gateway shutdown waits for close acknowledgement and confirms bounded termination", async () => {
+  const fixture = gatewayFixture();
+  fixture.factory.autoConfirmClose = false;
+  const connection = await fixture.gateway.connect({
+    apiVersion: DISCORD_API_VERSION,
+    intentBitfield: DISCORD_GATEWAY_INTENTS,
+    resume: undefined,
+    onDispatch: async () => undefined,
+    onSessionEstablished: async () => undefined,
+    onReconcileRequired: async () => undefined,
+  });
+  const socket = fixture.factory.sockets[0];
+  assert.ok(socket);
+  let settled = false;
+  const closing = connection.close().then(() => {
+    settled = true;
+  });
+  await fixture.flush();
+
+  assert.equal(settled, false);
+  assert.equal(socket.closedWith?.code, 1000);
+  await fixture.scheduler.runNext();
+  await closing;
+  assert.equal(socket.terminated, true);
+  assert.equal(settled, true);
+  assert.equal(fixture.scheduler.size, 0);
+});
+
+test("Gateway shutdown rejects when neither graceful close nor termination is acknowledged", async () => {
+  const fixture = gatewayFixture();
+  fixture.factory.autoConfirmClose = false;
+  fixture.factory.confirmTerminate = false;
+  const connection = await fixture.gateway.connect({
+    apiVersion: DISCORD_API_VERSION,
+    intentBitfield: DISCORD_GATEWAY_INTENTS,
+    resume: undefined,
+    onDispatch: async () => undefined,
+    onSessionEstablished: async () => undefined,
+    onReconcileRequired: async () => undefined,
+  });
+  const closing = connection.close();
+  await fixture.flush();
+  await fixture.scheduler.runNext();
+  await fixture.scheduler.runNext();
+
+  await assert.rejects(closing, /shutdown could not be confirmed/u);
+});
+
+test("Gateway shutdown cancels an in-flight reconnect discovery before it can create a socket", async () => {
+  let discoveryCalls = 0;
+  let resolveReconnectDiscovery = (_url: string): void => undefined;
+  const fixture = gatewayFixture({
+    getGatewayBotUrl: async () => {
+      discoveryCalls += 1;
+      if (discoveryCalls === 1) {
+        return "wss://gateway.discord.gg";
+      }
+      return new Promise<string>((resolve) => {
+        resolveReconnectDiscovery = resolve;
+      });
+    },
+  });
+  const connection = await fixture.gateway.connect({
+    apiVersion: DISCORD_API_VERSION,
+    intentBitfield: DISCORD_GATEWAY_INTENTS,
+    resume: undefined,
+    onDispatch: async () => undefined,
+    onSessionEstablished: async () => undefined,
+    onReconcileRequired: async () => undefined,
+  });
+  const socket = fixture.factory.sockets[0];
+  assert.ok(socket);
+  socket.emitClose(1000);
+  await fixture.scheduler.runReconnect();
+  assert.equal(discoveryCalls, 2);
+
+  await connection.close();
+  resolveReconnectDiscovery("wss://late-gateway.discord.gg");
+  await fixture.flush();
+
+  assert.equal(fixture.factory.sockets.length, 1);
+  assert.equal(fixture.scheduler.size, 0);
+});
+
 test("a non-resumable Invalid Session clears the cursor, re-identifies, and requests HTTP reconciliation", async () => {
   const fixture = gatewayFixture();
   let reconciliations = 0;
@@ -339,7 +423,10 @@ test("Gateway frames are bounded before JSON parsing", async () => {
   );
 });
 
-function gatewayFixture(overrides?: { maximumFrameBytes?: number }) {
+function gatewayFixture(overrides?: {
+  maximumFrameBytes?: number;
+  getGatewayBotUrl?: () => Promise<string>;
+}) {
   const factory = new FakeSocketFactory();
   const scheduler = new ManualScheduler(0.5);
   const diagnostics: DiscordGatewayDiagnostic[] = [];
@@ -349,7 +436,7 @@ function gatewayFixture(overrides?: { maximumFrameBytes?: number }) {
   const gateway = new WsDiscordGatewayPort({
     credentialProvider,
     discovery: {
-      getGatewayBotUrl: async () => "wss://gateway.discord.gg",
+      getGatewayBotUrl: overrides?.getGatewayBotUrl ?? (async () => "wss://gateway.discord.gg"),
     },
     socketFactory: factory,
     scheduler,
@@ -376,9 +463,11 @@ function gatewayFixture(overrides?: { maximumFrameBytes?: number }) {
 class FakeSocketFactory implements DiscordGatewaySocketFactory {
   readonly sockets: FakeSocket[] = [];
   readonly urls: string[] = [];
+  autoConfirmClose = true;
+  confirmTerminate = true;
 
   connect(url: string): DiscordGatewaySocket {
-    const socket = new FakeSocket();
+    const socket = new FakeSocket(this.autoConfirmClose, this.confirmTerminate);
     this.urls.push(url);
     this.sockets.push(socket);
     return socket;
@@ -387,12 +476,19 @@ class FakeSocketFactory implements DiscordGatewaySocketFactory {
 
 class FakeSocket implements DiscordGatewaySocket {
   readonly sent: string[] = [];
+  readonly autoConfirmClose: boolean;
+  readonly confirmTerminate: boolean;
   terminated = false;
   closedWith: { code: number; reason: string } | undefined;
   #open: (() => void) | undefined;
   #message: ((data: string | Uint8Array, isBinary: boolean) => void) | undefined;
   #close: ((code: number) => void) | undefined;
   #error: (() => void) | undefined;
+
+  constructor(autoConfirmClose = true, confirmTerminate = true) {
+    this.autoConfirmClose = autoConfirmClose;
+    this.confirmTerminate = confirmTerminate;
+  }
 
   onOpen(listener: () => void): void {
     this.#open = listener;
@@ -416,6 +512,9 @@ class FakeSocket implements DiscordGatewaySocket {
 
   close(code: number, reason: string): void {
     this.closedWith = { code, reason };
+    if (this.autoConfirmClose) {
+      queueMicrotask(() => this.#close?.(code));
+    }
   }
 
   terminate(): void {
@@ -423,7 +522,9 @@ class FakeSocket implements DiscordGatewaySocket {
       return;
     }
     this.terminated = true;
-    this.#close?.(4000);
+    if (this.confirmTerminate) {
+      this.#close?.(4000);
+    }
   }
 
   emitOpen(): void {

@@ -24,14 +24,17 @@ OpenDelegate is installed with an Agent; there is no `npm run start` owner workf
 1. Get the platform-specific bundle and verify `SHA256SUMS` against the digest from its trusted
    publication channel. The current repository produces marked internal-preview bundles only; see
    [Build an internal preview](#build-an-internal-preview).
-2. If you want Discord, complete the [Discord Forum setup guide](docs/DISCORD_SETUP.md) before the
-   first Main initialization. This preview cannot add or replace a Discord binding later.
+2. Discord is optional during first initialization. You can add, replace, extend, or disable its
+   Forum binding later through the owner-authenticated Configuration Chat; use the
+   [Discord Forum setup guide](docs/DISCORD_SETUP.md) for the required App, Forum, tags, and
+   permissions.
 3. Open the extracted bundle directory in Codex or Claude.
 4. Send: _“Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed
    OpenDelegate Main Device. Guide me through every owner decision, keep runtime state outside this
    bundle, and stop if a required safety check fails.”_
 5. Follow the Agent through owner claim, save the ten recovery codes, and finish Device, Agent,
-   route, and Artifact setup in Admin Web Configuration Chat.
+   route, Artifact, and optional Discord setup in Admin Web Configuration Chat. Discord tokens go
+   through the secure credential panel, never the chat composer.
 6. To add a computer, ask Configuration Chat for a short-lived Device grant, transfer the unopened
    file through an owner-controlled secure handoff, and ask the Agent on that computer to follow
    `skills/opendelegate-join/SKILL.md`.

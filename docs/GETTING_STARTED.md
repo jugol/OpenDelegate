@@ -25,17 +25,16 @@ Prepare:
 - a password manager or another safe place for the owner passphrase and recovery codes, plus the bot
   token when Discord is enabled.
 
-When `release-metadata.json` reports an internal preview and you want Discord, complete the
-[Discord Forum setup](DISCORD_SETUP.md) manual path before the first deterministic `init`. An
-internal preview cannot add or replace a Discord binding after Main has been initialized, and
-Configuration Chat must not pretend that it can. You may instead initialize without Discord and use
-Admin Web, but that Main will remain Discord-disabled in the preview.
+Discord is optional during deterministic `init`. You may initialize without it and add a binding
+later, or initialize with a prepared non-secret binding. In either case, create the external App,
+bot, Community Forum, workflow tags, intents, and permissions by following the
+[Discord Forum setup](DISCORD_SETUP.md). After owner claim, Configuration Chat can add, replace,
+extend, or disable the live binding without deleting Main's durable Tasks or native Agent sessions.
 
-For a release candidate or the same bytes after supported promotion, do not apply that preview
-workaround. When you want Discord, use the candidate's verified Configuration Chat path after owner
-claim. If you selected Discord and the path is absent or cannot reach ready state, treat the
-candidate as invalid rather than falling back to preview behavior. If you decline Discord, continue
-with Discord disabled; that choice does not invalidate the installation.
+For a release candidate or the same bytes after supported promotion, the authenticated
+Configuration Chat path is a required release feature. If it is absent or cannot activate and
+validate a selected binding, treat the candidate as invalid. Declining Discord remains valid and
+leaves Admin Web as the Task entry point.
 
 The Main computer may run macOS, Windows, or Linux and is also enrolled as a normal Worker. Other
 Devices connect outbound to Main. They never need pairwise SSH trust or database credentials.
@@ -72,13 +71,10 @@ Then send this prompt:
 > Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop if
 > a required safety check fails.
 
-Before invoking the launcher for the first time, tell the Agent whether Discord is part of this
-installation. If you selected Discord for an internal preview, the Agent must finish the manual
-Discord guide, obtain the complete non-secret binding through the documented safe boundaries, and
-include it in the first initialization. If you selected Discord for release-candidate bytes, the
-Agent records the intent and uses the verified Configuration Chat path after owner claim; it does
-not apply the preview workaround. If you declined Discord, the Agent initializes Main explicitly
-Discord-disabled and skips both paths.
+Before invoking the launcher for the first time, tell the Agent whether you want to configure
+Discord now, defer it until after owner claim, or keep it disabled. A prepared non-secret binding
+may still be included in the first initialization, but it is no longer required. A deferred or
+declined choice initializes Main explicitly Discord-disabled and never blocks Admin Web.
 
 The Agent will inspect the host, verify the bundle, and ask only for choices that affect your intent.
 Unless you choose otherwise, the accepted defaults are:
@@ -178,9 +174,10 @@ Work through these items with the Configuration Agent:
 2. approve the proposed Device name, Roles, and Instructions;
 3. confirm the bootstrapped Main Agent Adapter is ready, then configure any additional Worker or
    custom Agent Adapters;
-4. when Discord was selected, inspect the persisted binding and feature state for a preview or
-   complete the verified candidate Discord configuration path. When Discord was declined, confirm
-   that it remains disabled and skip Discord setup;
+4. inspect the current `discord.binding`: if first init already seeded the intended binding, do not
+   upload the token again or submit a no-op proposal—confirm its IDs and require
+   `ready / DISCORD_READY`; for deferred, new, or changed Discord setup, use the secure credential
+   panel and complete the approved proposal; otherwise confirm that the binding remains disabled;
 5. define ordered routes that Workers may use to reach Main;
 6. choose Artifact exposure and retention;
 7. when a supported bundle exposes verified service commands, decide whether the core service
@@ -198,33 +195,38 @@ inside the unavailable chat, and do not simulate a configuration response.
 
 ## 5. Connect Discord Forum
 
-Use the path that matches `release-metadata.json`.
-
-If you did not select Discord, skip this section, keep the installation explicitly
-Discord-disabled, and create Tasks through **Admin Web → Tasks → New task**.
+If you do not want Discord, skip this section and create Tasks through
+**Admin Web → Tasks → New task**. You can return later without reinitializing Main.
 
 ### Internal preview
 
-When Discord was selected for an internal preview, its App, bot, Forum, workflow tags, non-secret
-binding, and bot credential were prepared before the first Main initialization. Configuration Chat
-may inspect that binding but does not create the App, Forum, tags, or a replacement binding. The
-preview cannot add or replace a Discord binding on an existing Main.
-
-Follow the [Discord Forum setup](DISCORD_SETUP.md) internal-preview manual path for the exact setup,
-token rotation, permission, and first-Task verification flow.
+Internal previews remain unsupported, but their Configuration Chat uses the same deterministic
+binding lifecycle as the candidate: secure token intake, typed proposal, owner Approval, serialized
+Gateway replacement, and failure rollback. Follow the [Discord Forum setup](DISCORD_SETUP.md) for
+the external Discord work and the exact IDs. The chat does not create the Discord App, Forum, tags,
+intents, or permissions for you.
 
 ### Release candidate or promoted supported release
 
-When Discord was selected, open **Configuration Chat → Discord** and follow the verified
-Configuration Chat path for that candidate. It must guide the owner through the Discord Application,
-bot, Forum, workflow tags, intents, permissions, owner identity, Secret-safe credential ingress, and
-binding validation without using the internal-preview first-init workaround. A release candidate
-configured for Discord that does not expose or complete this path is invalid and must not be
-promoted.
+First inspect the effective `discord.binding`. If first init already seeded the intended binding and
+provisioned its token, confirm the Application, bot, guild, Forum, six workflow-tag, owner-user, and
+optional Role IDs, then wait for `ready / DISCORD_READY`; do not upload a duplicate token or submit a
+no-op proposal. For a deferred, new, or changed binding, open **Configuration Chat**, select
+**Discord bot token** in its secure credential panel, store the token, and let the Agent use only the
+returned opaque alias. Review the complete diff, approve the protected change in **Approvals**, and
+wait for `ready / DISCORD_READY`.
 
-When Discord is configured through either path, sign in to Admin Web and confirm that it reports
-`ready / DISCORD_READY`, the correct Forum is bound, and the owner identity is allowlisted. The token
-must never enter a chat message, JSON file, environment variable, or command argument.
+Adding a Forum preserves the existing `forumBindings` entries and appends a distinct Channel.
+Replacing a bot, guild, or Forum submits the complete replacement object. Disabling sets
+`discord.binding` to `null`. These operations preserve durable Tasks, event history, and native
+Agent sessions, but OpenDelegate never silently migrates an old Discord thread identity into a new
+Forum; start new Forum posts for new Tasks as needed.
+
+The token must never enter a chat message, JSON file, environment variable, command argument, or
+log. The runtime checks that the credential alias exists before stopping the current Gateway. It
+then starts the candidate binding under a single serialized lifecycle; activation or Configuration
+commit failure restores the previous binding. A release candidate that cannot complete this path is
+invalid and must not be promoted.
 
 Discord is a client of the durable Task service, not its database. If Discord is offline, Admin Web,
 Task state, and recovery remain available on Main. After connectivity returns, reconciliation

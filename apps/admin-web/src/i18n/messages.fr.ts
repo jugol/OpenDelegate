@@ -77,17 +77,24 @@ export const frenchMessages = {
     failedMessage: "L’agent de configuration n’a pas pu répondre. Aucun paramètre n’a été modifié.",
     secureStoreFailed:
       "L’identifiant n’a pas pu être stocké de manière sécurisée. Il n’a pas été envoyé à l’assistant de configuration.",
-    secureTitle: "Stocker un identifiant de base de données",
+    secureTitle: "Stocker un identifiant en sécurité",
     secureIntro:
       "La valeur est envoyée directement au magasin de secrets géré de cet appareil principal. L’agent ne reçoit qu’une référence opaque.",
+    secureKindLabel: "Type d’identifiant",
+    secureDatabaseOption: "URI de base de données",
+    secureDiscordOption: "Jeton du bot Discord",
     databaseUriLabel: "URI de la base de données",
     databaseUriPlaceholder: "URI de connexion PostgreSQL",
+    discordTokenLabel: "Jeton du bot Discord",
+    discordTokenPlaceholder: "Jeton du bot depuis le portail développeur Discord",
     secureNotice:
       "Après l’envoi, la valeur d’origine est effacée de ce formulaire et ne devient jamais un message.",
     secureStore: "Stocker en sécurité",
     secureStoring: "Stockage sécurisé…",
     secureStored: "Stocké localement sous {reference}",
     secureReferenceMessage: "Utilisez cette référence sécurisée de base de données : {reference}",
+    secureDiscordReferenceMessage:
+      "Utilisez cette référence sécurisée du jeton Discord : {reference}. Son botTokenAlias est {alias}.",
     title: "Assistant de configuration",
     subtitle: "La configuration de l’appareil reste séparée des conversations liées aux tâches.",
     restore: "Restaurer l’assistant de configuration",

@@ -1717,8 +1717,8 @@ test("bundle guidance is launcher-first and never presents source-checkout comma
   assert.match(readme, /\.\\opendelegate\.cmd help/u);
   assert.doesNotMatch(readme, /\.\\opendelegate\.cmd init(?:\s|$)/u);
   assert.match(readme, /skills\/opendelegate-init\/SKILL\.md/u);
-  assert.match(readme, /before the first Main initialization/u);
-  assert.match(readme, /cannot add or replace a Discord binding later/u);
+  assert.match(readme, /Discord may be deferred/u);
+  assert.match(readme, /add or replace the approved binding/u);
   assert.match(readme, /Implementation: partial=36/u);
   assert.match(readme, /THIRD_PARTY_NOTICES\.json/u);
   assert.doesNotMatch(readme, /THIRD_PARTY_NOTICES\.md/u);
@@ -1744,7 +1744,8 @@ test("assembled bundle documentation includes complete localized launcher guidan
       locale: "en",
       supportStatusLabel: "Support status",
       adminTask: /Admin Web → Tasks → New task/u,
-      previewRestriction: /cannot add or replace a Discord binding later/u,
+      previewRestriction:
+        /Discord may be deferred.*secure credential panel.*add or replace the approved binding/u,
       unsupported: /This bundle is unsupported and must not be published under a release tag/u,
       candidate:
         /This candidate is not a supported release until it is promoted through the documented release channel/u,
@@ -1763,7 +1764,8 @@ test("assembled bundle documentation includes complete localized launcher guidan
       locale: "ko",
       supportStatusLabel: "지원 상태",
       adminTask: /Admin Web → Tasks → 새 작업/u,
-      previewRestriction: /나중에 Discord Binding을 추가하거나 교체할 수 없습니다/u,
+      previewRestriction:
+        /Discord 설정은 나중으로 미뤄도 됩니다.*승인된 Binding을 추가하거나 교체하세요/u,
       unsupported: /이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다/u,
       candidate: /이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다/u,
       candidateDiscordPath: /Discord를 사용하려면.*검증된 Configuration Chat 절차를 따르세요/u,
@@ -1780,7 +1782,8 @@ test("assembled bundle documentation includes complete localized launcher guidan
       locale: "ja",
       supportStatusLabel: "サポート状況",
       adminTask: /Admin Web → Tasks → 新しいタスク/u,
-      previewRestriction: /後から Discord Binding を追加または置換できません/u,
+      previewRestriction:
+        /Discord 設定は後回しにできます.*承認済み Binding を追加または置換します/u,
       unsupported: /このバンドルはサポート対象外であり、リリースタグで公開してはいけません/u,
       candidate:
         /この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません/u,
@@ -1799,7 +1802,8 @@ test("assembled bundle documentation includes complete localized launcher guidan
       locale: "fr",
       supportStatusLabel: "Statut de prise en charge",
       adminTask: /Admin Web → Tasks → Nouvelle tâche/u,
-      previewRestriction: /ne peut ni ajouter ni remplacer un Binding Discord ensuite/u,
+      previewRestriction:
+        /Discord peut être configuré plus tard.*ajoutez ou remplacez le Binding approuvé/u,
       unsupported:
         /Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release/u,
       candidate:
@@ -1818,7 +1822,8 @@ test("assembled bundle documentation includes complete localized launcher guidan
       locale: "es",
       supportStatusLabel: "Estado de soporte",
       adminTask: /Admin Web → Tasks → Nueva tarea/u,
-      previewRestriction: /no puede añadir ni sustituir después un Binding de Discord/u,
+      previewRestriction:
+        /Puedes configurar Discord más adelante.*añade o sustituye el Binding aprobado/u,
       unsupported:
         /Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release/u,
       candidate:
@@ -1837,7 +1842,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
       locale: "zh-CN",
       supportStatusLabel: "支持状态",
       adminTask: /Admin Web → Tasks → 新建任务/u,
-      previewRestriction: /无法在之后添加或替换 Discord Binding/u,
+      previewRestriction: /Discord 可以稍后配置.*添加或替换获批的 Binding/u,
       unsupported: /此捆绑包不受支持，且不得在 Release tag 下发布/u,
       candidate: /在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release/u,
       candidateDiscordPath: /如需使用 Discord.*已验证的 Configuration Chat 流程/u,

@@ -1212,7 +1212,8 @@ textarea:focus-visible,
   gap: 8px;
 }
 
-.secure-secret-form input {
+.secure-secret-form input,
+.secure-secret-form select {
   width: 100%;
   min-width: 0;
   height: 46px;
@@ -1224,7 +1225,12 @@ textarea:focus-visible,
   font: inherit;
 }
 
-.secure-secret-form input:focus-visible {
+.secure-secret-form select {
+  appearance: auto;
+}
+
+.secure-secret-form input:focus-visible,
+.secure-secret-form select:focus-visible {
   outline: 3px solid rgb(47 100 214 / 22%);
   outline-offset: 1px;
   border-color: var(--color-accent);
