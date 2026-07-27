@@ -241,9 +241,11 @@ pnpm dev:admin
 Launcher를 사용하십시오.
 
 Codex와 Claude 인증은 기본적으로 각 OpenDelegate Device의 `state/providers/codex` 및
-`state/providers/claude`에 격리됩니다. 설정이 끝나면 바로 그 controlled home에서 대화형으로
-인증하십시오. OpenDelegate는 사용자의 전역 provider home에서 로그인을 복사하거나 상속하지 않으며,
-first-class provider Run은 자격 증명 환경 변수를 거부합니다.
+`state/providers/claude`에 격리됩니다. Owner는 Main init 또는 Worker join에서
+`--codex-home ABSOLUTE_PATH`를 지정해 기존 로컬 Codex home을 명시적인 공유 SSOT로 사용할 수
+있습니다. OpenDelegate는 로그인 정보를 복사하지 않고 그 경로를 저장합니다. 이 경우 Codex 인증,
+설정, 플러그인, 캐시 및 native session 저장소는 공유되지만 각 Task는 계속 별도의 native session을
+사용합니다. 전역 home을 암묵적으로 상속하지는 않습니다.
 
 ## 저장소 구성
 

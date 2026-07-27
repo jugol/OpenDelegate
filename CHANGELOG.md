@@ -71,6 +71,8 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Added an explicit, durable `--codex-home` Main option so an owner can share one existing local
+  Codex home as a Device SSOT while managed provider homes remain the default.
 - Made the fixed Main computer a normal co-located Worker Device under the same service lifecycle
   and Device policy instead of a control-only scheduling exception.
 - Replaced the Admin design-only fixture path with authenticated Task operations and explicit

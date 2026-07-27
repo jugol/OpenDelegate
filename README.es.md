@@ -265,9 +265,12 @@ Este servidor de desarrollo no es una ruta de instalación para el Owner. Utiliz
 `internal-preview` generado para validar el Main empaquetado.
 
 La autenticación de Codex y Claude se aísla por cada Device de OpenDelegate, de forma predeterminada
-en `state/providers/codex` y `state/providers/claude`. Después de la configuración, autentícate de
-forma interactiva en esos controlled homes exactos. OpenDelegate no copia ni hereda un inicio de
-sesión del provider home global del usuario, y los Runs first-class rechazan las variables de
+en `state/providers/codex` y `state/providers/claude`. El Owner puede indicar
+`--codex-home ABSOLUTE_PATH` durante la inicialización del Main o la incorporación de un Worker para
+usar un Codex home local existente como SSOT compartido explícito. OpenDelegate guarda la ruta sin
+copiar el inicio de sesión. La autenticación, la configuración, los plugins, las cachés y el
+almacenamiento de native sessions de Codex se comparten, pero cada Task conserva su propia native
+session. No se hereda implícitamente ningún home global, y los Runs first-class rechazan las variables de
 entorno con credenciales.
 
 ## Mapa del repositorio

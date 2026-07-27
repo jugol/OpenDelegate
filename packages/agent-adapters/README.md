@@ -39,13 +39,13 @@ model turn. An installed version outside the configured tested set is reported a
 `untested` and execution fails closed unless the owner explicitly configures
 `allowUntestedVersion`.
 
-Every first-class Codex and Claude adapter uses an absolute
-OpenDelegate-controlled provider home and rejects ambient or per-Run attempts to
-override it. The default Worker paths are `state/providers/codex` and
-`state/providers/claude`. Existing authentication from a user's global provider
-home is deliberately not copied; the owner must authenticate each controlled home
-through the provider's normal interactive login. Keep these homes outside the
-checkout and restrict them to the Worker service identity.
+Every first-class Codex and Claude adapter uses an absolute, explicitly configured
+provider home and rejects ambient or per-Run attempts to override it. The default
+Device paths are `state/providers/codex` and `state/providers/claude`. Existing
+authentication is never copied. An owner may explicitly select an existing local
+Codex home as the Device's shared source of truth; otherwise the owner authenticates
+the managed home through the provider's normal interactive login. Keep every
+provider home outside the checkout and restrict it to the runtime identity.
 
 Claude SDK also ignores ambient settings, skills, and plugins and requires its
 fail-closed sandbox. Native Windows Claude SDK execution is reported incompatible
@@ -55,7 +55,7 @@ container.
 The CLI adapters pass prompts through stdin, never a command-line argument. Child
 processes always use `shell: false`. Only a narrow OS environment allowlist is
 inherited. First-class provider Runs reject `secretEnvironment`; provider
-authentication belongs in the controlled home, while future Task credentials must
+authentication belongs in the configured home, while future Task credentials must
 cross a typed, exact Run-scoped Secret helper. The generic adapter may accept an
 explicit secret environment when its caller deliberately composes that separate
 contract, and known values and common encoded forms are redacted from normalized

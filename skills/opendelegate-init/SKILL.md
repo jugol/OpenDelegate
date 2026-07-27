@@ -134,7 +134,7 @@ packaged launcher for a verified provider login and probe boundary. That boundar
 
 1. use the same resolver as foreground and service Main to choose one canonical executable and
    prefix;
-2. authenticate the exact controlled home through owner-interactive stdio without exposing a token;
+2. authenticate the exact configured home through owner-interactive stdio without exposing a token;
 3. persist the provider, canonical command identity, and tested version; and
 4. revalidate that identity and version on every foreground and service start.
 
@@ -146,28 +146,32 @@ The current internal preview does not expose that boundary. It may use this fore
 best-effort flow, but it does not prove a pinned executable identity or service readiness:
 
 1. Resolve one exact absolute `MAIN_HOME` and reuse it for every command. Honor an explicit
-   owner-selected home first; otherwise use the packaged runtime's platform default. The controlled
-   provider homes are `MAIN_HOME/state/providers/codex` and `MAIN_HOME/state/providers/claude`.
+   owner-selected home first; otherwise use the packaged runtime's platform default. Managed
+   provider homes are `MAIN_HOME/state/providers/codex` and `MAIN_HOME/state/providers/claude`. An
+   owner may explicitly select an existing absolute local Codex home as a shared source of truth;
+   retain that exact path for `--codex-home`.
 2. Select only a Main provider supported on this host and verify the installed version against
    `docs/release/SUPPORT_MATRIX.md`. `Auto` means choose a provider that passes the preview checks;
    it does not mean accepting an installed but unauthenticated CLI. Native Windows must not select
    Claude until the required fail-closed sandbox exists; use Codex or an explicitly configured
    WSL2/container execution path.
-3. Create only the selected provider home through an owner-restricted filesystem boundary. Reject a
-   link, path alias, non-directory, or path that resolves somewhere else. Do not copy, inherit, or
-   read the user's global provider home.
+3. For a managed provider home, create only the selected directory through an owner-restricted
+   filesystem boundary. For an explicit external Codex home, inspect the existing directory without
+   copying it. Reject a link, path alias, non-directory, checkout path, or path that resolves
+   somewhere else. Never discover or inherit an ambient global provider home.
 4. In the same owner environment that will keep the preview Main in the foreground:
-   - Codex: set the non-secret `CODEX_HOME` selector to the controlled Codex home, run
-     `codex login`, and require `codex login status` to pass.
+   - Codex: set the non-secret `CODEX_HOME` selector to the selected Codex home. Run `codex login`
+     only when the explicit status check is not ready, then require `codex login status` to pass.
    - Claude: set the non-secret `CLAUDE_CONFIG_DIR` selector to the controlled Claude home, run
      `claude auth login`, and require `claude auth status --json` to report ready.
 5. Never accept a provider token in an Agent prompt, argv, a temporary file, a log, or an unrelated
    environment variable. The provider's own owner-interactive login flow writes directly into the
-   controlled home.
+   configured home.
 6. Include the selected `--agent codex` or `--agent claude` option only after the preview version
-   and authentication checks pass. Start Main in that same foreground environment and continue to
-   local owner claim. Do not call the authenticated runtime-feature endpoint before an owner session
-   exists or imply that this preview path is deterministic.
+   and authentication checks pass. Include `--codex-home ABSOLUTE_PATH` only for an owner-selected
+   external Codex home. Start Main in that same foreground environment and continue to local owner
+   claim. Do not call the authenticated runtime-feature endpoint before an owner session exists or
+   imply that this preview path is deterministic.
 
 ### Initialize Main
 
@@ -337,9 +341,9 @@ not a Task conversation:
 1. verify the current Device Facts and capabilities;
 2. propose Roles and Instructions with an exact diff;
 3. confirm the bootstrapped Main Adapter remains ready, then configure additional Worker or generic
-   adapters without exposing credentials. Authenticate each additional OpenDelegate-controlled
-   Codex/Claude provider home through the same owner-interactive rule instead of copying or
-   inheriting the user's global provider home;
+   adapters without exposing credentials. Authenticate each additional managed Codex/Claude provider
+   home through the same owner-interactive rule. Preserve an explicitly selected external Codex home
+   by reference instead of copying it, and never inherit an ambient provider home;
 4. handle Discord according to the owner's current choice:
    - When the owner declined Discord, preserve the explicit Discord-disabled state and continue. Do
      not reject the installation or present Discord as required.

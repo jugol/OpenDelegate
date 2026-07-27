@@ -7,7 +7,7 @@ export function resolveControlledProviderHome(path: string, provider: string): s
   if (!isAbsolute(path)) {
     throw new AgentAdapterError(
       "CONTROLLED_PROVIDER_HOME_REQUIRED",
-      `The ${provider} adapter requires an absolute OpenDelegate-controlled home.`,
+      `The ${provider} adapter requires an absolute configured provider home.`,
     );
   }
   return resolve(path);
@@ -24,7 +24,7 @@ export async function prepareControlledProviderHome(path: string, provider: stri
   ) {
     throw new AgentAdapterError(
       "CONTROLLED_PROVIDER_HOME_UNSAFE",
-      `The OpenDelegate-controlled ${provider} home is unsafe.`,
+      `The configured ${provider} provider home is unsafe.`,
     );
   }
   if (process.platform !== "win32") {

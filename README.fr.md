@@ -265,9 +265,12 @@ Ce serveur de développement n’est pas un parcours d’installation pour l’O
 `internal-preview` généré pour valider le Main empaqueté.
 
 L’authentification Codex et Claude est isolée par Device OpenDelegate, par défaut dans
-`state/providers/codex` et `state/providers/claude`. Après la configuration, authentifiez-vous
-interactivement dans ces controlled homes précis. OpenDelegate ne copie ni n’hérite d’une connexion
-provenant du provider home global de l’utilisateur, et les Runs first-class refusent les variables
+`state/providers/codex` et `state/providers/claude`. L’Owner peut fournir
+`--codex-home ABSOLUTE_PATH` pendant l’initialisation du Main ou l’inscription d’un Worker afin
+d’utiliser un Codex home local existant comme SSOT partagé explicite. OpenDelegate enregistre ce
+chemin sans copier la connexion. L’authentification, les réglages, les plugins, les caches et le
+stockage des native sessions Codex sont alors partagés, tandis que chaque Task conserve sa propre
+native session. Aucun home global n’est hérité implicitement, et les Runs first-class refusent les variables
 d’environnement contenant des identifiants.
 
 ## Organisation du dépôt

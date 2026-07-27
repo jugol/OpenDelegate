@@ -97,7 +97,7 @@ export function validateAgentRequest(request: AgentStartRequest | AgentResumeReq
 /**
  * A general-purpose Agent provider is not a minimal credential scope: any
  * provider-native shell or file tool could read its process environment.
- * Provider authentication belongs in the controlled provider home, while Task
+ * Provider authentication belongs in the configured provider home, while Task
  * credentials must be exposed through an exact, typed Device-local helper.
  */
 export function rejectUnscopedProviderSecrets(
@@ -106,7 +106,7 @@ export function rejectUnscopedProviderSecrets(
   if (Object.keys(request.secretEnvironment ?? {}).length > 0) {
     throw new AgentAdapterError(
       "SECRET_ENVIRONMENT_SCOPE_UNSAFE",
-      "Agent provider turns cannot receive credential environment variables; use the controlled provider home or a typed Run-scoped Secret helper.",
+      "Agent provider turns cannot receive credential environment variables; use the configured provider home or a typed Run-scoped Secret helper.",
     );
   }
 }

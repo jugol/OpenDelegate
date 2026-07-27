@@ -146,6 +146,7 @@ export interface ParsedArguments {
   readonly database?: MainDatabaseConfiguration;
   readonly listener?: MainListenerConfiguration;
   readonly agentProvider?: MainAgentProviderPreference;
+  readonly codexHome?: string;
   readonly adminAutoOpen?: boolean;
   readonly artifactConfigurationFile?: string;
   readonly discordConfigurationFile?: string;
@@ -204,6 +205,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   let tlsCertificatePath: string | undefined;
   let tlsPrivateKeyPath: string | undefined;
   let agentProvider: MainAgentProviderPreference | undefined;
+  let codexHome: string | undefined;
   let adminAutoOpen: boolean | undefined;
   let artifactConfigurationFile: string | undefined;
   let discordConfigurationFile: string | undefined;
@@ -239,6 +241,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       value === "--database-schema" ||
       value === "--secret-backend-config" ||
       value === "--agent" ||
+      value === "--codex-home" ||
       value === "--admin-auto-open" ||
       value === "--artifact-config" ||
       value === "--discord-config" ||
@@ -298,6 +301,9 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
             );
           }
           agentProvider = target;
+          break;
+        case "--codex-home":
+          codexHome = resolve(target);
           break;
         case "--admin-auto-open":
           if (target !== "enabled" && target !== "disabled") {
@@ -364,6 +370,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       database !== undefined ||
       listener !== undefined ||
       agentProvider !== undefined ||
+      codexHome !== undefined ||
       adminAutoOpen !== undefined ||
       artifactConfigurationFile !== undefined ||
       discordConfigurationFile !== undefined ||
@@ -376,6 +383,9 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       "CONFIG_INVALID",
       "Agent, Admin auto-open, Artifact, Device channel, Discord, database, listener, TLS, and Admin bundle options are available only with init.",
     );
+  }
+  if (codexHome !== undefined && agentProvider !== "codex") {
+    throw new MainRuntimeError("CONFIG_INVALID", "--codex-home requires --agent codex.");
   }
   if (discordTokenStdin && discordConfigurationFile === undefined) {
     throw new MainRuntimeError(
@@ -408,6 +418,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
     ...(database === undefined ? {} : { database }),
     ...(listener === undefined ? {} : { listener }),
     ...(agentProvider === undefined ? {} : { agentProvider }),
+    ...(codexHome === undefined ? {} : { codexHome }),
     ...(adminAutoOpen === undefined ? {} : { adminAutoOpen }),
     ...(artifactConfigurationFile === undefined ? {} : { artifactConfigurationFile }),
     ...(discordConfigurationFile === undefined ? {} : { discordConfigurationFile }),
@@ -628,6 +639,7 @@ async function runInit(options: ParsedArguments, identity: RuntimeIdentity): Pro
     identity,
     options.agentProvider,
     options.adminAutoOpen,
+    options.codexHome,
   );
   let claimListener: Awaited<ReturnType<typeof startClaimListener>>;
   try {
@@ -900,14 +912,19 @@ async function createAndListen(
   identity: RuntimeIdentity,
   requestedAgentProvider?: MainAgentProviderPreference,
   initialAdminAutoOpen?: boolean,
+  requestedCodexHome?: string,
 ): Promise<MainRuntime> {
   const paths = resolveRuntimePaths({
     home,
     sourceCheckout: installationRoot,
   });
   const agent = await resolveMainAgentComposition({
-    paths,
+    paths: {
+      ...paths,
+      sourceCheckoutRoot: installationRoot,
+    },
     ...(requestedAgentProvider === undefined ? {} : { requestedProvider: requestedAgentProvider }),
+    ...(requestedCodexHome === undefined ? {} : { requestedCodexHome }),
   });
   if (agent.status === "ready") {
     writeEvent("main.agent.ready", {
@@ -1425,6 +1442,7 @@ Usage:
     [--home PATH] [--expires-seconds 30..1800] [--role ROLE ...]
   opendelegate init [--home PATH] [--admin-root PATH] [--open]
     [--agent auto|codex|claude|disabled]
+    [--codex-home ABSOLUTE_PATH]
     [--admin-auto-open enabled|disabled]
     [--artifact-config ABSOLUTE_PATH]
     [--discord-config ABSOLUTE_PATH [--discord-token-stdin]]

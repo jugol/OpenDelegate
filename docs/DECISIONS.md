@@ -428,7 +428,8 @@ unrelated Tasks or surrendering orchestration and permission enforcement to a
 vendor UI.
 
 **Consequence:** Provider compatibility is version-pinned and fail-closed.
-OpenDelegate-owned provider homes and strict settings isolation are part of setup.
+OpenDelegate-owned provider homes and strict settings isolation are the default;
+an explicitly selected external Codex home follows D-049.
 Native Windows Claude SDK execution is not advertised until its required sandbox is
 enforceable; Codex, WSL2, or a configured container is used instead.
 
@@ -603,3 +604,30 @@ Discord thread identifiers are not silently migrated across Forums; new posts
 create new Tasks under the new binding. Failed candidates leave the prior
 credential and binding available for rollback, and Configuration Chat never
 receives or persists the raw bot token.
+
+## D-049 — Explicit shared Codex home
+
+**Decision:** Main and Worker use Device-local, OpenDelegate-managed provider homes
+by default. An owner may instead supply an existing absolute local Codex home with
+`--codex-home`. OpenDelegate persists that exact path as non-secret configuration,
+passes it as `CODEX_HOME`, and never discovers, copies, or silently inherits a
+global home.
+
+Codex does not expose a separate authentication-home selector. Selecting an
+external home therefore shares its authentication, settings, plugins, caches, and
+provider-native session storage with other local Codex consumers. OpenDelegate
+still keys every Task workstream to its own native session and remains authoritative
+for Task state, permissions, leases, and lifecycle.
+
+**Rationale:** A personal Device may already maintain one intentional Codex source
+of truth for services such as an Agent gateway. Requiring another interactive login
+creates independent refresh state and avoidable credential drift. Implicit ambient
+inheritance would be surprising and would silently import provider behavior, so
+sharing must be explicit and durable.
+
+**Consequence:** The external home becomes trusted Device configuration and must be
+an owner-restricted local directory outside the source checkout. Logging out,
+rotating authentication, or changing Codex configuration affects every local
+consumer of that home. Owners who want stronger settings and session isolation keep
+the default managed home. Claude remains managed unless an existing explicit
+Worker configuration selects an external Claude home.

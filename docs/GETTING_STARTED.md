@@ -93,7 +93,7 @@ avoids a bootstrap deadlock in which Configuration Chat needs the same provider 
 was expected to configure.
 
 First read `supportStatus`. A release candidate must expose a packaged provider login and probe
-boundary that uses the same command resolver as Main, authenticates the controlled home through
+boundary that uses the same command resolver as Main, authenticates the configured home through
 owner-interactive stdio, persists the canonical command identity and tested version, and revalidates
 them on foreground and service startup. If that boundary is absent, the candidate is invalid and
 must not be promoted or represented as supported.
@@ -102,26 +102,31 @@ The current internal preview does not expose that deterministic boundary. Its in
 following foreground-only validation path, but this does not prove a pinned executable identity or
 service readiness:
 
-1. resolve the exact `MAIN_HOME` and create only the selected provider's owner-restricted home;
+1. resolve the exact `MAIN_HOME` and the selected provider's owner-restricted home;
 2. resolve one installed provider command from the same owner environment that will launch the
    foreground Main, then verify the exact version against the
    [support matrix](release/SUPPORT_MATRIX.md);
-3. authenticate and inspect only the controlled home:
+3. authenticate and inspect only the configured home:
 
-   - Codex: `MAIN_HOME/state/providers/codex`, supplied as `CODEX_HOME`; run `codex login` in the
-     owner's interactive session, then require `codex login status` to pass.
+   - Codex: use `MAIN_HOME/state/providers/codex` by default. When the owner explicitly chooses an
+     existing local Codex source of truth, use that absolute path and retain it for
+     `--codex-home ABSOLUTE_PATH`. Supply the selected path as `CODEX_HOME`, run `codex login` only
+     when `codex login status` is not already ready, and require the status check to pass.
    - Claude: `MAIN_HOME/state/providers/claude`, supplied as `CLAUDE_CONFIG_DIR`; run
      `claude auth login` in the owner's interactive session, then require
      `claude auth status --json` to report ready. Native Windows does not select Claude until its
      fail-closed sandbox is available; use Codex or an explicitly configured WSL2/container path.
 
-The Agent must not copy or inherit the global provider home, accept a login token through a prompt,
-or place credentials in argv, an environment value other than the non-secret home selector, a log,
-or the bundle. It initializes Main with the selected `--agent codex` or `--agent claude` only after
-the preview version and authentication checks pass, keeps Main in that exact foreground owner
-environment, and continues to the local claim flow. `Auto` means choosing a provider that passes
-this preview boundary, not accepting the first installed but unauthenticated CLI. It never upgrades
-the preview into a persistent or supported installation.
+The Agent must not discover an ambient provider home or copy login material. An external Codex home
+is used only when the owner explicitly supplies it; because Codex has no auth-only home selector,
+that choice shares Codex settings, plugins, caches, and native-session storage as well as login. The
+Agent never accepts a login token through a prompt or places credentials in argv, an unrelated
+environment value, a log, or the bundle. It initializes Main with the selected `--agent codex` or
+`--agent claude` and, when selected, `--codex-home ABSOLUTE_PATH` only after the preview version and
+authentication checks pass. It keeps Main in that exact foreground owner environment and continues
+to the local claim flow. `Auto` means choosing a provider that passes this preview boundary, not
+accepting the first installed but unauthenticated CLI. It never upgrades the preview into a
+persistent or supported installation.
 
 The Agent also enrolls the Main computer as its own co-located Worker. OpenDelegate does not treat
 Main as a control-only exception.
@@ -186,8 +191,9 @@ Work through these items with the Configuration Agent:
 8. review the exact diff before applying any persistent configuration change.
 
 The initial Main provider login already happened through the init Agent in section 2. Additional
-Codex and Claude adapters use their own OpenDelegate-controlled provider homes and the same normal
-owner-interactive login rule; never copy a global credential directory.
+Codex and Claude adapters use managed provider homes by default and the same normal
+owner-interactive login rule. An explicit external Codex home remains shared by reference; never
+copy a global credential directory.
 
 If Configuration Chat nevertheless reports that its Agent is unavailable, use its read-only
 checklist and return to the init Agent's provider-readiness flow. Do not attempt the missing login

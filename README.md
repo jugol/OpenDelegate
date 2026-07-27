@@ -248,10 +248,12 @@ This development server is not an owner installation path. Use the generated int
 launcher when validating the bundled Main.
 
 Codex and Claude authentication is isolated per OpenDelegate Device under
-`state/providers/codex` and `state/providers/claude` by default. Authenticate those
-exact controlled homes interactively after setup. OpenDelegate intentionally does
-not copy or inherit a login from the user's global provider home, and first-class
-provider Runs reject credential environment variables.
+`state/providers/codex` and `state/providers/claude` by default. An owner may pass
+`--codex-home ABSOLUTE_PATH` during Main init or Worker join to use an existing
+local Codex home as an explicit shared source of truth. OpenDelegate persists that
+path without copying login material; Codex auth, settings, plugins, caches, and
+native-session storage are then shared, while each Task still keeps its own native
+session. Ambient global homes are never inherited.
 
 ## Repository map
 

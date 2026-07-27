@@ -175,7 +175,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
         diagnostics: [
           {
             code: "CONTROLLED_PROVIDER_HOME_UNSAFE",
-            message: "The OpenDelegate-controlled Codex home is unavailable or unsafe.",
+            message: "The configured Codex home is unavailable or unsafe.",
           },
         ],
       };
@@ -1095,7 +1095,7 @@ function requireRunnableProbe(probe: AgentAdapterProbe, allowUntestedVersion: bo
   if (probe.auth.state !== "ready") {
     throw new AgentAdapterError(
       "ADAPTER_AUTH_NOT_READY",
-      "Codex authentication is not ready in the OpenDelegate-controlled home.",
+      "Codex authentication is not ready in the configured home.",
       true,
     );
   }

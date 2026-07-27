@@ -1,6 +1,6 @@
 import { lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   ClaudeAgentSdkAdapter,
@@ -20,14 +20,23 @@ import { readStableRegularFile } from "./stable-file.ts";
 export type MainAgentProviderPreference = "auto" | "codex" | "claude" | "disabled";
 export type SelectedMainAgentProvider = Exclude<MainAgentProviderPreference, "auto">;
 
-interface SelectedAgentConfiguration {
+interface ManagedAgentConfiguration {
   readonly schemaVersion: 1;
   readonly provider: SelectedMainAgentProvider;
 }
 
+interface SharedCodexAgentConfiguration {
+  readonly schemaVersion: 2;
+  readonly provider: "codex";
+  readonly codexHome: string;
+}
+
+type SelectedAgentConfiguration = ManagedAgentConfiguration | SharedCodexAgentConfiguration;
+
 export interface MainAgentRuntimePaths {
   readonly home: string;
   readonly configDirectory: string;
+  readonly sourceCheckoutRoot: string;
   readonly stateDirectory: string;
 }
 
@@ -70,13 +79,16 @@ export type MainAgentComposition = MainAgentCompositionReady | MainAgentComposit
 export interface ResolveMainAgentCompositionOptions {
   readonly paths: MainAgentRuntimePaths;
   readonly requestedProvider?: MainAgentProviderPreference;
+  readonly requestedCodexHome?: string;
   readonly createAdapter?: (
     provider: Exclude<SelectedMainAgentProvider, "disabled">,
     leaseStore: SessionLeaseStore,
+    providerHome: string,
   ) => AgentAdapter;
 }
 
-export type MainAgentRuntimeErrorCode = "AGENT_CONFIGURATION_CORRUPT" | "AGENT_PROVIDER_CONFLICT";
+export type MainAgentRuntimeErrorCode =
+  "AGENT_CONFIGURATION_CORRUPT" | "AGENT_HOME_CONFLICT" | "AGENT_PROVIDER_CONFLICT";
 
 export class MainAgentRuntimeError extends Error {
   readonly code: MainAgentRuntimeErrorCode;
@@ -107,8 +119,33 @@ export async function resolveMainAgentComposition(
   options: ResolveMainAgentCompositionOptions,
 ): Promise<MainAgentComposition> {
   const selectionPath = join(options.paths.configDirectory, selectionFilename);
-  const existing = await readSelectedAgentConfiguration(selectionPath);
+  const existing = await readSelectedAgentConfiguration(
+    selectionPath,
+    options.paths.sourceCheckoutRoot,
+  );
   const requested = options.requestedProvider ?? "auto";
+  const requestedCodexHome =
+    options.requestedCodexHome === undefined
+      ? undefined
+      : validateSharedCodexHome(options.requestedCodexHome, options.paths.sourceCheckoutRoot);
+  if (requestedCodexHome !== undefined && requested !== "codex") {
+    throw new MainAgentRuntimeError(
+      "AGENT_HOME_CONFLICT",
+      "A shared Codex home requires an explicit Codex Agent provider.",
+    );
+  }
+  const persistedCodexHome = configuredCodexHome(existing);
+  if (
+    requestedCodexHome !== undefined &&
+    persistedCodexHome !== undefined &&
+    requestedCodexHome !== persistedCodexHome
+  ) {
+    throw new MainAgentRuntimeError(
+      "AGENT_HOME_CONFLICT",
+      "Main already has a different shared Codex home.",
+    );
+  }
+  const codexHome = requestedCodexHome ?? persistedCodexHome;
   const reenableFromDisabled =
     existing?.provider === "disabled" && requested !== "auto" && requested !== "disabled";
   if (
@@ -128,7 +165,11 @@ export async function resolveMainAgentComposition(
     (existing === undefined && requested === "disabled")
   ) {
     if (existing === undefined) {
-      await persistSelection(selectionPath, { schemaVersion: 1, provider: "disabled" });
+      await persistSelection(
+        selectionPath,
+        { schemaVersion: 1, provider: "disabled" },
+        options.paths.sourceCheckoutRoot,
+      );
     }
     return {
       status: "unavailable",
@@ -158,9 +199,10 @@ export async function resolveMainAgentComposition(
     if (provider === "disabled") {
       continue;
     }
+    const home = providerHome(provider, options.paths, codexHome);
     const adapter =
-      options.createAdapter?.(provider, leaseStore) ??
-      createProductionAdapter(provider, leaseStore, options.paths);
+      options.createAdapter?.(provider, leaseStore, home) ??
+      createProductionAdapter(provider, leaseStore, home);
     try {
       outcomes.push({
         provider,
@@ -204,15 +246,29 @@ export async function resolveMainAgentComposition(
   }
 
   if (existing === undefined) {
-    await persistSelection(selectionPath, {
-      schemaVersion: 1,
-      provider: selected.provider,
-    });
+    await persistSelection(
+      selectionPath,
+      selectionFor(selected.provider, codexHome),
+      options.paths.sourceCheckoutRoot,
+    );
   } else if (reenableFromDisabled) {
-    await replaceDisabledSelection(selectionPath, {
-      schemaVersion: 1,
-      provider: selected.provider,
-    });
+    await replaceSelection(
+      selectionPath,
+      existing,
+      selectionFor(selected.provider, codexHome),
+      options.paths.sourceCheckoutRoot,
+    );
+  } else if (
+    existing.schemaVersion === 1 &&
+    existing.provider === "codex" &&
+    codexHome !== undefined
+  ) {
+    await replaceSelection(
+      selectionPath,
+      existing,
+      selectionFor("codex", codexHome),
+      options.paths.sourceCheckoutRoot,
+    );
   }
   const agentWorkspace = await ensureAgentWorkspace(options.paths);
   return createReadyComposition(
@@ -283,17 +339,66 @@ async function ensureAgentWorkspace(paths: MainAgentRuntimePaths): Promise<strin
 function createProductionAdapter(
   provider: Exclude<SelectedMainAgentProvider, "disabled">,
   leaseStore: SessionLeaseStore,
-  paths: MainAgentRuntimePaths,
+  home: string,
 ): AgentAdapter {
   return provider === "codex"
     ? new CodexAppServerAdapter({
-        codexHome: join(paths.stateDirectory, "providers", "codex"),
+        codexHome: home,
         leaseStore,
       })
     : new ClaudeAgentSdkAdapter({
-        claudeHome: join(paths.stateDirectory, "providers", "claude"),
+        claudeHome: home,
         leaseStore,
       });
+}
+
+function providerHome(
+  provider: Exclude<SelectedMainAgentProvider, "disabled">,
+  paths: MainAgentRuntimePaths,
+  sharedCodexHome: string | undefined,
+): string {
+  return provider === "codex"
+    ? (sharedCodexHome ?? join(paths.stateDirectory, "providers", "codex"))
+    : join(paths.stateDirectory, "providers", "claude");
+}
+
+function selectionFor(
+  provider: SelectedMainAgentProvider,
+  sharedCodexHome: string | undefined,
+): SelectedAgentConfiguration {
+  return provider === "codex" && sharedCodexHome !== undefined
+    ? {
+        schemaVersion: 2,
+        provider,
+        codexHome: sharedCodexHome,
+      }
+    : {
+        schemaVersion: 1,
+        provider,
+      };
+}
+
+function configuredCodexHome(
+  configuration: SelectedAgentConfiguration | undefined,
+): string | undefined {
+  return configuration?.schemaVersion === 2 ? configuration.codexHome : undefined;
+}
+
+function validateSharedCodexHome(value: string, sourceCheckoutRoot: string): string {
+  if (!isAbsolute(value) || value.trim() !== value || value.includes("\0")) {
+    throw new MainAgentRuntimeError(
+      "AGENT_HOME_CONFLICT",
+      "The shared Codex home must be an absolute filesystem path.",
+    );
+  }
+  const resolved = resolve(value);
+  if (isWithin(sourceCheckoutRoot, resolved)) {
+    throw new MainAgentRuntimeError(
+      "AGENT_HOME_CONFLICT",
+      "The shared Codex home must live outside the OpenDelegate source checkout.",
+    );
+  }
+  return resolved;
 }
 
 function isReadyProbe(probe: AgentAdapterProbe): boolean {
@@ -330,6 +435,7 @@ function unavailableCode(outcome: {
 
 async function readSelectedAgentConfiguration(
   path: string,
+  sourceCheckoutRoot: string,
 ): Promise<SelectedAgentConfiguration | undefined> {
   let bytes: Buffer;
   try {
@@ -352,25 +458,40 @@ async function readSelectedAgentConfiguration(
   } finally {
     bytes.fill(0);
   }
-  if (
-    !isRecord(parsed) ||
-    !hasExactKeys(parsed, ["schemaVersion", "provider"]) ||
-    parsed["schemaVersion"] !== 1 ||
-    (parsed["provider"] !== "codex" &&
-      parsed["provider"] !== "claude" &&
-      parsed["provider"] !== "disabled")
-  ) {
+  if (!isRecord(parsed)) {
     throw corruptSelection();
   }
-  return Object.freeze({
-    schemaVersion: 1,
-    provider: parsed["provider"],
-  });
+  if (
+    hasExactKeys(parsed, ["schemaVersion", "provider"]) &&
+    parsed["schemaVersion"] === 1 &&
+    (parsed["provider"] === "codex" ||
+      parsed["provider"] === "claude" ||
+      parsed["provider"] === "disabled")
+  ) {
+    return Object.freeze({
+      schemaVersion: 1,
+      provider: parsed["provider"],
+    });
+  }
+  if (
+    hasExactKeys(parsed, ["schemaVersion", "provider", "codexHome"]) &&
+    parsed["schemaVersion"] === 2 &&
+    parsed["provider"] === "codex" &&
+    typeof parsed["codexHome"] === "string"
+  ) {
+    return Object.freeze({
+      schemaVersion: 2,
+      provider: "codex",
+      codexHome: validateSharedCodexHome(parsed["codexHome"], sourceCheckoutRoot),
+    });
+  }
+  throw corruptSelection();
 }
 
 async function persistSelection(
   path: string,
   configuration: SelectedAgentConfiguration,
+  sourceCheckoutRoot: string,
 ): Promise<void> {
   try {
     await writeFile(path, `${JSON.stringify(configuration, undefined, 2)}\n`, {
@@ -382,19 +503,21 @@ async function persistSelection(
     if (!isErrno(error, "EEXIST")) {
       throw corruptSelection();
     }
-    const existing = await readSelectedAgentConfiguration(path);
-    if (existing?.provider !== configuration.provider) {
+    const existing = await readSelectedAgentConfiguration(path, sourceCheckoutRoot);
+    if (existing === undefined || JSON.stringify(existing) !== JSON.stringify(configuration)) {
       throw new MainAgentRuntimeError(
         "AGENT_PROVIDER_CONFLICT",
-        "Another Main process fixed a different Agent provider.",
+        "Another Main process fixed a different Agent configuration.",
       );
     }
   }
 }
 
-async function replaceDisabledSelection(
+async function replaceSelection(
   path: string,
+  expected: SelectedAgentConfiguration,
   configuration: SelectedAgentConfiguration,
+  sourceCheckoutRoot: string,
 ): Promise<void> {
   const lockPath = `${path}.lock`;
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
@@ -412,11 +535,11 @@ async function replaceDisabledSelection(
   }
 
   try {
-    const current = await readSelectedAgentConfiguration(path);
-    if (current?.provider !== "disabled") {
+    const current = await readSelectedAgentConfiguration(path, sourceCheckoutRoot);
+    if (current === undefined || JSON.stringify(current) !== JSON.stringify(expected)) {
       throw new MainAgentRuntimeError(
         "AGENT_PROVIDER_CONFLICT",
-        "Another Main process already changed the fixed Agent provider.",
+        "Another Main process already changed the fixed Agent configuration.",
       );
     }
     await writeFile(temporaryPath, `${JSON.stringify(configuration, undefined, 2)}\n`, {
@@ -452,6 +575,11 @@ function isErrno(error: unknown, code: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isWithin(parent: string, child: string): boolean {
+  const relationship = relative(resolve(parent), resolve(child));
+  return relationship === "" || (!relationship.startsWith("..") && !isAbsolute(relationship));
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

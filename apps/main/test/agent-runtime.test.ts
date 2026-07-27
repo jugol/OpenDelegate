@@ -74,6 +74,52 @@ test("an explicit provider is persisted and conflicting startup fails closed", a
   );
 });
 
+test("an explicit shared Codex home upgrades a matching selection and survives restart", async (context) => {
+  const paths = await runtimePaths(context);
+  const sharedCodexHome = await mkdtemp(join(tmpdir(), "opendelegate-codex-ssot-"));
+  context.after(async () => {
+    await rm(sharedCodexHome, { force: true, recursive: true });
+  });
+  const observedHomes: string[] = [];
+  const createAdapter = (
+    provider: "codex" | "claude",
+    _leaseStore: unknown,
+    providerHome: string,
+  ): AgentAdapter => {
+    observedHomes.push(providerHome);
+    return new ProbeOnlyAdapter(probe(provider, "ready"));
+  };
+
+  await resolveMainAgentComposition({
+    paths,
+    requestedProvider: "codex",
+    createAdapter,
+  });
+  const upgraded = await resolveMainAgentComposition({
+    paths,
+    requestedProvider: "codex",
+    requestedCodexHome: sharedCodexHome,
+    createAdapter,
+  });
+  const restarted = await resolveMainAgentComposition({
+    paths,
+    createAdapter,
+  });
+
+  assert.equal(upgraded.status, "ready");
+  assert.equal(restarted.status, "ready");
+  assert.deepEqual(observedHomes, [
+    join(paths.stateDirectory, "providers", "codex"),
+    sharedCodexHome,
+    sharedCodexHome,
+  ]);
+  assert.deepEqual(JSON.parse(await readFile(join(paths.configDirectory, "agent.json"), "utf8")), {
+    schemaVersion: 2,
+    provider: "codex",
+    codexHome: sharedCodexHome,
+  });
+});
+
 test("auto leaves selection resumable when no provider is ready", async (context) => {
   const paths = await runtimePaths(context);
   const unavailable = await resolveMainAgentComposition({
@@ -155,7 +201,12 @@ async function runtimePaths(context: test.TestContext): Promise<MainAgentRuntime
     mkdir(configDirectory, { recursive: true }),
     mkdir(stateDirectory, { recursive: true }),
   ]);
-  return { home, configDirectory, stateDirectory };
+  return {
+    home,
+    configDirectory,
+    sourceCheckoutRoot: join(home, "source-checkout"),
+    stateDirectory,
+  };
 }
 
 function factory(

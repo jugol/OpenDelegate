@@ -121,6 +121,23 @@ test("CLI init accepts secret-free database and exact HTTPS listener configurati
     /enabled or disabled/,
   );
   assert.throws(() => parseArguments(["init", "--agent", "unknown"]), /must be auto/);
+  const sharedCodex = parseArguments([
+    "init",
+    "--agent",
+    "codex",
+    "--codex-home",
+    "/srv/codex-ssot",
+  ]);
+  assert.equal(sharedCodex.agentProvider, "codex");
+  assert.equal(sharedCodex.codexHome, resolve("/srv/codex-ssot"));
+  assert.throws(
+    () => parseArguments(["init", "--agent", "auto", "--codex-home", "/srv/codex-ssot"]),
+    /requires --agent codex/,
+  );
+  assert.throws(
+    () => parseArguments(["serve", "--codex-home", "/srv/codex-ssot"]),
+    /available only with init/,
+  );
   assert.throws(
     () => parseArguments(["init", "--discord-token-stdin"]),
     /requires --discord-config/,
