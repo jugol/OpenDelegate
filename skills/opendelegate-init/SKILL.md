@@ -100,13 +100,78 @@ the runtime source of truth.
 
 ## 4. Configure Main
 
-Before the first deterministic `init`, ask whether Discord belongs in this installation. When it
-does, complete the manual App, Community Forum, intent, permission, workflow-tag ID, owner
-allowlist, and secret-safe token prerequisites in `docs/DISCORD_SETUP.md`, then include the complete
-binding in that first initialization. The current deterministic boundary cannot add or replace a
-Discord binding after Main exists: a different requested binding fails closed with `CONFIG_EXISTS`.
+Before the first deterministic `init`, read `release-metadata.json`, select the path for its exact
+`supportStatus`, and ask whether Discord belongs in this installation.
+
+When the owner selected Discord for an internal preview whose status begins with `internal-preview`,
+complete the manual App, Community Forum, intent, permission, workflow-tag ID, owner allowlist, and
+secret-safe token prerequisites in `docs/DISCORD_SETUP.md`, then include the complete binding in
+that first initialization. The preview's deterministic boundary cannot add or replace a Discord
+binding after Main exists: a different requested binding fails closed with `CONFIG_EXISTS`.
 Configuration Chat must not claim that it can perform that mutation. Re-running `init` may rotate
 the token only when the requested persisted configuration is otherwise identical.
+
+When the owner selected Discord for release-candidate bytes, including the exact same bytes after a
+verified external promotion, do not use the internal-preview manual first-init workaround. Record
+that intent, initialize and claim Main, then require the verified Configuration Chat → Discord path
+in section 6. If that selected path is unavailable or cannot complete and validate the binding, the
+candidate is invalid: stop, keep the release unsupported, and report the missing capability as a
+release blocker.
+
+When the owner declined Discord, record the Discord-disabled intent, initialize Main without a
+Discord binding, and continue. Do not run either setup path, reject the candidate, or imply that
+Discord is mandatory. Explain that an internal preview cannot add Discord to that existing Main
+later, while release-candidate bytes may use only their verified authenticated configuration path if
+the owner changes the choice.
+
+### Bootstrap the Main Configuration Agent
+
+Do this before the first Main `init` so Configuration Chat never depends on a provider login that
+only the unavailable chat could perform.
+
+Read the bundle's `supportStatus` before choosing the provider path.
+
+For release-candidate bytes, including the exact bytes after external promotion, inspect the
+packaged launcher for a verified provider login and probe boundary. That boundary must:
+
+1. use the same resolver as foreground and service Main to choose one canonical executable and
+   prefix;
+2. authenticate the exact controlled home through owner-interactive stdio without exposing a token;
+3. persist the provider, canonical command identity, and tested version; and
+4. revalidate that identity and version on every foreground and service start.
+
+If a candidate lacks a packaged provider login and probe boundary with those properties, stop and
+reject it. Do not substitute direct `codex` or `claude` commands, ambient `PATH`, or the external
+init Agent's own executable resolution, and do not represent the candidate as supported.
+
+The current internal preview does not expose that boundary. It may use this foreground-only
+best-effort flow, but it does not prove a pinned executable identity or service readiness:
+
+1. Resolve one exact absolute `MAIN_HOME` and reuse it for every command. Honor an explicit
+   owner-selected home first; otherwise use the packaged runtime's platform default. The controlled
+   provider homes are `MAIN_HOME/state/providers/codex` and `MAIN_HOME/state/providers/claude`.
+2. Select only a Main provider supported on this host and verify the installed version against
+   `docs/release/SUPPORT_MATRIX.md`. `Auto` means choose a provider that passes the preview checks;
+   it does not mean accepting an installed but unauthenticated CLI. Native Windows must not select
+   Claude until the required fail-closed sandbox exists; use Codex or an explicitly configured
+   WSL2/container execution path.
+3. Create only the selected provider home through an owner-restricted filesystem boundary. Reject a
+   link, path alias, non-directory, or path that resolves somewhere else. Do not copy, inherit, or
+   read the user's global provider home.
+4. In the same owner environment that will keep the preview Main in the foreground:
+   - Codex: set the non-secret `CODEX_HOME` selector to the controlled Codex home, run
+     `codex login`, and require `codex login status` to pass.
+   - Claude: set the non-secret `CLAUDE_CONFIG_DIR` selector to the controlled Claude home, run
+     `claude auth login`, and require `claude auth status --json` to report ready.
+5. Never accept a provider token in an Agent prompt, argv, a temporary file, a log, or an unrelated
+   environment variable. The provider's own owner-interactive login flow writes directly into the
+   controlled home.
+6. Include the selected `--agent codex` or `--agent claude` option only after the preview version
+   and authentication checks pass. Start Main in that same foreground environment and continue to
+   local owner claim. Do not call the authenticated runtime-feature endpoint before an owner session
+   exists or imply that this preview path is deterministic.
+
+### Initialize Main
 
 1. Prefer SQLite. Use `init --database sqlite` unless the owner selects PostgreSQL. Main persists
    one top-level, non-secret `secretBackend` descriptor. Windows and macOS, plus Linux graphical
@@ -180,8 +245,13 @@ the token only when the requested persisted configuration is otherwise identical
    than adding a second preference to `main.json`.
 5. Open the local claim page when requested. Never print, log, or relay the claim token.
 6. Have the owner create the passphrase and save the ten one-time recovery codes. Confirm recovery
-   works independently of Discord.
-7. Enroll the fixed Main computer as its own co-located Worker before installing a persistent
+   works independently of Discord, then complete normal owner login.
+7. From the authenticated owner session, read `GET /api/v1/runtime/features` and require
+   `configurationAgent.status` to be `ready`. If the pinned version, authentication, capabilities,
+   or feature probe fails, return to the provider bootstrap above and leave an exact resumable
+   checklist. Do not enter Configuration Chat, simulate a Configuration Agent, or call the
+   first-milestone setup complete.
+8. Enroll the fixed Main computer as its own co-located Worker before installing a persistent
    service. Main is a Device and must remain eligible for normal headless, Agent, Knowledge, and
    Computer Use work; do not model it as a control-only exception.
 
@@ -257,24 +327,34 @@ mutations still require explicit owner approval.
 
 ## 6. Finish conversational setup
 
-Read `GET /api/v1/runtime/features` before presenting conversational setup. When
-`configurationAgent.status` is `unavailable`, explain that Configuration Chat is read-only in this
-build, leave the deterministic checklist below as resumable work, and do not invite the owner to
-type into it. Never simulate an Agent response locally.
+From an authenticated owner session, read `GET /api/v1/runtime/features` before presenting
+conversational setup. When `configurationAgent.status` is `unavailable`, explain that Configuration
+Chat is read-only in this build, leave the deterministic checklist below as resumable work, and
+return to the provider bootstrap in section 4. Do not attempt a provider login inside the
+unavailable chat, invite the owner to type into it, or simulate an Agent response locally.
 
 Only after the Configuration Agent feature reports `ready`, continue in Admin Configuration Chat,
 not a Task conversation:
 
 1. verify the current Device Facts and capabilities;
 2. propose Roles and Instructions with an exact diff;
-3. configure Codex, Claude, or generic adapters without exposing credentials; authenticate each
-   exact OpenDelegate-controlled Codex/Claude provider home interactively instead of copying or
+3. confirm the bootstrapped Main Adapter remains ready, then configure additional Worker or generic
+   adapters without exposing credentials. Authenticate each additional OpenDelegate-controlled
+   Codex/Claude provider home through the same owner-interactive rule instead of copying or
    inheriting the user's global provider home;
-4. inspect the Discord owner identities and Forum Channels that were bound during the first Main
-   initialization. Configuration Chat cannot add or replace that binding in the current build. For
-   an identical persisted binding, provision a new or rotated Discord bot token with
-   `init --discord-config ABSOLUTE_PATH --discord-token-stdin`, writing bytes directly to bounded
-   stdin as above. The Discord configuration retains only the alias and non-secret IDs.
+4. handle Discord according to `release-metadata.json`:
+   - When the owner declined Discord, preserve the explicit Discord-disabled state and continue. Do
+     not reject the installation or present Discord as required.
+   - When the owner selected Discord for an internal preview, inspect the owner identities and Forum
+     Channels bound during the first Main initialization. Configuration Chat cannot add or replace
+     that binding. For an identical persisted binding, provision a new or rotated Discord bot token
+     with `init --discord-config ABSOLUTE_PATH --discord-token-stdin`, writing bytes directly to
+     bounded stdin as above. The Discord configuration retains only the alias and non-secret IDs.
+   - When the owner selected Discord for release-candidate bytes, run the verified Configuration
+     Chat → Discord path in `docs/DISCORD_SETUP.md`. It must complete and validate the App, bot,
+     Community Forum, workflow-tag IDs, required intents and permissions, owner allowlist,
+     secret-safe token ingress, and durable binding. If the feature is unavailable or any validation
+     fails, stop and reject the candidate instead of falling back to the preview workaround.
 5. configure ordered routes per Device;
 6. enroll each additional Worker with a short-lived single-use grant (the fixed Main was already
    enrolled locally in section 4); and

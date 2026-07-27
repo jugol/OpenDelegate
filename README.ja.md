@@ -36,9 +36,10 @@ OpenDelegate は Agent とともにインストールします。Owner 向けの
 6. Device を追加する際は、Configuration Chat で有効期間の短い Single-use Device
    Grant を発行します。ファイルを開かずに Owner が管理する安全な方法で転送し、対象 Device の Agent に
    `skills/opendelegate-join/SKILL.md` の手順を実行するよう依頼してください。
-7. 独立した Task ごとに Discord
-   Forum へ新しい投稿を作成します。同じ投稿への返信は同じ Task と native Agent
-   Session を継続し、新しい投稿はクリーンな Context から始まります。
+7. Discord を設定した場合は、独立した Task ごとに Forum へ新しい投稿を作成します。同じ投稿への返信は同じ Task と native
+   Agent
+   Session を継続し、新しい投稿はクリーンな Context から始まります。Discord を使用しない場合や利用できない場合は、**Admin
+   Web → Tasks →新しいタスク**から作成します。
 
 Owner Recovery、追加 Device、最初の Task、トラブルシューティングを含む
 [完全なセットアップガイド（英語）](docs/GETTING_STARTED.md)を参照してください。
@@ -168,17 +169,8 @@ Round-trip、Clean Shutdown の限定的な Smoke Evidence が含まれます。
 
 Destination 名には `internal-preview` を含める必要があります。生成される `INTERNAL_PREVIEW.md` と
 `release-metadata.json` は、Bundle がサポート対象外であることと、正確な Release Evidence
-State を記録します。Foreground Runtime を確認するには、次を実行します。
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-Bundle をビルドした Platform に対応する Launcher を使用してください。内部プレビューは永続的な OS
+State を記録します。Discord とその他の Owner の選択を永続的な Main 設定の作成前に確定できるよう、組み立て済み Bundle は上記の Agent-first
+[クイックスタート](#クイックスタート)からのみ初期化してください。内部プレビューは Foreground で動作し、永続的な OS
 Service をインストールせず、Release Tag として公開してはいけません。
 
 Acceptance Criterion が 1 つでも未完了の場合、Production Build は意図的に失敗します。

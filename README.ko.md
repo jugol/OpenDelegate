@@ -38,8 +38,9 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
 6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
    파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
    `skills/opendelegate-join/SKILL.md`를 따르도록 요청합니다.
-7. 독립된 Task마다 Discord Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은 동일한 Task와
-   native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
+7. Discord를 설정했다면 독립된 Task마다 Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은
+   동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
+   Discord를 사용하지 않거나 사용할 수 없으면 **Admin Web → Tasks → 새 작업**에서 만듭니다.
 
 Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
 [전체 설정 가이드(영문)](docs/GETTING_STARTED.md)를 참고하십시오.
@@ -169,18 +170,9 @@ Claim/Login, Session-cookie Round-trip 및 정상 종료에 대한 제한된 Smo
 
 Destination 이름에는 `internal-preview`가 포함되어야 합니다. 생성된 `INTERNAL_PREVIEW.md`와
 `release-metadata.json`에는 Bundle이 지원되지 않는다는 사실과 정확한 Release Evidence 상태가
-기록됩니다. Foreground Runtime을 점검하려면 다음을 실행합니다.
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-Bundle이 빌드된 플랫폼에 맞는 Launcher를 사용하십시오. 내부 프리뷰는 지속성 있는 OS 서비스를
-설치하지 않으며 Release Tag로 게시해서는 안 됩니다.
+기록됩니다. Discord와 기타 Owner 선택이 지속성 있는 Main 설정 생성 전에 모두 확정되도록, 조립된
+Bundle은 위의 Agent-first [빠른 시작](#빠른-시작)을 통해서만 초기화하십시오. 내부 프리뷰는
+Foreground에서 실행되고 지속성 있는 OS 서비스를 설치하지 않으며 Release Tag로 게시해서는 안 됩니다.
 
 인수 기준이 하나라도 미완료이면 프로덕션 빌드는 의도적으로 실패합니다.
 

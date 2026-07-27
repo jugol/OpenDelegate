@@ -3,18 +3,28 @@
 OpenDelegate uses Discord as an owner-facing Task client: one Forum post maps to one durable Task,
 and replies in that post continue the same Task. Main remains the source of truth.
 
-> [!WARNING]
-> The current internal preview must receive its complete Discord binding during the **first** Main
-> initialization. It can rotate the token for the exact same binding later, but it cannot add or
-> replace a binding on an already initialized Main. Configuration Chat does not currently create a
-> Discord App, Forum, workflow tags, or a new binding.
+Discord is optional. If the owner declines it, keep the installation explicitly Discord-disabled,
+stop this guide, and create Tasks through **Admin Web → Tasks → New task**. The candidate validity
+rules below apply only after the owner selects Discord.
 
 > [!IMPORTANT]
-> Discord does not document a Developer Mode action for copying Forum tag IDs, and this preview has
-> no packaged tag-discovery command. Those IDs must be read from `available_tags` in Discord's
-> `GET /channels/{forumChannelId}` response through an owner-controlled, secret-safe API client.
-> Stop setup if that boundary is unavailable. Never expose the bot token to an Agent prompt, shell
-> argument, environment variable, temporary plaintext file, Discord message, or log.
+> Read `release-metadata.json` and use the path for its exact `supportStatus`. A
+> `release-candidate` remains unsupported until external promotion, but its bundled onboarding must
+> use the verified Configuration Chat path. A status beginning with `internal-preview` uses the
+> manual path below and remains unsupported.
+
+> [!WARNING]
+> When `supportStatus` begins with `internal-preview`, Main must receive its complete Discord binding
+> during the **first** initialization. It can rotate the token for the exact same binding later, but
+> it cannot add or replace a binding on an already initialized Main. Preview Configuration Chat does
+> not create a Discord App, Forum, workflow tags, or a new binding.
+
+> [!IMPORTANT]
+> The internal preview has no packaged tag-discovery command. Discord does not document a Developer
+> Mode action for copying Forum tag IDs, so preview setup must read them from `available_tags` in
+> Discord's `GET /channels/{forumChannelId}` response through an owner-controlled, secret-safe API
+> client. Stop preview setup if that boundary is unavailable. Never expose the bot token to an Agent
+> prompt, shell argument, environment variable, temporary plaintext file, Discord message, or log.
 
 The Discord UI can change. Use Discord's official
 [App quick start](https://docs.discord.com/developers/quick-start/getting-started),
@@ -22,7 +32,23 @@ The Discord UI can change. Use Discord's official
 and [Forum guide](https://support.discord.com/hc/en-us/articles/6208479917079-Forum-Channels-FAQ)
 alongside this OpenDelegate-specific checklist.
 
-## 1. Create the Discord App and bot
+## Release-candidate and promoted-release path
+
+When the owner selected Discord, open **Admin Web → Configuration Chat → Discord** and follow the
+verified Configuration Chat flow bundled with that candidate. It must guide the owner through
+Application and bot setup, Forum and workflow-tag selection, intents, least-privilege permissions,
+owner and Role allowlists, Secret-safe credential ingress, binding validation, and the first-Task
+probe.
+
+Do not apply the internal-preview manual workaround to release-candidate bytes. If Configuration
+Chat cannot complete the selected Discord flow or Discord cannot reach `ready / DISCORD_READY`, the
+candidate is invalid and must not be promoted or represented as supported.
+
+## Internal-preview manual path
+
+The remaining seven sections apply only when `supportStatus` begins with `internal-preview`.
+
+### 1. Create the Discord App and bot
 
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications), select
    **New Application**, and create a dedicated App for this OpenDelegate instance.
@@ -38,7 +64,7 @@ alongside this OpenDelegate-specific checklist.
 Do not reuse a general-purpose bot. A dedicated App keeps its token, intents, permissions, and
 revocation boundary specific to OpenDelegate.
 
-## 2. Prepare the Community server and Forum
+### 2. Prepare the Community server and Forum
 
 1. In Discord, open **Server Settings → Enable Community → Get Started** and complete Discord's
    safety checklist. Enabling Community does not itself make a server public.
@@ -63,7 +89,7 @@ revocation boundary specific to OpenDelegate.
 The configuration keys determine each tag's meaning; the runtime cannot validate the visible tag
 names. Create clear names and map each ID carefully.
 
-## 3. Configure intents and permissions
+### 3. Configure intents and permissions
 
 On **Developer Portal → Bot → Privileged Gateway Intents**, enable **Message Content Intent**.
 OpenDelegate connects with Gateway API v10 and requests:
@@ -98,7 +124,7 @@ See Discord's official [Gateway intent reference](https://docs.discord.com/devel
 and [thread permission model](https://docs.discord.com/developers/topics/threads) for the platform
 semantics.
 
-## 4. Collect the non-secret IDs
+### 4. Collect the non-secret IDs
 
 In Discord, open **User Settings → Advanced** and enable **Developer Mode**. Discord documents how
 to [copy user, server, and Channel IDs](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID).
@@ -122,7 +148,7 @@ pre-existing owner-approved credential provider that writes the authorization ma
 a bounded child process, but it must not receive or print the token itself. If that is not possible,
 leave Discord disabled and record tag discovery as an explicit setup blocker.
 
-## 5. Create the OpenDelegate binding
+### 5. Create the OpenDelegate binding
 
 Create the non-secret JSON outside the source checkout and bundle. This Windows example shows the
 complete strict schema:
@@ -175,17 +201,23 @@ descriptor shapes are:
 - headless Linux: `linux-systemd-credential-vault` with `credentialName` and an absolute
   `vaultRoot`; the service must provide `CREDENTIALS_DIRECTORY`.
 
-## 6. Provision the bot token
+### 6. Provision the bot token
 
-Pass the binding on the first Main initialization and write the bot token directly to bounded stdin:
+Pass the binding on the first Main initialization and write the bot token directly to bounded stdin.
+The init Agent uses this launcher on Windows:
 
-```text
-opendelegate init --discord-config ABSOLUTE_PATH --discord-token-stdin
+```powershell
+.\opendelegate.cmd init --discord-config ABSOLUTE_PATH --discord-token-stdin
 ```
 
-On Windows the packaged launcher is `opendelegate.cmd`; on macOS and Linux it is
-`./opendelegate`. Let the init Agent compose the full command with the database, listener,
-Device-channel, Artifact, Agent, and Admin options selected for this Main.
+On macOS and Linux:
+
+```sh
+./opendelegate init --discord-config ABSOLUTE_PATH --discord-token-stdin
+```
+
+Let the init Agent compose the full command with the database, listener, Device-channel, Artifact,
+Agent, and Admin options selected for this Main.
 
 The credential provider must write only the token bytes to the child process and close stdin.
 OpenDelegate copies those bytes into Main's managed Secret Store and persists only
@@ -193,11 +225,25 @@ OpenDelegate copies those bytes into Main's managed Secret Store and persists on
 and a new Discord token require separate provisioning invocations. Re-running `init` may rotate the
 token only when the requested persisted configuration is otherwise identical.
 
+When PostgreSQL and Discord both need a new Secret, use this exact order:
+
+1. Have the init Agent compose the complete Main configuration, including the final
+   `--discord-config` binding and PostgreSQL reference.
+2. Provision the PostgreSQL URI first. Run the complete command with `--database-uri-stdin` but
+   without `--discord-token-stdin`, let Main initialize with the complete Discord binding already
+   persisted, and then stop the foreground runtime cleanly.
+3. Re-run the same complete non-secret `init` options, omit `--database-uri-stdin`, add
+   `--discord-token-stdin`, and let the credential provider write only the bot token.
+
+Do not run a bare or Discord-free `init` as an intermediate step. Do not change any persisted
+binding, listener, database, Artifact, Device-channel, or Secret Store option between the two
+invocations.
+
 If Main was initialized without this binding, do not edit `main.json` or attempt to force
 `CONFIG_EXISTS` aside. This preview has no supported add-binding mutation. Keep Admin Web and the
 durable Task service available without Discord and record the missing product path.
 
-## 7. Verify the first Task
+### 7. Verify the first Task
 
 After Main, its co-located Worker, and Task execution are ready:
 

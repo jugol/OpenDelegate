@@ -34,8 +34,9 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
 6. 添加 Device 时，请通过 Configuration Chat 签发一份短期、一次性的 Device
    Grant。不要打开该文件；使用 Owner 控制的安全方式将其交给目标 Device，然后让该 Device 上的 Agent 按照
    `skills/opendelegate-join/SKILL.md` 操作。
-7. 每个独立 Task 都应在 Discord Forum 中创建一个新帖子。同一帖子的回复会延续同一 Task 及其 native
-   Agent Session；新帖子则从干净的 Context 开始。
+7. 如果已配置 Discord，请为每个独立 Task 创建一个 Forum 新帖子。同一帖子的回复会延续同一 Task 及其 native
+   Agent Session；新帖子则从干净的 Context 开始。如果 Discord 已禁用或不可用，请选择 **Admin Web →
+   Tasks → 新建任务**。
 
 请阅读[完整设置指南（英文）](docs/GETTING_STARTED.md)，其中包括 Owner 恢复、添加 Device、创建首个 Task 和故障排查。
 
@@ -151,17 +152,8 @@ metadata、依赖实例的法律清单、checksum，以及针对 CLI/service/Wor
 cookie 往返和正常关闭的有限 smoke evidence。
 
 目标名称必须包含 `internal-preview`。生成的 `INTERNAL_PREVIEW.md` 和 `release-metadata.json`
-会记录该 bundle 不受支持，并保留准确的 Release evidence 状态。如需检查前台 runtime：
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-请使用 bundle 构建平台对应的 launcher。内部预览版不会安装持久化的操作系统服务，也不得以 Release
+会记录该 bundle 不受支持，并保留准确的 Release evidence 状态。请仅通过上方 Agent-first
+[快速开始](#快速开始)初始化已组装的 bundle，以便在创建持久 Main 配置之前确定 Discord 和其他所有 Owner 选择。内部预览版以前台方式运行，不会安装持久化的操作系统服务，也不得以 Release
 tag 发布。
 
 只要有任何验收标准尚未完成，生产构建就会按设计失败：

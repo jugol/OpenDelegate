@@ -44,9 +44,10 @@ OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Ow
 6. Pour ajouter un Device, demandez à Configuration Chat un Device Grant de courte durée et à usage
    unique. Transférez le fichier sans l’ouvrir par un moyen sûr contrôlé par l’Owner, puis demandez
    à l’Agent du Device cible de suivre `skills/opendelegate-join/SKILL.md`.
-7. Créez une nouvelle publication Discord Forum pour chaque Task indépendante. Les réponses
+7. Si Discord est configuré, créez une publication Forum pour chaque Task indépendante. Les réponses
    poursuivent la même Task et sa native Agent Session ; une nouvelle publication démarre avec un
-   Context propre.
+   Context propre. Si Discord est désactivé ou indisponible, ouvrez **Admin Web → Tasks → Nouvelle
+   tâche**.
 
 Consultez le [guide de configuration complet (en anglais)](docs/GETTING_STARTED.md), qui couvre la
 récupération de l’Owner, les Devices supplémentaires, la première Task et le dépannage.
@@ -188,19 +189,11 @@ revendication/connexion de l’Owner, l’aller-retour du cookie de session et l
 
 Le nom de la destination doit contenir `internal-preview`. Les fichiers générés
 `INTERNAL_PREVIEW.md` et `release-metadata.json` indiquent que le bundle n’est pas pris en charge et
-conservent l’état exact des preuves de release. Pour inspecter le runtime au premier plan :
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-Utilisez le launcher correspondant à la plateforme sur laquelle le bundle a été construit. La
-préversion interne n’installe aucun service OS persistant et ne doit pas être publiée sous un tag de
-release.
+conservent l’état exact des preuves de release. Initialisez le bundle assemblé uniquement via le
+[Démarrage rapide](#démarrage-rapide) Agent-first ci-dessus afin que Discord et chaque choix de
+l’Owner soient résolus avant la création de la configuration durable du Main. La préversion interne
+s’exécute au premier plan, n’installe aucun service OS persistant et ne doit pas être publiée sous
+un tag de release.
 
 Un build de production échoue intentionnellement tant qu’un critère d’acceptation reste incomplet :
 

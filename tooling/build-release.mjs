@@ -333,6 +333,10 @@ const bundleReadmeCopy = Object.freeze({
     agentStep: "Open this directory in Codex or Claude and send this prompt:",
     candidateWarning:
       "This candidate is not a supported release until it is promoted through the documented release channel.",
+    candidateDiscordStep:
+      "If you want Discord, follow `docs/DISCORD_SETUP.md` and this candidate's verified Configuration Chat flow before creating your first Task.",
+    candidateConfigurationStep:
+      "After owner claim, finish Device, Agent, route, and Artifact setup in Admin Web Configuration Chat.",
     claimStep: "Complete owner claim and save all 10 one-time recovery codes.",
     cliIntroduction: "For deterministic CLI inspection:",
     configurationStep:
@@ -340,9 +344,10 @@ const bundleReadmeCopy = Object.freeze({
     documentation:
       "See `docs/release/README.md` for release semantics, `SECURITY.md` for private\nvulnerability reporting, and `THIRD_PARTY_NOTICES.json` for the complete bundled\ndependency legal inventory.",
     discordStep:
-      "If you want Discord, complete `docs/DISCORD_SETUP.md` before the first Main initialization. This preview cannot add or replace a Discord binding later.",
+      "If you want Discord, complete `docs/DISCORD_SETUP.md` before the first Main initialization. This package cannot add or replace a Discord binding later.",
     firstTaskStep:
-      "Create one Discord Forum post for each independent Task. Replies continue that Task and its native Agent session; a new post starts a clean context.",
+      "If Discord is configured, create one Discord Forum post for each independent Task. Replies continue that Task and its native Agent session; a new post starts a clean context. If Discord is unavailable or disabled, use Admin Web → Tasks → New task for a minimal Task.",
+    firstTaskHeading: "Create your first Task",
     grantIntroduction:
       "Ask Configuration Chat to create a short-lived, single-use grant on Main. The deterministic boundary is:",
     grantSafety:
@@ -374,6 +379,10 @@ const bundleReadmeCopy = Object.freeze({
     agentStep: "이 디렉터리를 Codex 또는 Claude에서 열고 다음 문장을 그대로 보내세요.",
     candidateWarning:
       "이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다.",
+    candidateDiscordStep:
+      "Discord를 사용하려면 첫 Task를 만들기 전에 `docs/DISCORD_SETUP.md`와 이 후보에서 검증된 Configuration Chat 절차를 따르세요.",
+    candidateConfigurationStep:
+      "Owner Claim 후 Admin Web Configuration Chat에서 Device, Agent, Route 및 Artifact 설정을 마치세요.",
     claimStep: "Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관하세요.",
     cliIntroduction: "결정적인 CLI 인터페이스를 확인하려면 다음을 사용하세요.",
     configurationStep:
@@ -381,9 +390,10 @@ const bundleReadmeCopy = Object.freeze({
     documentation:
       "릴리스 의미는 `docs/release/README.md`, 비공개 취약점 신고 방법은 `SECURITY.md`,\n번들된 의존성의 전체 법적 목록은 `THIRD_PARTY_NOTICES.json`을 확인하세요.",
     discordStep:
-      "Discord를 사용하려면 최초 Main 초기화 전에 `docs/DISCORD_SETUP.md`를 완료하세요. 현재 프리뷰는 나중에 Discord Binding을 추가하거나 교체할 수 없습니다.",
+      "Discord를 사용하려면 최초 Main 초기화 전에 `docs/DISCORD_SETUP.md`를 완료하세요. 이 패키지는 나중에 Discord Binding을 추가하거나 교체할 수 없습니다.",
     firstTaskStep:
-      "독립된 Task마다 Discord Forum 게시글을 하나 만드세요. 같은 게시글의 답글은 해당 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context로 시작합니다.",
+      "Discord를 설정했다면 독립된 Task마다 Discord Forum 게시글을 하나 만드세요. 같은 게시글의 답글은 해당 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context로 시작합니다. Discord를 사용하지 않거나 사용할 수 없으면 Admin Web → Tasks → 새 작업에서 만드세요.",
+    firstTaskHeading: "첫 Task 만들기",
     grantIntroduction:
       "Main의 Configuration Chat에서 수명이 짧은 일회용 Grant를 만드세요. 결정론적 경계는 다음과 같습니다.",
     grantSafety:
@@ -415,6 +425,10 @@ const bundleReadmeCopy = Object.freeze({
     agentStep: "このディレクトリを Codex または Claude で開き、次の文をそのまま送信します。",
     candidateWarning:
       "この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません。",
+    candidateDiscordStep:
+      "Discord を使用する場合は、最初の Task を作成する前に `docs/DISCORD_SETUP.md` と、この候補で検証済みの Configuration Chat 手順に従ってください。",
+    candidateConfigurationStep:
+      "Owner Claim 後、Admin Web の Configuration Chat で Device、Agent、Route、Artifact の設定を完了します。",
     claimStep: "Owner Claim を完了し、10 個の one-time Recovery Code をすべて安全に保存します。",
     cliIntroduction: "決定的な CLI インターフェースを確認するには、次を実行します。",
     configurationStep:
@@ -422,9 +436,10 @@ const bundleReadmeCopy = Object.freeze({
     documentation:
       "リリースの意味は `docs/release/README.md`、非公開の脆弱性報告は `SECURITY.md`、\nバンドルされた依存関係の完全な法的一覧は `THIRD_PARTY_NOTICES.json` を確認してください。",
     discordStep:
-      "Discord を使用する場合は、最初の Main 初期化前に `docs/DISCORD_SETUP.md` を完了します。現在のプレビューでは後から Discord Binding を追加または置換できません。",
+      "Discord を使用する場合は、最初の Main 初期化前に `docs/DISCORD_SETUP.md` を完了します。このパッケージでは後から Discord Binding を追加または置換できません。",
     firstTaskStep:
-      "独立した Task ごとに Discord Forum へ新しい投稿を作成します。同じ投稿への返信はその Task と native Agent Session を継続し、新しい投稿はクリーンな Context から始まります。",
+      "Discord を設定した場合は、独立した Task ごとに Discord Forum へ新しい投稿を作成します。同じ投稿への返信はその Task と native Agent Session を継続し、新しい投稿はクリーンな Context から始まります。Discord を使用しない場合や利用できない場合は、Admin Web → Tasks → 新しいタスクから作成します。",
+    firstTaskHeading: "最初の Task を作成",
     grantIntroduction:
       "Main の Configuration Chat で有効期間の短い Single-use Grant を作成します。決定的な境界は次のとおりです。",
     grantSafety:
@@ -457,6 +472,10 @@ const bundleReadmeCopy = Object.freeze({
     agentStep: "Ouvrez ce répertoire dans Codex ou Claude, puis envoyez exactement :",
     candidateWarning:
       "Ce candidat n’est pas une version prise en charge tant qu’il n’a pas été promu par le canal de publication documenté.",
+    candidateDiscordStep:
+      "Pour utiliser Discord, suivez `docs/DISCORD_SETUP.md` et le parcours Configuration Chat vérifié pour ce candidat avant de créer votre première Task.",
+    candidateConfigurationStep:
+      "Après l’accès Owner, terminez la configuration des Devices, Agents, Routes et Artifacts dans Configuration Chat d’Admin Web.",
     claimStep:
       "Revendiquez l’accès Owner et conservez en lieu sûr les 10 codes de récupération à usage unique.",
     cliIntroduction: "Pour inspecter l’interface CLI déterministe :",
@@ -465,9 +484,10 @@ const bundleReadmeCopy = Object.freeze({
     documentation:
       "Consultez `docs/release/README.md` pour la sémantique des releases, `SECURITY.md`\npour signaler une vulnérabilité en privé et `THIRD_PARTY_NOTICES.json` pour\nl’inventaire juridique complet des dépendances incluses.",
     discordStep:
-      "Pour utiliser Discord, terminez `docs/DISCORD_SETUP.md` avant la première initialisation du Main. Cette préversion ne peut ni ajouter ni remplacer un Binding Discord ensuite.",
+      "Pour utiliser Discord, terminez `docs/DISCORD_SETUP.md` avant la première initialisation du Main. Ce package ne peut ni ajouter ni remplacer un Binding Discord ensuite.",
     firstTaskStep:
-      "Créez une publication Discord Forum pour chaque Task indépendante. Les réponses poursuivent cette Task et sa native Agent Session ; une nouvelle publication démarre avec un Context propre.",
+      "Si Discord est configuré, créez une publication Discord Forum pour chaque Task indépendante. Les réponses poursuivent cette Task et sa native Agent Session ; une nouvelle publication démarre avec un Context propre. Si Discord est désactivé ou indisponible, ouvrez Admin Web → Tasks → Nouvelle tâche.",
+    firstTaskHeading: "Créer votre première Task",
     grantIntroduction:
       "Demandez à Configuration Chat de créer sur Main un Grant de courte durée et à usage unique. La frontière déterministe est :",
     grantSafety:
@@ -500,6 +520,10 @@ const bundleReadmeCopy = Object.freeze({
     agentStep: "Abre este directorio en Codex o Claude y envía exactamente:",
     candidateWarning:
       "Este candidato no es una versión con soporte hasta que se promocione mediante el canal de publicación documentado.",
+    candidateDiscordStep:
+      "Para usar Discord, sigue `docs/DISCORD_SETUP.md` y el flujo de Configuration Chat verificado para este candidato antes de crear tu primera Task.",
+    candidateConfigurationStep:
+      "Después de reclamar el acceso del Owner, completa la configuración de Devices, Agents, Routes y Artifacts en Configuration Chat de Admin Web.",
     claimStep:
       "Reclama el acceso de Owner y guarda de forma segura los 10 códigos de recuperación de un solo uso.",
     cliIntroduction: "Para inspeccionar la interfaz CLI determinista:",
@@ -508,9 +532,10 @@ const bundleReadmeCopy = Object.freeze({
     documentation:
       "Consulta `docs/release/README.md` para conocer la semántica de las releases,\n`SECURITY.md` para informar de vulnerabilidades en privado y\n`THIRD_PARTY_NOTICES.json` para ver el inventario legal completo de las dependencias incluidas.",
     discordStep:
-      "Para usar Discord, completa `docs/DISCORD_SETUP.md` antes de la primera inicialización del Main. Esta vista previa no puede añadir ni sustituir después un Binding de Discord.",
+      "Para usar Discord, completa `docs/DISCORD_SETUP.md` antes de la primera inicialización del Main. Este paquete no puede añadir ni sustituir después un Binding de Discord.",
     firstTaskStep:
-      "Crea una publicación en Discord Forum para cada Task independiente. Las respuestas continúan esa Task y su native Agent Session; una publicación nueva empieza con un Context limpio.",
+      "Si Discord está configurado, crea una publicación en Discord Forum para cada Task independiente. Las respuestas continúan esa Task y su native Agent Session; una publicación nueva empieza con un Context limpio. Si Discord está desactivado o no está disponible, abre Admin Web → Tasks → Nueva tarea.",
+    firstTaskHeading: "Crear tu primera Task",
     grantIntroduction:
       "Pide a Configuration Chat que cree en Main un Grant de corta duración y un solo uso. El límite determinista es:",
     grantSafety:
@@ -542,6 +567,10 @@ const bundleReadmeCopy = Object.freeze({
     addDeviceHeading: "添加另一台 Device",
     agentStep: "在 Codex 或 Claude 中打开此目录，并原样发送以下内容：",
     candidateWarning: "在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release。",
+    candidateDiscordStep:
+      "如需使用 Discord，请在创建首个 Task 前按照 `docs/DISCORD_SETUP.md` 和此候选版本已验证的 Configuration Chat 流程完成设置。",
+    candidateConfigurationStep:
+      "完成 Owner Claim 后，在 Admin Web 的 Configuration Chat 中设置 Device、Agent、Route 和 Artifact。",
     claimStep: "完成 Owner Claim，并妥善保存全部 10 个一次性恢复代码。",
     cliIntroduction: "如需检查确定性的 CLI 界面，请运行：",
     configurationStep:
@@ -549,9 +578,10 @@ const bundleReadmeCopy = Object.freeze({
     documentation:
       "Release 语义请参阅 `docs/release/README.md`，私下报告安全漏洞请参阅\n`SECURITY.md`，随附依赖项的完整法律清单请参阅 `THIRD_PARTY_NOTICES.json`。",
     discordStep:
-      "如需使用 Discord，请在首次 Main 初始化之前完成 `docs/DISCORD_SETUP.md`。当前预览版无法在之后添加或替换 Discord Binding。",
+      "如需使用 Discord，请在首次 Main 初始化之前完成 `docs/DISCORD_SETUP.md`。此软件包无法在之后添加或替换 Discord Binding。",
     firstTaskStep:
-      "每个独立 Task 都应在 Discord Forum 中创建一个新帖子。同一帖子的回复会继续该 Task 及其 Agent 原生 Session；新帖子则从干净的 Context 开始。",
+      "如果已配置 Discord，请为每个独立 Task 创建一个 Discord Forum 新帖子。同一帖子的回复会继续该 Task 及其 Agent 原生 Session；新帖子则从干净的 Context 开始。如果 Discord 已禁用或不可用，请选择 Admin Web → Tasks → 新建任务。",
+    firstTaskHeading: "创建首个 Task",
     grantIntroduction:
       "请让 Main 上的 Configuration Chat 创建一份短期、一次性的 Grant。确定性边界为：",
     grantSafety:
@@ -602,7 +632,7 @@ export function renderBundleReadme(
     throw new Error(`Unsupported bundle README locale: ${String(locale)}.`);
   }
   const preview = supportStatus.startsWith("internal-preview");
-  const launcher = platform === "win32" ? "opendelegate.cmd" : "./opendelegate";
+  const launcher = platform === "win32" ? ".\\opendelegate.cmd" : "./opendelegate";
   const statusLabel = preview ? copy.previewTitle : copy.candidateTitle;
   const firstStep = preview ? copy.previewWarning : copy.candidateWarning;
 
@@ -619,14 +649,13 @@ ${copy.supportStatusLabel}: \`${supportStatus}\`.
 1. ${firstStep}
 2. ${copy.integrityStep}
 3. ${copy.stateStep}
-4. ${copy.discordStep}
-5. ${copy.agentStep}
+4. ${copy.agentStep}
 
    > ${bundleInitAgentPrompt}
 
-6. ${copy.claimStep}
-7. ${copy.configurationStep}
-8. ${copy.firstTaskStep}
+5. ${preview ? copy.discordStep : copy.claimStep}
+6. ${preview ? copy.claimStep : copy.candidateConfigurationStep}
+7. ${preview ? copy.configurationStep : copy.candidateDiscordStep}
 
 ## ${copy.addDeviceHeading}
 
@@ -642,13 +671,16 @@ ${copy.joinStep}
 
 > ${bundleJoinAgentPrompt}
 
+## ${copy.firstTaskHeading}
+
+${copy.firstTaskStep}
+
 ${copy.guides}
 
 ${copy.cliIntroduction}
 
 \`\`\`text
 ${launcher} help
-${launcher} init
 ${launcher} status
 \`\`\`
 

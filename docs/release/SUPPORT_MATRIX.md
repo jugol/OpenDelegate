@@ -109,14 +109,34 @@ source additions remain a distinct protected action. This is implementation
 evidence, not a supported-manager claim: clean-host install, privilege, and
 existing-source behavior still require target-platform lab proof before release.
 
+## Provider command identity release blocker
+
+The current Main Agent configuration persists only the provider selection. The
+production adapters resolve Codex or Claude again from the process environment at
+runtime; Windows Codex may also resolve an npm `codex.js` entrypoint and pair it
+with the bundled Node executable. An init Agent that runs `codex login` or
+`claude auth login` directly therefore cannot prove that foreground Main, a later
+service Main, and the interactive login all used one canonical executable and
+prefix.
+
+This is acceptable only for a marked, foreground-only internal preview. It is a
+release blocker for `release-candidate` and supported channels. A candidate must
+provide one packaged provider login and probe boundary that shares Main's resolver,
+authenticates the exact controlled provider home through owner-interactive stdio,
+persists the canonical command identity and tested version, and revalidates both
+on every foreground and service start. Until that boundary and its cross-platform
+proof exist, a successful provider status command or
+`configurationAgent.status=ready` observation must not be described as pinned
+service readiness.
+
 ## Runtime and integration pins
 
 | Integration | First-milestone pin |
 | --- | --- |
 | Bundled Node.js | 24.18.0, verified against the repository-pinned official archive digest |
 | pnpm | 11.15.1 |
-| Codex CLI fallback | 0.145.0 |
-| Claude Code CLI fallback | 2.1.205 |
+| Codex App Server and CLI | 0.145.0 |
+| Claude Agent SDK and authentication CLI | SDK 0.3.205; Claude Code 2.1.205 |
 | Discord API | v10 |
 | Graphical Linux reference | Ubuntu 24.04.4 LTS, GNOME, Wayland |
 

@@ -42,9 +42,10 @@ OpenDelegate se instala con un Agent; el recorrido de instalación del Owner no 
 6. Para añadir un Device, solicita en Configuration Chat un Device Grant de corta duración y un solo
    uso. Transfiere el archivo sin abrirlo mediante un mecanismo seguro controlado por el Owner y
    pide al Agent del Device de destino que siga `skills/opendelegate-join/SKILL.md`.
-7. Crea una nueva publicación en Discord Forum para cada Task independiente. Las respuestas
-   continúan la misma Task y su native Agent Session; una publicación nueva empieza con un Context
-   limpio.
+7. Si Discord está configurado, crea una publicación en el Forum para cada Task independiente. Las
+   respuestas continúan la misma Task y su native Agent Session; una publicación nueva empieza con
+   un Context limpio. Si Discord está desactivado o no está disponible, abre **Admin Web → Tasks →
+   Nueva tarea**.
 
 Consulta la [guía de configuración completa (en inglés)](docs/GETTING_STARTED.md), que incluye la
 recuperación del Owner, Devices adicionales, la primera Task y la resolución de problemas.
@@ -186,18 +187,11 @@ limpio.
 
 El nombre del destino debe contener `internal-preview`. Los archivos generados `INTERNAL_PREVIEW.md`
 y `release-metadata.json` indican que el bundle no tiene soporte y conservan el estado exacto de la
-evidencia de release. Para inspeccionar el runtime en primer plano:
-
-```powershell
-.\opendelegate.cmd init --open
-```
-
-```sh
-./opendelegate init --open
-```
-
-Utiliza el launcher correspondiente a la plataforma en la que se compiló el bundle. La vista previa
-interna no instala un servicio persistente del SO y no debe publicarse bajo un tag de release.
+evidencia de release. Inicializa el bundle ensamblado únicamente mediante el
+[Inicio rápido](#inicio-rápido) Agent-first anterior, para que Discord y todas las decisiones del
+Owner queden resueltos antes de crear la configuración duradera del Main. La vista previa interna se
+ejecuta en primer plano, no instala un servicio persistente del SO y no debe publicarse bajo un tag
+de release.
 
 Una compilación de producción falla intencionadamente mientras algún criterio de aceptación esté
 incompleto:
