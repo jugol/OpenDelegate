@@ -127,7 +127,7 @@ textarea:focus-visible,
   top: 0;
   z-index: 5;
   min-width: 0;
-  height: 100%;
+  height: calc(100vh - 48px);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -135,6 +135,10 @@ textarea:focus-visible,
   padding: 24px 16px;
   border-right: 1px solid var(--color-border);
   background: var(--color-rail);
+}
+
+.runtime-boundary-notice[hidden] + .app-frame .device-rail {
+  height: 100vh;
 }
 
 .brand {
