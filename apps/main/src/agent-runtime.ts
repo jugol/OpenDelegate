@@ -264,6 +264,27 @@ export async function resolveMainAgentComposition(
     const unavailableProvider = reenableFromDisabled
       ? requested
       : (existing?.provider ?? (requested === "auto" ? undefined : requested));
+    if (
+      (requestedCodexHome !== undefined || requestedClaudeHome !== undefined) &&
+      unavailableProvider !== undefined &&
+      unavailableProvider !== "disabled"
+    ) {
+      const unavailableConfiguration = selectionFor(unavailableProvider, providerHomes);
+      if (existing === undefined) {
+        await persistSelection(
+          selectionPath,
+          unavailableConfiguration,
+          options.paths.sourceCheckoutRoot,
+        );
+      } else if (JSON.stringify(existing) !== JSON.stringify(unavailableConfiguration)) {
+        await replaceSelection(
+          selectionPath,
+          existing,
+          unavailableConfiguration,
+          options.paths.sourceCheckoutRoot,
+        );
+      }
+    }
     return {
       status: "unavailable",
       ...(unavailableProvider === undefined ? {} : { provider: unavailableProvider }),

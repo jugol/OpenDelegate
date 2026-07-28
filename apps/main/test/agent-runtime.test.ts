@@ -131,6 +131,48 @@ test("explicit shared provider homes upgrade one selection and survive restart",
   });
 });
 
+test("a shared Claude home survives signed-out setup for owner reconnect", async (context) => {
+  const paths = await runtimePaths(context);
+  const sharedClaudeHome = await mkdtemp(join(tmpdir(), "opendelegate-claude-ssot-"));
+  context.after(async () => {
+    await rm(sharedClaudeHome, { force: true, recursive: true });
+  });
+  const observedHomes: string[] = [];
+  const createAdapter = (
+    provider: "codex" | "claude",
+    _leaseStore: unknown,
+    providerHome: string,
+  ): AgentAdapter => {
+    observedHomes.push(providerHome);
+    return new ProbeOnlyAdapter(
+      probe(provider, provider === "claude" && observedHomes.length === 1 ? "signed-out" : "ready"),
+    );
+  };
+
+  const signedOut = await resolveMainAgentComposition({
+    paths,
+    requestedProvider: "claude",
+    requestedClaudeHome: sharedClaudeHome,
+    createAdapter,
+  });
+  const recovered = await resolveMainAgentComposition({
+    paths,
+    createAdapter,
+  });
+
+  assert.equal(signedOut.status, "unavailable");
+  assert.equal(signedOut.code, "AGENT_AUTH_NOT_READY");
+  assert.equal(recovered.status, "ready");
+  assert.equal(recovered.provider, "claude");
+  assert.deepEqual(observedHomes, [sharedClaudeHome, sharedClaudeHome]);
+  assert.deepEqual(JSON.parse(await readFile(join(paths.configDirectory, "agent.json"), "utf8")), {
+    schemaVersion: 3,
+    provider: "claude",
+    codexHome: null,
+    claudeHome: sharedClaudeHome,
+  });
+});
+
 test("auto leaves selection resumable when no provider is ready", async (context) => {
   const paths = await runtimePaths(context);
   const unavailable = await resolveMainAgentComposition({

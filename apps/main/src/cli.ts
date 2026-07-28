@@ -395,10 +395,13 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   if (codexHome !== undefined && agentProvider !== "codex") {
     throw new MainRuntimeError("CONFIG_INVALID", "--codex-home requires --agent codex.");
   }
-  if (claudeHome !== undefined && (agentProvider === undefined || agentProvider === "disabled")) {
+  if (
+    claudeHome !== undefined &&
+    (agentProvider === undefined || agentProvider === "auto" || agentProvider === "disabled")
+  ) {
     throw new MainRuntimeError(
       "CONFIG_INVALID",
-      "--claude-home requires an explicit non-disabled --agent selection.",
+      "--claude-home requires --agent codex or --agent claude.",
     );
   }
   if (discordTokenStdin && discordConfigurationFile === undefined) {

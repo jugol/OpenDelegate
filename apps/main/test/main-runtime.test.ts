@@ -142,6 +142,10 @@ test("CLI init accepts secret-free database and exact HTTPS listener configurati
     /requires --agent codex/,
   );
   assert.throws(
+    () => parseArguments(["init", "--agent", "auto", "--claude-home", "/srv/claude-ssot"]),
+    /requires --agent codex or --agent claude/,
+  );
+  assert.throws(
     () => parseArguments(["serve", "--codex-home", "/srv/codex-ssot"]),
     /available only with init/,
   );
