@@ -18,7 +18,12 @@ export function mapDiscordThread(value: unknown): DiscordThread {
     throw invalid("Discord returned a channel that is not a public thread.");
   }
   const metadata = requireRecord(record["thread_metadata"], "thread metadata");
-  const tags = requireSnowflakeArray(record["applied_tags"], "applied tags", 5);
+  const appliedTags = record["applied_tags"];
+  const tags = requireSnowflakeArray(
+    appliedTags === undefined ? [] : appliedTags,
+    "applied tags",
+    5,
+  );
   const name = requireString(record, "name", 1, 100);
   return Object.freeze({
     id: requireSnowflake(record, "id"),
@@ -46,7 +51,7 @@ export function discordThreadArchiveTimestamp(value: unknown): string | undefine
   return timestamp;
 }
 
-export function mapDiscordMessage(value: unknown): DiscordMessage {
+export function mapDiscordMessage(value: unknown, expectedGuildId?: string): DiscordMessage {
   const record = requireRecord(value, "message");
   const authorRecord = requireRecord(record["author"], "message author");
   const member = optionalRecord(record["member"], "message member");
@@ -59,13 +64,34 @@ export function mapDiscordMessage(value: unknown): DiscordMessage {
 
   return Object.freeze({
     id: requireSnowflake(record, "id"),
-    guildId: requireSnowflake(record, "guild_id"),
+    guildId: resolveMessageGuildId(record, expectedGuildId),
     channelId: requireSnowflake(record, "channel_id"),
     author: mapAuthor(authorRecord, member),
     content: requireString(record, "content", 0, MAX_MESSAGE_CONTENT_CHARACTERS),
     attachments: Object.freeze(attachments.map(mapAttachment)),
     createdAtMs,
   });
+}
+
+function resolveMessageGuildId(
+  record: Record<string, unknown>,
+  expectedGuildId: string | undefined,
+): string {
+  if (expectedGuildId !== undefined && !/^[0-9]{17,20}$/u.test(expectedGuildId)) {
+    throw invalid("The configured Discord Guild identifier is invalid.");
+  }
+  const value = record["guild_id"];
+  if (value === undefined) {
+    if (expectedGuildId === undefined) {
+      throw invalid("Discord returned an invalid guild_id identifier.");
+    }
+    return expectedGuildId;
+  }
+  const guildId = requireSnowflake(record, "guild_id");
+  if (expectedGuildId !== undefined && guildId !== expectedGuildId) {
+    throw invalid("Discord returned a message from a different Guild.");
+  }
+  return guildId;
 }
 
 export function mapDiscordInteraction(value: unknown, receivedAtMs: number): DiscordInteraction {

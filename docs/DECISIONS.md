@@ -1023,6 +1023,13 @@ typed-tool marker remains the mutation replay boundary defined by D-058.
 
 **Decision:** An owner-created post in an approved Discord Forum starts exactly one
 Task without an owner-applied Intake tag. Workflow tags are bot-owned projections.
+Discord may omit `applied_tags` entirely for a thread with no tags; the wire boundary
+normalizes only that absent field to an empty tag set while continuing to reject
+null, malformed, oversized, or non-Snowflake tag data.
+Discord REST message responses may likewise omit their otherwise-known `guild_id`.
+The HTTP port supplies its configured Guild ID only when that field is absent and
+rejects any present mismatched or malformed Guild ID; Gateway messages remain
+self-identifying.
 When Gateway events arrive before a new thread or starter message is readable over
 Discord HTTP, the Adapter does not advance its durable or in-connection processed
 cursor. Gateway Resume replays the dispatch under bounded reconnect backoff, while

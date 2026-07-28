@@ -643,6 +643,7 @@ export async function createProductionDiscordRuntime(
       options.api ??
       new FetchDiscordApiPort({
         applicationId: options.config.applicationId,
+        guildId: options.config.guildId,
         productVersion: options.productVersion,
         credentialProvider,
         interactionTokenVault,

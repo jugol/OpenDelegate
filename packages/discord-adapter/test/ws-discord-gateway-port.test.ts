@@ -330,7 +330,9 @@ test("the Gateway wire mapper accepts only reviewed thread and component-interac
     t: "READY",
     d: { session_id: SESSION_ID, resume_gateway_url: RESUME_URL },
   });
-  socket.emitJson({ op: 0, s: 2, t: "THREAD_CREATE", d: rawThread(false) });
+  const taglessThread = rawThread(false) as Record<string, unknown>;
+  delete taglessThread["applied_tags"];
+  socket.emitJson({ op: 0, s: 2, t: "THREAD_CREATE", d: taglessThread });
   socket.emitJson({ op: 0, s: 3, t: "THREAD_UPDATE", d: rawThread(true) });
   socket.emitJson({
     op: 0,
@@ -372,6 +374,10 @@ test("the Gateway wire mapper accepts only reviewed thread and component-interac
   assert.equal(
     dispatches[3]?.type === "INTERACTION_CREATE" && dispatches[3].interaction.messageAuthorId,
     BOT_ID,
+  );
+  assert.deepEqual(
+    dispatches[0]?.type === "THREAD_CREATE" ? dispatches[0].thread.appliedTagIds : undefined,
+    [],
   );
   assert.equal(JSON.stringify(fixture.diagnostics).includes("transient-interaction-token"), false);
   await connection.close();

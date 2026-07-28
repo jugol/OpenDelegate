@@ -54,6 +54,7 @@ export interface DiscordGatewayDiscovery {
 
 export interface FetchDiscordApiPortOptions {
   readonly applicationId: string;
+  readonly guildId?: string;
   readonly productVersion: string;
   readonly credentialProvider: DiscordBotCredentialProvider;
   readonly interactionTokenVault: DiscordInteractionTokenVault;
@@ -71,6 +72,7 @@ interface DiscordRequest {
 
 export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscovery {
   readonly #applicationId: string;
+  readonly #guildId: string | undefined;
   readonly #credentialProvider: DiscordBotCredentialProvider;
   readonly #interactionTokenVault: DiscordInteractionTokenVault;
   readonly #fetch: DiscordFetch;
@@ -80,6 +82,9 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
 
   public constructor(options: FetchDiscordApiPortOptions) {
     assertSnowflake(options.applicationId, "Discord Application ID");
+    if (options.guildId !== undefined) {
+      assertSnowflake(options.guildId, "Discord Guild ID");
+    }
     assertProductVersion(options.productVersion);
     assertBoundedInteger(
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -94,6 +99,7 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       "Discord maximum response size",
     );
     this.#applicationId = options.applicationId;
+    this.#guildId = options.guildId;
     this.#credentialProvider = options.credentialProvider;
     this.#interactionTokenVault = options.interactionTokenVault;
     this.#fetch = options.fetch ?? fetch;
@@ -239,6 +245,7 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     assertSnowflake(messageId, "Discord message ID");
     return mapDiscordMessage(
       await this.#botJson("GET", `/channels/${threadId}/messages/${messageId}`),
+      this.#guildId,
     );
   }
 
@@ -325,7 +332,9 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       "message page",
       MESSAGE_PAGE_LIMIT,
     );
-    const messages = rawMessages.map(mapDiscordMessage).sort(compareSnowflakeMessage);
+    const messages = rawMessages
+      .map((message) => mapDiscordMessage(message, this.#guildId))
+      .sort(compareSnowflakeMessage);
     const nextAfter = messages.at(-1)?.id;
     if (rawMessages.length === MESSAGE_PAGE_LIMIT && nextAfter === undefined) {
       throw invalidResponse("Discord message pagination did not provide a cursor.");
@@ -367,6 +376,7 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       thread: mapDiscordThread(response),
       starterMessage: mapDiscordMessage(
         requireRecord(response["message"], "created Forum starter message"),
+        this.#guildId,
       ),
     });
   }

@@ -172,6 +172,99 @@ test("the HTTP port paginates archived threads and messages with bounded oldest-
   );
 });
 
+test("the HTTP port accepts Discord's omitted applied_tags field for a tagless Forum thread", async () => {
+  const taglessThread = rawThread(THREAD_ID, false, "2026-07-24T00:00:00.000Z") as Record<
+    string,
+    unknown
+  >;
+  delete taglessThread["applied_tags"];
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("tagless-thread-secret"),
+    fetch: routeFetch([], {
+      [`GET /api/v10/guilds/${GUILD_ID}/threads/active`]: json({
+        threads: [taglessThread],
+      }),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:tagless",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const threads = await api.listActiveThreads(GUILD_ID);
+
+  assert.equal(threads.length, 1);
+  assert.deepEqual(threads[0]?.appliedTagIds, []);
+});
+
+test("the HTTP port still rejects a present null applied_tags field", async () => {
+  const malformedThread = rawThread(THREAD_ID, false, "2026-07-24T00:00:00.000Z") as Record<
+    string,
+    unknown
+  >;
+  malformedThread["applied_tags"] = null;
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("malformed-tag-secret"),
+    fetch: routeFetch([], {
+      [`GET /api/v10/guilds/${GUILD_ID}/threads/active`]: json({
+        threads: [malformedThread],
+      }),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:malformed-tag",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  await assert.rejects(api.listActiveThreads(GUILD_ID), hasDiscordApiCode("INVALID_RESPONSE"));
+});
+
+test("the HTTP port restores its configured Guild ID when a REST message omits guild_id", async () => {
+  const starter = rawMessage(THREAD_ID, "Tagless starter") as Record<string, unknown>;
+  delete starter["guild_id"];
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    guildId: GUILD_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("message-guild-secret"),
+    fetch: routeFetch([], {
+      [`GET /api/v10/channels/${THREAD_ID}/messages/${THREAD_ID}`]: json(starter),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:message-guild",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const message = await api.getMessage(THREAD_ID, THREAD_ID);
+
+  assert.equal(message.guildId, GUILD_ID);
+});
+
+test("the HTTP port rejects a REST message that names another Guild", async () => {
+  const starter = rawMessage(THREAD_ID, "Wrong Guild") as Record<string, unknown>;
+  starter["guild_id"] = "100000000000000099";
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    guildId: GUILD_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("wrong-guild-secret"),
+    fetch: routeFetch([], {
+      [`GET /api/v10/channels/${THREAD_ID}/messages/${THREAD_ID}`]: json(starter),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:wrong-guild",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  await assert.rejects(api.getMessage(THREAD_ID, THREAD_ID), hasDiscordApiCode("INVALID_RESPONSE"));
+});
+
 test("Components v2 writes use a deterministic enforced nonce no longer than 25 characters", async () => {
   const requests: CapturedRequest[] = [];
   const fetch = routeFetch(requests, {

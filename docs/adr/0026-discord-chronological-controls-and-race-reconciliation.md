@@ -28,6 +28,16 @@ reconciliation remains an idempotent second recovery surface. Task creation rema
 independent of owner-applied workflow tags, and the Adapter projects Intake after the
 binding exists.
 
+Discord's HTTP and Gateway thread payloads may omit `applied_tags` when no tag is
+applied. The shared wire mapper treats only an absent field as an empty tag set. A
+present value must still be a bounded array of valid Snowflake IDs.
+
+Discord REST message endpoints may omit `guild_id` even though the request is for a
+thread already resolved inside the configured Guild. The HTTP port passes that
+configured Guild ID to the shared message mapper as an absent-field fallback. A
+present Guild ID must be valid and equal the configured Guild; Gateway messages do
+not receive this fallback.
+
 For every accepted owner message, the Adapter enqueues one deterministic
 `post-task-update` outbox record whose idempotency key derives from that inbound
 message. The resulting ordinary reply acknowledges current work and carries controls
@@ -83,6 +93,10 @@ messages not authored by the configured bot cannot invoke controls.
 - A starter/thread event race that initially returns `404` leaves the dispatch cursor
   unchanged, then replay creates exactly one Task and projects Intake after the
   resources become visible.
+- A live tagless thread whose payload omits `applied_tags` is ingested with an empty
+  tag set; malformed present tag data is rejected.
+- A REST starter message with no `guild_id` inherits the configured Guild, while a
+  present mismatched Guild is rejected.
 - Duplicate delivery of an owner message creates exactly one chronological working
   acknowledgement with running controls.
 - A chronological failed update contains Retry.
