@@ -765,6 +765,9 @@ may request a transition but cannot manufacture a state outside the transition r
     chat is closed or the Admin page is hidden, Admin Web retains the conversation
     across section navigation and exposes a localized unread badge, visible summary,
     and accessible live notification. Opening the chat marks those responses read.
+    While an Agent turn is in flight, the transcript itself shows a localized
+    Agent-authored-position activity message; a disabled composer placeholder is not
+    the only progress indication.
 
 ### FR-16 — Policy and approvals
 

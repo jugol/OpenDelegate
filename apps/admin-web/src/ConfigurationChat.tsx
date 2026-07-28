@@ -128,6 +128,7 @@ export function ConfigurationChat({
   const [secureCredential, setSecureCredential] = useState("");
   const [storedReference, setStoredReference] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [agentResponding, setAgentResponding] = useState(false);
   const activeSetup = setupGoal === null ? null : guidedSetupDescriptor(setupGoal, copy);
   const [conversationMessages, setConversationMessages] = useState<readonly ChatMessage[]>(() => [
     onSendMessage === undefined
@@ -185,6 +186,7 @@ export function ConfigurationChat({
         ]);
       }
       setPending(true);
+      setAgentResponding(true);
       try {
         const response = await onSendMessage(message);
         appendAgentMessage({
@@ -202,6 +204,7 @@ export function ConfigurationChat({
         });
         return false;
       } finally {
+        setAgentResponding(false);
         setPending(false);
       }
     },
@@ -378,6 +381,7 @@ export function ConfigurationChat({
         },
       ]);
       try {
+        setAgentResponding(true);
         const response = await onSendMessage(referenceMessage);
         appendAgentMessage({
           id: `message-agent-secure-reference-${sequence + 1}`,
@@ -399,6 +403,7 @@ export function ConfigurationChat({
         systemMessageKey: "secureStoreFailed",
       });
     } finally {
+      setAgentResponding(false);
       material.fill(0);
       setPending(false);
     }
@@ -615,6 +620,26 @@ export function ConfigurationChat({
                 </div>
               </article>
             ))}
+            {agentResponding ? (
+              <article
+                aria-label={copy.chat.waitingPlaceholder}
+                className="chat-message chat-message--agent chat-message--activity"
+              >
+                <span className="agent-avatar">
+                  <Network aria-hidden="true" />
+                </span>
+                <div className="chat-message-body">
+                  <div className="chat-agent-activity">
+                    <span aria-hidden="true" className="chat-agent-activity-dots">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                    <span>{copy.chat.waitingPlaceholder}</span>
+                  </div>
+                </div>
+              </article>
+            ) : null}
           </div>
 
           {session.proposal !== null && proposalState !== "dismissed" ? (

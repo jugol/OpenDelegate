@@ -513,6 +513,56 @@ describe("first-run Device overview", () => {
     expect(document.activeElement).toBe(composer);
   });
 
+  it("shows an in-conversation Agent activity message while a response is pending", async () => {
+    let resolveResponse!: (value: {
+      readonly content: string;
+      readonly suggestedActions: readonly [];
+    }) => void;
+    const response = new Promise<{
+      readonly content: string;
+      readonly suggestedActions: readonly [];
+    }>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const user = userEvent.setup();
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        executionAvailable
+        initialChatOpen
+        onConfigurationMessage={() => response}
+      />,
+    );
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "Inspect the current Discord binding.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    const conversation = screen.getByRole("log", { name: "Configuration conversation" });
+    expect(
+      within(conversation).getByRole("article", {
+        name: "Waiting for Configuration Agent…",
+      }),
+    ).toBeTruthy();
+
+    await act(() => {
+      resolveResponse({
+        content: "The binding inspection is complete.",
+        suggestedActions: [],
+      });
+    });
+
+    expect(await screen.findByText("The binding inspection is complete.")).toBeTruthy();
+    expect(
+      within(conversation).queryByRole("article", {
+        name: "Waiting for Configuration Agent…",
+      }),
+    ).toBeNull();
+  });
+
   it("renders Agent paragraphs and numbered steps as readable message structure", async () => {
     const user = userEvent.setup();
     render(

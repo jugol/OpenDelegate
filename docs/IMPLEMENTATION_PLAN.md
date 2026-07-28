@@ -599,7 +599,9 @@ Deliver the required visual setup, Device specification, and operational surface
   bulleted steps into semantic Configuration Chat lists. Keep an in-flight
   configuration conversation mounted across Admin section navigation, and surface
   responses that arrive off-screen through a localized unread badge, visible
-  summary, and accessible live notification until the owner opens the chat.
+  summary, and accessible live notification until the owner opens the chat. Show a
+  transient Agent activity message inside the transcript while a native turn is
+  pending, independently of the composer placeholder.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.

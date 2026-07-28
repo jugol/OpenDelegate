@@ -829,6 +829,12 @@ summary, and an accessible live status. Opening the chat marks the count read; a
 visible open chat is already the notification surface. Unread state is browser
 presentation state, not durable configuration or orchestration state.
 
+While a native Configuration Agent turn is pending, the transcript renders a
+localized Agent activity message in the same visual position where the response will
+arrive. Animated dots supplement visible text and respect reduced-motion policy.
+Secret intake does not claim that the Agent is responding until secure storage has
+completed and the follow-up Agent turn actually begins.
+
 **Rationale:** Collapsing line breaks turns a detailed onboarding response into one
 dense paragraph. A long native Agent turn can also finish after the owner closes the
 drawer or moves to another Admin section, where a silent launcher gives no indication
