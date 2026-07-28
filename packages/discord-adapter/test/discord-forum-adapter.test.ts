@@ -17,6 +17,7 @@ import {
   type TaskChannelProjection,
   redactDiscordSecrets,
   renderStatusPanel,
+  renderTaskUpdate,
 } from "../src/index.ts";
 
 const GUILD_ID = "100000000000000001";
@@ -526,6 +527,32 @@ test("starter message and thread events in either order create exactly one bound
   assert.equal((await repository.getGatewayCursor())?.sequence, 9);
 });
 
+test("accepted owner messages post one chronological working update with Task controls", async () => {
+  const { adapter, api } = fixture();
+  const thread = { ...forumThread("300000000000000002"), appliedTagIds: [] };
+  const starter = ownerMessage(thread.id, thread.id, "Start without a manual Intake tag.");
+  const reply = ownerMessage("300000000000000003", thread.id, "Continue with this detail.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter, reply]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.flushOutbox();
+  await adapter.handleGatewayDispatch(messageDispatch(2, reply));
+  await adapter.flushOutbox();
+  await adapter.handleGatewayDispatch(messageDispatch(2, reply));
+  await adapter.flushOutbox();
+
+  const updates = api.operations.filter((operation) => operation["kind"] === "message");
+  assert.equal(updates.length, 2);
+  for (const update of updates) {
+    const rendered = JSON.stringify(update["payload"]);
+    assert.match(rendered, /Message received/);
+    assert.match(rendered, /OpenDelegate is working on this Task/);
+    assert.match(rendered, /Pause/);
+    assert.match(rendered, /Cancel/);
+  }
+});
+
 test("replies resume only their bound Task and unauthorized content never reaches the Task port", async () => {
   const { adapter, api, tasks } = fixture();
   const firstThread = forumThread("300000000000000011");
@@ -670,10 +697,15 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
   const panelPayload = panels[0]?.["payload"];
   assert.match(JSON.stringify(panelPayload), /Open report/);
   assert.match(JSON.stringify(panelPayload), /32768/);
-  assert.equal((await repository.getBindingByTask("task-1"))?.statusPanelMessageId, "900");
-  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  const statusPanelMessageId = panels[0]?.["messageId"];
+  assert.equal(
+    (await repository.getBindingByTask("task-1"))?.statusPanelMessageId,
+    statusPanelMessageId,
+  );
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 2);
 
-  api.missingStatusPanelMessageIds.add("900");
+  assert.equal(typeof statusPanelMessageId, "string");
+  api.missingStatusPanelMessageIds.add(statusPanelMessageId as string);
   await adapter.publishTaskProjection({
     ...projection,
     state: "running",
@@ -682,14 +714,10 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
   });
   await adapter.flushOutbox();
   const restored = await repository.getBindingByTask("task-1");
-  assert.equal(restored?.statusPanelMessageId, "902");
+  const restoredPanel = api.operations.filter((operation) => operation["kind"] === "panel").at(-1);
+  assert.equal(restored?.statusPanelMessageId, restoredPanel?.["messageId"]);
   assert.equal(restored?.externalState, "available");
-  assert.equal(
-    api.operations.filter((operation) => operation["kind"] === "panel").at(-1)?.[
-      "requestedMessageId"
-    ],
-    undefined,
-  );
+  assert.equal(restoredPanel?.["requestedMessageId"], undefined);
 });
 
 test("a completed Task without links renders valid Components v2 without an empty action row", () => {
@@ -706,6 +734,21 @@ test("a completed Task without links renders valid Components v2 without an empt
     container?.type === 17 && container.components.some((component) => component.type === 1),
     false,
   );
+});
+
+test("a chronological failure update carries its Retry control", () => {
+  const payload = renderTaskUpdate({
+    taskId: "task-failed",
+    state: "failed",
+    objective: "Reach an eligible Worker.",
+    summary: "No eligible Worker is online after three automatic attempts.",
+    significance: "failure",
+  });
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /Task needs attention/);
+  assert.match(rendered, /No eligible Worker is online/);
+  assert.match(rendered, /Retry/);
+  assert.match(rendered, /od:v1:retry/);
 });
 
 test("pause, resume, cancel, and retry controls map to channel-neutral idempotent commands", async () => {
@@ -762,7 +805,7 @@ test("Discord outage leaves an idempotent durable outbox that drains after resta
     significance: "status",
   });
   await initial.adapter.flushOutbox();
-  assert.equal((await initial.repository.listOutbox()).filter((item) => !item.delivered).length, 2);
+  assert.equal((await initial.repository.listOutbox()).filter((item) => !item.delivered).length, 3);
 
   const restartedRepository = new InMemoryDiscordStateRepository(initial.repository.snapshot());
   initial.api.online = true;
@@ -878,6 +921,19 @@ test("approve/reject controls use the approval callback and unauthorized control
       messageId: "900",
       customId: "od:v1:cancel",
       author: { id: "999999999999999999", bot: false, roleIds: [] },
+      receivedAtMs: 1_000,
+    }),
+  );
+  await adapter.handleGatewayDispatch(
+    interactionDispatch(4, {
+      id: "400000000000000013",
+      token: "forged-control-token",
+      guildId: GUILD_ID,
+      channelId: thread.id,
+      messageId: "899",
+      messageAuthorId: OWNER_ID,
+      customId: "od:v1:cancel",
+      author: { id: OWNER_ID, bot: false, roleIds: [] },
       receivedAtMs: 1_000,
     }),
   );
@@ -1041,13 +1097,21 @@ function threadDispatch(sequence: number, thread: DiscordThread): DiscordGateway
 
 function interactionDispatch(
   sequence: number,
-  interaction: Extract<DiscordGatewayDispatch, { type: "INTERACTION_CREATE" }>["interaction"],
+  interaction: Omit<
+    Extract<DiscordGatewayDispatch, { type: "INTERACTION_CREATE" }>["interaction"],
+    "messageAuthorId"
+  > & {
+    readonly messageAuthorId?: string;
+  },
 ): DiscordGatewayDispatch {
   return {
     sessionId: "gateway-session",
     resumeGatewayUrl: "wss://gateway.discord.gg",
     sequence,
     type: "INTERACTION_CREATE",
-    interaction,
+    interaction: {
+      ...interaction,
+      messageAuthorId: interaction.messageAuthorId ?? BOT_ID,
+    },
   };
 }

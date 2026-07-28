@@ -18,6 +18,7 @@ const SESSION_ID = "gateway-session-1";
 const RESUME_URL = "wss://resume.discord.gg";
 const GUILD_ID = "100000000000000001";
 const THREAD_ID = "100000000000000003";
+const BOT_ID = "100000000000000005";
 
 test("the Gateway driver identifies, dispatches supported events, heartbeats with jitter, and resumes after a missing ACK", async () => {
   const fixture = gatewayFixture();
@@ -348,7 +349,10 @@ test("the Gateway wire mapper accepts only reviewed thread and component-interac
       channel_id: THREAD_ID,
       type: 3,
       data: { custom_id: "task:pause" },
-      message: { id: "100000000000000021" },
+      message: {
+        id: "100000000000000021",
+        author: { id: BOT_ID, bot: true },
+      },
       member: {
         user: { id: "100000000000000004", bot: false },
         roles: [],
@@ -364,6 +368,10 @@ test("the Gateway wire mapper accepts only reviewed thread and component-interac
   assert.equal(
     dispatches[3]?.type === "INTERACTION_CREATE" && dispatches[3].interaction.receivedAtMs,
     1_000,
+  );
+  assert.equal(
+    dispatches[3]?.type === "INTERACTION_CREATE" && dispatches[3].interaction.messageAuthorId,
+    BOT_ID,
   );
   assert.equal(JSON.stringify(fixture.diagnostics).includes("transient-interaction-token"), false);
   await connection.close();

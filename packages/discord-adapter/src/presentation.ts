@@ -96,7 +96,7 @@ export function renderTaskUpdate(projection: TaskChannelProjection): DiscordMess
         : projection.significance === "question"
           ? "## Owner input needed"
           : "## Task update";
-  const buttons = linkButtons(projection);
+  const buttons = controlButtons(projection);
   const components: DiscordMessagePayload["components"] = Object.freeze([
     Object.freeze({
       type: 17 as const,
@@ -171,7 +171,11 @@ function controlButtons(projection: TaskChannelProjection): DiscordActionRow {
         break;
     }
   }
-  if (projection.state !== "completed" && projection.state !== "cancelled") {
+  if (
+    projection.state !== "completed" &&
+    projection.state !== "failed" &&
+    projection.state !== "cancelled"
+  ) {
     buttons.push(actionButton("Cancel", 4, "od:v1:cancel"));
   }
   buttons.push(...linkButtons(projection).components);

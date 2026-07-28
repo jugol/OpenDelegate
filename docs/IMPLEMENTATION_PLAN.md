@@ -532,11 +532,20 @@ Make Discord the complete primary Task interface.
   permission verification, owner allowlist, and Forum binding.
 - Implement Gateway session management, heartbeat, resume, and thread/message events.
 - Implement HTTP reconciliation for missed messages and archived threads.
-- Map Forum post to internal Task and make ingestion idempotent.
+- Map Forum post to internal Task and make ingestion idempotent without requiring an
+  owner-applied workflow tag. Treat Intake and later workflow tags only as bot-owned
+  projections. During transient thread/starter visibility races, leave the Gateway
+  dispatch cursor unadvanced so Resume replays it under bounded reconnect backoff
+  and the ordinary reconnect reconciliation path.
 - Implement Task status projection with one workflow tag and a stable Components v2
   status panel.
+- Post one idempotent chronological working acknowledgement for each accepted owner
+  message with applicable controls. Keep this distinct from heartbeat projection so
+  long conversations gain a current activity surface without notification spam.
 - Implement concise progress, targeted questions, final result, file/media, and
-  Artifact link presentation.
+  Artifact link presentation. Chronological failure replies must include the
+  owner-safe concrete reason or exhausted resource plus the relevant recovery
+  control, including Retry for failed Tasks.
 - Present interactive Artifacts with a distinct owner action label. Never place a
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.
@@ -553,6 +562,11 @@ Make Discord the complete primary Task interface.
 - The owner completes the canonical Task journey from desktop and mobile Discord.
 - A second Forum post remains context-isolated.
 - Main outage and Gateway reconnect reconcile without missing or duplicating work.
+- A tagless owner-created Forum post starts exactly one Task and receives the bot's
+  Intake projection even when thread and starter resources become visible in
+  different Gateway/HTTP cycles.
+- A long conversation exposes current work and failure recovery at the latest
+  chronological position rather than only on its starter status panel.
 - Unauthorized messages never reach an Agent.
 - An outcome-only Task does not require a Device, OS, route, provider, or
   multi-Device-placement answer when durable configuration and eligibility can

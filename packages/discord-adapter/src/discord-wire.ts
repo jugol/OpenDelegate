@@ -78,6 +78,7 @@ export function mapDiscordInteraction(value: unknown, receivedAtMs: number): Dis
   }
   const data = requireRecord(record["data"], "interaction data");
   const message = requireRecord(record["message"], "interaction message");
+  const messageAuthor = requireRecord(message["author"], "interaction message author");
   const member = optionalRecord(record["member"], "interaction member");
   const user =
     member === undefined
@@ -90,6 +91,7 @@ export function mapDiscordInteraction(value: unknown, receivedAtMs: number): Dis
     guildId: requireSnowflake(record, "guild_id"),
     channelId: requireSnowflake(record, "channel_id"),
     messageId: requireSnowflake(message, "id"),
+    messageAuthorId: requireSnowflake(messageAuthor, "id"),
     customId: requireString(data, "custom_id", 1, 100),
     author: mapAuthor(user, member),
     receivedAtMs,

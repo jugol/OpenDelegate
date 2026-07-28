@@ -83,6 +83,7 @@ export interface DiscordInteraction {
   readonly guildId: string;
   readonly channelId: string;
   readonly messageId: string;
+  readonly messageAuthorId: string;
   readonly customId: string;
   readonly author: DiscordAuthor;
   readonly receivedAtMs: number;

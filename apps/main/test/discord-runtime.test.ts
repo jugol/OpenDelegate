@@ -104,6 +104,7 @@ test("Main Discord runtime adds a Task Artifact link without making status proje
           revision: 1,
         }),
       flushOutbox: () => Promise.resolve(),
+      reconcilePending: () => Promise.resolve(),
       publishTaskProjection: (projection) => {
         projections.push(structuredClone(projection));
         return Promise.resolve();
@@ -297,6 +298,78 @@ test("Main Discord runtime keeps one Forum Task across replies and publishes its
   assert.equal(gateway.closed, true);
   assert.equal(runtime.status.status, "unavailable");
   assert.equal(runtime.status.code, "DISCORD_STOPPED");
+});
+
+test("Main Discord runtime replays a tagless Forum post without advancing its cursor during a resource race", async () => {
+  const clock = new TestClock();
+  const repository = new InMemoryDiscordStateRepository();
+  const tasks = new TaskService({
+    clock: { now: () => NOW },
+    eventStore: new InMemoryEventStore({ clock: { now: () => NOW } }),
+  });
+  const api = new TestDiscordApi();
+  api.resourcesVisible = false;
+  const gateway = new TestDiscordGateway();
+  const adapter = new DiscordForumAdapter({
+    config: discordConfiguration(),
+    repository,
+    api,
+    tasks: {
+      createTask: async (input) =>
+        tasks.create({
+          principalId: input.principalId,
+          idempotencyKey: input.idempotencyKey,
+          objective: input.objective,
+          completionCriteria: input.completionCriteria,
+          constraints: input.constraints,
+          selectedInputRefs: input.selectedInputRefs,
+        }),
+      appendTaskInput: async (input) => {
+        await tasks.appendInput({
+          taskId: input.taskId,
+          principalId: input.principalId,
+          idempotencyKey: input.idempotencyKey,
+          message: input.message,
+          selectedInputRefs: input.selectedInputRefs,
+        });
+      },
+      commandTask: async (input) => {
+        await tasks.command(input);
+      },
+      resolveApproval: async (input) => {
+        await tasks.resolveApproval(input);
+      },
+    },
+    clock,
+    gateway,
+  });
+  const runtime = new DiscordMainRuntime({
+    adapter,
+    repository,
+    tasks,
+    clock,
+    synchronizationIntervalMs: 60_000,
+  });
+
+  await runtime.start();
+  await assert.rejects(gateway.dispatch(messageDispatch(api.starter)), {
+    code: "NOT_FOUND",
+  });
+  await assert.rejects(gateway.dispatch(threadDispatch(api.thread, 3)), {
+    code: "NOT_FOUND",
+  });
+  assert.equal((await tasks.list()).length, 0);
+  assert.equal((await repository.getGatewayCursor())?.sequence, 1);
+
+  api.resourcesVisible = true;
+  await gateway.dispatch(messageDispatch(api.starter));
+  await gateway.dispatch(threadDispatch(api.thread, 3));
+  await runtime.synchronizeNow();
+
+  assert.equal((await tasks.list()).length, 1);
+  assert.equal((await repository.getGatewayCursor())?.sequence, 3);
+  assert.deepEqual(api.appliedTags.at(-1), [STATUS_TAGS.intake]);
+  await runtime.close();
 });
 
 test("Main Discord runtime remains available for repair and retries an unavailable installation", async () => {
@@ -1028,6 +1101,7 @@ class DeferredStartupDiscordGateway implements DiscordGatewayPort {
 
 class TestDiscordApi implements DiscordApiPort {
   public online = true;
+  public resourcesVisible = true;
   public statusPanelWritten = false;
   public readonly appliedTags: Array<readonly string[]> = [];
   public readonly createdMessages: DiscordMessagePayload[] = [];
@@ -1090,11 +1164,13 @@ class TestDiscordApi implements DiscordApiPort {
 
   public async getThread(): Promise<DiscordThread> {
     this.#requireOnline();
+    this.#requireResourcesVisible();
     return structuredClone(this.thread);
   }
 
   public async getMessage(_threadId: string, messageId: string): Promise<DiscordMessage> {
     this.#requireOnline();
+    this.#requireResourcesVisible();
     if (messageId !== THREAD_ID) {
       throw new DiscordApiError("NOT_FOUND", "The message does not exist.");
     }
@@ -1103,6 +1179,9 @@ class TestDiscordApi implements DiscordApiPort {
 
   public async listActiveThreads(): Promise<readonly DiscordThread[]> {
     this.#requireOnline();
+    if (!this.resourcesVisible) {
+      return [];
+    }
     return [structuredClone(this.thread)];
   }
 
@@ -1123,6 +1202,7 @@ class TestDiscordApi implements DiscordApiPort {
     readonly nextAfter?: string;
   }> {
     this.#requireOnline();
+    this.#requireResourcesVisible();
     return {
       messages:
         after === undefined || BigInt(after) < BigInt(THREAD_ID)
@@ -1207,6 +1287,12 @@ class TestDiscordApi implements DiscordApiPort {
   #requireOnline(): void {
     if (!this.online) {
       throw new DiscordApiError("OFFLINE", "Discord is unavailable.");
+    }
+  }
+
+  #requireResourcesVisible(): void {
+    if (!this.resourcesVisible) {
+      throw new DiscordApiError("NOT_FOUND", "Discord has not exposed the resource yet.");
     }
   }
 }
@@ -1330,5 +1416,15 @@ function messageDispatch(message: DiscordMessage): DiscordGatewayDispatch {
     resumeGatewayUrl: "wss://gateway.discord.gg",
     sequence: 2,
     message,
+  };
+}
+
+function threadDispatch(thread: DiscordThread, sequence: number): DiscordGatewayDispatch {
+  return {
+    type: "THREAD_CREATE",
+    sessionId: "discord-session",
+    resumeGatewayUrl: "wss://gateway.discord.gg",
+    sequence,
+    thread,
   };
 }

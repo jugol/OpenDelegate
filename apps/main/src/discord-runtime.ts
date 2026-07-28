@@ -86,7 +86,12 @@ export interface DiscordRuntimeScheduler {
 export interface DiscordMainRuntimeOptions {
   readonly adapter: Pick<
     DiscordForumAdapter,
-    "close" | "createTaskThread" | "flushOutbox" | "publishTaskProjection" | "start"
+    | "close"
+    | "createTaskThread"
+    | "flushOutbox"
+    | "publishTaskProjection"
+    | "reconcilePending"
+    | "start"
   >;
   readonly repository: Pick<DiscordStateRepository, "getGatewayCursor" | "listBindings">;
   readonly tasks: DiscordProjectionTaskPort;
@@ -269,6 +274,8 @@ export class DiscordMainRuntime {
         this.#cursorAtConnectionStart = cursorFingerprint(before);
         await this.#adapter.start();
         this.#adapterStarted = true;
+      } else {
+        await this.#adapter.reconcilePending();
       }
 
       const cursor = await this.#repository.getGatewayCursor();

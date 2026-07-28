@@ -43,6 +43,7 @@ const REQUIRED_PERMISSIONS = [
 ] as const;
 const OUTBOX_LEASE_MS = 30_000;
 const MAX_RECONCILIATION_PAGES = 1_000;
+const TASK_INPUT_ACTIVITY_SUMMARY = "⏳ Message received. OpenDelegate is working on this Task.";
 
 export class DiscordForumAdapter {
   readonly #config: DiscordForumAdapterConfig;
@@ -58,6 +59,7 @@ export class DiscordForumAdapter {
   #startPromise: Promise<void> | undefined;
   #closePromise: Promise<void> | undefined;
   #connection: DiscordGatewayConnection | undefined;
+  #reconciliationPending = false;
 
   constructor(options: DiscordForumAdapterOptions) {
     validateConfig(options.config);
@@ -308,10 +310,20 @@ export class DiscordForumAdapter {
       }
     } catch (error) {
       this.#recordDiagnostic("discord.reconciliation_failed", { error: errorText(error) });
-      if (!(error instanceof DiscordApiError && error.code === "OFFLINE")) {
-        throw error;
+      if (error instanceof DiscordApiError && error.code === "OFFLINE") {
+        this.#reconciliationPending = true;
+        return;
       }
+      throw error;
     }
+  }
+
+  async reconcilePending(): Promise<void> {
+    if (!this.#reconciliationPending) {
+      return;
+    }
+    this.#reconciliationPending = false;
+    await this.reconcile();
   }
 
   async publishTaskProjection(projection: TaskChannelProjection): Promise<void> {
@@ -496,10 +508,7 @@ export class DiscordForumAdapter {
       try {
         thread = await this.#api.getThread(message.channelId);
       } catch (error) {
-        if (
-          error instanceof DiscordApiError &&
-          (error.code === "NOT_FOUND" || error.code === "FORBIDDEN")
-        ) {
+        if (error instanceof DiscordApiError && error.code === "FORBIDDEN") {
           return;
         }
         throw error;
@@ -527,15 +536,9 @@ export class DiscordForumAdapter {
       });
       return;
     }
-    try {
-      const starter = await this.#api.getMessage(thread.id, thread.id);
-      if (!starter.author.bot && this.#isAuthorized(starter.author.id, starter.author.roleIds)) {
-        await this.#ingestMessage(thread, starter);
-      }
-    } catch (error) {
-      if (!(error instanceof DiscordApiError && error.code === "NOT_FOUND")) {
-        throw error;
-      }
+    const starter = await this.#api.getMessage(thread.id, thread.id);
+    if (!starter.author.bot && this.#isAuthorized(starter.author.id, starter.author.roleIds)) {
+      await this.#ingestMessage(thread, starter);
     }
   }
 
@@ -571,6 +574,7 @@ export class DiscordForumAdapter {
     if (claim.outcome === "completed") {
       return;
     }
+    let taskId: string;
     if (message.id === thread.id) {
       const objective =
         message.content.trim().length === 0
@@ -585,6 +589,7 @@ export class DiscordForumAdapter {
         selectedInputRefs: attachmentReferences(message),
         source: taskSource(thread, message),
       });
+      taskId = created.taskId;
       await this.#repository.bindTask({
         guildId: thread.guildId,
         forumChannelId: thread.parentId,
@@ -600,6 +605,7 @@ export class DiscordForumAdapter {
       if (binding === undefined) {
         return;
       }
+      taskId = binding.taskId;
       await this.#tasks.appendTaskInput({
         taskId: binding.taskId,
         principalId: `discord:${message.author.id}`,
@@ -609,6 +615,17 @@ export class DiscordForumAdapter {
         source: taskSource(thread, message),
       });
     }
+    await this.#enqueueOutbox(`${key}:activity`, {
+      kind: "post-task-update",
+      taskId,
+      projection: Object.freeze({
+        taskId,
+        state: "running",
+        objective: "Process the accepted owner message.",
+        summary: TASK_INPUT_ACTIVITY_SUMMARY,
+        significance: "status",
+      }),
+    });
     await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
   }
 
@@ -617,15 +634,7 @@ export class DiscordForumAdapter {
     if (existing !== undefined) {
       return existing;
     }
-    let starter: DiscordMessage;
-    try {
-      starter = await this.#api.getMessage(thread.id, thread.id);
-    } catch (error) {
-      if (error instanceof DiscordApiError && error.code === "NOT_FOUND") {
-        return undefined;
-      }
-      throw error;
-    }
+    const starter = await this.#api.getMessage(thread.id, thread.id);
     await this.#ingestMessage(thread, starter);
     return this.#repository.getBindingByThread(thread.id);
   }
@@ -642,6 +651,7 @@ export class DiscordForumAdapter {
         guildId: interaction.guildId,
         channelId: interaction.channelId,
         messageId: interaction.messageId,
+        messageAuthorId: interaction.messageAuthorId,
         customId: interaction.customId,
         authorId: interaction.author.id,
       }),
@@ -688,8 +698,7 @@ export class DiscordForumAdapter {
     if (
       binding === undefined ||
       binding.externalState !== "available" ||
-      (binding.statusPanelMessageId !== undefined &&
-        binding.statusPanelMessageId !== interaction.messageId)
+      interaction.messageAuthorId !== this.#config.botUserId
     ) {
       await this.#finishDeferredInteraction(
         record.responseRef,

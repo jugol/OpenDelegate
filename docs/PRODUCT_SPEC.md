@@ -446,7 +446,9 @@ through a secure handoff and resumes the same Task afterward.
 2. A new approved Forum post creates a Task with an immutable Task ID and stores the
    Discord channel, thread, post, and message identifiers as external bindings.
    Thread and starter-message events may share an external identifier and arrive in
-   either order; ingestion remains idempotent.
+   either order; ingestion remains idempotent. The owner never has to apply an
+   Intake or other workflow-status tag to start work. Workflow tags are projections
+   that the bot applies after binding the Task.
 3. A reply creates an idempotent Task event and resumes the Task's Coordinator
    Session when appropriate.
 4. The Discord Adapter reconciles messages after reconnect using persisted cursors
@@ -457,9 +459,14 @@ through a secure handoff and resumes the same Task afterward.
    such as priority or category. The database is authoritative when Discord's
    20-available-tag and five-applied-tag limits cannot represent internal state.
 7. The bot maintains a concise status surface and edits it instead of posting a new
-   message for every heartbeat.
+   message for every heartbeat. Each accepted owner message additionally receives
+   one idempotent chronological acknowledgement near that message, with applicable
+   Task controls, so active work remains visible in a long conversation without
+   producing heartbeat noise.
 8. Significant decisions, questions, failures, and final results remain ordinary
-   replies in chronological order.
+   replies in chronological order. A failure reply includes the owner-safe concrete
+   reason or exhausted resource and the applicable recovery control, such as Retry;
+   the owner is never left with only a generic attention notice.
 9. Buttons and menus offer pause, cancel, retry, approve, reject, inspect Runs, and
    open Artifact actions where Discord permits.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may

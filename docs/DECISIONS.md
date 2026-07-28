@@ -1018,3 +1018,35 @@ does not remove the owner's context, and a later recovery can include that visib
 owner message without treating an unfinished response as a verified completion.
 Secrets remain subject to pre-acceptance rejection and secure intake, and the first
 typed-tool marker remains the mutation replay boundary defined by D-058.
+
+## D-064 — Discord workflow state is bot-owned and current feedback is chronological
+
+**Decision:** An owner-created post in an approved Discord Forum starts exactly one
+Task without an owner-applied Intake tag. Workflow tags are bot-owned projections.
+When Gateway events arrive before a new thread or starter message is readable over
+Discord HTTP, the Adapter does not advance its durable or in-connection processed
+cursor. Gateway Resume replays the dispatch under bounded reconnect backoff, while
+the ordinary reconnect reconciliation path provides a second idempotent recovery
+surface.
+
+Each accepted owner message enqueues one idempotent ordinary working acknowledgement
+near the latest conversation position with applicable Task controls. A failure
+update preserves its owner-safe concrete cause or exhausted resource and places the
+Retry control on that chronological failure message. The stable starter status panel
+remains a compact dashboard, but it is not the sole actionable surface. Interactions
+from these chronological messages are accepted only when the authoritative Discord
+interaction payload identifies the configured bot as the source message author.
+
+**Rationale:** Requiring a manually applied Intake tag inverted the projection model
+and made a valid post appear inert. Editing only the starter panel hid activity and
+recovery controls above long conversations. Replacing concrete scheduling or
+executor evidence with a generic attention sentence made failures impossible to
+diagnose. Restricting interactions to one stored panel message prevented safe
+controls on later bot-authored updates.
+
+**Consequence:** Normal Forum use requires no tag knowledge. Transient Discord
+resource-visibility races recover without a continuous full reconciliation scan.
+Owners receive one durable acknowledgement per accepted message rather than
+heartbeat spam, and actionable failures stay next to their explanation. Forged
+controls on owner or webhook messages remain inert, while controls on any message
+authored by the configured bot can use the existing idempotent command path.
