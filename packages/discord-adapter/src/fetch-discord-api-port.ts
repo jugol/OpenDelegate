@@ -116,23 +116,22 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       );
     }
 
-    const [applicationValue, botValue, guildValue, memberValue, rolesValue, ...forumValues] =
-      await Promise.all([
-        this.#botJson("GET", "/oauth2/applications/@me"),
-        this.#botJson("GET", "/users/@me"),
-        this.#botJson("GET", `/guilds/${input.guildId}`),
-        this.#botJson("GET", `/users/@me/guilds/${input.guildId}/member`),
-        this.#botJson("GET", `/guilds/${input.guildId}/roles`),
-        ...input.forumChannelIds.map((channelId) => this.#botJson("GET", `/channels/${channelId}`)),
-      ]);
+    const [applicationValue, botValue, guildValue, rolesValue, ...forumValues] = await Promise.all([
+      this.#botJson("GET", "/oauth2/applications/@me"),
+      this.#botJson("GET", "/users/@me"),
+      this.#botJson("GET", `/guilds/${input.guildId}`),
+      this.#botJson("GET", `/guilds/${input.guildId}/roles`),
+      ...input.forumChannelIds.map((channelId) => this.#botJson("GET", `/channels/${channelId}`)),
+    ]);
 
     const application = requireRecord(applicationValue, "Application");
     const bot = requireRecord(botValue, "bot user");
     const guild = requireRecord(guildValue, "guild");
+    const botUserId = requireSnowflake(bot, "id");
+    const memberValue = await this.#botJson("GET", `/guilds/${input.guildId}/members/${botUserId}`);
     const member = requireRecord(memberValue, "guild member");
     const roles = parseRoles(rolesValue);
     const applicationId = requireSnowflake(application, "id");
-    const botUserId = requireSnowflake(bot, "id");
     const guildId = requireSnowflake(guild, "id");
     if (applicationId !== input.applicationId || guildId !== input.guildId) {
       throw invalidResponse("Discord returned a different installation than requested.");
