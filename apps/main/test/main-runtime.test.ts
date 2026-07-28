@@ -38,6 +38,10 @@ const DEVELOPMENT_RELEASE_IDENTITY = {
   releaseChannel: "development",
   releaseVerification: { status: "not-applicable" },
 } as const;
+const DEVELOPMENT_RUNTIME_IDENTITY = {
+  build: { version: "0.1.0-test", buildId: "release-candidate-spoof" },
+  ...DEVELOPMENT_RELEASE_IDENTITY,
+} as const;
 
 test("CLI init accepts secret-free database and exact HTTPS listener configuration", () => {
   const parsed = parseArguments([
@@ -461,7 +465,7 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "release-candidate-spoof" },
-    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    releaseIdentity: DEVELOPMENT_RUNTIME_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
   });

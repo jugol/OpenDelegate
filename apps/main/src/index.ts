@@ -431,6 +431,35 @@ export interface InitializedMainHome {
   readonly paths: RuntimePaths;
 }
 
+function projectRuntimeReleaseIdentity(identity: RuntimeReleaseIdentity): RuntimeReleaseIdentity {
+  switch (identity.releaseChannel) {
+    case "development":
+      return {
+        declaredReleaseChannel: identity.declaredReleaseChannel,
+        releaseChannel: identity.releaseChannel,
+        releaseVerification: identity.releaseVerification,
+      };
+    case "internal-preview":
+      return {
+        declaredReleaseChannel: identity.declaredReleaseChannel,
+        releaseChannel: identity.releaseChannel,
+        releaseVerification: identity.releaseVerification,
+      };
+    case "release-candidate":
+      return {
+        declaredReleaseChannel: identity.declaredReleaseChannel,
+        releaseChannel: identity.releaseChannel,
+        releaseVerification: identity.releaseVerification,
+      };
+    case "released":
+      return {
+        declaredReleaseChannel: identity.declaredReleaseChannel,
+        releaseChannel: identity.releaseChannel,
+        releaseVerification: identity.releaseVerification,
+      };
+  }
+}
+
 export interface CreateMainRuntimeOptions {
   readonly home?: string;
   readonly configuration: MainConfiguration;
@@ -1155,7 +1184,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     }
     const tasks = taskExecution ?? taskService;
     const runtimeFeatures: NonNullable<MainControlPlaneAppOptions["runtimeFeatures"]> = {
-      ...options.releaseIdentity,
+      ...projectRuntimeReleaseIdentity(options.releaseIdentity),
       taskExecution:
         taskExecution === undefined
           ? {
