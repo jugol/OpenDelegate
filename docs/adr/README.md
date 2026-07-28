@@ -40,6 +40,7 @@ approved product specification.
 17. [`0020-main-singleton-ownership.md`](0020-main-singleton-ownership.md)
 18. [`0021-supported-release-promotion-and-native-authenticity.md`](0021-supported-release-promotion-and-native-authenticity.md)
 19. [`0022-live-discord-binding-reconfiguration.md`](0022-live-discord-binding-reconfiguration.md)
+20. [`0023-task-scoped-owner-handoff.md`](0023-task-scoped-owner-handoff.md)
 
 ## Proposed ADRs
 

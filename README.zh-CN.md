@@ -3,8 +3,8 @@
 语言：[English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) ·
 [Français](README.fr.md) · [Español](README.es.md) · **[简体中文](README.zh-CN.md)**
 
-OpenDelegate 是一个个人自托管控制平面，用于在一台固定的 Main Device 与多台 macOS、Windows 和 Linux
-Device 之间协调 AI Agent。
+**只需在 Discord 中告诉 OpenDelegate 你想要的结果，执行位置和方式由它决定。** 固定且始终在线的 Main
+会协调 macOS、Windows 和 Linux；发出指令的手机或电脑随后可以断开连接。
 
 > [!TIP]
 > **从这里开始：** [快速开始](#快速开始) · [完整设置指南（英文）](docs/GETTING_STARTED.md) ·
@@ -17,24 +17,25 @@ Device 之间协调 AI Agent。
 
 OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run start`。
 
-1. 获取与操作系统和架构匹配的 bundle，并使用通过可信发布渠道独立取得的 digest 核验
-   `SHA256SUMS`。当前仓库只能生成带有明确标识的内部预览 bundle；请参阅
-   [构建内部预览版](#构建内部预览版)。
+1. 把此仓库 URL 交给 Codex 或 Claude。如果已有受支持的平台 bundle，也可以打开解压后的目录。
+   Agent 会区分源代码和 bundle、检查 `supportStatus` 并核验 `SHA256SUMS`。当前源代码只能生成标记明确的
+   [内部预览版](#构建内部预览版)。
 2. 首次初始化 Main 时可以暂不配置 Discord。之后可在经过 Owner 身份验证的 Configuration Chat
    中添加、替换、扩展或禁用 Forum Binding。所需的 App、Forum、Tag 和 Permission 请参阅
    [Discord Forum 设置指南](docs/DISCORD_SETUP.md)。
-3. 在 Codex 或 Claude 中打开解压后的 bundle 目录，并原样发送以下内容： _“Read
-   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
-   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
-   if a required safety check fails.”_
+3. 发送： _“Install OpenDelegate from this repository. Discover and follow its Main installation
+   instructions. Initialize this computer as my fixed, always-on Main Device. Guide me through every
+   owner decision, keep runtime state outside the checkout or bundle, and stop if a required safety
+   check fails. Do not ask me to choose a Device, OS, route, or Agent for future Tasks.”_ Agent
+   会自行找到 `AGENTS.md` 和 `skills/opendelegate-init/SKILL.md`，Owner 不需要了解内部文件结构。
 4. 按照 Agent 的引导完成 Owner Claim，并妥善保存全部十个一次性恢复代码。
 5. 先在 Admin Web 中运行 **评估设备**，查看 Codex、Claude、浏览器自动化、Computer Use 和
    Knowledge 的确定性结果，再通过右下角的 Configuration Chat 完成 Device、Agent、Route、
    Artifact 以及可选的 Discord 设置。切勿在聊天中输入 Provider 凭据；Discord
    令牌只能输入安全凭据面板。
 6. 添加 Device 时，请通过 Configuration Chat 签发一份短期、一次性的 Device
-   Grant。不要打开该文件；使用 Owner 控制的安全方式将其交给目标 Device，然后让该 Device 上的 Agent 按照
-   `skills/opendelegate-join/SKILL.md` 操作。
+   Grant。不要打开该文件；使用 Owner 控制的安全方式将其交给目标 Device，然后让该 Device 上的 Agent
+   将这台电脑连接为 Worker。Agent 会自行找到 `skills/opendelegate-join/SKILL.md`。
 7. 如果已配置 Discord，请为每个独立 Task 创建一个 Forum 新帖子。同一帖子的回复会延续同一 Task 及其 native
    Agent Session；新帖子则从干净的 Context 开始。如果 Discord 已禁用或不可用，请选择 **Admin Web →
    Tasks → 新建任务**。
@@ -43,18 +44,20 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
 
 ## 为什么选择 OpenDelegate
 
-你可以通过手机或电脑创建 Task，让 Main Agent 将其拆分为 Work Order，把这些 Work
-Order 路由到符合条件的 Device，并获得一个持久、可检查的统一结果，而无需手动重新打开每个 Agent
-Session。
+通过手机或电脑描述想要的结果，而不是设备安排。Main Agent 可以按需拆分 Windows 开发、macOS
+构建或签名以及 Linux 部署；确定性调度器会选择实际 Device 和 Route。
 
 - 一个 Discord Forum 帖子对应一个持久的 Task 和一个上下文边界。
+- 发出指令的手机或电脑可以断开连接；只需固定 Main 和当前工作所需的 Device 保持可用。
 - 确定性软件负责身份、Policy、健康状态、路由、lease、重试、持久化和状态转换。Agent负责语义判断和分配给它们的工作。
 - Worker 只连接到 Main。它们不需要 NxN SSH 网状网络，也不需要直接访问数据库。
 - Codex、Claude 和自定义 runner 位于 Agent Adapter 契约之后，同时仍可恢复有价值的 provider-native
   session。
 - 每台 Device 都保留自己选择性检索、相互链接的 Markdown
   Knowledge。Main 永远不会收到其中的文件名、标题、链接、图谱、索引、片段或内容。
-- 丰富的结果可以成为 Artifact，并由 Main 按照明确的 Exposure Policy 提供。
+- 结果可以是 Discord 回复或附件、文件、Artifact、托管页面或经过验证的 Git 引用。
+- 如果登录、MFA、CAPTCHA、法律确认或 OS 权限需要 Owner，同一 Task 会通过 Main 提供限时、可撤销的
+  Owner Handoff，并在 Owner 回复后继续。
 
 ## 架构
 

@@ -3,8 +3,8 @@
 Langues : [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) ·
 **[Français](README.fr.md)** · [Español](README.es.md) · [简体中文](README.zh-CN.md)
 
-OpenDelegate est un plan de contrôle personnel et auto-hébergé qui coordonne des agents d’IA entre
-un Main Device fixe et plusieurs Devices sous macOS, Windows et Linux.
+**Décrivez le résultat voulu dans Discord ; OpenDelegate décide où et comment l’exécuter.** Un Main
+fixe et toujours actif coordonne macOS, Windows et Linux ; votre téléphone ou ordinateur peut se déconnecter.
 
 > [!TIP]
 > **Commencez ici :** [Démarrage rapide](#démarrage-rapide) ·
@@ -23,18 +23,20 @@ un Main Device fixe et plusieurs Devices sous macOS, Windows et Linux.
 OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Owner n’utilise pas
 `npm run start`.
 
-1. Procurez-vous le bundle correspondant au système et à l’architecture, puis vérifiez `SHA256SUMS`
-   avec le digest obtenu séparément par le canal de publication fiable. Le dépôt ne produit
-   actuellement que des bundles de préversion interne clairement identifiés ; consultez
-   [Construire une préversion interne](#construire-une-préversion-interne).
+1. Donnez l’URL de ce dépôt à Codex ou Claude. Si vous avez déjà un bundle pris en charge pour la
+   plateforme, ouvrez plutôt son répertoire extrait. L’Agent distingue source et bundle, inspecte
+   `supportStatus` et vérifie `SHA256SUMS`. Le source actuel ne produit que la
+   [préversion interne](#construire-une-préversion-interne) indiquée.
 2. Discord peut être omis lors de la première initialisation du Main. Vous pourrez ensuite ajouter,
    remplacer, étendre ou désactiver le Binding Forum dans Configuration Chat après authentification
    Owner. Suivez le [guide de configuration de Discord Forum](docs/DISCORD_SETUP.md) pour l’App, le
    Forum, les Tags et les Permissions requis.
-3. Ouvrez le répertoire du bundle extrait dans Codex ou Claude, puis envoyez exactement : _“Read
-   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
-   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
-   if a required safety check fails.”_
+3. Envoyez : _“Install OpenDelegate from this repository. Discover and follow its Main installation
+   instructions. Initialize this computer as my fixed, always-on Main Device. Guide me through every
+   owner decision, keep runtime state outside the checkout or bundle, and stop if a required safety
+   check fails. Do not ask me to choose a Device, OS, route, or Agent for future Tasks.”_ L’Agent
+   découvre lui-même `AGENTS.md` et `skills/opendelegate-init/SKILL.md` ; l’Owner n’a pas à connaître
+   l’arborescence interne.
 4. Suivez l’Agent pour revendiquer l’accès Owner et conservez en lieu sûr les dix codes de
    récupération à usage unique.
 5. Dans Admin Web, lancez d’abord **Évaluer l’appareil** et examinez le résultat déterministe pour
@@ -44,7 +46,8 @@ OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Ow
    panneau d’identifiants sécurisé.
 6. Pour ajouter un Device, demandez à Configuration Chat un Device Grant de courte durée et à usage
    unique. Transférez le fichier sans l’ouvrir par un moyen sûr contrôlé par l’Owner, puis demandez
-   à l’Agent du Device cible de suivre `skills/opendelegate-join/SKILL.md`.
+   à l’Agent du Device cible de connecter cet ordinateur comme Worker. Il découvre lui-même
+   `skills/opendelegate-join/SKILL.md`.
 7. Si Discord est configuré, créez une publication Forum pour chaque Task indépendante. Les réponses
    poursuivent la même Task et sa native Agent Session ; une nouvelle publication démarre avec un
    Context propre. Si Discord est désactivé ou indisponible, ouvrez **Admin Web → Tasks → Nouvelle
@@ -55,11 +58,13 @@ récupération de l’Owner, les Devices supplémentaires, la première Task et 
 
 ## Pourquoi OpenDelegate
 
-Créez une Task depuis un téléphone ou un ordinateur, laissez le Main Agent la diviser en Work
-Orders, acheminer ces Work Orders vers les Devices éligibles, puis recevez un résultat unique,
-durable et inspectable sans avoir à rouvrir manuellement chaque session d’agent.
+Depuis un téléphone ou un ordinateur, décrivez le résultat plutôt qu’un plan de placement. Le Main
+Agent peut répartir le développement sous Windows, la compilation ou signature sous macOS et le
+déploiement sous Linux ; le planificateur choisit les Devices et les Routes.
 
 - Une publication Discord Forum correspond à une Task durable et à une frontière de contexte.
+- Le téléphone ou l’ordinateur qui envoie la commande peut se déconnecter. Seuls le Main fixe et les
+  Devices nécessaires au travail en cours doivent rester disponibles.
 - Un logiciel déterministe gère l’identité, les Policies, l’état de santé, le routage, les leases,
   les nouvelles tentatives, la persistance et les transitions d’état. Les agents prennent en charge
   le jugement sémantique et le travail qui leur est attribué.
@@ -69,8 +74,10 @@ durable et inspectable sans avoir à rouvrir manuellement chaque session d’age
   en conservant la possibilité de reprendre les sessions natives utiles des fournisseurs.
 - Chaque Device conserve son propre Knowledge Markdown sélectif et relié. Le Main ne reçoit jamais
   ses noms de fichiers, titres, liens, graphe, index, extraits ou contenu.
-- Les résultats riches peuvent devenir des Artifacts servis par le Main selon une Exposure Policy
-  explicite.
+- Le résultat peut être une réponse ou pièce jointe Discord, un fichier, un Artifact, une vue
+  hébergée ou une référence Git vérifiée.
+- Si un login, MFA, CAPTCHA, consentement légal ou permission OS exige l’Owner, la même Task se met
+  en pause sur un Owner Handoff via le Main, limité dans le temps et révocable, puis reprend.
 
 ## Architecture
 

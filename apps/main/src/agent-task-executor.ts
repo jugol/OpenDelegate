@@ -505,6 +505,16 @@ function assertSessionBinding(
   }
 }
 
+const OUTCOME_ORCHESTRATION_INSTRUCTIONS = Object.freeze([
+  "The owner specifies the outcome, not Device placement. Do not ask the owner to choose a Device, OS, route, Agent provider, or multi-Device split when capability requirements and deterministic scheduling can decide.",
+  "Infer the required capabilities and OS constraints from the objective, express them in Work Orders when planning, and let OpenDelegate select the actual Devices and routes.",
+  "Ask the owner only about a choice that changes the intended outcome or Policy, or an irreducible human action.",
+  "If login, MFA, CAPTCHA, legal confirmation, or OS permission requires the owner, return waiting_user with one clear question. Refer to an existing OpenDelegate interactive Artifact action when one is available, never invent a handoff URL or put a credential in chat, and continue this same Task after the owner replies.",
+]);
+
+const OUTCOME_PRESENTATION_INSTRUCTION =
+  "Present the verified outcome in the most useful available form: Discord summary, file, Artifact, hosted result, or Git reference. Mention only results supported by authoritative Worker reports.";
+
 function buildCoordinatorPrompt(
   request: TaskExecutionRequest,
   maximumBytes: number,
@@ -520,6 +530,8 @@ function buildCoordinatorPrompt(
         "You are the OpenDelegate Main Agent continuing exactly one durable Task after its provider-native session became unavailable.",
         "The versioned, hash-verified public checkpoint below is the only prior Task context. Keep it isolated from every other Task.",
         "Worker Run reports remain the only authority for execution side effects. Never infer a side effect from an omitted checkpoint item.",
+        ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+        OUTCOME_PRESENTATION_INSTRUCTION,
         "Do not expose private chain-of-thought. Return one exact JSON object and no Markdown fence.",
         'Return either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"} or {"schemaVersion":1,"state":"waiting_resource|review|failed","publicMessage":"owner-visible text"}.',
         "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -533,6 +545,8 @@ function buildCoordinatorPrompt(
     "You are the OpenDelegate Main Agent for exactly one durable Task.",
     "Keep this Task isolated from every unrelated Task. You may plan and synthesize, but deterministic OpenDelegate modules own dispatch, policy, routes, leases, and durable state.",
     "Worker Run reports are the only authority for execution side effects. Never claim that a Work Order, Run, artifact, command, or external action completed from your own text.",
+    ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+    OUTCOME_PRESENTATION_INSTRUCTION,
     "Do not expose private chain-of-thought. Return one exact JSON object and no Markdown fence.",
     'Return either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"} or {"schemaVersion":1,"state":"waiting_resource|review|failed","publicMessage":"owner-visible text"}.',
     "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -594,6 +608,7 @@ function buildPlanningPrompt(
         "You are the OpenDelegate Main Agent continuing planning for exactly one durable Task after its provider-native session became unavailable.",
         "Use only the versioned, hash-verified public checkpoint below. Omitted counts are explicit; do not invent omitted details or import another Task's context.",
         "Deterministic OpenDelegate code validates dependencies, selects eligible Devices, issues authority, dispatches Runs, and enforces Policy.",
+        ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
         "Do not claim execution happened. Do not expose private chain-of-thought.",
         "Return one exact JSON object and no Markdown fence.",
         'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
@@ -607,6 +622,7 @@ function buildPlanningPrompt(
   const prefix = [
     "You are the OpenDelegate Main Agent planning exactly one durable Task.",
     "Return a bounded Work Order plan. Deterministic OpenDelegate code will validate dependencies, select eligible Devices, issue leases, dispatch Runs, and enforce Policy.",
+    ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
     "Do not claim any execution happened. Do not expose private chain-of-thought.",
     "Return one exact JSON object and no Markdown fence.",
     'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
@@ -671,6 +687,8 @@ function buildVerificationPrompt(
       "The versioned, hash-verified public checkpoint is the only prior Task context. The bounded Worker evidence below was accepted from durable authenticated Run events.",
       "Lease, fencing, route, credential, local-path, Knowledge, and private transcript data are intentionally absent.",
       "Judge only whether the evidence satisfies every exact completion criterion in the checkpoint. Never invent omitted evidence.",
+      ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+      OUTCOME_PRESENTATION_INSTRUCTION,
       "Return one exact JSON object and no Markdown fence.",
       'If every criterion is satisfied: {"schemaVersion":1,"state":"completed","publicMessage":"owner-visible synthesis","verifiedCompletionCriteria":["copy every exact Task criterion"]}.',
       'Otherwise return either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"} or {"schemaVersion":1,"state":"review|waiting_resource|failed","publicMessage":"owner-visible gap"}.',
@@ -693,6 +711,8 @@ function buildVerificationPrompt(
     "You are the OpenDelegate Main Agent verifying exactly one durable Task.",
     "Every record below was accepted by deterministic OpenDelegate code from the authenticated, current, unexpired Worker Run named in that record.",
     "You cannot manufacture, alter, or infer execution evidence. Judge only whether these authoritative reports satisfy every exact Task completion criterion.",
+    ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+    OUTCOME_PRESENTATION_INSTRUCTION,
     "Return one exact JSON object and no Markdown fence.",
     'If every criterion is satisfied: {"schemaVersion":1,"state":"completed","publicMessage":"owner-visible synthesis","verifiedCompletionCriteria":["copy every exact Task criterion"]}.',
     'Otherwise return either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"} or {"schemaVersion":1,"state":"review|waiting_resource|failed","publicMessage":"owner-visible gap"}.',
@@ -1031,11 +1051,28 @@ function readAgentOwnerQuestion(value: unknown, errorFactory: () => TaskExecutor
     question.includes("\n") ||
     question.includes("\r") ||
     !/[?？]$/u.test(question) ||
-    (question.match(/[?？]/gu)?.length ?? 0) !== 1
+    (question.match(/[?？]/gu)?.length ?? 0) !== 1 ||
+    isRoutinePlacementQuestion(question)
   ) {
     throw errorFactory();
   }
   return question;
+}
+
+function isRoutinePlacementQuestion(question: string): boolean {
+  const normalized = question.normalize("NFKC").toLocaleLowerCase("en-US");
+  return [
+    /\bwhich\s+(?:device|computer|machine|worker)\b/u,
+    /\bwhere\s+should\s+(?:i|we|this|the\s+task)\s+(?:run|execute|perform|handle|build|deploy)\b/u,
+    /\b(?:built|run|executed|performed|handled|deployed)\s+by\b.{0,96}\b(?:worker|device|computer|machine)\b/u,
+    /\b(?:worker|device|computer|machine)\s+(?:should\s+)?(?:run|execute|perform|handle|build|deploy)\b/u,
+    /\b(?:run|execute|perform|handle|build|deploy)\b.{0,96}\b(?:on|using|with|via)\s+(?:which\s+)?(?:device|computer|machine|worker)\b/u,
+    /(?:어느|어떤)\s*(?:장치|기기|컴퓨터|워커).*(?:실행|작업)/u,
+    /(?:どの|どれ)\s*(?:device|デバイス|端末|コンピューター).*(?:実行|担当)/u,
+    /(?:quel|quelle)\s+(?:device|appareil|ordinateur|worker).*(?:exécuter|effectuer)/u,
+    /(?:qué|cuál)\s+(?:device|dispositivo|ordenador|worker).*(?:ejecutar|realizar)/u,
+    /(?:哪台|哪个).*(?:设备|电脑|worker).*(?:运行|执行)/u,
+  ].some((pattern) => pattern.test(normalized));
 }
 
 function validateReference(value: unknown): NativeSessionReference {

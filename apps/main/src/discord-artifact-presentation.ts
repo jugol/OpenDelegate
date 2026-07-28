@@ -48,7 +48,8 @@ export class DiscordArtifactPresentation implements DiscordArtifactPresentationP
       return undefined;
     }
     return Object.freeze({
-      label: "Open report",
+      label:
+        metadata.presentation === "interactive-html" ? "Open interactive result" : "Open report",
       url:
         metadata.exposurePolicy.mode === "public" ||
         metadata.exposurePolicy.mode === "private-network"

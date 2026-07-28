@@ -32,6 +32,10 @@ test("README leads owners into one complete agent-first setup journey", async ()
   ]);
 
   const readmeLead = readme.slice(0, readme.indexOf("## Quick Start"));
+  assert.match(
+    readmeLead,
+    /Tell OpenDelegate the outcome you want in Discord[\s\S]*decides where and how to run it/u,
+  );
   assert.match(readmeLead, /> \[!TIP\]\r?\n> \*\*Start here:/u);
   assert.match(readmeLead, /\[Complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
   assert.match(readmeLead, /\[Discord Forum setup\]\(docs\/DISCORD_SETUP\.md\)/u);
@@ -55,7 +59,13 @@ test("README leads owners into one complete agent-first setup journey", async ()
   assert.match(quickStart, /\(docs\/DISCORD_SETUP\.md\)/u);
   assert.match(quickStart, /skills\/opendelegate-init\/SKILL\.md/u);
   assert.match(quickStart, /skills\/opendelegate-join\/SKILL\.md/u);
-  assert.match(quickStart, /Guide me through every owner decision/u);
+  assert.match(quickStart, /Guide me through every\s+owner decision/u);
+  assert.match(quickStart, /Give this repository URL to Codex or Claude/u);
+  assert.match(quickStart, /Do not ask me to choose a Device, OS, route, or Agent/u);
+  const ownerPrompt = quickStart.match(/2\. Send: _“([\s\S]*?)”_/u)?.[1];
+  assert.notEqual(ownerPrompt, undefined, "Quick Start must include one copyable owner prompt");
+  assert.doesNotMatch(ownerPrompt, /AGENTS\.md|SKILL\.md/u);
+  assert.match(ownerPrompt, /Discover and follow its Main installation\s+instructions/u);
   assert.match(quickStart, /SHA256SUMS/u);
   assert.match(quickStart, /Admin Web/u);
   assert.match(quickStart, /Discord Forum post/u);
@@ -200,6 +210,7 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       statusHeading: "## 현재 소스 상태",
       deferredDiscordPattern: /추가·교체·확장·비활성화/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*새 작업/u,
+      promisePattern: /Discord에서 원하는 결과만 말하세요.*실행 위치와 방법은 OpenDelegate가 결정/u,
     },
     {
       filename: "README.ja.md",
@@ -210,6 +221,8 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       statusHeading: "## 現在のソースの状態",
       deferredDiscordPattern: /追加、置換、拡張、無効化/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*新しいタスク/u,
+      promisePattern:
+        /Discord で望む成果を伝えてください.*実行場所と方法は OpenDelegate が決めます/u,
     },
     {
       filename: "README.fr.md",
@@ -220,6 +233,8 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       statusHeading: "## État actuel du code source",
       deferredDiscordPattern: /ajouter,\s+remplacer, étendre ou désactiver/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*Nouvelle\s+tâche/u,
+      promisePattern:
+        /Décrivez le résultat voulu dans Discord.*OpenDelegate décide où et comment l’exécuter/u,
     },
     {
       filename: "README.es.md",
@@ -230,6 +245,8 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       statusHeading: "## Estado actual del código fuente",
       deferredDiscordPattern: /añadir,\s+sustituir, ampliar o desactivar/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*Nueva\s+tarea/u,
+      promisePattern:
+        /Dile a OpenDelegate qué resultado quieres en Discord.*decide dónde y cómo ejecutarlo/u,
     },
     {
       filename: "README.zh-CN.md",
@@ -240,12 +257,14 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       statusHeading: "## 当前源代码状态",
       deferredDiscordPattern: /添加、替换、扩展或禁用/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*新建任务/u,
+      promisePattern: /只需在 Discord 中告诉 OpenDelegate 你想要的结果.*执行位置和方式由它决定/u,
     },
   ];
 
   for (const locale of locales) {
     const content = await readRepositoryFile(locale.filename);
     const readmeLead = content.slice(0, content.indexOf(locale.heading));
+    assert.match(readmeLead, locale.promisePattern);
     assert.match(readmeLead, /> \[!TIP\]\r?\n>/u);
     assert.match(readmeLead, /\(docs\/GETTING_STARTED\.md\)/u);
     assert.match(readmeLead, /\(docs\/DISCORD_SETUP\.md\)/u);

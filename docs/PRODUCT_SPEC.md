@@ -40,7 +40,9 @@ solution that asks an LLM to remember every IP address, route, health state, ret
 rule, and permission wastes context and behaves unpredictably. A central shared
 memory also leaks Device-specific operational detail into unrelated Tasks.
 
-The owner needs one system that:
+The owner needs one system where they describe the result and do not have to care
+which physical computer, operating system, route, or agent performs each step. That
+system must:
 
 - receives work from an interface available on a phone or laptop;
 - preserves a separate durable context for every Task;
@@ -76,16 +78,22 @@ configuration-focused chat assistant helps the owner progressively configure the
 system, proposes settings based on detected facts, and applies structured changes
 through the same Policy Engine used by every other actor.
 
-Long or visual results become Artifacts. OpenDelegate uses Discord-native components,
-images, and files where they fit and serves Markdown, PDF, images, logs, or static
-HTML through a Main-hosted Artifact Gateway where a richer interface is useful.
+Long, visual, or interactive results become Artifacts. OpenDelegate uses
+Discord-native components, images, and files where they fit and serves Markdown,
+PDF, images, logs, static HTML, or an isolated interactive view through a Main-hosted
+Artifact Gateway. When login, MFA, CAPTCHA, legal confirmation, or an OS permission
+requires a human, the same Task may pause with a bounded Owner Handoff and continue
+after the owner returns control.
 
 ### Product promise
 
-The owner can create a Task from Discord on any Device, leave the Main computer and
-Workers running, and expect OpenDelegate to choose eligible resources, continue
-native agent sessions, coordinate work, preserve Task context, and return a useful,
-inspectable result without manually operating every machine.
+The owner can tell OpenDelegate the desired outcome from Discord on a phone or
+computer, then disconnect that client. A fixed always-on Main chooses eligible
+resources, hides routine Device, OS, route, and multi-Device placement decisions,
+continues native agent sessions, coordinates work, preserves Task context, and
+returns a useful result as a Discord response, file, Artifact, hosted view, or Git
+reference. If a step truly requires the owner, OpenDelegate asks for that one action
+through a secure handoff and resumes the same Task afterward.
 
 ### Design principles
 
@@ -106,6 +114,12 @@ inspectable result without manually operating every machine.
    but an informed owner may configure more permissive behavior.
 8. **Personal-first simplicity.** Solve one owner's multi-Device workflow before
    introducing organizations, tenants, billing, or shared ownership.
+9. **Outcome over placement.** The Task states what success means. OpenDelegate
+   exposes actual placement for observability but does not make the owner plan the
+   Device, OS, route, provider, or cross-Device workflow.
+10. **Humans only where necessary.** Automation pauses for irreducible identity,
+    consent, legal, or OS-security boundaries and resumes from the same durable Task
+    after a bounded Owner Handoff.
 
 ## Actors
 
@@ -329,6 +343,17 @@ inspectable result without manually operating every machine.
     so that an unclaimed public endpoint cannot be taken over remotely.
 96. As an owner, I want OpenDelegate upgrades verified and recoverable, so that an
     automatic service update cannot strand every Device.
+97. As an owner, I want to describe only the result in Discord, so that I do not have
+    to choose a Device, operating system, route, or Agent provider.
+98. As an owner, I want one Task to span Windows development, macOS build or signing,
+    and Linux deployment when needed, so that I do not have to coordinate the
+    handoffs myself.
+99. As an owner, I want the result delivered in the most useful form—Discord, file,
+    Artifact, hosted view, or Git reference—so that chat is not an output-format
+    limitation.
+100. As an owner, I want a secure, temporary handoff when login, MFA, CAPTCHA, legal
+     confirmation, or OS permission requires me, so that I can act and let the same
+     Task continue without sending credentials through chat.
 
 ## Functional Requirements
 
@@ -354,6 +379,13 @@ inspectable result without manually operating every machine.
    return structured status, and resume a session.
 10. Every bootstrap step is resumable and idempotent. A failed step must not require
     deleting the Instance and starting over.
+11. The repository and release documentation supports an owner giving the repository
+    URL or verified bundle to a capable local Agent and asking it to install
+    OpenDelegate. The Agent discovers the init skill and explains only choices that
+    affect owner intent.
+12. The init and join skills give separate, complete Main and Worker procedures so
+    the owner does not need to translate a control-plane topology into manual
+    commands.
 
 ### FR-2 — Device enrollment and identity
 
@@ -514,6 +546,17 @@ may request a transition but cannot manufacture a state outside the transition r
     native session ID, Workspace ID, workstream ID, and session lineage. This safe
     observation excludes Device-local paths, worktree paths, and session keys and is
     durably preserved by Main.
+16. Normal Task intake does not ask the owner to select a Device, OS family, route,
+    Agent provider, or multi-Device split when the objective, registered Workspaces,
+    verified Capabilities, Policy, and deterministic eligibility can decide.
+17. Main may decompose one Task into ordered or parallel Work Orders across different
+    OS families. The owner observes assignments and rationale through Admin and audit
+    but does not manually coordinate the handoffs.
+18. Main asks about placement only when the choice changes the intended outcome or an
+    owner preference cannot be derived from durable configuration.
+19. Main Agent result validation rejects a direct routine placement question before
+    it becomes owner-visible. Outcome-shaping compatibility, legal, policy, and
+    human-action questions remain valid.
 
 ### FR-8 — Concurrency and resource locks
 
@@ -647,6 +690,11 @@ may request a transition but cannot manufacture a state outside the transition r
    equivalent OS security controls.
 10. Browser-only work should prefer structured browser automation when it is more
     reliable than pixel-level desktop control.
+11. Login, MFA, CAPTCHA, legal confirmation, and other human-only interactions pause
+    the current Task rather than inviting the Agent to bypass the boundary.
+12. When an eligible interactive surface exists, Main presents a bounded Owner
+    Handoff. After the owner returns control through the same Task, execution resumes
+    from durable state and the existing session lineage where possible.
 
 ### FR-13 — Knowledge-aware capability development
 
@@ -685,6 +733,20 @@ may request a transition but cannot manufacture a state outside the transition r
 11. Interactive HTML is an explicit, more permissive Artifact mode and cannot share
     Admin Web cookies or origin authority.
 12. Temporary Artifacts expire according to policy; the owner may pin an Artifact.
+13. Final presentation may be a Discord-native response or attachment, downloadable
+    file, Artifact, hosted result, or Git reference proven by an authoritative Worker
+    report.
+14. An Owner Handoff is Task-scoped and Main-mediated. It may use an isolated
+    interactive Artifact or a configured remote-session gateway, but raw Worker VNC
+    or browser-debug endpoints are not exposed to Discord by default.
+15. Owner Handoff access follows an explicit exposure policy, is time-bounded,
+    revocable, and audited, and carries no credential in its Discord URL or Agent
+    prompt.
+16. The handoff asks the owner for one clear action, never requests a credential in
+    chat, and preserves the Task context boundary while waiting.
+17. Credentials or provider tokens retained after owner authorization remain in the
+    relevant Device Secret Store under Policy; only a non-secret capability
+    reference may enter Task state.
 
 ### FR-15 — Admin Web
 
@@ -1171,8 +1233,9 @@ The first milestone must prove:
 
 The milestone is accepted only when all of the following are demonstrated:
 
-1. Starting from an unconfigured checkout or release, the owner invokes the init
-   skill and reaches a running Main service and Admin Web without manually using a
+1. Starting from an unconfigured checkout or release, the owner gives the repository
+   or verified bundle to a capable Agent, which discovers the init skill and reaches
+   a running Main service and Admin Web without requiring the owner to use a
    development start command.
 2. The current Device appears as the only initial Device.
 3. The owner configures an embedded database and can alternatively validate and use
@@ -1187,8 +1250,9 @@ The milestone is accepted only when all of the following are demonstrated:
 9. A Forum post creates exactly one Task and a reply resumes it.
 10. A different Forum post creates a context-isolated Task.
 11. A clear Task starts automatically and an ambiguous Task asks one useful question.
-12. Main decomposes one Task into parallel Work Orders on at least two Devices and
-    synthesizes the reports.
+12. Main decomposes one outcome-only Task into parallel Work Orders on at least two
+    OS families without asking the owner to choose placement, then synthesizes the
+    reports and leaves the assignments inspectable.
 13. General Agent Runs execute concurrently while Computer Use is limited by the
     desktop-session lock.
 14. Codex and Claude start through programmatic adapters, return observable events,
@@ -1204,11 +1268,14 @@ The milestone is accepted only when all of the following are demonstrated:
 18. A Worker records a qualifying new Knowledge file or update and deterministically
     rebuilds its index.
 19. Computer Use completes the reference interaction on macOS, Windows, and supported
-    graphical Linux, produces screenshot evidence, and honors cancellation.
+    graphical Linux, produces screenshot evidence, honors cancellation, and pauses
+    and resumes the same Task through a bounded Owner Handoff for the reference
+    human-only step.
 20. A headless NAS-style Linux Worker remains fully usable for non-desktop
     Capabilities and reports Computer Use unavailable.
-21. A Worker-generated report is uploaded to Main and shown as both a concise Discord
-    result and an Artifact link.
+21. Worker-generated outcomes are shown as a concise Discord result and the useful
+    available form—file, Artifact, hosted result, or verified Git reference—and an
+    interactive result uses a credential-free Owner Handoff link when required.
 22. At least private-network, authenticated, signed-link, and intentionally public
     Artifact modes are proven.
 23. Agent-generated HTML cannot access Admin Web credentials or execute scripts in

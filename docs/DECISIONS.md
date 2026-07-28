@@ -881,3 +881,40 @@ current Device observation, configuration protocol, and safety rules. Durable
 configuration and receipts remain authoritative. A failure after the durable tool
 boundary stays failed and requires a new owner request after inspecting current
 configuration; the interrupted request itself is never replayed.
+
+## D-059 — Outcome-oriented orchestration and bounded Owner Handoff
+
+**Decision:** OpenDelegate accepts Tasks as desired outcomes, not placement plans.
+Main infers capability and operating-system requirements, decomposes work across
+heterogeneous Devices when useful, and delegates actual Device and route selection to
+deterministic eligibility and scheduling. Main does not ask the owner to choose a
+Device, OS, Transport Profile, Agent provider, or multi-Device split unless that
+choice changes the intended outcome or cannot be derived from durable owner
+configuration. Actual assignments remain visible in Admin Web and audit.
+
+Results may be returned as Discord-native text or attachments, files, Artifacts,
+hosted views, or Git references, but every completion claim remains grounded in an
+authoritative Worker report. If login, MFA, CAPTCHA, legal confirmation, OS
+permission, or another irreducibly human step blocks work, the current Task enters
+`waiting_user` and may expose one Main-mediated Owner Handoff. A handoff uses an
+isolated interactive Artifact or configured remote-session gateway, follows an
+explicit exposure policy, is time-bounded, revocable, and audited, and contains no
+credential or raw Worker VNC/browser-debug endpoint in Discord or Agent context.
+After the owner returns control in the same Task, OpenDelegate resumes durable
+execution and the existing native-session lineage where possible.
+
+**Rationale:** The product's value is freedom from physical placement, not a prettier
+way to remote-control several computers. Requiring the owner to plan Windows,
+macOS, Linux, provider, or network handoffs would merely move orchestration into
+Discord. Some identity, consent, legal, and operating-system boundaries still require
+a person; making that pause explicit preserves security while keeping the Task
+continuous.
+
+**Consequence:** Device placement is observable output rather than routine user
+input. A fixed Main must still remain online; this decision does not add Main
+failover. The existing isolated interactive Artifact path is the first handoff
+surface. A VNC-like or browser-session gateway is an adapter behind Main and is not
+claimed as implemented until its expiry, revocation, audit, secret-isolation, and
+cross-network acceptance evidence passes. ADR-0023 defines the explicit Task record,
+trust, return, and gateway extension boundary; interactive presentation alone is not
+a Handoff.

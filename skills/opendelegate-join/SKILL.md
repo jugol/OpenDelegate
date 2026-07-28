@@ -12,6 +12,19 @@ description:
 Keep the join deterministic. The Agent guides and diagnoses; the packaged Worker owns key
 generation, pinned enrollment, certificate storage, and channel validation.
 
+## Owner outcome
+
+Turn this computer into one outbound Worker for the owner's fixed Main without asking the owner to
+design a Device-to-Device mesh or decide which future Tasks belong here. Detect this Device's OS,
+Workspaces, Agent Adapters, routes, and verified Capabilities; enroll them so Main can place work
+automatically. The owner should later state outcomes in Discord while OpenDelegate decides whether
+this Worker, another Worker, or several OS families are required.
+
+If the owner gave you only the repository URL or a verified bundle plus a short-lived grant,
+identify the installation input below and complete the join journey. Ask only for an owner choice
+that changes their intent or Policy. Never ask for another Device's local path, credential,
+Knowledge, or SSH trust.
+
 ## 1. Verify the installation input
 
 Accept either:

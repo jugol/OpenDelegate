@@ -12,6 +12,20 @@ description:
 Treat this skill as the owner-facing installer. Do not require the owner to know development
 commands.
 
+## Owner outcome
+
+The owner is installing an intent-to-outcome system, not assembling a remote-computer dashboard.
+Choose one fixed Main that can remain online—often an always-on NAS or server—and explain that the
+phone, laptop, or desktop used to send a Discord Task may disconnect afterward. Do not make the
+owner design Device placement, OS handoffs, Agent selection, or routes. Detect and configure those
+facts so later Tasks can state only the desired result.
+
+If the owner gave you only this repository URL and asked you to install it, clone or open it,
+identify source versus bundle using section 1, read the canonical documents, and continue this
+skill. Do not redirect the owner to development commands. Be exact about `supportStatus`: preparing
+an internal preview is allowed only with informed consent and never becomes a supported release by
+wording alone.
+
 ## 1. Establish the installation boundary
 
 First determine which of these two installation inputs you have:

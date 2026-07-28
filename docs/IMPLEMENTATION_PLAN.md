@@ -537,6 +537,9 @@ Make Discord the complete primary Task interface.
   status panel.
 - Implement concise progress, targeted questions, final result, file/media, and
   Artifact link presentation.
+- Present interactive Artifacts with a distinct owner action label. Never place a
+  credential, signed bearer value, raw Worker desktop address, or browser-debug
+  endpoint in a Discord message.
 - Implement pause, resume, cancel, retry, approval, denial, and inspect interactions.
 - Implement system incident and recommendation post creation.
 - Handle archive, lock, reopen, delete, permission loss, rate limit, and reconnect.
@@ -551,6 +554,9 @@ Make Discord the complete primary Task interface.
 - A second Forum post remains context-isolated.
 - Main outage and Gateway reconnect reconcile without missing or duplicating work.
 - Unauthorized messages never reach an Agent.
+- An outcome-only Task does not require a Device, OS, route, provider, or
+  multi-Device-placement answer when durable configuration and eligibility can
+  decide it.
 - A locked or deleted post degrades to Admin Web without losing Task state.
 - Approved binding changes survive Main restart, duplicate Approval replay opens no
   second Gateway, and failed candidates preserve the prior live and durable binding.
@@ -616,6 +622,11 @@ Deliver the required visual setup, Device specification, and operational surface
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.
+- Make the init and join journeys readable by an Agent that receives only the
+  repository URL or verified bundle plus an owner request to install OpenDelegate.
+  The init Agent chooses and explains the fixed always-on Main boundary; each join
+  Agent completes one outbound Worker without requiring the owner to design the
+  topology or placement policy.
 - Keep English as the canonical Admin default and add complete, typed Korean,
   Japanese, French, Spanish, and Simplified Chinese presentation catalogs with an
   explicit pre-authentication and authenticated language selector.
@@ -628,6 +639,9 @@ Deliver the required visual setup, Device specification, and operational surface
 
 - A new owner completes setup through the init skill and Admin Web without reading
   source code.
+- The same owner can give the repository or verified bundle to Codex or Claude on
+  Main and each Worker and receive an accurate, resumable Main-versus-Worker setup
+  journey without manually translating documentation into commands.
 - The required Device UI matches the product specification.
 - A configuration change can be proposed conversationally, previewed, policy-checked,
   applied, audited, and rolled back.
@@ -685,13 +699,21 @@ Turn Worker output into durable, useful, safely viewable results.
 - Implement viewer access profiles and Artifact exposure precedence.
 - Implement private-network, authenticated, signed-link, public, and custom modes.
 - Implement isolated static and interactive HTML origins.
+- Implement the Owner Handoff presentation contract on the interactive origin:
+  Task-scoped access, explicit exposure policy, expiry, revocation, audit, and a
+  credential-free Discord/Admin action. Keep a remote-session gateway behind an
+  adapter boundary; never default to direct Worker VNC exposure.
 - Add Artifact pin, revoke, expire, and audit.
 
 ### Exit gate
 
 - An Artifact generated on an Omada-reachable Worker uploads to Main and opens from a
   Tailscale-reachable laptop without direct Worker access.
-- Discord shows a useful native summary and Open Report button.
+- Discord shows a useful native summary and labels report and interactive-result
+  actions distinctly.
+- The reference Owner Handoff opens through Main, expires or revokes cleanly, leaks
+  no credential or raw Worker endpoint, and resumes the same Task after the owner
+  replies.
 - Every exposure mode passes authorization and audit tests.
 - Malicious generated content cannot cross the Artifact security boundary.
 
@@ -715,6 +737,10 @@ Ship Computer Use as a real, schedulable, cross-platform Capability.
 - Capture screenshots and an action summary as Task Artifacts.
 - Implement locked, logged-out, permission-denied, helper-crashed, display-changed,
   and timeout behavior.
+- When login, MFA, CAPTCHA, legal confirmation, OS permission, or another human-only
+  step is reached, pause the same Task, offer an eligible Main-mediated Owner
+  Handoff, and resume only after the owner returns control. Never attempt to bypass
+  the boundary or request a credential in chat.
 - Add an owner-visible active Computer Use indicator and kill control.
 
 ### Exit gate
@@ -725,6 +751,8 @@ Ship Computer Use as a real, schedulable, cross-platform Capability.
 - Coherent rollback and cloned-service fixtures cannot create two input-capable
   controllers, even when each local snapshot is internally valid.
 - Permission failure is actionable and does not trigger unsafe bypass attempts.
+- The reference human-only interaction uses a bounded Owner Handoff and preserves
+  Task and session continuity across the pause.
 - Emergency stop prevents further input.
 - A headless NAS-style Linux Device remains healthy and accurately lacks the
   capability.

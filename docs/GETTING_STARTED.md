@@ -1,11 +1,26 @@
 # Getting started
 
-OpenDelegate is installed with an Agent, then operated through Admin Web and Discord. You do not
-start it with `npm run start`, copy credentials into a prompt, or configure every pair of Devices
-with SSH.
+OpenDelegate is installed with an Agent, then operated through Admin Web and Discord. You describe
+the desired outcome; OpenDelegate decides which eligible Device, OS, Agent, route, or combination
+should perform it. You do not start it with `npm run start`, copy credentials into a prompt,
+configure every pair of Devices with SSH, or manually coordinate cross-Device handoffs.
 
 This guide takes one owner from an empty Main computer to a first isolated Task and an additional
 Worker Device.
+
+The shortest honest setup request is to give this repository URL or an extracted, verified release
+bundle to Codex or Claude and say:
+
+> Install OpenDelegate from this repository. Discover and follow its Main installation instructions.
+> Set up this computer as my fixed, always-on Main, keep runtime state outside the checkout or
+> bundle, and guide me through only the owner decisions that affect my intent. Do not ask me to
+> choose a Device, OS, route, or Agent for future Tasks.
+
+That Agent owns the checklist below and discovers `AGENTS.md` plus
+`skills/opendelegate-init/SKILL.md` itself. On each additional computer, give the same repository or
+platform bundle plus the unopened, short-lived grant and ask its Agent to join that computer as a
+Worker; it discovers `skills/opendelegate-join/SKILL.md`. The owner should not have to translate
+this guide into shell commands or know the repository's internal file layout.
 
 > [!IMPORTANT]
 > Read `release-metadata.json` before setup. When `supportStatus` begins with `internal-preview`,
@@ -67,9 +82,13 @@ instead of building again. Do not publish an internal-preview directory under a 
 Open the extracted bundle directory as the workspace in Codex, or start Claude from that directory.
 Then send this prompt:
 
-> Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
-> Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop if
-> a required safety check fails.
+> Install OpenDelegate from this directory. Discover and follow its Main installation instructions,
+> then initialize this computer as my fixed, always-on OpenDelegate Main Device. Guide me through
+> every owner decision, keep runtime state outside this bundle, do not ask me to choose a Device,
+> OS, route, or Agent for future Tasks, and stop if a required safety check fails.
+
+The Agent discovers and follows `skills/opendelegate-init/SKILL.md`; the path is documented here for
+auditing, not because the owner must name it.
 
 Before invoking the launcher for the first time, tell the Agent whether you want to configure
 Discord now, defer it until after owner claim, or keep it disabled. A prepared non-secret binding
@@ -273,11 +292,13 @@ unopened file with an owner-controlled local or operating-system-secure handoff.
 
 On the new Device, open its bundle directory in Codex or Claude and send:
 
-> Read `skills/opendelegate-join/SKILL.md` and join this computer to my fixed OpenDelegate Main using
-> the unopened grant file at `ABSOLUTE_GRANT_FILE`. Detect its capabilities, keep all Knowledge
-> local, and ask before any network or privileged change.
+> Join this computer to my fixed OpenDelegate Main using the unopened grant file at
+> `ABSOLUTE_GRANT_FILE`. Discover and follow this directory's Worker installation instructions,
+> detect its capabilities, keep all Knowledge local, and ask before any network or privileged
+> change.
 
-The join Agent passes only the file path to the packaged Worker. The Worker generates its own
+The join Agent discovers `skills/opendelegate-join/SKILL.md` and passes only the file path to the
+packaged Worker. The Worker generates its own
 Device-local key, validates Main's identity, consumes the grant, and confirms the mutual-TLS
 channel. If the grant expired or was consumed, delete any retained handoff copy and issue a new one;
 never edit or reuse it.
@@ -306,6 +327,19 @@ Main evaluates the Task, creates Work Orders, selects eligible Devices from dura
 Role, policy, route, and health state, and reports progress back to the post. When a result is better
 shown visually, OpenDelegate may attach it or publish an Artifact link under the configured exposure
 policy.
+
+Do not name a Device, OS, route, or Agent unless that placement is part of the result you actually
+want. A Task may move from Windows development to macOS build or signing and then to Linux
+deployment without an owner-managed handoff. The actual assignments and reasons remain inspectable
+in Admin Web and audit.
+
+The final result may be a Discord response or attachment, downloadable file, Artifact, hosted view,
+or verified Git reference. If login, MFA, CAPTCHA, legal confirmation, or an OS permission needs
+you, OpenDelegate keeps this Task in `waiting_user` and may show an **Open interactive result**
+action. Open only the Main-mediated action, perform the requested step without posting a credential,
+then reply in the same Forum post so the Task can continue. OpenDelegate does not publish a raw
+Worker VNC or browser-debug endpoint by default; a configured remote-session gateway is a future
+adapter until its release evidence passes.
 
 Use Admin Web to inspect the durable Task journal, Work Orders, Device health, approvals, audit
 events, and Artifacts. Discord remains the conversational surface. The Main database remains the

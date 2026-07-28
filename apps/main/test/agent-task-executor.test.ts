@@ -134,6 +134,53 @@ test("Main Agent must ask exactly one targeted owner question", async () => {
   });
 });
 
+test("Main Agent cannot delegate routine Device placement back to the owner", async () => {
+  const executor = new AgentBackedTaskExecutor({
+    adapter: new FakeAgentAdapter("placement-question"),
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  await assert.rejects(executor.execute(request(1)), {
+    code: "COORDINATOR_RESULT_INVALID",
+  });
+});
+
+test("Main Agent may clarify an OS requirement that changes the requested outcome", async () => {
+  const executor = new AgentBackedTaskExecutor({
+    adapter: new FakeAgentAdapter("outcome-platform-question"),
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  assert.deepEqual(await executor.execute(request(1)), {
+    state: "waiting_user",
+    publicMessage: "Which operating systems must the release support?",
+  });
+});
+
 test("Main Agent creates an explicit checkpoint continuation when resume is deterministically unavailable", async () => {
   const adapter = new FakeAgentAdapter();
   const repository = new EventStoreMainNativeSessionRepository(
@@ -179,6 +226,11 @@ test("Main Agent creates an explicit checkpoint continuation when resume is dete
   assert.equal(continuation?.continuationReason, "native-session-resume-unavailable");
   assert.match(continuation?.prompt ?? "", /Durable checkpoint continuation package/u);
   assert.match(continuation?.prompt ?? "", /Continue from the durable checkpoint\./u);
+  assert.match(
+    continuation?.prompt ?? "",
+    /The owner specifies the outcome, not Device placement/u,
+  );
+  assert.match(continuation?.prompt ?? "", /never invent a handoff URL/u);
   assert.doesNotMatch(
     continuation?.prompt ?? "",
     /THIS-REQUEST-OBJECT-MUST-NOT-BE-THE-CHECKPOINT/u,
@@ -189,6 +241,58 @@ test("Main Agent creates an explicit checkpoint continuation when resume is dete
   assert.equal(stored?.nativeSessionId, "native-task-session-continuation");
   assert.equal(stored?.lineage.parentNativeSessionId, "native-task-session");
   assert.equal(stored?.lineage.continuationReason, "native-session-resume-unavailable");
+});
+
+test("outcome-first rules survive planning and verification checkpoint continuation", async () => {
+  for (const turn of ["planning", "verification"] as const) {
+    const adapter = new FakeAgentAdapter("outcome-continuation");
+    adapter.resumeAvailable = false;
+    const repository = new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    );
+    const cwd = await realpath(".");
+    await repository.save(persistedCoordinatorSession(cwd));
+    const executor = new AgentBackedTaskExecutor({
+      adapter,
+      sessionRepository: repository,
+      checkpoints: checkpointProvider("Continue from the durable checkpoint."),
+      deviceId: "device_main",
+      workspace: {
+        workspaceId: "workspace_main_coordinator",
+        cwd,
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: { mode: "deny" },
+      limits,
+    });
+    const task = request(2).task;
+    const controller = new AbortController();
+
+    if (turn === "planning") {
+      const decision = await executor.plan({
+        task,
+        attempt: 2,
+        executionKey: "task-execution:task_release:attempt:2",
+        signal: controller.signal,
+      });
+      assert.equal(decision.state, "ready");
+    } else {
+      const result = await executor.verify({
+        task,
+        workOrders: [releaseWorkOrder()],
+        reports: [releaseWorkerReport()],
+        signal: controller.signal,
+      });
+      assert.equal(result.state, "completed");
+    }
+
+    const prompt = adapter.starts[0]?.prompt ?? "";
+    assert.match(prompt, new RegExp(`continuing ${turn}`, "u"));
+    assert.match(prompt, /The owner specifies the outcome, not Device placement/u);
+    assert.match(prompt, /never invent a handoff URL/u);
+    assert.equal(adapter.starts[0]?.continuationReason, "native-session-resume-unavailable");
+  }
 });
 
 test("Main Agent plans Work Orders and verifies completion only from authoritative Worker reports", async () => {
@@ -225,25 +329,24 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   assert.equal(planned.plan.taskId, task.taskId);
   assert.equal(planned.plan.workOrders[0]?.workOrderId, "work_release_build");
   assert.match(adapter.starts[0]?.prompt ?? "", /Return a bounded Work Order plan/u);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /The owner specifies the outcome, not Device placement/u,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /Do not ask the owner to choose a Device, OS, route, Agent provider, or multi-Device split/u,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /login, MFA, CAPTCHA, legal confirmation, or OS permission/u,
+  );
+  assert.match(adapter.starts[0]?.prompt ?? "", /never invent a handoff URL/u);
 
   const verified = await reasoner.verify({
     task,
     workOrders: planned.plan.workOrders,
-    reports: [
-      {
-        taskId: task.taskId,
-        workOrderId: "work_release_build",
-        deviceId: "device_worker",
-        workerId: "worker_primary",
-        routeId: "route_private",
-        runId: "run_release_build",
-        leaseId: "lease_release_build",
-        fencingToken: 7,
-        report: "The Worker built the release and attached the test evidence.",
-        artifactIds: ["artifact_release_evidence"],
-        acceptedAtMs: Date.parse(NOW),
-      },
-    ],
+    reports: [releaseWorkerReport()],
     signal: controller.signal,
   });
   assert.deepEqual(verified, {
@@ -260,6 +363,10 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   assert.match(
     adapter.resumes[0]?.prompt ?? "",
     /You cannot manufacture, alter, or infer execution evidence/u,
+  );
+  assert.match(
+    adapter.resumes[0]?.prompt ?? "",
+    /Discord summary, file, Artifact, hosted result, or Git reference/u,
   );
 });
 
@@ -348,17 +455,78 @@ function checkpointProvider(latestMessage?: string): {
   };
 }
 
+function releaseWorkOrder() {
+  return {
+    protocolVersion: "v1" as const,
+    taskId: "task_release",
+    workOrderId: "work_release_build",
+    title: "Build the release",
+    brief: "Build and test the requested release.",
+    completionCriteria: ["The release build and tests succeed."],
+    constraints: ["Do not waive release evidence."],
+    selectedInputIds: [],
+    dependsOn: [],
+    schedulingHints: {
+      preferredDeviceIds: [],
+      preferredRoles: ["development"],
+    },
+    requiredCapabilities: ["codex"],
+    requiredSecretRefs: [],
+  };
+}
+
+function releaseWorkerReport() {
+  return {
+    taskId: "task_release",
+    workOrderId: "work_release_build",
+    deviceId: "device_worker",
+    workerId: "worker_primary",
+    routeId: "route_private",
+    runId: "run_release_build",
+    leaseId: "lease_release_build",
+    fencingToken: 7,
+    report: "The Worker built the release and attached the test evidence.",
+    artifactIds: ["artifact_release_evidence"],
+    acceptedAtMs: Date.parse(NOW),
+  };
+}
+
+function persistedCoordinatorSession(cwd: string): NativeSessionReference {
+  return {
+    schemaVersion: 1,
+    provider: "generic",
+    adapterId: "fixture-main-agent",
+    adapterVersion: "1.0.0",
+    nativeSessionId: "native-task-session",
+    sessionKey: "task:task_release:coordinator:fixture-main-agent",
+    taskId: "task_release",
+    workstreamId: "coordinator",
+    deviceId: "device_main",
+    workspaceId: "workspace_main_coordinator",
+    cwd,
+    lineage: { lineageId: "lineage-task-release" },
+    createdAt: NOW,
+  };
+}
+
+type FakeAgentMode =
+  | "normal"
+  | "invalid-completion"
+  | "multiple-questions"
+  | "placement-question"
+  | "outcome-platform-question"
+  | "orchestration"
+  | "outcome-continuation";
+
 class FakeAgentAdapter implements AgentAdapter {
   readonly adapterId = "fixture-main-agent";
   readonly provider = "generic" as const;
   readonly starts: AgentStartRequest[] = [];
   readonly resumes: AgentResumeRequest[] = [];
-  readonly #mode: "normal" | "invalid-completion" | "multiple-questions" | "orchestration";
+  readonly #mode: FakeAgentMode;
   resumeAvailable = true;
 
-  constructor(
-    mode: "normal" | "invalid-completion" | "multiple-questions" | "orchestration" = "normal",
-  ) {
+  constructor(mode: FakeAgentMode = "normal") {
     this.#mode = mode;
   }
 
@@ -387,6 +555,31 @@ class FakeAgentAdapter implements AgentAdapter {
 
   async start(input: AgentStartRequest): Promise<AgentRunHandle> {
     this.starts.push(structuredClone(input));
+    if (this.#mode === "outcome-continuation") {
+      const result = input.prompt.includes("continuing planning")
+        ? {
+            schemaVersion: 1,
+            state: "ready",
+            plan: {
+              protocolVersion: "v1",
+              taskId: input.taskId,
+              workOrders: [releaseWorkOrder()],
+            },
+          }
+        : input.prompt.includes("continuing verification")
+          ? {
+              schemaVersion: 1,
+              state: "completed",
+              publicMessage: "The authoritative Worker evidence satisfies the Task.",
+              verifiedCompletionCriteria: ["Every release gate is verified."],
+            }
+          : {
+              schemaVersion: 1,
+              state: "waiting_user",
+              ownerQuestion: "Which release channel should I use?",
+            };
+      return handle(session(input), result);
+    }
     return handle(
       session(input),
       this.#mode === "invalid-completion"
@@ -402,38 +595,50 @@ class FakeAgentAdapter implements AgentAdapter {
               state: "waiting_user",
               ownerQuestion: "Which release channel should I use? Should it be signed?",
             }
-          : this.#mode === "orchestration"
+          : this.#mode === "placement-question"
             ? {
                 schemaVersion: 1,
-                state: "ready",
-                plan: {
-                  protocolVersion: "v1",
-                  taskId: input.taskId,
-                  workOrders: [
-                    {
-                      protocolVersion: "v1",
-                      workOrderId: "work_release_build",
-                      title: "Build the release",
-                      brief: "Build and test the requested release.",
-                      completionCriteria: ["The release build and tests succeed."],
-                      constraints: ["Do not waive release evidence."],
-                      selectedInputIds: [],
-                      dependsOn: [],
-                      schedulingHints: {
-                        preferredDeviceIds: [],
-                        preferredRoles: ["development"],
-                      },
-                      requiredCapabilities: ["codex"],
-                      requiredSecretRefs: [],
-                    },
-                  ],
-                },
-              }
-            : {
-                schemaVersion: 1,
                 state: "waiting_user",
-                ownerQuestion: "Which release channel should I use?",
-              },
+                ownerQuestion: "Would you like this built by the Mac or Windows worker?",
+              }
+            : this.#mode === "outcome-platform-question"
+              ? {
+                  schemaVersion: 1,
+                  state: "waiting_user",
+                  ownerQuestion: "Which operating systems must the release support?",
+                }
+              : this.#mode === "orchestration"
+                ? {
+                    schemaVersion: 1,
+                    state: "ready",
+                    plan: {
+                      protocolVersion: "v1",
+                      taskId: input.taskId,
+                      workOrders: [
+                        {
+                          protocolVersion: "v1",
+                          workOrderId: "work_release_build",
+                          title: "Build the release",
+                          brief: "Build and test the requested release.",
+                          completionCriteria: ["The release build and tests succeed."],
+                          constraints: ["Do not waive release evidence."],
+                          selectedInputIds: [],
+                          dependsOn: [],
+                          schedulingHints: {
+                            preferredDeviceIds: [],
+                            preferredRoles: ["development"],
+                          },
+                          requiredCapabilities: ["codex"],
+                          requiredSecretRefs: [],
+                        },
+                      ],
+                    },
+                  }
+                : {
+                    schemaVersion: 1,
+                    state: "waiting_user",
+                    ownerQuestion: "Which release channel should I use?",
+                  },
     );
   }
 
