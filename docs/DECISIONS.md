@@ -993,3 +993,28 @@ bounded read-only Agent turn before Task origin. Discord automatically presents
 originated work when a Forum binding is ready; Admin remains authoritative when
 Discord is unavailable. The first configured Forum is the deterministic default
 until explicit category routing is added.
+
+## D-063 — Accepted Configuration messages survive an in-flight reload
+
+**Decision:** Main records an owner Configuration Chat message as a durable,
+Device-and-Adapter-scoped event before it starts or resumes the corresponding native
+Agent turn. The eventual Agent response is a separate terminal event correlated by
+the immutable request operation key. Conversation projection supports both these
+events and the legacy completed-exchange event without duplicating messages.
+
+While the original Main process still owns the request, the history projection marks
+the accepted owner message as pending. Admin Web restores it after reload, renders
+the ordinary Agent activity state, and polls the bounded history endpoint until the
+terminal response appears. An accepted message with no terminal response and no live
+request owner is rendered as interrupted rather than remaining pending forever.
+
+**Rationale:** Persisting the owner message only after a potentially long Agent turn
+made a reload look like data loss. The message disappeared until the Agent completed,
+and a failed or interrupted turn could erase the only visible copy entirely.
+Optimistic browser state is not an acceptable durability boundary.
+
+**Consequence:** A browser disconnect cannot erase an accepted message. Agent failure
+does not remove the owner's context, and a later recovery can include that visible
+owner message without treating an unfinished response as a verified completion.
+Secrets remain subject to pre-acceptance rejection and secure intake, and the first
+typed-tool marker remains the mutation replay boundary defined by D-058.

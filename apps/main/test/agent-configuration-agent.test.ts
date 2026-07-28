@@ -114,7 +114,7 @@ test("Configuration Agent creates a fresh continuation when the initial native r
     /prior provider-native Configuration Agent session is unavailable/iu,
   );
   assert.match(adapter.starts[1]?.prompt ?? "", /Inspect this Device\./u);
-  assert.match(adapter.starts[1]?.prompt ?? "", /Durable completed exchanges/iu);
+  assert.match(adapter.starts[1]?.prompt ?? "", /Durable visible conversation/iu);
   assert.equal(adapter.starts[1]?.runId.endsWith("_continuation_turn_0"), true);
   assert.equal(adapter.starts[1]?.continuationOf?.nativeSessionId, "native-configuration-session");
   assert.match(adapter.starts[1]?.continuationReason ?? "", /resume was unavailable/iu);
@@ -144,6 +144,22 @@ test("Configuration Agent never auto-continues or replays after a durable tool a
   assert.equal(adapter.starts.length, 1);
   assert.equal(adapter.resumes.length, 2);
   assert.equal(broker.calls.length, 1);
+  const interruptedHistory = await agent.listMessages({
+    deviceId: "device_worker",
+    principalId: "owner_personal",
+  });
+  assert.deepEqual(
+    interruptedHistory.messages
+      .filter((item) => item.role === "owner")
+      .map(({ content, responseStatus }) => ({ content, responseStatus })),
+    [
+      { content: "Inspect this Device.", responseStatus: "completed" },
+      {
+        content: "Inspect configuration and continue Discord setup.",
+        responseStatus: "interrupted",
+      },
+    ],
+  );
 
   const restarted = await createAgent(adapter, eventStore, broker);
   await assert.rejects(restarted.sendMessage(interrupted), {
@@ -259,10 +275,10 @@ test("Configuration Chat restores its visible Device conversation after restart"
   });
 
   assert.deepEqual(
-    history.messages.map(({ role, content, suggestedActions }) => ({
-      role,
-      content,
-      suggestedActions,
+    history.messages.map((item) => ({
+      role: item.role,
+      content: item.content,
+      suggestedActions: item.role === "agent" ? item.suggestedActions : undefined,
     })),
     [
       {
@@ -285,6 +301,42 @@ test("Configuration Chat restores its visible Device conversation after restart"
         content: "I prepared a proposal; it has not been applied.",
         suggestedActions: undefined,
       },
+    ],
+  );
+});
+
+test("Configuration Chat exposes an accepted owner message while its Agent response is pending", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new DeferredConfigurationAdapter();
+  const agent = await createAgent(adapter, eventStore);
+  const response = agent.sendMessage(
+    message("request_pending_history", "Keep this visible during reload."),
+  );
+
+  await adapter.started;
+  const pending = await agent.listMessages({
+    deviceId: "device_worker",
+    principalId: "owner_personal",
+  });
+
+  assert.equal(pending.messages[0]?.role, "owner");
+  assert.equal(pending.messages[0]?.content, "Keep this visible during reload.");
+  assert.equal(
+    (pending.messages[0] as { readonly responseStatus?: string } | undefined)?.responseStatus,
+    "pending",
+  );
+
+  adapter.complete();
+  await response;
+  const completed = await agent.listMessages({
+    deviceId: "device_worker",
+    principalId: "owner_personal",
+  });
+  assert.deepEqual(
+    completed.messages.map(({ role, content }) => ({ role, content })),
+    [
+      { role: "owner", content: "Keep this visible during reload." },
+      { role: "agent", content: "The deferred response completed." },
     ],
   );
 });
@@ -532,6 +584,60 @@ class FakeConfigurationAdapter implements AgentAdapter {
         claimReceiptIds: [],
       }),
     );
+  }
+}
+
+class DeferredConfigurationAdapter extends FakeConfigurationAdapter {
+  readonly started: Promise<void>;
+  #complete: ((result: Awaited<AgentRunHandle["result"]>) => void) | undefined;
+  #markStarted: (() => void) | undefined;
+  #reference: NativeSessionReference | undefined;
+
+  constructor() {
+    super();
+    this.started = new Promise((resolve) => {
+      this.#markStarted = resolve;
+    });
+  }
+
+  override async start(input: AgentStartRequest): Promise<AgentRunHandle> {
+    this.starts.push(structuredClone(input));
+    const reference = session(input);
+    this.#reference = reference;
+    const result = new Promise<Awaited<AgentRunHandle["result"]>>((resolve) => {
+      this.#complete = resolve;
+    });
+    this.#markStarted?.();
+    return {
+      events: {
+        async *[Symbol.asyncIterator]() {
+          yield {
+            sequence: 1,
+            observedAt: NOW,
+            type: "session_started" as const,
+            session: reference,
+          };
+        },
+      },
+      result,
+      async cancel() {
+        return undefined;
+      },
+    };
+  }
+
+  complete(): void {
+    assert.ok(this.#reference);
+    this.#complete?.({
+      status: "succeeded",
+      session: this.#reference,
+      finalText: JSON.stringify({
+        schemaVersion: 1,
+        type: "final",
+        content: "The deferred response completed.",
+        claimReceiptIds: [],
+      }),
+    });
   }
 }
 

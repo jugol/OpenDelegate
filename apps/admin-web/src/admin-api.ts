@@ -555,6 +555,7 @@ export interface ConfigurationAgentConversationMessage {
   readonly role: "owner" | "agent";
   readonly content: string;
   readonly suggestedActions: readonly ConfigurationAgentSuggestedAction[];
+  readonly responseStatus?: "completed" | "interrupted" | "pending";
   readonly occurredAt: string;
 }
 
@@ -699,6 +700,7 @@ export class BrowserAdminApi implements AdminApi {
       `/api/v1/devices/${encodeURIComponent(deviceId)}/configuration/messages`,
       {
         body: { message },
+        keepalive: true,
         method: "POST",
       },
     );
@@ -872,6 +874,7 @@ export class BrowserAdminApi implements AdminApi {
     path: string,
     options: {
       readonly body: unknown;
+      readonly keepalive?: boolean;
       readonly method: "POST";
     },
   ): Promise<TValue> {
@@ -896,6 +899,7 @@ export class BrowserAdminApi implements AdminApi {
       readonly body?: unknown;
       readonly csrfToken?: string;
       readonly idempotencyKey?: string;
+      readonly keepalive?: boolean;
       readonly method?: "GET" | "POST";
     } = {},
   ): Promise<TValue> {
@@ -919,6 +923,7 @@ export class BrowserAdminApi implements AdminApi {
     const response = await fetch(path, {
       credentials: "same-origin",
       headers,
+      keepalive: options.keepalive ?? false,
       method: options.method ?? "GET",
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
     });
@@ -1036,12 +1041,18 @@ function asConfigurationAgentConversation(
     const content = asNonBlankString(record["content"]);
     const occurredAt = asNonBlankString(record["occurredAt"]);
     const role = record["role"];
+    const responseStatus = record["responseStatus"];
     const rawActions = record["suggestedActions"] ?? [];
     if (
       messageId === undefined ||
       content === undefined ||
       occurredAt === undefined ||
       (role !== "owner" && role !== "agent") ||
+      (responseStatus !== undefined &&
+        responseStatus !== "completed" &&
+        responseStatus !== "interrupted" &&
+        responseStatus !== "pending") ||
+      (role === "agent" && responseStatus !== undefined) ||
       !Array.isArray(rawActions) ||
       rawActions.length > 4
     ) {
@@ -1058,7 +1069,14 @@ function asConfigurationAgentConversation(
       }
       return action;
     });
-    return { messageId, role, content, suggestedActions, occurredAt };
+    return {
+      messageId,
+      role,
+      content,
+      suggestedActions,
+      ...(responseStatus === undefined ? {} : { responseStatus }),
+      occurredAt,
+    };
   });
 }
 

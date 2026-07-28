@@ -132,6 +132,7 @@ export function ConfigurationChat({
   const [storedReference, setStoredReference] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [agentResponding, setAgentResponding] = useState(false);
+  const [recoveredPending, setRecoveredPending] = useState(false);
   const [historyHydrated, setHistoryHydrated] = useState(onLoadMessages === undefined);
   const activeSetup = setupGoal === null ? null : guidedSetupDescriptor(setupGoal, copy);
   const [conversationMessages, setConversationMessages] = useState<readonly ChatMessage[]>(() => [
@@ -167,6 +168,40 @@ export function ConfigurationChat({
       notifyIfUnread();
     },
     [notifyIfUnread],
+  );
+
+  const restoreConversationMessages = useCallback(
+    (messages: readonly ConfigurationAgentConversationMessage[]): boolean => {
+      const restored = messages.flatMap((message): readonly ChatMessage[] => {
+        const visible: ChatMessage = {
+          id: `history-${message.messageId}`,
+          author: message.role,
+          content: message.content,
+          ...(message.suggestedActions.length === 0
+            ? {}
+            : { suggestedActions: message.suggestedActions }),
+        };
+        return message.role === "owner" && message.responseStatus === "interrupted"
+          ? [
+              visible,
+              {
+                id: `history-interrupted-${message.messageId}`,
+                author: "agent",
+                systemMessageKey: "failedMessage",
+              },
+            ]
+          : [visible];
+      });
+      const hasPending = messages.some(
+        (message) => message.role === "owner" && message.responseStatus === "pending",
+      );
+      setConversationMessages(restored);
+      setRecoveredPending(hasPending);
+      setPending(hasPending);
+      setAgentResponding(hasPending);
+      return hasPending;
+    },
+    [],
   );
 
   const sendConversationMessage = useCallback(
@@ -254,15 +289,7 @@ export function ConfigurationChat({
         if (messages.length === 0) {
           return;
         }
-        const restored = messages.map((message): ChatMessage => ({
-          id: `history-${message.messageId}`,
-          author: message.role,
-          content: message.content,
-          ...(message.suggestedActions.length === 0
-            ? {}
-            : { suggestedActions: message.suggestedActions }),
-        }));
-        setConversationMessages(restored);
+        restoreConversationMessages(messages);
       })
       .catch(() => {
         // Chat remains usable when history recovery is temporarily unavailable.
@@ -275,7 +302,38 @@ export function ConfigurationChat({
     return () => {
       active = false;
     };
-  }, [onLoadMessages]);
+  }, [onLoadMessages, restoreConversationMessages]);
+
+  useEffect(() => {
+    if (!historyHydrated || !recoveredPending || onLoadMessages === undefined) {
+      return;
+    }
+    let active = true;
+    let timer: number | undefined;
+    const poll = async (): Promise<void> => {
+      try {
+        const messages = await onLoadMessages();
+        if (!active) {
+          return;
+        }
+        if (messages.length > 0 && !restoreConversationMessages(messages)) {
+          return;
+        }
+      } catch {
+        // A live pending response remains visible while a transient history read retries.
+      }
+      if (active) {
+        timer = window.setTimeout(() => void poll(), 750);
+      }
+    };
+    timer = window.setTimeout(() => void poll(), 750);
+    return () => {
+      active = false;
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [historyHydrated, onLoadMessages, recoveredPending, restoreConversationMessages]);
 
   useEffect(() => {
     if (open && focusRequestId > 0) {

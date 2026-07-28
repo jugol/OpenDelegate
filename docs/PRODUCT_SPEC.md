@@ -853,11 +853,14 @@ may request a transition but cannot manufacture a state outside the transition r
     records the first typed-tool attempt for each owner request before execution; an
     interrupted request with that boundary and no final response fails closed across
     restart instead of replaying.
-27. Completed owner and Agent Configuration Chat exchanges are stored durably per
-    target Device and Adapter. Admin Web restores them after reload or Main restart;
-    they remain separate from Task conversations and never include provider-hidden
-    reasoning or raw Secret material. Enter sends a message, while Shift+Enter inserts
-    a newline in the multiline composer.
+27. Main durably records an accepted owner Configuration Chat message before starting
+    or resuming its Agent turn. Admin Web restores that message immediately after
+    reload, shows whether its response is still pending or was interrupted, and
+    reconciles the eventual Agent response without requiring another reload.
+    Completed owner and Agent exchanges remain stored per target Device and Adapter
+    across Main restart. They remain separate from Task conversations and never
+    include provider-hidden reasoning or raw Secret material. Enter sends a message,
+    while Shift+Enter inserts a newline in the multiline composer.
 28. Approving a protected Configuration proposal atomically executes that exact
     proposal through the Approval service. A follow-up chat message never creates a
     second Approval for the same target Device and proposal: the durable Approval

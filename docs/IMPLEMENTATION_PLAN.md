@@ -618,10 +618,14 @@ Deliver the required visual setup, Device specification, and operational surface
   the complete current prompt plus a bounded durable excerpt of completed Device
   exchanges, disclose the possible loss of provider-private or interrupted in-flight
   context, re-inspect durable state, and re-confirm any missing value before proposing
-  a change. Persist completed owner and Agent exchanges per Device so Admin Web and a
-  fresh native continuation recover them after reload or Main restart. Record the
-  first typed-tool attempt before broker execution and fail an interrupted request
-  closed across restart; never auto-restart or replay after that boundary.
+  a change. Persist each accepted owner message before Agent execution and persist
+  each completed Agent response separately per Device. After reload, Admin Web must
+  restore an accepted message immediately, distinguish a live pending response from
+  an interrupted turn, and poll only while a live response remains pending. A fresh
+  native continuation receives the bounded durable conversation excerpt after reload
+  or Main restart. Record the first typed-tool attempt before broker execution and
+  fail an interrupted request closed across restart; never auto-restart or replay
+  after that boundary.
 - Derive protected Configuration Approval request identity from target Device plus
   immutable proposal ID while keeping each chat tool execution request-bound.
   Approval executes the protected operation immediately; a later “approval complete”

@@ -60,6 +60,20 @@ interface ConfigurationConversationExchangeEventPayload {
   readonly response: ConfigurationAgentMessageResponse;
 }
 
+interface ConfigurationConversationOwnerMessageEventPayload {
+  readonly schemaVersion: 1;
+  readonly operationKey: string;
+  readonly requestDigest: string;
+  readonly ownerMessage: ConfigurationAgentConversationMessageV1;
+}
+
+interface ConfigurationConversationTurn {
+  readonly operationKey: string;
+  readonly requestDigest: string;
+  readonly ownerMessage: ConfigurationAgentConversationMessageV1;
+  readonly response?: ConfigurationAgentMessageResponse;
+}
+
 interface StoredConfigurationConversationEvent {
   readonly streamVersion: number;
   readonly type: string;
@@ -373,6 +387,8 @@ const DEFAULT_MAXIMUM_PROMPT_BYTES = 64 * 1024;
 const DEFAULT_MAXIMUM_TOOL_TURNS = 8;
 const CONFIGURATION_RESPONSE_EVENT = "configuration-agent.response-recorded";
 const CONFIGURATION_TOOL_ATTEMPT_EVENT = "configuration-agent.tool-attempted";
+const CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT =
+  "configuration-agent.conversation-owner-message-recorded";
 const CONFIGURATION_CONVERSATION_EXCHANGE_EVENT =
   "configuration-agent.conversation-exchange-recorded";
 const MAXIMUM_CONFIGURATION_CONVERSATION_EXCHANGES = 1_000;
@@ -471,21 +487,29 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       return active.result;
     }
 
-    const result = this.#enqueue(request.deviceId, async () => {
-      const stored = await this.#loadStoredResponse(operationKey, requestDigest);
-      if (stored !== undefined) {
-        return stored;
-      }
-      const storedExchange = await this.#loadStoredConversationExchange(
-        request.deviceId,
+    const result = (async () => {
+      const ownerMessage = await this.#recordConversationOwnerMessage({
+        deviceId: request.deviceId,
         operationKey,
+        ownerMessage: request.message,
         requestDigest,
-      );
-      if (storedExchange !== undefined) {
-        return storedExchange;
-      }
-      return this.#runAndRecord(request, operationKey, requestDigest);
-    });
+      });
+      return this.#enqueue(request.deviceId, async () => {
+        const stored = await this.#loadStoredResponse(operationKey, requestDigest);
+        if (stored !== undefined) {
+          return stored;
+        }
+        const storedExchange = await this.#loadStoredConversationExchange(
+          request.deviceId,
+          operationKey,
+          requestDigest,
+        );
+        if (storedExchange !== undefined) {
+          return storedExchange;
+        }
+        return this.#runAndRecord(request, operationKey, requestDigest, ownerMessage);
+      });
+    })();
     this.#activeRequests.set(operationKey, { requestDigest, result });
     const cleanup = (): void => {
       if (this.#activeRequests.get(operationKey)?.result === result) {
@@ -510,22 +534,38 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     } catch {
       throw unavailable("The Configuration Chat history could not be read.");
     }
-    const exchanges = events
-      .map((event) => validateConversationExchangeEvent(event))
-      .slice(-MAXIMUM_CONFIGURATION_CONVERSATION_EXCHANGES);
+    const turns = projectConversationTurns(events).slice(
+      -MAXIMUM_CONFIGURATION_CONVERSATION_EXCHANGES,
+    );
     return {
-      messages: exchanges.flatMap((exchange) => [
-        structuredClone(exchange.ownerMessage),
-        {
-          messageId: exchange.response.messageId,
-          role: "agent" as const,
-          content: exchange.response.content,
-          ...(exchange.response.suggestedActions === undefined
-            ? {}
-            : { suggestedActions: [...exchange.response.suggestedActions] }),
-          occurredAt: exchange.response.occurredAt,
-        },
-      ]),
+      messages: turns.flatMap((turn) => {
+        const active = this.#activeRequests.get(turn.operationKey);
+        const responseStatus =
+          turn.response !== undefined
+            ? ("completed" as const)
+            : active?.requestDigest === turn.requestDigest
+              ? ("pending" as const)
+              : ("interrupted" as const);
+        return [
+          {
+            ...structuredClone(turn.ownerMessage),
+            responseStatus,
+          },
+          ...(turn.response === undefined
+            ? []
+            : [
+                {
+                  messageId: turn.response.messageId,
+                  role: "agent" as const,
+                  content: turn.response.content,
+                  ...(turn.response.suggestedActions === undefined
+                    ? {}
+                    : { suggestedActions: [...turn.response.suggestedActions] }),
+                  occurredAt: turn.response.occurredAt,
+                },
+              ]),
+        ];
+      }),
     };
   }
 
@@ -549,6 +589,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     input: ConfigurationAgentMessageInput,
     operationKey: string,
     requestDigest: string,
+    ownerMessage: ConfigurationAgentConversationMessageV1,
   ): Promise<ConfigurationAgentMessageResponse> {
     await this.#assertNoInterruptedToolAttempt(operationKey, requestDigest);
     const sessionKey = configurationSessionKey(input.deviceId, this.#adapter.adapterId);
@@ -610,7 +651,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
             turnIndex,
             prompt: buildConfigurationContinuationPrompt(
               prompt,
-              conversation.messages,
+              conversation.messages.filter(
+                (message) => message.role !== "owner" || message.responseStatus !== "pending",
+              ),
               this.#maximumPromptBytes,
             ),
             session: undefined,
@@ -643,7 +686,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
           await this.#recordConversationExchange({
             deviceId: input.deviceId,
             operationKey,
-            ownerMessage: input.message,
+            ownerMessage,
             requestDigest,
             response,
           });
@@ -855,27 +898,78 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     }
   }
 
-  async #recordConversationExchange(input: {
+  async #recordConversationOwnerMessage(input: {
     readonly deviceId: string;
     readonly operationKey: string;
     readonly ownerMessage: string;
     readonly requestDigest: string;
-    readonly response: ConfigurationAgentMessageResponse;
-  }): Promise<void> {
+  }): Promise<ConfigurationAgentConversationMessageV1> {
     const streamId = conversationStreamId(input.deviceId, this.#adapter.adapterId);
+    const occurredAt = this.#clock.now();
+    if (!isRfc3339Instant(occurredAt)) {
+      throw unavailable("The Configuration Agent clock returned an invalid instant.");
+    }
     const ownerMessage: ConfigurationAgentConversationMessageV1 = {
       messageId: `owner_${digest(`${input.operationKey}\u0000owner`)
         .slice("sha256:".length)
         .slice(0, 64)}`,
       role: "owner",
       content: input.ownerMessage,
-      occurredAt: input.response.occurredAt,
+      occurredAt,
     };
     const payload = {
       schemaVersion: 1,
       operationKey: input.operationKey,
       requestDigest: input.requestDigest,
       ownerMessage,
+    } satisfies ConfigurationConversationOwnerMessageEventPayload;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const events = await this.#eventStore.readStream(streamId);
+      const existing = findConversationOwnerMessage(events, input.operationKey);
+      if (existing !== undefined) {
+        if (
+          existing.requestDigest !== input.requestDigest ||
+          existing.ownerMessage.content !== input.ownerMessage
+        ) {
+          throw idempotencyConflict();
+        }
+        return structuredClone(existing.ownerMessage);
+      }
+      try {
+        await this.#eventStore.append({
+          streamId,
+          expectedVersion: events.length,
+          events: [
+            {
+              eventId: `event_${digest(`${streamId}\u0000${input.operationKey}\u0000owner`)
+                .slice("sha256:".length)
+                .slice(0, 64)}`,
+              type: CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT,
+              payload,
+            },
+          ],
+        });
+        return structuredClone(ownerMessage);
+      } catch {
+        // Re-read to distinguish a concurrent idempotent append from storage failure.
+      }
+    }
+    throw unavailable("The Configuration Chat owner message could not be stored durably.");
+  }
+
+  async #recordConversationExchange(input: {
+    readonly deviceId: string;
+    readonly operationKey: string;
+    readonly ownerMessage: ConfigurationAgentConversationMessageV1;
+    readonly requestDigest: string;
+    readonly response: ConfigurationAgentMessageResponse;
+  }): Promise<void> {
+    const streamId = conversationStreamId(input.deviceId, this.#adapter.adapterId);
+    const payload = {
+      schemaVersion: 1,
+      operationKey: input.operationKey,
+      requestDigest: input.requestDigest,
+      ownerMessage: input.ownerMessage,
       response: input.response,
     } satisfies ConfigurationConversationExchangeEventPayload;
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -1120,12 +1214,12 @@ function buildConfigurationContinuationPrompt(
 ): string {
   const prefix = [
     "Native session recovery notice: the prior provider-native Configuration Agent session is unavailable.",
-    "Briefly tell the owner that you recovered in a new native session. Completed visible exchanges are durable and supplied below; an interrupted in-flight turn or provider-only hidden context may still be unavailable.",
-    "Use the durable exchange excerpt as conversation context, but re-inspect durable configuration before proposing a change. Reconfirm any required value or choice that is absent from the excerpt.",
+    "Briefly tell the owner that you recovered in a new native session. Accepted visible owner messages and completed Agent responses are durable and supplied below; provider-only hidden context may still be unavailable.",
+    "Use the durable visible-conversation excerpt as context, but re-inspect durable configuration before proposing a change. Reconfirm any required value or choice that is absent from the excerpt.",
   ];
   const suffix = ["", "Complete current request:", prompt];
   const fixedBytes = Buffer.byteLength(
-    [...prefix, "Durable completed exchanges:", ...suffix].join("\n"),
+    [...prefix, "Durable visible conversation:", ...suffix].join("\n"),
     "utf8",
   );
   let remainingBytes = maximumBytes - fixedBytes;
@@ -1143,14 +1237,14 @@ function buildConfigurationContinuationPrompt(
   }
   const history =
     selected.length === 0
-      ? [`No completed exchange fits the continuation budget; ${String(omitted)} omitted.`]
+      ? [`No durable visible message fits the continuation budget; ${String(omitted)} omitted.`]
       : [
           ...selected,
           ...(omitted === 0 ? [] : [`${String(omitted)} older message(s) omitted by budget.`]),
         ];
   const continuationPrompt = [
     ...prefix,
-    "Durable completed exchanges:",
+    "Durable visible conversation:",
     ...history,
     ...suffix,
   ].join("\n");
@@ -1547,13 +1641,116 @@ function validateConversationExchangeEvent(
   };
 }
 
+function validateConversationOwnerMessageEvent(
+  event: StoredConfigurationConversationEvent,
+): ConfigurationConversationOwnerMessageEventPayload {
+  if (
+    !Number.isSafeInteger(event.streamVersion) ||
+    event.streamVersion < 1 ||
+    event.type !== CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT ||
+    !isRecord(event.payload) ||
+    !hasExactKeys(event.payload, [
+      "schemaVersion",
+      "operationKey",
+      "requestDigest",
+      "ownerMessage",
+    ]) ||
+    event.payload["schemaVersion"] !== 1 ||
+    typeof event.payload["operationKey"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.payload["operationKey"]) ||
+    typeof event.payload["requestDigest"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.payload["requestDigest"]) ||
+    !isRecord(event.payload["ownerMessage"]) ||
+    !hasExactKeys(event.payload["ownerMessage"], ["messageId", "role", "content", "occurredAt"])
+  ) {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  const ownerMessage = event.payload["ownerMessage"];
+  assertIdentifier(ownerMessage["messageId"], "Configuration owner message ID", 160);
+  if (ownerMessage["role"] !== "owner") {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  assertIdentifier(ownerMessage["content"], "Configuration owner message", 8_192);
+  if (
+    typeof ownerMessage["occurredAt"] !== "string" ||
+    !isRfc3339Instant(ownerMessage["occurredAt"])
+  ) {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  return {
+    schemaVersion: 1,
+    operationKey: event.payload["operationKey"],
+    requestDigest: event.payload["requestDigest"],
+    ownerMessage: structuredClone(ownerMessage) as ConfigurationAgentConversationMessageV1,
+  };
+}
+
+function projectConversationTurns(
+  events: readonly StoredConfigurationConversationEvent[],
+): readonly ConfigurationConversationTurn[] {
+  const turns: ConfigurationConversationTurn[] = [];
+  const indexes = new Map<string, number>();
+  for (const event of events) {
+    const projected:
+      | ConfigurationConversationExchangeEventPayload
+      | ConfigurationConversationOwnerMessageEventPayload =
+      event.type === CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT
+        ? validateConversationOwnerMessageEvent(event)
+        : validateConversationExchangeEvent(event);
+    const existingIndex = indexes.get(projected.operationKey);
+    if (existingIndex === undefined) {
+      indexes.set(projected.operationKey, turns.length);
+      turns.push({
+        operationKey: projected.operationKey,
+        requestDigest: projected.requestDigest,
+        ownerMessage: structuredClone(projected.ownerMessage),
+        ...(isConversationExchange(projected)
+          ? { response: structuredClone(projected.response) }
+          : {}),
+      });
+      continue;
+    }
+    const existing = turns[existingIndex];
+    if (
+      existing === undefined ||
+      existing.requestDigest !== projected.requestDigest ||
+      JSON.stringify(existing.ownerMessage) !== JSON.stringify(projected.ownerMessage) ||
+      !isConversationExchange(projected) ||
+      existing.response !== undefined
+    ) {
+      throw unavailable("The Configuration Chat history is corrupt.");
+    }
+    turns[existingIndex] = {
+      ...existing,
+      response: structuredClone(projected.response),
+    };
+  }
+  return turns;
+}
+
+function isConversationExchange(
+  event:
+    | ConfigurationConversationExchangeEventPayload
+    | ConfigurationConversationOwnerMessageEventPayload,
+): event is ConfigurationConversationExchangeEventPayload {
+  return "response" in event;
+}
+
 function findConversationExchange(
   events: readonly StoredConfigurationConversationEvent[],
   operationKey: string,
 ): ConfigurationConversationExchangeEventPayload | undefined {
   return events
+    .filter((event) => event.type === CONFIGURATION_CONVERSATION_EXCHANGE_EVENT)
     .map((event) => validateConversationExchangeEvent(event))
     .find((exchange) => exchange.operationKey === operationKey);
+}
+
+function findConversationOwnerMessage(
+  events: readonly StoredConfigurationConversationEvent[],
+  operationKey: string,
+): ConfigurationConversationTurn | undefined {
+  return projectConversationTurns(events).find((turn) => turn.operationKey === operationKey);
 }
 
 function validateToolAttemptEventPayload(value: unknown): ConfigurationToolAttemptEventPayload {

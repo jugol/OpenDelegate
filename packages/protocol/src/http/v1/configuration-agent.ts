@@ -70,24 +70,47 @@ export type ConfigurationAgentMessageResponseV1 = Type.Static<
   typeof ConfigurationAgentMessageResponseSchema
 >;
 
-export const ConfigurationAgentConversationMessageSchema = Type.Object(
-  {
-    messageId: OpaqueIdSchema,
-    role: Type.Union([Type.Literal("owner"), Type.Literal("agent")]),
-    content: Type.String({
-      minLength: 1,
-      maxLength: 32_768,
-    }),
-    suggestedActions: Type.Optional(
-      Type.Array(ConfigurationAgentSuggestedActionSchema, {
-        maxItems: 4,
-        uniqueItems: true,
-      }),
+export const ConfigurationAgentConversationMessageSchema = Type.Union(
+  [
+    Type.Object(
+      {
+        messageId: OpaqueIdSchema,
+        role: Type.Literal("owner"),
+        content: Type.String({
+          minLength: 1,
+          maxLength: 32_768,
+        }),
+        responseStatus: Type.Optional(
+          Type.Union([
+            Type.Literal("completed"),
+            Type.Literal("interrupted"),
+            Type.Literal("pending"),
+          ]),
+        ),
+        occurredAt: Rfc3339InstantSchema,
+      },
+      { additionalProperties: false },
     ),
-    occurredAt: Rfc3339InstantSchema,
-  },
+    Type.Object(
+      {
+        messageId: OpaqueIdSchema,
+        role: Type.Literal("agent"),
+        content: Type.String({
+          minLength: 1,
+          maxLength: 32_768,
+        }),
+        suggestedActions: Type.Optional(
+          Type.Array(ConfigurationAgentSuggestedActionSchema, {
+            maxItems: 4,
+            uniqueItems: true,
+          }),
+        ),
+        occurredAt: Rfc3339InstantSchema,
+      },
+      { additionalProperties: false },
+    ),
+  ],
   {
-    additionalProperties: false,
     $id: "OpenDelegateConfigurationAgentConversationMessageV1",
   },
 );

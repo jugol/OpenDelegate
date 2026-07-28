@@ -147,6 +147,7 @@ describe("BrowserAdminApi JSON responses", () => {
     expect(headers).toBeInstanceOf(Headers);
     expect((headers as Headers).get("x-opendelegate-csrf")).toBe("csrf-configuration");
     expect((headers as Headers).get("idempotency-key")).toMatch(/^admin-[0-9a-f-]{36}$/);
+    expect(fetchMock.mock.calls[1]?.[1]?.keepalive).toBe(true);
   });
 
   it("loads the durable Device-scoped Configuration Chat conversation", async () => {
@@ -162,6 +163,7 @@ describe("BrowserAdminApi JSON responses", () => {
               messageId: "configuration_owner_001",
               role: "owner",
               content: "Keep this after restart.",
+              responseStatus: "completed",
               occurredAt: "2026-07-24T01:01:00.000Z",
             },
             {
@@ -184,6 +186,7 @@ describe("BrowserAdminApi JSON responses", () => {
         role: "owner",
         content: "Keep this after restart.",
         suggestedActions: [],
+        responseStatus: "completed",
         occurredAt: "2026-07-24T01:01:00.000Z",
       },
       {

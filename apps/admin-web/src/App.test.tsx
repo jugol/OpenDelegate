@@ -548,6 +548,66 @@ describe("first-run Device overview", () => {
     expect(screen.queryByText(firstRunDevice.configurationSession.assistantMessage)).toBeNull();
   });
 
+  it("keeps an accepted message visible and reconciles its response after reload", async () => {
+    let historyReads = 0;
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        executionAvailable
+        initialChatOpen
+        onConfigurationMessage={async () => ({
+          content: "Unused direct response.",
+          suggestedActions: [],
+        })}
+        onLoadConfigurationMessages={async () => {
+          historyReads += 1;
+          return (
+            historyReads === 1
+              ? [
+                  {
+                    messageId: "owner-pending",
+                    role: "owner",
+                    content: "Keep this visible during reload.",
+                    suggestedActions: [],
+                    occurredAt: "2026-07-24T01:00:00.000Z",
+                    responseStatus: "pending",
+                  },
+                ]
+              : [
+                  {
+                    messageId: "owner-pending",
+                    role: "owner",
+                    content: "Keep this visible during reload.",
+                    suggestedActions: [],
+                    occurredAt: "2026-07-24T01:00:00.000Z",
+                    responseStatus: "completed",
+                  },
+                  {
+                    messageId: "agent-completed",
+                    role: "agent",
+                    content: "The restored response completed.",
+                    suggestedActions: [],
+                    occurredAt: "2026-07-24T01:00:01.000Z",
+                  },
+                ]
+          ) as never;
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Keep this visible during reload.")).toBeTruthy();
+    expect(
+      screen.getByRole("article", {
+        name: "Waiting for Configuration Agent…",
+      }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText("The restored response completed.", {}, { timeout: 3_000 }),
+    ).toBeTruthy();
+    expect(historyReads).toBeGreaterThanOrEqual(2);
+  });
+
   it("restores durable history while native Configuration Agent messaging is unavailable", async () => {
     render(
       <App

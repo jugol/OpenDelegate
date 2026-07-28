@@ -6,6 +6,7 @@ import Value from "typebox/value";
 import {
   AuditEventListResponseSchema,
   BrowserSessionSchema,
+  ConfigurationAgentConversationResponseSchema,
   ConfigurationAgentMessageRequestSchema,
   ConfigurationAgentMessageResponseSchema,
   CreateTaskRequestSchema,
@@ -55,6 +56,34 @@ test("Configuration Agent messages are bounded and never carry raw configuration
     Value.Check(ConfigurationAgentMessageResponseSchema, {
       ...response,
       configurationPatch: [{ operation: "set", key: "policy.network-change" }],
+    }),
+    false,
+  );
+  assert.equal(
+    Value.Check(ConfigurationAgentConversationResponseSchema, {
+      messages: [
+        {
+          messageId: "configuration_owner_pending",
+          role: "owner",
+          content: "Keep this visible during reload.",
+          responseStatus: "pending",
+          occurredAt: NOW,
+        },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(ConfigurationAgentConversationResponseSchema, {
+      messages: [
+        {
+          messageId: "configuration_agent_invalid",
+          role: "agent",
+          content: "An Agent response cannot be pending.",
+          responseStatus: "pending",
+          occurredAt: NOW,
+        },
+      ],
     }),
     false,
   );
