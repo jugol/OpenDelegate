@@ -240,6 +240,8 @@ test("Main Discord runtime keeps one Forum Task across replies and publishes its
     afterReply.messages.map((message) => [message.role, message.content]),
     [["owner", "Keep this in the same native Task session."]],
   );
+  assert.deepEqual(api.acknowledgedMessages, [THREAD_ID, REPLY_ID]);
+  assert.doesNotMatch(JSON.stringify(api.createdMessages), /Message received/u);
 
   await tasks.recordExecution({
     taskId,
@@ -265,6 +267,16 @@ test("Main Discord runtime keeps one Forum Task across replies and publishes its
   assert.equal(binding?.taskId, taskId);
   assert.equal(api.appliedTags.at(-1)?.[0], STATUS_TAGS.done);
   assert.match(JSON.stringify(api.createdMessages), /The cross-device report is ready\./);
+  assert.equal(
+    api.createdMessages.filter((payload) =>
+      JSON.stringify(payload).includes("The cross-device report is ready."),
+    ).length,
+    1,
+  );
+  assert.deepEqual(api.completedAcknowledgements.at(-1), {
+    messageId: REPLY_ID,
+    outcome: "success",
+  });
 
   const firstResultCount = api.createdMessages.filter((payload) =>
     JSON.stringify(payload).includes("## Result"),
@@ -1105,6 +1117,11 @@ class TestDiscordApi implements DiscordApiPort {
   public statusPanelWritten = false;
   public readonly appliedTags: Array<readonly string[]> = [];
   public readonly createdMessages: DiscordMessagePayload[] = [];
+  public readonly acknowledgedMessages: string[] = [];
+  public readonly completedAcknowledgements: Array<{
+    readonly messageId: string;
+    readonly outcome: "success" | "failure";
+  }> = [];
   public readonly thread: DiscordThread = {
     id: THREAD_ID,
     guildId: GUILD_ID,
@@ -1134,6 +1151,7 @@ class TestDiscordApi implements DiscordApiPort {
     attachments: [],
     createdAtMs: 2_000,
   };
+  readonly #messageByRequestKey = new Map<string, string>();
   #nextMessageId = 900_000_000_000_000_000n;
 
   public async probeInstallation(): Promise<DiscordInstallationProbe> {
@@ -1264,11 +1282,48 @@ class TestDiscordApi implements DiscordApiPort {
   }
 
   public async createMessage(input: {
+    readonly requestKey: string;
     readonly payload: DiscordMessagePayload;
   }): Promise<{ readonly messageId: string }> {
     this.#requireOnline();
+    const existing = this.#messageByRequestKey.get(input.requestKey);
+    if (existing !== undefined) {
+      return { messageId: existing };
+    }
     this.createdMessages.push(structuredClone(input.payload));
-    return { messageId: this.#nextMessage() };
+    const messageId = this.#nextMessage();
+    this.#messageByRequestKey.set(input.requestKey, messageId);
+    return { messageId };
+  }
+
+  public async editMessage(input: { readonly payload: DiscordMessagePayload }): Promise<void> {
+    this.#requireOnline();
+    this.createdMessages.push(structuredClone(input.payload));
+  }
+
+  public async acknowledgeMessage(input: {
+    readonly messageId: string;
+  }): Promise<{ readonly reactionVisible: boolean; readonly typingVisible: boolean }> {
+    this.#requireOnline();
+    this.acknowledgedMessages.push(input.messageId);
+    return { reactionVisible: true, typingVisible: true };
+  }
+
+  public async refreshTyping(): Promise<boolean> {
+    this.#requireOnline();
+    return true;
+  }
+
+  public async completeMessageAcknowledgement(input: {
+    readonly messageId: string;
+    readonly outcome: "success" | "failure";
+  }): Promise<{ readonly acknowledgementRemoved: boolean; readonly outcomeVisible: boolean }> {
+    this.#requireOnline();
+    this.completedAcknowledgements.push({
+      messageId: input.messageId,
+      outcome: input.outcome,
+    });
+    return { acknowledgementRemoved: true, outcomeVisible: true };
   }
 
   public async deferInteraction(): Promise<{ readonly responseRef: string }> {

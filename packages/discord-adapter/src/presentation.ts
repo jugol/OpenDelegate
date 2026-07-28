@@ -53,9 +53,9 @@ export function renderStatusPanel(projection: TaskChannelProjection): DiscordMes
   validateProjection(projection);
   const status = workflowStatusForTaskState(projection.state);
   const detailLines = [
-    `## ${safeMarkdown(projection.objective, 180)}`,
+    "## Task status",
     `**${STATUS_LABELS[status]}**`,
-    safeMarkdown(projection.summary, 1_500),
+    safeMarkdown(statusPanelSummary(projection), 1_500),
   ];
   if (projection.progress !== undefined) {
     detailLines.push(
@@ -65,12 +65,12 @@ export function renderStatusPanel(projection: TaskChannelProjection): DiscordMes
   if (projection.approval !== undefined) {
     detailLines.push(`Approval needed: ${safeMarkdown(projection.approval.description, 500)}`);
   }
-  const actions = controlButtons(projection);
+  const references = linkButtons(projection);
   const containerComponents: DiscordContainer["components"] = Object.freeze([
     Object.freeze({ type: 10 as const, content: detailLines.join("\n\n") }),
-    ...(actions.components.length === 0
+    ...(references.components.length === 0
       ? []
-      : [Object.freeze({ type: 14 as const, divider: true, spacing: 1 as const }), actions]),
+      : [Object.freeze({ type: 14 as const, divider: true, spacing: 1 as const }), references]),
   ]);
   return Object.freeze({
     flags: DISCORD_COMPONENTS_V2_FLAG,
@@ -85,17 +85,25 @@ export function renderStatusPanel(projection: TaskChannelProjection): DiscordMes
   });
 }
 
+function statusPanelSummary(projection: TaskChannelProjection): string {
+  switch (projection.significance) {
+    case "question":
+      return "Waiting for your reply to the latest message below.";
+    case "failure":
+      return "Action is needed. See the latest failure update below.";
+    case "final":
+      return "Completed. See the latest result below.";
+    case "decision":
+      return "The Task changed. See the latest decision below.";
+    case "status":
+      return projection.summary;
+  }
+}
+
 export function renderTaskUpdate(projection: TaskChannelProjection): DiscordMessagePayload {
   validateProjection(projection);
   const status = workflowStatusForTaskState(projection.state);
-  const headline =
-    projection.significance === "final"
-      ? "## Result"
-      : projection.significance === "failure"
-        ? "## Task needs attention"
-        : projection.significance === "question"
-          ? "## Owner input needed"
-          : "## Task update";
+  const headline = taskUpdateHeadline(projection.significance);
   const buttons = controlButtons(projection);
   const components: DiscordMessagePayload["components"] = Object.freeze([
     Object.freeze({
@@ -117,6 +125,51 @@ export function renderTaskUpdate(projection: TaskChannelProjection): DiscordMess
     components,
     allowed_mentions: Object.freeze({ parse: Object.freeze([]) }),
   });
+}
+
+export function renderResolvedOwnerPrompt(
+  projection: TaskChannelProjection,
+): DiscordMessagePayload {
+  validateProjection(projection);
+  if (projection.significance !== "question") {
+    throw new DiscordAdapterError(
+      "PROJECTION_INVALID",
+      "Only an owner-question projection can be resolved in place.",
+    );
+  }
+  return Object.freeze({
+    flags: DISCORD_COMPONENTS_V2_FLAG,
+    components: Object.freeze([
+      Object.freeze({
+        type: 17 as const,
+        accent_color: STATUS_COLORS.running,
+        components: Object.freeze([
+          Object.freeze({
+            type: 10 as const,
+            content: `## Input received\n\n${safeMarkdown(
+              projection.summary,
+              1_500,
+            )}\n\n✅ Your reply was received. OpenDelegate is continuing this Task.`,
+          }),
+        ]),
+      }),
+    ]),
+    allowed_mentions: Object.freeze({ parse: Object.freeze([]) }),
+  });
+}
+
+function taskUpdateHeadline(significance: TaskChannelProjection["significance"]): string {
+  switch (significance) {
+    case "final":
+      return "## Result";
+    case "failure":
+      return "## Task needs attention";
+    case "question":
+      return "## Owner input needed";
+    case "decision":
+    case "status":
+      return "## Task update";
+  }
 }
 
 export function renderInteractionResult(message: string, success = true): DiscordMessagePayload {
@@ -226,6 +279,9 @@ function validateProjection(projection: TaskChannelProjection): void {
       projection.sourceEventId.length > 160 ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(projection.sourceEventId))
   ) {
+    throw invalidProjection();
+  }
+  if (projection.significance !== "status" && projection.sourceEventId === undefined) {
     throw invalidProjection();
   }
   if (

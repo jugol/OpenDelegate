@@ -276,6 +276,29 @@ export interface DiscordApiPort {
     requestKey: string;
     payload: DiscordMessagePayload;
   }): Promise<{ readonly messageId: string }>;
+  editMessage(input: {
+    threadId: string;
+    messageId: string;
+    payload: DiscordMessagePayload;
+  }): Promise<void>;
+  /**
+   * Quietly acknowledges one accepted owner message in place. Implementations
+   * should add the bot's 👀 reaction and trigger Discord's transient typing
+   * indicator. A missing optional reaction permission must not block Task work.
+   */
+  acknowledgeMessage(input: { threadId: string; messageId: string }): Promise<{
+    readonly reactionVisible: boolean;
+    readonly typingVisible: boolean;
+  }>;
+  refreshTyping(input: { threadId: string }): Promise<boolean>;
+  completeMessageAcknowledgement(input: {
+    threadId: string;
+    messageId: string;
+    outcome: "success" | "failure";
+  }): Promise<{
+    readonly acknowledgementRemoved: boolean;
+    readonly outcomeVisible: boolean;
+  }>;
   /**
    * Consumes the raw interaction token immediately and returns an opaque local
    * response reference. The raw token must never be persisted by the adapter.
@@ -387,7 +410,17 @@ export interface DiscordInboundRecord {
   readonly updatedAtMs: number;
 }
 
+export interface DiscordOwnerMessageCompletion {
+  readonly messageId: string;
+  readonly outcome: "success" | "failure";
+}
+
 export type DiscordOutboxAction =
+  | {
+      readonly kind: "acknowledge-owner-message";
+      readonly taskId: string;
+      readonly messageId: string;
+    }
   | {
       readonly kind: "sync-tags";
       readonly taskId: string;
@@ -402,6 +435,18 @@ export type DiscordOutboxAction =
       readonly kind: "post-task-update";
       readonly taskId: string;
       readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "resolve-owner-prompt";
+      readonly taskId: string;
+      readonly promptRequestKey: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "complete-owner-message";
+      readonly taskId: string;
+      readonly completion: DiscordOwnerMessageCompletion;
+      readonly afterRequestKey: string;
     }
   | {
       readonly kind: "task-command";

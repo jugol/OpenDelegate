@@ -20,6 +20,12 @@ export interface TaskExecutionRequest {
   readonly task: TaskDetailV1;
   readonly attempt: number;
   readonly executionKey: string;
+  /**
+   * Stable identity for semantic planning across deterministic retries in one
+   * owner-input cycle. The first attempt's execution key is retained so plans
+   * written by earlier releases remain reusable after upgrade.
+   */
+  readonly planningKey: string;
   readonly signal: AbortSignal;
 }
 
@@ -412,6 +418,7 @@ export class TaskExecutionCoordinator {
     const resumesInterruptedAttempt = task.state === "running" && runningRecords.length > 0;
     const attempt = resumesInterruptedAttempt ? runningRecords.length : runningRecords.length + 1;
     const executionKey = `task-execution:${taskId}:cycle:${cycle.cycleId}:attempt:${attempt}`;
+    const planningKey = `task-execution:${taskId}:cycle:${cycle.cycleId}:attempt:1`;
     setExecutionKey(executionKey);
 
     if (attempt > this.#maximumAutomaticAttempts) {
@@ -462,6 +469,7 @@ export class TaskExecutionCoordinator {
           task,
           attempt,
           executionKey,
+          planningKey,
           signal: budgetGuard?.signal ?? signal,
         }),
       );

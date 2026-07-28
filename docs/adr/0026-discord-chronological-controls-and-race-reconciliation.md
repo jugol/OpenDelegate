@@ -4,6 +4,11 @@ Status: **Accepted**
 
 Date: **2026-07-29**
 
+The generic per-message working-card decision is superseded by
+[ADR-0027](0027-discord-single-turn-lifecycle-and-retry-stable-planning.md). The
+Forum visibility-race, tagless intake, concrete failure, and control-authorship
+decisions remain accepted.
+
 ## Context
 
 FR-5 defines one approved Discord Forum post as one Task and workflow tags as a

@@ -990,6 +990,35 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
           }),
         ),
     };
+    const listMainOwnedDeviceDirectory = async () => {
+      const mainProfile = await deviceProfiles.get(configuration.deviceId);
+      return mergeMainDeviceSummary(
+        {
+          deviceId: configuration.deviceId,
+          name: mainProfile?.displayName ?? hostname(),
+          osFamily: currentOsFamily(),
+          platformRelease: release(),
+          architecture: arch(),
+          role: "main",
+          connection: "online",
+          runtime: "healthy",
+          serviceMode: "foreground",
+          roles: [...(mainProfile?.roles ?? ["main-coordinator"])],
+          instructions: [...(mainProfile?.instructions ?? [])],
+          policies: [...(mainProfile?.policies ?? [])],
+          routes: [
+            {
+              routeId: `main-local:${configuration.deviceId}`,
+              label: "Main-local",
+              priority: 0,
+              health: "healthy" as const,
+            },
+          ],
+          knowledgeHealth: "unknown" as const,
+        },
+        (await fleet?.deviceSummaries()) ?? [],
+      );
+    };
     let configurationToolBroker: ConfigurationServiceAgentToolBroker | undefined;
     if (options.agentConfiguration !== undefined) {
       configurationToolBroker = new ConfigurationServiceAgentToolBroker({
@@ -1050,6 +1079,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             sandbox: options.agentExecution.sandbox,
             permissions: options.agentExecution.permissions,
             limits: options.agentExecution.limits,
+            deviceDirectory: { list: listMainOwnedDeviceDirectory },
             ...(options.agentExecution.maximumPromptBytes === undefined
               ? {}
               : { maximumPromptBytes: options.agentExecution.maximumPromptBytes }),
@@ -1205,6 +1235,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
           checkpoints: continuationCheckpoints,
           planner: agentReasoner,
           verifier: agentReasoner,
+          directCompletionAuthorizer: agentReasoner,
           targetResolver: new DeterministicWorkerTargetResolver({ candidates: fleet }),
           dispatch: new MainDeviceChannelWorkerRunDispatchPort(deviceChannel.workerChannel),
           clock,
@@ -1492,33 +1523,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       runtimeFeatures,
       deviceDirectory: {
         list: async () => {
-          const mainProfile = await deviceProfiles.get(configuration.deviceId);
-          const [mergedMain, ...remoteWorkers] = mergeMainDeviceSummary(
-            {
-              deviceId: configuration.deviceId,
-              name: mainProfile?.displayName ?? hostname(),
-              osFamily: currentOsFamily(),
-              platformRelease: release(),
-              architecture: arch(),
-              role: "main",
-              connection: "online",
-              runtime: "healthy",
-              serviceMode: "foreground",
-              roles: [...(mainProfile?.roles ?? ["main-coordinator"])],
-              instructions: [...(mainProfile?.instructions ?? [])],
-              policies: [...(mainProfile?.policies ?? [])],
-              routes: [
-                {
-                  routeId: `main-local:${configuration.deviceId}`,
-                  label: "Main-local",
-                  priority: 0,
-                  health: "healthy" as const,
-                },
-              ],
-              knowledgeHealth: "unknown" as const,
-            },
-            (await fleet?.deviceSummaries()) ?? [],
-          );
+          const [mergedMain, ...remoteWorkers] = await listMainOwnedDeviceDirectory();
           if (mergedMain === undefined) {
             throw new Error("The Device directory did not retain Main's Device.");
           }

@@ -538,14 +538,20 @@ Make Discord the complete primary Task interface.
   dispatch cursor unadvanced so Resume replays it under bounded reconnect backoff
   and the ordinary reconnect reconciliation path.
 - Implement Task status projection with one workflow tag and a stable Components v2
-  status panel.
-- Post one idempotent chronological working acknowledgement for each accepted owner
-  message with applicable controls. Keep this distinct from heartbeat projection so
-  long conversations gain a current activity surface without notification spam.
+  status panel. Keep the panel neutral: state and references only, without repeating
+  the Forum title, chronological question body, or mutable Task controls.
+- Acknowledge each accepted owner message in place with one idempotent best-effort
+  `👀` reaction and a typing signal refreshed during active work. Close that exact
+  reaction lifecycle with `✅` or `❌` only after the durable question, result, or
+  failure delivery succeeds. Do not post a generic working card.
 - Implement concise progress, targeted questions, final result, file/media, and
-  Artifact link presentation. Chronological failure replies must include the
-  owner-safe concrete reason or exhausted resource plus the relevant recovery
-  control, including Retry for failed Tasks.
+  Artifact link presentation. Questions, decisions, failures, and final results are
+  each posted once at the latest chronological position using immutable Task
+  source-event identity. Mutable Artifact/link enrichment updates the stable panel,
+  not another result message. Resolve an answered question by editing that same
+  nonce-recoverable message and removing its controls. Chronological failure replies
+  must include the owner-safe concrete reason or exhausted resource plus the relevant
+  recovery control, including Retry for failed Tasks.
 - Present interactive Artifacts with a distinct owner action label. Never place a
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.
@@ -567,6 +573,13 @@ Make Discord the complete primary Task interface.
   different Gateway/HTTP cycles.
 - A long conversation exposes current work and failure recovery at the latest
   chronological position rather than only on its starter status panel.
+- One owner reply produces one in-place acknowledgement and no duplicate working or
+  question cards; typing stays alive, the reaction closes, an answered prompt is
+  edited in place, and automatic resource retries reuse that owner turn's durable
+  plan across Main restart.
+- A narrowly recognized read-only Device availability question is answered
+  deterministically from bounded Main-owned state without an LLM turn or artificial
+  Worker Run; untrusted planner completion and unverified capabilities fail closed.
 - Unauthorized messages never reach an Agent.
 - An outcome-only Task does not require a Device, OS, route, provider, or
   multi-Device-placement answer when durable configuration and eligibility can

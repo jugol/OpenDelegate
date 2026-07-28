@@ -1057,3 +1057,67 @@ Owners receive one durable acknowledgement per accepted message rather than
 heartbeat spam, and actionable failures stay next to their explanation. Forged
 controls on owner or webhook messages remain inert, while controls on any message
 authored by the configured bot can use the existing idempotent command path.
+
+The ordinary working-card portion of this decision is superseded by D-065. The
+tagless intake, visibility-race recovery, concrete failure, and bot-authored control
+decisions remain current.
+
+## D-065 — One Discord owner message has one visible turn lifecycle
+
+**Decision:** One accepted owner message is acknowledged on that exact Discord
+message with a best-effort `👀` reaction and typing refreshed while work remains
+active. Once a durable question, result, or failure is delivered, that exact message
+transitions to `✅` or `❌`. It does not create a generic ordinary working card. The
+stable Task panel is a neutral dashboard projection: it shows state and durable
+references but does not repeat the Forum title, the chronological owner-question
+body, or mutable Task controls. Questions, decisions, failures, and final results
+remain single ordinary replies at their chronological point, keyed by immutable
+Task source-event identity. An owner answer edits the existing question message into
+a control-free receipt before Task continuation.
+
+The semantic plan identity is the owner-input execution-cycle identity, not the
+automatic-attempt identity. Deterministic Worker/resource retries in that cycle load
+the first durable plan instead of asking the Main Agent to reinterpret the same
+owner turn. A new accepted owner input creates a new cycle and may legitimately
+produce a new plan.
+
+**Rationale:** A generic working card, the stable panel, and a chronological question
+were three independent delivery paths rendering one turn. Attempt-scoped planning
+then allowed a transient Worker-selection failure to re-enter the native Agent
+session and recover an older question. The combined behavior produced the duplicate
+cards and repeated question visible to the owner.
+
+**Consequence:** Immediate activity remains visible beside the newest owner message
+without growing the transcript, and stale `👀` or question controls do not survive a
+terminal turn. The status panel and the conversation no longer compete as copies of
+one prompt. Restart and retry preserve one interpretation of an owner turn, while
+significant results and actionable failures remain durable and near the bottom of a
+long Forum post.
+
+## D-066 — Main may answer bounded read-only orchestration questions directly
+
+**Decision:** Before semantic planning, deterministic Main code may recognize a
+deliberately narrow Device-directory question and read an owner-safe projection of
+Main-owned Device state containing identity, display name, OS family,
+runtime/connection state, Roles, verified capability names, route health, and
+bounded capacity. It excludes Secrets, Device Instructions, Knowledge, private
+transcripts, local paths, Policy internals, and unverified capability claims.
+
+The deterministic path formats the answer without an LLM and mints authority for
+that exact decision, Task, and planning key. The authoritative executor rejects a
+planner's `completed` decision unless the trusted direct-completion authorizer
+recognizes it. A requested action, compound side-effect objective, selected external
+input, external lookup, file or system change, browser operation, or claim of
+execution must still become one or more Work Orders and can complete only from
+authoritative Worker evidence.
+
+**Rationale:** Asking which Devices are currently reachable is a query against state
+Main already owns. Dispatching an invented `device_inventory_read` Work Order to an
+offline Worker both wastes a Run and can fail to answer the very availability
+question being asked.
+
+**Consequence:** A routine Device availability question consumes neither a model
+turn nor a Worker Run. Main coordinator turns remain tool-denied under D-042.
+Side-effect authority, Worker leases, Policy, and evidence requirements are
+unchanged, and custom planners cannot forge the read-only exception by echoing a
+schema or completion criteria.

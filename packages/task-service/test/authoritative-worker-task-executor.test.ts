@@ -13,6 +13,7 @@ import {
   AuthoritativeWorkerTaskExecutor,
   DurableTaskBudgetEnforcer,
   TaskExecutionCoordinator,
+  TaskExecutorError,
   TaskService,
   type AuthoritativeWorkerReport,
   type TaskExecutionRequest,
@@ -128,6 +129,85 @@ test("only current leased Worker reports can authorize Task completion", async (
     await executor.authorizeWorkerArtifactRun("device-worker-1", artifactRunScope(assignment)),
     { authorized: false },
   );
+});
+
+test("a Main-owned read-only planning answer completes without inventing a Worker Run", async () => {
+  let targetResolutionCalls = 0;
+  let verificationCalls = 0;
+  const dispatch = new RecordingDispatchPort();
+  const authorizedDecisions = new WeakSet<object>();
+  const executor = new AuthoritativeWorkerTaskExecutor({
+    clock: mutableClock(NOW_MS),
+    eventStore: new InMemoryEventStore({ clock: { now: () => NOW } }),
+    idSource: sequentialIds(),
+    planner: {
+      async plan(input) {
+        const decision = {
+          state: "completed",
+          publicMessage: "NAS Main is online. Mac Studio is currently offline.",
+          verifiedCompletionCriteria: [...input.task.completionCriteria],
+        } as const;
+        authorizedDecisions.add(decision);
+        return decision;
+      },
+    },
+    directCompletionAuthorizer: {
+      authorize: ({ decision }) => authorizedDecisions.has(decision),
+    },
+    targetResolver: {
+      async resolve() {
+        targetResolutionCalls += 1;
+        return {
+          deviceId: "device-worker-1",
+          workerId: "worker-1",
+          routeId: "route-private-1",
+        };
+      },
+    },
+    dispatch,
+    verifier: {
+      async verify(input) {
+        verificationCalls += 1;
+        return {
+          state: "completed",
+          verifiedCompletionCriteria: [...input.task.completionCriteria],
+        };
+      },
+    },
+  });
+
+  assert.deepEqual(await executor.execute(request("device-directory", 1)), {
+    state: "completed",
+    publicMessage: "NAS Main is online. Mac Studio is currently offline.",
+    verifiedCompletionCriteria: ["The requested result is proven."],
+  });
+  assert.equal(targetResolutionCalls, 0);
+  assert.equal(verificationCalls, 0);
+  assert.equal(dispatch.records.length, 0);
+});
+
+test("an untrusted planner cannot complete side-effect work without Worker evidence", async () => {
+  const executor = new AuthoritativeWorkerTaskExecutor({
+    clock: mutableClock(NOW_MS),
+    eventStore: new InMemoryEventStore({ clock: { now: () => NOW } }),
+    idSource: sequentialIds(),
+    planner: {
+      async plan(input) {
+        return {
+          state: "completed" as const,
+          publicMessage: "The requested files were deleted.",
+          verifiedCompletionCriteria: [...input.task.completionCriteria],
+        };
+      },
+    },
+    targetResolver: fixedTargetResolver(),
+    dispatch: new RecordingDispatchPort(),
+    verifier: fixedVerifier(),
+  });
+
+  await assert.rejects(executor.execute(request("untrusted-direct-completion", 1)), {
+    code: "WORK_PLAN_INVALID",
+  });
 });
 
 function checkpoint(taskId: string, workOrderId: string) {
@@ -272,6 +352,149 @@ test("retry uses a higher fence and rejects a late completion from the replaced 
     ).length,
     1,
   );
+});
+
+test("an automatic Worker retry reuses the owner-turn plan instead of asking an old question again", async () => {
+  const clock = mutableClock(NOW_MS);
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(clock.now()).toISOString() },
+  });
+  let planningTurns = 0;
+  const repeatedQuestion = "What exact work and result should this test produce?";
+  const executor = new AuthoritativeWorkerTaskExecutor({
+    clock,
+    eventStore,
+    idSource: sequentialIds(),
+    leaseDurationMs: 60_000,
+    planner: {
+      async plan(input) {
+        planningTurns += 1;
+        if (planningTurns === 1) {
+          return {
+            state: "waiting_user" as const,
+            publicMessage: repeatedQuestion,
+          };
+        }
+        if (planningTurns === 2) {
+          return {
+            state: "ready" as const,
+            plan: {
+              protocolVersion: PROTOCOL_VERSION,
+              taskId: input.task.taskId,
+              workOrders: [workOrder("work-order-device-inventory")],
+            },
+          };
+        }
+        return {
+          state: "waiting_user" as const,
+          publicMessage: repeatedQuestion,
+        };
+      },
+    },
+    targetResolver: {
+      async resolve() {
+        throw new TaskExecutorError(
+          "WORKER_OFFLINE",
+          "No eligible Worker is online for this Work Order.",
+          true,
+        );
+      },
+    },
+    dispatch: new RecordingDispatchPort(),
+    verifier: fixedVerifier(),
+  });
+  const tasks = new TaskService({
+    clock: { now: () => new Date(clock.now()).toISOString() },
+    eventStore,
+  });
+  const coordinator = new TaskExecutionCoordinator({
+    taskService: tasks,
+    executor,
+    maximumAutomaticAttempts: 2,
+    retryDelayMs: 0,
+  });
+
+  const task = await coordinator.create({
+    principalId: "owner-conversation",
+    idempotencyKey: "conversation-task",
+    objective: "A test Task",
+    completionCriteria: ["Complete the requested work and report the observable result."],
+    constraints: [],
+    selectedInputRefs: [],
+  });
+  await coordinator.waitForIdle();
+  assert.equal((await coordinator.get(task.taskId)).state, "waiting_user");
+
+  await coordinator.appendInput({
+    taskId: task.taskId,
+    principalId: "owner-conversation",
+    idempotencyKey: "conversation-device-question",
+    message: "Which Devices are currently reachable?",
+    selectedInputRefs: [],
+  });
+  await coordinator.waitForIdle();
+
+  const result = await coordinator.get(task.taskId);
+  assert.equal(planningTurns, 2);
+  assert.equal(result.state, "failed");
+  assert.match(result.messages.at(-1)?.content ?? "", /WORKER_OFFLINE/u);
+  assert.notEqual(result.messages.at(-1)?.content, repeatedQuestion);
+  await coordinator.close();
+});
+
+test("a Main restart reuses the first owner-cycle plan for a later automatic attempt", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  let planningTurns = 0;
+  const options = {
+    clock: mutableClock(NOW_MS),
+    eventStore,
+    idSource: sequentialIds(),
+    planner: {
+      async plan(input: { readonly task: TaskExecutionRequest["task"] }) {
+        planningTurns += 1;
+        return {
+          state: "ready" as const,
+          plan: {
+            protocolVersion: PROTOCOL_VERSION,
+            taskId: input.task.taskId,
+            workOrders: [workOrder("work-order-restart-plan")],
+          },
+        };
+      },
+    },
+    targetResolver: {
+      async resolve() {
+        throw new TaskExecutorError(
+          "WORKER_OFFLINE",
+          "No eligible Worker is online for this Work Order.",
+          true,
+        );
+      },
+    },
+    dispatch: new RecordingDispatchPort(),
+    verifier: fixedVerifier(),
+  } as const;
+  const first = new AuthoritativeWorkerTaskExecutor(options);
+  await assert.rejects(first.execute(request("owner-cycle-attempt-1", 1)), {
+    code: "WORKER_OFFLINE",
+  });
+
+  const restarted = new AuthoritativeWorkerTaskExecutor({
+    ...options,
+    planner: {
+      async plan() {
+        throw new Error("The persisted semantic plan must be reused after restart.");
+      },
+    },
+  });
+  await assert.rejects(
+    restarted.execute({
+      ...request("owner-cycle-attempt-2", 2),
+      planningKey: "owner-cycle-attempt-1",
+    }),
+    { code: "WORKER_OFFLINE" },
+  );
+  assert.equal(planningTurns, 1);
 });
 
 test("an expired Worker event is durably rejected without becoming Run evidence", async () => {
@@ -936,6 +1159,7 @@ function request(executionKey: string, attempt: number): TaskExecutionRequest {
   return {
     attempt,
     executionKey,
+    planningKey: executionKey,
     signal: new AbortController().signal,
     task: {
       taskId: "task-release",

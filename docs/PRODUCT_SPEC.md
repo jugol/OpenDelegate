@@ -459,14 +459,22 @@ through a secure handoff and resumes the same Task afterward.
    such as priority or category. The database is authoritative when Discord's
    20-available-tag and five-applied-tag limits cannot represent internal state.
 7. The bot maintains a concise status surface and edits it instead of posting a new
-   message for every heartbeat. Each accepted owner message additionally receives
-   one idempotent chronological acknowledgement near that message, with applicable
-   Task controls, so active work remains visible in a long conversation without
-   producing heartbeat noise.
+   message for every heartbeat. The surface shows Task state and references but does
+   not repeat the Forum title, the current owner question, or mutable Task controls.
+   Each accepted owner message receives one idempotent in-place acknowledgement on
+   that exact message: a best-effort `👀` reaction plus Discord's typing indicator.
+   Typing is refreshed while the turn remains active; after a durable question,
+   result, or failure is delivered, the same message transitions to `✅` or `❌`.
+   OpenDelegate does not post a second generic working card for the same input.
 8. Significant decisions, questions, failures, and final results remain ordinary
-   replies in chronological order. A failure reply includes the owner-safe concrete
-   reason or exhausted resource and the applicable recovery control, such as Retry;
-   the owner is never left with only a generic attention notice.
+   replies exactly once in chronological order, keyed by their immutable Task source
+   event rather than mutable Artifact or link enrichment. The full owner question
+   exists only in its chronological reply, while the status surface says only that
+   input is needed. The first eligible owner answer resolves that same question
+   message in place, removes its controls, and resumes the Task once. A failure reply
+   includes the owner-safe concrete reason or exhausted resource and the applicable
+   recovery control, such as Retry; the owner is never left with only a generic
+   attention notice.
 9. Buttons and menus offer pause, cancel, retry, approve, reject, inspect Runs, and
    open Artifact actions where Discord permits.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
@@ -496,6 +504,18 @@ through a secure handoff and resumes the same Task afterward.
 9. The owner may pause, resume, cancel, reopen, or archive a Task.
 10. Completion requires Main to reconcile every required Work Order and verify the
     Task completion criteria, not merely receive one successful Worker response.
+11. A narrowly recognized read-only Device-directory question that is fully
+    answerable from a bounded, owner-safe, Main-owned orchestration snapshot may
+    complete through deterministic Main code before an Agent turn. Unverified
+    capabilities are excluded. A planner-supplied `completed` shape is not authority;
+    the authoritative executor accepts only the exact decision minted by the trusted
+    deterministic query path. This exception cannot authorize or claim a file,
+    system, network, browser, or other external side effect; execution still
+    requires authoritative Worker evidence.
+12. Deterministic retries within one owner-input cycle reuse the first durable
+    semantic plan. A retry never asks the Main Agent to reinterpret the same owner
+    turn merely because Worker selection, dispatch, or another deterministic
+    resource stage failed.
 
 #### Canonical Task states
 
@@ -1381,6 +1401,8 @@ The following normally require no LLM:
 - Discord event reconciliation and tag projection;
 - package-source classification when mechanically known;
 - Policy decisions;
+- narrowly recognized read-only Device-directory query rendering from bounded
+  Main-owned state;
 - Markdown indexing and graph extraction;
 - Artifact upload, serving, and retention; and
 - service supervision.

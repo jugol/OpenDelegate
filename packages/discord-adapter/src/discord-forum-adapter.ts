@@ -26,6 +26,7 @@ import {
 import { DiscordAdapterError, DiscordApiError } from "./errors.ts";
 import {
   renderInteractionResult,
+  renderResolvedOwnerPrompt,
   renderStatusPanel,
   renderTaskUpdate,
   workflowStatusForTaskState,
@@ -43,7 +44,13 @@ const REQUIRED_PERMISSIONS = [
 ] as const;
 const OUTBOX_LEASE_MS = 30_000;
 const MAX_RECONCILIATION_PAGES = 1_000;
-const TASK_INPUT_ACTIVITY_SUMMARY = "⏳ Message received. OpenDelegate is working on this Task.";
+const TYPING_REFRESH_INTERVAL_MS = 7_000;
+
+interface OwnerMessageActivity {
+  readonly threadId: string;
+  readonly messageId: string;
+  readonly lastTypingAtMs: number;
+}
 
 export class DiscordForumAdapter {
   readonly #config: DiscordForumAdapterConfig;
@@ -54,6 +61,7 @@ export class DiscordForumAdapter {
   readonly #gateway: DiscordForumAdapterOptions["gateway"];
   readonly #diagnostics: DiscordDiagnostic[] = [];
   readonly #threadWork = new Map<string, Promise<void>>();
+  readonly #ownerActivityByTask = new Map<string, OwnerMessageActivity>();
   readonly #outboxOwner = `discord-adapter:${cryptoRandomSuffix()}`;
   #flushPromise: Promise<void> | undefined;
   #startPromise: Promise<void> | undefined;
@@ -238,6 +246,9 @@ export class DiscordForumAdapter {
         break;
     }
     await this.#saveCursor(dispatch);
+    if (dispatch.type !== "INTERACTION_CREATE") {
+      await this.flushOutbox();
+    }
   }
 
   async reconcile(): Promise<void> {
@@ -333,23 +344,52 @@ export class DiscordForumAdapter {
     if (binding === undefined) {
       throw new DiscordAdapterError("PROJECTION_INVALID", "The Task has no Discord Forum binding.");
     }
-    const digest = digestValue(projection);
-    await this.#enqueueOutbox(`${digest}:01-tags`, {
+    await this.#refreshOwnerActivity(projection, binding);
+    const projectionDigest = digestValue(projection);
+    const ownerMessageCompletion = await this.#ownerMessageCompletion(projection, binding);
+    const panelRequestKey = `${projectionDigest}:02-panel`;
+    await this.#enqueueOutbox(`${projectionDigest}:01-tags`, {
       kind: "sync-tags",
       taskId: projection.taskId,
       state: projection.state,
     });
-    await this.#enqueueOutbox(`${digest}:02-panel`, {
+    await this.#enqueueOutbox(panelRequestKey, {
       kind: "upsert-status-panel",
       taskId: projection.taskId,
       projection: frozenClone(projection),
     });
     if (projection.significance !== "status") {
-      await this.#enqueueOutbox(`${digest}:03-update`, {
+      const sourceEventId = projection.sourceEventId;
+      if (sourceEventId === undefined) {
+        throw new DiscordAdapterError(
+          "PROJECTION_INVALID",
+          "A significant chronological Task update requires a stable source event ID.",
+        );
+      }
+      const updateDigest = digestValue({
+        taskId: projection.taskId,
+        sourceEventId,
+        significance: projection.significance,
+      });
+      const updateRequestKey = `${updateDigest}:03-update`;
+      await this.#enqueueOutbox(updateRequestKey, {
         kind: "post-task-update",
         taskId: projection.taskId,
-        projection: frozenClone(projection),
+        projection: chronologicalProjection(projection),
       });
+      if (ownerMessageCompletion !== undefined) {
+        await this.#enqueueOwnerMessageCompletion(
+          projection,
+          ownerMessageCompletion,
+          updateRequestKey,
+        );
+      }
+    } else if (ownerMessageCompletion !== undefined) {
+      await this.#enqueueOwnerMessageCompletion(
+        projection,
+        ownerMessageCompletion,
+        panelRequestKey,
+      );
     }
   }
 
@@ -614,19 +654,44 @@ export class DiscordForumAdapter {
         selectedInputRefs: attachmentReferences(message),
         source: taskSource(thread, message),
       });
+      await this.#enqueueOwnerPromptResolution(binding.taskId, key);
     }
-    await this.#enqueueOutbox(`${key}:activity`, {
-      kind: "post-task-update",
+    await this.#enqueueOutbox(`${key}:02-acknowledgement`, {
+      kind: "acknowledge-owner-message",
       taskId,
-      projection: Object.freeze({
-        taskId,
-        state: "running",
-        objective: "Process the accepted owner message.",
-        summary: TASK_INPUT_ACTIVITY_SUMMARY,
-        significance: "status",
-      }),
+      messageId: message.id,
     });
     await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
+  }
+
+  async #enqueueOwnerPromptResolution(taskId: string, ownerMessageKey: string): Promise<void> {
+    const outbox = await this.#repository.listOutbox();
+    const resolvedPromptKeys = new Set(
+      outbox
+        .filter((item) => item.action.kind === "resolve-owner-prompt")
+        .map((item) =>
+          item.action.kind === "resolve-owner-prompt" ? item.action.promptRequestKey : "",
+        ),
+    );
+    const prompt = [...outbox]
+      .reverse()
+      .find(
+        (item) =>
+          item.delivered &&
+          item.action.kind === "post-task-update" &&
+          item.action.taskId === taskId &&
+          item.action.projection.significance === "question" &&
+          !resolvedPromptKeys.has(item.id),
+      );
+    if (prompt === undefined || prompt.action.kind !== "post-task-update") {
+      return;
+    }
+    await this.#enqueueOutbox(`${ownerMessageKey}:01-resolve-prompt:${digestValue(prompt.id)}`, {
+      kind: "resolve-owner-prompt",
+      taskId,
+      promptRequestKey: prompt.id,
+      projection: frozenClone(prompt.action.projection),
+    });
   }
 
   async #ensureBinding(thread: DiscordThread): Promise<DiscordTaskBinding | undefined> {
@@ -779,6 +844,154 @@ export class DiscordForumAdapter {
     void binding;
   }
 
+  async #refreshOwnerActivity(
+    projection: TaskChannelProjection,
+    binding: DiscordTaskBinding,
+  ): Promise<void> {
+    if (!keepsOwnerActivityOpen(projection.state)) {
+      return;
+    }
+    let activity = this.#ownerActivityByTask.get(projection.taskId);
+    if (activity === undefined) {
+      const latest = await this.#latestOwnerAcknowledgement(projection.taskId, true);
+      if (latest === undefined) {
+        return;
+      }
+      activity = {
+        threadId: binding.threadId,
+        messageId: latest.messageId,
+        lastTypingAtMs: latest.createdAtMs,
+      };
+      this.#ownerActivityByTask.set(projection.taskId, activity);
+    }
+    const nowMs = this.#clock.nowMs();
+    if (nowMs - activity.lastTypingAtMs < TYPING_REFRESH_INTERVAL_MS) {
+      return;
+    }
+    try {
+      const visible = await this.#api.refreshTyping({ threadId: activity.threadId });
+      if (!visible) {
+        this.#recordDiagnostic("discord.message_activity_typing_unavailable", {
+          threadId: activity.threadId,
+          messageId: activity.messageId,
+        });
+      }
+    } catch (error) {
+      this.#recordDiagnostic("discord.message_activity_refresh_failed", {
+        threadId: activity.threadId,
+        messageId: activity.messageId,
+        error: errorText(error),
+      });
+    } finally {
+      this.#ownerActivityByTask.set(projection.taskId, {
+        ...activity,
+        lastTypingAtMs: nowMs,
+      });
+    }
+  }
+
+  async #ownerMessageCompletion(
+    projection: TaskChannelProjection,
+    binding: DiscordTaskBinding,
+  ): Promise<
+    | {
+        readonly messageId: string;
+        readonly outcome: "success" | "failure";
+      }
+    | undefined
+  > {
+    if (keepsOwnerActivityOpen(projection.state)) {
+      return undefined;
+    }
+    const activity = this.#ownerActivityByTask.get(projection.taskId);
+    const latest =
+      activity ??
+      (await this.#latestOwnerAcknowledgement(projection.taskId, false).then((item) =>
+        item === undefined
+          ? undefined
+          : {
+              threadId: binding.threadId,
+              messageId: item.messageId,
+              lastTypingAtMs: item.createdAtMs,
+            },
+      ));
+    if (latest === undefined) {
+      return undefined;
+    }
+    return Object.freeze({
+      messageId: latest.messageId,
+      outcome: projection.state === "failed" ? "failure" : "success",
+    });
+  }
+
+  async #latestOwnerAcknowledgement(
+    taskId: string,
+    deliveredOnly: boolean,
+  ): Promise<{ readonly messageId: string; readonly createdAtMs: number } | undefined> {
+    const item = [...(await this.#repository.listOutbox())]
+      .reverse()
+      .find(
+        (candidate) =>
+          (!deliveredOnly || candidate.delivered) &&
+          candidate.action.kind === "acknowledge-owner-message" &&
+          candidate.action.taskId === taskId,
+      );
+    if (item === undefined || item.action.kind !== "acknowledge-owner-message") {
+      return undefined;
+    }
+    return Object.freeze({
+      messageId: item.action.messageId,
+      createdAtMs: item.createdAtMs,
+    });
+  }
+
+  async #completeOwnerActivity(
+    taskId: string,
+    threadId: string,
+    completion: {
+      readonly messageId: string;
+      readonly outcome: "success" | "failure";
+    },
+  ): Promise<void> {
+    const result = await this.#api.completeMessageAcknowledgement({
+      threadId,
+      messageId: completion.messageId,
+      outcome: completion.outcome,
+    });
+    if (!result.acknowledgementRemoved) {
+      this.#recordDiagnostic("discord.message_acknowledgement_remove_unavailable", {
+        threadId,
+        messageId: completion.messageId,
+      });
+    }
+    if (!result.outcomeVisible) {
+      this.#recordDiagnostic("discord.message_acknowledgement_outcome_unavailable", {
+        threadId,
+        messageId: completion.messageId,
+      });
+    }
+    const active = this.#ownerActivityByTask.get(taskId);
+    if (active?.messageId === completion.messageId) {
+      this.#ownerActivityByTask.delete(taskId);
+    }
+  }
+
+  async #enqueueOwnerMessageCompletion(
+    projection: TaskChannelProjection,
+    completion: {
+      readonly messageId: string;
+      readonly outcome: "success" | "failure";
+    },
+    afterRequestKey: string,
+  ): Promise<void> {
+    await this.#enqueueOutbox(`${afterRequestKey}:04-complete-owner-message`, {
+      kind: "complete-owner-message",
+      taskId: projection.taskId,
+      completion: Object.freeze({ ...completion }),
+      afterRequestKey,
+    });
+  }
+
   async #enqueueOutbox(id: string, action: DiscordOutboxAction): Promise<void> {
     const nowMs = this.#clock.nowMs();
     await this.#repository.enqueueOutbox({
@@ -848,6 +1061,48 @@ export class DiscordForumAdapter {
   async #executeOutbox(item: DiscordOutboxItem): Promise<void> {
     const action = item.action;
     switch (action.kind) {
+      case "acknowledge-owner-message": {
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const prior =
+          this.#ownerActivityByTask.get(action.taskId) ??
+          (await this.#latestOwnerAcknowledgement(action.taskId, true).then((item) =>
+            item === undefined
+              ? undefined
+              : {
+                  threadId: binding.threadId,
+                  messageId: item.messageId,
+                  lastTypingAtMs: item.createdAtMs,
+                },
+          ));
+        const acknowledgement = await this.#api.acknowledgeMessage({
+          threadId: binding.threadId,
+          messageId: action.messageId,
+        });
+        if (!acknowledgement.reactionVisible) {
+          this.#recordDiagnostic("discord.message_acknowledgement_reaction_unavailable", {
+            threadId: binding.threadId,
+            messageId: action.messageId,
+          });
+        }
+        if (!acknowledgement.typingVisible) {
+          this.#recordDiagnostic("discord.message_acknowledgement_typing_unavailable", {
+            threadId: binding.threadId,
+            messageId: action.messageId,
+          });
+        }
+        if (prior !== undefined && prior.messageId !== action.messageId) {
+          await this.#completeOwnerActivity(action.taskId, prior.threadId, {
+            messageId: prior.messageId,
+            outcome: "success",
+          });
+        }
+        this.#ownerActivityByTask.set(action.taskId, {
+          threadId: binding.threadId,
+          messageId: action.messageId,
+          lastTypingAtMs: this.#clock.nowMs(),
+        });
+        return;
+      }
       case "sync-tags": {
         const binding = await requiredBinding(this.#repository, action.taskId);
         const thread = await this.#api.getThread(binding.threadId);
@@ -908,6 +1163,44 @@ export class DiscordForumAdapter {
           requestKey: item.id,
           payload: renderTaskUpdate(action.projection),
         });
+        return;
+      }
+      case "resolve-owner-prompt": {
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const prompt = await this.#api.createMessage({
+          threadId: binding.threadId,
+          requestKey: action.promptRequestKey,
+          payload: renderTaskUpdate(action.projection),
+        });
+        try {
+          await this.#api.editMessage({
+            threadId: binding.threadId,
+            messageId: prompt.messageId,
+            payload: renderResolvedOwnerPrompt(action.projection),
+          });
+        } catch (error) {
+          if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+            throw error;
+          }
+          this.#recordDiagnostic("discord.owner_prompt_message_missing", {
+            threadId: binding.threadId,
+            messageId: prompt.messageId,
+          });
+        }
+        return;
+      }
+      case "complete-owner-message": {
+        const dependency = (await this.#repository.listOutbox()).find(
+          (candidate) => candidate.id === action.afterRequestKey,
+        );
+        if (dependency?.delivered !== true) {
+          throw new DiscordApiError(
+            "OFFLINE",
+            "The owner-message outcome is waiting for its durable Discord reply.",
+          );
+        }
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        await this.#completeOwnerActivity(action.taskId, binding.threadId, action.completion);
         return;
       }
       case "task-command":
@@ -1154,9 +1447,12 @@ async function bindingForAction(
   action: DiscordOutboxAction,
 ): Promise<DiscordTaskBinding | undefined> {
   switch (action.kind) {
+    case "acknowledge-owner-message":
     case "sync-tags":
     case "upsert-status-panel":
     case "post-task-update":
+    case "resolve-owner-prompt":
+    case "complete-owner-message":
       return repository.getBindingByTask(action.taskId);
     case "task-command":
     case "approval-decision":
@@ -1172,6 +1468,24 @@ function taskSource(thread: DiscordThread, message: DiscordMessage) {
     threadId: thread.id,
     messageId: message.id,
     authorId: message.author.id,
+  });
+}
+
+function keepsOwnerActivityOpen(state: TaskChannelProjection["state"]): boolean {
+  return state === "intake" || state === "queued" || state === "running";
+}
+
+function chronologicalProjection(projection: TaskChannelProjection): TaskChannelProjection {
+  return Object.freeze({
+    taskId: projection.taskId,
+    ...(projection.sourceEventId === undefined ? {} : { sourceEventId: projection.sourceEventId }),
+    state: projection.state,
+    objective: projection.objective,
+    summary: projection.summary,
+    significance: projection.significance,
+    ...(projection.approval === undefined
+      ? {}
+      : { approval: Object.freeze({ ...projection.approval }) }),
   });
 }
 

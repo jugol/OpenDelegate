@@ -64,7 +64,7 @@ export interface FetchDiscordApiPortOptions {
 }
 
 interface DiscordRequest {
-  readonly method: "GET" | "PATCH" | "POST";
+  readonly method: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
   readonly path: string;
   readonly body?: unknown;
   readonly authenticated: boolean;
@@ -431,6 +431,73 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     );
   }
 
+  public async editMessage(input: {
+    threadId: string;
+    messageId: string;
+    payload: DiscordMessagePayload;
+  }): Promise<void> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    assertSnowflake(input.messageId, "Discord message ID");
+    const response = requireRecord(
+      await this.#botJson(
+        "PATCH",
+        `/channels/${input.threadId}/messages/${input.messageId}`,
+        validateMessagePayload(input.payload),
+      ),
+      "edited message",
+    );
+    if (requireSnowflake(response, "id") !== input.messageId) {
+      throw invalidResponse("Discord edited a different message than requested.");
+    }
+  }
+
+  public async acknowledgeMessage(input: { threadId: string; messageId: string }): Promise<{
+    readonly reactionVisible: boolean;
+    readonly typingVisible: boolean;
+  }> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    assertSnowflake(input.messageId, "Discord message ID");
+    const [reactionVisible, typingVisible] = await Promise.all([
+      this.#bestEffortAcknowledgementRequest(
+        "PUT",
+        `/channels/${input.threadId}/messages/${input.messageId}/reactions/${encodeURIComponent(
+          "👀",
+        )}/@me`,
+      ),
+      this.#bestEffortAcknowledgementRequest("POST", `/channels/${input.threadId}/typing`),
+    ]);
+    return Object.freeze({ reactionVisible, typingVisible });
+  }
+
+  public async refreshTyping(input: { threadId: string }): Promise<boolean> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    return this.#bestEffortAcknowledgementRequest("POST", `/channels/${input.threadId}/typing`);
+  }
+
+  public async completeMessageAcknowledgement(input: {
+    threadId: string;
+    messageId: string;
+    outcome: "success" | "failure";
+  }): Promise<{
+    readonly acknowledgementRemoved: boolean;
+    readonly outcomeVisible: boolean;
+  }> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    assertSnowflake(input.messageId, "Discord message ID");
+    const messagePath = `/channels/${input.threadId}/messages/${input.messageId}/reactions`;
+    const [acknowledgementRemoved, outcomeVisible] = await Promise.all([
+      this.#bestEffortAcknowledgementRequest(
+        "DELETE",
+        `${messagePath}/${encodeURIComponent("👀")}/@me`,
+      ),
+      this.#bestEffortAcknowledgementRequest(
+        "PUT",
+        `${messagePath}/${encodeURIComponent(input.outcome === "success" ? "✅" : "❌")}/@me`,
+      ),
+    ]);
+    return Object.freeze({ acknowledgementRemoved, outcomeVisible });
+  }
+
   public async deferInteraction(input: {
     interactionId: string;
     interactionToken: string;
@@ -530,6 +597,24 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
         throw error;
       }
       throw new DiscordApiError("OFFLINE", "The Discord bot credential provider is unavailable.");
+    }
+  }
+
+  async #bestEffortAcknowledgementRequest(
+    method: "DELETE" | "POST" | "PUT",
+    path: string,
+  ): Promise<boolean> {
+    try {
+      await this.#botJson(method, path);
+      return true;
+    } catch (error) {
+      if (
+        error instanceof DiscordApiError &&
+        (error.code === "FORBIDDEN" || error.code === "NOT_FOUND")
+      ) {
+        return false;
+      }
+      throw error;
     }
   }
 

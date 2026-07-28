@@ -117,6 +117,12 @@ bound Forum Channel:
 The combined permission bitfield is `292057877504`. Channel overrides count: an explicit deny in the
 Forum can make the installation probe fail even when the bot Role allows that permission.
 
+Optionally grant `ADD_REACTIONS` if you want OpenDelegate's lifecycle to appear on the exact owner
+message: `👀` while the Task turn is active, then `✅` after a durable response or `❌` after a
+failure. OpenDelegate treats this as presentation-only: the installation remains ready without it,
+Discord typing still provides transient activity, and a missing reaction permission never blocks
+Task ingestion.
+
 Do not grant `ADMINISTRATOR`, `MANAGE_CHANNELS`, or `CREATE_PUBLIC_THREADS` for the current manual
 setup. OpenDelegate needs `MANAGE_THREADS` to project tags and reconcile owner-created posts; it
 does not need authority to configure the server or create Forum Channels.

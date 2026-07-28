@@ -13,6 +13,7 @@ import {
 import { InMemoryEventStore } from "@opendelegate/event-store";
 import {
   createTaskContinuationCheckpoint,
+  type DeviceSummaryV1,
   type TaskContinuationCheckpointV1,
 } from "@opendelegate/protocol";
 import type { TaskExecutionRequest } from "@opendelegate/task-service";
@@ -372,11 +373,253 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   );
 });
 
+test("Main Agent answers read-only Device questions from the bounded Main-owned directory", async () => {
+  const adapter = new FakeAgentAdapter("device-directory-answer");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+    deviceDirectory: {
+      list: async () => [
+        {
+          deviceId: "device_main",
+          name: "NAS Main",
+          osFamily: "linux",
+          platformRelease: "26",
+          architecture: "x64",
+          role: "main",
+          connection: "online",
+          runtime: "healthy",
+          serviceMode: "system-service",
+          roles: ["main-coordinator"],
+          instructions: ["PRIVATE_DEVICE_INSTRUCTION_SENTINEL"],
+          routes: [
+            {
+              routeId: "main-local:device_main",
+              label: "Main-local",
+              priority: 0,
+              health: "healthy",
+            },
+          ],
+          knowledgeHealth: "healthy",
+        },
+        {
+          deviceId: "device_mac",
+          name: "Mac Studio",
+          osFamily: "macos",
+          platformRelease: "26",
+          architecture: "arm64",
+          role: "worker",
+          connection: "offline",
+          runtime: "unavailable",
+          serviceMode: "user-service",
+          roles: ["build"],
+          knowledgeHealth: "unknown",
+        },
+      ],
+    },
+  });
+  const controller = new AbortController();
+  const baseTask = request(1).task;
+  const task = {
+    ...baseTask,
+    objective: "테스트를 위한 일감",
+    completionCriteria: ["The current Device availability is reported."],
+    constraints: [],
+    messages: [
+      {
+        messageId: "message_device_question",
+        role: "owner" as const,
+        content: "지금 접속 가능한 디바이스가 뭐뭐가 있어?",
+        occurredAt: NOW,
+      },
+    ],
+  };
+
+  const result = await reasoner.plan({
+    task,
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_1:attempt:1",
+    signal: controller.signal,
+  });
+
+  assert.equal(result.state, "completed");
+  if (result.state !== "completed") {
+    throw new Error("The deterministic Device query did not complete.");
+  }
+  assert.match(result.publicMessage, /현재 등록된 기기 2대 중 1대/u);
+  assert.match(result.publicMessage, /NAS Main — 접속 가능/u);
+  assert.match(result.publicMessage, /Mac Studio — 오프라인/u);
+  assert.doesNotMatch(result.publicMessage, /PRIVATE_DEVICE_INSTRUCTION_SENTINEL/u);
+  assert.deepEqual(result.verifiedCompletionCriteria, [
+    "The current Device availability is reported.",
+  ]);
+  assert.equal(adapter.starts.length, 0);
+  assert.equal(
+    reasoner.authorize({
+      task,
+      executionKey: "task-execution:task_release:cycle:cycle_1:attempt:1",
+      decision: result,
+    }),
+    true,
+  );
+});
+
+test("Main planning exposes only verified capabilities and never Device instructions", async () => {
+  const adapter = new FakeAgentAdapter("orchestration");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+    deviceDirectory: {
+      list: async () => [
+        {
+          deviceId: "device_worker",
+          name: "Build Worker",
+          osFamily: "windows",
+          platformRelease: "26",
+          architecture: "x64",
+          role: "worker",
+          connection: "online",
+          runtime: "healthy",
+          serviceMode: "system-service",
+          instructions: ["PRIVATE_DEVICE_INSTRUCTION_SENTINEL"],
+          capabilities: [
+            { name: "codex", verification: "verified" },
+            { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
+            { name: "DEGRADED_CAPABILITY_SENTINEL", verification: "degraded" },
+          ],
+          knowledgeHealth: "healthy",
+        },
+      ],
+    },
+  });
+
+  const planned = await reasoner.plan({
+    task: request(1).task,
+    attempt: 1,
+    executionKey: "verified-capability-planning",
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(planned.state, "ready");
+  const prompt = adapter.starts[0]?.prompt ?? "";
+  assert.match(prompt, /"capabilities":\["codex"\]/u);
+  assert.doesNotMatch(prompt, /UNVERIFIED_CAPABILITY_SENTINEL/u);
+  assert.doesNotMatch(prompt, /DEGRADED_CAPABILITY_SENTINEL/u);
+  assert.doesNotMatch(prompt, /PRIVATE_DEVICE_INSTRUCTION_SENTINEL/u);
+});
+
+test("Main Device queries fail closed when their directory is unavailable or already cancelled", async () => {
+  let directoryCalls = 0;
+  const createReasoner = (list: () => Promise<readonly DeviceSummaryV1[]>) =>
+    new AgentBackedTaskExecutor({
+      adapter: new FakeAgentAdapter(),
+      sessionRepository: new EventStoreMainNativeSessionRepository(
+        new InMemoryEventStore({ clock: { now: () => NOW } }),
+      ),
+      checkpoints: checkpointProvider(),
+      deviceId: "device_main",
+      workspace: {
+        workspaceId: "workspace_main_coordinator",
+        cwd: process.cwd(),
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: { mode: "deny" },
+      limits,
+      deviceDirectory: { list },
+    });
+  const baseTask = request(1).task;
+  const queryTask = {
+    ...baseTask,
+    objective: "Which Devices are reachable now?",
+    constraints: [],
+    messages: [
+      {
+        messageId: "message_device_query",
+        role: "owner" as const,
+        content: "Which Devices are reachable now?",
+        occurredAt: NOW,
+      },
+    ],
+  };
+  const unavailable = createReasoner(async () => {
+    directoryCalls += 1;
+    throw new Error("private backend detail");
+  });
+  await assert.rejects(
+    unavailable.plan({
+      task: queryTask,
+      attempt: 1,
+      executionKey: "unavailable-device-directory",
+      signal: new AbortController().signal,
+    }),
+    { code: "MAIN_CONTEXT_UNAVAILABLE" },
+  );
+
+  const controller = new AbortController();
+  controller.abort("owner-cancelled");
+  const cancelled = createReasoner(async () => {
+    directoryCalls += 1;
+    return [];
+  });
+  await assert.rejects(
+    cancelled.plan({
+      task: queryTask,
+      attempt: 1,
+      executionKey: "cancelled-device-directory",
+      signal: controller.signal,
+    }),
+    { code: "EXECUTION_CANCELLED" },
+  );
+  const compound = createReasoner(async () => {
+    directoryCalls += 1;
+    return [];
+  });
+  assert.equal(
+    await compound.planDeterministically({
+      task: {
+        ...queryTask,
+        objective: "Prepare and deploy the release.",
+      },
+      attempt: 1,
+      executionKey: "compound-side-effect-device-query",
+      signal: new AbortController().signal,
+    }),
+    undefined,
+  );
+  assert.equal(directoryCalls, 1);
+});
+
 function request(attempt: number, ownerMessage?: string): TaskExecutionRequest {
   const controller = new AbortController();
   return {
     attempt,
     executionKey: `task-execution:task_release:attempt:${attempt}`,
+    planningKey: "task-execution:task_release:attempt:1",
     signal: controller.signal,
     task: {
       taskId: "task_release",
@@ -518,6 +761,7 @@ type FakeAgentMode =
   | "placement-question"
   | "outcome-platform-question"
   | "orchestration"
+  | "device-directory-answer"
   | "outcome-continuation";
 
 class FakeAgentAdapter implements AgentAdapter {
@@ -609,38 +853,45 @@ class FakeAgentAdapter implements AgentAdapter {
                   state: "waiting_user",
                   ownerQuestion: "Which operating systems must the release support?",
                 }
-              : this.#mode === "orchestration"
+              : this.#mode === "device-directory-answer"
                 ? {
                     schemaVersion: 1,
-                    state: "ready",
-                    plan: {
-                      protocolVersion: "v1",
-                      taskId: input.taskId,
-                      workOrders: [
-                        {
-                          protocolVersion: "v1",
-                          workOrderId: "work_release_build",
-                          title: "Build the release",
-                          brief: "Build and test the requested release.",
-                          completionCriteria: ["The release build and tests succeed."],
-                          constraints: ["Do not waive release evidence."],
-                          selectedInputIds: [],
-                          dependsOn: [],
-                          schedulingHints: {
-                            preferredDeviceIds: [],
-                            preferredRoles: ["development"],
-                          },
-                          requiredCapabilities: ["codex"],
-                          requiredSecretRefs: [],
-                        },
-                      ],
-                    },
+                    state: "completed",
+                    publicMessage: "NAS Main is online. Mac Studio is currently offline.",
+                    verifiedCompletionCriteria: ["The current Device availability is reported."],
                   }
-                : {
-                    schemaVersion: 1,
-                    state: "waiting_user",
-                    ownerQuestion: "Which release channel should I use?",
-                  },
+                : this.#mode === "orchestration"
+                  ? {
+                      schemaVersion: 1,
+                      state: "ready",
+                      plan: {
+                        protocolVersion: "v1",
+                        taskId: input.taskId,
+                        workOrders: [
+                          {
+                            protocolVersion: "v1",
+                            workOrderId: "work_release_build",
+                            title: "Build the release",
+                            brief: "Build and test the requested release.",
+                            completionCriteria: ["The release build and tests succeed."],
+                            constraints: ["Do not waive release evidence."],
+                            selectedInputIds: [],
+                            dependsOn: [],
+                            schedulingHints: {
+                              preferredDeviceIds: [],
+                              preferredRoles: ["development"],
+                            },
+                            requiredCapabilities: ["codex"],
+                            requiredSecretRefs: [],
+                          },
+                        ],
+                      },
+                    }
+                  : {
+                      schemaVersion: 1,
+                      state: "waiting_user",
+                      ownerQuestion: "Which release channel should I use?",
+                    },
     );
   }
 

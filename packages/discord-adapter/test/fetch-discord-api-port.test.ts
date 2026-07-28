@@ -310,6 +310,118 @@ test("Components v2 writes use a deterministic enforced nonce no longer than 25 
   assert.equal("enforce_nonce" in editBody, false);
 });
 
+test("owner-message acknowledgement uses an in-place reaction and Discord typing", async () => {
+  const messageId = "100000000000000090";
+  const requests: CapturedRequest[] = [];
+  const reactionPath = `/api/v10/channels/${THREAD_ID}/messages/${messageId}/reactions/${encodeURIComponent(
+    "👀",
+  )}/@me`;
+  const typingPath = `/api/v10/channels/${THREAD_ID}/typing`;
+  const fetch = routeFetch(requests, {
+    [`PUT ${reactionPath}`]: new Response(null, { status: 204 }),
+    [`POST ${typingPath}`]: new Response(null, { status: 204 }),
+  });
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("acknowledgement-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:acknowledgement",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const acknowledgement = await api.acknowledgeMessage({
+    threadId: THREAD_ID,
+    messageId,
+  });
+
+  assert.deepEqual(acknowledgement, { reactionVisible: true, typingVisible: true });
+  assert.deepEqual(
+    requests.map((request) => `${request.method} ${request.pathname}`).sort(),
+    [`POST ${typingPath}`, `PUT ${reactionPath}`].sort(),
+  );
+});
+
+test("owner-message activity refreshes and closes on the same message without posting chatter", async () => {
+  const messageId = "100000000000000091";
+  const requests: CapturedRequest[] = [];
+  const typingPath = `/api/v10/channels/${THREAD_ID}/typing`;
+  const reactionRoot = `/api/v10/channels/${THREAD_ID}/messages/${messageId}/reactions`;
+  const fetch = routeFetch(requests, {
+    [`POST ${typingPath}`]: new Response(null, { status: 204 }),
+    [`DELETE ${reactionRoot}/${encodeURIComponent("👀")}/@me`]: new Response(null, {
+      status: 204,
+    }),
+    [`PUT ${reactionRoot}/${encodeURIComponent("✅")}/@me`]: new Response(null, {
+      status: 204,
+    }),
+    [`PATCH /api/v10/channels/${THREAD_ID}/messages/${messageId}`]: json({
+      id: messageId,
+    }),
+  });
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("activity-lifecycle-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:activity",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  assert.equal(await api.refreshTyping({ threadId: THREAD_ID }), true);
+  assert.deepEqual(
+    await api.completeMessageAcknowledgement({
+      threadId: THREAD_ID,
+      messageId,
+      outcome: "success",
+    }),
+    { acknowledgementRemoved: true, outcomeVisible: true },
+  );
+  await api.editMessage({
+    threadId: THREAD_ID,
+    messageId,
+    payload: componentsPayload(),
+  });
+
+  assert.deepEqual(
+    requests.map((request) => `${request.method} ${request.pathname}`).sort(),
+    [
+      `POST ${typingPath}`,
+      `DELETE ${reactionRoot}/${encodeURIComponent("👀")}/@me`,
+      `PUT ${reactionRoot}/${encodeURIComponent("✅")}/@me`,
+      `PATCH /api/v10/channels/${THREAD_ID}/messages/${messageId}`,
+    ].sort(),
+  );
+});
+
+test("optional acknowledgement permission failures do not block Task processing", async () => {
+  const messageId = "100000000000000090";
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("acknowledgement-fallback-secret"),
+    fetch: routeFetch([], {
+      [`PUT /api/v10/channels/${THREAD_ID}/messages/${messageId}/reactions/${encodeURIComponent(
+        "👀",
+      )}/@me`]: json({ message: "Missing Permissions" }, { status: 403 }),
+      [`POST /api/v10/channels/${THREAD_ID}/typing`]: new Response(null, { status: 204 }),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:acknowledgement-fallback",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  assert.deepEqual(await api.acknowledgeMessage({ threadId: THREAD_ID, messageId }), {
+    reactionVisible: false,
+    typingVisible: true,
+  });
+});
+
 test("the HTTP port creates a Forum post with one starter message and workflow tag", async () => {
   const requests: CapturedRequest[] = [];
   const fetch = routeFetch(requests, {
