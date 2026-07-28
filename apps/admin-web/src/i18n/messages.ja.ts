@@ -85,7 +85,7 @@ export const japaneseMessages = {
     databaseSetupTitle: "外部 PostgreSQL を使用",
     databaseSetupDescription: "SQLite はすでに稼働中です。データベース URI は不要です。",
     discordSetupRequest:
-      "Discord Forum の設定を案内してください。まず現在のバインディングを確認し、Discord 側に残っている手順を説明して、足りない非機密情報だけを尋ねてください。Bot トークンをチャットに貼るよう求めず、安全なトークンフォームを使うタイミングを教えてください。",
+      "Discord Bot を初めて設定する利用者として案内してください。まず現在の接続状態を確認し、Forum の投稿が OpenDelegate Task になる仕組みを説明してください。全体の流れは短く示し、残っている手順は一度に一つずつ案内してください。現在の手順では、どこを開くか、何をするか、なぜ必要か、完了をどう確認するか、何を伝えるかを示し、私の確認を待ってから次へ進んでください。初めて出る用語を説明し、不足している機密ではない値だけを尋ねてください。Bot トークンをチャットに貼るよう求めず、安全なトークンフォームを使うタイミングを教えてください。",
     databaseSetupRequest:
       "まず現在のデータベース設定を説明してください。既定の SQLite には URI が不要です。外部 PostgreSQL を選ぶ場合は、変更を提案する前に移行とサービス再起動の要件を案内し、URI はチャットではなく安全なフォームに入力するよう教えてください。",
     discordSecureTitle: "Discord Bot トークンを安全に保存",

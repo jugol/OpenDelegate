@@ -743,7 +743,13 @@ guiding the owner through the Discord Developer Portal, bot, Community Server,
 Forum, intents, permissions, and missing non-secret identifiers. The raw bot token
 is accepted only by Main's secure intake form. The Agent then uses the existing typed
 configuration proposal, protected Approval, live activation validation, and rollback
-flow. Browser-only Discord actions remain explicit owner actions.
+flow. Browser-only Discord actions remain explicit owner actions. The guide assumes
+no previous bot setup experience, explains the Forum-post-to-Task result and Discord
+terms before raw fields, and covers only missing stages, including installation into
+the selected server and Forum-access verification. It presents a brief roadmap, then
+names where to go, what to do, why it is needed, how to verify completion, and what
+non-secret value to return only for the current stage. It waits for owner confirmation
+before advancing and keeps one clear next action visible.
 
 **Rationale:** An unsolicited `Database URI` password field made the embedded
 database look incomplete and separated credentials from the reason they were
@@ -845,3 +851,33 @@ paragraph and list structure. Unread presentation never creates a Task event, se
 an external notification, or changes Agent session semantics. Switching or reloading
 Devices may reset this transient indicator; durable configuration session recovery
 remains Main's responsibility.
+
+## D-058 — Configuration continuation before tool execution
+
+**Decision:** If the initial native resume for one Configuration Agent request fails
+with the public unavailable condition before any typed configuration tool for that
+request has executed, Main retries that same complete current prompt by starting a
+fresh native session. The new native reference is appended to the existing
+Device-scoped configuration-session lineage. Main does not perform this automatic
+continuation after the request has reached a typed tool. Before executing the first
+typed tool, Main writes a durable request-bound attempt marker. If that request has no
+final response after interruption, later replay fails closed, including after Main
+restart. Configuration Chat is not a Task, so FR-9's Task Brief and Work Order
+checkpoint package does not apply; the recovered Agent discloses that chat-only
+context was lost, re-inspects durable configuration, and re-confirms any required
+chat-only value or choice before proposing a change.
+
+**Rationale:** A provider process can be interrupted while its native thread still
+appears resumable but refuses the next turn. Failing every later Configuration Chat
+message leaves deterministic configuration intact but makes recovery impossible.
+Before the first tool request, replaying the current prompt cannot duplicate a
+configuration mutation; after a tool request, that guarantee no longer holds. The
+durable boundary prevents a process restart from accidentally resetting this safety
+decision.
+
+**Consequence:** The owner may lose conversational detail held only in the unavailable
+provider session, but the continuation receives the complete current owner request,
+current Device observation, configuration protocol, and safety rules. Durable
+configuration and receipts remain authoritative. A failure after the durable tool
+boundary stays failed and requires a new owner request after inspecting current
+configuration; the interrupted request itself is never replayed.

@@ -68,10 +68,88 @@ test("Configuration Agent resumes one native session per target Device", async (
   );
   assert.match(
     adapter.starts[0]?.prompt ?? "",
+    /may be creating a Discord bot for the first time.*plain language/isu,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /one Discord Forum post.*one OpenDelegate Task.*replies.*same Task/isu,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /where to go.*what to do.*why.*how to verify.*what.*send back/isu,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /brief roadmap.*current stage.*wait for the owner to confirm.*next stage/isu,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /install link.*add the bot.*server.*member list.*Forum/isu,
+  );
+  assert.match(adapter.starts[0]?.prompt ?? "", /Developer Mode.*Copy ID.*non-secret/isu);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
     /SQLite is the default and needs no database URI/isu,
   );
   assert.match(adapter.resumes[0]?.prompt ?? "", /Propose a safer route\./);
   assert.equal(adapter.resumes[0]?.session.nativeSessionId, "native-configuration-session");
+});
+
+test("Configuration Agent creates a fresh continuation when the initial native resume fails", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new InitialResumeFailureAdapter();
+  const agent = await createAgent(adapter, eventStore);
+
+  await agent.sendMessage(message("request_initial", "Inspect this Device."));
+  const recovered = await agent.sendMessage(
+    message("request_after_loss", "Continue Discord setup."),
+  );
+
+  assert.equal(recovered.content, "I continued safely in a fresh native session.");
+  assert.equal(adapter.resumes.length, 1);
+  assert.equal(adapter.starts.length, 2);
+  assert.match(adapter.starts[1]?.prompt ?? "", /Continue Discord setup\./);
+  assert.match(
+    adapter.starts[1]?.prompt ?? "",
+    /prior Configuration Agent conversation is unavailable/iu,
+  );
+  assert.equal(adapter.starts[1]?.runId.endsWith("_continuation_turn_0"), true);
+  assert.equal(adapter.starts[1]?.continuationOf?.nativeSessionId, "native-configuration-session");
+  assert.match(adapter.starts[1]?.continuationReason ?? "", /resume was unavailable/iu);
+
+  const stored = await new EventStoreMainNativeSessionRepository(eventStore).load(
+    "configuration:device_worker:fixture-configuration-agent",
+  );
+  assert.equal(stored?.nativeSessionId, "native-configuration-continuation");
+  assert.equal(stored?.lineage.parentNativeSessionId, "native-configuration-session");
+  assert.match(stored?.lineage.continuationReason ?? "", /resume was unavailable/iu);
+});
+
+test("Configuration Agent never auto-continues or replays after a durable tool attempt", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new ToolThenResumeFailureAdapter();
+  const broker = new RecordingToolBroker();
+  const agent = await createAgent(adapter, eventStore, broker);
+  const interrupted = message(
+    "request_tool_then_loss",
+    "Inspect configuration and continue Discord setup.",
+  );
+
+  await agent.sendMessage(message("request_seed", "Inspect this Device."));
+  await assert.rejects(agent.sendMessage(interrupted), {
+    code: "CONFIGURATION_AGENT_UNAVAILABLE",
+  });
+  assert.equal(adapter.starts.length, 1);
+  assert.equal(adapter.resumes.length, 2);
+  assert.equal(broker.calls.length, 1);
+
+  const restarted = await createAgent(adapter, eventStore, broker);
+  await assert.rejects(restarted.sendMessage(interrupted), {
+    code: "CONFIGURATION_AGENT_UNAVAILABLE",
+  });
+  assert.equal(adapter.starts.length, 1);
+  assert.equal(adapter.resumes.length, 2);
+  assert.equal(broker.calls.length, 1);
 });
 
 test("Configuration Agent rejects raw Secret material before adapter, session, or event access", async () => {
@@ -411,6 +489,67 @@ class FakeConfigurationAdapter implements AgentAdapter {
   }
 }
 
+class InitialResumeFailureAdapter extends FakeConfigurationAdapter {
+  override async start(input: AgentStartRequest): Promise<AgentRunHandle> {
+    this.starts.push(structuredClone(input));
+    const reference = {
+      ...session(input),
+      nativeSessionId:
+        this.starts.length === 1
+          ? "native-configuration-session"
+          : "native-configuration-continuation",
+      lineage: {
+        lineageId:
+          this.starts.length === 1
+            ? "lineage-configuration-device"
+            : "lineage-configuration-continuation",
+        ...(input.continuationOf === undefined
+          ? {}
+          : {
+              parentNativeSessionId: input.continuationOf.nativeSessionId,
+              continuationReason: input.continuationReason,
+            }),
+      },
+    };
+    return handle(
+      reference,
+      JSON.stringify({
+        schemaVersion: 1,
+        type: "final",
+        content:
+          this.starts.length === 1
+            ? "I inspected the available configuration context."
+            : "I continued safely in a fresh native session.",
+        claimReceiptIds: [],
+        suggestedActions: [],
+      }),
+    );
+  }
+
+  override async resume(input: AgentResumeRequest): Promise<AgentRunHandle> {
+    this.resumes.push(structuredClone(input));
+    return failedHandle(input.session);
+  }
+}
+
+class ToolThenResumeFailureAdapter extends FakeConfigurationAdapter {
+  override async resume(input: AgentResumeRequest): Promise<AgentRunHandle> {
+    this.resumes.push(structuredClone(input));
+    if (this.resumes.length === 1) {
+      return handle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "tool",
+          toolCallId: "inspect_before_loss",
+          request: { tool: "inspect" },
+        }),
+      );
+    }
+    return failedHandle(input.session);
+  }
+}
+
 class ToolUsingConfigurationAdapter implements AgentAdapter {
   readonly adapterId = "fixture-configuration-agent";
   readonly provider = "generic" as const;
@@ -720,6 +859,36 @@ function handle(reference: NativeSessionReference, finalText: string): AgentRunH
       status: "succeeded" as const,
       session: reference,
       finalText,
+    }),
+    async cancel() {
+      return undefined;
+    },
+  };
+}
+
+function failedHandle(reference: NativeSessionReference): AgentRunHandle {
+  const events: readonly NormalizedAgentEvent[] = [
+    {
+      sequence: 1,
+      observedAt: NOW,
+      type: "session_started",
+      session: reference,
+    },
+  ];
+  return {
+    events: {
+      async *[Symbol.asyncIterator]() {
+        yield* events;
+      },
+    },
+    result: Promise.resolve({
+      status: "failed" as const,
+      session: reference,
+      error: {
+        code: "NATIVE_SESSION_UNAVAILABLE",
+        message: "The native session cannot accept another turn.",
+        retryable: false,
+      },
     }),
     async cancel() {
       return undefined;

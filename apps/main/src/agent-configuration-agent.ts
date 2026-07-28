@@ -41,6 +41,13 @@ interface ConfigurationResponseEventPayload {
   readonly response: ConfigurationAgentMessageResponse;
 }
 
+interface ConfigurationToolAttemptEventPayload {
+  readonly schemaVersion: 1;
+  readonly requestDigest: string;
+  readonly toolOperationId: string;
+  readonly tool: ConfigurationToolRequest["tool"];
+}
+
 export interface AgentBackedConfigurationAgentClock {
   now(): string;
 }
@@ -347,6 +354,7 @@ type ConfigurationAgentToolTurnResult =
 const DEFAULT_MAXIMUM_PROMPT_BYTES = 64 * 1024;
 const DEFAULT_MAXIMUM_TOOL_TURNS = 8;
 const CONFIGURATION_RESPONSE_EVENT = "configuration-agent.response-recorded";
+const CONFIGURATION_TOOL_ATTEMPT_EVENT = "configuration-agent.tool-attempted";
 const DATABASE_URI_MATERIAL =
   /\b(?:amqps?|mariadb|mongodb(?:\+srv)?|mysql|postgres(?:ql)?|rediss?):\/\/[^\s<>"']+/iu;
 const USERINFO_URI_MATERIAL = /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s/:@]+:[^\s/@]+@[^\s<>"']+/iu;
@@ -480,6 +488,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     operationKey: string,
     requestDigest: string,
   ): Promise<ConfigurationAgentMessageResponse> {
+    await this.#assertNoInterruptedToolAttempt(operationKey, requestDigest);
     const sessionKey = configurationSessionKey(input.deviceId, this.#adapter.adapterId);
     let session: NativeSessionReference | undefined;
     try {
@@ -503,18 +512,45 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     const baseRunId = `configuration_${operationKey.slice("sha256:".length)}`;
     let prompt = buildConfigurationPrompt(input, this.#maximumPromptBytes);
     let toolCallCount = 0;
+    let toolAttemptRecorded = false;
     const receipts = new Map<string, ConfigurationToolReceipt>();
 
     try {
       for (let turnIndex = 0; turnIndex <= this.#maximumToolTurns; turnIndex += 1) {
-        const turn = await this.#runTurn({
-          baseRunId,
-          turnIndex,
-          prompt,
-          session,
-          targetDeviceId: input.deviceId,
-          sessionKey,
-        });
+        let turn: {
+          readonly session: NativeSessionReference;
+          readonly finalText: string | undefined;
+        };
+        try {
+          turn = await this.#runTurn({
+            baseRunId,
+            turnIndex,
+            prompt,
+            session,
+            targetDeviceId: input.deviceId,
+            sessionKey,
+          });
+        } catch (error) {
+          if (
+            turnIndex !== 0 ||
+            session === undefined ||
+            !(error instanceof ConfigurationAgentPortError) ||
+            error.code !== "CONFIGURATION_AGENT_UNAVAILABLE"
+          ) {
+            throw error;
+          }
+          turn = await this.#runTurn({
+            baseRunId: `${baseRunId}_continuation`,
+            turnIndex,
+            prompt: buildConfigurationContinuationPrompt(prompt, this.#maximumPromptBytes),
+            session: undefined,
+            continuationOf: session,
+            continuationReason:
+              "Initial Configuration Agent native resume was unavailable before tool execution.",
+            targetDeviceId: input.deviceId,
+            sessionKey,
+          });
+        }
         session = turn.session;
         const parsed = parseConfigurationTurnResult(turn.finalText);
         if (parsed.type === "final") {
@@ -542,6 +578,15 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         }
         toolCallCount += 1;
         const toolOperationId = configurationToolOperationId(operationKey, parsed.toolCallId);
+        if (!toolAttemptRecorded) {
+          await this.#recordToolAttempt({
+            operationKey,
+            requestDigest,
+            toolOperationId,
+            tool: parsed.request.tool,
+          });
+          toolAttemptRecorded = true;
+        }
         let toolResult: ConfigurationAgentToolTurnResult;
         try {
           const receipt = await this.#toolBroker.execute({
@@ -599,6 +644,8 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     readonly turnIndex: number;
     readonly prompt: string;
     readonly session: NativeSessionReference | undefined;
+    readonly continuationOf?: NativeSessionReference;
+    readonly continuationReason?: string;
     readonly targetDeviceId: string;
     readonly sessionKey: string;
   }): Promise<{
@@ -624,7 +671,16 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     try {
       handle =
         input.session === undefined
-          ? await this.#adapter.start({ operation: "start", ...common })
+          ? await this.#adapter.start({
+              operation: "start",
+              ...common,
+              ...(input.continuationOf === undefined
+                ? {}
+                : {
+                    continuationOf: input.continuationOf,
+                    continuationReason: input.continuationReason,
+                  }),
+            })
           : await this.#adapter.resume({
               operation: "resume",
               ...common,
@@ -720,6 +776,73 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     }
   }
 
+  async #assertNoInterruptedToolAttempt(
+    operationKey: string,
+    requestDigest: string,
+  ): Promise<void> {
+    let events: readonly {
+      readonly streamVersion: number;
+      readonly type: string;
+      readonly payload: unknown;
+    }[];
+    try {
+      events = await this.#eventStore.readStream(toolAttemptStreamId(operationKey));
+    } catch {
+      throw unavailable("The Configuration Agent tool-attempt state could not be read.");
+    }
+    if (events.length === 0) {
+      return;
+    }
+    if (
+      events.length !== 1 ||
+      events[0]?.streamVersion !== 1 ||
+      events[0].type !== CONFIGURATION_TOOL_ATTEMPT_EVENT
+    ) {
+      throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+    }
+    const payload = validateToolAttemptEventPayload(events[0].payload);
+    if (payload.requestDigest !== requestDigest) {
+      throw idempotencyConflict();
+    }
+    throw unavailable(
+      "A previous Configuration Agent attempt reached a deterministic tool without recording a final response. OpenDelegate did not replay it.",
+    );
+  }
+
+  async #recordToolAttempt(input: {
+    readonly operationKey: string;
+    readonly requestDigest: string;
+    readonly toolOperationId: string;
+    readonly tool: ConfigurationToolRequest["tool"];
+  }): Promise<void> {
+    const streamId = toolAttemptStreamId(input.operationKey);
+    const payload = {
+      schemaVersion: 1,
+      requestDigest: input.requestDigest,
+      toolOperationId: input.toolOperationId,
+      tool: input.tool,
+    } satisfies ConfigurationToolAttemptEventPayload;
+    try {
+      await this.#eventStore.append({
+        streamId,
+        expectedVersion: 0,
+        events: [
+          {
+            eventId: `event_${digest(`${streamId}\u0000${input.requestDigest}`)
+              .slice("sha256:".length)
+              .slice(0, 64)}`,
+            type: CONFIGURATION_TOOL_ATTEMPT_EVENT,
+            payload,
+          },
+        ],
+      });
+    } catch {
+      throw unavailable(
+        "The Configuration Agent tool-attempt boundary could not be stored durably.",
+      );
+    }
+  }
+
   async #loadStoredResponse(
     operationKey: string,
     requestDigest: string,
@@ -801,7 +924,11 @@ function buildConfigurationPrompt(
     "Adding another Forum means preserving the existing object and adding a distinct forumBindings entry. Replacing the bot, guild, or Forum means proposing the complete replacement object. Disabling means setting discord.binding to null. Durable Tasks and native Agent sessions remain in Main; Discord thread identities are not silently migrated.",
     "A secure Discord token intake returns secret://main/ALIAS. Store only ALIAS as botTokenAlias after removing the exact secret://main/ prefix. Never put the token or the secret:// reference itself in discord.binding. Applying, replacing, or disabling Discord requires the normal owner Approval; the runtime validates the credential and installation and restores the previous binding if activation fails.",
     "Guide Discord setup in dependency order: inspect the current binding; guide the owner through creating or selecting an Application and bot in the Discord Developer Portal; confirm the server has Community enabled and a Forum channel; confirm the required Gateway intents and least-privilege bot permissions; collect only missing non-secret Application, bot user, Guild, Forum, workflow tag, owner, and optional role IDs; direct token entry to the secure token form; then propose the complete discord.binding for Approval. Discord-side browser actions remain owner actions, so never claim you completed them.",
-    "For Discord, explain that message-content access and the GUILDS, GUILD_MESSAGES, and MESSAGE_CONTENT intents are required. Prefer VIEW_CHANNEL, READ_MESSAGE_HISTORY, SEND_MESSAGES, SEND_MESSAGES_IN_THREADS, ATTACH_FILES, and MANAGE_THREADS; request MANAGE_CHANNELS only when OpenDelegate must create or configure the Forum.",
+    "Assume the owner may be creating a Discord bot for the first time. Use reassuring plain language, answer in the owner's language when it is evident, and define Application, bot, server or Guild, Forum, tag, and ID when each term first appears.",
+    "Before giving setup steps, explain the outcome: one Discord Forum post becomes one OpenDelegate Task, replies continue the same Task, and the Forum list plus workflow tags form a task dashboard. Inspect first, then summarize what is already connected and what is still missing without leading with raw configuration fields.",
+    "After inspection, give a brief roadmap of only the missing stages and clearly label the single current stage. Explain only that current stage in detail: where to go, what to do, why it is needed, how to verify it worked, and what, if anything, to send back to OpenDelegate. End with an explicit completion check and wait for the owner to confirm before advancing to the next stage. Do not present an unexplained wall of identifiers or a full manual in one response.",
+    "Use Discord's current setup boundaries accurately: create or select the Application in the Developer Portal; configure the bot and privileged MESSAGE_CONTENT toggle on its Bot page; configure Guild Install scopes and least-privilege permissions on Installation or OAuth2; open the resulting install link, add the bot to the selected server, and verify that it appears in the member list and can see the Forum; enable Community in Discord Server Settings before creating a Forum; create the workflow tags intake, running, waiting, review, done, and failed; then enable Developer Mode in User Settings > Advanced and use Copy ID for the required non-secret IDs. Explain that IDs are safe to provide in chat but the bot token is a secret and must only use the secure token form.",
+    "For Discord, explain that the OpenDelegate runtime uses the GUILDS, GUILD_MESSAGES, and MESSAGE_CONTENT Gateway intents, while only privileged MESSAGE_CONTENT needs the Developer Portal toggle for an unverified personal bot. Prefer VIEW_CHANNEL, READ_MESSAGE_HISTORY, SEND_MESSAGES, SEND_MESSAGES_IN_THREADS, ATTACH_FILES, and MANAGE_THREADS; explain the reason for each permission and request MANAGE_CHANNELS only when OpenDelegate must create or configure the Forum.",
     "SQLite is the default and needs no database URI. Treat external PostgreSQL as an explicit owner opt-in. Before proposing database.adapter or database.uri-ref, explain that storing a URI or changing durable Configuration does not migrate the live database: the owner needs the supported backup/restore and service reconfiguration path. Never claim that the active database changed without a deterministic runtime receipt that proves it.",
     "Mutation claims must reference the exact successful durable receipt returned by OpenDelegate. Failed tool results prove that no requested mutation occurred.",
     "Never request or repeat a raw secret, Discord bot token, private key, enrollment grant, database URI, or Agent credential. Direct the owner to the platform secret-store flow instead.",
@@ -822,6 +949,20 @@ function buildConfigurationPrompt(
     throw unavailable("The Configuration Agent message exceeds its prompt budget.");
   }
   return prompt;
+}
+
+function buildConfigurationContinuationPrompt(prompt: string, maximumBytes: number): string {
+  const continuationPrompt = [
+    "Native session recovery notice: the prior Configuration Agent conversation is unavailable.",
+    "Briefly tell the owner that you recovered in a new session before giving guidance. Do not claim to remember prior chat-only details, confirmations, or choices.",
+    "Re-inspect durable configuration before proposing a change. Reconfirm with the owner any required value or choice that exists only in the unavailable conversation.",
+    "",
+    prompt,
+  ].join("\n");
+  if (Buffer.byteLength(continuationPrompt, "utf8") > maximumBytes) {
+    throw unavailable("The Configuration Agent continuation exceeds its prompt budget.");
+  }
+  return continuationPrompt;
 }
 
 function buildToolResultPrompt(
@@ -1160,6 +1301,30 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
   return structuredClone(value) as unknown as ConfigurationResponseEventPayload;
 }
 
+function validateToolAttemptEventPayload(value: unknown): ConfigurationToolAttemptEventPayload {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["schemaVersion", "requestDigest", "toolOperationId", "tool"]) ||
+    value["schemaVersion"] !== 1 ||
+    typeof value["requestDigest"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(value["requestDigest"])
+  ) {
+    throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+  }
+  assertIdentifier(value["toolOperationId"], "Configuration tool operation ID", 160);
+  if (
+    value["tool"] !== "inspect" &&
+    value["tool"] !== "validate" &&
+    value["tool"] !== "propose" &&
+    value["tool"] !== "diff" &&
+    value["tool"] !== "apply" &&
+    value["tool"] !== "rollback"
+  ) {
+    throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+  }
+  return structuredClone(value) as unknown as ConfigurationToolAttemptEventPayload;
+}
+
 function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgentMessageInput {
   if (!isRecord(input)) {
     throw unavailable("The Configuration Agent request is invalid.");
@@ -1451,6 +1616,10 @@ function configurationTaskId(targetDeviceId: string): string {
 
 function responseStreamId(operationKey: string): string {
   return `configuration-response:${operationKey.slice("sha256:".length)}`;
+}
+
+function toolAttemptStreamId(operationKey: string): string {
+  return `configuration-tool-attempt:${operationKey.slice("sha256:".length)}`;
 }
 
 function configurationToolOperationId(operationKey: string, toolCallId: string): string {

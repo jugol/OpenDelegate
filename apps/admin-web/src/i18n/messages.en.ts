@@ -81,7 +81,7 @@ export const englishMessages = {
     databaseSetupTitle: "Use external PostgreSQL",
     databaseSetupDescription: "SQLite is already active. No database URI is required.",
     discordSetupRequest:
-      "Guide me through Discord Forum setup. Inspect the current binding first, explain the Discord-side steps that remain, and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+      "I may be setting up a Discord bot for the first time. Inspect the current binding and explain how Forum posts become OpenDelegate Tasks. Give me a short roadmap, then guide me through one remaining step at a time. For the current step, tell me where to go, what to do, why it is needed, how to verify it, and what I should send back; wait for my confirmation before continuing. Define unfamiliar terms and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
     databaseSetupRequest:
       "Explain my current database setup first. SQLite is the default and requires no URI. If I choose external PostgreSQL, guide the migration and service restart requirements before proposing changes, and tell me to use the secure form instead of pasting the URI into chat.",
     discordSecureTitle: "Store the Discord token securely",

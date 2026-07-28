@@ -590,7 +590,12 @@ Deliver the required visual setup, Device specification, and operational surface
   credential as the next missing value. Explain that embedded SQLite is already
   active without a URI, and make the Discord guide inspect the current binding before
   walking through Discord-side prerequisites, non-secret identifiers, secure token
-  intake, proposal, Approval, activation validation, and rollback.
+  intake, proposal, Approval, activation validation, and rollback. Treat the owner as
+  new to Discord bots: explain the Forum-post-to-Task outcome and unfamiliar terms,
+  cover only missing stages (including server installation and Forum-access
+  verification), show a brief roadmap, and give where/what/why/verification/return
+  value detail only for the current stage. Keep one explicit next action visible and
+  wait for owner confirmation before advancing.
 - When Main reports exactly `DISCORD_NOT_CONFIGURED`, start one transparent
   Agent-guided Discord onboarding turn on the first Main Configuration Chat opening
   in that browser session. Do not trigger first-time onboarding for a configured but
@@ -602,6 +607,12 @@ Deliver the required visual setup, Device specification, and operational surface
   summary, and accessible live notification until the owner opens the chat. Show a
   transient Agent activity message inside the transcript while a native turn is
   pending, independently of the composer placeholder.
+- If a Configuration Agent request cannot complete its initial native resume before
+  executing any typed tool, start and durably record a fresh native continuation from
+  the complete current prompt, disclose the loss of prior chat-only context, re-inspect
+  durable state, and re-confirm any chat-only value before proposing a change. Record
+  the first typed-tool attempt before broker execution and fail an interrupted request
+  closed across restart; never auto-restart or replay after that boundary.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.

@@ -20,6 +20,9 @@ import { AdminI18nProvider } from "./i18n";
 import { koreanMessages } from "./i18n/messages.ko";
 import { firstRunDevice } from "./view-model";
 
+const discordSetupRequest =
+  "I may be setting up a Discord bot for the first time. Inspect the current binding and explain how Forum posts become OpenDelegate Tasks. Give me a short roadmap, then guide me through one remaining step at a time. For the current step, tell me where to go, what to do, why it is needed, how to verify it, and what I should send back; wait for my confirmation before continuing. Define unfamiliar terms and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.";
+
 const ownerSession: OwnerSession = {
   sessionId: "session_owner_browser",
   ownerId: "owner_primary",
@@ -419,7 +422,7 @@ describe("Admin authentication and Task control", () => {
     await waitFor(() =>
       expect(sendConfigurationMessage).toHaveBeenCalledWith(
         windowsMain.deviceId,
-        "Guide me through Discord Forum setup. Inspect the current binding first, explain the Discord-side steps that remain, and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+        discordSetupRequest,
       ),
     );
     expect(
@@ -607,7 +610,7 @@ describe("Admin authentication and Task control", () => {
     expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
       2,
       windowsMain.deviceId,
-      "Guide me through Discord Forum setup. Inspect the current binding first, explain the Discord-side steps that remain, and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+      discordSetupRequest,
     );
     expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
       3,

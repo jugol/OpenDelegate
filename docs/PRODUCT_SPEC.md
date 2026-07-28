@@ -573,10 +573,12 @@ may request a transition but cannot manufacture a state outside the transition r
    file or command results relevant to the Task, decisions, approvals, and Artifacts.
 11. It does not require hidden reasoning, internal model state, or an exact visual
     mirror of a vendor's Desktop conversation.
-12. Context pressure, provider compaction, retention expiry, corruption, or Device
-    loss triggers a checkpoint and continuation session.
-13. A continuation receives a bounded package: Task Brief, rolling summary,
-    decisions, pending Work Orders, selected Artifact index, relevant current
+12. For Task Coordinator and Worker sessions, context pressure, provider compaction,
+    retention expiry, corruption, or Device loss triggers a checkpoint and
+    continuation session. Configuration Chat follows its separate recovery contract
+    in FR-15 because it is not a Task and does not own a Task Brief or Work Orders.
+13. A Task or Worker continuation receives a bounded package: Task Brief, rolling
+    summary, decisions, pending Work Orders, selected Artifact index, relevant current
     messages, and explicit constraints.
 14. A Worker uses Device-level automatic adapter selection only when its Run has no
     Agent requirement. When a requirement exists, the provider is mandatory, the
@@ -752,7 +754,14 @@ may request a transition but cannot manufacture a state outside the transition r
     for missing non-secret identifiers, and then offers secure bot-token intake when
     it is actually required. It uses the typed proposal and protected Approval
     lifecycle and never claims that browser-only Discord actions were completed by
-    OpenDelegate.
+    OpenDelegate. The guide assumes no prior bot experience, first explains how one
+    Forum post maps to one Task, defines unfamiliar Discord terms, and walks through
+    only the missing stages, including installing the configured bot into the selected
+    server and verifying its Forum access. It gives a brief roadmap, then explains
+    only the current stage in detail: where to go, what to do, why it is required,
+    how to verify completion, and what non-secret value, if any, to return. It waits
+    for owner confirmation before advancing, presenting a single clear next action
+    instead of an unexplained identifier dump or a full manual in one response.
 24. When Main reports the exact `DISCORD_NOT_CONFIGURED` runtime state, the first
     opening of Main's Configuration Chat in a browser session transparently starts
     one Agent-guided Discord onboarding turn. A deterministic in-chat status explains
@@ -768,6 +777,16 @@ may request a transition but cannot manufacture a state outside the transition r
     While an Agent turn is in flight, the transcript itself shows a localized
     Agent-authored-position activity message; a disabled composer placeholder is not
     the only progress indication.
+26. If the first native resume attempt for a Configuration Agent request fails before
+    any typed configuration tool for that request has executed, Main starts a fresh
+    native continuation with the complete current prompt and records the new lineage.
+    It does not automatically restart after a tool has executed, because replay could
+    duplicate a mutation or misrepresent its receipt. The continuation tells the owner
+    that prior chat-only context is unavailable, re-inspects durable configuration,
+    and re-confirms any required value or choice that existed only in the lost
+    conversation before proposing a change. Main durably records the first typed-tool
+    attempt for each owner request before execution; an interrupted request with that
+    boundary and no final response fails closed across restart instead of replaying.
 
 ### FR-16 — Policy and approvals
 

@@ -89,7 +89,7 @@ export const frenchMessages = {
     databaseSetupDescription:
       "SQLite est déjà actif. Aucune URI de base de données n’est nécessaire.",
     discordSetupRequest:
-      "Guidez-moi dans la configuration d’un forum Discord. Inspectez d’abord la liaison actuelle, expliquez les étapes qui restent côté Discord et ne demandez que les valeurs non secrètes manquantes. Ne me demandez jamais de coller le jeton du bot dans la conversation ; indiquez-moi quand utiliser le formulaire sécurisé.",
+      "Considérez que je configure peut-être un bot Discord pour la première fois. Inspectez d’abord la connexion actuelle et expliquez comment les publications du forum deviennent des Tasks OpenDelegate. Donnez-moi une courte vue d’ensemble, puis guidez-moi une étape restante à la fois. Pour l’étape actuelle, indiquez où aller, quoi faire, pourquoi c’est nécessaire, comment vérifier la réussite et ce que je dois vous transmettre, puis attendez ma confirmation avant de continuer. Définissez les termes inconnus et ne demandez que les valeurs non secrètes manquantes. Ne me demandez jamais de coller le jeton du bot dans la conversation ; indiquez-moi quand utiliser le formulaire sécurisé.",
     databaseSetupRequest:
       "Expliquez d’abord ma configuration de base de données actuelle. SQLite est la valeur par défaut et ne nécessite aucune URI. Si je choisis PostgreSQL externe, expliquez la migration et le redémarrage du service avant de proposer des changements, et demandez d’utiliser le formulaire sécurisé plutôt que de coller l’URI dans la conversation.",
     discordSecureTitle: "Stocker le jeton Discord en sécurité",

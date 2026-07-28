@@ -74,7 +74,7 @@ export const simplifiedChineseMessages = {
     databaseSetupTitle: "使用外部 PostgreSQL",
     databaseSetupDescription: "SQLite 已在运行，无需数据库 URI。",
     discordSetupRequest:
-      "请引导我设置 Discord 论坛。先检查当前绑定，说明 Discord 端仍需完成的步骤，并且只询问缺少的非机密值。绝不要让我把机器人令牌粘贴到聊天中；请告诉我何时使用安全令牌表单。",
+      "请假设我可能是第一次设置 Discord 机器人。先检查当前连接，并说明论坛帖子如何成为 OpenDelegate Task。请先简要列出整个流程，然后一次只引导我完成一个尚未完成的步骤。对于当前步骤，请说明去哪里、做什么、为什么需要、如何确认成功，以及我需要提供什么；等我确认后再继续下一步。请解释陌生术语，并且只询问缺少的非机密值。绝不要让我把机器人令牌粘贴到聊天中；请告诉我何时使用安全令牌表单。",
     databaseSetupRequest:
       "请先说明我当前的数据库设置。SQLite 是默认选项，不需要 URI。如果我选择外部 PostgreSQL，请在提出更改前说明迁移和服务重启要求，并让我使用安全表单，而不是把 URI 粘贴到聊天中。",
     discordSecureTitle: "安全存储 Discord 机器人令牌",

@@ -89,7 +89,7 @@ export const spanishMessages = {
     databaseSetupTitle: "Usar PostgreSQL externo",
     databaseSetupDescription: "SQLite ya está activo. No se necesita ninguna URI de base de datos.",
     discordSetupRequest:
-      "Guíame por la configuración de un foro de Discord. Inspecciona primero la vinculación actual, explica los pasos pendientes en Discord y pide solo los valores no secretos que falten. Nunca me pidas pegar el token del bot en el chat; indícame cuándo usar el formulario seguro.",
+      "Supón que quizá estoy configurando un bot de Discord por primera vez. Inspecciona primero la conexión actual y explica cómo las publicaciones del foro se convierten en Tasks de OpenDelegate. Dame un resumen breve y después guíame por una sola etapa pendiente cada vez. Para la etapa actual, dime adónde ir, qué hacer, por qué es necesario, cómo comprobar que funcionó y qué debo enviarte; espera mi confirmación antes de continuar. Define los términos desconocidos y pide solo los valores no secretos que falten. Nunca me pidas pegar el token del bot en el chat; indícame cuándo usar el formulario seguro.",
     databaseSetupRequest:
       "Explica primero mi configuración de base de datos actual. SQLite es el valor predeterminado y no necesita URI. Si elijo PostgreSQL externo, guía la migración y los requisitos de reinicio del servicio antes de proponer cambios, e indícame que use el formulario seguro en lugar de pegar la URI en el chat.",
     discordSecureTitle: "Guardar el token de Discord de forma segura",
