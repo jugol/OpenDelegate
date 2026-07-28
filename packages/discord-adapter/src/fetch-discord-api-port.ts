@@ -121,7 +121,7 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
         this.#botJson("GET", "/oauth2/applications/@me"),
         this.#botJson("GET", "/users/@me"),
         this.#botJson("GET", `/guilds/${input.guildId}`),
-        this.#botJson("GET", `/guilds/${input.guildId}/members/@me`),
+        this.#botJson("GET", `/users/@me/guilds/${input.guildId}/member`),
         this.#botJson("GET", `/guilds/${input.guildId}/roles`),
         ...input.forumChannelIds.map((channelId) => this.#botJson("GET", `/channels/${channelId}`)),
       ]);

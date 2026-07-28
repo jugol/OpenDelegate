@@ -31,7 +31,7 @@ test("the HTTP port verifies Application, Community Forum, intents, tags, and ef
       owner_id: "100000000000000099",
       features: ["COMMUNITY"],
     }),
-    [`GET /api/v10/guilds/${GUILD_ID}/members/@me`]: json({
+    [`GET /api/v10/users/@me/guilds/${GUILD_ID}/member`]: json({
       user: { id: BOT_USER_ID, bot: true },
       roles: ["100000000000000010"],
     }),
