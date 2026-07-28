@@ -1074,6 +1074,10 @@ body, or mutable Task controls. Questions, decisions, failures, and final result
 remain single ordinary replies at their chronological point, keyed by immutable
 Task source-event identity. An owner answer edits the existing question message into
 a control-free receipt before Task continuation.
+Existing full-projection outbox identities are adopted as aliases for the matching
+Task source event during upgrade. If a prior interrupted upgrade already produced
+multiple copies of that event's question, one accepted answer resolves every copy
+rather than leaving an older prompt active.
 
 The semantic plan identity is the owner-input execution-cycle identity, not the
 automatic-attempt identity. Deterministic Worker/resource retries in that cycle load

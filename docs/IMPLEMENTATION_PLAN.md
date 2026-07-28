@@ -549,9 +549,11 @@ Make Discord the complete primary Task interface.
   each posted once at the latest chronological position using immutable Task
   source-event identity. Mutable Artifact/link enrichment updates the stable panel,
   not another result message. Resolve an answered question by editing that same
-  nonce-recoverable message and removing its controls. Chronological failure replies
-  must include the owner-safe concrete reason or exhausted resource plus the relevant
-  recovery control, including Retry for failed Tasks.
+  nonce-recoverable message and removing its controls. Adopt a matching delivered
+  legacy projection key during upgrade; if duplicate copies already exist, resolve
+  every copy of that source event from one accepted answer. Chronological failure
+  replies must include the owner-safe concrete reason or exhausted resource plus the
+  relevant recovery control, including Retry for failed Tasks.
 - Present interactive Artifacts with a distinct owner action label. Never place a
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.

@@ -20,6 +20,10 @@ results as durable conversation messages. The comparative primary-source review 
 recorded in
 [`../research/messaging-agent-conversation-ux.md`](../research/messaging-agent-conversation-ux.md).
 
+The source-event delivery key supersedes an earlier full-projection digest. Existing
+installations can therefore already contain a delivered question or result under
+the older key when they upgrade.
+
 ## Decision
 
 For every accepted Discord owner message, OpenDelegate enqueues one deterministic
@@ -38,6 +42,11 @@ decisions, failures, and final results remain ordinary chronological replies. Th
 delivery identity is the immutable Task source-event ID, not a digest of mutable
 Artifact or inspection links. An owner answer resolves the existing question
 message in place and removes its controls before the same Task resumes.
+Before enqueuing a source-event delivery, the Adapter adopts any existing legacy
+outbox item carrying that Task and source-event identity. If an interrupted upgrade
+has already delivered duplicate copies of one question, the first eligible owner
+answer resolves every copy of that same source event so no stale prompt remains
+actionable.
 
 Task execution gives semantic planning a stable key derived from the first attempt
 of one owner-input cycle. Automatic attempts retain their own execution keys for
@@ -69,6 +78,9 @@ record a bounded diagnostic.
   same nonce-bound Discord message and never appends a second question.
 - Artifact enrichment of one terminal source event updates the stable panel without
   posting another chronological result.
+- Upgrade from a full-projection delivery key adopts the delivered legacy item
+  without sending the source event again; duplicate copies left by an interrupted
+  upgrade are all resolved by one owner answer.
 - A deterministic retry after Worker unavailability invokes planning once for the
   owner-input cycle and reuses the original Work Order plan.
 - Reaction/typing HTTP calls are bounded and authenticated; typing refresh and

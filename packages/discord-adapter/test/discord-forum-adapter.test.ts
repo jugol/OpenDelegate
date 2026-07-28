@@ -377,6 +377,30 @@ function fixture(options?: {
   return { adapter, api, tasks, repository, clock };
 }
 
+async function recordDeliveredOutbox(
+  repository: InMemoryDiscordStateRepository,
+  clock: FakeClock,
+  id: string,
+  action: Parameters<InMemoryDiscordStateRepository["enqueueOutbox"]>[0]["action"],
+): Promise<void> {
+  await repository.enqueueOutbox({
+    id,
+    action,
+    createdAtMs: clock.nowMs(),
+    notBeforeMs: clock.nowMs(),
+  });
+  const claimed = await repository.claimReadyOutbox({
+    owner: "migration-test",
+    nowMs: clock.nowMs(),
+    leaseMs: 30_000,
+    limit: 100,
+  });
+  const item = claimed.find((candidate) => candidate.id === id);
+  assert.notEqual(item, undefined);
+  await repository.completeOutbox({ id, owner: "migration-test" });
+  clock.value += 1;
+}
+
 test("installation probe requires Community, Forum type, Gateway intents, and least permissions", async () => {
   const { adapter, api } = fixture();
   const ready = await adapter.verifyInstallation();
@@ -703,6 +727,97 @@ test("one owner answer resolves the one durable question in place and resumes on
   assert.equal(
     (await restartedRepository.listOutbox()).filter((item) => !item.delivered).length,
     0,
+  );
+});
+
+test("source-event delivery identity adopts a delivered legacy projection after upgrade", async () => {
+  const { adapter, api, repository, clock } = fixture();
+  const thread = forumThread("300000000000000007");
+  const starter = ownerMessage(thread.id, thread.id, "Retain the delivered question.");
+  const projection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "waiting_user",
+    objective: "Retain the delivered question.",
+    summary: "Which release channel should OpenDelegate use?",
+    sourceEventId: "event_legacy_question",
+    significance: "question",
+  };
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await recordDeliveredOutbox(repository, clock, "legacy-projection-digest:03-update", {
+    kind: "post-task-update",
+    taskId: projection.taskId,
+    projection,
+  });
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 0);
+  assert.equal(
+    (await repository.listOutbox()).filter(
+      (item) =>
+        item.action.kind === "post-task-update" &&
+        item.action.projection.sourceEventId === projection.sourceEventId,
+    ).length,
+    1,
+  );
+});
+
+test("one owner answer resolves every duplicate projection of the same legacy prompt", async () => {
+  const { adapter, api, tasks, repository, clock } = fixture();
+  const thread = forumThread("300000000000000008");
+  const starter = ownerMessage(thread.id, thread.id, "테스트를 위한 일감");
+  const answer = ownerMessage("300000000000000010", thread.id, "현재 기기 목록을 알려줘.");
+  const projection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "waiting_user",
+    objective: "테스트를 위한 일감",
+    summary: "테스트에서 수행할 구체적인 작업과 기대 결과는 무엇인가요?",
+    sourceEventId: "event_duplicated_legacy_question",
+    significance: "question",
+  };
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter, answer]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+  const original = (await repository.listOutbox()).find(
+    (item) =>
+      item.action.kind === "post-task-update" &&
+      item.action.projection.sourceEventId === projection.sourceEventId,
+  );
+  assert.notEqual(original, undefined);
+  if (original?.action.kind !== "post-task-update") {
+    throw new Error("The canonical question delivery was not recorded.");
+  }
+  await repository.enqueueOutbox({
+    id: "duplicate-legacy-projection:03-update",
+    action: {
+      kind: "post-task-update",
+      taskId: projection.taskId,
+      projection: original.action.projection,
+    },
+    createdAtMs: clock.nowMs() + 1,
+    notBeforeMs: clock.nowMs(),
+  });
+  await adapter.flushOutbox();
+  await adapter.handleGatewayDispatch(messageDispatch(2, answer));
+  await adapter.flushOutbox();
+
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "append").length, 1);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 2);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-edit").length,
+    2,
+  );
+  assert.equal(
+    (await repository.listOutbox()).filter(
+      (item) => item.action.kind === "resolve-owner-prompt" && item.delivered,
+    ).length,
+    2,
   );
 });
 

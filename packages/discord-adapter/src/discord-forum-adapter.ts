@@ -366,17 +366,21 @@ export class DiscordForumAdapter {
           "A significant chronological Task update requires a stable source event ID.",
         );
       }
-      const updateDigest = digestValue({
-        taskId: projection.taskId,
-        sourceEventId,
-        significance: projection.significance,
-      });
-      const updateRequestKey = `${updateDigest}:03-update`;
-      await this.#enqueueOutbox(updateRequestKey, {
-        kind: "post-task-update",
-        taskId: projection.taskId,
-        projection: chronologicalProjection(projection),
-      });
+      const priorUpdateRequestKey = await this.#significantUpdateRequestKey(projection);
+      const updateRequestKey =
+        priorUpdateRequestKey ??
+        `${digestValue({
+          taskId: projection.taskId,
+          sourceEventId,
+          significance: projection.significance,
+        })}:03-update`;
+      if (priorUpdateRequestKey === undefined) {
+        await this.#enqueueOutbox(updateRequestKey, {
+          kind: "post-task-update",
+          taskId: projection.taskId,
+          projection: chronologicalProjection(projection),
+        });
+      }
       if (ownerMessageCompletion !== undefined) {
         await this.#enqueueOwnerMessageCompletion(
           projection,
@@ -673,7 +677,7 @@ export class DiscordForumAdapter {
           item.action.kind === "resolve-owner-prompt" ? item.action.promptRequestKey : "",
         ),
     );
-    const prompt = [...outbox]
+    const latestPrompt = [...outbox]
       .reverse()
       .find(
         (item) =>
@@ -683,15 +687,48 @@ export class DiscordForumAdapter {
           item.action.projection.significance === "question" &&
           !resolvedPromptKeys.has(item.id),
       );
-    if (prompt === undefined || prompt.action.kind !== "post-task-update") {
+    if (latestPrompt === undefined || latestPrompt.action.kind !== "post-task-update") {
       return;
     }
-    await this.#enqueueOutbox(`${ownerMessageKey}:01-resolve-prompt:${digestValue(prompt.id)}`, {
-      kind: "resolve-owner-prompt",
-      taskId,
-      promptRequestKey: prompt.id,
-      projection: frozenClone(prompt.action.projection),
-    });
+    const sourceEventId = latestPrompt.action.projection.sourceEventId;
+    const matchingPrompts = outbox.filter(
+      (item) =>
+        item.delivered &&
+        item.action.kind === "post-task-update" &&
+        item.action.taskId === taskId &&
+        item.action.projection.significance === "question" &&
+        !resolvedPromptKeys.has(item.id) &&
+        (sourceEventId === undefined
+          ? item.id === latestPrompt.id
+          : item.action.projection.sourceEventId === sourceEventId),
+    );
+    for (const prompt of matchingPrompts) {
+      if (prompt.action.kind !== "post-task-update") {
+        continue;
+      }
+      await this.#enqueueOutbox(`${ownerMessageKey}:01-resolve-prompt:${digestValue(prompt.id)}`, {
+        kind: "resolve-owner-prompt",
+        taskId,
+        promptRequestKey: prompt.id,
+        projection: frozenClone(prompt.action.projection),
+      });
+    }
+  }
+
+  async #significantUpdateRequestKey(
+    projection: TaskChannelProjection,
+  ): Promise<string | undefined> {
+    const sourceEventId = projection.sourceEventId;
+    if (sourceEventId === undefined) {
+      return undefined;
+    }
+    return (await this.#repository.listOutbox()).find(
+      (item) =>
+        item.action.kind === "post-task-update" &&
+        item.action.taskId === projection.taskId &&
+        item.action.projection.sourceEventId === sourceEventId &&
+        item.action.projection.significance === projection.significance,
+    )?.id;
   }
 
   async #ensureBinding(thread: DiscordThread): Promise<DiscordTaskBinding | undefined> {
