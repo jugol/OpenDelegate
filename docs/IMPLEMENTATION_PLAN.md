@@ -591,6 +591,10 @@ Deliver the required visual setup, Device specification, and operational surface
   active without a URI, and make the Discord guide inspect the current binding before
   walking through Discord-side prerequisites, non-secret identifiers, secure token
   intake, proposal, Approval, activation validation, and rollback.
+- When Main reports exactly `DISCORD_NOT_CONFIGURED`, start one transparent
+  Agent-guided Discord onboarding turn on the first Main Configuration Chat opening
+  in that browser session. Do not trigger first-time onboarding for a configured but
+  degraded, reconnecting, starting, or unavailable Discord runtime.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.

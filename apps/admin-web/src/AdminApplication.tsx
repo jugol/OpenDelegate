@@ -145,6 +145,7 @@ export function AdminApplication({
       configurationAgentAvailable={features.configurationAgent.status === "ready"}
       deviceFleet={deviceFleet}
       discordConfigured={features.discord.status === "ready"}
+      discordSetupRecommended={features.discord.code === "DISCORD_NOT_CONFIGURED"}
       executionAvailable={features.taskExecution.status === "ready"}
       {...(deepLink.artifactId === undefined ? {} : { initialArtifactId: deepLink.artifactId })}
       initialSection={deepLink.section}

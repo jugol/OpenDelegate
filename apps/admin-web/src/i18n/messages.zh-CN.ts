@@ -65,6 +65,7 @@ export const simplifiedChineseMessages = {
     unavailableMessage:
       "主设备报告设备评估或配置智能体消息功能不可用。当前显示的设备信息仅来自主设备的确定性运行环境报告。",
     failedMessage: "配置智能体无法响应。没有更改任何设置。",
+    discordOnboardingMessage: "Discord 尚未连接。我正在检查当前绑定并准备设置指南。",
     secureStoreFailed: "无法安全存储该凭据。它未发送到配置对话。",
     guidedSetupTitle: "引导式设置",
     guidedSetupIntro: "选择一个目标。智能体会先检查当前设置，只引导尚未完成的步骤。",

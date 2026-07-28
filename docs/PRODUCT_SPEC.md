@@ -753,6 +753,12 @@ may request a transition but cannot manufacture a state outside the transition r
     it is actually required. It uses the typed proposal and protected Approval
     lifecycle and never claims that browser-only Discord actions were completed by
     OpenDelegate.
+24. When Main reports the exact `DISCORD_NOT_CONFIGURED` runtime state, the first
+    opening of Main's Configuration Chat in a browser session transparently starts
+    one Agent-guided Discord onboarding turn. A deterministic in-chat status explains
+    that the current binding is being inspected; the resulting guidance and actions
+    still come from the Agent response. Degraded or reconnecting Discord states do not
+    masquerade as first-time setup.
 
 ### FR-16 — Policy and approvals
 

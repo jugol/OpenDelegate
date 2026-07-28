@@ -785,3 +785,30 @@ the protocol and browser boundaries. Main-service actions are never offered in a
 Worker Configuration Chat. Discord prerequisites, SQLite-as-default guidance,
 protected Approval, live activation validation, and rollback retain the behavior
 defined by D-054.
+
+## D-056 — First-time Discord guidance starts from exact runtime state
+
+**Decision:** When Main's public runtime feature reports the exact
+`DISCORD_NOT_CONFIGURED` code and the Configuration Agent is ready, the first opening
+of the Main Device's Configuration Chat in a browser session automatically submits
+the localized Discord guided-setup request to that Device's existing configuration
+session. The transcript first shows a deterministic Agent-status message explaining
+that OpenDelegate is inspecting the current binding. The actual guidance and any
+typed action suggestions are returned by the Configuration Agent and rendered inside
+its response as required by D-055.
+
+The browser records a successful onboarding turn in session storage, scoped to the
+Main Device, so closing, reopening, or reloading the same browser session does not
+spend another Agent turn. A failed turn is not recorded as complete. This marker is
+presentation state only; Main's runtime code remains authoritative.
+
+**Rationale:** A new owner should not need to guess the first prompt or already know
+that Discord Forum is the intended Task inbox. Triggering from an exact deterministic
+runtime state provides discoverability without restoring a permanent setup menu or
+asking an LLM to infer whether Discord is configured.
+
+**Consequence:** A configured Discord runtime that is starting, reconnecting,
+degraded, stopped, or unavailable never receives first-time onboarding merely because
+its status is not ready. Workers never initiate this Main-service flow. Raw tokens
+still enter only through secure intake after the Agent identifies them as the next
+missing value.

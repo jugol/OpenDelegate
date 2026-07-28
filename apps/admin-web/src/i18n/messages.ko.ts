@@ -71,6 +71,8 @@ export const koreanMessages = {
     unavailableMessage:
       "메인에서 장치 평가 또는 설정 에이전트 메시지 기능을 사용할 수 없다고 보고했습니다. 화면에 표시되는 장치 정보는 메인의 결정론적 런타임 보고서에서만 가져옵니다.",
     failedMessage: "설정 에이전트가 응답하지 못했습니다. 설정은 변경되지 않았습니다.",
+    discordOnboardingMessage:
+      "Discord가 아직 연결되지 않았습니다. 현재 바인딩을 확인하고 설정 안내를 준비하고 있습니다.",
     secureStoreFailed:
       "인증 정보를 안전하게 저장하지 못했습니다. 설정 채팅에는 전송되지 않았습니다.",
     guidedSetupTitle: "단계별 설정",

@@ -244,7 +244,7 @@ const linuxWorker: DeviceSummary = {
   knowledgeHealth: "healthy",
 };
 
-const readyFeatures: RuntimeFeatures = {
+const discordUnconfiguredFeatures: RuntimeFeatures = {
   declaredReleaseChannel: "development",
   releaseChannel: "development",
   releaseVerification: { status: "not-applicable" },
@@ -253,9 +253,15 @@ const readyFeatures: RuntimeFeatures = {
   discord: { status: "unavailable", code: "DISCORD_NOT_CONFIGURED" },
 };
 
+const connectedFeatures: RuntimeFeatures = {
+  ...discordUnconfiguredFeatures,
+  discord: { status: "ready", code: "DISCORD_READY" },
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   document.documentElement.lang = "en";
 });
 
@@ -383,6 +389,86 @@ describe("Admin authentication and Task control", () => {
       windowsMain.deviceId,
       "Keep 이 owner-authored text unchanged.",
     );
+  });
+
+  it("starts Agent-guided Discord onboarding once when Main reports no binding", async () => {
+    const sendConfigurationMessage = vi
+      .fn<AdminApi["sendConfigurationMessage"]>()
+      .mockResolvedValue({
+        content: "Discord is not connected. I inspected the binding and can guide setup.",
+        suggestedActions: ["guide-discord"],
+      });
+    const api = createApi({
+      runtimeFeatures: vi
+        .fn<AdminApi["runtimeFeatures"]>()
+        .mockResolvedValue(discordUnconfiguredFeatures),
+      sendConfigurationMessage,
+    });
+    const user = userEvent.setup();
+    render(<AdminApplication api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
+    expect(sendConfigurationMessage).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+
+    expect(
+      await screen.findByText(
+        "Discord is not connected yet. I’m checking the current binding and preparing setup guidance.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(sendConfigurationMessage).toHaveBeenCalledWith(
+        windowsMain.deviceId,
+        "Guide me through Discord Forum setup. Inspect the current binding first, explain the Discord-side steps that remain, and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+      ),
+    );
+    expect(
+      await screen.findByText(
+        "Discord is not connected. I inspected the binding and can guide setup.",
+      ),
+    ).toBeTruthy();
+    const agentMessages = screen.getAllByRole("article", { name: "OpenDelegate" });
+    expect(
+      within(agentMessages.at(-1)!).getByRole("button", {
+        name: "Set up or review Discord",
+      }),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(sendConfigurationMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries initial Discord guidance on the next open after an Agent failure", async () => {
+    const sendConfigurationMessage = vi
+      .fn<AdminApi["sendConfigurationMessage"]>()
+      .mockRejectedValueOnce(new Error("Configuration Agent fixture failure."))
+      .mockResolvedValueOnce({
+        content: "Discord guidance recovered on the next open.",
+        suggestedActions: ["guide-discord"],
+      });
+    const api = createApi({
+      runtimeFeatures: vi
+        .fn<AdminApi["runtimeFeatures"]>()
+        .mockResolvedValue(discordUnconfiguredFeatures),
+      sendConfigurationMessage,
+    });
+    const user = userEvent.setup();
+    render(<AdminApplication api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(
+      await screen.findByText(
+        "The Configuration Agent could not respond. No settings were changed.",
+      ),
+    ).toBeTruthy();
+    expect(sendConfigurationMessage).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(await screen.findByText("Discord guidance recovered on the next open.")).toBeTruthy();
+    expect(sendConfigurationMessage).toHaveBeenCalledTimes(2);
   });
 
   it("stores a database URI through secure ingest and sends only its reference to Configuration Chat", async () => {
@@ -927,7 +1013,7 @@ function createApi(overrides: Partial<AdminApi> = {}): AdminApi {
     completeRecovery: vi.fn<AdminApi["completeRecovery"]>(),
     listDevices: vi.fn<AdminApi["listDevices"]>().mockResolvedValue([windowsMain]),
     assessDevice: vi.fn<AdminApi["assessDevice"]>().mockResolvedValue(windowsMain),
-    runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue(readyFeatures),
+    runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue(connectedFeatures),
     sendConfigurationMessage: vi
       .fn<AdminApi["sendConfigurationMessage"]>()
       .mockResolvedValue({ content: "Configuration response.", suggestedActions: [] }),

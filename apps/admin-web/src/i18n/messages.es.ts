@@ -76,6 +76,8 @@ export const spanishMessages = {
       "El Main indica que la evaluación del dispositivo o la mensajería del agente de configuración no están disponibles. Los datos visibles del dispositivo proceden únicamente del informe determinista del entorno de ejecución del Main.",
     failedMessage:
       "El agente de configuración no pudo responder. No se cambió ninguna configuración.",
+    discordOnboardingMessage:
+      "Discord todavía no está conectado. Estoy comprobando la vinculación actual y preparando la guía de configuración.",
     secureStoreFailed:
       "No se pudo guardar la credencial de forma segura. No se envió al chat de configuración.",
     guidedSetupTitle: "Configuración guiada",

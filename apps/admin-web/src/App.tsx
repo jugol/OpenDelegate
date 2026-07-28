@@ -26,6 +26,7 @@ export interface AppProps {
   readonly configurationAgentAvailable?: boolean;
   readonly deviceFleet: DeviceFleetViewModel;
   readonly discordConfigured?: boolean;
+  readonly discordSetupRecommended?: boolean;
   readonly executionAvailable?: boolean;
   readonly initialArtifactId?: string;
   readonly initialChatOpen?: boolean;
@@ -47,6 +48,7 @@ export function App({
   configurationAgentAvailable = false,
   deviceFleet,
   discordConfigured = false,
+  discordSetupRecommended = false,
   executionAvailable = false,
   initialArtifactId,
   initialChatOpen = false,
@@ -207,6 +209,8 @@ export function App({
 
       {activeSection === "devices" ? (
         <ConfigurationChat
+          deviceId={device.deviceId}
+          discordSetupRecommended={discordSetupRecommended}
           expanded={chatExpanded}
           focusRequestId={chatFocusRequestId}
           key={device.deviceId}

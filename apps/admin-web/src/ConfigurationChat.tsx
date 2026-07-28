@@ -14,6 +14,7 @@ import {
 import {
   type FormEvent,
   type KeyboardEvent,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -38,6 +39,7 @@ import type { ConfigurationSessionView } from "./view-model";
 
 type ProposalState = "proposed" | "reviewing" | "dismissed";
 type GuidedSetupGoal = "discord" | "external-postgresql";
+type ConversationEntryMode = "owner-visible" | "agent-initiated";
 
 interface GuidedSetupDescriptor {
   readonly icon: "bot" | "database";
@@ -75,6 +77,8 @@ type ChatMessage = {
 );
 
 interface ConfigurationChatProps {
+  readonly deviceId: string;
+  readonly discordSetupRecommended: boolean;
   readonly expanded: boolean;
   readonly focusRequestId: number;
   readonly mainDevice: boolean;
@@ -91,6 +95,8 @@ interface ConfigurationChatProps {
 }
 
 export function ConfigurationChat({
+  deviceId,
+  discordSetupRecommended,
   expanded,
   focusRequestId,
   mainDevice,
@@ -129,6 +135,57 @@ export function ConfigurationChat({
   const composerRef = useRef<HTMLInputElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousMessageCountRef = useRef(conversationMessages.length);
+  const discordOnboardingAttemptedForOpenRef = useRef(false);
+
+  const sendConversationMessage = useCallback(
+    async (
+      message: string,
+      entryMode: ConversationEntryMode = "owner-visible",
+    ): Promise<boolean> => {
+      if (onSendMessage === undefined || pending) {
+        return false;
+      }
+
+      const sequence = conversationMessages.length;
+      if (entryMode === "owner-visible") {
+        setConversationMessages((current) => [
+          ...current,
+          {
+            id: `message-owner-${sequence}`,
+            author: "owner",
+            content: message,
+          },
+        ]);
+      }
+      setPending(true);
+      try {
+        const response = await onSendMessage(message);
+        setConversationMessages((current) => [
+          ...current,
+          {
+            id: `message-agent-${sequence + 1}`,
+            author: "agent",
+            content: response.content,
+            suggestedActions: response.suggestedActions,
+          },
+        ]);
+        return true;
+      } catch {
+        setConversationMessages((current) => [
+          ...current,
+          {
+            id: `message-agent-${sequence + 1}`,
+            author: "agent",
+            systemMessageKey: "failedMessage",
+          },
+        ]);
+        return false;
+      } finally {
+        setPending(false);
+      }
+    },
+    [conversationMessages.length, onSendMessage, pending],
+  );
 
   useEffect(() => {
     const discoveryMessage: ChatMessage =
@@ -162,6 +219,7 @@ export function ConfigurationChat({
       setSetupMessageId(null);
       setSecureCredential("");
       setStoredReference(null);
+      discordOnboardingAttemptedForOpenRef.current = false;
     }
   }, [open]);
 
@@ -191,45 +249,45 @@ export function ConfigurationChat({
     }
   }, [onSendMessage, open, pending]);
 
-  async function sendConversationMessage(message: string): Promise<void> {
-    if (onSendMessage === undefined || pending) {
+  useEffect(() => {
+    if (
+      !open ||
+      !mainDevice ||
+      !discordSetupRecommended ||
+      onSendMessage === undefined ||
+      pending ||
+      discordOnboardingAttemptedForOpenRef.current ||
+      discordOnboardingCompleted(deviceId)
+    ) {
       return;
     }
-
-    const sequence = conversationMessages.length;
+    discordOnboardingAttemptedForOpenRef.current = true;
     setConversationMessages((current) => [
       ...current,
       {
-        id: `message-owner-${sequence}`,
-        author: "owner",
-        content: message,
+        id: "message-agent-discord-onboarding",
+        author: "agent",
+        content: copy.chat.discordOnboardingMessage,
       },
     ]);
-    setPending(true);
-    try {
-      const response = await onSendMessage(message);
-      setConversationMessages((current) => [
-        ...current,
-        {
-          id: `message-agent-${sequence + 1}`,
-          author: "agent",
-          content: response.content,
-          suggestedActions: response.suggestedActions,
-        },
-      ]);
-    } catch {
-      setConversationMessages((current) => [
-        ...current,
-        {
-          id: `message-agent-${sequence + 1}`,
-          author: "agent",
-          systemMessageKey: "failedMessage",
-        },
-      ]);
-    } finally {
-      setPending(false);
-    }
-  }
+    void sendConversationMessage(copy.chat.discordSetupRequest, "agent-initiated").then(
+      (succeeded) => {
+        if (succeeded) {
+          recordDiscordOnboardingCompleted(deviceId);
+        }
+      },
+    );
+  }, [
+    copy.chat.discordOnboardingMessage,
+    copy.chat.discordSetupRequest,
+    deviceId,
+    discordSetupRecommended,
+    mainDevice,
+    onSendMessage,
+    open,
+    pending,
+    sendConversationMessage,
+  ]);
 
   async function submitChatMessage(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -727,5 +785,29 @@ function suggestedActionDescriptor(
         title: copy.chat.databaseSecureTitle,
         description: copy.chat.databaseSecureIntro,
       };
+  }
+}
+
+const DISCORD_ONBOARDING_SESSION_KEY_PREFIX = "opendelegate.configuration.discord-onboarding.v1:";
+
+function discordOnboardingCompleted(deviceId: string): boolean {
+  try {
+    return (
+      window.sessionStorage.getItem(`${DISCORD_ONBOARDING_SESSION_KEY_PREFIX}${deviceId}`) ===
+      "completed"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function recordDiscordOnboardingCompleted(deviceId: string): void {
+  try {
+    window.sessionStorage.setItem(
+      `${DISCORD_ONBOARDING_SESSION_KEY_PREFIX}${deviceId}`,
+      "completed",
+    );
+  } catch {
+    // A blocked browser storage policy must not prevent Configuration Chat from working.
   }
 }

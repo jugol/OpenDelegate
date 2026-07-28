@@ -68,6 +68,8 @@ export const englishMessages = {
     unavailableMessage:
       "Main reports that Device assessment or Configuration Agent messaging is unavailable. The visible Device facts come only from Main's deterministic runtime report.",
     failedMessage: "The Configuration Agent could not respond. No settings were changed.",
+    discordOnboardingMessage:
+      "Discord is not connected yet. I’m checking the current binding and preparing setup guidance.",
     secureStoreFailed:
       "The credential could not be stored securely. It was not sent to Configuration Chat.",
     guidedSetupTitle: "Guided setup",

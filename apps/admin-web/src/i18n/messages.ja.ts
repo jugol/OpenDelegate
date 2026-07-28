@@ -73,6 +73,8 @@ export const japaneseMessages = {
     unavailableMessage:
       "Main から、デバイス評価または設定エージェントのメッセージ機能を利用できないと報告されています。表示されるデバイス情報は、Main の決定論的なランタイムレポートだけを基にしています。",
     failedMessage: "設定エージェントが応答できませんでした。設定は変更されていません。",
+    discordOnboardingMessage:
+      "Discord はまだ接続されていません。現在のバインディングを確認し、セットアップ手順を準備しています。",
     secureStoreFailed: "認証情報を安全に保存できませんでした。設定チャットには送信されていません。",
     guidedSetupTitle: "ガイド付きセットアップ",
     guidedSetupIntro:

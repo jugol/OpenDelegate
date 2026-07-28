@@ -75,6 +75,8 @@ export const frenchMessages = {
     unavailableMessage:
       "Le Main indique que l’évaluation de l’appareil ou la messagerie de l’agent de configuration est indisponible. Les informations visibles sur l’appareil proviennent uniquement du rapport déterministe de son environnement d’exécution.",
     failedMessage: "L’agent de configuration n’a pas pu répondre. Aucun paramètre n’a été modifié.",
+    discordOnboardingMessage:
+      "Discord n’est pas encore connecté. Je vérifie la liaison actuelle et prépare les instructions de configuration.",
     secureStoreFailed:
       "L’identifiant n’a pas pu être stocké de manière sécurisée. Il n’a pas été envoyé à l’assistant de configuration.",
     guidedSetupTitle: "Configuration guidée",
