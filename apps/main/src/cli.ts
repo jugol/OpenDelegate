@@ -1172,7 +1172,7 @@ function registerClaimPage(
     <p><strong>Pre-release software:</strong> no supported OpenDelegate release is published.</p>
     <p>Create the local owner credential. Save the recovery codes shown next.</p>
     <form id="claim" data-claim="${escapeHtml(claimToken)}" data-main="${escapeHtml(mainOrigin)}">
-      <label>Passphrase <input name="passphrase" type="password" minlength="12" maxlength="1024" required autocomplete="new-password"></label>
+      <label>Passphrase <input name="passphrase" type="password" required autocomplete="new-password"></label>
       <button type="submit">Create owner</button>
     </form>
     <pre id="result" aria-live="polite"></pre>

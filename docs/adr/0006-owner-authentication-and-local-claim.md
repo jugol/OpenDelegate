@@ -4,6 +4,8 @@ Status: **Accepted**
 
 Date: **2026-07-24**
 
+Last updated: **2026-07-28**
+
 ## Context
 
 Admin Web can be exposed through LAN, Tailscale, Omada, a reverse proxy, or an
@@ -29,10 +31,13 @@ Argon2id implementation plus Node.js cryptographic primitives.
    only its encoded PHC string. New hashes use at least 64 MiB memory, three
    iterations, parallelism four, a 16-byte random salt, and a 32-byte result. Login
    transparently rehashes after a successful check when the configured floor rises.
-3. Password, session, claim-token, and recovery-code values are accepted only by the
+3. Accept owner passphrases containing at least 10 Unicode code points, including at
+   least one non-whitespace code point, and at most 1024 UTF-8 bytes. Apply the same
+   authoritative auth-module boundary to initial claim, login, and recovery.
+4. Password, session, claim-token, and recovery-code values are accepted only by the
    auth module and are redacted structurally from logs, audit payloads, errors, and
    API response schemas.
-4. Apply bounded per-source and per-account login rate limits. Authentication
+5. Apply bounded per-source and per-account login rate limits. Authentication
    responses do not reveal whether the owner exists or which credential check
    failed.
 

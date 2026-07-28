@@ -631,3 +631,19 @@ rotating authentication, or changing Codex configuration affects every local
 consumer of that home. Owners who want stronger settings and session isolation keep
 the default managed home. Claude remains managed unless an existing explicit
 Worker configuration selects an external Claude home.
+
+## D-050 — Ten-character owner passphrase floor
+
+**Decision:** Initial owner claim, normal Admin login, and recovery accept an owner
+passphrase containing at least 10 Unicode code points, including at least one
+non-whitespace code point, and at most 1024 UTF-8 bytes. The auth module is the
+authoritative validator; user-facing forms do not substitute UTF-16 browser length
+rules for that boundary.
+
+**Rationale:** OpenDelegate is a personal local-first system, and the Owner chose a
+more accommodating minimum while retaining Argon2id hashing, rate limiting, local
+claim, independent recovery codes, and the option to use a longer generated
+passphrase.
+
+**Consequence:** A non-blank 10-code-point passphrase is valid for claim, login, and
+recovery; nine or fewer code points fail before password hashing.

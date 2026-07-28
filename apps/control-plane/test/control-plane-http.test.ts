@@ -33,8 +33,8 @@ const ADMIN_ORIGIN = "https://admin.test";
 const ADMIN_HOST = "admin.test";
 const CLAIM_ORIGIN = "http://127.0.0.1:4310";
 const CLAIM_HOST = "127.0.0.1:4310";
-const PASSPHRASE = "correct horse battery staple";
-const NEW_PASSPHRASE = "new correct horse battery staple";
+const PASSPHRASE = "🔐".repeat(10);
+const NEW_PASSPHRASE = "🔑".repeat(10);
 const MAIN_DEVICE = Object.freeze({
   deviceId: "device_main",
   name: "main-host",

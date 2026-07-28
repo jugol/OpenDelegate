@@ -117,7 +117,15 @@ test("remote, expired, weak, and concurrent claims fail closed with one atomic w
     harness.auth.claimOwner({
       channel: "local-bootstrap",
       claimToken: issued.claimToken,
-      passphrase: "elevenchars",
+      passphrase: "🔐".repeat(9),
+    }),
+    isAuthError("PASSPHRASE_INVALID"),
+  );
+  await assert.rejects(
+    harness.auth.claimOwner({
+      channel: "local-bootstrap",
+      claimToken: issued.claimToken,
+      passphrase: "\u0085".repeat(10),
     }),
     isAuthError("PASSPHRASE_INVALID"),
   );
@@ -127,7 +135,7 @@ test("remote, expired, weak, and concurrent claims fail closed with one atomic w
       harness.auth.claimOwner({
         channel: "local-bootstrap",
         claimToken: issued.claimToken,
-        passphrase: "correct horse battery staple",
+        passphrase: "🔐".repeat(10),
       }),
     ),
   );

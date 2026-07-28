@@ -6,7 +6,7 @@ Intended license: **Apache License 2.0**
 
 Default product and repository language: **English**
 
-Last updated: **2026-07-25**
+Last updated: **2026-07-28**
 
 ## Document contract
 
@@ -690,9 +690,11 @@ may request a transition but cannot manufacture a state outside the transition r
 2. Admin Web requires application authentication even on a private network.
 3. Initial owner claim is available only through a local bootstrap channel on Main
    and produces independent recovery credentials.
-4. The first milestone provides a strong local owner authentication method and may
-   add optional reverse-proxy or identity-provider adapters. Discord identity alone
-   is not the only Admin recovery method.
+4. The first milestone provides a local owner passphrase protected by Argon2id.
+   Owner creation and recovery accept 10 or more Unicode code points including at
+   least one non-whitespace code point, up to 1024 UTF-8 bytes. Optional
+   reverse-proxy or identity-provider adapters may be added, and Discord identity
+   alone is not the only Admin recovery method.
 5. Initial navigation shows the current Device and expands to a left-side Device list
    as more Devices enroll.
 6. Device detail includes name, OS, health, Facts, Capabilities, Roles, Instructions,
