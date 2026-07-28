@@ -338,6 +338,40 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     });
   }
 
+  public async createForumPost(input: {
+    forumChannelId: string;
+    requestKey: string;
+    name: string;
+    content: string;
+    appliedTagIds: readonly string[];
+  }): Promise<{
+    readonly thread: DiscordThread;
+    readonly starterMessage: DiscordMessage;
+  }> {
+    assertSnowflake(input.forumChannelId, "Discord Forum channel ID");
+    assertRequestKey(input.requestKey);
+    assertBoundedForumText(input.name, "Discord Forum post name", 1, 100);
+    assertBoundedForumText(input.content, "Discord Forum starter content", 1, 2_000);
+    assertDistinctSnowflakes(input.appliedTagIds, "Discord Forum applied tags", 5);
+    const response = requireRecord(
+      await this.#botJson("POST", `/channels/${input.forumChannelId}/threads`, {
+        name: input.name,
+        message: {
+          content: input.content,
+          allowed_mentions: { parse: [] },
+        },
+        applied_tags: [...input.appliedTagIds],
+      }),
+      "created Forum thread",
+    );
+    return Object.freeze({
+      thread: mapDiscordThread(response),
+      starterMessage: mapDiscordMessage(
+        requireRecord(response["message"], "created Forum starter message"),
+      ),
+    });
+  }
+
   public async updateThreadTags(threadId: string, appliedTagIds: readonly string[]): Promise<void> {
     assertSnowflake(threadId, "Discord thread ID");
     assertDistinctSnowflakes(appliedTagIds, "Discord applied tag IDs", 5);
@@ -815,6 +849,18 @@ function assertDistinctSnowflakes(
 function assertRequestKey(value: string): void {
   if (value.length < 1 || value.length > 512 || value.includes("\u0000")) {
     throw invalidResponse("The Discord request idempotency key is invalid.");
+  }
+}
+
+function assertBoundedForumText(
+  value: string,
+  label: string,
+  minimum: number,
+  maximum: number,
+): void {
+  const length = Array.from(value).length;
+  if (length < minimum || length > maximum || value.includes("\u0000") || value.includes("\r")) {
+    throw invalidResponse(`${label} is invalid.`);
   }
 }
 

@@ -350,7 +350,7 @@ describe("Admin authentication and Task control", () => {
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     const artifacts = screen.getByRole("button", { name: "Artifacts" });
     const audit = screen.getByRole("button", { name: "Audit" });
-    const join = screen.getByRole("button", { name: "Join a device" });
+    const join = screen.getByRole("button", { name: "Add Device" });
     for (const control of [artifacts, audit, join]) {
       expect((control as HTMLButtonElement).disabled).toBe(false);
     }
@@ -366,7 +366,7 @@ describe("Admin authentication and Task control", () => {
     expect(await screen.findByText("DATABASE_READY")).toBeTruthy();
 
     await user.click(join);
-    expect(await screen.findByRole("heading", { level: 1, name: "Join a device" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Add a Device" })).toBeTruthy();
     expect(await screen.findByText("Secure join flow")).toBeTruthy();
   });
 
@@ -463,7 +463,7 @@ describe("Admin authentication and Task control", () => {
     await user.click(screen.getByRole("button", { name: "Configure" }));
     expect(
       await screen.findByText(
-        "The Configuration Agent could not respond. No settings were changed.",
+        "The local Configuration Agent was unavailable or interrupted. OpenDelegate did not replay an uncertain setup action. Completed changes remain durable; inspect the current settings, then try again.",
       ),
     ).toBeTruthy();
     expect(sendConfigurationMessage).toHaveBeenCalledTimes(1);

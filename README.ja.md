@@ -54,6 +54,8 @@ Owner Recovery、追加 Device、最初の Task、トラブルシューティン
 Windows 開発、macOS ビルドや署名、Linux 配備へ分割し、実際の Device と Route は決定論的に選ばれます。
 
 - Discord Forum の 1 つの投稿が、1 つの永続的な Task と Context Boundary に対応します。
+- 任意の決定論的 Monitor は、障害や改善を同じ通常の Forum 連携 Task として作成できます。
+  Category ごとに無効化、Review 提案、自動実行を選べますが、Policy、Approval、Budget、Audit は迂回しません。
 - 指示に使ったスマートフォンやノート PC は切断できます。現在の作業に必要な固定 Main と Device
   だけが利用可能であれば動作します。
 - 決定論的なソフトウェアが ID、Policy、Health、Routing、Lease、Retry、Persistence、State

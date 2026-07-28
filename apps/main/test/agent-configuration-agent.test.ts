@@ -111,8 +111,10 @@ test("Configuration Agent creates a fresh continuation when the initial native r
   assert.match(adapter.starts[1]?.prompt ?? "", /Continue Discord setup\./);
   assert.match(
     adapter.starts[1]?.prompt ?? "",
-    /prior Configuration Agent conversation is unavailable/iu,
+    /prior provider-native Configuration Agent session is unavailable/iu,
   );
+  assert.match(adapter.starts[1]?.prompt ?? "", /Inspect this Device\./u);
+  assert.match(adapter.starts[1]?.prompt ?? "", /Durable completed exchanges/iu);
   assert.equal(adapter.starts[1]?.runId.endsWith("_continuation_turn_0"), true);
   assert.equal(adapter.starts[1]?.continuationOf?.nativeSessionId, "native-configuration-session");
   assert.match(adapter.starts[1]?.continuationReason ?? "", /resume was unavailable/iu);
@@ -241,6 +243,50 @@ test("Configuration Agent durably replays an idempotent response after restart",
   await assert.rejects(restartedAgent.sendMessage({ ...input, message: "A different mutation." }), {
     code: "IDEMPOTENCY_CONFLICT",
   });
+});
+
+test("Configuration Chat restores its visible Device conversation after restart", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const firstAgent = await createAgent(new FakeConfigurationAdapter(), eventStore);
+
+  await firstAgent.sendMessage(message("request_history_one", "Inspect this Device."));
+  await firstAgent.sendMessage(message("request_history_two", "Propose a safer route."));
+
+  const restartedAgent = await createAgent(new FakeConfigurationAdapter(), eventStore);
+  const history = await restartedAgent.listMessages({
+    deviceId: "device_worker",
+    principalId: "owner_personal",
+  });
+
+  assert.deepEqual(
+    history.messages.map(({ role, content, suggestedActions }) => ({
+      role,
+      content,
+      suggestedActions,
+    })),
+    [
+      {
+        role: "owner",
+        content: "Inspect this Device.",
+        suggestedActions: undefined,
+      },
+      {
+        role: "agent",
+        content: "I inspected the available configuration context.",
+        suggestedActions: ["guide-discord", "guide-external-postgresql"],
+      },
+      {
+        role: "owner",
+        content: "Propose a safer route.",
+        suggestedActions: undefined,
+      },
+      {
+        role: "agent",
+        content: "I prepared a proposal; it has not been applied.",
+        suggestedActions: undefined,
+      },
+    ],
+  );
 });
 
 test("Configuration Agent rejects a terminal response that can impersonate applied state", async () => {

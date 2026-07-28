@@ -64,7 +64,8 @@ export const simplifiedChineseMessages = {
   chat: {
     unavailableMessage:
       "主设备报告设备评估或配置智能体消息功能不可用。当前显示的设备信息仅来自主设备的确定性运行环境报告。",
-    failedMessage: "配置智能体无法响应。没有更改任何设置。",
+    failedMessage:
+      "本地配置智能体尚未就绪或在响应过程中中断。OpenDelegate 没有自动重放结果不确定的配置操作。已完成的更改会保留；请先检查当前设置，然后重试。",
     discordOnboardingMessage: "Discord 尚未连接。我正在检查当前绑定并准备设置指南。",
     secureStoreFailed: "无法安全存储该凭据。它未发送到配置对话。",
     guidedSetupTitle: "引导式设置",
@@ -412,8 +413,9 @@ export const simplifiedChineseMessages = {
   },
   join: {
     eyebrow: "设备注册",
-    title: "加入设备",
-    intro: "生成短期、一次性的注册文件并下载一次，然后在新设备上运行随包提供的 Worker 加入命令。",
+    title: "添加设备",
+    intro:
+      "让新 Mac、Windows 或 Linux 设备上已有的 Agent 安装 Worker。Main 只提供短期、一次性的注册文件。",
     unavailable: "此 Main 尚未配置设备注册。",
     loadFailed: "无法加载设备注册状态。",
     deviceId: "设备 ID",
@@ -433,9 +435,21 @@ export const simplifiedChineseMessages = {
     fingerprint: "预期 Main 指纹",
     endpoints: "Worker 通道端点",
     download: "下载注册文件",
-    joinCommand: "在新设备上运行",
+    joinCommand: "手动命令（高级）",
     copyCommand: "复制命令",
     copyDone: "已复制",
+    recommended: "推荐",
+    agentAssistedTitle: "让新设备的 Agent 完成安装",
+    agentAssistedDetail:
+      "在新设备上打开 Codex 或 Claude。下载注册文件后，只把本地路径和下方提示交给 Agent，不要提供文件内容。",
+    agentPromptLabel: "交给新设备上 Codex 或 Claude 的提示",
+    agentPrompt:
+      "请从 https://github.com/jugol/OpenDelegate 在此设备上安装 OpenDelegate Worker。遵循 README 和 skills/opendelegate-join/SKILL.md，使用未打开的注册文件 <absolute-path-to/{filename}> 加入 Main。绝不要显示、粘贴或记录注册文件内容。配置此操作系统的原生服务，验证 Main 连接，并在设备出现在 Admin Web 后报告。",
+    copyAgentPrompt: "复制 Agent 提示",
+    afterJoin: "设备出现在左侧列表后，打开其配置聊天进行评估，并设置名称、角色和指令。",
+    needHelp: "需要 OpenDelegate 引导吗？",
+    helpDetail: "配置聊天可以在不暴露注册文件的情况下说明安全传输、目标设备命令和注册验证。",
+    openSetupChat: "询问配置聊天",
     recent: "最近的注册文件",
     none: "尚未签发注册文件。",
     statusActive: "有效",
@@ -443,9 +457,9 @@ export const simplifiedChineseMessages = {
     statusExpired: "已过期",
     statusRevoked: "已撤销",
     stepsTitle: "安全加入流程",
-    stepOne: "在 Main 上生成并下载一次性注册文件。",
-    stepTwo: "通过操作系统安全的本地交接方式移动文件。",
-    stepThree: "运行随包提供的 Worker 加入命令；已使用的文件会被删除。",
+    stepOne: "在新设备上打开 Codex 或 Claude，并让它准备 OpenDelegate Worker。",
+    stepTwo: "在这里生成并下载一次性注册文件，通过已认证连接或安全的本地交接原样移动。",
+    stepThree: "把文件路径交给新设备的 Agent。Worker 加入 Main 后会删除已使用的文件。",
   },
   artifact: {
     eyebrow: "任务输出",

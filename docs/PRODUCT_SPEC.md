@@ -554,9 +554,11 @@ may request a transition but cannot manufacture a state outside the transition r
     but does not manually coordinate the handoffs.
 18. Main asks about placement only when the choice changes the intended outcome or an
     owner preference cannot be derived from durable configuration.
-19. Main Agent result validation rejects a direct routine placement question before
-    it becomes owner-visible. Outcome-shaping compatibility, legal, policy, and
-    human-action questions remain valid.
+19. Main Agent instructions treat a direct routine placement question as a planning
+    defect, but structural result validation does not infer intent from Device words
+    or reject a question lexically. Placement questions remain valid when privacy,
+    data locality, cost, physical or interactive access, licensed software, result
+    location, compatibility, legal, Policy, or another owner-visible outcome changes.
 
 ### FR-8 — Concurrency and resource locks
 
@@ -844,11 +846,24 @@ may request a transition but cannot manufacture a state outside the transition r
     native continuation with the complete current prompt and records the new lineage.
     It does not automatically restart after a tool has executed, because replay could
     duplicate a mutation or misrepresent its receipt. The continuation tells the owner
-    that prior chat-only context is unavailable, re-inspects durable configuration,
-    and re-confirms any required value or choice that existed only in the lost
-    conversation before proposing a change. Main durably records the first typed-tool
-    attempt for each owner request before execution; an interrupted request with that
-    boundary and no final response fails closed across restart instead of replaying.
+    that provider-private or interrupted in-flight context may be unavailable,
+    receives a bounded excerpt of completed Device-scoped Configuration Chat
+    exchanges, re-inspects durable configuration, and re-confirms any required value
+    or choice that is absent from the excerpt before proposing a change. Main durably
+    records the first typed-tool attempt for each owner request before execution; an
+    interrupted request with that boundary and no final response fails closed across
+    restart instead of replaying.
+27. Completed owner and Agent Configuration Chat exchanges are stored durably per
+    target Device and Adapter. Admin Web restores them after reload or Main restart;
+    they remain separate from Task conversations and never include provider-hidden
+    reasoning or raw Secret material. Enter sends a message, while Shift+Enter inserts
+    a newline in the multiline composer.
+28. Approving a protected Configuration proposal atomically executes that exact
+    proposal through the Approval service. A follow-up chat message never creates a
+    second Approval for the same target Device and proposal: the durable Approval
+    request identity is derived from that immutable pair, while each chat tool
+    execution retains its own replay boundary. After the owner reports approval, the
+    Agent inspects current durable configuration instead of blindly applying again.
 
 ### FR-16 — Policy and approvals
 
@@ -907,6 +922,14 @@ may request a transition but cannot manufacture a state outside the transition r
    Profile.
 7. Autonomous work creates an ordinary auditable Task and does not operate outside
    Task accounting.
+8. Each proactive category may inherit its profile or explicitly select disabled,
+   propose, or execute. A bounded monitor or system-incident signal with propose
+   authority creates a manual-review Task; execute creates an auto Task. Both enter
+   the ordinary Task coordinator, Policy, approval, budget, lock, and audit paths
+   rather than a privileged monitor-only execution path. When Discord is ready, Main
+   creates and durably binds one bot-authored post in the configured Forum before
+   using the ordinary Task projection. FR-4's bounded read-only diagnostic Agent may
+   produce the incident signal, but it cannot perform remedial work outside the Task.
 
 ### FR-19 — Persistence
 

@@ -1,4 +1,14 @@
-import { Check, Clipboard, Download, KeyRound, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  Bot,
+  Check,
+  Clipboard,
+  Download,
+  KeyRound,
+  MessageCircle,
+  RefreshCw,
+  ShieldCheck,
+  Terminal,
+} from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type {
@@ -7,11 +17,17 @@ import type {
   EnrollmentGrantStatus,
   IssueEnrollmentGrantResult,
 } from "./admin-api";
-import { formatAdminDate, useAdminI18n } from "./i18n";
+import { formatAdminDate, formatMessage, useAdminI18n } from "./i18n";
 
 export type JoinSurfaceApi = Pick<AdminApi, "deviceEnrollment" | "issueEnrollmentGrant">;
 
-export function JoinSurface({ api }: { readonly api: JoinSurfaceApi }): React.JSX.Element {
+export function JoinSurface({
+  api,
+  onOpenConfigurationChat,
+}: {
+  readonly api: JoinSurfaceApi;
+  readonly onOpenConfigurationChat?: (trigger: HTMLButtonElement) => void;
+}): React.JSX.Element {
   const { locale, messages } = useAdminI18n();
   const [overview, setOverview] = useState<DeviceEnrollmentOverview | null>(null);
   const [issued, setIssued] = useState<IssueEnrollmentGrantResult | null>(null);
@@ -22,6 +38,7 @@ export function JoinSurface({ api }: { readonly api: JoinSurfaceApi }): React.JS
   const [issuing, setIssuing] = useState(false);
   const [issuanceFailed, setIssuanceFailed] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [agentPromptCopied, setAgentPromptCopied] = useState(false);
 
   async function load(): Promise<void> {
     setLoading(true);
@@ -99,6 +116,15 @@ export function JoinSurface({ api }: { readonly api: JoinSurfaceApi }): React.JS
         : `opendelegate worker join --grant-file <absolute-path-to/${issued.suggestedFilename}>`,
     [issued],
   );
+  const agentPrompt = useMemo(
+    () =>
+      issued === null
+        ? ""
+        : formatMessage(messages.join.agentPrompt, {
+            filename: issued.suggestedFilename,
+          }),
+    [issued, messages.join.agentPrompt],
+  );
 
   async function copyCommand(): Promise<void> {
     if (joinCommand === "") {
@@ -109,6 +135,18 @@ export function JoinSurface({ api }: { readonly api: JoinSurfaceApi }): React.JS
       setCopied(true);
     } catch {
       setCopied(false);
+    }
+  }
+
+  async function copyAgentPrompt(): Promise<void> {
+    if (agentPrompt === "") {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(agentPrompt);
+      setAgentPromptCopied(true);
+    } catch {
+      setAgentPromptCopied(false);
     }
   }
 
@@ -159,6 +197,14 @@ export function JoinSurface({ api }: { readonly api: JoinSurfaceApi }): React.JS
               <li>{messages.join.stepTwo}</li>
               <li>{messages.join.stepThree}</li>
             </ol>
+            <div className="join-path">
+              <Bot aria-hidden="true" />
+              <div>
+                <strong>{messages.join.agentAssistedTitle}</strong>
+                <p>{messages.join.agentAssistedDetail}</p>
+              </div>
+              <span>{messages.join.recommended}</span>
+            </div>
             <form className="join-form" onSubmit={(event) => void issue(event)}>
               <label htmlFor="join-device-id">{messages.join.deviceId}</label>
               <input
@@ -236,8 +282,30 @@ export function JoinSurface({ api }: { readonly api: JoinSurfaceApi }): React.JS
                 <Download aria-hidden="true" />
                 {messages.join.download}
               </button>
+              <div className="command-block command-block--recommended">
+                <span>
+                  <Bot aria-hidden="true" />
+                  {messages.join.agentPromptLabel}
+                </span>
+                <code>{agentPrompt}</code>
+                <button
+                  className="secondary-button"
+                  onClick={() => void copyAgentPrompt()}
+                  type="button"
+                >
+                  {agentPromptCopied ? (
+                    <Check aria-hidden="true" />
+                  ) : (
+                    <Clipboard aria-hidden="true" />
+                  )}
+                  {agentPromptCopied ? messages.join.copyDone : messages.join.copyAgentPrompt}
+                </button>
+              </div>
               <div className="command-block">
-                <span>{messages.join.joinCommand}</span>
+                <span>
+                  <Terminal aria-hidden="true" />
+                  {messages.join.joinCommand}
+                </span>
                 <code>{joinCommand}</code>
                 <button
                   className="secondary-button"
@@ -248,6 +316,7 @@ export function JoinSurface({ api }: { readonly api: JoinSurfaceApi }): React.JS
                   {copied ? messages.join.copyDone : messages.join.copyCommand}
                 </button>
               </div>
+              <p className="join-after">{messages.join.afterJoin}</p>
             </section>
           ) : null}
 
@@ -271,6 +340,22 @@ export function JoinSurface({ api }: { readonly api: JoinSurfaceApi }): React.JS
               </ul>
             )}
           </section>
+          {onOpenConfigurationChat === undefined ? null : (
+            <section className="operations-card join-help">
+              <MessageCircle aria-hidden="true" />
+              <div>
+                <h2>{messages.join.needHelp}</h2>
+                <p>{messages.join.helpDetail}</p>
+              </div>
+              <button
+                className="secondary-button"
+                onClick={(event) => onOpenConfigurationChat(event.currentTarget)}
+                type="button"
+              >
+                {messages.join.openSetupChat}
+              </button>
+            </section>
+          )}
         </div>
       )}
     </main>

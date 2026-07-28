@@ -63,6 +63,9 @@ Agent peut répartir le développement sous Windows, la compilation ou signature
 déploiement sous Linux ; le planificateur choisit les Devices et les Routes.
 
 - Une publication Discord Forum correspond à une Task durable et à une frontière de contexte.
+- Des moniteurs déterministes facultatifs peuvent créer les mêmes Tasks ordinaires reliées au Forum
+  pour les incidents ou améliorations. Chaque catégorie peut être désactivée, proposée à la revue
+  ou exécutée sans contourner les Policies, approbations, budgets ni audits.
 - Le téléphone ou l’ordinateur qui envoie la commande peut se déconnecter. Seuls le Main fixe et les
   Devices nécessaires au travail en cours doivent rester disponibles.
 - Un logiciel déterministe gère l’identité, les Policies, l’état de santé, le routage, les leases,

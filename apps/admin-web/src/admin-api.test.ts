@@ -149,6 +149,57 @@ describe("BrowserAdminApi JSON responses", () => {
     expect((headers as Headers).get("idempotency-key")).toMatch(/^admin-[0-9a-f-]{36}$/);
   });
 
+  it("loads the durable Device-scoped Configuration Chat conversation", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ csrfToken: "csrf-configuration-history", session: ownerSession }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          messages: [
+            {
+              messageId: "configuration_owner_001",
+              role: "owner",
+              content: "Keep this after restart.",
+              occurredAt: "2026-07-24T01:01:00.000Z",
+            },
+            {
+              messageId: "configuration_agent_001",
+              role: "agent",
+              content: "The conversation is durable.",
+              suggestedActions: ["guide-discord"],
+              occurredAt: "2026-07-24T01:02:00.000Z",
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const api = new BrowserAdminApi();
+
+    await api.login("correct horse battery staple");
+    await expect(api.listConfigurationMessages("device_main/with space")).resolves.toEqual([
+      {
+        messageId: "configuration_owner_001",
+        role: "owner",
+        content: "Keep this after restart.",
+        suggestedActions: [],
+        occurredAt: "2026-07-24T01:01:00.000Z",
+      },
+      {
+        messageId: "configuration_agent_001",
+        role: "agent",
+        content: "The conversation is durable.",
+        suggestedActions: ["guide-discord"],
+        occurredAt: "2026-07-24T01:02:00.000Z",
+      },
+    ]);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "/api/v1/devices/device_main%2Fwith%20space/configuration/messages",
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("GET");
+  });
+
   it("sends Secret bytes only through the authenticated secure-ingest endpoint", async () => {
     const receipt = {
       schemaVersion: 1 as const,

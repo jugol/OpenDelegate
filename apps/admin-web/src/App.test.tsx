@@ -226,7 +226,7 @@ describe("first-run Device overview", () => {
   it("keeps unfinished navigation honest while Device detail tabs are keyboard-operable", () => {
     renderApp();
 
-    for (const label of ["Tasks", "Approvals", "Artifacts", "Audit", "Join a device"]) {
+    for (const label of ["Tasks", "Approvals", "Artifacts", "Audit", "Add Device"]) {
       expect((screen.getByRole("button", { name: label }) as HTMLButtonElement).disabled).toBe(
         true,
       );
@@ -511,6 +511,168 @@ describe("first-run Device overview", () => {
     expect(within(log).getAllByRole("article", { name: "OpenDelegate" })).toHaveLength(3);
     expect((composer as HTMLInputElement).value).toBe("");
     expect(document.activeElement).toBe(composer);
+  });
+
+  it("restores the durable Device conversation when Configuration Chat mounts", async () => {
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        executionAvailable
+        initialChatOpen
+        onConfigurationMessage={async () => ({
+          content: "Current reply.",
+          suggestedActions: [],
+        })}
+        onLoadConfigurationMessages={async () => [
+          {
+            messageId: "owner-history",
+            role: "owner",
+            content: "Keep this across restart.",
+            suggestedActions: [],
+            occurredAt: "2026-07-24T01:00:00.000Z",
+          },
+          {
+            messageId: "agent-history",
+            role: "agent",
+            content: "This conversation is durable.",
+            suggestedActions: [],
+            occurredAt: "2026-07-24T01:00:01.000Z",
+          },
+        ]}
+      />,
+    );
+
+    expect(await screen.findByText("Keep this across restart.")).toBeTruthy();
+    expect(screen.getByText("This conversation is durable.")).toBeTruthy();
+    expect(screen.queryByText(firstRunDevice.configurationSession.assistantMessage)).toBeNull();
+  });
+
+  it("restores durable history while native Configuration Agent messaging is unavailable", async () => {
+    render(
+      <App
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        initialChatOpen
+        onLoadConfigurationMessages={async () => [
+          {
+            messageId: "agent-degraded-history",
+            role: "agent",
+            content: "Stored before the provider became unavailable.",
+            suggestedActions: [],
+            occurredAt: "2026-07-24T01:00:01.000Z",
+          },
+        ]}
+      />,
+    );
+
+    expect(await screen.findByText("Stored before the provider became unavailable.")).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "Message Configuration Chat",
+        }) as HTMLTextAreaElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it("hydrates history before automatic Discord onboarding can append or send", async () => {
+    const hydrationDevice = {
+      ...firstRunDevice,
+      deviceId: "device_main_hydration",
+      name: "Hydration Main",
+    };
+    let resolveHistory!: (
+      value: readonly {
+        readonly messageId: string;
+        readonly role: "owner" | "agent";
+        readonly content: string;
+        readonly suggestedActions: readonly [];
+        readonly occurredAt: string;
+      }[],
+    ) => void;
+    const history = new Promise<
+      readonly {
+        readonly messageId: string;
+        readonly role: "owner" | "agent";
+        readonly content: string;
+        readonly suggestedActions: readonly [];
+        readonly occurredAt: string;
+      }[]
+    >((resolve) => {
+      resolveHistory = resolve;
+    });
+    const sent: string[] = [];
+
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [hydrationDevice], mainDeviceId: hydrationDevice.deviceId }}
+        discordSetupRecommended
+        initialChatOpen
+        onConfigurationMessage={async (_deviceId, message) => {
+          sent.push(message);
+          return { content: "Discord setup guidance.", suggestedActions: [] };
+        }}
+        onLoadConfigurationMessages={() => history}
+      />,
+    );
+
+    expect(sent).toEqual([]);
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "Message Configuration Chat",
+        }) as HTMLTextAreaElement
+      ).disabled,
+    ).toBe(true);
+
+    await act(async () => {
+      resolveHistory([
+        {
+          messageId: "owner-before-onboarding",
+          role: "owner",
+          content: "Preserve this older setup context.",
+          suggestedActions: [],
+          occurredAt: "2026-07-24T01:00:00.000Z",
+        },
+      ]);
+      await history;
+    });
+
+    expect(await screen.findByText("Preserve this older setup context.")).toBeTruthy();
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(screen.getByText("Discord setup guidance.")).toBeTruthy();
+  });
+
+  it("inserts a newline with Shift+Enter and sends multiline text with Enter", async () => {
+    const sentMessages: { readonly deviceId: string; readonly message: string }[] = [];
+    const onConfigurationMessage = async (deviceId: string, message: string) => {
+      sentMessages.push({ deviceId, message });
+      return { content: "Understood.", suggestedActions: [] as const };
+    };
+    const user = userEvent.setup();
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        executionAvailable
+        initialChatOpen
+        onConfigurationMessage={onConfigurationMessage}
+      />,
+    );
+    const composer = screen.getByRole("textbox", { name: "Message Configuration Chat" });
+
+    await user.type(composer, "First line");
+    await user.keyboard("{Shift>}{Enter}{/Shift}Second line");
+
+    expect(sentMessages).toEqual([]);
+    expect((composer as HTMLTextAreaElement).value).toBe("First line\nSecond line");
+
+    await user.keyboard("{Enter}");
+
+    expect(sentMessages).toEqual([
+      { deviceId: firstRunDevice.deviceId, message: "First line\nSecond line" },
+    ]);
   });
 
   it("shows an in-conversation Agent activity message while a response is pending", async () => {

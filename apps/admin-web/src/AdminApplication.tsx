@@ -153,6 +153,12 @@ export function AdminApplication({
       onConfigurationMessage={(deviceId, message) =>
         browserApi.sendConfigurationMessage(deviceId, message)
       }
+      {...(browserApi.listConfigurationMessages === undefined
+        ? {}
+        : {
+            onLoadConfigurationMessages: (deviceId: string) =>
+              browserApi.listConfigurationMessages!(deviceId),
+          })}
       onSecureSecretIngest={(purpose, secret) => browserApi.ingestSecret(purpose, secret)}
       releaseIdentity={features}
     />

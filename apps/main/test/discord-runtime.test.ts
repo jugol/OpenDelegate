@@ -91,6 +91,18 @@ test("Main Discord runtime adds a Task Artifact link without making status proje
     adapter: {
       start: () => Promise.resolve(),
       close: () => Promise.resolve(),
+      createTaskThread: (projection) =>
+        Promise.resolve({
+          guildId: GUILD_ID,
+          forumChannelId: FORUM_ID,
+          threadId: THREAD_ID,
+          starterMessageId: THREAD_ID,
+          taskId: projection.taskId,
+          externalState: "available" as const,
+          archived: false,
+          locked: false,
+          revision: 1,
+        }),
       flushOutbox: () => Promise.resolve(),
       publishTaskProjection: (projection) => {
         projections.push(structuredClone(projection));
@@ -1117,6 +1129,39 @@ class TestDiscordApi implements DiscordApiPort {
           ? [structuredClone(this.starter)]
           : [],
       hasMore: false,
+    };
+  }
+
+  public async createForumPost(input: {
+    forumChannelId: string;
+    requestKey: string;
+    name: string;
+    content: string;
+    appliedTagIds: readonly string[];
+  }): Promise<{ thread: DiscordThread; starterMessage: DiscordMessage }> {
+    this.#requireOnline();
+    const threadId = (850_000_000_000_000_000n + this.#nextMessageId++).toString();
+    return {
+      thread: {
+        id: threadId,
+        guildId: GUILD_ID,
+        parentId: input.forumChannelId,
+        type: 11,
+        name: input.name,
+        ownerId: BOT_ID,
+        appliedTagIds: [...input.appliedTagIds],
+        archived: false,
+        locked: false,
+      },
+      starterMessage: {
+        id: threadId,
+        guildId: GUILD_ID,
+        channelId: threadId,
+        author: { id: BOT_ID, bot: true, roleIds: [] },
+        content: input.content,
+        attachments: [],
+        createdAtMs: 3_000,
+      },
     };
   }
 

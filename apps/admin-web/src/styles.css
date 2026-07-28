@@ -1689,19 +1689,23 @@ textarea:focus-visible,
   gap: 8px;
 }
 
-.chat-composer input {
+.chat-composer textarea {
   width: 100%;
   min-width: 0;
-  height: 52px;
-  padding: 0 16px;
+  min-height: 52px;
+  max-height: 132px;
+  padding: 14px 16px;
   border: 1px solid var(--color-control-border);
   border-radius: var(--radius-control);
   color: var(--color-ink);
   background: var(--color-canvas);
+  font: inherit;
   font-size: 16px;
+  line-height: 1.4;
+  resize: vertical;
 }
 
-.chat-composer input::placeholder {
+.chat-composer textarea::placeholder {
   color: var(--color-muted);
   opacity: 1;
 }
@@ -4651,6 +4655,44 @@ textarea:focus-visible,
   line-height: 1.5;
 }
 
+.join-path {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  margin: 0 0 22px;
+  padding: 15px 16px;
+  border: 1px solid #b9d3ff;
+  border-radius: var(--radius-control);
+  background: var(--color-accent-soft);
+}
+
+.join-path > svg {
+  width: 22px;
+  color: var(--color-accent);
+}
+
+.join-path p {
+  margin: 4px 0 0;
+  color: var(--color-body);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.join-path > span {
+  position: absolute;
+  top: -10px;
+  right: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: var(--color-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .join-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(132px, 0.38fr);
@@ -4757,10 +4799,23 @@ textarea:focus-visible,
 }
 
 .command-block > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--color-muted);
   font-size: 11px;
   font-weight: 650;
   text-transform: uppercase;
+}
+
+.command-block > span svg {
+  width: 14px;
+  height: 14px;
+}
+
+.command-block--recommended {
+  border-color: #b9d3ff;
+  background: var(--color-accent-soft);
 }
 
 .command-block > code {
@@ -4775,6 +4830,40 @@ textarea:focus-visible,
 
 .recent-grants {
   grid-column: 1 / -1;
+}
+
+.join-after {
+  margin: 16px 0 0;
+  color: var(--color-body);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.join-help {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.join-help > svg {
+  color: var(--color-accent);
+}
+
+.join-help h2,
+.join-help p {
+  margin: 0;
+}
+
+.join-help h2 {
+  font-size: 16px;
+}
+
+.join-help p {
+  margin-top: 3px;
+  color: var(--color-muted);
+  font-size: 12px;
 }
 
 .grant-list {

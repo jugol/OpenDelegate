@@ -550,6 +550,14 @@ export interface ConfigurationAgentReply {
   readonly suggestedActions: readonly ConfigurationAgentSuggestedAction[];
 }
 
+export interface ConfigurationAgentConversationMessage {
+  readonly messageId: string;
+  readonly role: "owner" | "agent";
+  readonly content: string;
+  readonly suggestedActions: readonly ConfigurationAgentSuggestedAction[];
+  readonly occurredAt: string;
+}
+
 export function parseMainSecretReference(input: unknown): MainSecretReference {
   if (
     typeof input !== "string" ||
@@ -577,6 +585,9 @@ export interface AdminApi {
   assessDevice(deviceId: string): Promise<DeviceSummary>;
   runtimeFeatures(): Promise<RuntimeFeatures>;
   sendConfigurationMessage(deviceId: string, message: string): Promise<ConfigurationAgentReply>;
+  listConfigurationMessages?(
+    deviceId: string,
+  ): Promise<readonly ConfigurationAgentConversationMessage[]>;
   ingestSecret(
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,
@@ -692,6 +703,15 @@ export class BrowserAdminApi implements AdminApi {
       },
     );
     return asConfigurationAgentReply(response);
+  }
+
+  async listConfigurationMessages(
+    deviceId: string,
+  ): Promise<readonly ConfigurationAgentConversationMessage[]> {
+    const response = await this.#request<unknown>(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/configuration/messages`,
+    );
+    return asConfigurationAgentConversation(response);
   }
 
   async ingestSecret(
@@ -995,6 +1015,51 @@ function asConfigurationAgentReply(value: unknown): ConfigurationAgentReply {
     content,
     suggestedActions,
   };
+}
+
+function asConfigurationAgentConversation(
+  value: unknown,
+): readonly ConfigurationAgentConversationMessage[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw unexpectedResponse(502);
+  }
+  const rawMessages = (value as Record<string, unknown>)["messages"];
+  if (!Array.isArray(rawMessages) || rawMessages.length > 2_000) {
+    throw unexpectedResponse(502);
+  }
+  return rawMessages.map((value): ConfigurationAgentConversationMessage => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw unexpectedResponse(502);
+    }
+    const record = value as Record<string, unknown>;
+    const messageId = asNonBlankString(record["messageId"]);
+    const content = asNonBlankString(record["content"]);
+    const occurredAt = asNonBlankString(record["occurredAt"]);
+    const role = record["role"];
+    const rawActions = record["suggestedActions"] ?? [];
+    if (
+      messageId === undefined ||
+      content === undefined ||
+      occurredAt === undefined ||
+      (role !== "owner" && role !== "agent") ||
+      !Array.isArray(rawActions) ||
+      rawActions.length > 4
+    ) {
+      throw unexpectedResponse(502);
+    }
+    const suggestedActions = rawActions.map((action): ConfigurationAgentSuggestedAction => {
+      if (
+        action !== "guide-discord" &&
+        action !== "guide-external-postgresql" &&
+        action !== "ingest-discord-bot-token" &&
+        action !== "ingest-database-uri"
+      ) {
+        throw unexpectedResponse(502);
+      }
+      return action;
+    });
+    return { messageId, role, content, suggestedActions, occurredAt };
+  });
 }
 
 function invalidSecretIngestResponse(): AdminApiError {

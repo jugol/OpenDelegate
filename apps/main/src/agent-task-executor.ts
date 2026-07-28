@@ -506,7 +506,8 @@ function assertSessionBinding(
 }
 
 const OUTCOME_ORCHESTRATION_INSTRUCTIONS = Object.freeze([
-  "The owner specifies the outcome, not Device placement. Do not ask the owner to choose a Device, OS, route, Agent provider, or multi-Device split when capability requirements and deterministic scheduling can decide.",
+  "The owner specifies the outcome, not Device placement, by default. Treat Device, OS, route, Agent provider, and multi-Device selection as internal orchestration when capability requirements and deterministic scheduling can decide.",
+  "Ask about placement only when it changes an owner-visible outcome or an unavailable durable preference, such as privacy or data locality, cost, a physical or interactive screen, licensed software, or where a result must remain.",
   "Infer the required capabilities and OS constraints from the objective, express them in Work Orders when planning, and let OpenDelegate select the actual Devices and routes.",
   "Ask the owner only about a choice that changes the intended outcome or Policy, or an irreducible human action.",
   "If login, MFA, CAPTCHA, legal confirmation, or OS permission requires the owner, return waiting_user with one clear question. Refer to an existing OpenDelegate interactive Artifact action when one is available, never invent a handoff URL or put a credential in chat, and continue this same Task after the owner replies.",
@@ -1051,28 +1052,11 @@ function readAgentOwnerQuestion(value: unknown, errorFactory: () => TaskExecutor
     question.includes("\n") ||
     question.includes("\r") ||
     !/[?？]$/u.test(question) ||
-    (question.match(/[?？]/gu)?.length ?? 0) !== 1 ||
-    isRoutinePlacementQuestion(question)
+    (question.match(/[?？]/gu)?.length ?? 0) !== 1
   ) {
     throw errorFactory();
   }
   return question;
-}
-
-function isRoutinePlacementQuestion(question: string): boolean {
-  const normalized = question.normalize("NFKC").toLocaleLowerCase("en-US");
-  return [
-    /\bwhich\s+(?:device|computer|machine|worker)\b/u,
-    /\bwhere\s+should\s+(?:i|we|this|the\s+task)\s+(?:run|execute|perform|handle|build|deploy)\b/u,
-    /\b(?:built|run|executed|performed|handled|deployed)\s+by\b.{0,96}\b(?:worker|device|computer|machine)\b/u,
-    /\b(?:worker|device|computer|machine)\s+(?:should\s+)?(?:run|execute|perform|handle|build|deploy)\b/u,
-    /\b(?:run|execute|perform|handle|build|deploy)\b.{0,96}\b(?:on|using|with|via)\s+(?:which\s+)?(?:device|computer|machine|worker)\b/u,
-    /(?:어느|어떤)\s*(?:장치|기기|컴퓨터|워커).*(?:실행|작업)/u,
-    /(?:どの|どれ)\s*(?:device|デバイス|端末|コンピューター).*(?:実行|担当)/u,
-    /(?:quel|quelle)\s+(?:device|appareil|ordinateur|worker).*(?:exécuter|effectuer)/u,
-    /(?:qué|cuál)\s+(?:device|dispositivo|ordenador|worker).*(?:ejecutar|realizar)/u,
-    /(?:哪台|哪个).*(?:设备|电脑|worker).*(?:运行|执行)/u,
-  ].some((pattern) => pattern.test(normalized));
 }
 
 function validateReference(value: unknown): NativeSessionReference {

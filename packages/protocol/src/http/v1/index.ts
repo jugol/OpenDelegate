@@ -84,10 +84,14 @@ export {
   type ReadinessV1,
 } from "./common.ts";
 export {
+  ConfigurationAgentConversationMessageSchema,
+  ConfigurationAgentConversationResponseSchema,
   ConfigurationAgentMessageParamsSchema,
   ConfigurationAgentMessageRequestSchema,
   ConfigurationAgentMessageResponseSchema,
   ConfigurationAgentSuggestedActionSchema,
+  type ConfigurationAgentConversationMessageV1,
+  type ConfigurationAgentConversationResponseV1,
   type ConfigurationAgentMessageParamsV1,
   type ConfigurationAgentMessageRequestV1,
   type ConfigurationAgentMessageResponseV1,

@@ -70,7 +70,8 @@ export const koreanMessages = {
   chat: {
     unavailableMessage:
       "메인에서 장치 평가 또는 설정 에이전트 메시지 기능을 사용할 수 없다고 보고했습니다. 화면에 표시되는 장치 정보는 메인의 결정론적 런타임 보고서에서만 가져옵니다.",
-    failedMessage: "설정 에이전트가 응답하지 못했습니다. 설정은 변경되지 않았습니다.",
+    failedMessage:
+      "로컬 설정 에이전트가 준비되지 않았거나 응답 중 중단되었습니다. OpenDelegate는 결과가 불확실한 설정 작업을 자동으로 다시 실행하지 않았습니다. 이미 완료된 변경은 유지되므로 현재 설정을 확인한 뒤 다시 요청해 주세요.",
     discordOnboardingMessage:
       "Discord가 아직 연결되지 않았습니다. 현재 바인딩을 확인하고 설정 안내를 준비하고 있습니다.",
     secureStoreFailed:
@@ -436,9 +437,9 @@ export const koreanMessages = {
   },
   join: {
     eyebrow: "장치 등록",
-    title: "장치 연결",
+    title: "장치 추가",
     intro:
-      "유효 시간이 짧은 일회용 등록 파일을 생성해 한 번 다운로드한 뒤, 새 장치에서 패키지에 포함된 Worker 연결 명령을 실행하세요.",
+      "새 Mac, Windows 또는 Linux 장치에서 이미 사용하는 Agent에게 Worker 설치를 맡기세요. Main은 유효 시간이 짧은 일회용 등록 파일만 제공합니다.",
     unavailable: "이 메인에는 장치 등록 기능이 설정되어 있지 않습니다.",
     loadFailed: "장치 등록 상태를 불러오지 못했습니다.",
     deviceId: "장치 ID",
@@ -458,9 +459,23 @@ export const koreanMessages = {
     fingerprint: "예상 메인 지문",
     endpoints: "Worker 채널 엔드포인트",
     download: "등록 파일 다운로드",
-    joinCommand: "새 장치에서 실행",
+    joinCommand: "수동 명령(고급)",
     copyCommand: "명령 복사",
     copyDone: "복사됨",
+    recommended: "권장",
+    agentAssistedTitle: "새 장치의 Agent에게 설치 맡기기",
+    agentAssistedDetail:
+      "새 장치에서 Codex 또는 Claude를 여세요. 등록 파일을 받은 뒤 파일 내용이 아닌 로컬 경로와 아래 프롬프트를 Agent에게 전달하세요.",
+    agentPromptLabel: "새 장치의 Codex 또는 Claude에게 전달할 프롬프트",
+    agentPrompt:
+      "이 장치에 https://github.com/jugol/OpenDelegate 저장소의 OpenDelegate Worker를 설치하세요. README와 skills/opendelegate-join/SKILL.md를 따르세요. 열어보지 않은 등록 파일 <absolute-path-to/{filename}>을 사용해 이 장치를 연결하세요. 등록 파일 내용은 출력·붙여넣기·로그 기록하지 마세요. 이 OS의 네이티브 서비스를 설정하고 Main 연결을 검증한 뒤 Admin Web에 장치가 나타나면 보고하세요.",
+    copyAgentPrompt: "Agent 프롬프트 복사",
+    afterJoin:
+      "왼쪽 목록에 장치가 나타나면 해당 장치의 환경설정 채팅을 열어 평가하고, 별명·역할·지침을 정하세요.",
+    needHelp: "OpenDelegate의 안내가 필요한가요?",
+    helpDetail:
+      "환경설정 채팅에서 등록 파일을 노출하지 않고 안전한 파일 전달, 대상 장치 명령, 등록 확인 방법을 안내받을 수 있습니다.",
+    openSetupChat: "환경설정 채팅에 물어보기",
     recent: "최근 등록 파일",
     none: "발급된 등록 파일이 없습니다.",
     statusActive: "사용 가능",
@@ -468,9 +483,11 @@ export const koreanMessages = {
     statusExpired: "만료됨",
     statusRevoked: "취소됨",
     stepsTitle: "안전한 연결 흐름",
-    stepOne: "메인에서 일회용 등록 파일을 생성하고 다운로드합니다.",
-    stepTwo: "운영체제의 안전한 로컬 전달 방식으로 파일을 옮깁니다.",
-    stepThree: "패키지의 Worker 연결 명령을 실행하면 사용된 등록 파일이 삭제됩니다.",
+    stepOne: "새 장치에서 Codex 또는 Claude를 열고 OpenDelegate Worker 준비를 요청합니다.",
+    stepTwo:
+      "여기서 일회용 등록 파일을 생성·다운로드한 뒤 인증된 연결이나 안전한 로컬 전달 방식으로 열지 않은 채 옮깁니다.",
+    stepThree:
+      "새 장치의 Agent에게 파일 경로를 줍니다. Worker가 Main에 연결되고 사용한 등록 파일은 삭제됩니다.",
   },
   artifact: {
     eyebrow: "작업 결과물",

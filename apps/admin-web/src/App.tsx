@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   AdminApi,
+  ConfigurationAgentConversationMessage,
   ConfigurationAgentReply,
   RuntimeReleaseIdentity,
   SecureSecretIngestPurpose,
@@ -36,6 +37,9 @@ export interface AppProps {
     deviceId: string,
     message: string,
   ) => Promise<ConfigurationAgentReply>;
+  readonly onLoadConfigurationMessages?: (
+    deviceId: string,
+  ) => Promise<readonly ConfigurationAgentConversationMessage[]>;
   readonly onSecureSecretIngest?: (
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,
@@ -55,6 +59,7 @@ export function App({
   initialSection = "devices",
   onAssessDevice,
   onConfigurationMessage,
+  onLoadConfigurationMessages,
   onSecureSecretIngest,
   releaseIdentity = {
     declaredReleaseChannel: "development",
@@ -94,6 +99,10 @@ export function App({
   const mainDevice = resolveMainDevice(deviceFleet);
   const device =
     deviceFleet.devices.find((candidate) => candidate.deviceId === selectedDeviceId) ?? mainDevice;
+  const loadSelectedDeviceConfigurationMessages = useCallback(
+    () => onLoadConfigurationMessages?.(device.deviceId) ?? Promise.resolve([]),
+    [device.deviceId, onLoadConfigurationMessages],
+  );
 
   useEffect(() => {
     if (!deviceFleet.devices.some((candidate) => candidate.deviceId === selectedDeviceId)) {
@@ -215,7 +224,7 @@ export function App({
         ) : activeSection === "audit" && api !== undefined ? (
           <AuditSurface api={api} />
         ) : activeSection === "join" && api !== undefined ? (
-          <JoinSurface api={api} />
+          <JoinSurface api={api} onOpenConfigurationChat={openChat} />
         ) : (
           <DeviceSurface
             chatOpen={chatOpen}
@@ -238,6 +247,9 @@ export function App({
         modal={chatModal}
         onClose={closeChat}
         onUnreadAgentMessage={recordUnreadAgentMessage}
+        {...(onLoadConfigurationMessages === undefined
+          ? {}
+          : { onLoadMessages: loadSelectedDeviceConfigurationMessages })}
         {...(configurationAgentAvailable && onConfigurationMessage !== undefined
           ? {
               ...(onSecureSecretIngest === undefined

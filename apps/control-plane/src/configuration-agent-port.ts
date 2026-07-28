@@ -1,4 +1,8 @@
-import type { ConfigurationAgentMessageResponseV1, DeviceSummaryV1 } from "@opendelegate/protocol";
+import type {
+  ConfigurationAgentConversationResponseV1,
+  ConfigurationAgentMessageResponseV1,
+  DeviceSummaryV1,
+} from "@opendelegate/protocol";
 
 export interface ConfigurationDeviceObservation {
   readonly name: string;
@@ -22,6 +26,10 @@ export interface ConfigurationAgentMessageInput {
 
 export interface ConfigurationAgentPort {
   sendMessage(input: ConfigurationAgentMessageInput): Promise<ConfigurationAgentMessageResponseV1>;
+  listMessages?(input: {
+    readonly deviceId: string;
+    readonly principalId: string;
+  }): Promise<ConfigurationAgentConversationResponseV1>;
 }
 
 export type ConfigurationAgentPortErrorCode =

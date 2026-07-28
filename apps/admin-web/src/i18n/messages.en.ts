@@ -67,7 +67,8 @@ export const englishMessages = {
   chat: {
     unavailableMessage:
       "Main reports that Device assessment or Configuration Agent messaging is unavailable. The visible Device facts come only from Main's deterministic runtime report.",
-    failedMessage: "The Configuration Agent could not respond. No settings were changed.",
+    failedMessage:
+      "The local Configuration Agent was unavailable or interrupted. OpenDelegate did not replay an uncertain setup action. Completed changes remain durable; inspect the current settings, then try again.",
     discordOnboardingMessage:
       "Discord is not connected yet. I’m checking the current binding and preparing setup guidance.",
     secureStoreFailed:
@@ -136,7 +137,7 @@ export const englishMessages = {
     artifacts: "Artifacts",
     audit: "Audit",
     adminSections: "Admin sections",
-    joinDevice: "Join a device",
+    joinDevice: "Add Device",
   },
   device: {
     sections: "Device sections",
@@ -434,9 +435,9 @@ export const englishMessages = {
   },
   join: {
     eyebrow: "Device enrollment",
-    title: "Join a device",
+    title: "Add a Device",
     intro:
-      "Create a short-lived, single-use grant, download it once, then run the packaged Worker join command on the new device.",
+      "Use the Agent already on the new Mac, Windows, or Linux device to install its Worker. Main supplies one short-lived enrollment file; the new Device handles the rest.",
     unavailable: "Device enrollment is not configured on this Main.",
     loadFailed: "Device enrollment status could not be loaded.",
     deviceId: "Device ID",
@@ -456,9 +457,23 @@ export const englishMessages = {
     fingerprint: "Expected Main fingerprint",
     endpoints: "Worker channel endpoints",
     download: "Download grant file",
-    joinCommand: "Run on the new device",
+    joinCommand: "Manual command (advanced)",
     copyCommand: "Copy command",
     copyDone: "Copied",
+    recommended: "Recommended",
+    agentAssistedTitle: "Let the new Device’s Agent install it",
+    agentAssistedDetail:
+      "Open Codex or Claude on the new Device. After you download the grant, give its local path—not its contents—to that Agent with the prompt shown here.",
+    agentPromptLabel: "Give this prompt to Codex or Claude on the new Device",
+    agentPrompt:
+      "Install OpenDelegate Worker on this Device from https://github.com/jugol/OpenDelegate. Follow the repository README and skills/opendelegate-join/SKILL.md. Join it using the unopened grant file at <absolute-path-to/{filename}>. Never print, paste, or log the grant contents. Configure the native service for this OS, verify Main connectivity, and report when this Device appears in Admin Web.",
+    copyAgentPrompt: "Copy Agent prompt",
+    afterJoin:
+      "When the Device appears in the left list, open its Configuration Chat to assess it, choose a name, and set Roles and Instructions.",
+    needHelp: "Want OpenDelegate to guide you?",
+    helpDetail:
+      "Configuration Chat can explain secure file transfer, the target Device command, and how to verify enrollment without asking you to expose the grant.",
+    openSetupChat: "Ask Configuration Chat",
     recent: "Recent grants",
     none: "No enrollment grants have been issued.",
     statusActive: "Active",
@@ -466,9 +481,11 @@ export const englishMessages = {
     statusExpired: "Expired",
     statusRevoked: "Revoked",
     stepsTitle: "Secure join flow",
-    stepOne: "Generate and download the one-time grant on Main.",
-    stepTwo: "Move the file through an OS-secure local handoff.",
-    stepThree: "Run the packaged Worker join command; the Worker deletes the consumed grant.",
+    stepOne: "Open Codex or Claude on the new Device and ask it to prepare OpenDelegate Worker.",
+    stepTwo:
+      "Generate and download the one-time grant here, then move the unopened file over an authenticated link or secure local handoff.",
+    stepThree:
+      "Give the file path to the new Device’s Agent. The Worker joins Main and deletes the consumed grant.",
   },
   artifact: {
     eyebrow: "Task output",

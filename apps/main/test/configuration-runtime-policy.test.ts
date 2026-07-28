@@ -82,6 +82,35 @@ test("Autonomy Profile produces a current machine-readable proactive disposition
   await apply(service, [
     {
       operation: "set",
+      key: "autonomy.general-improvement",
+      scope: { kind: "main", id: "device-main" },
+      value: "execute",
+    },
+  ]);
+  assert.equal(await policy.proactiveDisposition("general-improvement"), "execute");
+
+  await apply(service, [
+    {
+      operation: "set",
+      key: "autonomy.general-improvement",
+      scope: { kind: "main", id: "device-main" },
+      value: "disabled",
+    },
+  ]);
+  assert.equal(await policy.proactiveDisposition("general-improvement"), "disabled");
+
+  await apply(service, [
+    {
+      operation: "set",
+      key: "autonomy.general-improvement",
+      scope: { kind: "main", id: "device-main" },
+      value: "inherit",
+    },
+  ]);
+
+  await apply(service, [
+    {
+      operation: "set",
       key: "autonomy.profile",
       scope: { kind: "device", id: "device-main" },
       value: "reactive",

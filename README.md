@@ -59,6 +59,9 @@ can divide it into Windows development, macOS build or signing, and Linux server
 deterministic scheduling chooses the eligible Devices and routes.
 
 - One Discord Forum post maps to one durable Task and context boundary.
+- Optional deterministic monitors can originate the same ordinary Forum-backed Tasks
+  for incidents or improvements. Per-category authority can disable, propose for
+  review, or execute them without bypassing Policy, approvals, budgets, or audit.
 - Your command-sending phone or laptop can disconnect. Only the fixed Main and Devices needed for
   current work must be available.
 - Placement is visible in Admin and audit, but routine Tasks do not require you to choose a Device,

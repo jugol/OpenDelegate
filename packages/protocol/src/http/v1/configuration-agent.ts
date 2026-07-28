@@ -69,3 +69,45 @@ export const ConfigurationAgentMessageResponseSchema = Type.Object(
 export type ConfigurationAgentMessageResponseV1 = Type.Static<
   typeof ConfigurationAgentMessageResponseSchema
 >;
+
+export const ConfigurationAgentConversationMessageSchema = Type.Object(
+  {
+    messageId: OpaqueIdSchema,
+    role: Type.Union([Type.Literal("owner"), Type.Literal("agent")]),
+    content: Type.String({
+      minLength: 1,
+      maxLength: 32_768,
+    }),
+    suggestedActions: Type.Optional(
+      Type.Array(ConfigurationAgentSuggestedActionSchema, {
+        maxItems: 4,
+        uniqueItems: true,
+      }),
+    ),
+    occurredAt: Rfc3339InstantSchema,
+  },
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateConfigurationAgentConversationMessageV1",
+  },
+);
+
+export type ConfigurationAgentConversationMessageV1 = Type.Static<
+  typeof ConfigurationAgentConversationMessageSchema
+>;
+
+export const ConfigurationAgentConversationResponseSchema = Type.Object(
+  {
+    messages: Type.Array(ConfigurationAgentConversationMessageSchema, {
+      maxItems: 2_000,
+    }),
+  },
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateConfigurationAgentConversationResponseV1",
+  },
+);
+
+export type ConfigurationAgentConversationResponseV1 = Type.Static<
+  typeof ConfigurationAgentConversationResponseSchema
+>;

@@ -30,6 +30,7 @@ import {
   ArtifactOpenInstructionSchema,
   ArtifactParamsSchema,
   AuditEventListResponseSchema,
+  ConfigurationAgentConversationResponseSchema,
   ConfigurationAgentMessageParamsSchema,
   ConfigurationAgentMessageRequestSchema,
   ConfigurationAgentMessageResponseSchema,
@@ -565,6 +566,38 @@ function registerConfigurationAgentRoutes(
   options: MainControlPlaneAppOptions,
   validatePublicMutation: (request: FastifyRequest) => void,
 ): void {
+  app.get(
+    "/api/v1/devices/:deviceId/configuration/messages",
+    {
+      schema: {
+        params: ConfigurationAgentMessageParamsSchema,
+        response: {
+          200: ConfigurationAgentConversationResponseSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+    },
+    async (request) => {
+      const session = await options.ownerAuth.validateSession(requireSessionToken(request));
+      const devices = await currentDevices(options);
+      if (!devices.some((candidate) => candidate.deviceId === request.params.deviceId)) {
+        throw new PublicHttpError(404, "DEVICE_NOT_FOUND");
+      }
+      if (options.configurationAgent?.listMessages === undefined) {
+        return { messages: [] };
+      }
+      return (
+        (await options.configurationAgent.listMessages({
+          deviceId: request.params.deviceId,
+          principalId: session.ownerId,
+        })) ?? { messages: [] }
+      );
+    },
+  );
+
   app.post(
     "/api/v1/devices/:deviceId/configuration/messages",
     {

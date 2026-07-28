@@ -615,10 +615,20 @@ Deliver the required visual setup, Device specification, and operational surface
   pending, independently of the composer placeholder.
 - If a Configuration Agent request cannot complete its initial native resume before
   executing any typed tool, start and durably record a fresh native continuation from
-  the complete current prompt, disclose the loss of prior chat-only context, re-inspect
-  durable state, and re-confirm any chat-only value before proposing a change. Record
-  the first typed-tool attempt before broker execution and fail an interrupted request
+  the complete current prompt plus a bounded durable excerpt of completed Device
+  exchanges, disclose the possible loss of provider-private or interrupted in-flight
+  context, re-inspect durable state, and re-confirm any missing value before proposing
+  a change. Persist completed owner and Agent exchanges per Device so Admin Web and a
+  fresh native continuation recover them after reload or Main restart. Record the
+  first typed-tool attempt before broker execution and fail an interrupted request
   closed across restart; never auto-restart or replay after that boundary.
+- Derive protected Configuration Approval request identity from target Device plus
+  immutable proposal ID while keeping each chat tool execution request-bound.
+  Approval executes the protected operation immediately; a later “approval complete”
+  message inspects durable configuration and cannot create a duplicate Approval for
+  the same proposal or misread a compensated historical receipt as current state.
+- Use a multiline Configuration Chat composer where Enter sends and Shift+Enter adds
+  a newline.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.
@@ -768,7 +778,18 @@ Make the system useful over time, not only during a happy-path demo.
 - Implement deterministic monitors for service, transport, database, Discord,
   provider, Artifact Store, lock, lease, and disk conditions.
 - Implement Reactive, Assisted, and Autonomous behavior by category.
-- Create system incident and recommendation Tasks.
+- Give every category an inherit, disabled, propose, or execute disposition. Convert
+  each bounded deterministic signal into one idempotent ordinary manual-review or
+  auto Task, then let the existing coordinator own it. When Discord is ready, create
+  one bot-authored starter post in the first configured Forum, persist the Task
+  binding, and let the existing Forum projection own subsequent updates. Reconcile an
+  uncertain create from deterministic Task markers across active and archived posts
+  before retrying.
+- Create system incident and recommendation Tasks without granting monitors a bypass
+  around Task Policy, approvals, budgets, locks, audit, or Secret boundaries.
+- Preserve FR-4's bounded, tool-denied diagnostic Agent as a read-only pre-Task
+  exception after deterministic transport recovery is exhausted; use its result as
+  the incident signal and perform every repair inside the resulting Task.
 - Implement diagnostics escalation packages and guided configuration repair.
 - Add retention and cleanup jobs with dry-run and audit.
 - Add provider usage and cost metrics where available.

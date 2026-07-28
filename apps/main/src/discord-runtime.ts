@@ -86,7 +86,7 @@ export interface DiscordRuntimeScheduler {
 export interface DiscordMainRuntimeOptions {
   readonly adapter: Pick<
     DiscordForumAdapter,
-    "close" | "flushOutbox" | "publishTaskProjection" | "start"
+    "close" | "createTaskThread" | "flushOutbox" | "publishTaskProjection" | "start"
   >;
   readonly repository: Pick<DiscordStateRepository, "getGatewayCursor" | "listBindings">;
   readonly tasks: DiscordProjectionTaskPort;
@@ -187,6 +187,19 @@ export class DiscordMainRuntime {
 
   public get diagnostics(): readonly DiscordRuntimeDiagnostic[] {
     return Object.freeze(this.#diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
+  }
+
+  public async presentTask(taskId: string): Promise<void> {
+    if (this.#status.code !== "DISCORD_READY") {
+      throw new DiscordApiError("OFFLINE", "Discord is not ready to present a new Task.");
+    }
+    const task = await this.#tasks.get(taskId);
+    let artifact: NonNullable<TaskChannelProjection["artifact"]> | undefined;
+    if (this.#artifactPresentation !== undefined) {
+      artifact = await this.#artifactPresentation.forTask(task.taskId);
+    }
+    await this.#adapter.createTaskThread(projectTask(task, artifact));
+    await this.#adapter.flushOutbox();
   }
 
   public async start(): Promise<DiscordRuntimeStatus> {

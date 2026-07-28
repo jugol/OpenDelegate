@@ -30,6 +30,7 @@ import {
 } from "./i18n";
 import {
   type ConfigurationAgentReply,
+  type ConfigurationAgentConversationMessage,
   type ConfigurationAgentSuggestedAction,
   mainSecretAlias,
   type SecureSecretIngestPurpose,
@@ -99,6 +100,7 @@ interface ConfigurationChatProps {
     secret: Uint8Array,
   ) => Promise<SecureSecretIngestReceipt>;
   readonly onUnreadAgentMessage?: () => void;
+  readonly onLoadMessages?: () => Promise<readonly ConfigurationAgentConversationMessage[]>;
   readonly onSendMessage?: (message: string) => Promise<ConfigurationAgentReply>;
   readonly onToggleExpanded: () => void;
   readonly open: boolean;
@@ -114,6 +116,7 @@ export function ConfigurationChat({
   modal,
   onClose,
   onIngestSecret,
+  onLoadMessages,
   onUnreadAgentMessage,
   onSendMessage,
   onToggleExpanded,
@@ -129,6 +132,7 @@ export function ConfigurationChat({
   const [storedReference, setStoredReference] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [agentResponding, setAgentResponding] = useState(false);
+  const [historyHydrated, setHistoryHydrated] = useState(onLoadMessages === undefined);
   const activeSetup = setupGoal === null ? null : guidedSetupDescriptor(setupGoal, copy);
   const [conversationMessages, setConversationMessages] = useState<readonly ChatMessage[]>(() => [
     onSendMessage === undefined
@@ -145,7 +149,7 @@ export function ConfigurationChat({
   ]);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const scrollRegionRef = useRef<HTMLDivElement | null>(null);
-  const composerRef = useRef<HTMLInputElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openRef = useRef(open);
   const previousMessageCountRef = useRef(conversationMessages.length);
@@ -170,7 +174,7 @@ export function ConfigurationChat({
       message: string,
       entryMode: ConversationEntryMode = "owner-visible",
     ): Promise<boolean> => {
-      if (onSendMessage === undefined || pending) {
+      if (onSendMessage === undefined || pending || !historyHydrated) {
         return false;
       }
 
@@ -208,7 +212,7 @@ export function ConfigurationChat({
         setPending(false);
       }
     },
-    [appendAgentMessage, conversationMessages.length, onSendMessage, pending],
+    [appendAgentMessage, conversationMessages.length, historyHydrated, onSendMessage, pending],
   );
 
   useEffect(() => {
@@ -234,6 +238,44 @@ export function ConfigurationChat({
         : current,
     );
   }, [copy, onSendMessage, session.assistantMessage]);
+
+  useEffect(() => {
+    if (onLoadMessages === undefined) {
+      setHistoryHydrated(true);
+      return;
+    }
+    let active = true;
+    setHistoryHydrated(false);
+    void onLoadMessages()
+      .then((messages) => {
+        if (!active) {
+          return;
+        }
+        if (messages.length === 0) {
+          return;
+        }
+        const restored = messages.map((message): ChatMessage => ({
+          id: `history-${message.messageId}`,
+          author: message.role,
+          content: message.content,
+          ...(message.suggestedActions.length === 0
+            ? {}
+            : { suggestedActions: message.suggestedActions }),
+        }));
+        setConversationMessages(restored);
+      })
+      .catch(() => {
+        // Chat remains usable when history recovery is temporarily unavailable.
+      })
+      .finally(() => {
+        if (active) {
+          setHistoryHydrated(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [onLoadMessages]);
 
   useEffect(() => {
     if (open && focusRequestId > 0) {
@@ -283,6 +325,7 @@ export function ConfigurationChat({
       !mainDevice ||
       !discordSetupRecommended ||
       onSendMessage === undefined ||
+      !historyHydrated ||
       pending ||
       discordOnboardingAttemptedForOpenRef.current ||
       discordOnboardingCompleted(deviceId)
@@ -310,6 +353,7 @@ export function ConfigurationChat({
     copy.chat.discordSetupRequest,
     deviceId,
     discordSetupRecommended,
+    historyHydrated,
     mainDevice,
     onSendMessage,
     open,
@@ -320,7 +364,7 @@ export function ConfigurationChat({
   async function submitChatMessage(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const message = draft.trim();
-    if (message === "") {
+    if (message === "" || !historyHydrated) {
       return;
     }
     setDraft("");
@@ -428,7 +472,7 @@ export function ConfigurationChat({
 
     const focusable = Array.from(
       dialog.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
       ),
     );
     const first = focusable.at(0);
@@ -737,11 +781,17 @@ export function ConfigurationChat({
           <label className="sr-only" htmlFor="configuration-chat-message">
             {copy.chat.messageLabel}
           </label>
-          <input
+          <textarea
             autoComplete="off"
-            disabled={onSendMessage === undefined || pending}
+            disabled={onSendMessage === undefined || pending || !historyHydrated}
             id="configuration-chat-message"
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
             placeholder={
               onSendMessage === undefined
                 ? copy.chat.unavailablePlaceholder
@@ -750,11 +800,14 @@ export function ConfigurationChat({
                   : copy.chat.askPlaceholder
             }
             ref={composerRef}
+            rows={1}
             value={draft}
           />
           <button
             aria-label={copy.chat.send}
-            disabled={onSendMessage === undefined || pending || draft.trim() === ""}
+            disabled={
+              onSendMessage === undefined || pending || !historyHydrated || draft.trim() === ""
+            }
             type="submit"
           >
             <Send aria-hidden="true" />

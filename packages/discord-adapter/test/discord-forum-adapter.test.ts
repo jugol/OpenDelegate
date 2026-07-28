@@ -172,6 +172,41 @@ class FakeDiscordApi implements DiscordApiPort {
     return { messages, hasMore: false };
   }
 
+  public async createForumPost(input: {
+    forumChannelId: string;
+    requestKey: string;
+    name: string;
+    content: string;
+    appliedTagIds: readonly string[];
+  }): Promise<{ thread: DiscordThread; starterMessage: DiscordMessage }> {
+    this.#assertOnline();
+    const threadId = (800_000_000_000_000_000n + BigInt(this.threads.size)).toString();
+    const thread: DiscordThread = {
+      id: threadId,
+      guildId: GUILD_ID,
+      parentId: input.forumChannelId,
+      type: 11,
+      name: input.name,
+      ownerId: BOT_ID,
+      appliedTagIds: [...input.appliedTagIds],
+      archived: false,
+      locked: false,
+    };
+    const starterMessage: DiscordMessage = {
+      id: threadId,
+      guildId: GUILD_ID,
+      channelId: threadId,
+      author: { id: BOT_ID, bot: true, roleIds: [] },
+      content: input.content,
+      attachments: [],
+      createdAtMs: 1_000,
+    };
+    this.threads.set(threadId, thread);
+    this.messages.set(threadId, [starterMessage]);
+    this.operations.push({ kind: "forum-post", ...input, threadId });
+    return { thread, starterMessage };
+  }
+
   public async updateThreadTags(threadId: string, appliedTagIds: readonly string[]): Promise<void> {
     this.#assertOnline();
     this.operations.push({ kind: "tags", threadId, appliedTagIds: [...appliedTagIds] });
@@ -326,6 +361,34 @@ test("installation probe requires Community, Forum type, Gateway intents, and le
     "Channel 100000000000000002 lacks permissions: ATTACH_FILES, MANAGE_THREADS, READ_MESSAGE_HISTORY, SEND_MESSAGES, SEND_MESSAGES_IN_THREADS.",
   ]);
   assert.equal(JSON.stringify(invalid).includes("token"), false);
+});
+
+test("a bot-originated Task creates one recoverable Forum post and durable binding", async () => {
+  const initial = fixture();
+  const projection: TaskChannelProjection = {
+    taskId: "task-proactive-001",
+    state: "intake",
+    objective: "Recover the degraded Worker route.",
+    summary: "A deterministic monitor created this Task.",
+    significance: "decision",
+  };
+
+  const created = await initial.adapter.createTaskThread(projection);
+  assert.equal(created.taskId, projection.taskId);
+  assert.equal(created.forumChannelId, FORUM_ID);
+  assert.equal(created.threadId, created.starterMessageId);
+  assert.equal(
+    initial.api.operations.filter((operation) => operation["kind"] === "forum-post").length,
+    1,
+  );
+
+  const restarted = fixture({ api: initial.api });
+  const recovered = await restarted.adapter.createTaskThread(projection);
+  assert.equal(recovered.threadId, created.threadId);
+  assert.equal(
+    initial.api.operations.filter((operation) => operation["kind"] === "forum-post").length,
+    1,
+  );
 });
 
 test("live startup supplies the durable Resume cursor and pinned API contract to the Gateway port", async () => {

@@ -849,8 +849,8 @@ that guidance is ready.
 **Consequence:** Agent content remains plain, safely escaped React text while gaining
 paragraph and list structure. Unread presentation never creates a Task event, sends
 an external notification, or changes Agent session semantics. Switching or reloading
-Devices may reset this transient indicator; durable configuration session recovery
-remains Main's responsibility.
+Devices may reset this transient indicator. Completed Device-scoped conversation
+history is durable Main state and is independent from the transient unread count.
 
 ## D-058 — Configuration continuation before tool execution
 
@@ -864,8 +864,10 @@ typed tool, Main writes a durable request-bound attempt marker. If that request 
 final response after interruption, later replay fails closed, including after Main
 restart. Configuration Chat is not a Task, so FR-9's Task Brief and Work Order
 checkpoint package does not apply; the recovered Agent discloses that chat-only
-context was lost, re-inspects durable configuration, and re-confirms any required
-chat-only value or choice before proposing a change.
+or interrupted in-flight context may be missing, receives a bounded excerpt of
+completed durable Device-scoped exchanges, re-inspects durable configuration, and
+re-confirms any required value or choice absent from that excerpt before proposing a
+change.
 
 **Rationale:** A provider process can be interrupted while its native thread still
 appears resumable but refuses the next turn. Failing every later Configuration Chat
@@ -875,12 +877,13 @@ configuration mutation; after a tool request, that guarantee no longer holds. Th
 durable boundary prevents a process restart from accidentally resetting this safety
 decision.
 
-**Consequence:** The owner may lose conversational detail held only in the unavailable
-provider session, but the continuation receives the complete current owner request,
-current Device observation, configuration protocol, and safety rules. Durable
-configuration and receipts remain authoritative. A failure after the durable tool
-boundary stays failed and requires a new owner request after inspecting current
-configuration; the interrupted request itself is never replayed.
+**Consequence:** The owner may lose detail held only in the unavailable provider
+session or an interrupted unfinished turn. Completed visible exchanges survive Main
+restart, restore in Admin Web, and enter a bounded recovery excerpt alongside the
+complete current owner request, current Device observation, configuration protocol,
+and safety rules. Durable configuration and receipts remain authoritative. A failure
+after the durable tool boundary stays failed and requires a new owner request after
+inspecting current configuration; the interrupted request itself is never replayed.
 
 ## D-059 — Outcome-oriented orchestration and bounded Owner Handoff
 
@@ -918,3 +921,75 @@ claimed as implemented until its expiry, revocation, audit, secret-isolation, an
 cross-network acceptance evidence passes. ADR-0023 defines the explicit Task record,
 trust, return, and gateway extension boundary; interactive presentation alone is not
 a Handoff.
+
+## D-060 — Placement questions are semantic, not lexically forbidden
+
+**Decision:** Device placement remains an internal orchestration choice by default,
+but Main may ask when placement changes privacy, data locality, cost, physical or
+interactive access, licensed-software availability, where a result may remain, or
+another owner-visible outcome that durable configuration cannot decide. Result
+validation enforces the shape and bound of one owner question; it does not reject
+sentences merely because they mention a Device, OS, or Worker.
+
+**Rationale:** A multilingual word-pattern filter cannot distinguish orchestration
+avoidance from a legitimate outcome choice. Prompt policy and durable owner
+preferences carry that semantic rule more accurately than a lexical parser.
+
+**Consequence:** Routine scheduling stays invisible to the owner, while a legitimate
+placement-dependent decision is not accidentally suppressed. Audit and Agent
+evaluation should flag repeated unnecessary placement questions as a quality issue,
+not misclassify them as a malformed protocol response.
+
+## D-061 — Configuration Approval execution and conversation recovery are deterministic
+
+**Decision:** Completed Configuration Chat exchanges are durable, Device-and-Adapter-
+scoped Main events and are restored independently of the provider-native session.
+Applying a
+protected proposal uses one durable Approval request identity derived from the target
+Device plus immutable proposal ID, while each chat tool execution keeps its
+request-bound replay identity. Owner approval executes the exact protected operation
+immediately; a follow-up chat request for the same proposal observes the existing
+Approval instead of requesting another one.
+
+**Rationale:** Provider sessions can disappear across process failure, while chat
+message idempotency keys necessarily change for each owner message. Basing protected
+operation identity on the chat turn caused “approval complete” follow-ups to create
+an endless sequence of new Approval IDs even though every one described the same
+proposal.
+
+**Consequence:** Main can recover completed conversational context without replaying
+provider-hidden work, and one target Device plus immutable proposal has one Approval
+record even when later chat messages use new tool operation IDs. The Agent inspects
+durable configuration after approval. An Approval whose execution failed remains
+visible as failed and is diagnosed; it is not silently replaced with a fresh Approval
+or confused with a compensated historical receipt.
+
+## D-062 — Proactive signals enter the ordinary Task path
+
+**Decision:** A proactive category inherits its profile or explicitly selects
+disabled, propose, or execute. A bounded monitor or system-incident signal under
+propose creates one idempotent manual-review Task; execute creates one idempotent auto
+Task. Existing Task coordination processes it. When Discord is ready, Main creates
+one bot-authored post in the first configured Forum, durably binds it to the Task, and
+uses the normal Forum projection thereafter. An uncertain Forum-create result is
+reconciled from deterministic Task markers across active and archived posts before
+retry.
+
+FR-4's bounded, tool-denied, Task-independent diagnostic Agent remains an explicit
+read-only exception after deterministic transport recovery is exhausted. Its result
+may be the system-incident signal for an ordinary recovery Task; it cannot perform
+the repair outside that Task.
+
+**Rationale:** A direct monitor-to-Agent repair path would create hidden mutation with
+different authorization and accounting. Treating remedial work as an ordinary Task
+preserves the same observable unit the owner already understands. An internally
+originated Task also needs an outbound Forum binding because Discord can project only
+Tasks already associated with a thread.
+
+**Consequence:** Deterministic monitoring spends no continuous LLM context and
+remedial work never bypasses Policy, approvals, budgets, locks, audit, Secret
+boundaries, or Task session isolation. The narrow FR-4 diagnostic may spend one
+bounded read-only Agent turn before Task origin. Discord automatically presents
+originated work when a Forum binding is ready; Admin remains authoritative when
+Discord is unavailable. The first configured Forum is the deterministic default
+until explicit category routing is added.

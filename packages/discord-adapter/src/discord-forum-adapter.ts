@@ -341,6 +341,134 @@ export class DiscordForumAdapter {
     }
   }
 
+  async createTaskThread(projection: TaskChannelProjection): Promise<DiscordTaskBinding> {
+    renderStatusPanel(projection);
+    let result: DiscordTaskBinding | undefined;
+    await this.#withThread(`outbound-task:${projection.taskId}`, async () => {
+      const existing = await this.#repository.getBindingByTask(projection.taskId);
+      if (existing !== undefined) {
+        result = existing;
+        return;
+      }
+      const forum = this.#config.forumBindings[0];
+      if (forum === undefined) {
+        throw new DiscordAdapterError(
+          "CONFIG_INVALID",
+          "No configured Discord Forum can present the Task.",
+        );
+      }
+      const name = outboundTaskThreadName(projection);
+      const content = outboundTaskStarterContent(projection);
+      const recovered = await this.#findOutboundTaskThread(forum.channelId, name, content);
+      const created =
+        recovered ??
+        (await this.#api.createForumPost({
+          forumChannelId: forum.channelId,
+          requestKey: `outbound-task:${projection.taskId}`,
+          name,
+          content,
+          appliedTagIds: [forum.workflowTagIds.intake],
+        }));
+      if (
+        !this.#isApprovedThread(created.thread) ||
+        created.thread.parentId !== forum.channelId ||
+        created.thread.ownerId !== this.#config.botUserId ||
+        created.starterMessage.id !== created.thread.id ||
+        created.starterMessage.channelId !== created.thread.id ||
+        created.starterMessage.guildId !== this.#config.guildId ||
+        created.starterMessage.content !== content
+      ) {
+        throw new DiscordAdapterError(
+          "PERSISTENCE_CONFLICT",
+          "Discord returned an invalid outbound Forum Task.",
+        );
+      }
+      result = await this.#repository.bindTask({
+        guildId: created.thread.guildId,
+        forumChannelId: created.thread.parentId,
+        threadId: created.thread.id,
+        starterMessageId: created.starterMessage.id,
+        taskId: projection.taskId,
+        externalState: "available",
+        archived: created.thread.archived,
+        locked: created.thread.locked,
+      });
+    });
+    if (result === undefined) {
+      throw new DiscordAdapterError(
+        "PERSISTENCE_CONFLICT",
+        "The outbound Forum Task binding was not recorded.",
+      );
+    }
+    await this.publishTaskProjection(projection);
+    return result;
+  }
+
+  async #findOutboundTaskThread(
+    forumChannelId: string,
+    name: string,
+    content: string,
+  ): Promise<
+    | {
+        readonly thread: DiscordThread;
+        readonly starterMessage: DiscordMessage;
+      }
+    | undefined
+  > {
+    const candidates: DiscordThread[] = [];
+    for (const thread of await this.#api.listActiveThreads(this.#config.guildId)) {
+      if (
+        thread.parentId === forumChannelId &&
+        thread.ownerId === this.#config.botUserId &&
+        thread.name === name
+      ) {
+        candidates.push(thread);
+      }
+    }
+    let before: string | undefined;
+    for (let page = 0; page < MAX_RECONCILIATION_PAGES; page += 1) {
+      const archived = await this.#api.listArchivedPublicThreads(forumChannelId, before);
+      for (const thread of archived.threads) {
+        if (thread.ownerId === this.#config.botUserId && thread.name === name) {
+          candidates.push(thread);
+        }
+      }
+      if (!archived.hasMore) {
+        break;
+      }
+      if (archived.nextBefore === undefined || archived.nextBefore === before) {
+        throw new DiscordAdapterError(
+          "PERSISTENCE_CONFLICT",
+          "Discord outbound Task reconciliation did not advance.",
+        );
+      }
+      before = archived.nextBefore;
+    }
+    const matches: {
+      readonly thread: DiscordThread;
+      readonly starterMessage: DiscordMessage;
+    }[] = [];
+    for (const thread of candidates) {
+      try {
+        const starterMessage = await this.#api.getMessage(thread.id, thread.id);
+        if (starterMessage.content === content) {
+          matches.push({ thread, starterMessage });
+        }
+      } catch (error) {
+        if (!(error instanceof DiscordApiError && error.code === "NOT_FOUND")) {
+          throw error;
+        }
+      }
+    }
+    if (matches.length > 1) {
+      throw new DiscordAdapterError(
+        "PERSISTENCE_CONFLICT",
+        "Discord contains duplicate outbound Forum posts for one Task.",
+      );
+    }
+    return matches[0];
+  }
+
   async flushOutbox(): Promise<void> {
     if (this.#flushPromise !== undefined) {
       return this.#flushPromise;
@@ -1050,6 +1178,27 @@ function replyMessage(message: DiscordMessage): string {
   }
   const count = message.attachments.length;
   return `The owner attached ${count.toString()} ${count === 1 ? "file" : "files"} through Discord.`;
+}
+
+function outboundTaskThreadName(projection: TaskChannelProjection): string {
+  const marker = `OD-${digestValue(projection.taskId).slice(-10)}`;
+  const objective = projection.objective.replace(/\s+/gu, " ").trim();
+  return truncateCodePoints(`${marker} ${objective}`, 100);
+}
+
+function outboundTaskStarterContent(projection: TaskChannelProjection): string {
+  return truncateCodePoints(
+    `OpenDelegate Task ${projection.taskId}\n\n${projection.objective.trim()}`,
+    2_000,
+  );
+}
+
+function truncateCodePoints(value: string, maximum: number): string {
+  const points = Array.from(value);
+  if (points.length <= maximum) {
+    return value;
+  }
+  return `${points.slice(0, maximum - 1).join("")}…`;
 }
 
 function digestValue(value: unknown): string {

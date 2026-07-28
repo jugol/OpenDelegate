@@ -61,6 +61,9 @@ separar desarrollo en Windows, compilación o firma en macOS y despliegue en Lin
 elige los Devices y las Routes.
 
 - Una publicación de Discord Forum se corresponde con una Task duradera y un límite de contexto.
+- Los monitores deterministas opcionales pueden crear las mismas Tasks ordinarias vinculadas al
+  Forum para incidencias o mejoras. Cada categoría puede desactivarse, proponerse para revisión o
+  ejecutarse sin eludir Policies, aprobaciones, presupuestos ni auditoría.
 - El teléfono u ordenador que envía la orden puede desconectarse. Solo deben estar disponibles el
   Main fijo y los Devices necesarios para el trabajo actual.
 - El software determinista se ocupa de la identidad, las Policies, el estado de salud, el

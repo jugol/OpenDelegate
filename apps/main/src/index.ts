@@ -144,6 +144,7 @@ import {
   AgentBackedRouteIncidentDiagnostic,
   MainRouteIncidentDiagnosisService,
 } from "./route-incident-diagnosis.ts";
+import { MainProactiveTaskOriginator } from "./proactive-task-originator.ts";
 import {
   acquireMainSingletonOwnership,
   MainSingletonOwnershipError,
@@ -185,6 +186,12 @@ export {
   AgentBackedTaskExecutor,
   EventStoreMainNativeSessionRepository,
 } from "./agent-task-executor.ts";
+export {
+  MainProactiveTaskOriginator,
+  type MainProactiveTaskOriginatorInput,
+  type MainProactiveTaskOriginatorOptions,
+  type MainProactiveTaskOriginatorReceipt,
+} from "./proactive-task-originator.ts";
 export type {
   AgentBackedTaskExecutorOptions,
   MainNativeSessionRepository,
@@ -528,6 +535,7 @@ export interface MainRuntime {
   readonly ownerAuth: OwnerAuth;
   readonly paths: RuntimePaths;
   readonly tasks: TaskService | TaskExecutionCoordinator;
+  readonly proactive: MainProactiveTaskOriginator;
   readonly taskExecution?: TaskExecutionCoordinator;
   readonly discord?: DiscordMainRuntime | undefined;
   readonly artifacts?: MainArtifactRuntime;
@@ -896,6 +904,23 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       eventStore,
       resolveDefaultMode: () => runtimePolicy.taskDefaultMode(),
     });
+    const proactiveTaskTarget: {
+      current: Pick<TaskService | TaskExecutionCoordinator, "create">;
+    } = { current: taskService };
+    const proactive = new MainProactiveTaskOriginator({
+      policy: runtimePolicy,
+      tasks: {
+        create: (input) => proactiveTaskTarget.current.create(input),
+      },
+      presentation: {
+        present: async (taskId) => {
+          const runtime = discordBindingController?.runtime;
+          if (runtime?.status.code === "DISCORD_READY") {
+            await runtime.presentTask(taskId);
+          }
+        },
+      },
+    });
     const continuationCheckpoints = new DurableTaskContinuationCheckpointService({
       eventStore,
       tasks: taskService,
@@ -1034,6 +1059,30 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         ? undefined
         : new MainRouteIncidentDiagnosisService({
             eventStore,
+            notifications: {
+              publish: async ({ result }) => {
+                await proactive.originate({
+                  signalId: result.incidentId,
+                  kind: "incident-recovery",
+                  deviceId: result.authenticatedDeviceId,
+                  objective: `Restore reliable OpenDelegate connectivity for Device ${result.authenticatedDeviceId}.`,
+                  completionCriteria: [
+                    "The Device is reachable through at least one verified configured route.",
+                    "The recovery result and remaining risk are reported with durable evidence.",
+                  ],
+                  constraints: [
+                    `Initial diagnosis: ${result.recommendation}`,
+                    `Owner question if human input remains necessary: ${result.ownerQuestion}`,
+                    "Do not weaken networking, VPN, firewall, credential, or Action Policy boundaries.",
+                  ],
+                  selectedInputRefs: [],
+                  source: {
+                    kind: "system-incident",
+                    reference: `route-incident:${result.fingerprint}`,
+                  },
+                });
+              },
+            },
             ...(options.agentExecution === undefined
               ? {}
               : {
@@ -1200,6 +1249,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       taskExecution = new TaskExecutionCoordinator(taskExecutionOptions);
     }
     const tasks = taskExecution ?? taskService;
+    proactiveTaskTarget.current = tasks;
     const runtimeFeatures: NonNullable<MainControlPlaneAppOptions["runtimeFeatures"]> = {
       ...projectRuntimeReleaseIdentity(options.releaseIdentity),
       taskExecution:
@@ -1571,6 +1621,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       ownerAuth,
       paths,
       tasks,
+      proactive,
       ...(taskExecution === undefined ? {} : { taskExecution }),
       get discord() {
         return discordBindingController?.runtime;

@@ -301,6 +301,20 @@ export class ApprovalService {
     });
   }
 
+  async findByRequestIdempotencyKey(idempotencyKey: string): Promise<ApprovalRequest | undefined> {
+    const normalizedKey = requireSafeText(idempotencyKey, "Approval idempotency key", 500);
+    const now = requireTime(this.#clock.now(), "Approval observation time");
+    return this.#repository.transact((state) => {
+      const receipt = state.requestReceipts.get(normalizedKey);
+      if (receipt === undefined) {
+        return undefined;
+      }
+      const request = requireRequest(state, receipt.approvalId);
+      expireRequest(state, request, now, this.#idSource);
+      return cloneRequest(request);
+    });
+  }
+
   async get(approvalId: string): Promise<ApprovalRequest> {
     const normalizedId = requireIdentifier(approvalId, "Approval ID");
     const now = requireTime(this.#clock.now(), "Approval observation time");

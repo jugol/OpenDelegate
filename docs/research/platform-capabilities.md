@@ -22,6 +22,13 @@ This report verifies the external platform behavior that OpenDelegate's planning
 - Thread events and messages inside threads require API v9 or newer; current integrations should target the current API version and handle `THREAD_CREATE`, `THREAD_UPDATE`, `THREAD_DELETE`, and `MESSAGE_CREATE`. [Discord Threads](https://docs.discord.com/developers/topics/threads)
 - The bot needs `VIEW_CHANNEL`, `READ_MESSAGE_HISTORY`, `SEND_MESSAGES`, and `SEND_MESSAGES_IN_THREADS` for normal operation, plus `ATTACH_FILES` for rich results. `MANAGE_THREADS` is needed if OpenDelegate must reliably change tags, archive, lock, or reopen owner-created posts; `MANAGE_CHANNELS` is needed only when onboarding creates or configures the Forum itself. [Discord Permissions](https://docs.discord.com/developers/topics/permissions) [Discord Threads](https://docs.discord.com/developers/topics/threads)
 - Discord's HTTP API is appropriate for creating/updating posts and messages, while the Gateway is the event stream. OpenDelegate should consume both: Gateway events for low-latency operation and periodic HTTP reconciliation after disconnects. [Discord Gateway](https://docs.discord.com/developers/events/gateway)
+- The Forum-create endpoint accepts a post name, one starter message, and applied
+  tags, and returns the new public thread with its nested starter message. It does
+  not expose a dedicated idempotency-key field, so a bot-originated Task must write
+  a deterministic Task marker, reconcile active and archived posts after an
+  uncertain response, and bind the recovered thread before retrying creation. This
+  is an OpenDelegate inference from the documented request contract. [Discord
+  Channel resource](https://docs.discord.com/developers/resources/channel)
 
 ### Archive and lock behavior
 

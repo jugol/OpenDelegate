@@ -74,7 +74,8 @@ export const frenchMessages = {
   chat: {
     unavailableMessage:
       "Le Main indique que l’évaluation de l’appareil ou la messagerie de l’agent de configuration est indisponible. Les informations visibles sur l’appareil proviennent uniquement du rapport déterministe de son environnement d’exécution.",
-    failedMessage: "L’agent de configuration n’a pas pu répondre. Aucun paramètre n’a été modifié.",
+    failedMessage:
+      "L’agent de configuration local était indisponible ou a été interrompu. OpenDelegate n’a pas relancé une opération de résultat incertain. Les modifications terminées restent durables ; vérifiez la configuration actuelle, puis réessayez.",
     discordOnboardingMessage:
       "Discord n’est pas encore connecté. Je vérifie la liaison actuelle et prépare les instructions de configuration.",
     secureStoreFailed:
@@ -453,7 +454,7 @@ export const frenchMessages = {
     eyebrow: "Inscription d’appareil",
     title: "Ajouter un appareil",
     intro:
-      "Créez un fichier d’inscription à courte durée et à usage unique, téléchargez-le une fois, puis lancez la commande Worker fournie sur le nouvel appareil.",
+      "Confiez l’installation du Worker à l’Agent déjà présent sur le nouveau Mac, appareil Windows ou Linux. Main fournit seulement un fichier d’inscription temporaire et à usage unique.",
     unavailable: "L’inscription d’appareils n’est pas configurée sur ce Main.",
     loadFailed: "Impossible de charger l’état de l’inscription des appareils.",
     deviceId: "ID de l’appareil",
@@ -476,9 +477,23 @@ export const frenchMessages = {
     fingerprint: "Empreinte Main attendue",
     endpoints: "Points de terminaison du canal Worker",
     download: "Télécharger le fichier",
-    joinCommand: "À exécuter sur le nouvel appareil",
+    joinCommand: "Commande manuelle (avancé)",
     copyCommand: "Copier la commande",
     copyDone: "Copiée",
+    recommended: "Recommandé",
+    agentAssistedTitle: "Confier l’installation à l’Agent du nouvel appareil",
+    agentAssistedDetail:
+      "Ouvrez Codex ou Claude sur le nouvel appareil. Après le téléchargement, donnez à l’Agent le chemin local du fichier, jamais son contenu, avec l’invite ci-dessous.",
+    agentPromptLabel: "Invite pour Codex ou Claude sur le nouvel appareil",
+    agentPrompt:
+      "Installe OpenDelegate Worker sur cet appareil depuis https://github.com/jugol/OpenDelegate. Suis le README et skills/opendelegate-join/SKILL.md. Rejoins Main avec le fichier d’inscription non ouvert <absolute-path-to/{filename}>. N’affiche, ne colle et ne journalise jamais son contenu. Configure le service natif de cet OS, vérifie la connexion à Main et signale quand l’appareil apparaît dans Admin Web.",
+    copyAgentPrompt: "Copier l’invite Agent",
+    afterJoin:
+      "Quand l’appareil apparaît à gauche, ouvrez son chat de configuration pour l’évaluer et définir son nom, ses rôles et ses instructions.",
+    needHelp: "Besoin d’être guidé par OpenDelegate ?",
+    helpDetail:
+      "Le chat de configuration explique le transfert sûr, la commande cible et la vérification sans exposer le fichier d’inscription.",
+    openSetupChat: "Demander au chat de configuration",
     recent: "Fichiers récents",
     none: "Aucun fichier d’inscription n’a été émis.",
     statusActive: "Actif",
@@ -486,9 +501,12 @@ export const frenchMessages = {
     statusExpired: "Expiré",
     statusRevoked: "Révoqué",
     stepsTitle: "Parcours d’ajout sécurisé",
-    stepOne: "Générez et téléchargez le fichier à usage unique sur Main.",
-    stepTwo: "Transférez-le par un moyen local sécurisé du système.",
-    stepThree: "Lancez la commande Worker fournie ; le fichier utilisé sera supprimé.",
+    stepOne:
+      "Ouvrez Codex ou Claude sur le nouvel appareil et demandez la préparation d’OpenDelegate Worker.",
+    stepTwo:
+      "Générez ici le fichier à usage unique, puis transférez-le sans l’ouvrir via une liaison authentifiée ou un transfert local sûr.",
+    stepThree:
+      "Donnez son chemin à l’Agent du nouvel appareil. Le Worker rejoint Main et supprime le fichier consommé.",
   },
   artifact: {
     eyebrow: "Sortie de tâche",

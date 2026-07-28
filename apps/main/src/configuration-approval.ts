@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   ApprovalPortError,
   type ApprovalDecisionInput,
@@ -293,8 +295,25 @@ class ConfigurationApprovalRequestBroker implements ConfigurationApprovalRequest
     const descriptor = actionDescriptor(context, input.expectedRevision, input.proposalId, changes);
     const risk = riskFor(input.authorization);
     const targetDeviceId = approvalTargetDeviceId(input.authorization);
-    const approval = await this.#service.request({
-      idempotencyKey: `configuration-approval:${input.operationId}`,
+    const idempotencyKey = configurationApprovalIdempotencyKey(
+      input.targetDeviceId,
+      input.proposalId,
+    );
+    const expectedApproval = {
+      descriptor,
+      principalId: input.principalId,
+      proposalId: input.proposalId,
+      targetDeviceId,
+    } as const;
+    const existing =
+      selectMatchingConfigurationApproval(await this.#service.list(), expectedApproval) ??
+      (await this.#service.findByRequestIdempotencyKey(idempotencyKey));
+    if (existing !== undefined) {
+      assertMatchingConfigurationApproval(existing, expectedApproval);
+      return { approvalId: existing.approvalId };
+    }
+    const request = {
+      idempotencyKey,
       requestedBy: input.principalId,
       actionCategory: categoryFor(input.authorization),
       actionType: "configuration.apply",
@@ -323,8 +342,79 @@ class ConfigurationApprovalRequestBroker implements ConfigurationApprovalRequest
         } as unknown as ActionTargetValue,
       },
       expiresAtMs: this.#clock.now() + this.#expirationMs,
-    });
+    } satisfies Parameters<ApprovalService["request"]>[0];
+    let approval: ApprovalRequest;
+    try {
+      approval = await this.#service.request(request);
+    } catch (error) {
+      if (
+        !(error instanceof ApprovalServiceError) ||
+        error.code !== "APPROVAL_IDEMPOTENCY_CONFLICT"
+      ) {
+        throw error;
+      }
+      const raced = await this.#service.findByRequestIdempotencyKey(idempotencyKey);
+      if (raced === undefined) {
+        throw error;
+      }
+      assertMatchingConfigurationApproval(raced, {
+        descriptor,
+        principalId: input.principalId,
+        proposalId: input.proposalId,
+        targetDeviceId,
+      });
+      approval = raced;
+    }
     return { approvalId: approval.approvalId };
+  }
+}
+
+function selectMatchingConfigurationApproval(
+  approvals: readonly ApprovalRequest[],
+  expected: Parameters<typeof assertMatchingConfigurationApproval>[1],
+): ApprovalRequest | undefined {
+  const matches = approvals.filter((approval) => {
+    try {
+      assertMatchingConfigurationApproval(approval, expected);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return (
+    matches.find(
+      (approval) => approval.state === "approved" && approval.executionStatus === "succeeded",
+    ) ?? matches[0]
+  );
+}
+
+function configurationApprovalIdempotencyKey(targetDeviceId: string, proposalId: string): string {
+  const identity = createHash("sha256")
+    .update(`${targetDeviceId}\u0000${proposalId}`, "utf8")
+    .digest("hex");
+  return `configuration-approval:${identity}`;
+}
+
+function assertMatchingConfigurationApproval(
+  approval: ApprovalRequest,
+  expected: {
+    readonly descriptor: ActionTargetDescriptor;
+    readonly principalId: string;
+    readonly proposalId: string;
+    readonly targetDeviceId: string | undefined;
+  },
+): void {
+  if (
+    approval.requestedBy !== expected.principalId ||
+    approval.actionType !== "configuration.apply" ||
+    approval.resource !== `configuration-proposal:${expected.proposalId}` ||
+    approval.targetDeviceId !== expected.targetDeviceId ||
+    approval.actionFingerprint !== createActionFingerprint(expected.descriptor)
+  ) {
+    throw new ApprovalServiceError(
+      "APPROVAL_IDEMPOTENCY_CONFLICT",
+      "The Configuration Approval identity already belongs to a different action.",
+    );
   }
 }
 

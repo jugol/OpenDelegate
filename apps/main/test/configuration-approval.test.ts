@@ -475,6 +475,29 @@ test("a protected Configuration proposal is previewed, approved once, applied, a
   assert.equal(Object.hasOwn(pending, "execution"), false);
   assert.equal(Object.hasOwn(pending, "actionDescriptor"), false);
 
+  await assert.rejects(
+    broker.execute({
+      operationId: "configuration:apply:artifact:approval-follow-up",
+      principalId: "owner_personal",
+      targetDeviceId: CONTEXT.deviceId,
+      request: {
+        tool: "apply",
+        proposalId: proposed.result.proposal.id,
+        expectedRevision: 0,
+      },
+    }),
+    (error: unknown) => {
+      assert.equal(error instanceof ConfigurationAgentToolBrokerError, true);
+      assert.equal(
+        (error as ConfigurationAgentToolBrokerError).code,
+        "CONFIGURATION_TOOL_APPROVAL_REQUIRED",
+      );
+      assert.equal((error as ConfigurationAgentToolBrokerError).approvalId, approvalId);
+      return true;
+    },
+  );
+  assert.equal((await approvals.controlPlane.list()).length, 1);
+
   const decision = {
     approvalId,
     principalId: "owner_personal",

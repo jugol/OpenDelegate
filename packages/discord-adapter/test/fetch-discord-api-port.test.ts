@@ -217,6 +217,60 @@ test("Components v2 writes use a deterministic enforced nonce no longer than 25 
   assert.equal("enforce_nonce" in editBody, false);
 });
 
+test("the HTTP port creates a Forum post with one starter message and workflow tag", async () => {
+  const requests: CapturedRequest[] = [];
+  const fetch = routeFetch(requests, {
+    [`POST /api/v10/channels/${FORUM_ID}/threads`]: json({
+      id: THREAD_ID,
+      guild_id: GUILD_ID,
+      parent_id: FORUM_ID,
+      type: 11,
+      name: "OD-route Recover the Worker route",
+      owner_id: BOT_USER_ID,
+      applied_tags: ["100000000000000020"],
+      thread_metadata: { archived: false, locked: false },
+      message: {
+        id: THREAD_ID,
+        guild_id: GUILD_ID,
+        channel_id: THREAD_ID,
+        author: { id: BOT_USER_ID, bot: true },
+        content: "OpenDelegate Task task-route-001",
+        attachments: [],
+        timestamp: "2026-07-24T00:00:00.000Z",
+      },
+    }),
+  });
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("forum-create-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:forum-create",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const result = await api.createForumPost({
+    forumChannelId: FORUM_ID,
+    requestKey: "outbound-task:task-route-001",
+    name: "OD-route Recover the Worker route",
+    content: "OpenDelegate Task task-route-001",
+    appliedTagIds: ["100000000000000020"],
+  });
+
+  assert.equal(result.thread.id, THREAD_ID);
+  assert.equal(result.starterMessage.id, THREAD_ID);
+  assert.deepEqual(requests[0]?.body, {
+    name: "OD-route Recover the Worker route",
+    message: {
+      content: "OpenDelegate Task task-route-001",
+      allowed_mentions: { parse: [] },
+    },
+    applied_tags: ["100000000000000020"],
+  });
+});
+
 test("interaction deferral keeps the token only in the injected vault and persists an opaque reference", async () => {
   const rawInteractionToken = "raw-interaction-token-must-not-be-returned";
   const requests: CapturedRequest[] = [];

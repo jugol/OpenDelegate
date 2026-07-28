@@ -823,6 +823,28 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
       discord: { status: "unavailable", code: "TEST_DISCORD_UNAVAILABLE" },
     },
     configurationAgent: {
+      async listMessages(input) {
+        assert.deepEqual(input, {
+          deviceId: MAIN_DEVICE.deviceId,
+          principalId: owner.ownerId,
+        });
+        return {
+          messages: [
+            {
+              messageId: "configuration_owner_001",
+              role: "owner",
+              content: "Inspect this Device and recommend a safe setup.",
+              occurredAt: "2026-07-24T00:00:00.000Z",
+            },
+            {
+              messageId: "configuration_message_001",
+              role: "agent",
+              content: "I prepared a reviewable Device-scoped proposal.",
+              occurredAt: "2026-07-24T00:00:01.000Z",
+            },
+          ],
+        };
+      },
       async sendMessage(input) {
         calls.push(input);
         return {
@@ -863,6 +885,31 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
       },
     ]);
 
+    const history = await app.inject({
+      method: "GET",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.equal(history.statusCode, 200);
+    assert.deepEqual(
+      history
+        .json()
+        .messages.map((message: { readonly role: string; readonly content: string }) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      [
+        {
+          role: "owner",
+          content: "Inspect this Device and recommend a safe setup.",
+        },
+        {
+          role: "agent",
+          content: "I prepared a reviewable Device-scoped proposal.",
+        },
+      ],
+    );
+
     const unknownDevice = await app.inject({
       method: "POST",
       url: "/api/v1/devices/device_unknown/configuration/messages",
@@ -891,6 +938,70 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
     assert.equal(secretShapedField.statusCode, 400);
     assert.doesNotMatch(secretShapedField.body, /must-not-cross|secretValue/i);
     assert.equal(calls.length, 1);
+  } finally {
+    await app.close();
+  }
+});
+
+test("durable Configuration Chat history remains readable when native messaging is unavailable", async () => {
+  const { ownerAuth } = createAuthFixture();
+  await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+    devices: [MAIN_DEVICE],
+    runtimeFeatures: {
+      declaredReleaseChannel: "development",
+      releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
+      taskExecution: { status: "unavailable", code: "TEST_TASK_UNAVAILABLE" },
+      configurationAgent: { status: "unavailable", code: "TEST_PROVIDER_UNAVAILABLE" },
+      discord: { status: "unavailable", code: "TEST_DISCORD_UNAVAILABLE" },
+    },
+    configurationAgent: {
+      async listMessages() {
+        return {
+          messages: [
+            {
+              messageId: "configuration_agent_degraded_001",
+              role: "agent",
+              content: "This completed exchange remains durable.",
+              occurredAt: "2026-07-24T00:00:01.000Z",
+            },
+          ],
+        };
+      },
+      async sendMessage() {
+        throw new Error("Native messaging is unavailable.");
+      },
+    },
+  });
+
+  try {
+    const history = await app.inject({
+      method: "GET",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: { host: ADMIN_HOST, cookie: authenticated.cookie },
+    });
+    assert.equal(history.statusCode, 200);
+    assert.equal(history.json().messages[0]?.content, "This completed exchange remains durable.");
+
+    const send = await app.inject({
+      method: "POST",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "configuration-message-degraded",
+      },
+      payload: { message: "Continue setup." },
+    });
+    assert.equal(send.statusCode, 503);
+    assert.equal(send.json().code, "CONFIGURATION_AGENT_UNAVAILABLE");
   } finally {
     await app.close();
   }

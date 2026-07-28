@@ -75,7 +75,7 @@ export const spanishMessages = {
     unavailableMessage:
       "El Main indica que la evaluación del dispositivo o la mensajería del agente de configuración no están disponibles. Los datos visibles del dispositivo proceden únicamente del informe determinista del entorno de ejecución del Main.",
     failedMessage:
-      "El agente de configuración no pudo responder. No se cambió ninguna configuración.",
+      "El agente de configuración local no estaba disponible o fue interrumpido. OpenDelegate no repitió una operación de resultado incierto. Los cambios completados se conservan; revisa la configuración actual y vuelve a intentarlo.",
     discordOnboardingMessage:
       "Discord todavía no está conectado. Estoy comprobando la vinculación actual y preparando la guía de configuración.",
     secureStoreFailed:
@@ -449,9 +449,9 @@ export const spanishMessages = {
   },
   join: {
     eyebrow: "Inscripción de dispositivo",
-    title: "Unir un dispositivo",
+    title: "Añadir un dispositivo",
     intro:
-      "Crea un archivo de inscripción de corta duración y un solo uso, descárgalo una vez y ejecuta el comando Worker incluido en el dispositivo nuevo.",
+      "Deja que el Agent del nuevo Mac, dispositivo Windows o Linux instale su Worker. Main solo proporciona un archivo de inscripción temporal y de un solo uso.",
     unavailable: "La inscripción de dispositivos no está configurada en este Main.",
     loadFailed: "No se pudo cargar el estado de inscripción de dispositivos.",
     deviceId: "ID del dispositivo",
@@ -472,9 +472,23 @@ export const spanishMessages = {
     fingerprint: "Huella de Main esperada",
     endpoints: "Endpoints del canal Worker",
     download: "Descargar archivo",
-    joinCommand: "Ejecutar en el dispositivo nuevo",
+    joinCommand: "Comando manual (avanzado)",
     copyCommand: "Copiar comando",
     copyDone: "Copiado",
+    recommended: "Recomendado",
+    agentAssistedTitle: "Deja que el Agent del dispositivo nuevo lo instale",
+    agentAssistedDetail:
+      "Abre Codex o Claude en el dispositivo nuevo. Tras descargar el archivo, entrega al Agent su ruta local —no su contenido— junto con el texto siguiente.",
+    agentPromptLabel: "Texto para Codex o Claude en el dispositivo nuevo",
+    agentPrompt:
+      "Instala OpenDelegate Worker en este dispositivo desde https://github.com/jugol/OpenDelegate. Sigue el README y skills/opendelegate-join/SKILL.md. Únelo usando el archivo de inscripción sin abrir <absolute-path-to/{filename}>. Nunca muestres, pegues ni registres su contenido. Configura el servicio nativo de este sistema operativo, verifica la conexión con Main e informa cuando el dispositivo aparezca en Admin Web.",
+    copyAgentPrompt: "Copiar texto para el Agent",
+    afterJoin:
+      "Cuando aparezca a la izquierda, abre su chat de configuración para evaluarlo y definir nombre, roles e instrucciones.",
+    needHelp: "¿Quieres que OpenDelegate te guíe?",
+    helpDetail:
+      "El chat de configuración explica la transferencia segura, el comando del dispositivo y la verificación sin exponer el archivo.",
+    openSetupChat: "Preguntar al chat de configuración",
     recent: "Archivos recientes",
     none: "No se ha emitido ningún archivo de inscripción.",
     statusActive: "Activo",
@@ -482,9 +496,12 @@ export const spanishMessages = {
     statusExpired: "Caducado",
     statusRevoked: "Revocado",
     stepsTitle: "Flujo de unión seguro",
-    stepOne: "Genera y descarga el archivo de un solo uso en Main.",
-    stepTwo: "Muévelo mediante una transferencia local segura del sistema.",
-    stepThree: "Ejecuta el comando Worker incluido; el archivo usado se elimina.",
+    stepOne:
+      "Abre Codex o Claude en el dispositivo nuevo y pídele que prepare OpenDelegate Worker.",
+    stepTwo:
+      "Genera aquí el archivo de un solo uso y muévelo sin abrir mediante una conexión autenticada o una transferencia local segura.",
+    stepThree:
+      "Da la ruta al Agent del dispositivo nuevo. El Worker se une a Main y elimina el archivo usado.",
   },
   artifact: {
     eyebrow: "Resultado de tarea",

@@ -48,6 +48,8 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
 构建或签名以及 Linux 部署；确定性调度器会选择实际 Device 和 Route。
 
 - 一个 Discord Forum 帖子对应一个持久的 Task 和一个上下文边界。
+- 可选的确定性监控器可将故障或改进创建为同一种普通的 Forum 支持 Task。每个类别都可设为禁用、提交审核或
+  自动执行，但不会绕过 Policy、审批、预算或审计。
 - 发出指令的手机或电脑可以断开连接；只需固定 Main 和当前工作所需的 Device 保持可用。
 - 确定性软件负责身份、Policy、健康状态、路由、lease、重试、持久化和状态转换。Agent负责语义判断和分配给它们的工作。
 - Worker 只连接到 Main。它们不需要 NxN SSH 网状网络，也不需要直接访问数据库。

@@ -244,6 +244,21 @@ export interface DiscordApiPort {
     readonly hasMore: boolean;
     readonly nextAfter?: string;
   }>;
+  /**
+   * Creates one bot-authored starter post in a configured Forum. Callers must
+   * reconcile by their durable Task binding before retrying because Discord's
+   * Forum-create endpoint has no first-class idempotency key.
+   */
+  createForumPost(input: {
+    readonly forumChannelId: string;
+    readonly requestKey: string;
+    readonly name: string;
+    readonly content: string;
+    readonly appliedTagIds: readonly string[];
+  }): Promise<{
+    readonly thread: DiscordThread;
+    readonly starterMessage: DiscordMessage;
+  }>;
   updateThreadTags(threadId: string, appliedTagIds: readonly string[]): Promise<void>;
   /**
    * A production implementation uses `requestKey` as a Discord nonce/reconciliation

@@ -41,6 +41,8 @@ approved product specification.
 18. [`0021-supported-release-promotion-and-native-authenticity.md`](0021-supported-release-promotion-and-native-authenticity.md)
 19. [`0022-live-discord-binding-reconfiguration.md`](0022-live-discord-binding-reconfiguration.md)
 20. [`0023-task-scoped-owner-handoff.md`](0023-task-scoped-owner-handoff.md)
+21. [`0024-configuration-chat-history-and-approval-correlation.md`](0024-configuration-chat-history-and-approval-correlation.md)
+22. [`0025-proactive-task-and-discord-forum-origin.md`](0025-proactive-task-and-discord-forum-origin.md)
 
 ## Proposed ADRs
 

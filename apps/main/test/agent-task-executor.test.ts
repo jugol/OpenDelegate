@@ -134,7 +134,7 @@ test("Main Agent must ask exactly one targeted owner question", async () => {
   });
 });
 
-test("Main Agent cannot delegate routine Device placement back to the owner", async () => {
+test("Main Agent result parsing does not guess intent from Device words", async () => {
   const executor = new AgentBackedTaskExecutor({
     adapter: new FakeAgentAdapter("placement-question"),
     sessionRepository: new EventStoreMainNativeSessionRepository(
@@ -152,8 +152,9 @@ test("Main Agent cannot delegate routine Device placement back to the owner", as
     limits,
   });
 
-  await assert.rejects(executor.execute(request(1)), {
-    code: "COORDINATOR_RESULT_INVALID",
+  assert.deepEqual(await executor.execute(request(1)), {
+    state: "waiting_user",
+    publicMessage: "Would you like this built by the Mac or Windows worker?",
   });
 });
 
@@ -335,8 +336,9 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   );
   assert.match(
     adapter.starts[0]?.prompt ?? "",
-    /Do not ask the owner to choose a Device, OS, route, Agent provider, or multi-Device split/u,
+    /Treat Device, OS, route, Agent provider, and multi-Device selection as internal orchestration/u,
   );
+  assert.match(adapter.starts[0]?.prompt ?? "", /privacy or data locality.*physical/isu);
   assert.match(
     adapter.starts[0]?.prompt ?? "",
     /login, MFA, CAPTCHA, legal confirmation, or OS permission/u,

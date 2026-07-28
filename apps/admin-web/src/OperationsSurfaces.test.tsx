@@ -138,7 +138,8 @@ describe("owner operations surfaces", () => {
 
     render(<JoinSurface api={api} />);
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Join a device" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Add a Device" })).toBeTruthy();
+    expect(screen.getByText("Let the new Device’s Agent install it")).toBeTruthy();
     await user.type(await screen.findByLabelText("Device ID"), "device_worker");
     await user.click(await screen.findByRole("button", { name: "Generate grant" }));
 
@@ -151,6 +152,9 @@ describe("owner operations surfaces", () => {
     expect(await screen.findByRole("heading", { name: "Grant ready to download" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Download grant file" })).toBeTruthy();
     expect(screen.getByText(/opendelegate worker join --grant-file/u)).toBeTruthy();
+    expect(screen.getByText(/github\.com\/jugol\/OpenDelegate/u)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy Agent prompt" })).toBeTruthy();
+    expect(screen.getByText(/appears in the left list/iu)).toBeTruthy();
     expect(document.body.textContent).not.toContain(issued.document.token);
     expect(screen.getByText(/downloaded file is a credential/iu)).toBeTruthy();
   });

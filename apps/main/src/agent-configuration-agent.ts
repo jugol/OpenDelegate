@@ -25,7 +25,11 @@ import {
   type ConfigurationToolReceipt,
   type ConfigurationToolRequest,
 } from "@opendelegate/configuration";
-import type { ConfigurationAgentSuggestedActionV1 } from "@opendelegate/protocol";
+import type {
+  ConfigurationAgentConversationMessageV1,
+  ConfigurationAgentConversationResponseV1,
+  ConfigurationAgentSuggestedActionV1,
+} from "@opendelegate/protocol";
 import type { ManagedSecretStore } from "@opendelegate/secrets";
 
 import type {
@@ -46,6 +50,20 @@ interface ConfigurationToolAttemptEventPayload {
   readonly requestDigest: string;
   readonly toolOperationId: string;
   readonly tool: ConfigurationToolRequest["tool"];
+}
+
+interface ConfigurationConversationExchangeEventPayload {
+  readonly schemaVersion: 1;
+  readonly operationKey: string;
+  readonly requestDigest: string;
+  readonly ownerMessage: ConfigurationAgentConversationMessageV1;
+  readonly response: ConfigurationAgentMessageResponse;
+}
+
+interface StoredConfigurationConversationEvent {
+  readonly streamVersion: number;
+  readonly type: string;
+  readonly payload: unknown;
 }
 
 export interface AgentBackedConfigurationAgentClock {
@@ -355,6 +373,9 @@ const DEFAULT_MAXIMUM_PROMPT_BYTES = 64 * 1024;
 const DEFAULT_MAXIMUM_TOOL_TURNS = 8;
 const CONFIGURATION_RESPONSE_EVENT = "configuration-agent.response-recorded";
 const CONFIGURATION_TOOL_ATTEMPT_EVENT = "configuration-agent.tool-attempted";
+const CONFIGURATION_CONVERSATION_EXCHANGE_EVENT =
+  "configuration-agent.conversation-exchange-recorded";
+const MAXIMUM_CONFIGURATION_CONVERSATION_EXCHANGES = 1_000;
 const DATABASE_URI_MATERIAL =
   /\b(?:amqps?|mariadb|mongodb(?:\+srv)?|mysql|postgres(?:ql)?|rediss?):\/\/[^\s<>"']+/iu;
 const USERINFO_URI_MATERIAL = /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s/:@]+:[^\s/@]+@[^\s<>"']+/iu;
@@ -455,6 +476,14 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       if (stored !== undefined) {
         return stored;
       }
+      const storedExchange = await this.#loadStoredConversationExchange(
+        request.deviceId,
+        operationKey,
+        requestDigest,
+      );
+      if (storedExchange !== undefined) {
+        return storedExchange;
+      }
       return this.#runAndRecord(request, operationKey, requestDigest);
     });
     this.#activeRequests.set(operationKey, { requestDigest, result });
@@ -465,6 +494,39 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     };
     void result.then(cleanup, cleanup);
     return result;
+  }
+
+  async listMessages(input: {
+    readonly deviceId: string;
+    readonly principalId: string;
+  }): Promise<ConfigurationAgentConversationResponseV1> {
+    assertIdentifier(input.deviceId, "Target Device ID", 160);
+    assertIdentifier(input.principalId, "Owner principal ID", 160);
+    let events: readonly StoredConfigurationConversationEvent[];
+    try {
+      events = await this.#eventStore.readStream(
+        conversationStreamId(input.deviceId, this.#adapter.adapterId),
+      );
+    } catch {
+      throw unavailable("The Configuration Chat history could not be read.");
+    }
+    const exchanges = events
+      .map((event) => validateConversationExchangeEvent(event))
+      .slice(-MAXIMUM_CONFIGURATION_CONVERSATION_EXCHANGES);
+    return {
+      messages: exchanges.flatMap((exchange) => [
+        structuredClone(exchange.ownerMessage),
+        {
+          messageId: exchange.response.messageId,
+          role: "agent" as const,
+          content: exchange.response.content,
+          ...(exchange.response.suggestedActions === undefined
+            ? {}
+            : { suggestedActions: [...exchange.response.suggestedActions] }),
+          occurredAt: exchange.response.occurredAt,
+        },
+      ]),
+    };
   }
 
   #enqueue<TResult>(deviceId: string, operation: () => Promise<TResult>): Promise<TResult> {
@@ -539,10 +601,18 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
           ) {
             throw error;
           }
+          const conversation = await this.listMessages({
+            deviceId: input.deviceId,
+            principalId: input.principalId,
+          });
           turn = await this.#runTurn({
             baseRunId: `${baseRunId}_continuation`,
             turnIndex,
-            prompt: buildConfigurationContinuationPrompt(prompt, this.#maximumPromptBytes),
+            prompt: buildConfigurationContinuationPrompt(
+              prompt,
+              conversation.messages,
+              this.#maximumPromptBytes,
+            ),
             session: undefined,
             continuationOf: session,
             continuationReason:
@@ -570,6 +640,13 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
               : { suggestedActions: [...parsed.suggestedActions] }),
             occurredAt,
           } satisfies ConfigurationAgentMessageResponse;
+          await this.#recordConversationExchange({
+            deviceId: input.deviceId,
+            operationKey,
+            ownerMessage: input.message,
+            requestDigest,
+            response,
+          });
           return await this.#recordResponse(operationKey, requestDigest, response);
         }
 
@@ -772,8 +849,90 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       if (stored !== undefined) {
         return stored;
       }
-      throw unavailable("The Configuration Agent response could not be stored durably.");
+      // The Device-scoped conversation stream is the canonical durable copy.
+      // This per-operation stream is only a fast idempotency lookup.
+      return structuredClone(response);
     }
+  }
+
+  async #recordConversationExchange(input: {
+    readonly deviceId: string;
+    readonly operationKey: string;
+    readonly ownerMessage: string;
+    readonly requestDigest: string;
+    readonly response: ConfigurationAgentMessageResponse;
+  }): Promise<void> {
+    const streamId = conversationStreamId(input.deviceId, this.#adapter.adapterId);
+    const ownerMessage: ConfigurationAgentConversationMessageV1 = {
+      messageId: `owner_${digest(`${input.operationKey}\u0000owner`)
+        .slice("sha256:".length)
+        .slice(0, 64)}`,
+      role: "owner",
+      content: input.ownerMessage,
+      occurredAt: input.response.occurredAt,
+    };
+    const payload = {
+      schemaVersion: 1,
+      operationKey: input.operationKey,
+      requestDigest: input.requestDigest,
+      ownerMessage,
+      response: input.response,
+    } satisfies ConfigurationConversationExchangeEventPayload;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const events = await this.#eventStore.readStream(streamId);
+      const existing = findConversationExchange(events, input.operationKey);
+      if (existing !== undefined) {
+        if (
+          existing.requestDigest !== input.requestDigest ||
+          JSON.stringify(existing.response) !== JSON.stringify(input.response)
+        ) {
+          throw idempotencyConflict();
+        }
+        return;
+      }
+      try {
+        await this.#eventStore.append({
+          streamId,
+          expectedVersion: events.length,
+          events: [
+            {
+              eventId: `event_${digest(`${streamId}\u0000${input.operationKey}`)
+                .slice("sha256:".length)
+                .slice(0, 64)}`,
+              type: CONFIGURATION_CONVERSATION_EXCHANGE_EVENT,
+              payload,
+            },
+          ],
+        });
+        return;
+      } catch {
+        // Re-read to distinguish a concurrent idempotent append from storage failure.
+      }
+    }
+    throw unavailable("The Configuration Chat exchange could not be stored durably.");
+  }
+
+  async #loadStoredConversationExchange(
+    deviceId: string,
+    operationKey: string,
+    requestDigest: string,
+  ): Promise<ConfigurationAgentMessageResponse | undefined> {
+    let events: readonly StoredConfigurationConversationEvent[];
+    try {
+      events = await this.#eventStore.readStream(
+        conversationStreamId(deviceId, this.#adapter.adapterId),
+      );
+    } catch {
+      throw unavailable("The Configuration Chat history could not be read.");
+    }
+    const existing = findConversationExchange(events, operationKey);
+    if (existing === undefined) {
+      return undefined;
+    }
+    if (existing.requestDigest !== requestDigest) {
+      throw idempotencyConflict();
+    }
+    return structuredClone(existing.response);
   }
 
   async #assertNoInterruptedToolAttempt(
@@ -919,10 +1078,13 @@ function buildConfigurationPrompt(
     "Inspect before changing configuration. Use the returned revision in every later typed request. Never invent proposal, change-set, revision, or receipt identifiers.",
     "The Main-scoped boolean admin.open-on-login controls whether the owner-session helper opens the canonical Admin origin once per login session. It is discoverable through inspect and changeable through the normal propose/apply flow.",
     "After applying or rolling back admin.open-on-login, explain that the installed helper still needs the separately elevated service reconfigure flow. Configuration Chat never elevates or restarts native services.",
+    "autonomy.profile sets the broad proactive default: reactive, assisted, or autonomous. Each proactive category can independently inherit that profile or be disabled, proposed, or executed through autonomy.incident-recovery, autonomy.maintenance, autonomy.capability-expansion, autonomy.cleanup, autonomy.cost-incurring-work, and autonomy.general-improvement.",
+    "Explain proactive authority in outcome terms. A deterministic monitor may originate an ordinary auditable Task and Discord Forum post without continuously running an LLM. proposed creates a manual review Task; executed creates an auto Task, but Action Policy, approvals, budgets, resource locks, and Secret boundaries still apply. Never imply that autonomous mode bypasses them.",
     'The Main-scoped discord.binding controls the live Discord Forum connection. Its value is null when disabled, or exactly {"schemaVersion":1,"enabled":true,"botTokenAlias":"opaque managed-store alias","forum":{"applicationId":"17-20 digit ID","botUserId":"17-20 digit ID","guildId":"17-20 digit ID","forumBindings":[{"channelId":"17-20 digit ID","workflowTagIds":{"done":"ID","failed":"ID","intake":"ID","review":"ID","running":"ID","waiting":"ID"}}],"ownerUserIds":["ID"],"allowedRoleIds":["ID"]}}.',
     "Disable Discord by setting discord.binding to explicit null. Never unset this key; null is the durable disabled-state marker.",
     "Adding another Forum means preserving the existing object and adding a distinct forumBindings entry. Replacing the bot, guild, or Forum means proposing the complete replacement object. Disabling means setting discord.binding to null. Durable Tasks and native Agent sessions remain in Main; Discord thread identities are not silently migrated.",
     "A secure Discord token intake returns secret://main/ALIAS. Store only ALIAS as botTokenAlias after removing the exact secret://main/ prefix. Never put the token or the secret:// reference itself in discord.binding. Applying, replacing, or disabling Discord requires the normal owner Approval; the runtime validates the credential and installation and restores the previous binding if activation fails.",
+    "Approving a Configuration Approval executes that exact proposal immediately; the owner does not need to return to chat to trigger apply. If the owner says an Approval was completed, inspect current durable configuration first. Never submit apply again merely because the owner said approved. If inspection does not show the requested value, ask the owner to inspect that Approval's execution status and error instead of creating a replacement Approval blindly.",
     "Guide Discord setup in dependency order: inspect the current binding; guide the owner through creating or selecting an Application and bot in the Discord Developer Portal; confirm the server has Community enabled and a Forum channel; confirm the required Gateway intents and least-privilege bot permissions; collect only missing non-secret Application, bot user, Guild, Forum, workflow tag, owner, and optional role IDs; direct token entry to the secure token form; then propose the complete discord.binding for Approval. Discord-side browser actions remain owner actions, so never claim you completed them.",
     "Assume the owner may be creating a Discord bot for the first time. Use reassuring plain language, answer in the owner's language when it is evident, and define Application, bot, server or Guild, Forum, tag, and ID when each term first appears.",
     "Before giving setup steps, explain the outcome: one Discord Forum post becomes one OpenDelegate Task, replies continue the same Task, and the Forum list plus workflow tags form a task dashboard. Inspect first, then summarize what is already connected and what is still missing without leading with raw configuration fields.",
@@ -951,13 +1113,46 @@ function buildConfigurationPrompt(
   return prompt;
 }
 
-function buildConfigurationContinuationPrompt(prompt: string, maximumBytes: number): string {
+function buildConfigurationContinuationPrompt(
+  prompt: string,
+  messages: readonly ConfigurationAgentConversationMessageV1[],
+  maximumBytes: number,
+): string {
+  const prefix = [
+    "Native session recovery notice: the prior provider-native Configuration Agent session is unavailable.",
+    "Briefly tell the owner that you recovered in a new native session. Completed visible exchanges are durable and supplied below; an interrupted in-flight turn or provider-only hidden context may still be unavailable.",
+    "Use the durable exchange excerpt as conversation context, but re-inspect durable configuration before proposing a change. Reconfirm any required value or choice that is absent from the excerpt.",
+  ];
+  const suffix = ["", "Complete current request:", prompt];
+  const fixedBytes = Buffer.byteLength(
+    [...prefix, "Durable completed exchanges:", ...suffix].join("\n"),
+    "utf8",
+  );
+  let remainingBytes = maximumBytes - fixedBytes;
+  const selected: string[] = [];
+  let omitted = 0;
+  for (const message of [...messages].reverse()) {
+    const line = JSON.stringify({ role: message.role, content: message.content });
+    const bytes = Buffer.byteLength(`${line}\n`, "utf8");
+    if (bytes > remainingBytes) {
+      omitted += 1;
+      continue;
+    }
+    selected.unshift(line);
+    remainingBytes -= bytes;
+  }
+  const history =
+    selected.length === 0
+      ? [`No completed exchange fits the continuation budget; ${String(omitted)} omitted.`]
+      : [
+          ...selected,
+          ...(omitted === 0 ? [] : [`${String(omitted)} older message(s) omitted by budget.`]),
+        ];
   const continuationPrompt = [
-    "Native session recovery notice: the prior Configuration Agent conversation is unavailable.",
-    "Briefly tell the owner that you recovered in a new session before giving guidance. Do not claim to remember prior chat-only details, confirmations, or choices.",
-    "Re-inspect durable configuration before proposing a change. Reconfirm with the owner any required value or choice that exists only in the unavailable conversation.",
-    "",
-    prompt,
+    ...prefix,
+    "Durable completed exchanges:",
+    ...history,
+    ...suffix,
   ].join("\n");
   if (Buffer.byteLength(continuationPrompt, "utf8") > maximumBytes) {
     throw unavailable("The Configuration Agent continuation exceeds its prompt budget.");
@@ -1301,6 +1496,66 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
   return structuredClone(value) as unknown as ConfigurationResponseEventPayload;
 }
 
+function validateConversationExchangeEvent(
+  event: StoredConfigurationConversationEvent,
+): ConfigurationConversationExchangeEventPayload {
+  if (
+    !Number.isSafeInteger(event.streamVersion) ||
+    event.streamVersion < 1 ||
+    event.type !== CONFIGURATION_CONVERSATION_EXCHANGE_EVENT ||
+    !isRecord(event.payload) ||
+    !hasExactKeys(event.payload, [
+      "schemaVersion",
+      "operationKey",
+      "requestDigest",
+      "ownerMessage",
+      "response",
+    ]) ||
+    event.payload["schemaVersion"] !== 1 ||
+    typeof event.payload["operationKey"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.payload["operationKey"]) ||
+    typeof event.payload["requestDigest"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.payload["requestDigest"]) ||
+    !isRecord(event.payload["ownerMessage"]) ||
+    !hasExactKeys(event.payload["ownerMessage"], ["messageId", "role", "content", "occurredAt"])
+  ) {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  const ownerMessage = event.payload["ownerMessage"];
+  assertIdentifier(ownerMessage["messageId"], "Configuration owner message ID", 160);
+  if (ownerMessage["role"] !== "owner") {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  assertIdentifier(ownerMessage["content"], "Configuration owner message", 8_192);
+  if (
+    typeof ownerMessage["occurredAt"] !== "string" ||
+    !isRfc3339Instant(ownerMessage["occurredAt"])
+  ) {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  const response = validateResponseEventPayload({
+    schemaVersion: 1,
+    requestDigest: event.payload["requestDigest"],
+    response: event.payload["response"],
+  }).response;
+  return {
+    schemaVersion: 1,
+    operationKey: event.payload["operationKey"],
+    requestDigest: event.payload["requestDigest"],
+    ownerMessage: structuredClone(ownerMessage) as ConfigurationAgentConversationMessageV1,
+    response,
+  };
+}
+
+function findConversationExchange(
+  events: readonly StoredConfigurationConversationEvent[],
+  operationKey: string,
+): ConfigurationConversationExchangeEventPayload | undefined {
+  return events
+    .map((event) => validateConversationExchangeEvent(event))
+    .find((exchange) => exchange.operationKey === operationKey);
+}
+
 function validateToolAttemptEventPayload(value: unknown): ConfigurationToolAttemptEventPayload {
   if (
     !isRecord(value) ||
@@ -1608,6 +1863,12 @@ function isUuid(value: string): boolean {
 
 function configurationSessionKey(targetDeviceId: string, adapterId: string): string {
   return `configuration:${targetDeviceId}:${adapterId}`;
+}
+
+function conversationStreamId(targetDeviceId: string, adapterId: string): string {
+  return `configuration-conversation:${digest(`${targetDeviceId}\u0000${adapterId}`).slice(
+    "sha256:".length,
+  )}`;
 }
 
 function configurationTaskId(targetDeviceId: string): string {

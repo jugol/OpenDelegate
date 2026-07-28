@@ -72,7 +72,8 @@ export const japaneseMessages = {
   chat: {
     unavailableMessage:
       "Main から、デバイス評価または設定エージェントのメッセージ機能を利用できないと報告されています。表示されるデバイス情報は、Main の決定論的なランタイムレポートだけを基にしています。",
-    failedMessage: "設定エージェントが応答できませんでした。設定は変更されていません。",
+    failedMessage:
+      "ローカル設定エージェントが利用できないか、応答中に中断されました。OpenDelegate は結果が不明な設定操作を自動再実行していません。完了済みの変更は保持されるため、現在の設定を確認してから再度依頼してください。",
     discordOnboardingMessage:
       "Discord はまだ接続されていません。現在のバインディングを確認し、セットアップ手順を準備しています。",
     secureStoreFailed: "認証情報を安全に保存できませんでした。設定チャットには送信されていません。",
@@ -440,9 +441,9 @@ export const japaneseMessages = {
   },
   join: {
     eyebrow: "デバイス登録",
-    title: "デバイスを参加させる",
+    title: "デバイスを追加",
     intro:
-      "有効期間の短い一回限りの登録ファイルを作成して一度ダウンロードし、新しいデバイスで同梱の Worker 参加コマンドを実行します。",
+      "新しい Mac、Windows、Linux デバイスにある Agent に Worker のインストールを任せます。Main は短期間有効な一回限りの登録ファイルだけを提供します。",
     unavailable: "この Main にはデバイス登録が設定されていません。",
     loadFailed: "デバイス登録の状態を読み込めませんでした。",
     deviceId: "デバイス ID",
@@ -462,9 +463,23 @@ export const japaneseMessages = {
     fingerprint: "想定される Main フィンガープリント",
     endpoints: "Worker チャネルのエンドポイント",
     download: "登録ファイルをダウンロード",
-    joinCommand: "新しいデバイスで実行",
+    joinCommand: "手動コマンド（上級者向け）",
     copyCommand: "コマンドをコピー",
     copyDone: "コピーしました",
+    recommended: "推奨",
+    agentAssistedTitle: "新しいデバイスの Agent にインストールを任せる",
+    agentAssistedDetail:
+      "新しいデバイスで Codex または Claude を開きます。登録ファイルの内容ではなく、ローカルパスと下のプロンプトを渡してください。",
+    agentPromptLabel: "新しいデバイスの Codex または Claude に渡すプロンプト",
+    agentPrompt:
+      "https://github.com/jugol/OpenDelegate からこのデバイスに OpenDelegate Worker をインストールしてください。README と skills/opendelegate-join/SKILL.md に従い、未開封の登録ファイル <absolute-path-to/{filename}> で参加してください。登録ファイルの内容を表示、貼り付け、ログ記録しないでください。この OS のネイティブサービスを設定し、Main への接続を確認し、Admin Web に表示されたら報告してください。",
+    copyAgentPrompt: "Agent プロンプトをコピー",
+    afterJoin:
+      "左の一覧に表示されたら、そのデバイスの設定チャットで評価、名前、ロール、指示を設定します。",
+    needHelp: "OpenDelegate の案内が必要ですか？",
+    helpDetail:
+      "設定チャットは登録ファイルを公開せず、安全な転送、対象デバイスのコマンド、登録確認を案内します。",
+    openSetupChat: "設定チャットに聞く",
     recent: "最近の登録ファイル",
     none: "発行済みの登録ファイルはありません。",
     statusActive: "有効",
@@ -472,9 +487,12 @@ export const japaneseMessages = {
     statusExpired: "期限切れ",
     statusRevoked: "取り消し済み",
     stepsTitle: "安全な参加フロー",
-    stepOne: "Main で一回限りの登録ファイルを生成してダウンロードします。",
-    stepTwo: "OS の安全なローカル受け渡しでファイルを移動します。",
-    stepThree: "同梱の Worker 参加コマンドを実行すると、使用済みファイルが削除されます。",
+    stepOne:
+      "新しいデバイスで Codex または Claude を開き、OpenDelegate Worker の準備を依頼します。",
+    stepTwo:
+      "ここで一回限りの登録ファイルを生成し、認証済み接続か安全なローカル受け渡しで未開封のまま移動します。",
+    stepThree:
+      "新しいデバイスの Agent にファイルパスを渡します。Worker が Main に参加し、使用済みファイルを削除します。",
   },
   artifact: {
     eyebrow: "タスク出力",

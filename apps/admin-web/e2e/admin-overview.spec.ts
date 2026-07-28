@@ -533,8 +533,8 @@ test("authenticated owner can enroll a Device, inspect Artifacts, and diagnose M
   await installApi(page, { signedIn: true });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Join a device" }).click();
-  await expect(page.getByRole("heading", { name: "Join a device" })).toBeVisible();
+  await page.getByRole("button", { name: "Add Device" }).click();
+  await expect(page.getByRole("heading", { name: "Add a Device" })).toBeVisible();
   await page.getByLabel("Device ID").fill("device_browser_worker");
   await page.getByRole("button", { name: "Generate grant" }).click();
   await expect(page.getByRole("heading", { name: "Grant ready to download" })).toBeVisible();
