@@ -89,6 +89,15 @@ if (provider === "codex-app-server") {
           cwd: process.cwd(),
         },
       });
+      if (
+        message.method === "thread/resume" &&
+        process.env.FIXTURE_EMIT_THREAD_GOAL_CLEARED === "1"
+      ) {
+        send({
+          method: "thread/goal/cleared",
+          params: { threadId },
+        });
+      }
       continue;
     }
     if (message.method === "turn/start") {

@@ -92,6 +92,7 @@ const BENIGN_NOTIFICATION_METHODS = new Set([
   "thread/compacted",
   "thread/environment/connected",
   "thread/environment/disconnected",
+  "thread/goal/cleared",
   "thread/settings/updated",
   "thread/started",
   "thread/status/changed",

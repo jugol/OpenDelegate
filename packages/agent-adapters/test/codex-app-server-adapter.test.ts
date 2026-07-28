@@ -25,7 +25,7 @@ const limits: AgentRunLimits = {
   maxDiagnosticBytes: 4 * 1024,
 };
 
-test("Codex App Server ignores remote-control status and preserves native threads", async () => {
+test("Codex App Server ignores benign status and goal notifications across native threads", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
   try {
     const cwd = await realpath(process.cwd());
@@ -72,6 +72,7 @@ test("Codex App Server ignores remote-control status and preserves native thread
       },
       environment: {
         FIXTURE_EMIT_REMOTE_CONTROL_STATUS: "1",
+        FIXTURE_EMIT_THREAD_GOAL_CLEARED: "1",
       },
       limits,
     };
