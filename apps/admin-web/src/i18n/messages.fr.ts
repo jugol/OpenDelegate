@@ -626,6 +626,8 @@ export const frenchMessages = {
     browserAutomation: "Automatisation du navigateur",
     configurationAssessmentIntro:
       "Commencez par évaluer l’appareil. Je pourrai ensuite expliquer l’état observé de Codex, Claude, de l’automatisation du navigateur, de Computer Use et du Knowledge local, puis vous aider à proposer des rôles ou instructions. Le chat ne peut pas lancer l’évaluation et les identifiants du fournisseur ne doivent jamais figurer dans les messages.",
+    configurationAssessmentReadyIntro:
+      "L’évaluation de l’appareil est terminée. Je peux maintenant expliquer l’état observé de Codex, Claude, de l’automatisation du navigateur, de Computer Use et du Knowledge local, puis vous aider à proposer des rôles ou instructions. Ne saisissez pas les identifiants du fournisseur dans les messages.",
     localNetwork: "Réseau local",
     healthyPriorityOne: "Opérationnel · Priorité 1",
     healthyPriority: "Opérationnel · Priorité {priority}",

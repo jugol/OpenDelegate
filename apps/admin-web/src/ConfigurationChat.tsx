@@ -106,6 +106,26 @@ export function ConfigurationChat({
   const previousMessageCountRef = useRef(conversationMessages.length);
 
   useEffect(() => {
+    const discoveryMessage: ChatMessage =
+      onSendMessage === undefined
+        ? {
+            id: "message-agent-discovery",
+            author: "agent",
+            systemMessageKey: "unavailableMessage",
+          }
+        : {
+            id: "message-agent-discovery",
+            author: "agent",
+            content: localizePresentationText(session.assistantMessage, copy),
+          };
+    setConversationMessages((current) =>
+      current.length === 1 && current[0]?.id === "message-agent-discovery"
+        ? [discoveryMessage]
+        : current,
+    );
+  }, [copy, onSendMessage, session.assistantMessage]);
+
+  useEffect(() => {
     if (open && focusRequestId > 0) {
       (onSendMessage === undefined ? closeButtonRef.current : composerRef.current)?.focus();
     }

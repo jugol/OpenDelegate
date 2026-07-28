@@ -612,6 +612,8 @@ export const japaneseMessages = {
     browserAutomation: "ブラウザー自動化",
     configurationAssessmentIntro:
       "まず「デバイスを評価」を実行してください。その後、観測された Codex、Claude、ブラウザー自動化、Computer Use、ローカル Knowledge の状態を説明し、役割や指示の提案を支援できます。チャット自体は評価を実行できず、プロバイダーの認証情報をメッセージに含めてはいけません。",
+    configurationAssessmentReadyIntro:
+      "デバイス評価が完了しました。観測された Codex、Claude、ブラウザー自動化、Computer Use、ローカル Knowledge の状態を説明し、役割や指示の提案を支援できます。プロバイダーの認証情報をメッセージに含めないでください。",
     localNetwork: "ローカルネットワーク",
     healthyPriorityOne: "正常 · 優先度 1",
     healthyPriority: "正常 · 優先度 {priority}",

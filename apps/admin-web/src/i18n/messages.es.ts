@@ -625,6 +625,8 @@ export const spanishMessages = {
     browserAutomation: "Automatización del navegador",
     configurationAssessmentIntro:
       "Empieza por evaluar el dispositivo. Después podré explicar el estado observado de Codex, Claude, la automatización del navegador, Computer Use y el Knowledge local, y ayudarte a proponer roles o instrucciones. El chat no puede ejecutar la evaluación y las credenciales del proveedor no deben incluirse en los mensajes.",
+    configurationAssessmentReadyIntro:
+      "La evaluación del dispositivo está completa. Ahora puedo explicar el estado observado de Codex, Claude, la automatización del navegador, Computer Use y el Knowledge local, y ayudarte a proponer roles o instrucciones. No incluyas credenciales del proveedor en los mensajes.",
     localNetwork: "Red local",
     healthyPriorityOne: "En buen estado · Prioridad 1",
     healthyPriority: "En buen estado · Prioridad {priority}",

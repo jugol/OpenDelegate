@@ -163,6 +163,11 @@ const windowsMain: DeviceSummary = {
 
 const assessedWindowsMain: DeviceSummary = {
   ...windowsMain,
+  lastObservation: {
+    observedAtMs: 1_753_000_000_000,
+    acceptedAtMs: 1_753_000_000_000,
+    source: "local-assessment",
+  },
   capabilities: [
     { name: "browser-automation", verification: "detected" },
     { name: "claude-code", verification: "degraded" },
@@ -609,7 +614,7 @@ describe("Admin authentication and Task control", () => {
     const chat = screen.getByRole("dialog", { name: "Configuration Chat" });
     expect(
       within(chat).getByText(
-        "Start with Assess device. I can then explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. I cannot run the assessment from chat, and provider credentials must stay out of messages.",
+        "Device assessment is current. I can now explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. Provider credentials must stay out of messages.",
       ),
     ).toBeTruthy();
     expect(

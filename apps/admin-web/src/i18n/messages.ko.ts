@@ -609,6 +609,8 @@ export const koreanMessages = {
     browserAutomation: "브라우저 자동화",
     configurationAssessmentIntro:
       "먼저 장치 평가를 실행하세요. 그 후 관측된 Codex, Claude, 브라우저 자동화, Computer Use, 로컬 Knowledge 상태를 설명하고 역할이나 지침 제안을 도와드릴 수 있습니다. 채팅 자체는 평가를 실행할 수 없으며, 프로바이더 자격 증명은 메시지에 입력하면 안 됩니다.",
+    configurationAssessmentReadyIntro:
+      "장치 평가가 완료되었습니다. 이제 관측된 Codex, Claude, 브라우저 자동화, Computer Use, 로컬 Knowledge 상태를 설명하고 역할이나 지침 제안을 도와드릴 수 있습니다. 프로바이더 자격 증명은 메시지에 입력하지 마세요.",
     localNetwork: "로컬 네트워크",
     healthyPriorityOne: "정상 · 우선순위 1",
     healthyPriority: "정상 · 우선순위 {priority}",

@@ -582,6 +582,8 @@ export const simplifiedChineseMessages = {
     browserAutomation: "浏览器自动化",
     configurationAssessmentIntro:
       "请先运行设备评估。之后我可以解释观测到的 Codex、Claude、浏览器自动化、Computer Use 和本地 Knowledge 状态，并帮助你提出角色或指令建议。聊天本身不能执行评估，且消息中不得包含提供商凭据。",
+    configurationAssessmentReadyIntro:
+      "设备评估已完成。现在我可以解释观测到的 Codex、Claude、浏览器自动化、Computer Use 和本地 Knowledge 状态，并帮助你提出角色或指令建议。请勿在消息中包含提供商凭据。",
     localNetwork: "本地网络",
     healthyPriorityOne: "健康 · 优先级 1",
     healthyPriority: "健康 · 优先级 {priority}",
