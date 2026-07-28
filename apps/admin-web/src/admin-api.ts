@@ -33,7 +33,7 @@ export interface DeviceSummary {
   readonly lastObservation?: {
     readonly observedAtMs: number;
     readonly acceptedAtMs: number;
-    readonly source: "authenticated-heartbeat";
+    readonly source: "authenticated-heartbeat" | "local-assessment";
   };
   readonly roles?: readonly string[];
   readonly instructions?: readonly string[];
@@ -563,6 +563,7 @@ export interface AdminApi {
   beginRecovery(recoveryCode: string): Promise<{ readonly recoveryToken: string }>;
   completeRecovery(recoveryToken: string, newPassphrase: string): Promise<RecoveryResult>;
   listDevices(): Promise<readonly DeviceSummary[]>;
+  assessDevice(deviceId: string): Promise<DeviceSummary>;
   runtimeFeatures(): Promise<RuntimeFeatures>;
   sendConfigurationMessage(deviceId: string, message: string): Promise<string>;
   ingestSecret(
@@ -651,6 +652,17 @@ export class BrowserAdminApi implements AdminApi {
       "/api/v1/devices",
     );
     return response.devices;
+  }
+
+  async assessDevice(deviceId: string): Promise<DeviceSummary> {
+    const response = await this.#authenticatedRequest<{ readonly device: DeviceSummary }>(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/assessment`,
+      {
+        body: {},
+        method: "POST",
+      },
+    );
+    return response.device;
   }
 
   async runtimeFeatures(): Promise<RuntimeFeatures> {

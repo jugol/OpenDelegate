@@ -136,6 +136,21 @@ export const spanishMessages = {
     runs: "Ejecuciones",
     authority: "Autoridad y recursos",
     configure: "Configurar",
+    assessDevice: "Evaluar dispositivo",
+    assessingDevice: "Evaluando…",
+    assessmentFailed:
+      "La evaluación del dispositivo falló. No se reemplazó la observación guardada.",
+    localAgentSetup: "Configuración del Agent local",
+    localAgentSetupIntro:
+      "El chat de configuración usa el Main Agent elegido durante la inicialización de OpenDelegate. Estará disponible cuando el adaptador local esté instalado, autenticado y supere la comprobación de compatibilidad.",
+    codexSetupGuide:
+      "Codex: elige Codex durante la inicialización y comparte explícitamente un Codex home ya autenticado si quieres reutilizarlo.",
+    claudeSetupGuide:
+      "Claude: elige Claude durante la inicialización y autentica el perfil de Claude administrado por Main en este dispositivo.",
+    agentCredentialNote:
+      "Las credenciales del proveedor permanecen en este dispositivo. Nunca las pegues en el chat de configuración.",
+    assessmentScope:
+      "La evaluación comprueba Codex, Claude, la automatización del navegador, Computer Use y el Knowledge local sin pedir a un LLM que los deduzca.",
     facts: "Datos del dispositivo",
     roles: "Roles",
     instructions: "Instrucciones",
@@ -608,6 +623,8 @@ export const spanishMessages = {
     development: "Desarrollo",
     computerUse: "Computer Use",
     browserAutomation: "Automatización del navegador",
+    configurationAssessmentIntro:
+      "Empieza por evaluar el dispositivo. Después podré explicar el estado observado de Codex, Claude, la automatización del navegador, Computer Use y el Knowledge local, y ayudarte a proponer roles o instrucciones. El chat no puede ejecutar la evaluación y las credenciales del proveedor no deben incluirse en los mensajes.",
     localNetwork: "Red local",
     healthyPriorityOne: "En buen estado · Prioridad 1",
     healthyPriority: "En buen estado · Prioridad {priority}",

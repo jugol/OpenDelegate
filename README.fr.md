@@ -37,9 +37,11 @@ OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Ow
    if a required safety check fails.”_
 4. Suivez l’Agent pour revendiquer l’accès Owner et conservez en lieu sûr les dix codes de
    récupération à usage unique.
-5. Dans Configuration Chat, en bas à droite d’Admin Web, terminez la configuration des Devices,
-   Agents, Routes, Artifacts et de Discord si souhaité. Saisissez le jeton Discord uniquement dans
-   le panneau d’identifiants sécurisé, jamais dans le champ de discussion.
+5. Dans Admin Web, lancez d’abord **Évaluer l’appareil** et examinez le résultat déterministe pour
+   Codex, Claude, l’automatisation du navigateur, Computer Use et le Knowledge. Terminez ensuite la
+   configuration des Devices, Agents, Routes, Artifacts et de Discord dans Configuration Chat. Ne
+   saisissez jamais d’identifiants Provider dans le chat ; le jeton Discord va uniquement dans le
+   panneau d’identifiants sécurisé.
 6. Pour ajouter un Device, demandez à Configuration Chat un Device Grant de courte durée et à usage
    unique. Transférez le fichier sans l’ouvrir par un moyen sûr contrôlé par l’Owner, puis demandez
    à l’Agent du Device cible de suivre `skills/opendelegate-join/SKILL.md`.

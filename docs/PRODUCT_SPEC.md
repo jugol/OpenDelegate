@@ -713,21 +713,27 @@ may request a transition but cannot manufacture a state outside the transition r
    rollback tools rather than editing opaque settings text.
 13. The Agent may recommend settings from observed facts, explain consequences, and
     ask for values that cannot be discovered.
-14. Protected configuration changes use the same Policy and approval mechanisms as
+14. Admin Web exposes an explicit deterministic assessment for the local Main Device.
+    It probes local Codex and Claude adapters, browser automation, Computer Use
+    readiness, and local Knowledge health without spending LLM context. The bounded,
+    non-secret result is durable in Main metadata and is supplied to Configuration
+    Chat as authoritative context. Configuration Chat cannot claim that it ran the
+    assessment.
+15. Protected configuration changes use the same Policy and approval mechanisms as
     Task work.
-15. Admin Web does not attempt to reproduce the complete Discord Task chat in the
+16. Admin Web does not attempt to reproduce the complete Discord Task chat in the
     first release.
-16. English is the canonical fallback and the initial locale when no explicit owner
+17. English is the canonical fallback and the initial locale when no explicit owner
     choice has been stored. Admin Web exposes a language selector before and after
     authentication for Korean, Japanese, French, Spanish, and Simplified Chinese.
-17. The explicit locale choice persists locally, updates the document language,
+18. The explicit locale choice persists locally, updates the document language,
     accessibility names, tooltips, status labels, and locale-sensitive dates without
     requiring a reload, and is included as `Accept-Language` on Admin requests.
-18. Owner-authored Device names, Roles, Task objectives, criteria, constraints, and
+19. Owner-authored Device names, Roles, Task objectives, criteria, constraints, and
     historical owner or Agent conversation content are never machine-translated.
     Stable product chrome and deterministic built-in state labels are translated at
     render time.
-19. Domain codes, API fields, durable events, schemas, logs, and source defaults
+20. Domain codes, API fields, durable events, schemas, logs, and source defaults
     remain English regardless of the selected presentation locale.
 
 ### FR-16 — Policy and approvals

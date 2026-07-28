@@ -201,7 +201,10 @@ export const DeviceSummarySchema = Type.Object(
         {
           observedAtMs: Type.Integer({ minimum: 0 }),
           acceptedAtMs: Type.Integer({ minimum: 0 }),
-          source: Type.Literal("authenticated-heartbeat"),
+          source: Type.Union([
+            Type.Literal("authenticated-heartbeat"),
+            Type.Literal("local-assessment"),
+          ]),
         },
         { additionalProperties: false },
       ),
@@ -286,6 +289,38 @@ export const DeviceSummarySchema = Type.Object(
 );
 
 export type DeviceSummaryV1 = Type.Static<typeof DeviceSummarySchema>;
+
+export const DeviceAssessmentParamsSchema = Type.Object(
+  {
+    deviceId: OpaqueIdSchema,
+  },
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateDeviceAssessmentParamsV1",
+  },
+);
+
+export const DeviceAssessmentRequestSchema = Type.Object(
+  {},
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateDeviceAssessmentRequestV1",
+  },
+);
+
+export const DeviceAssessmentResponseSchema = Type.Object(
+  {
+    device: DeviceSummarySchema,
+  },
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateDeviceAssessmentResponseV1",
+  },
+);
+
+export type DeviceAssessmentParamsV1 = Type.Static<typeof DeviceAssessmentParamsSchema>;
+export type DeviceAssessmentRequestV1 = Type.Static<typeof DeviceAssessmentRequestSchema>;
+export type DeviceAssessmentResponseV1 = Type.Static<typeof DeviceAssessmentResponseSchema>;
 
 export const DeviceListResponseSchema = Type.Object(
   {

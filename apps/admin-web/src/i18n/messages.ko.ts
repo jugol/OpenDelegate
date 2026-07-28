@@ -129,6 +129,20 @@ export const koreanMessages = {
     runs: "실행",
     authority: "권한 및 리소스",
     configure: "설정",
+    assessDevice: "장치 평가",
+    assessingDevice: "평가 중…",
+    assessmentFailed: "장치 평가에 실패했습니다. 저장된 기존 관측값은 바뀌지 않았습니다.",
+    localAgentSetup: "로컬 Agent 설정",
+    localAgentSetupIntro:
+      "환경설정 채팅은 OpenDelegate init에서 선택한 Main Agent를 사용합니다. 로컬 어댑터가 설치되고 로그인되어 호환성 검사를 통과하면 사용할 수 있습니다.",
+    codexSetupGuide:
+      "Codex: init에서 Codex를 선택하고, 기존 인증을 재사용하려면 인증된 Codex home을 명시적으로 공유하세요.",
+    claudeSetupGuide:
+      "Claude: init에서 Claude를 선택한 뒤 이 장치의 Main 관리형 Claude 프로필을 인증하세요.",
+    agentCredentialNote:
+      "프로바이더 자격 증명은 이 장치에만 남습니다. 환경설정 채팅에는 절대 붙여넣지 마세요.",
+    assessmentScope:
+      "평가는 LLM의 추측 없이 Codex, Claude, 브라우저 자동화, Computer Use 준비 상태와 로컬 Knowledge 상태를 확인합니다.",
     facts: "장치 정보",
     roles: "역할",
     instructions: "지침",
@@ -593,6 +607,8 @@ export const koreanMessages = {
     development: "개발",
     computerUse: "Computer Use",
     browserAutomation: "브라우저 자동화",
+    configurationAssessmentIntro:
+      "먼저 장치 평가를 실행하세요. 그 후 관측된 Codex, Claude, 브라우저 자동화, Computer Use, 로컬 Knowledge 상태를 설명하고 역할이나 지침 제안을 도와드릴 수 있습니다. 채팅 자체는 평가를 실행할 수 없으며, 프로바이더 자격 증명은 메시지에 입력하면 안 됩니다.",
     localNetwork: "로컬 네트워크",
     healthyPriorityOne: "정상 · 우선순위 1",
     healthyPriority: "정상 · 우선순위 {priority}",

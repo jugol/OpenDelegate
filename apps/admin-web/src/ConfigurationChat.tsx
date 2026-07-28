@@ -96,7 +96,7 @@ export function ConfigurationChat({
       : {
           id: "message-agent-discovery",
           author: "agent",
-          content: session.assistantMessage,
+          content: localizePresentationText(session.assistantMessage, copy),
         },
   ]);
   const dialogRef = useRef<HTMLDivElement | null>(null);

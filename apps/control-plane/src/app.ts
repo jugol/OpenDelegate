@@ -34,6 +34,9 @@ import {
   ConfigurationAgentMessageRequestSchema,
   ConfigurationAgentMessageResponseSchema,
   CreateTaskRequestSchema,
+  DeviceAssessmentParamsSchema,
+  DeviceAssessmentRequestSchema,
+  DeviceAssessmentResponseSchema,
   DeviceListResponseSchema,
   DeviceEnrollmentOverviewSchema,
   ExtendTaskBudgetRequestSchema,
@@ -123,6 +126,14 @@ export interface MainControlPlaneAppOptions extends SharedAppOptions {
   readonly deviceDirectory?: {
     list(): Promise<readonly DeviceSummaryV1[]>;
   };
+  readonly deviceAssessment?: {
+    canAssess(deviceId: string): boolean;
+    assess(input: {
+      readonly deviceId: string;
+      readonly principalId: string;
+      readonly idempotencyKey: string;
+    }): Promise<void>;
+  };
   readonly runtimeFeatures?: RuntimeFeaturesResponseV1;
   readonly readiness?: () => ReadinessV1 | Promise<ReadinessV1>;
   readonly tasks?: Pick<TaskService, "command" | "create" | "get" | "list">;
@@ -181,7 +192,7 @@ export async function createMainControlPlaneApp(
   );
 
   registerMainOwnerRoutes(app, options, ingress.validatePublicMutation);
-  registerDeviceRoutes(app, options);
+  registerDeviceRoutes(app, options, ingress.validatePublicMutation);
   registerRuntimeFeatureRoutes(app, options);
   registerSecureSecretIngestRoutes(app, options, ingress.validatePublicMutation);
   registerConfigurationAgentRoutes(app, options, ingress.validatePublicMutation);
@@ -582,7 +593,8 @@ function registerConfigurationAgentRoutes(
         throw new PublicHttpError(503, "CONFIGURATION_AGENT_UNAVAILABLE");
       }
       const devices = await currentDevices(options);
-      if (!devices.some((device) => device.deviceId === request.params.deviceId)) {
+      const device = devices.find((candidate) => candidate.deviceId === request.params.deviceId);
+      if (device === undefined) {
         throw new PublicHttpError(404, "DEVICE_NOT_FOUND");
       }
       return options.configurationAgent.sendMessage({
@@ -590,6 +602,21 @@ function registerConfigurationAgentRoutes(
         principalId: session.ownerId,
         idempotencyKey: requireIdempotencyKey(request),
         message: request.body.message,
+        ...(device.lastObservation === undefined
+          ? {}
+          : {
+              deviceObservation: {
+                name: device.name,
+                osFamily: device.osFamily,
+                platformRelease: device.platformRelease,
+                architecture: device.architecture,
+                role: device.role,
+                observedAtMs: device.lastObservation.observedAtMs,
+                capabilities: structuredClone(device.capabilities ?? []),
+                agentAdapters: structuredClone(device.agentAdapters ?? []),
+                knowledgeHealth: device.knowledgeHealth ?? "unknown",
+              },
+            }),
       });
     },
   );
@@ -635,7 +662,11 @@ function runtimeFeaturesFor(options: MainControlPlaneAppOptions): RuntimeFeature
   );
 }
 
-function registerDeviceRoutes(app: ControlPlaneApp, options: MainControlPlaneAppOptions): void {
+function registerDeviceRoutes(
+  app: ControlPlaneApp,
+  options: MainControlPlaneAppOptions,
+  validatePublicMutation: (request: FastifyRequest) => void,
+): void {
   app.get(
     "/api/v1/devices",
     {
@@ -652,6 +683,52 @@ function registerDeviceRoutes(app: ControlPlaneApp, options: MainControlPlaneApp
     async (request) => {
       await options.ownerAuth.validateSession(requireSessionToken(request));
       return { devices: await currentDevices(options) };
+    },
+  );
+
+  app.post(
+    "/api/v1/devices/:deviceId/assessment",
+    {
+      schema: {
+        params: DeviceAssessmentParamsSchema,
+        body: DeviceAssessmentRequestSchema,
+        response: {
+          200: DeviceAssessmentResponseSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+      onRequest: async (request) => {
+        validatePublicMutation(request);
+      },
+    },
+    async (request) => {
+      const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
+      const session = await options.ownerAuth.validateSession(sessionToken);
+      const devices = await currentDevices(options);
+      if (!devices.some((device) => device.deviceId === request.params.deviceId)) {
+        throw new PublicHttpError(404, "DEVICE_NOT_FOUND");
+      }
+      if (
+        options.deviceAssessment === undefined ||
+        !options.deviceAssessment.canAssess(request.params.deviceId)
+      ) {
+        throw new PublicHttpError(503, "DEVICE_ASSESSMENT_UNAVAILABLE");
+      }
+      await options.deviceAssessment.assess({
+        deviceId: request.params.deviceId,
+        principalId: session.ownerId,
+        idempotencyKey: requireIdempotencyKey(request),
+      });
+      const device = (await currentDevices(options)).find(
+        (candidate) => candidate.deviceId === request.params.deviceId,
+      );
+      if (device === undefined) {
+        throw new PublicHttpError(404, "DEVICE_NOT_FOUND");
+      }
+      return { device };
     },
   );
 }

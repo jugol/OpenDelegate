@@ -8,6 +8,7 @@ import {
   type ConfigurationAgentPort,
   type MainControlPlaneAppOptions,
 } from "@opendelegate/control-plane";
+import type { AgentAdapterProbe } from "@opendelegate/agent-adapters";
 import {
   ConfigurationService,
   STANDARD_CONFIGURATION_DEFINITIONS,
@@ -149,6 +150,12 @@ import {
   type MainSingletonOwnership,
   type MainSingletonOwnershipFactory,
 } from "./main-singleton-ownership.ts";
+import {
+  EventStoreMainDeviceAssessmentRepository,
+  MainDeviceAssessmentService,
+  projectMainDeviceAssessment,
+  type CapabilityAssessmentProbe,
+} from "./main-device-assessment.ts";
 import {
   enforceHostRuntimePermissions,
   RuntimePermissionEnforcementError,
@@ -386,6 +393,7 @@ export interface RuntimePaths {
   readonly stateDirectory: string;
   readonly sqliteFile: string;
   readonly logsDirectory: string;
+  readonly knowledgeDirectory: string;
 }
 
 export type MainRuntimeErrorCode =
@@ -506,6 +514,11 @@ export interface CreateMainRuntimeOptions {
     readonly listenerFactory?: MainDeviceChannelListenerFactory;
     readonly runtimeFactory?: typeof createProductionMainDeviceChannelRuntime;
   };
+  readonly mainDeviceAssessment?: {
+    readonly probeAgentAdapters: () => Promise<readonly AgentAdapterProbe[]>;
+    readonly probeBrowserAutomation?: () => Promise<CapabilityAssessmentProbe>;
+    readonly probeComputerUse?: () => Promise<CapabilityAssessmentProbe>;
+  };
 }
 
 export interface MainRuntime {
@@ -551,6 +564,7 @@ export function resolveRuntimePaths(input: {
     stateDirectory,
     sqliteFile: join(stateDirectory, "main.sqlite3"),
     logsDirectory: join(home, "logs"),
+    knowledgeDirectory: join(home, "knowledge"),
   });
 }
 
@@ -771,6 +785,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     "verify",
     managedSecretStore,
   );
+  const mainDeviceAssessmentRepository = new EventStoreMainDeviceAssessmentRepository(eventStore);
   let ownerRepository: SqlOwnerAuthRepository | undefined;
   let approvalRepository: SqlApprovalRepository | undefined;
   let actionAuthorizationRepository: SqlActionAuthorizationRepository | undefined;
@@ -1072,11 +1087,12 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         "verify",
         managedSecretStore,
       );
+      const durableDeviceObservations = deviceObservationRepository;
       fleet = new MainWorkerFleetProjection({
         identities: {
           list: async () => (await channelReference.current?.listDeviceIdentities()) ?? [],
         },
-        observations: deviceObservationRepository,
+        observations: durableDeviceObservations,
         profiles: deviceProfiles,
         clock,
       });
@@ -1379,6 +1395,45 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         ],
       };
     };
+    const probeConnectedMainWorkerCapability = async (
+      name: "browser-automation" | "computer-use",
+    ): Promise<CapabilityAssessmentProbe> => {
+      const worker = ((await fleet?.deviceSummaries()) ?? []).find(
+        (candidate) =>
+          candidate.deviceId === configuration.deviceId &&
+          candidate.role === "worker" &&
+          candidate.connection === "online",
+      );
+      const capability = worker?.capabilities?.find((candidate) => candidate.name === name);
+      if (worker === undefined || capability === undefined) {
+        return { verification: "unavailable" };
+      }
+      return {
+        verification: capability.verification,
+        ...(capability.observedAtMs === undefined
+          ? worker.lastObservation === undefined
+            ? {}
+            : { observedAtMs: worker.lastObservation.observedAtMs }
+          : { observedAtMs: capability.observedAtMs }),
+        ...(capability.version === undefined ? {} : { version: capability.version }),
+      };
+    };
+    const mainDeviceAssessment =
+      options.mainDeviceAssessment === undefined
+        ? undefined
+        : new MainDeviceAssessmentService({
+            deviceId: configuration.deviceId,
+            knowledgeDirectory: paths.knowledgeDirectory,
+            repository: mainDeviceAssessmentRepository,
+            probeAgentAdapters: options.mainDeviceAssessment.probeAgentAdapters,
+            probeBrowserAutomation:
+              options.mainDeviceAssessment.probeBrowserAutomation ??
+              (() => probeConnectedMainWorkerCapability("browser-automation")),
+            probeComputerUse:
+              options.mainDeviceAssessment.probeComputerUse ??
+              (() => probeConnectedMainWorkerCapability("computer-use")),
+            clock,
+          });
     app = await createMainControlPlaneApp({
       ownerAuth,
       allowedOrigins: [configuration.main.origin],
@@ -1387,7 +1442,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       deviceDirectory: {
         list: async () => {
           const mainProfile = await deviceProfiles.get(configuration.deviceId);
-          return mergeMainDeviceSummary(
+          const [mergedMain, ...remoteWorkers] = mergeMainDeviceSummary(
             {
               deviceId: configuration.deviceId,
               name: mainProfile?.displayName ?? hostname(),
@@ -1413,8 +1468,37 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             },
             (await fleet?.deviceSummaries()) ?? [],
           );
+          if (mergedMain === undefined) {
+            throw new Error("The Device directory did not retain Main's Device.");
+          }
+          return [
+            projectMainDeviceAssessment(
+              mergedMain,
+              await mainDeviceAssessmentRepository.latest(configuration.deviceId),
+            ),
+            ...remoteWorkers,
+          ];
         },
       },
+      ...(mainDeviceAssessment === undefined
+        ? {}
+        : {
+            deviceAssessment: {
+              canAssess: (deviceId: string) => deviceId === configuration.deviceId,
+              assess: async ({
+                deviceId,
+                principalId,
+                idempotencyKey,
+              }: {
+                readonly deviceId: string;
+                readonly principalId: string;
+                readonly idempotencyKey: string;
+              }) => {
+                if (deviceId !== configuration.deviceId) return;
+                await mainDeviceAssessment.assess({ principalId, idempotencyKey });
+              },
+            },
+          }),
       tasks,
       budgets: budgetAdmin,
       approvals: approvalRuntime.controlPlane,
@@ -2428,6 +2512,7 @@ async function ensureRuntimeDirectories(
     [paths.configDirectory, "runtime config directory"],
     [paths.stateDirectory, "runtime state directory"],
     [paths.logsDirectory, "runtime logs directory"],
+    [paths.knowledgeDirectory, "runtime Knowledge directory"],
   ] as const) {
     try {
       await mkdir(path, { recursive: false, mode: 0o700 });

@@ -562,6 +562,10 @@ Deliver the required visual setup, Device specification, and operational surface
 - Implement first-run shell with one current Device and left-side Device navigation.
 - Implement Device Facts, Capabilities, Roles, Instructions, Policies, routes, Agent
   Adapters, locks, health, load, and Runs.
+- Add an authenticated on-demand Main Device assessment that probes local Codex and
+  Claude adapters, browser automation, Computer Use readiness, and local Knowledge
+  health, stores only the bounded observation in Main metadata, and exposes it to the
+  Configuration Agent without Secret material.
 - Implement Task, Work Order, Run, session lineage, event, approval, Artifact, error,
   and audit inspectors.
 - Implement emergency Task creation, pause, cancel, retry, drain, revoke, and stale
@@ -590,6 +594,8 @@ Deliver the required visual setup, Device specification, and operational surface
 - The required Device UI matches the product specification.
 - A configuration change can be proposed conversationally, previewed, policy-checked,
   applied, audited, and rolled back.
+- Local Agent onboarding names the init/authentication boundary accurately, and an
+  assessment survives Main restart without implying that Configuration Chat ran it.
 - Discord outage still permits inspection and emergency control.
 - All six Admin locales pass catalog completeness, locale persistence, accessibility,
   untranslated-owner-content, date-formatting, and desktop/mobile overflow tests.

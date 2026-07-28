@@ -30,8 +30,10 @@ OpenDelegate は Agent とともにインストールします。Owner 向けの
    if a required safety check fails.”_
 4. Agent の案内に従って Owner Claim を完了し、10 個の one-time Recovery
    Code をすべて安全に保存します。
-5. Admin Web 右下の Configuration Chat で Device、Agent、Route、Artifact、および任意の Discord
-   設定を完了します。Discord トークンはチャット入力欄ではなく、安全な認証情報パネルにのみ入力します。
+5. Admin Web で先に **デバイスを評価** を実行し、Codex、Claude、ブラウザー自動化、Computer Use、
+   Knowledge の決定論的な結果を確認してから、右下の Configuration Chat で Device、Agent、Route、
+   Artifact、および任意の Discord 設定を完了します。Provider の認証情報はチャットに入力せず、
+   Discord トークンは安全な認証情報パネルにのみ入力します。
 6. Device を追加する際は、Configuration Chat で有効期間の短い Single-use Device
    Grant を発行します。ファイルを開かずに Owner が管理する安全な方法で転送し、対象 Device の Agent に
    `skills/opendelegate-join/SKILL.md` の手順を実行するよう依頼してください。

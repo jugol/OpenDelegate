@@ -26,6 +26,7 @@
     "@opendelegate/discord-adapter": "workspace:*",
     "@opendelegate/domain": "workspace:*",
     "@opendelegate/event-store": "workspace:*",
+    "@opendelegate/knowledge": "workspace:*",
     "@opendelegate/owner-auth": "workspace:*",
     "@opendelegate/platform-services": "workspace:*",
     "@opendelegate/policy": "workspace:*",

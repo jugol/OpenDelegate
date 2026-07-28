@@ -96,7 +96,7 @@ export interface ConfigurationProposalView {
 }
 
 export interface ConfigurationSessionView {
-  readonly assistantMessage: string;
+  readonly assistantMessage: PresentationText;
   readonly proposal: ConfigurationProposalView | null;
 }
 

@@ -32,9 +32,11 @@ OpenDelegate is installed with an Agent; there is no `npm run start` owner workf
 4. Send: _“Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed
    OpenDelegate Main Device. Guide me through every owner decision, keep runtime state outside this
    bundle, and stop if a required safety check fails.”_
-5. Follow the Agent through owner claim, save the ten recovery codes, and finish Device, Agent,
-   route, Artifact, and optional Discord setup in Admin Web Configuration Chat. Discord tokens go
-   through the secure credential panel, never the chat composer.
+5. Follow the Agent through owner claim, save the ten recovery codes, then select **Assess device**
+   in Admin Web. Review the deterministic Codex, Claude, browser automation, Computer Use, and
+   Knowledge result before finishing Device, Agent, route, Artifact, and optional Discord setup in
+   Configuration Chat. Provider credentials never go into chat; Discord tokens use only the secure
+   credential panel.
 6. To add a computer, ask Configuration Chat for a short-lived Device grant, transfer the unopened
    file through an owner-controlled secure handoff, and ask the Agent on that computer to follow
    `skills/opendelegate-join/SKILL.md`.

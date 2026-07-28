@@ -127,8 +127,10 @@ export function mapDeviceOverview(device: DeviceSummary): DeviceOverviewViewMode
     },
     knowledge: knowledgeStatus(device.knowledgeHealth),
     configurationSession: {
-      assistantMessage:
-        "I have not assessed this Device yet. Ask me to detect agent tools, browser automation, Computer Use readiness, or local Knowledge health before I propose changes.",
+      assistantMessage: builtInText(
+        "Start with Assess device. I can then explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. I cannot run the assessment from chat, and provider credentials must stay out of messages.",
+        "configurationAssessmentIntro",
+      ),
       proposal: null,
     },
   };

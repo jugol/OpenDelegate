@@ -173,6 +173,13 @@ foreground process and does not establish service or release readiness.
 Sign in to Admin Web and open **Configuration Chat** from the lower-right corner. This conversation
 configures OpenDelegate itself; it is separate from Task conversations.
 
+Before asking for capability recommendations, select **Assess device** in the Local Agent setup
+panel. Main deterministically checks both supported Agent Adapters, browser automation, Computer Use
+readiness, and local Knowledge health, then stores the bounded result in its local metadata
+database. The assessment does not invoke an LLM, expose provider output or credentials, or send
+Knowledge content to Main. Configuration Chat receives only that non-secret result and cannot run
+the assessment itself. If the assessment fails, the previous stored observation remains available.
+
 Work through these items with the Configuration Agent:
 
 1. review detected Main Device Facts and capabilities;

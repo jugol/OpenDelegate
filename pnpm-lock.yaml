@@ -173,6 +173,9 @@ importers:
       '@opendelegate/event-store':
         specifier: workspace:*
         version: link:../../packages/event-store
+      '@opendelegate/knowledge':
+        specifier: workspace:*
+        version: link:../../packages/knowledge
       '@opendelegate/owner-auth':
         specifier: workspace:*
         version: link:../../packages/owner-auth

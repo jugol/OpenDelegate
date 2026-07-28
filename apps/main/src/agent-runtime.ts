@@ -279,6 +279,37 @@ export async function resolveMainAgentComposition(
   );
 }
 
+export async function probeMainAgentAdapters(
+  options: Pick<ResolveMainAgentCompositionOptions, "createAdapter" | "paths">,
+): Promise<readonly AgentAdapterProbe[]> {
+  const existing = await readSelectedAgentConfiguration(
+    join(options.paths.configDirectory, selectionFilename),
+    options.paths.sourceCheckoutRoot,
+  );
+  const sharedCodexHome = configuredCodexHome(existing);
+  const leaseStore = new FileSessionLeaseStore({
+    statePath: join(options.paths.stateDirectory, "native-session-leases.json"),
+  });
+  return Object.freeze(
+    await Promise.all(
+      providerPreference.map(async (provider): Promise<AgentAdapterProbe> => {
+        const adapter =
+          options.createAdapter?.(
+            provider,
+            leaseStore,
+            providerHome(provider, options.paths, sharedCodexHome),
+          ) ??
+          createProductionAdapter(
+            provider,
+            leaseStore,
+            providerHome(provider, options.paths, sharedCodexHome),
+          );
+        return structuredClone(await adapter.probe());
+      }),
+    ),
+  );
+}
+
 function createReadyComposition(
   agentWorkspace: string,
   provider: Exclude<SelectedMainAgentProvider, "disabled">,

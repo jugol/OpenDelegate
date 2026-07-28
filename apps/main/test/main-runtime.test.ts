@@ -468,6 +468,54 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     releaseIdentity: DEVELOPMENT_RUNTIME_IDENTITY,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
+    mainDeviceAssessment: {
+      probeAgentAdapters: async () => [
+        {
+          contractVersion: 1,
+          adapterId: "codex-app-server",
+          provider: "codex",
+          installed: true,
+          version: "0.145.0",
+          compatibility: "tested",
+          auth: { state: "ready" },
+          capabilities: {
+            start: true,
+            resume: true,
+            streaming: true,
+            cancellation: true,
+            approvalBridge: true,
+            steering: true,
+            checkpointContinuation: true,
+            workspaceIsolation: ["none"],
+          },
+          diagnostics: [],
+        },
+        {
+          contractVersion: 1,
+          adapterId: "claude-agent-sdk",
+          provider: "claude",
+          installed: true,
+          version: "0.2.114",
+          compatibility: "tested",
+          auth: { state: "not_ready" },
+          capabilities: {
+            start: true,
+            resume: true,
+            streaming: true,
+            cancellation: true,
+            approvalBridge: true,
+            steering: true,
+            checkpointContinuation: true,
+            workspaceIsolation: ["none"],
+          },
+          diagnostics: [{ code: "AUTH_NOT_READY", message: "Authentication is not ready." }],
+        },
+      ],
+      probeBrowserAutomation: async () => ({
+        verification: "verified",
+        version: "test-browser-1",
+      }),
+    },
   });
   const initialConfiguration = await inspectPersistedMainConfiguration({
     configuration: initialized.configuration,
@@ -593,6 +641,59 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     discord: { status: "unavailable", code: "DISCORD_NOT_CONFIGURED" },
   });
 
+  const assessment = await runtime.app.inject({
+    method: "POST",
+    url: `/api/v1/devices/${initialized.configuration.deviceId}/assessment`,
+    headers: {
+      host: "127.0.0.1:4380",
+      origin: "http://127.0.0.1:4380",
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      cookie,
+      "x-opendelegate-csrf": login.csrfToken,
+      "idempotency-key": "main-device-assessment-1",
+    },
+    payload: {},
+  });
+  assert.equal(assessment.statusCode, 200);
+  assert.deepEqual(
+    assessment
+      .json()
+      .device.capabilities.map(
+        (capability: { name: string; verification: string; version?: string }) => capability,
+      ),
+    [
+      {
+        name: "browser-automation",
+        verification: "verified",
+        observedAtMs: assessment.json().device.lastObservation.observedAtMs,
+        evidenceSource: "capability-probe",
+        version: "test-browser-1",
+      },
+      {
+        name: "claude-code",
+        verification: "degraded",
+        observedAtMs: assessment.json().device.lastObservation.observedAtMs,
+        evidenceSource: "agent-adapter",
+        version: "0.2.114",
+      },
+      {
+        name: "codex",
+        verification: "verified",
+        observedAtMs: assessment.json().device.lastObservation.observedAtMs,
+        evidenceSource: "agent-adapter",
+        version: "0.145.0",
+      },
+      {
+        name: "computer-use",
+        verification: "unavailable",
+        observedAtMs: assessment.json().device.lastObservation.observedAtMs,
+        evidenceSource: "capability-probe",
+      },
+    ],
+  );
+  assert.equal(assessment.json().device.knowledgeHealth, "healthy");
+
   const admin = await runtime.app.inject({
     method: "GET",
     url: "/",
@@ -694,6 +795,21 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
   });
   assert.equal(restored.statusCode, 200);
   assert.equal(restored.json().objective, "Survive Main restart.");
+  const restoredDevices = await restarted.app.inject({
+    method: "GET",
+    url: "/api/v1/devices",
+    headers: {
+      host: "127.0.0.1:4380",
+      cookie: `__Host-opendelegate_session=${restoredLogin.sessionToken}`,
+    },
+  });
+  assert.equal(restoredDevices.statusCode, 200);
+  assert.deepEqual(
+    restoredDevices
+      .json()
+      .devices[0].capabilities.map((capability: { name: string }) => capability.name),
+    ["browser-automation", "claude-code", "codex", "computer-use"],
+  );
 });
 
 test("one Main owns an installation and restart reconciliation begins only after release", async (t) => {

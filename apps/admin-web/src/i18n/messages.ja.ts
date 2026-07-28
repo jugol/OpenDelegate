@@ -130,6 +130,20 @@ export const japaneseMessages = {
     runs: "実行",
     authority: "権限とリソース",
     configure: "設定",
+    assessDevice: "デバイスを評価",
+    assessingDevice: "評価中…",
+    assessmentFailed: "デバイスの評価に失敗しました。保存済みの観測結果は変更されていません。",
+    localAgentSetup: "ローカル Agent の設定",
+    localAgentSetupIntro:
+      "設定チャットは OpenDelegate init で選択した Main Agent を使用します。ローカルアダプターのインストールとサインインが完了し、互換性プローブに合格すると利用できます。",
+    codexSetupGuide:
+      "Codex: init で Codex を選択し、既存の認証を再利用する場合は認証済みの Codex home を明示的に共有します。",
+    claudeSetupGuide:
+      "Claude: init で Claude を選択し、このデバイス上の Main 管理 Claude プロファイルを認証します。",
+    agentCredentialNote:
+      "プロバイダーの認証情報はこのデバイスにだけ保存されます。設定チャットには貼り付けないでください。",
+    assessmentScope:
+      "評価では LLM に推測させず、Codex、Claude、ブラウザー自動化、Computer Use、ローカル Knowledge の状態を確認します。",
     facts: "デバイス情報",
     roles: "役割",
     instructions: "指示",
@@ -596,6 +610,8 @@ export const japaneseMessages = {
     development: "開発",
     computerUse: "Computer Use",
     browserAutomation: "ブラウザー自動化",
+    configurationAssessmentIntro:
+      "まず「デバイスを評価」を実行してください。その後、観測された Codex、Claude、ブラウザー自動化、Computer Use、ローカル Knowledge の状態を説明し、役割や指示の提案を支援できます。チャット自体は評価を実行できず、プロバイダーの認証情報をメッセージに含めてはいけません。",
     localNetwork: "ローカルネットワーク",
     healthyPriorityOne: "正常 · 優先度 1",
     healthyPriority: "正常 · 優先度 {priority}",

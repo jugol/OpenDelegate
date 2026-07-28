@@ -134,6 +134,21 @@ export const frenchMessages = {
     runs: "Exécutions",
     authority: "Autorisations et ressources",
     configure: "Configurer",
+    assessDevice: "Évaluer l’appareil",
+    assessingDevice: "Évaluation…",
+    assessmentFailed:
+      "L’évaluation de l’appareil a échoué. L’observation enregistrée n’a pas été remplacée.",
+    localAgentSetup: "Configuration de l’Agent local",
+    localAgentSetupIntro:
+      "Le chat de configuration utilise le Main Agent choisi pendant l’initialisation d’OpenDelegate. Il devient disponible après l’installation et la connexion de l’adaptateur local, puis la réussite du contrôle de compatibilité.",
+    codexSetupGuide:
+      "Codex : choisissez Codex pendant l’initialisation et partagez explicitement un Codex home déjà authentifié pour le réutiliser.",
+    claudeSetupGuide:
+      "Claude : choisissez Claude pendant l’initialisation et authentifiez le profil Claude géré par Main sur cet appareil.",
+    agentCredentialNote:
+      "Les identifiants du fournisseur restent sur cet appareil. Ne les collez jamais dans le chat de configuration.",
+    assessmentScope:
+      "L’évaluation vérifie Codex, Claude, l’automatisation du navigateur, Computer Use et l’état du Knowledge local sans demander à un LLM de les déduire.",
     facts: "Informations sur l’appareil",
     roles: "Rôles",
     instructions: "Instructions",
@@ -609,6 +624,8 @@ export const frenchMessages = {
     development: "Développement",
     computerUse: "Computer Use",
     browserAutomation: "Automatisation du navigateur",
+    configurationAssessmentIntro:
+      "Commencez par évaluer l’appareil. Je pourrai ensuite expliquer l’état observé de Codex, Claude, de l’automatisation du navigateur, de Computer Use et du Knowledge local, puis vous aider à proposer des rôles ou instructions. Le chat ne peut pas lancer l’évaluation et les identifiants du fournisseur ne doivent jamais figurer dans les messages.",
     localNetwork: "Réseau local",
     healthyPriorityOne: "Opérationnel · Priorité 1",
     healthyPriority: "Opérationnel · Priorité {priority}",

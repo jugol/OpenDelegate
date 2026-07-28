@@ -31,8 +31,10 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
    Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
    if a required safety check fails.”_
 4. Agent의 안내에 따라 Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
-5. Admin Web 우측 하단의 Configuration Chat에서 Device, Agent, Route, Artifact와 선택적 Discord
-   설정을 마칩니다. Discord 토큰은 채팅 입력창이 아니라 보안 인증 정보 패널에만 입력합니다.
+5. Admin Web에서 **장치 평가**를 먼저 실행하고 Codex, Claude, 브라우저 자동화, Computer Use,
+   Knowledge의 결정론적 결과를 확인한 뒤 우측 하단 Configuration Chat에서 Device, Agent, Route,
+   Artifact와 선택적 Discord 설정을 마칩니다. Provider 자격 증명은 채팅에 입력하지 않으며,
+   Discord 토큰은 보안 인증 정보 패널에만 입력합니다.
 6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
    파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
    `skills/opendelegate-join/SKILL.md`를 따르도록 요청합니다.

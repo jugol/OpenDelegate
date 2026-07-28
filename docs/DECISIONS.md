@@ -647,3 +647,32 @@ passphrase.
 
 **Consequence:** A non-blank 10-code-point passphrase is valid for claim, login, and
 recovery; nine or fewer code points fail before password hashing.
+
+## D-051 — Deterministic local Device assessment before configuration advice
+
+**Decision:** Admin Web exposes an authenticated, on-demand assessment for the fixed
+Main Device. Main probes both supported local Agent Adapters, browser automation,
+Computer Use readiness, and local Knowledge health without invoking an LLM. The
+bounded result is stored as an attributable, idempotency-bound event in Main's
+existing event store and is restored across restart. It does not masquerade as a
+Worker heartbeat or replace Worker runtime/load state. Configuration Chat receives
+a non-secret projection of that observation as authoritative context, but has no
+assessment tool and must not claim that it ran the probes.
+
+Worker capability assessment continues through the authenticated Worker heartbeat;
+Main does not pretend that a local button can execute arbitrary probes on a remote
+Worker. Provider authentication remains Device-local. Admin guidance names the
+selected-init-provider boundary, explicit shared Codex home option, Main-managed
+Claude profile, and prohibition on pasting provider credentials into chat.
+
+**Rationale:** Asking an LLM to guess installed tools wastes context and can produce
+false capability claims. The previous unassessed chat copy also implied an action
+the Configuration Agent could not perform. A deterministic probe is cheaper,
+durable, and auditable, while the Agent remains useful for explaining the result
+and proposing Roles or Instructions.
+
+**Consequence:** The local Main assessment is explicit and refreshable; failed probes
+do not erase the last durable observation. Browser automation and Computer Use
+remain unavailable until an authenticated Worker observation or an equally strong
+explicit probe proves them. No Knowledge content, credential, provider output, or
+local path enters Main metadata or Configuration Chat.

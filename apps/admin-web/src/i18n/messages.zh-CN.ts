@@ -121,6 +121,18 @@ export const simplifiedChineseMessages = {
     runs: "执行记录",
     authority: "权限与资源",
     configure: "配置",
+    assessDevice: "评估设备",
+    assessingDevice: "正在评估…",
+    assessmentFailed: "设备评估失败。已保存的观测结果未被替换。",
+    localAgentSetup: "本地 Agent 设置",
+    localAgentSetupIntro:
+      "配置聊天使用 OpenDelegate 初始化时选择的 Main Agent。本地适配器安装、登录并通过兼容性探测后即可使用。",
+    codexSetupGuide:
+      "Codex：在初始化时选择 Codex；如需复用现有认证，请显式共享已认证的 Codex home。",
+    claudeSetupGuide: "Claude：在初始化时选择 Claude，并在此设备上认证由 Main 管理的 Claude 配置。",
+    agentCredentialNote: "提供商凭据只保留在此设备上。切勿将其粘贴到配置聊天中。",
+    assessmentScope:
+      "评估会直接检查 Codex、Claude、浏览器自动化、Computer Use 就绪状态和本地 Knowledge 健康状况，无需 LLM 推测。",
     facts: "设备信息",
     roles: "角色",
     instructions: "指令",
@@ -568,6 +580,8 @@ export const simplifiedChineseMessages = {
     development: "开发",
     computerUse: "Computer Use",
     browserAutomation: "浏览器自动化",
+    configurationAssessmentIntro:
+      "请先运行设备评估。之后我可以解释观测到的 Codex、Claude、浏览器自动化、Computer Use 和本地 Knowledge 状态，并帮助你提出角色或指令建议。聊天本身不能执行评估，且消息中不得包含提供商凭据。",
     localNetwork: "本地网络",
     healthyPriorityOne: "健康 · 优先级 1",
     healthyPriority: "健康 · 优先级 {priority}",

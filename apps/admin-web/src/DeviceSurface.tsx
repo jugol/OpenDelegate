@@ -13,6 +13,7 @@ import {
   MessagesSquare,
   Monitor,
   Network,
+  RefreshCw,
   Server,
   Settings,
   ShieldCheck,
@@ -56,17 +57,36 @@ export type AdminSection = "devices" | "tasks" | "approvals" | "artifacts" | "au
 interface DeviceSurfaceProps {
   readonly chatOpen: boolean;
   readonly device: DeviceOverviewViewModel;
+  readonly onAssess?: () => Promise<void>;
   readonly onConfigure: (trigger: HTMLButtonElement) => void;
 }
 
 export function DeviceSurface({
   chatOpen,
   device,
+  onAssess,
   onConfigure,
 }: DeviceSurfaceProps): React.JSX.Element {
   const { messages } = useAdminI18n();
   const [activeTab, setActiveTab] = useState<DeviceTabKey>("overview");
+  const [assessmentPending, setAssessmentPending] = useState(false);
+  const [assessmentFailed, setAssessmentFailed] = useState(false);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  async function assessDevice(): Promise<void> {
+    if (onAssess === undefined || assessmentPending) {
+      return;
+    }
+    setAssessmentPending(true);
+    setAssessmentFailed(false);
+    try {
+      await onAssess();
+    } catch {
+      setAssessmentFailed(true);
+    } finally {
+      setAssessmentPending(false);
+    }
+  }
 
   function selectTab(index: number): void {
     const normalizedIndex = (index + tabKeys.length) % tabKeys.length;
@@ -103,6 +123,13 @@ export function DeviceSurface({
   return (
     <main className="device-main">
       <DeviceHeader chatOpen={chatOpen} device={device} onConfigure={onConfigure} />
+      {onAssess === undefined ? null : (
+        <LocalAgentSetup
+          failed={assessmentFailed}
+          onAssess={() => void assessDevice()}
+          pending={assessmentPending}
+        />
+      )}
 
       <div className="device-tabs" role="tablist" aria-label={messages.device.sections}>
         {tabKeys.map((tabKey, index) => {
@@ -302,6 +329,49 @@ function NavigationItem({
       <Icon aria-hidden="true" />
       <span>{label}</span>
     </button>
+  );
+}
+
+function LocalAgentSetup({
+  failed,
+  onAssess,
+  pending,
+}: {
+  readonly failed: boolean;
+  readonly onAssess: () => void;
+  readonly pending: boolean;
+}): React.JSX.Element {
+  const { messages } = useAdminI18n();
+  return (
+    <section aria-labelledby="local-agent-setup-title" className="local-agent-setup">
+      <div className="local-agent-setup__icon">
+        <Bot aria-hidden="true" />
+      </div>
+      <div className="local-agent-setup__copy">
+        <h2 id="local-agent-setup-title">{messages.device.localAgentSetup}</h2>
+        <p>{messages.device.localAgentSetupIntro}</p>
+        <ul>
+          <li>{messages.device.codexSetupGuide}</li>
+          <li>{messages.device.claudeSetupGuide}</li>
+        </ul>
+        <p className="local-agent-setup__note">
+          <LockKeyhole aria-hidden="true" />
+          <span>{messages.device.agentCredentialNote}</span>
+        </p>
+        {failed ? (
+          <p className="local-agent-setup__error" role="alert">
+            {messages.device.assessmentFailed}
+          </p>
+        ) : null}
+      </div>
+      <div className="local-agent-setup__action">
+        <p>{messages.device.assessmentScope}</p>
+        <button className="secondary-button" disabled={pending} onClick={onAssess} type="button">
+          <RefreshCw aria-hidden="true" className={pending ? "spin" : undefined} />
+          {pending ? messages.device.assessingDevice : messages.device.assessDevice}
+        </button>
+      </div>
+    </section>
   );
 }
 

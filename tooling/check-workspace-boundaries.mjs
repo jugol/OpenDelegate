@@ -58,6 +58,7 @@ export const EXPECTED_WORKSPACE_DEPENDENCIES = Object.freeze({
     "@opendelegate/discord-adapter",
     "@opendelegate/domain",
     "@opendelegate/event-store",
+    "@opendelegate/knowledge",
     "@opendelegate/owner-auth",
     "@opendelegate/platform-services",
     "@opendelegate/policy",

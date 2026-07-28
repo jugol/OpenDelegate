@@ -92,9 +92,15 @@ export {
   type ConfigurationAgentMessageResponseV1,
 } from "./configuration-agent.ts";
 export {
+  DeviceAssessmentParamsSchema,
+  DeviceAssessmentRequestSchema,
+  DeviceAssessmentResponseSchema,
   DeviceListResponseSchema,
   DeviceOsFamilySchema,
   DeviceSummarySchema,
+  type DeviceAssessmentParamsV1,
+  type DeviceAssessmentRequestV1,
+  type DeviceAssessmentResponseV1,
   type DeviceListResponseV1,
   type DeviceSummaryV1,
 } from "./device.ts";

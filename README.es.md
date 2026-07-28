@@ -36,9 +36,10 @@ OpenDelegate se instala con un Agent; el recorrido de instalación del Owner no 
    if a required safety check fails.”_
 4. Sigue al Agent para reclamar el acceso del Owner y guarda de forma segura los diez códigos de
    recuperación de un solo uso.
-5. En Configuration Chat, en la esquina inferior derecha de Admin Web, completa la configuración
-   de Devices, Agents, Routes, Artifacts y, si quieres, Discord. Introduce el token de Discord solo
-   en el panel seguro de credenciales, nunca en el cuadro de chat.
+5. En Admin Web, ejecuta primero **Evaluar dispositivo** y revisa el resultado determinista de
+   Codex, Claude, la automatización del navegador, Computer Use y el Knowledge. Después completa la
+   configuración de Devices, Agents, Routes, Artifacts y Discord en Configuration Chat. No
+   introduzcas credenciales del Provider en el chat; el token de Discord va solo en el panel seguro.
 6. Para añadir un Device, solicita en Configuration Chat un Device Grant de corta duración y un solo
    uso. Transfiere el archivo sin abrirlo mediante un mecanismo seguro controlado por el Owner y
    pide al Agent del Device de destino que siga `skills/opendelegate-join/SKILL.md`.

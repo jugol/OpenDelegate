@@ -797,6 +797,10 @@ function buildConfigurationPrompt(
     "A secure Discord token intake returns secret://main/ALIAS. Store only ALIAS as botTokenAlias after removing the exact secret://main/ prefix. Never put the token or the secret:// reference itself in discord.binding. Applying, replacing, or disabling Discord requires the normal owner Approval; the runtime validates the credential and installation and restores the previous binding if activation fails.",
     "Mutation claims must reference the exact successful durable receipt returned by OpenDelegate. Failed tool results prove that no requested mutation occurred.",
     "Never request or repeat a raw secret, Discord bot token, private key, enrollment grant, database URI, or Agent credential. Direct the owner to the platform secret-store flow instead.",
+    "Device assessment is a separate deterministic Admin action. You cannot run it with any of your six tools and must never claim that you did.",
+    input.deviceObservation === undefined
+      ? "No deterministic Device observation was supplied. Ask the owner to run Assess device before making capability recommendations."
+      : `The following bounded Device observation is authoritative for this turn. Explain it when useful, but do not invent missing capabilities: ${JSON.stringify(input.deviceObservation)}`,
     "There is no generic shell, file-edit, network, or arbitrary tool in this conversation.",
     "Do not expose private chain-of-thought.",
     'When finished, return one exact JSON object and no Markdown fence: {"schemaVersion":1,"type":"final","content":"owner-visible response","claimReceiptIds":["every successful apply or rollback receipt, and no other receipt"]}.',
@@ -1111,12 +1115,133 @@ function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgen
   assertIdentifier(input.principalId, "Principal ID", 160);
   assertIdentifier(input.idempotencyKey, "Idempotency key", 160);
   assertIdentifier(input.message, "Owner message", 8_192);
+  const deviceObservation =
+    input.deviceObservation === undefined
+      ? undefined
+      : validateDeviceObservation(input.deviceObservation);
   return {
     deviceId: input.deviceId,
     principalId: input.principalId,
     idempotencyKey: input.idempotencyKey,
     message: input.message,
+    ...(deviceObservation === undefined ? {} : { deviceObservation }),
   };
+}
+
+function validateDeviceObservation(
+  value: ConfigurationAgentMessageInput["deviceObservation"],
+): NonNullable<ConfigurationAgentMessageInput["deviceObservation"]> {
+  if (
+    !isRecord(value) ||
+    (value.osFamily !== "linux" && value.osFamily !== "macos" && value.osFamily !== "windows") ||
+    (value.role !== "main" && value.role !== "worker") ||
+    (value.knowledgeHealth !== "healthy" &&
+      value.knowledgeHealth !== "degraded" &&
+      value.knowledgeHealth !== "unknown") ||
+    !Array.isArray(value.capabilities) ||
+    !Array.isArray(value.agentAdapters)
+  ) {
+    throw unavailable("The Device observation supplied to Configuration Agent is invalid.");
+  }
+  const observedAtMs = optionalObservationTime(value.observedAtMs);
+  assertIdentifier(value.name, "Observed Device name", 256);
+  assertIdentifier(value.platformRelease, "Observed platform release", 256);
+  assertIdentifier(value.architecture, "Observed architecture", 256);
+  const capabilities = value.capabilities.map((capability) =>
+    sanitizeObservedCapability(capability),
+  );
+  const agentAdapters = value.agentAdapters.map((adapter) => sanitizeObservedAgentAdapter(adapter));
+  const sanitized: NonNullable<ConfigurationAgentMessageInput["deviceObservation"]> = {
+    name: value.name,
+    osFamily: value.osFamily,
+    platformRelease: value.platformRelease,
+    architecture: value.architecture,
+    role: value.role,
+    ...(observedAtMs === undefined ? {} : { observedAtMs }),
+    capabilities,
+    agentAdapters,
+    knowledgeHealth: value.knowledgeHealth,
+  };
+  if (Buffer.byteLength(JSON.stringify(sanitized), "utf8") > 64 * 1024) {
+    throw unavailable("The Device observation supplied to Configuration Agent is too large.");
+  }
+  return sanitized;
+}
+
+function sanitizeObservedCapability(
+  value: unknown,
+): NonNullable<ConfigurationAgentMessageInput["deviceObservation"]>["capabilities"][number] {
+  if (
+    !isRecord(value) ||
+    (value.verification !== "detected" &&
+      value.verification !== "verified" &&
+      value.verification !== "degraded" &&
+      value.verification !== "unavailable" &&
+      value.verification !== "disabled") ||
+    (value.evidenceSource !== undefined &&
+      value.evidenceSource !== "agent-adapter" &&
+      value.evidenceSource !== "capability-probe" &&
+      value.evidenceSource !== "workspace-registry")
+  ) {
+    throw unavailable("The Device capability observation is invalid.");
+  }
+  const observedAtMs = optionalObservationTime(value.observedAtMs);
+  assertIdentifier(value.name, "Observed capability name", 256);
+  if (value.version !== undefined) {
+    assertIdentifier(value.version, "Observed capability version", 256);
+  }
+  return {
+    name: value.name,
+    verification: value.verification,
+    ...(observedAtMs === undefined ? {} : { observedAtMs }),
+    ...(value.evidenceSource === undefined ? {} : { evidenceSource: value.evidenceSource }),
+    ...(value.version === undefined ? {} : { version: value.version }),
+  };
+}
+
+function sanitizeObservedAgentAdapter(
+  value: unknown,
+): NonNullable<ConfigurationAgentMessageInput["deviceObservation"]>["agentAdapters"][number] {
+  if (
+    !isRecord(value) ||
+    (value.provider !== "codex" &&
+      value.provider !== "claude" &&
+      value.provider !== "generic-command") ||
+    (value.readiness !== "ready" &&
+      value.readiness !== "degraded" &&
+      value.readiness !== "unavailable") ||
+    (value.compatibility !== "tested" &&
+      value.compatibility !== "compatible" &&
+      value.compatibility !== "untested" &&
+      value.compatibility !== "incompatible") ||
+    typeof value.observedAtMs !== "number" ||
+    !Number.isSafeInteger(value.observedAtMs) ||
+    value.observedAtMs < 0
+  ) {
+    throw unavailable("The Device Agent Adapter observation is invalid.");
+  }
+  assertIdentifier(value.adapterId, "Observed Agent Adapter ID", 160);
+  if (value.version !== undefined) {
+    assertIdentifier(value.version, "Observed Agent Adapter version", 256);
+  }
+  return {
+    provider: value.provider,
+    adapterId: value.adapterId,
+    readiness: value.readiness,
+    compatibility: value.compatibility,
+    ...(value.version === undefined ? {} : { version: value.version }),
+    observedAtMs: value.observedAtMs,
+  };
+}
+
+function optionalObservationTime(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw unavailable("The Device observation time is invalid.");
+  }
+  return value;
 }
 
 function assertAdapter(adapter: AgentAdapter): void {

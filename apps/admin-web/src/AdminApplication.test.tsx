@@ -161,6 +161,27 @@ const windowsMain: DeviceSummary = {
   serviceMode: "foreground",
 };
 
+const assessedWindowsMain: DeviceSummary = {
+  ...windowsMain,
+  capabilities: [
+    { name: "browser-automation", verification: "detected" },
+    { name: "claude-code", verification: "degraded" },
+    { name: "codex", verification: "verified" },
+    { name: "computer-use", verification: "unavailable" },
+  ],
+  agentAdapters: [
+    {
+      provider: "codex",
+      adapterId: "codex-app-server",
+      readiness: "ready",
+      compatibility: "tested",
+      version: "0.145.0",
+      observedAtMs: 1_753_000_000_000,
+    },
+  ],
+  knowledgeHealth: "healthy",
+};
+
 const macosWorker: DeviceSummary = {
   deviceId: "device_macos_worker",
   name: "Design Mac — owner label",
@@ -554,7 +575,9 @@ describe("Admin authentication and Task control", () => {
   });
 
   it("loads the authenticated Main Device without inventing capability or desktop state", async () => {
+    const assessDevice = vi.fn<AdminApi["assessDevice"]>().mockResolvedValue(assessedWindowsMain);
     const api = createApi({
+      assessDevice,
       listDevices: vi.fn<AdminApi["listDevices"]>().mockResolvedValue([windowsMain]),
     });
     const user = userEvent.setup();
@@ -577,11 +600,16 @@ describe("Admin authentication and Task control", () => {
     expect(screen.queryByText("Apple silicon")).toBeNull();
     expect(screen.queryByText("Verified")).toBeNull();
 
+    await user.click(screen.getByRole("button", { name: "Assess device" }));
+    await waitFor(() => expect(assessDevice).toHaveBeenCalledWith(windowsMain.deviceId));
+    expect(await screen.findByText("Local Agent setup")).toBeTruthy();
+    expect(screen.getByText("Verified")).toBeTruthy();
+
     await user.click(screen.getByRole("button", { name: "Configure" }));
     const chat = screen.getByRole("dialog", { name: "Configuration Chat" });
     expect(
       within(chat).getByText(
-        "I have not assessed this Device yet. Ask me to detect agent tools, browser automation, Computer Use readiness, or local Knowledge health before I propose changes.",
+        "Start with Assess device. I can then explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. I cannot run the assessment from chat, and provider credentials must stay out of messages.",
       ),
     ).toBeTruthy();
     expect(
@@ -814,6 +842,7 @@ function createApi(overrides: Partial<AdminApi> = {}): AdminApi {
     beginRecovery: vi.fn<AdminApi["beginRecovery"]>(),
     completeRecovery: vi.fn<AdminApi["completeRecovery"]>(),
     listDevices: vi.fn<AdminApi["listDevices"]>().mockResolvedValue([windowsMain]),
+    assessDevice: vi.fn<AdminApi["assessDevice"]>().mockResolvedValue(windowsMain),
     runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue(readyFeatures),
     sendConfigurationMessage: vi
       .fn<AdminApi["sendConfigurationMessage"]>()

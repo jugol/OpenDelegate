@@ -29,6 +29,7 @@ export interface AppProps {
   readonly initialArtifactId?: string;
   readonly initialChatOpen?: boolean;
   readonly initialSection?: AdminSection;
+  readonly onAssessDevice?: (deviceId: string) => Promise<void>;
   readonly onConfigurationMessage?: (deviceId: string, message: string) => Promise<string>;
   readonly onSecureSecretIngest?: (
     purpose: SecureSecretIngestPurpose,
@@ -46,6 +47,7 @@ export function App({
   initialArtifactId,
   initialChatOpen = false,
   initialSection = "devices",
+  onAssessDevice,
   onConfigurationMessage,
   onSecureSecretIngest,
   releaseIdentity = {
@@ -188,7 +190,14 @@ export function App({
         ) : activeSection === "join" && api !== undefined ? (
           <JoinSurface api={api} />
         ) : (
-          <DeviceSurface chatOpen={chatOpen} device={device} onConfigure={openChat} />
+          <DeviceSurface
+            chatOpen={chatOpen}
+            device={device}
+            onConfigure={openChat}
+            {...(device.role === "main" && onAssessDevice !== undefined
+              ? { onAssess: () => onAssessDevice(device.deviceId) }
+              : {})}
+          />
         )}
       </div>
 

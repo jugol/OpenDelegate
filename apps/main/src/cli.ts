@@ -35,6 +35,7 @@ import {
 } from "./index.ts";
 import {
   MainAgentRuntimeError,
+  probeMainAgentAdapters,
   resolveMainAgentComposition,
   type MainAgentProviderPreference,
 } from "./agent-runtime.ts";
@@ -1007,6 +1008,15 @@ async function createAndListen(
     releaseIdentity: identity,
     sourceCheckout: installationRoot,
     managedSecretStore,
+    mainDeviceAssessment: {
+      probeAgentAdapters: () =>
+        probeMainAgentAdapters({
+          paths: {
+            ...paths,
+            sourceCheckoutRoot: installationRoot,
+          },
+        }),
+    },
     ...(initialAdminAutoOpen === undefined ? {} : { initialAdminAutoOpen }),
     ...(agent.status === "ready"
       ? {

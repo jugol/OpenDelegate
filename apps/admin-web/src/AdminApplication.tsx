@@ -119,6 +119,26 @@ export function AdminApplication({
     );
   }
 
+  async function assessDevice(deviceId: string): Promise<void> {
+    const assessed = mapDeviceOverview(await browserApi.assessDevice(deviceId));
+    setDeviceFleet((current) => {
+      if (current === null) {
+        return current;
+      }
+      const devices = current.devices.map((candidate) =>
+        candidate.deviceId === deviceId ? assessed : candidate,
+      );
+      const first = devices[0];
+      if (first === undefined) {
+        return current;
+      }
+      return {
+        ...current,
+        devices: [first, ...devices.slice(1)],
+      };
+    });
+  }
+
   return (
     <App
       api={browserApi}
@@ -128,6 +148,7 @@ export function AdminApplication({
       executionAvailable={features.taskExecution.status === "ready"}
       {...(deepLink.artifactId === undefined ? {} : { initialArtifactId: deepLink.artifactId })}
       initialSection={deepLink.section}
+      onAssessDevice={assessDevice}
       onConfigurationMessage={(deviceId, message) =>
         browserApi.sendConfigurationMessage(deviceId, message)
       }

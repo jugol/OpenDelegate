@@ -28,8 +28,10 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
    Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
    if a required safety check fails.”_
 4. 按照 Agent 的引导完成 Owner Claim，并妥善保存全部十个一次性恢复代码。
-5. 在 Admin Web 右下角的 Configuration Chat 中完成 Device、Agent、Route、Artifact
-   以及可选的 Discord 设置。Discord 令牌只能输入安全凭据面板，切勿输入聊天框。
+5. 先在 Admin Web 中运行 **评估设备**，查看 Codex、Claude、浏览器自动化、Computer Use 和
+   Knowledge 的确定性结果，再通过右下角的 Configuration Chat 完成 Device、Agent、Route、
+   Artifact 以及可选的 Discord 设置。切勿在聊天中输入 Provider 凭据；Discord
+   令牌只能输入安全凭据面板。
 6. 添加 Device 时，请通过 Configuration Chat 签发一份短期、一次性的 Device
    Grant。不要打开该文件；使用 Owner 控制的安全方式将其交给目标 Device，然后让该 Device 上的 Agent 按照
    `skills/opendelegate-join/SKILL.md` 操作。

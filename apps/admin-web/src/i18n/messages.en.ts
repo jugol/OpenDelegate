@@ -127,6 +127,20 @@ export const englishMessages = {
     runs: "Runs",
     authority: "Authority & resources",
     configure: "Configure",
+    assessDevice: "Assess device",
+    assessingDevice: "Assessing…",
+    assessmentFailed: "Device assessment failed. No stored observation was replaced.",
+    localAgentSetup: "Local Agent setup",
+    localAgentSetupIntro:
+      "Configuration Chat uses the Main Agent selected during OpenDelegate init. It becomes available after the local adapter is installed, signed in, and passes its compatibility probe.",
+    codexSetupGuide:
+      "Codex: select Codex during init and explicitly share an existing authenticated Codex home when you want to reuse it.",
+    claudeSetupGuide:
+      "Claude: select Claude during init and authenticate the Main-managed Claude profile on this Device.",
+    agentCredentialNote:
+      "Provider credentials stay on this Device. Never paste them into Configuration Chat.",
+    assessmentScope:
+      "Assessment checks Codex, Claude, browser automation, Computer Use readiness, and local Knowledge health without asking an LLM to infer them.",
     facts: "Device facts",
     roles: "Roles",
     instructions: "Instructions",
@@ -591,6 +605,8 @@ export const englishMessages = {
     development: "Development",
     computerUse: "Computer Use",
     browserAutomation: "Browser automation",
+    configurationAssessmentIntro:
+      "Start with Assess device. I can then explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. I cannot run the assessment from chat, and provider credentials must stay out of messages.",
     localNetwork: "Local network",
     healthyPriorityOne: "Healthy · Priority 1",
     healthyPriority: "Healthy · Priority {priority}",
