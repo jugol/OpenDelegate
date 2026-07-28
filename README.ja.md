@@ -248,11 +248,12 @@ pnpm dev:admin
 Launcher を使用してください。
 
 Codex と Claude の認証は、既定で OpenDelegate Device ごとの `state/providers/codex` と
-`state/providers/claude` に分離されます。Owner は Main init または Worker join で
-`--codex-home ABSOLUTE_PATH` を指定し、既存のローカル Codex home を明示的な共有 SSOT
-として利用できます。OpenDelegate はログイン情報をコピーせず、そのパスを保存します。この場合、
-Codex の認証・設定・プラグイン・キャッシュ・native session ストレージは共有されますが、各 Task
-は引き続き固有の native session を使用します。グローバル home を暗黙に継承することはありません。
+`state/providers/claude` に分離されます。Owner は Main init で
+`--codex-home ABSOLUTE_PATH` または `--claude-home ABSOLUTE_PATH` を指定し、既存のローカル
+Provider ディレクトリを明示的な共有 SSOT として利用できます。OpenDelegate はログイン情報を
+コピーせず、そのパスを保存し、実行とデバイス評価に同じ home を使用します。Provider の設定・
+プラグイン・キャッシュ・native session ストレージは共有されますが、各 Task は引き続き固有の
+native session を使用します。グローバル home を暗黙に継承することはありません。
 
 ## リポジトリ構成
 

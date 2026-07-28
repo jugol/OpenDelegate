@@ -14,6 +14,7 @@ import {
 
 import {
   MainAgentRuntimeError,
+  probeMainAgentAdapters,
   resolveMainAgentComposition,
   type MainAgentRuntimePaths,
 } from "../src/agent-runtime.ts";
@@ -74,11 +75,13 @@ test("an explicit provider is persisted and conflicting startup fails closed", a
   );
 });
 
-test("an explicit shared Codex home upgrades a matching selection and survives restart", async (context) => {
+test("explicit shared provider homes upgrade one selection and survive restart", async (context) => {
   const paths = await runtimePaths(context);
   const sharedCodexHome = await mkdtemp(join(tmpdir(), "opendelegate-codex-ssot-"));
+  const sharedClaudeHome = await mkdtemp(join(tmpdir(), "opendelegate-claude-ssot-"));
   context.after(async () => {
     await rm(sharedCodexHome, { force: true, recursive: true });
+    await rm(sharedClaudeHome, { force: true, recursive: true });
   });
   const observedHomes: string[] = [];
   const createAdapter = (
@@ -99,6 +102,11 @@ test("an explicit shared Codex home upgrades a matching selection and survives r
     paths,
     requestedProvider: "codex",
     requestedCodexHome: sharedCodexHome,
+    requestedClaudeHome: sharedClaudeHome,
+    createAdapter,
+  });
+  await probeMainAgentAdapters({
+    paths,
     createAdapter,
   });
   const restarted = await resolveMainAgentComposition({
@@ -112,11 +120,14 @@ test("an explicit shared Codex home upgrades a matching selection and survives r
     join(paths.stateDirectory, "providers", "codex"),
     sharedCodexHome,
     sharedCodexHome,
+    sharedClaudeHome,
+    sharedCodexHome,
   ]);
   assert.deepEqual(JSON.parse(await readFile(join(paths.configDirectory, "agent.json"), "utf8")), {
-    schemaVersion: 2,
+    schemaVersion: 3,
     provider: "codex",
     codexHome: sharedCodexHome,
+    claudeHome: sharedClaudeHome,
   });
 });
 

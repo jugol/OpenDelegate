@@ -251,9 +251,10 @@ launcher when validating the bundled Main.
 
 Codex and Claude authentication is isolated per OpenDelegate Device under
 `state/providers/codex` and `state/providers/claude` by default. An owner may pass
-`--codex-home ABSOLUTE_PATH` during Main init or Worker join to use an existing
-local Codex home as an explicit shared source of truth. OpenDelegate persists that
-path without copying login material; Codex auth, settings, plugins, caches, and
+`--codex-home ABSOLUTE_PATH` or `--claude-home ABSOLUTE_PATH` during Main init to use
+an existing local provider directory as an explicit shared source of truth.
+OpenDelegate persists the path without copying login material and uses that same
+home for execution and Device assessment. Provider settings, plugins, caches, and
 native-session storage are then shared, while each Task still keeps its own native
 session. Ambient global homes are never inherited.
 

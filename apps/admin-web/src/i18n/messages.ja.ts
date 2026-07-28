@@ -139,7 +139,7 @@ export const japaneseMessages = {
     codexSetupGuide:
       "Codex: init で Codex を選択し、既存の認証を再利用する場合は認証済みの Codex home を明示的に共有します。",
     claudeSetupGuide:
-      "Claude: init で Claude を選択し、このデバイス上の Main 管理 Claude プロファイルを認証します。",
+      "Claude: --claude-home で認証済みの Claude 設定ディレクトリを再利用するか、このデバイス上の Main 管理 Claude プロファイルを認証します。",
     agentCredentialNote:
       "プロバイダーの認証情報はこのデバイスにだけ保存されます。設定チャットには貼り付けないでください。",
     assessmentScope:

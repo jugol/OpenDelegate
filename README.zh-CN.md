@@ -225,11 +225,11 @@ pnpm dev:admin
 此开发服务器不是 Owner 安装路径。验证打包后的 Main 时，请使用生成的 `internal-preview` launcher。
 
 Codex 和 Claude 身份验证默认按 OpenDelegate Device 隔离在 `state/providers/codex` 与
-`state/providers/claude` 中。Owner 可以在 Main init 或 Worker join 时指定
-`--codex-home ABSOLUTE_PATH`，将现有本地 Codex home 明确用作共享 SSOT。OpenDelegate
-只保存该路径，不复制登录信息。此时 Codex 身份验证、设置、插件、缓存和 native session
-存储会被共享，但每个 Task 仍使用各自独立的 native session。系统绝不会隐式继承全局 home，
-并且 first-class provider Run 会拒绝包含凭据的环境变量。
+`state/providers/claude` 中。Owner 可以在 Main init 时指定
+`--codex-home ABSOLUTE_PATH` 或 `--claude-home ABSOLUTE_PATH`，将现有本地 Provider 目录明确
+用作共享 SSOT。OpenDelegate 只保存该路径，不复制登录信息，并在执行与 Device 评估中使用同一
+home。Provider 设置、插件、缓存和 native session 存储会被共享，但每个 Task 仍使用各自独立的
+native session。系统绝不会隐式继承全局 home。
 
 ## 仓库结构
 

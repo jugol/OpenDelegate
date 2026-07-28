@@ -2,6 +2,15 @@ import { Languages } from "lucide-react";
 
 import { normalizeLocale, supportedLocales, useAdminI18n } from "./i18n";
 
+const compactLocaleLabels = {
+  en: "EN",
+  ko: "한국",
+  ja: "日本",
+  fr: "FR",
+  es: "ES",
+  "zh-CN": "中文",
+} as const;
+
 export function LanguageSelector({
   placement,
 }: {
@@ -10,8 +19,14 @@ export function LanguageSelector({
   const { locale, messages, setLocale } = useAdminI18n();
 
   return (
-    <label className={`language-selector language-selector--${placement}`}>
+    <label
+      className={`language-selector language-selector--${placement}`}
+      title={messages.common.language}
+    >
       <Languages aria-hidden="true" />
+      <span aria-hidden="true" className="language-selector__compact">
+        {compactLocaleLabels[locale]}
+      </span>
       <span className="sr-only">{messages.common.language}</span>
       <select
         aria-label={messages.common.language}

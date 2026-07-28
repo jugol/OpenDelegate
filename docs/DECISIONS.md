@@ -662,8 +662,9 @@ assessment tool and must not claim that it ran the probes.
 Worker capability assessment continues through the authenticated Worker heartbeat;
 Main does not pretend that a local button can execute arbitrary probes on a remote
 Worker. Provider authentication remains Device-local. Admin guidance names the
-selected-init-provider boundary, explicit shared Codex home option, Main-managed
-Claude profile, and prohibition on pasting provider credentials into chat.
+selected-init-provider boundary, explicit shared Codex and Claude home options,
+their managed-profile alternatives, and the prohibition on pasting provider
+credentials into chat.
 
 **Rationale:** Asking an LLM to guess installed tools wastes context and can produce
 false capability claims. The previous unassessed chat copy also implied an action
@@ -676,3 +677,27 @@ do not erase the last durable observation. Browser automation and Computer Use
 remain unavailable until an authenticated Worker observation or an equally strong
 explicit probe proves them. No Knowledge content, credential, provider output, or
 local path enters Main metadata or Configuration Chat.
+
+## D-052 — Explicit shared Claude home
+
+**Decision:** Main may receive an existing absolute local Claude configuration
+directory through `--claude-home`. OpenDelegate persists only that path, supplies it
+as `CLAUDE_CONFIG_DIR`, and uses it for both the Claude Adapter and deterministic
+Device assessment. It never copies, links, discovers, or stores Claude credentials.
+The shared Claude home may be configured while Codex remains the selected Main
+Agent so that both installed Adapters are assessed accurately.
+
+If `claude auth status --json` is not ready in that exact directory, setup instructs
+the Owner to run `claude auth login` with the same `CLAUDE_CONFIG_DIR` and reassess.
+The default remains the Device-local managed home when no explicit path is supplied.
+
+**Rationale:** A personal NAS may intentionally maintain one Claude authentication
+source of truth. Probing an unrelated managed home incorrectly reports a healthy
+local Claude installation as degraded and creates unnecessary duplicate login
+state.
+
+**Consequence:** Authentication rotation, logout, settings, hooks, plugins, caches,
+and provider-native sessions in that external directory are shared with its other
+local consumers. The directory must be owner-restricted and outside the source
+checkout. OpenDelegate still owns Task isolation, policy, session leases, and
+orchestration state.

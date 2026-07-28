@@ -136,7 +136,7 @@ export const englishMessages = {
     codexSetupGuide:
       "Codex: select Codex during init and explicitly share an existing authenticated Codex home when you want to reuse it.",
     claudeSetupGuide:
-      "Claude: select Claude during init and authenticate the Main-managed Claude profile on this Device.",
+      "Claude: pass --claude-home to reuse an authenticated Claude config directory, or authenticate the Main-managed Claude profile on this Device.",
     agentCredentialNote:
       "Provider credentials stay on this Device. Never paste them into Configuration Chat.",
     assessmentScope:

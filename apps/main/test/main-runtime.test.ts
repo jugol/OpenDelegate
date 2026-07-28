@@ -131,15 +131,22 @@ test("CLI init accepts secret-free database and exact HTTPS listener configurati
     "codex",
     "--codex-home",
     "/srv/codex-ssot",
+    "--claude-home",
+    "/srv/claude-ssot",
   ]);
   assert.equal(sharedCodex.agentProvider, "codex");
   assert.equal(sharedCodex.codexHome, resolve("/srv/codex-ssot"));
+  assert.equal(sharedCodex.claudeHome, resolve("/srv/claude-ssot"));
   assert.throws(
     () => parseArguments(["init", "--agent", "auto", "--codex-home", "/srv/codex-ssot"]),
     /requires --agent codex/,
   );
   assert.throws(
     () => parseArguments(["serve", "--codex-home", "/srv/codex-ssot"]),
+    /available only with init/,
+  );
+  assert.throws(
+    () => parseArguments(["serve", "--claude-home", "/srv/claude-ssot"]),
     /available only with init/,
   );
   assert.throws(

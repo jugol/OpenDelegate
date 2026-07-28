@@ -138,7 +138,7 @@ export const koreanMessages = {
     codexSetupGuide:
       "Codex: init에서 Codex를 선택하고, 기존 인증을 재사용하려면 인증된 Codex home을 명시적으로 공유하세요.",
     claudeSetupGuide:
-      "Claude: init에서 Claude를 선택한 뒤 이 장치의 Main 관리형 Claude 프로필을 인증하세요.",
+      "Claude: --claude-home으로 인증된 Claude 설정 디렉터리를 재사용하거나, 이 장치의 Main 관리형 Claude 프로필을 인증하세요.",
     agentCredentialNote:
       "프로바이더 자격 증명은 이 장치에만 남습니다. 환경설정 채팅에는 절대 붙여넣지 마세요.",
     assessmentScope:

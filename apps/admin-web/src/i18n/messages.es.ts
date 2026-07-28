@@ -146,7 +146,7 @@ export const spanishMessages = {
     codexSetupGuide:
       "Codex: elige Codex durante la inicialización y comparte explícitamente un Codex home ya autenticado si quieres reutilizarlo.",
     claudeSetupGuide:
-      "Claude: elige Claude durante la inicialización y autentica el perfil de Claude administrado por Main en este dispositivo.",
+      "Claude: usa --claude-home para reutilizar un directorio de Claude autenticado, o autentica el perfil de Claude administrado por Main en este dispositivo.",
     agentCredentialNote:
       "Las credenciales del proveedor permanecen en este dispositivo. Nunca las pegues en el chat de configuración.",
     assessmentScope:

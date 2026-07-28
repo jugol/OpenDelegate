@@ -718,7 +718,9 @@ may request a transition but cannot manufacture a state outside the transition r
     readiness, and local Knowledge health without spending LLM context. The bounded,
     non-secret result is durable in Main metadata and is supplied to Configuration
     Chat as authoritative context. Configuration Chat cannot claim that it ran the
-    assessment.
+    assessment. An Owner may explicitly bind existing Device-local Codex and Claude
+    configuration homes by absolute path; assessment and execution use those same
+    homes without copying or discovering credentials.
 15. Protected configuration changes use the same Policy and approval mechanisms as
     Task work.
 16. Admin Web does not attempt to reproduce the complete Discord Task chat in the

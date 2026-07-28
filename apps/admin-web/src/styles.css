@@ -333,6 +333,10 @@ textarea:focus-visible,
   stroke-width: 1.7px;
 }
 
+.language-selector__compact {
+  display: none;
+}
+
 .language-selector select {
   min-width: 0;
   height: 40px;
@@ -4072,6 +4076,25 @@ textarea:focus-visible,
 
   .approval-deny .danger-button {
     width: 100%;
+  }
+}
+
+@media (max-width: 1199px) {
+  .language-selector--rail {
+    width: 58px;
+  }
+
+  .language-selector--rail > svg {
+    display: none;
+  }
+
+  .language-selector--rail .language-selector__compact {
+    display: block;
+    color: var(--color-ink);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    line-height: 1;
   }
 }
 

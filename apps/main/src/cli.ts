@@ -148,6 +148,7 @@ export interface ParsedArguments {
   readonly listener?: MainListenerConfiguration;
   readonly agentProvider?: MainAgentProviderPreference;
   readonly codexHome?: string;
+  readonly claudeHome?: string;
   readonly adminAutoOpen?: boolean;
   readonly artifactConfigurationFile?: string;
   readonly discordConfigurationFile?: string;
@@ -207,6 +208,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   let tlsPrivateKeyPath: string | undefined;
   let agentProvider: MainAgentProviderPreference | undefined;
   let codexHome: string | undefined;
+  let claudeHome: string | undefined;
   let adminAutoOpen: boolean | undefined;
   let artifactConfigurationFile: string | undefined;
   let discordConfigurationFile: string | undefined;
@@ -243,6 +245,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       value === "--secret-backend-config" ||
       value === "--agent" ||
       value === "--codex-home" ||
+      value === "--claude-home" ||
       value === "--admin-auto-open" ||
       value === "--artifact-config" ||
       value === "--discord-config" ||
@@ -305,6 +308,9 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
           break;
         case "--codex-home":
           codexHome = resolve(target);
+          break;
+        case "--claude-home":
+          claudeHome = resolve(target);
           break;
         case "--admin-auto-open":
           if (target !== "enabled" && target !== "disabled") {
@@ -372,6 +378,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       listener !== undefined ||
       agentProvider !== undefined ||
       codexHome !== undefined ||
+      claudeHome !== undefined ||
       adminAutoOpen !== undefined ||
       artifactConfigurationFile !== undefined ||
       discordConfigurationFile !== undefined ||
@@ -387,6 +394,12 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   }
   if (codexHome !== undefined && agentProvider !== "codex") {
     throw new MainRuntimeError("CONFIG_INVALID", "--codex-home requires --agent codex.");
+  }
+  if (claudeHome !== undefined && (agentProvider === undefined || agentProvider === "disabled")) {
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      "--claude-home requires an explicit non-disabled --agent selection.",
+    );
   }
   if (discordTokenStdin && discordConfigurationFile === undefined) {
     throw new MainRuntimeError(
@@ -420,6 +433,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
     ...(listener === undefined ? {} : { listener }),
     ...(agentProvider === undefined ? {} : { agentProvider }),
     ...(codexHome === undefined ? {} : { codexHome }),
+    ...(claudeHome === undefined ? {} : { claudeHome }),
     ...(adminAutoOpen === undefined ? {} : { adminAutoOpen }),
     ...(artifactConfigurationFile === undefined ? {} : { artifactConfigurationFile }),
     ...(discordConfigurationFile === undefined ? {} : { discordConfigurationFile }),
@@ -641,6 +655,7 @@ async function runInit(options: ParsedArguments, identity: RuntimeIdentity): Pro
     options.agentProvider,
     options.adminAutoOpen,
     options.codexHome,
+    options.claudeHome,
   );
   let claimListener: Awaited<ReturnType<typeof startClaimListener>>;
   try {
@@ -914,6 +929,7 @@ async function createAndListen(
   requestedAgentProvider?: MainAgentProviderPreference,
   initialAdminAutoOpen?: boolean,
   requestedCodexHome?: string,
+  requestedClaudeHome?: string,
 ): Promise<MainRuntime> {
   const paths = resolveRuntimePaths({
     home,
@@ -926,6 +942,7 @@ async function createAndListen(
     },
     ...(requestedAgentProvider === undefined ? {} : { requestedProvider: requestedAgentProvider }),
     ...(requestedCodexHome === undefined ? {} : { requestedCodexHome }),
+    ...(requestedClaudeHome === undefined ? {} : { requestedClaudeHome }),
   });
   if (agent.status === "ready") {
     writeEvent("main.agent.ready", {
@@ -1453,6 +1470,7 @@ Usage:
   opendelegate init [--home PATH] [--admin-root PATH] [--open]
     [--agent auto|codex|claude|disabled]
     [--codex-home ABSOLUTE_PATH]
+    [--claude-home ABSOLUTE_PATH]
     [--admin-auto-open enabled|disabled]
     [--artifact-config ABSOLUTE_PATH]
     [--discord-config ABSOLUTE_PATH [--discord-token-stdin]]

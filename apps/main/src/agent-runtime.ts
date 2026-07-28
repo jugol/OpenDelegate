@@ -31,7 +31,20 @@ interface SharedCodexAgentConfiguration {
   readonly codexHome: string;
 }
 
-type SelectedAgentConfiguration = ManagedAgentConfiguration | SharedCodexAgentConfiguration;
+interface SharedProviderHomesAgentConfiguration {
+  readonly schemaVersion: 3;
+  readonly provider: SelectedMainAgentProvider;
+  readonly codexHome: string | null;
+  readonly claudeHome: string | null;
+}
+
+type SelectedAgentConfiguration =
+  ManagedAgentConfiguration | SharedCodexAgentConfiguration | SharedProviderHomesAgentConfiguration;
+
+interface ProviderHomes {
+  readonly codex?: string;
+  readonly claude?: string;
+}
 
 export interface MainAgentRuntimePaths {
   readonly home: string;
@@ -80,6 +93,7 @@ export interface ResolveMainAgentCompositionOptions {
   readonly paths: MainAgentRuntimePaths;
   readonly requestedProvider?: MainAgentProviderPreference;
   readonly requestedCodexHome?: string;
+  readonly requestedClaudeHome?: string;
   readonly createAdapter?: (
     provider: Exclude<SelectedMainAgentProvider, "disabled">,
     leaseStore: SessionLeaseStore,
@@ -127,25 +141,52 @@ export async function resolveMainAgentComposition(
   const requestedCodexHome =
     options.requestedCodexHome === undefined
       ? undefined
-      : validateSharedCodexHome(options.requestedCodexHome, options.paths.sourceCheckoutRoot);
+      : validateSharedProviderHome(
+          options.requestedCodexHome,
+          "Codex",
+          options.paths.sourceCheckoutRoot,
+        );
+  const requestedClaudeHome =
+    options.requestedClaudeHome === undefined
+      ? undefined
+      : validateSharedProviderHome(
+          options.requestedClaudeHome,
+          "Claude",
+          options.paths.sourceCheckoutRoot,
+        );
   if (requestedCodexHome !== undefined && requested !== "codex") {
     throw new MainAgentRuntimeError(
       "AGENT_HOME_CONFLICT",
       "A shared Codex home requires an explicit Codex Agent provider.",
     );
   }
-  const persistedCodexHome = configuredCodexHome(existing);
+  const persistedHomes = configuredProviderHomes(existing);
   if (
     requestedCodexHome !== undefined &&
-    persistedCodexHome !== undefined &&
-    requestedCodexHome !== persistedCodexHome
+    persistedHomes.codex !== undefined &&
+    requestedCodexHome !== persistedHomes.codex
   ) {
     throw new MainAgentRuntimeError(
       "AGENT_HOME_CONFLICT",
       "Main already has a different shared Codex home.",
     );
   }
-  const codexHome = requestedCodexHome ?? persistedCodexHome;
+  if (
+    requestedClaudeHome !== undefined &&
+    persistedHomes.claude !== undefined &&
+    requestedClaudeHome !== persistedHomes.claude
+  ) {
+    throw new MainAgentRuntimeError(
+      "AGENT_HOME_CONFLICT",
+      "Main already has a different shared Claude home.",
+    );
+  }
+  const effectiveCodexHome = requestedCodexHome ?? persistedHomes.codex;
+  const effectiveClaudeHome = requestedClaudeHome ?? persistedHomes.claude;
+  const providerHomes: ProviderHomes = {
+    ...(effectiveCodexHome === undefined ? {} : { codex: effectiveCodexHome }),
+    ...(effectiveClaudeHome === undefined ? {} : { claude: effectiveClaudeHome }),
+  };
   const reenableFromDisabled =
     existing?.provider === "disabled" && requested !== "auto" && requested !== "disabled";
   if (
@@ -199,7 +240,7 @@ export async function resolveMainAgentComposition(
     if (provider === "disabled") {
       continue;
     }
-    const home = providerHome(provider, options.paths, codexHome);
+    const home = providerHome(provider, options.paths, providerHomes);
     const adapter =
       options.createAdapter?.(provider, leaseStore, home) ??
       createProductionAdapter(provider, leaseStore, home);
@@ -245,28 +286,17 @@ export async function resolveMainAgentComposition(
     };
   }
 
+  const selectedConfiguration = selectionFor(selected.provider, providerHomes);
   if (existing === undefined) {
-    await persistSelection(
-      selectionPath,
-      selectionFor(selected.provider, codexHome),
-      options.paths.sourceCheckoutRoot,
-    );
-  } else if (reenableFromDisabled) {
-    await replaceSelection(
-      selectionPath,
-      existing,
-      selectionFor(selected.provider, codexHome),
-      options.paths.sourceCheckoutRoot,
-    );
+    await persistSelection(selectionPath, selectedConfiguration, options.paths.sourceCheckoutRoot);
   } else if (
-    existing.schemaVersion === 1 &&
-    existing.provider === "codex" &&
-    codexHome !== undefined
+    reenableFromDisabled ||
+    JSON.stringify(existing) !== JSON.stringify(selectedConfiguration)
   ) {
     await replaceSelection(
       selectionPath,
       existing,
-      selectionFor("codex", codexHome),
+      selectedConfiguration,
       options.paths.sourceCheckoutRoot,
     );
   }
@@ -286,7 +316,7 @@ export async function probeMainAgentAdapters(
     join(options.paths.configDirectory, selectionFilename),
     options.paths.sourceCheckoutRoot,
   );
-  const sharedCodexHome = configuredCodexHome(existing);
+  const providerHomes = configuredProviderHomes(existing);
   const leaseStore = new FileSessionLeaseStore({
     statePath: join(options.paths.stateDirectory, "native-session-leases.json"),
   });
@@ -297,12 +327,12 @@ export async function probeMainAgentAdapters(
           options.createAdapter?.(
             provider,
             leaseStore,
-            providerHome(provider, options.paths, sharedCodexHome),
+            providerHome(provider, options.paths, providerHomes),
           ) ??
           createProductionAdapter(
             provider,
             leaseStore,
-            providerHome(provider, options.paths, sharedCodexHome),
+            providerHome(provider, options.paths, providerHomes),
           );
         return structuredClone(await adapter.probe());
       }),
@@ -386,22 +416,30 @@ function createProductionAdapter(
 function providerHome(
   provider: Exclude<SelectedMainAgentProvider, "disabled">,
   paths: MainAgentRuntimePaths,
-  sharedCodexHome: string | undefined,
+  homes: ProviderHomes,
 ): string {
   return provider === "codex"
-    ? (sharedCodexHome ?? join(paths.stateDirectory, "providers", "codex"))
-    : join(paths.stateDirectory, "providers", "claude");
+    ? (homes.codex ?? join(paths.stateDirectory, "providers", "codex"))
+    : (homes.claude ?? join(paths.stateDirectory, "providers", "claude"));
 }
 
 function selectionFor(
   provider: SelectedMainAgentProvider,
-  sharedCodexHome: string | undefined,
+  homes: ProviderHomes,
 ): SelectedAgentConfiguration {
-  return provider === "codex" && sharedCodexHome !== undefined
+  if (homes.claude !== undefined || (provider !== "codex" && homes.codex !== undefined)) {
+    return {
+      schemaVersion: 3,
+      provider,
+      codexHome: homes.codex ?? null,
+      claudeHome: homes.claude ?? null,
+    };
+  }
+  return provider === "codex" && homes.codex !== undefined
     ? {
         schemaVersion: 2,
         provider,
-        codexHome: sharedCodexHome,
+        codexHome: homes.codex,
       }
     : {
         schemaVersion: 1,
@@ -409,24 +447,37 @@ function selectionFor(
       };
 }
 
-function configuredCodexHome(
+function configuredProviderHomes(
   configuration: SelectedAgentConfiguration | undefined,
-): string | undefined {
-  return configuration?.schemaVersion === 2 ? configuration.codexHome : undefined;
+): ProviderHomes {
+  if (configuration?.schemaVersion === 2) {
+    return { codex: configuration.codexHome };
+  }
+  if (configuration?.schemaVersion === 3) {
+    return {
+      ...(configuration.codexHome === null ? {} : { codex: configuration.codexHome }),
+      ...(configuration.claudeHome === null ? {} : { claude: configuration.claudeHome }),
+    };
+  }
+  return {};
 }
 
-function validateSharedCodexHome(value: string, sourceCheckoutRoot: string): string {
+function validateSharedProviderHome(
+  value: string,
+  provider: "Codex" | "Claude",
+  sourceCheckoutRoot: string,
+): string {
   if (!isAbsolute(value) || value.trim() !== value || value.includes("\0")) {
     throw new MainAgentRuntimeError(
       "AGENT_HOME_CONFLICT",
-      "The shared Codex home must be an absolute filesystem path.",
+      `The shared ${provider} home must be an absolute filesystem path.`,
     );
   }
   const resolved = resolve(value);
   if (isWithin(sourceCheckoutRoot, resolved)) {
     throw new MainAgentRuntimeError(
       "AGENT_HOME_CONFLICT",
-      "The shared Codex home must live outside the OpenDelegate source checkout.",
+      `The shared ${provider} home must live outside the OpenDelegate source checkout.`,
     );
   }
   return resolved;
@@ -513,7 +564,29 @@ async function readSelectedAgentConfiguration(
     return Object.freeze({
       schemaVersion: 2,
       provider: "codex",
-      codexHome: validateSharedCodexHome(parsed["codexHome"], sourceCheckoutRoot),
+      codexHome: validateSharedProviderHome(parsed["codexHome"], "Codex", sourceCheckoutRoot),
+    });
+  }
+  if (
+    hasExactKeys(parsed, ["schemaVersion", "provider", "codexHome", "claudeHome"]) &&
+    parsed["schemaVersion"] === 3 &&
+    (parsed["provider"] === "codex" ||
+      parsed["provider"] === "claude" ||
+      parsed["provider"] === "disabled") &&
+    (typeof parsed["codexHome"] === "string" || parsed["codexHome"] === null) &&
+    (typeof parsed["claudeHome"] === "string" || parsed["claudeHome"] === null)
+  ) {
+    return Object.freeze({
+      schemaVersion: 3,
+      provider: parsed["provider"],
+      codexHome:
+        parsed["codexHome"] === null
+          ? null
+          : validateSharedProviderHome(parsed["codexHome"], "Codex", sourceCheckoutRoot),
+      claudeHome:
+        parsed["claudeHome"] === null
+          ? null
+          : validateSharedProviderHome(parsed["claudeHome"], "Claude", sourceCheckoutRoot),
     });
   }
   throw corruptSelection();

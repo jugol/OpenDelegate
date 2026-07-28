@@ -566,6 +566,9 @@ Deliver the required visual setup, Device specification, and operational surface
   Claude adapters, browser automation, Computer Use readiness, and local Knowledge
   health, stores only the bounded observation in Main metadata, and exposes it to the
   Configuration Agent without Secret material.
+- Allow explicit owner-selected Codex and Claude configuration homes to be persisted
+  by path and reused by both execution and assessment, with managed homes as the
+  default and exact-home login guidance when authentication is not ready.
 - Implement Task, Work Order, Run, session lineage, event, approval, Artifact, error,
   and audit inspectors.
 - Implement emergency Task creation, pause, cancel, retry, drain, revoke, and stale

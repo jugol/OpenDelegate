@@ -188,12 +188,14 @@ describe("Admin language selection", () => {
 
     expect(screen.getByRole("heading", { name: englishMessages.device.facts })).toBeTruthy();
     expect(screen.getByText(firstRunDevice.name)).toBeTruthy();
+    expect(screen.getByText("EN")).toBeTruthy();
 
     await user.selectOptions(screen.getByLabelText(englishMessages.common.language), "ko");
 
     expect(screen.getByRole("heading", { name: koreanMessages.device.facts })).toBeTruthy();
     expect(screen.getByText(koreanMessages.known.mainCoordinator)).toBeTruthy();
     expect(screen.getByText(firstRunDevice.name)).toBeTruthy();
+    expect(screen.getByText("한국")).toBeTruthy();
     expect(document.documentElement.lang).toBe("ko");
     expect(meta.content).toBe(koreanMessages.common.metaDescription);
     expect(window.localStorage.getItem(ADMIN_LOCALE_STORAGE_KEY)).toBe("ko");

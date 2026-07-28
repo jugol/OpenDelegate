@@ -112,21 +112,23 @@ service readiness:
      existing local Codex source of truth, use that absolute path and retain it for
      `--codex-home ABSOLUTE_PATH`. Supply the selected path as `CODEX_HOME`, run `codex login` only
      when `codex login status` is not already ready, and require the status check to pass.
-   - Claude: `MAIN_HOME/state/providers/claude`, supplied as `CLAUDE_CONFIG_DIR`; run
-     `claude auth login` in the owner's interactive session, then require
-     `claude auth status --json` to report ready. Native Windows does not select Claude until its
-     fail-closed sandbox is available; use Codex or an explicitly configured WSL2/container path.
+   - Claude: use `MAIN_HOME/state/providers/claude` by default. To reuse an existing local Claude
+     SSOT, retain its absolute path for `--claude-home ABSOLUTE_PATH`. Supply the selected path as
+     `CLAUDE_CONFIG_DIR`, run `claude auth login` only when `claude auth status --json` is not
+     already ready, and require the status check to pass. Native Windows does not select Claude
+     until its fail-closed sandbox is available; use Codex or an explicitly configured
+     WSL2/container path.
 
-The Agent must not discover an ambient provider home or copy login material. An external Codex home
-is used only when the owner explicitly supplies it; because Codex has no auth-only home selector,
-that choice shares Codex settings, plugins, caches, and native-session storage as well as login. The
-Agent never accepts a login token through a prompt or places credentials in argv, an unrelated
-environment value, a log, or the bundle. It initializes Main with the selected `--agent codex` or
-`--agent claude` and, when selected, `--codex-home ABSOLUTE_PATH` only after the preview version and
-authentication checks pass. It keeps Main in that exact foreground owner environment and continues
-to the local claim flow. `Auto` means choosing a provider that passes this preview boundary, not
-accepting the first installed but unauthenticated CLI. It never upgrades the preview into a
-persistent or supported installation.
+The Agent must not discover an ambient provider home or copy login material. An external provider
+home is used only when the owner explicitly supplies it. Codex and Claude then share their settings,
+plugins, caches, and native-session storage as well as login with other local consumers of that
+directory. The Agent never accepts a login token through a prompt or places credentials in argv, an
+unrelated environment value, a log, or the bundle. It initializes Main with the selected
+`--agent codex` or `--agent claude` and any explicit `--codex-home ABSOLUTE_PATH` or
+`--claude-home ABSOLUTE_PATH` only after the preview version and authentication checks pass. It
+keeps Main in that exact foreground owner environment and continues to the local claim flow. `Auto`
+means choosing a provider that passes this preview boundary, not accepting the first installed but
+unauthenticated CLI. It never upgrades the preview into a persistent or supported installation.
 
 The Agent also enrolls the Main computer as its own co-located Worker. OpenDelegate does not treat
 Main as a control-only exception.
@@ -199,8 +201,9 @@ Work through these items with the Configuration Agent:
 
 The initial Main provider login already happened through the init Agent in section 2. Additional
 Codex and Claude adapters use managed provider homes by default and the same normal
-owner-interactive login rule. An explicit external Codex home remains shared by reference; never
-copy a global credential directory.
+owner-interactive login rule. Explicit external Codex and Claude homes remain shared by reference;
+never copy a global credential directory. If either Adapter is degraded only because authentication
+is not ready, authenticate the exact configured home and run **Assess device** again.
 
 If Configuration Chat nevertheless reports that its Agent is unavailable, use its read-only
 checklist and return to the init Agent's provider-readiness flow. Do not attempt the missing login

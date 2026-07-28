@@ -129,7 +129,8 @@ export const simplifiedChineseMessages = {
       "配置聊天使用 OpenDelegate 初始化时选择的 Main Agent。本地适配器安装、登录并通过兼容性探测后即可使用。",
     codexSetupGuide:
       "Codex：在初始化时选择 Codex；如需复用现有认证，请显式共享已认证的 Codex home。",
-    claudeSetupGuide: "Claude：在初始化时选择 Claude，并在此设备上认证由 Main 管理的 Claude 配置。",
+    claudeSetupGuide:
+      "Claude：使用 --claude-home 复用已认证的 Claude 配置目录，或在此设备上认证由 Main 管理的 Claude 配置。",
     agentCredentialNote: "提供商凭据只保留在此设备上。切勿将其粘贴到配置聊天中。",
     assessmentScope:
       "评估会直接检查 Codex、Claude、浏览器自动化、Computer Use 就绪状态和本地 Knowledge 健康状况，无需 LLM 推测。",
