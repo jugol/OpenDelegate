@@ -76,6 +76,16 @@ type ChatMessage = {
     }
 );
 
+type ChatMessageBlock =
+  | {
+      readonly kind: "paragraph";
+      readonly text: string;
+    }
+  | {
+      readonly items: readonly string[];
+      readonly kind: "ordered-list" | "unordered-list";
+    };
+
 interface ConfigurationChatProps {
   readonly deviceId: string;
   readonly discordSetupRecommended: boolean;
@@ -88,6 +98,7 @@ interface ConfigurationChatProps {
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,
   ) => Promise<SecureSecretIngestReceipt>;
+  readonly onUnreadAgentMessage?: () => void;
   readonly onSendMessage?: (message: string) => Promise<ConfigurationAgentReply>;
   readonly onToggleExpanded: () => void;
   readonly open: boolean;
@@ -103,6 +114,7 @@ export function ConfigurationChat({
   modal,
   onClose,
   onIngestSecret,
+  onUnreadAgentMessage,
   onSendMessage,
   onToggleExpanded,
   open,
@@ -134,8 +146,23 @@ export function ConfigurationChat({
   const scrollRegionRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLInputElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const openRef = useRef(open);
   const previousMessageCountRef = useRef(conversationMessages.length);
   const discordOnboardingAttemptedForOpenRef = useRef(false);
+
+  const notifyIfUnread = useCallback(() => {
+    if (!openRef.current || document.visibilityState !== "visible") {
+      onUnreadAgentMessage?.();
+    }
+  }, [onUnreadAgentMessage]);
+
+  const appendAgentMessage = useCallback(
+    (message: ChatMessage): void => {
+      setConversationMessages((current) => [...current, message]);
+      notifyIfUnread();
+    },
+    [notifyIfUnread],
+  );
 
   const sendConversationMessage = useCallback(
     async (
@@ -160,32 +187,30 @@ export function ConfigurationChat({
       setPending(true);
       try {
         const response = await onSendMessage(message);
-        setConversationMessages((current) => [
-          ...current,
-          {
-            id: `message-agent-${sequence + 1}`,
-            author: "agent",
-            content: response.content,
-            suggestedActions: response.suggestedActions,
-          },
-        ]);
+        appendAgentMessage({
+          id: `message-agent-${sequence + 1}`,
+          author: "agent",
+          content: response.content,
+          suggestedActions: response.suggestedActions,
+        });
         return true;
       } catch {
-        setConversationMessages((current) => [
-          ...current,
-          {
-            id: `message-agent-${sequence + 1}`,
-            author: "agent",
-            systemMessageKey: "failedMessage",
-          },
-        ]);
+        appendAgentMessage({
+          id: `message-agent-${sequence + 1}`,
+          author: "agent",
+          systemMessageKey: "failedMessage",
+        });
         return false;
       } finally {
         setPending(false);
       }
     },
-    [conversationMessages.length, onSendMessage, pending],
+    [appendAgentMessage, conversationMessages.length, onSendMessage, pending],
   );
+
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
 
   useEffect(() => {
     const discoveryMessage: ChatMessage =
@@ -354,34 +379,25 @@ export function ConfigurationChat({
       ]);
       try {
         const response = await onSendMessage(referenceMessage);
-        setConversationMessages((current) => [
-          ...current,
-          {
-            id: `message-agent-secure-reference-${sequence + 1}`,
-            author: "agent",
-            content: response.content,
-            suggestedActions: response.suggestedActions,
-          },
-        ]);
+        appendAgentMessage({
+          id: `message-agent-secure-reference-${sequence + 1}`,
+          author: "agent",
+          content: response.content,
+          suggestedActions: response.suggestedActions,
+        });
       } catch {
-        setConversationMessages((current) => [
-          ...current,
-          {
-            id: `message-agent-secure-reference-${sequence + 1}`,
-            author: "agent",
-            systemMessageKey: "failedMessage",
-          },
-        ]);
+        appendAgentMessage({
+          id: `message-agent-secure-reference-${sequence + 1}`,
+          author: "agent",
+          systemMessageKey: "failedMessage",
+        });
       }
     } catch {
-      setConversationMessages((current) => [
-        ...current,
-        {
-          id: `message-agent-secure-store-${sequence}`,
-          author: "agent",
-          systemMessageKey: "secureStoreFailed",
-        },
-      ]);
+      appendAgentMessage({
+        id: `message-agent-secure-store-${sequence}`,
+        author: "agent",
+        systemMessageKey: "secureStoreFailed",
+      });
     } finally {
       material.fill(0);
       setPending(false);
@@ -486,11 +502,13 @@ export function ConfigurationChat({
                   </span>
                 ) : null}
                 <div className="chat-message-body">
-                  <p>
-                    {message.systemMessageKey === undefined
-                      ? message.content
-                      : copy.chat[message.systemMessageKey]}
-                  </p>
+                  <ChatMessageCopy
+                    content={
+                      message.systemMessageKey === undefined
+                        ? message.content
+                        : copy.chat[message.systemMessageKey]
+                    }
+                  />
                   {message.author === "agent" &&
                   mainDevice &&
                   onIngestSecret !== undefined &&
@@ -720,6 +738,82 @@ export function ConfigurationChat({
       </div>
     </div>
   );
+}
+
+function ChatMessageCopy({ content }: { readonly content: string }): React.JSX.Element {
+  return (
+    <div className="chat-message-copy">
+      {parseChatMessageBlocks(content).map((block, index) => {
+        if (block.kind === "paragraph") {
+          return <p key={`paragraph-${index}`}>{block.text}</p>;
+        }
+        const items = block.items.map((item, itemIndex) => (
+          <li key={`${itemIndex}-${item}`}>{item}</li>
+        ));
+        return block.kind === "ordered-list" ? (
+          <ol key={`ordered-list-${index}`}>{items}</ol>
+        ) : (
+          <ul key={`unordered-list-${index}`}>{items}</ul>
+        );
+      })}
+    </div>
+  );
+}
+
+function parseChatMessageBlocks(content: string): readonly ChatMessageBlock[] {
+  const blocks: ChatMessageBlock[] = [];
+  let paragraphLines: string[] = [];
+  let listItems: string[] = [];
+  let listKind: "ordered-list" | "unordered-list" | null = null;
+
+  function flushParagraph(): void {
+    if (paragraphLines.length > 0) {
+      blocks.push({ kind: "paragraph", text: paragraphLines.join("\n") });
+      paragraphLines = [];
+    }
+  }
+
+  function flushList(): void {
+    if (listKind !== null && listItems.length > 0) {
+      blocks.push({ kind: listKind, items: listItems });
+      listItems = [];
+      listKind = null;
+    }
+  }
+
+  for (const rawLine of content.replaceAll("\r\n", "\n").replaceAll("\r", "\n").split("\n")) {
+    const line = rawLine.trim();
+    if (line === "") {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const orderedItem = line.match(/^\d+[.)]\s+(.+)$/u);
+    const unorderedItem = line.match(/^[-*•]\s+(.+)$/u);
+    const nextListKind =
+      orderedItem !== null
+        ? ("ordered-list" as const)
+        : unorderedItem !== null
+          ? ("unordered-list" as const)
+          : null;
+    if (nextListKind !== null) {
+      flushParagraph();
+      if (listKind !== null && listKind !== nextListKind) {
+        flushList();
+      }
+      listKind = nextListKind;
+      listItems.push((orderedItem ?? unorderedItem)![1]!);
+      continue;
+    }
+
+    flushList();
+    paragraphLines.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks;
 }
 
 function guidedSetupDescriptor(goal: GuidedSetupGoal, copy: Messages): GuidedSetupDescriptor {

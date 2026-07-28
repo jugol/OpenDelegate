@@ -595,6 +595,11 @@ Deliver the required visual setup, Device specification, and operational surface
   Agent-guided Discord onboarding turn on the first Main Configuration Chat opening
   in that browser session. Do not trigger first-time onboarding for a configured but
   degraded, reconnecting, starting, or unavailable Discord runtime.
+- Preserve Agent-authored paragraph breaks and turn line-oriented numbered or
+  bulleted steps into semantic Configuration Chat lists. Keep an in-flight
+  configuration conversation mounted across Admin section navigation, and surface
+  responses that arrive off-screen through a localized unread badge, visible
+  summary, and accessible live notification until the owner opens the chat.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.

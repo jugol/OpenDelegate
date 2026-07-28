@@ -513,6 +513,88 @@ describe("first-run Device overview", () => {
     expect(document.activeElement).toBe(composer);
   });
 
+  it("renders Agent paragraphs and numbered steps as readable message structure", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        executionAvailable
+        initialChatOpen
+        onConfigurationMessage={async () => ({
+          content:
+            "Discord is not connected.\n\nComplete these steps:\n1. Create a bot.\n2. Enable Community.\n\nDo not paste the bot token into chat.",
+          suggestedActions: [],
+        })}
+      />,
+    );
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "Help me configure Discord.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    const agentMessages = screen.getAllByRole("article", { name: "OpenDelegate" });
+    const response = agentMessages.at(-1)!;
+    expect(within(response).getAllByRole("paragraph")).toHaveLength(3);
+    expect(
+      within(response)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Create a bot.", "Enable Community."]);
+  });
+
+  it("announces an unread Agent response when Configuration Chat is closed", async () => {
+    let resolveResponse!: (value: {
+      readonly content: string;
+      readonly suggestedActions: readonly [];
+    }) => void;
+    const response = new Promise<{
+      readonly content: string;
+      readonly suggestedActions: readonly [];
+    }>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const user = userEvent.setup();
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        executionAvailable
+        initialChatOpen
+        onConfigurationMessage={() => response}
+      />,
+    );
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "Inspect Discord.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
+
+    await act(() => {
+      resolveResponse({
+        content: "Discord guidance is ready.",
+        suggestedActions: [],
+      });
+    });
+
+    const notification = await screen.findByRole("status", {
+      name: "Configuration Chat notifications",
+    });
+    expect(notification.textContent).toBe("New Configuration Chat response. 1 unread.");
+    const launcher = screen.getByRole("button", {
+      name: "Open Configuration Chat — new response available",
+    });
+    expect(within(launcher).getByText("1")).toBeTruthy();
+
+    await user.click(launcher);
+    expect(notification.textContent).toBe("");
+    expect(await screen.findByText("Discord guidance is ready.")).toBeTruthy();
+  });
+
   it("exposes only aggregate local Knowledge health", () => {
     renderApp();
 

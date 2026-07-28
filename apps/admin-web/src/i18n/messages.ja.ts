@@ -126,6 +126,11 @@ export const japaneseMessages = {
     askPlaceholder: "このデバイスについて質問する…",
     send: "メッセージを送信",
     open: "設定チャットを開く",
+    openUnread: "設定チャットを開く — 新しい返信があります",
+    notificationRegion: "設定チャットの通知",
+    unreadAnnouncement: "設定チャットに新しい返信があります。未読 {count} 件。",
+    unreadStatus: "設定チャットに新しい返信",
+    unreadCount: "未読 {count} 件",
   },
   navigation: {
     devices: "デバイス",

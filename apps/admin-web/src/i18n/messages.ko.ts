@@ -125,6 +125,11 @@ export const koreanMessages = {
     askPlaceholder: "이 장치에 관해 질문하세요…",
     send: "메시지 보내기",
     open: "설정 채팅 열기",
+    openUnread: "설정 채팅 열기 — 새 응답 있음",
+    notificationRegion: "설정 채팅 알림",
+    unreadAnnouncement: "설정 채팅에 새 응답이 있습니다. 읽지 않은 응답 {count}개.",
+    unreadStatus: "새 설정 채팅 응답",
+    unreadCount: "읽지 않은 응답 {count}개",
   },
   navigation: {
     devices: "장치",

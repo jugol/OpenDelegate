@@ -759,6 +759,12 @@ may request a transition but cannot manufacture a state outside the transition r
     that the current binding is being inspected; the resulting guidance and actions
     still come from the Agent response. Degraded or reconnecting Discord states do not
     masquerade as first-time setup.
+25. Configuration Chat preserves Agent-authored paragraph breaks and renders
+    line-oriented numbered or bulleted steps as readable semantic lists without
+    accepting arbitrary Agent-authored HTML. If an Agent response arrives while the
+    chat is closed or the Admin page is hidden, Admin Web retains the conversation
+    across section navigation and exposes a localized unread badge, visible summary,
+    and accessible live notification. Opening the chat marks those responses read.
 
 ### FR-16 — Policy and approvals
 

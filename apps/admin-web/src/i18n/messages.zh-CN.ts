@@ -114,6 +114,11 @@ export const simplifiedChineseMessages = {
     askPlaceholder: "询问有关此设备的问题…",
     send: "发送消息",
     open: "打开配置对话",
+    openUnread: "打开配置对话 — 有新回复",
+    notificationRegion: "配置对话通知",
+    unreadAnnouncement: "配置对话有新回复。{count} 条未读。",
+    unreadStatus: "配置对话有新回复",
+    unreadCount: "{count} 条未读",
   },
   navigation: {
     devices: "设备",

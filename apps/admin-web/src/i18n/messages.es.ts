@@ -131,6 +131,11 @@ export const spanishMessages = {
     askPlaceholder: "Pregunta sobre este dispositivo…",
     send: "Enviar mensaje",
     open: "Abrir el chat de configuración",
+    openUnread: "Abrir el chat de configuración — hay una respuesta nueva",
+    notificationRegion: "Notificaciones del chat de configuración",
+    unreadAnnouncement: "Hay una respuesta nueva en el chat de configuración. {count} sin leer.",
+    unreadStatus: "Nueva respuesta de configuración",
+    unreadCount: "{count} sin leer",
   },
   navigation: {
     devices: "Dispositivos",

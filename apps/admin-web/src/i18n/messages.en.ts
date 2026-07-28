@@ -123,6 +123,11 @@ export const englishMessages = {
     askPlaceholder: "Ask about this Device…",
     send: "Send message",
     open: "Open Configuration Chat",
+    openUnread: "Open Configuration Chat — new response available",
+    notificationRegion: "Configuration Chat notifications",
+    unreadAnnouncement: "New Configuration Chat response. {count} unread.",
+    unreadStatus: "New Configuration Chat response",
+    unreadCount: "{count} unread",
   },
   navigation: {
     devices: "Devices",

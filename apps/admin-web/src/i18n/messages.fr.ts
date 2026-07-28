@@ -131,6 +131,11 @@ export const frenchMessages = {
     askPlaceholder: "Posez une question sur cet appareil…",
     send: "Envoyer le message",
     open: "Ouvrir l’assistant de configuration",
+    openUnread: "Ouvrir l’assistant de configuration — nouvelle réponse disponible",
+    notificationRegion: "Notifications de l’assistant de configuration",
+    unreadAnnouncement: "Nouvelle réponse de configuration. Réponses non lues : {count}.",
+    unreadStatus: "Nouvelle réponse de configuration",
+    unreadCount: "Réponses non lues : {count}",
   },
   navigation: {
     devices: "Appareils",

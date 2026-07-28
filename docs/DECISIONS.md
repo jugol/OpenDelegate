@@ -812,3 +812,30 @@ degraded, stopped, or unavailable never receives first-time onboarding merely be
 its status is not ready. Workers never initiate this Main-service flow. Raw tokens
 still enter only through secure intake after the Agent identifies them as the next
 missing value.
+
+## D-057 — Readable Configuration Agent responses and transient unread state
+
+**Decision:** Configuration Chat preserves Agent-authored paragraph boundaries and
+converts line-oriented numbered or bulleted steps into semantic lists. It does not
+interpret arbitrary HTML or provide a general Agent-authored component surface.
+The active Device conversation remains mounted while the owner navigates between
+Admin sections so an in-flight response is not discarded merely because its drawer
+closed.
+
+When an Agent response or bounded system failure arrives while Configuration Chat is
+closed or the Admin page is hidden, Admin Web records a transient unread count. The
+closed launcher exposes that state through a numeric badge, a localized visible
+summary, and an accessible live status. Opening the chat marks the count read; a
+visible open chat is already the notification surface. Unread state is browser
+presentation state, not durable configuration or orchestration state.
+
+**Rationale:** Collapsing line breaks turns a detailed onboarding response into one
+dense paragraph. A long native Agent turn can also finish after the owner closes the
+drawer or moves to another Admin section, where a silent launcher gives no indication
+that guidance is ready.
+
+**Consequence:** Agent content remains plain, safely escaped React text while gaining
+paragraph and list structure. Unread presentation never creates a Task event, sends
+an external notification, or changes Agent session semantics. Switching or reloading
+Devices may reset this transient indicator; durable configuration session recovery
+remains Main's responsibility.

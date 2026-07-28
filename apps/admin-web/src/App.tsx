@@ -1,5 +1,5 @@
 import { MessageCircle } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   AdminApi,
@@ -13,7 +13,7 @@ import { ApprovalSurface } from "./ApprovalSurface";
 import { AuditSurface } from "./AuditSurface";
 import { ConfigurationChat } from "./ConfigurationChat";
 import { AdminRail, type AdminSection, DeviceSurface } from "./DeviceSurface";
-import { useAdminI18n } from "./i18n";
+import { formatMessage, useAdminI18n } from "./i18n";
 import { JoinSurface } from "./JoinSurface";
 import { TaskSurface } from "./TaskSurface";
 import { useMediaQuery } from "./use-media-query";
@@ -68,6 +68,7 @@ export function App({
   const [chatOpen, setChatOpen] = useState(initialChatOpen && initialSection === "devices");
   const [chatExpanded, setChatExpanded] = useState(false);
   const [chatFocusRequestId, setChatFocusRequestId] = useState(0);
+  const [unreadChatMessages, setUnreadChatMessages] = useState(0);
   const chatWasOpenRef = useRef(chatOpen);
   const launcherRef = useRef<HTMLButtonElement | null>(null);
   const lastChatTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -115,11 +116,31 @@ export function App({
     focusTarget?.focus();
   }, [chatOpen]);
 
+  useEffect(() => {
+    if (!chatOpen) {
+      return;
+    }
+
+    const markVisibleChatAsRead = (): void => {
+      if (document.visibilityState === "visible") {
+        setUnreadChatMessages(0);
+      }
+    };
+    document.addEventListener("visibilitychange", markVisibleChatAsRead);
+    markVisibleChatAsRead();
+    return () => document.removeEventListener("visibilitychange", markVisibleChatAsRead);
+  }, [chatOpen]);
+
+  const recordUnreadAgentMessage = useCallback(() => {
+    setUnreadChatMessages((current) => Math.min(current + 1, 99));
+  }, []);
+
   function openChat(trigger: HTMLButtonElement): void {
     lastChatTriggerRef.current = trigger;
     setActiveSection("devices");
     setChatOpen(true);
     setChatFocusRequestId((current) => current + 1);
+    setUnreadChatMessages(0);
   }
 
   function closeChat(): void {
@@ -207,37 +228,48 @@ export function App({
         )}
       </div>
 
-      {activeSection === "devices" ? (
-        <ConfigurationChat
-          deviceId={device.deviceId}
-          discordSetupRecommended={discordSetupRecommended}
-          expanded={chatExpanded}
-          focusRequestId={chatFocusRequestId}
-          key={device.deviceId}
-          mainDevice={device.role === "main"}
-          modal={chatModal}
-          onClose={closeChat}
-          {...(configurationAgentAvailable && onConfigurationMessage !== undefined
-            ? {
-                ...(onSecureSecretIngest === undefined
-                  ? {}
-                  : { onIngestSecret: onSecureSecretIngest }),
-                onSendMessage: (message: string) =>
-                  onConfigurationMessage(device.deviceId, message),
-              }
-            : {})}
-          onToggleExpanded={() => setChatExpanded((current) => !current)}
-          open={chatOpen}
-          session={device.configurationSession}
-        />
-      ) : null}
+      <ConfigurationChat
+        deviceId={device.deviceId}
+        discordSetupRecommended={discordSetupRecommended}
+        expanded={chatExpanded}
+        focusRequestId={chatFocusRequestId}
+        key={device.deviceId}
+        mainDevice={device.role === "main"}
+        modal={chatModal}
+        onClose={closeChat}
+        onUnreadAgentMessage={recordUnreadAgentMessage}
+        {...(configurationAgentAvailable && onConfigurationMessage !== undefined
+          ? {
+              ...(onSecureSecretIngest === undefined
+                ? {}
+                : { onIngestSecret: onSecureSecretIngest }),
+              onSendMessage: (message: string) => onConfigurationMessage(device.deviceId, message),
+            }
+          : {})}
+        onToggleExpanded={() => setChatExpanded((current) => !current)}
+        open={chatOpen}
+        session={device.configurationSession}
+      />
+
+      <span
+        aria-label={messages.chat.notificationRegion}
+        aria-live="polite"
+        className="sr-only"
+        role="status"
+      >
+        {unreadChatMessages > 0
+          ? formatMessage(messages.chat.unreadAnnouncement, {
+              count: unreadChatMessages,
+            })
+          : ""}
+      </span>
 
       {!chatOpen ? (
         <button
           aria-controls="configuration-chat"
           aria-expanded="false"
-          aria-label={messages.chat.open}
-          className={`chat-launcher ${
+          aria-label={unreadChatMessages > 0 ? messages.chat.openUnread : messages.chat.open}
+          className={`chat-launcher${unreadChatMessages > 0 ? " chat-launcher--unread" : ""} ${
             activeSection === "tasks"
               ? "chat-launcher--tasks"
               : activeSection === "approvals"
@@ -249,6 +281,21 @@ export function App({
           type="button"
         >
           <MessageCircle aria-hidden="true" />
+          {unreadChatMessages > 0 ? (
+            <>
+              <span aria-hidden="true" className="chat-launcher-badge">
+                {unreadChatMessages}
+              </span>
+              <span aria-hidden="true" className="chat-launcher-unread-copy">
+                <strong>{messages.chat.unreadStatus}</strong>
+                <small>
+                  {formatMessage(messages.chat.unreadCount, {
+                    count: unreadChatMessages,
+                  })}
+                </small>
+              </span>
+            </>
+          ) : null}
         </button>
       ) : null}
     </div>
