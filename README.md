@@ -184,6 +184,11 @@ above so Discord and every other owner choice are resolved before the durable Ma
 created. The internal preview runs in the foreground, does not install a persistent OS service, and
 must not be published under a release tag.
 
+The builder smokes the bundle with temporary state and an isolated dynamic loopback listener pair.
+It can run while an existing Main owns its configured ports and never stops, reconfigures, or
+upgrades that Main. Building creates inactive bytes; persistent activation belongs exclusively to
+the packaged native service lifecycle.
+
 A production build intentionally fails while any acceptance criterion is incomplete:
 
 ```sh

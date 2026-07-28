@@ -329,6 +329,8 @@ it does not create or mirror a Forum conversation.
   policy-gated actions proceed.
 - Let deterministic routes exhaust their configured attempts before asking an Agent to diagnose a
   connection failure.
+- Build candidate bundles without stopping Main. Bundle smoke uses separate temporary state and
+  listeners; activate a persistent update only through the packaged service lifecycle.
 - Keep Main backed up according to [Backup and restore](BACKUP_AND_RESTORE.md). Device Knowledge is
   intentionally local and may be lost with that Device.
 
@@ -358,6 +360,7 @@ Keep diagnostic output redacted before sharing it.
 | Computer Use is unavailable | Check the per-Device graphical helper, unlocked desktop, and OS privacy permissions. Headless Linux remains healthy with Computer Use unavailable. |
 | Owner access is lost | Use one saved recovery code locally, rotate the passphrase, and replace the remaining recovery set. Do not depend on Discord for recovery. |
 | An update fails | Keep the previous active version, inspect the bounded health failure, and follow [Service lifecycle](SERVICE_LIFECYCLE.md). Do not bypass rollback. |
+| A stopped preview wrapper no longer restarts | A transient supervisor is not an installed service and may remove its registration when stopped. Relaunch the exact validated foreground command, then use the native service lifecycle for any persistent supported installation. |
 
 For security-sensitive issues, follow [Security policy](../SECURITY.md). For the exact distinction
 between an internal preview, release candidate, and supported release, see

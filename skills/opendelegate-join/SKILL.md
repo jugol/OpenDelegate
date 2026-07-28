@@ -108,6 +108,10 @@ external Worker home below that StateDirectory. Only encrypted-credential and de
 appear in argv. The plaintext key must exist only in bounded stdin and the systemd runtime
 credential directory.
 
+That transient unit is a disposable enrollment boundary, not the installed Worker service. Do not
+reuse its name for restart, persistence, or upgrade, and do not infer that stopping it leaves a
+restartable unit definition behind.
+
 The deterministic implementation must:
 
 1. generate a Device-local non-exported or restrictively stored ECDSA P-256 key;

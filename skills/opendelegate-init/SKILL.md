@@ -92,6 +92,9 @@ Skip directly to step 5 when section 1 identified a packaged bundle.
    pinned official Node archive, verifies its audited SHA-256, refuses to overwrite an existing
    path, requires `internal-preview` in the destination name, marks the exact evidence state in
    metadata, writes checksums, and smokes Main, Admin, local claim, owner login, and clean shutdown.
+   Packaged smoke uses temporary state and an isolated dynamic loopback listener pair. Inspect any
+   existing Main first, but never stop or reconfigure it to free ports for the build. Bundle
+   construction must leave the installed process, service definition, and active version unchanged.
 5. Invoke the packaged `opendelegate` or `opendelegate.cmd`; do not depend on a globally installed
    Node runtime. Use a repository TypeScript entrypoint only to diagnose the builder itself.
 
@@ -326,6 +329,14 @@ logged-in helper key remains in the owner DPAPI vault; never copy it into the se
 Stage upgrades, verify health, and roll back on failure. A healthy core must not be reported as
 Computer Use ready when the helper, desktop, or permissions are absent. Network and firewall
 mutations still require explicit owner approval.
+
+Do not activate a persistent version with an interpolated SSH or shell mutation. Use the packaged
+`service install` or `service upgrade` command with the exact active version and a caller-stable
+command ID. The lifecycle journal, health check, and rollback own the transition. `systemd-run`,
+one-shot launchd experiments, scheduled-process wrappers, and similar transient supervisors may wrap
+a foreground internal preview, but they are not an installed service. If stopped, their registration
+may disappear; retain and report the exact foreground relaunch procedure instead of claiming restart
+or reboot persistence.
 
 ## 6. Finish conversational setup
 

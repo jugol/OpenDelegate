@@ -132,6 +132,13 @@ for the current OS and architecture, verifies its audited archive SHA-256, and w
 - the Admin assets, init skill, remaining release documentation, and launchers; and
 - the bundled Main runtime and production dependencies.
 
+The packaged smoke reserves an isolated, dynamically selected adjacent loopback listener pair and
+uses a temporary Main home. It does not require ports `4380` or `4381`, stop a running Main, modify
+an installed service, or activate the new bundle. If no safe listener pair can be reserved, the
+build fails without touching the installed runtime. If another local process claims a selected
+pair during the launcher handoff, smoke retries a bounded number of times with a fresh temporary
+home and pair.
+
 All bundle modes export the clean build commit into a disposable directory, run the frozen install
 and production deployment there, and remove it after success or failure. Packaging therefore
 cannot rewrite the live checkout's pnpm state, and ignored, untracked, or environment files cannot
@@ -165,6 +172,12 @@ not establish that release identity.
 Use `opendelegate.cmd` on Windows or `./opendelegate` on macOS/Linux. Runtime state, credentials,
 databases, logs, and generated Artifacts must remain outside both the source checkout and the
 release bundle.
+
+Building is not upgrading. For a persistent supported installation, activate exact verified bytes
+only through the native `opendelegate service install` or `opendelegate service upgrade` lifecycle
+described in [`SERVICE_LIFECYCLE.md`](../SERVICE_LIFECYCLE.md). A foreground or transient supervisor
+used for internal-preview validation is not persistence proof; stopping such a wrapper may remove
+its supervisor registration, so retain the exact validated relaunch procedure.
 
 ## Legacy preview attestation for service installation
 

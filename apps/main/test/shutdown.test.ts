@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { reportCliFailure, shutdownMainRuntime } from "../src/cli.ts";
+import { mapMainListenerError, reportCliFailure, shutdownMainRuntime } from "../src/cli.ts";
 import { MainRuntimeError } from "../src/index.ts";
 import {
   cleanupFailureFor,
@@ -29,6 +29,19 @@ test("shutdown listeners release a real child process after success and failure"
     message: "OpenDelegate could not shut down cleanly.",
   });
   assert.doesNotMatch(failed.stderr, /private spawned shutdown detail/u);
+});
+
+test("listener bind collisions retain a stable public startup code", () => {
+  const bindFailure = Object.assign(new Error("private bind detail"), {
+    code: "EADDRINUSE",
+  });
+  const wrapped = new Error("private framework wrapper", { cause: bindFailure });
+  const mapped = mapMainListenerError(wrapped, "Main");
+
+  assert.ok(mapped instanceof MainRuntimeError);
+  assert.equal(mapped.code, "MAIN_LISTENER_UNAVAILABLE");
+  assert.equal(mapped.message, "Main listener is unavailable.");
+  assert.equal(mapped.cause, wrapped);
 });
 
 test("competing shutdown triggers close once and release resumed stdin", async () => {

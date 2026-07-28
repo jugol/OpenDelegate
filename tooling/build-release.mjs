@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import {
   chmod,
   copyFile,
@@ -16,6 +16,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -2760,6 +2761,134 @@ const PORTABLE_PACKAGED_MAIN_READINESS_PHASE_TIMEOUT_MS = 20_000;
 // Keep the smoke bound above any one 60-second native command without allowing
 // a stalled packaged Main to wait indefinitely.
 const WINDOWS_PACKAGED_MAIN_READINESS_PHASE_TIMEOUT_MS = 180_000;
+const MINIMUM_PACKAGED_SMOKE_PORT = 1_024;
+const MAXIMUM_PACKAGED_SMOKE_MAIN_PORT = 65_534;
+const DEFAULT_PACKAGED_SMOKE_PORT_FLOOR = 20_000;
+const DEFAULT_PACKAGED_SMOKE_PORT_CEILING = 60_000;
+const MAXIMUM_PACKAGED_SMOKE_PORT_ATTEMPTS = 128;
+const MAXIMUM_PACKAGED_SMOKE_START_ATTEMPTS = 3;
+const PACKAGED_SMOKE_LISTENER_UNAVAILABLE_CODE = "MAIN_LISTENER_UNAVAILABLE";
+
+export async function reservePackagedSmokeListener(options = {}) {
+  const excludedMainPorts = new Set(options.excludedMainPorts ?? []);
+  for (const port of excludedMainPorts) {
+    if (
+      !Number.isSafeInteger(port) ||
+      port < MINIMUM_PACKAGED_SMOKE_PORT ||
+      port > MAXIMUM_PACKAGED_SMOKE_MAIN_PORT
+    ) {
+      throw new Error("The packaged smoke listener exclusion is invalid.");
+    }
+  }
+  const startPort =
+    options.startPort ??
+    randomInt(DEFAULT_PACKAGED_SMOKE_PORT_FLOOR, DEFAULT_PACKAGED_SMOKE_PORT_CEILING);
+  if (
+    !Number.isSafeInteger(startPort) ||
+    startPort < MINIMUM_PACKAGED_SMOKE_PORT ||
+    startPort > MAXIMUM_PACKAGED_SMOKE_MAIN_PORT
+  ) {
+    throw new Error("The packaged smoke listener start port is invalid.");
+  }
+
+  for (let attempt = 0; attempt < MAXIMUM_PACKAGED_SMOKE_PORT_ATTEMPTS; attempt += 1) {
+    const mainPort = packagedSmokePortCandidate(startPort, attempt);
+    if (excludedMainPorts.has(mainPort)) {
+      continue;
+    }
+    const mainServer = await tryReserveLoopbackPort(mainPort);
+    if (mainServer === undefined) {
+      continue;
+    }
+    const claimPort = mainPort + 1;
+    const claimServer = await tryReserveLoopbackPort(claimPort);
+    if (claimServer === undefined) {
+      await closeReservedLoopbackServer(mainServer);
+      continue;
+    }
+
+    let released = false;
+    return Object.freeze({
+      host: "127.0.0.1",
+      mainPort,
+      claimPort,
+      mainOrigin: `http://127.0.0.1:${String(mainPort)}`,
+      claimOrigin: `http://127.0.0.1:${String(claimPort)}`,
+      release: async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        await Promise.all([
+          closeReservedLoopbackServer(mainServer),
+          closeReservedLoopbackServer(claimServer),
+        ]);
+      },
+    });
+  }
+  throw new Error("Could not reserve an isolated adjacent loopback pair for packaged smoke.");
+}
+
+function packagedSmokePortCandidate(startPort, attempt) {
+  const candidateRange = MAXIMUM_PACKAGED_SMOKE_MAIN_PORT - MINIMUM_PACKAGED_SMOKE_PORT + 1;
+  return (
+    MINIMUM_PACKAGED_SMOKE_PORT +
+    ((startPort - MINIMUM_PACKAGED_SMOKE_PORT + attempt * 2) % candidateRange)
+  );
+}
+
+async function tryReserveLoopbackPort(port) {
+  const server = createServer();
+  server.unref();
+  try {
+    await new Promise((resolvePromise, rejectPromise) => {
+      server.once("error", rejectPromise);
+      server.listen({ exclusive: true, host: "127.0.0.1", port }, () => {
+        server.removeListener("error", rejectPromise);
+        resolvePromise();
+      });
+    });
+    return server;
+  } catch (error) {
+    await closeReservedLoopbackServer(server);
+    if (error?.code === "EADDRINUSE" || error?.code === "EACCES") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function closeReservedLoopbackServer(server) {
+  if (!server.listening) {
+    return;
+  }
+  await new Promise((resolvePromise, rejectPromise) => {
+    server.close((error) => {
+      if (error === undefined) {
+        resolvePromise();
+      } else {
+        rejectPromise(error);
+      }
+    });
+  });
+}
+
+async function packagedSmokeListenerPairIsUnavailable(listener) {
+  const mainServer = await tryReserveLoopbackPort(listener.mainPort);
+  if (mainServer === undefined) {
+    return true;
+  }
+  const claimServer = await tryReserveLoopbackPort(listener.claimPort);
+  if (claimServer === undefined) {
+    await closeReservedLoopbackServer(mainServer);
+    return true;
+  }
+  await Promise.all([
+    closeReservedLoopbackServer(mainServer),
+    closeReservedLoopbackServer(claimServer),
+  ]);
+  return false;
+}
 
 export async function waitForPackagedMainReadiness({
   exited,
@@ -2948,29 +3077,107 @@ async function smokeBundle(staging, buildId, productVersion) {
   };
 }
 
-async function runPackagedMainSmoke({
+export async function runPackagedMainSmoke(input, dependencies = {}) {
+  const runAttempt = dependencies.runAttempt ?? runPackagedMainSmokeAttempt;
+  const attemptedMainPorts = [];
+  for (let attempt = 0; attempt < MAXIMUM_PACKAGED_SMOKE_START_ATTEMPTS; attempt += 1) {
+    const smokeListener = await reservePackagedSmokeListener({
+      excludedMainPorts: attemptedMainPorts,
+    });
+    attemptedMainPorts.push(smokeListener.mainPort);
+    await smokeListener.release();
+    try {
+      return await runAttempt({
+        ...input,
+        smokeListener,
+      });
+    } catch (error) {
+      const listenerCollision =
+        isPackagedSmokeListenerUnavailableError(error) ||
+        (await packagedSmokeListenerPairIsUnavailable(smokeListener));
+      if (!listenerCollision || attempt === MAXIMUM_PACKAGED_SMOKE_START_ATTEMPTS - 1) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("The packaged Main smoke exhausted its listener start attempts.");
+}
+
+function isPackagedSmokeListenerUnavailableError(error) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    error.code === PACKAGED_SMOKE_LISTENER_UNAVAILABLE_CODE
+  );
+}
+
+function packagedSmokeListenerUnavailableError(error) {
+  return Object.assign(
+    new Error("The packaged Main could not acquire its isolated smoke listeners.", {
+      cause: error,
+    }),
+    {
+      code: PACKAGED_SMOKE_LISTENER_UNAVAILABLE_CODE,
+    },
+  );
+}
+
+export function createPackagedMainSmokeContract({ entrypoint, fixture, smokeHome, smokeListener }) {
+  return Object.freeze({
+    arguments: Object.freeze([
+      entrypoint,
+      "init",
+      "--home",
+      smokeHome,
+      "--listen-host",
+      smokeListener.host,
+      "--listen-port",
+      String(smokeListener.mainPort),
+      "--listen-origin",
+      smokeListener.mainOrigin,
+      ...fixture.initArguments,
+    ]),
+    mainOrigin: smokeListener.mainOrigin,
+    claimOrigin: smokeListener.claimOrigin,
+    healthUrl: `${smokeListener.mainOrigin}/health/live`,
+    adminUrl: `${smokeListener.mainOrigin}/`,
+    claimUrl: `${smokeListener.claimOrigin}/`,
+    claimApiUrl: `${smokeListener.claimOrigin}/api/v1/auth/claim`,
+    loginUrl: `${smokeListener.mainOrigin}/api/v1/auth/login`,
+    sessionUrl: `${smokeListener.mainOrigin}/api/v1/auth/session`,
+  });
+}
+
+async function runPackagedMainSmokeAttempt({
   buildId,
   entrypoint,
   fixture,
   productVersion,
   releaseEnvironment,
   runtime,
+  smokeListener,
   staging,
 }) {
   const smokeHome = await mkdtemp(join(dirname(staging), ".od-home-"));
-  const child = spawn(
-    runtime,
-    [entrypoint, "init", "--home", smokeHome, ...fixture.initArguments],
-    {
-      cwd: staging,
-      env: {
-        ...releaseEnvironment,
-        ...fixture.environment,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
+  const contract = createPackagedMainSmokeContract({
+    entrypoint,
+    fixture,
+    smokeHome,
+    smokeListener,
+  });
+  const child = spawn(runtime, contract.arguments, {
+    cwd: staging,
+    env: {
+      ...releaseEnvironment,
+      ...fixture.environment,
     },
-  );
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let childClosed = false;
+  child.once("close", () => {
+    childClosed = true;
+  });
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
@@ -2986,6 +3193,7 @@ async function runPackagedMainSmoke({
   let shutdownTimedOut = false;
   let forcedTermination = false;
   let shutdownEvaluation;
+  let smokeFailure;
   try {
     await waitForPackagedMainReadiness({
       exited: () => hasChildExited(child),
@@ -2993,13 +3201,13 @@ async function runPackagedMainSmoke({
     });
 
     const [health, admin, claim] = await Promise.all([
-      fetch("http://127.0.0.1:4380/health/live", {
+      fetch(contract.healthUrl, {
         signal: AbortSignal.timeout(5_000),
       }),
-      fetch("http://127.0.0.1:4380/", {
+      fetch(contract.adminUrl, {
         signal: AbortSignal.timeout(5_000),
       }),
-      fetch("http://127.0.0.1:4381/", {
+      fetch(contract.claimUrl, {
         signal: AbortSignal.timeout(5_000),
       }),
     ]);
@@ -3024,11 +3232,11 @@ async function runPackagedMainSmoke({
       throw new Error("The packaged local-claim page did not contain its one-time credential.");
     }
     const smokePassphrase = "release-smoke-correct-horse-2026";
-    const claimed = await fetch("http://127.0.0.1:4381/api/v1/auth/claim", {
+    const claimed = await fetch(contract.claimApiUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        origin: "http://127.0.0.1:4381",
+        origin: contract.claimOrigin,
         "sec-fetch-site": "same-origin",
       },
       body: JSON.stringify({ claimToken, passphrase: smokePassphrase }),
@@ -3042,11 +3250,11 @@ async function runPackagedMainSmoke({
       throw new Error("The packaged loopback owner claim did not produce recovery credentials.");
     }
 
-    const login = await fetch("http://127.0.0.1:4380/api/v1/auth/login", {
+    const login = await fetch(contract.loginUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        origin: "http://127.0.0.1:4380",
+        origin: contract.mainOrigin,
         "sec-fetch-site": "same-origin",
       },
       body: JSON.stringify({ passphrase: smokePassphrase }),
@@ -3069,7 +3277,7 @@ async function runPackagedMainSmoke({
       throw new Error("The packaged owner could not authenticate after local claim.");
     }
     const cookiePair = sessionCookie.split(";", 1)[0];
-    const session = await fetch("http://127.0.0.1:4380/api/v1/auth/session", {
+    const session = await fetch(contract.sessionUrl, {
       headers: {
         cookie: cookiePair,
       },
@@ -3088,6 +3296,8 @@ async function runPackagedMainSmoke({
       stat(join(smokeHome, "config", "main.json")),
       stat(join(smokeHome, "state", "main.sqlite3")),
     ]);
+  } catch (error) {
+    smokeFailure = error;
   } finally {
     if (!hasChildExited(child)) {
       child.stdin.end();
@@ -3100,6 +3310,7 @@ async function runPackagedMainSmoke({
       }
       await waitUntil(() => hasChildExited(child), 5_000);
     });
+    await waitUntil(() => childClosed, 5_000);
     shutdownEvaluation = evaluateSmokeShutdown({
       stdout,
       exitCode: child.exitCode,
@@ -3108,6 +3319,12 @@ async function runPackagedMainSmoke({
       forcedTermination,
     });
     await rm(smokeHome, { force: true, recursive: true });
+  }
+  if (smokeFailure !== undefined) {
+    if (stderr.includes(`"code":"${PACKAGED_SMOKE_LISTENER_UNAVAILABLE_CODE}"`)) {
+      throw packagedSmokeListenerUnavailableError(smokeFailure);
+    }
+    throw smokeFailure;
   }
   if (!shutdownEvaluation.accepted) {
     throw new Error(

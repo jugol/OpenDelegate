@@ -1055,7 +1055,7 @@ async function createAndListen(
     });
     return listening;
   } catch (error) {
-    return closeAfterPrimaryFailure(error, [
+    return closeAfterPrimaryFailure(mapMainListenerError(error, "Main"), [
       { operation: "main-runtime", close: () => runtime.close() },
     ]);
   }
@@ -1166,7 +1166,7 @@ async function startClaimListener(runtime: MainRuntime): Promise<
   try {
     await claimApp.listen({ host: "127.0.0.1", port });
   } catch (error) {
-    await closeAfterPrimaryFailure(error, [
+    await closeAfterPrimaryFailure(mapMainListenerError(error, "Local owner-claim"), [
       { operation: "owner-claim-listener", close: () => claimApp.close() },
     ]);
   }
@@ -1180,6 +1180,30 @@ async function startClaimListener(runtime: MainRuntime): Promise<
       await claimListener.app?.close();
     },
   };
+}
+
+export function mapMainListenerError(error: unknown, listener: string): unknown {
+  if (!hasNetworkErrorCode(error, "EADDRINUSE") && !hasNetworkErrorCode(error, "EACCES")) {
+    return error;
+  }
+  return new MainRuntimeError(
+    "MAIN_LISTENER_UNAVAILABLE",
+    `${listener} listener is unavailable.`,
+    error instanceof Error ? { cause: error } : undefined,
+  );
+}
+
+function hasNetworkErrorCode(error: unknown, code: string): boolean {
+  const visited = new Set<object>();
+  let current = error;
+  while (typeof current === "object" && current !== null && !visited.has(current)) {
+    visited.add(current);
+    if ("code" in current && current.code === code) {
+      return true;
+    }
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 function registerClaimPage(

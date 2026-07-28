@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createServer } from "node:net";
 import {
   access,
   copyFile,
@@ -35,6 +36,7 @@ import {
   collectShaBoundAttestationPaths,
   createCommittedSourceSnapshot,
   createChecksumManifest,
+  createPackagedMainSmokeContract,
   createMainDeployArguments,
   createWorkerDeployArguments,
   createPayloadManifest,
@@ -59,6 +61,7 @@ import {
   renderWindowsLauncher,
   renderReleaseRouter,
   resolvePackageLegalFiles,
+  runPackagedMainSmoke,
   validateReleaseDestination,
   validateReleaseDestinationName,
   validateReleaseAttestationDiff,
@@ -2162,6 +2165,63 @@ test("release smoke accepts only a natural zero exit with the shutdown marker", 
   }
 });
 
+test("packaged Main smoke retries through its real orchestration seam when the selected pair is claimed during handoff", async (t) => {
+  const collisionServers = [];
+  t.after(async () => {
+    await Promise.all(collisionServers.map((server) => closeServer(server)));
+  });
+
+  const observedListeners = [];
+  const result = await runPackagedMainSmoke(
+    {},
+    {
+      runAttempt: async ({ smokeListener }) => {
+        observedListeners.push(smokeListener);
+        const contract = createPackagedMainSmokeContract({
+          entrypoint: "/bundle/opendelegate.mjs",
+          fixture: { initArguments: ["--agent", "auto"] },
+          smokeHome: "/temporary/smoke-home",
+          smokeListener,
+        });
+        assert.deepEqual(contract.arguments, [
+          "/bundle/opendelegate.mjs",
+          "init",
+          "--home",
+          "/temporary/smoke-home",
+          "--listen-host",
+          "127.0.0.1",
+          "--listen-port",
+          String(smokeListener.mainPort),
+          "--listen-origin",
+          smokeListener.mainOrigin,
+          "--agent",
+          "auto",
+        ]);
+        assert.equal(contract.healthUrl, `${smokeListener.mainOrigin}/health/live`);
+        assert.equal(contract.adminUrl, `${smokeListener.mainOrigin}/`);
+        assert.equal(contract.claimUrl, `${smokeListener.claimOrigin}/`);
+        assert.equal(contract.claimApiUrl, `${smokeListener.claimOrigin}/api/v1/auth/claim`);
+        assert.equal(contract.loginUrl, `${smokeListener.mainOrigin}/api/v1/auth/login`);
+        assert.equal(contract.sessionUrl, `${smokeListener.mainOrigin}/api/v1/auth/session`);
+        if (observedListeners.length === 1) {
+          collisionServers.push(await listenLoopback(smokeListener.mainPort));
+          collisionServers.push(await listenLoopback(smokeListener.claimPort));
+          await Promise.all(collisionServers.map((server) => closeServer(server)));
+          throw Object.assign(new Error("Simulated transient listener handoff collision."), {
+            code: "MAIN_LISTENER_UNAVAILABLE",
+          });
+        }
+        return "passed-after-retry";
+      },
+    },
+  );
+
+  assert.equal(result, "passed-after-retry");
+  assert.equal(observedListeners.length, 2);
+  assert.notEqual(observedListeners[1].mainPort, observedListeners[0].mainPort);
+  assert.equal(observedListeners[1].claimPort, observedListeners[1].mainPort + 1);
+});
+
 test("packaged Main smoke keeps Windows ACL initialization and listener readiness separately bounded", async () => {
   let output = "";
   const observedTimeouts = [];
@@ -2279,3 +2339,30 @@ test("portable release payloads reject directory symlinks or Windows junctions",
 
   await assert.rejects(assertPortableTree(root), /symbolic link or junction/u);
 });
+
+function listenLoopback(port) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", rejectPromise);
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+      server.removeListener("error", rejectPromise);
+      resolvePromise(server);
+    });
+  });
+}
+
+function closeServer(server) {
+  if (!server.listening) {
+    return Promise.resolve();
+  }
+  return new Promise((resolvePromise, rejectPromise) => {
+    server.close((error) => {
+      if (error === undefined) {
+        resolvePromise();
+      } else {
+        rejectPromise(error);
+      }
+    });
+  });
+}

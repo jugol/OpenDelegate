@@ -53,8 +53,16 @@ bundle construction is separate and requires exactly Node.js 24.18.0.
   signed clean-host service lifecycle, owner permission behavior, or a supported release.
 - `tooling/build-release.mjs` creates and smokes a platform-specific marked internal preview,
   including Main, its co-located Worker command surface, Admin, owner claim/login, and clean
-  shutdown. That smoke does not prove privileged service persistence, enrolled remote Workers, live
-  providers, Discord, mixed routes, or Computer Use.
+  shutdown. It uses temporary state and an isolated dynamic loopback listener pair so a live Main
+  does not need to stop. That smoke does not activate the bundle or prove privileged service
+  persistence, enrolled remote Workers, live providers, Discord, mixed routes, or Computer Use.
+
+Before and after any bundle construction on an occupied Main host, record the installed service
+identity, active version, process identity, and structured health response. They must remain
+unchanged. Do not stop an installed or transiently supervised Main merely to free smoke ports.
+Activate a supported candidate only through the native service lifecycle. Treat `systemd-run`,
+`launchctl` one-shot experiments, scheduled-process wrappers, and similar transient launchers as
+lab supervision unless the persistent definition itself is installed and independently verified.
 
 ## Safe owner preparation
 

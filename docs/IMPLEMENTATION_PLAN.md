@@ -425,7 +425,10 @@ Make Main and Worker roles truly persistent on all target operating systems.
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
-- Build release bundles and smoke them on clean hosts.
+- Build release bundles and smoke them on clean hosts using isolated temporary state
+  and dynamically selected adjacent loopback listeners.
+- Keep bundle assembly independent from service activation. Installed systems switch
+  versions only through the journaled native service lifecycle.
 
 ### Exit gate
 
@@ -435,6 +438,8 @@ Make Main and Worker roles truly persistent on all target operating systems.
 - User-session helper loss removes graphical Capabilities without dropping headless
   work.
 - Failed upgrades roll back to a healthy version.
+- A bundle build completes while an existing Main remains healthy on its configured
+  listeners, without changing its process, service definition, or active version.
 
 ## Phase 5 — Device discovery, profile evolution, and resource control
 

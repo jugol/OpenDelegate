@@ -938,6 +938,9 @@ separate runtime roles with separate authority.
 - Main is one logical process group on one fixed Device.
 - The Control Plane owns database migrations and refuses to start normal work after a
   failed or incompatible migration.
+- Bundle assembly and packaged smoke use temporary state and dynamically selected
+  loopback listeners. They never stop, restart, reconfigure, or activate the
+  installed Main.
 - Main may expose several authenticated listener URLs through LAN or configured
   private/tunnel networks.
 - Admin Web and Artifact Gateway have separate authorization and origin boundaries.
@@ -952,6 +955,9 @@ separate runtime roles with separate authority.
 - Linux integrates with systemd where available and provides a supervised foreground
   fallback for environments without systemd.
 - Service installation, upgrade, restart, uninstall, and diagnostics are idempotent.
+- Bundle activation is owned by the native service lifecycle, including exact
+  active-version verification, bounded health checks, and failed-upgrade rollback;
+  constructing a bundle never changes the active version.
 - An interactive per-user helper may be distinct from a boot service where Computer
   Use requires access to the logged-in desktop.
 - The headless daemon never assumes that a desktop session exists.

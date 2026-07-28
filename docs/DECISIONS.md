@@ -701,3 +701,31 @@ and provider-native sessions in that external directory are shared with its othe
 local consumers. The directory must be owner-restricted and outside the source
 checkout. OpenDelegate still owns Task isolation, policy, session leases, and
 orchestration state.
+
+## D-053 — Non-disruptive bundle verification and supervisor-owned activation
+
+**Decision:** Bundle assembly and bundle activation are separate operations.
+Packaged smoke must use temporary state and an isolated dynamically selected
+adjacent loopback listener pair, with bounded fresh-pair retry if another local
+process claims the pair during startup handoff. It must not claim the configured
+Main listener, stop or restart an installed Main, edit its service definition, or
+change its active release pointer.
+
+An assembled bundle becomes active only through an explicit foreground launch or
+the native service lifecycle. Persistent installations use journaled
+`service install` or `service upgrade` with the exact active version, a
+caller-stable command ID, bounded health verification, and rollback. A transient
+supervisor invocation is a validation wrapper, not an installed service; stopping
+it may remove the supervisor registration as well as the process.
+
+**Rationale:** Release construction must be safe on the fixed Main Device while it
+is serving Admin, Worker, and orchestration traffic. Fixed smoke ports previously
+forced an operator to stop Main, and a transient systemd unit then disappeared
+when stopped. Conflating construction, process supervision, and activation turns a
+recoverable validation step into an avoidable outage.
+
+**Consequence:** A release build must coexist with an already occupied default Main
+and claim-listener pair. Build failure leaves the installed version and supervisor
+untouched. Agents must inspect the existing lifecycle before activation, use the
+packaged structured CLI rather than interpolated remote shell mutations, and
+describe foreground or transient preview runs as non-persistent validation only.
