@@ -77,12 +77,26 @@ export const frenchMessages = {
     failedMessage: "L’agent de configuration n’a pas pu répondre. Aucun paramètre n’a été modifié.",
     secureStoreFailed:
       "L’identifiant n’a pas pu être stocké de manière sécurisée. Il n’a pas été envoyé à l’assistant de configuration.",
-    secureTitle: "Stocker un identifiant en sécurité",
-    secureIntro:
-      "La valeur est envoyée directement au magasin de secrets géré de cet appareil principal. L’agent ne reçoit qu’une référence opaque.",
-    secureKindLabel: "Type d’identifiant",
-    secureDatabaseOption: "URI de base de données",
-    secureDiscordOption: "Jeton du bot Discord",
+    guidedSetupTitle: "Configuration guidée",
+    guidedSetupIntro:
+      "Choisissez un objectif. L’agent inspectera les réglages actuels et ne guidera que les étapes restantes.",
+    discordSetupTitle: "Configurer Discord",
+    discordReviewTitle: "Vérifier ou modifier Discord",
+    discordSetupDescription:
+      "Connectez un bot et un ou plusieurs forums sans placer son jeton dans la conversation.",
+    databaseSetupTitle: "Utiliser PostgreSQL externe",
+    databaseSetupDescription:
+      "SQLite est déjà actif. Aucune URI de base de données n’est nécessaire.",
+    discordSetupRequest:
+      "Guidez-moi dans la configuration d’un forum Discord. Inspectez d’abord la liaison actuelle, expliquez les étapes qui restent côté Discord et ne demandez que les valeurs non secrètes manquantes. Ne me demandez jamais de coller le jeton du bot dans la conversation ; indiquez-moi quand utiliser le formulaire sécurisé.",
+    databaseSetupRequest:
+      "Expliquez d’abord ma configuration de base de données actuelle. SQLite est la valeur par défaut et ne nécessite aucune URI. Si je choisis PostgreSQL externe, expliquez la migration et le redémarrage du service avant de proposer des changements, et demandez d’utiliser le formulaire sécurisé plutôt que de coller l’URI dans la conversation.",
+    discordSecureTitle: "Stocker le jeton Discord en sécurité",
+    discordSecureIntro:
+      "Utilisez ceci uniquement lorsque l’agent demande le jeton. OpenDelegate le stocke sur ce Main et ne transmet à l’agent qu’une référence opaque.",
+    databaseSecureTitle: "Identifiant PostgreSQL externe",
+    databaseSecureIntro:
+      "Cette URI facultative sert à un déploiement PostgreSQL externe. OpenDelegate la stocke sur ce Main et ne transmet à l’agent qu’une référence opaque.",
     databaseUriLabel: "URI de la base de données",
     databaseUriPlaceholder: "URI de connexion PostgreSQL",
     discordTokenLabel: "Jeton du bot Discord",
@@ -96,7 +110,8 @@ export const frenchMessages = {
     secureDiscordReferenceMessage:
       "Utilisez cette référence sécurisée du jeton Discord : {reference}. Son botTokenAlias est {alias}.",
     title: "Assistant de configuration",
-    subtitle: "La configuration de l’appareil reste séparée des conversations liées aux tâches.",
+    subtitle:
+      "Configurez cet appareil et les services OpenDelegate. Les tâches restent dans Discord.",
     restore: "Restaurer l’assistant de configuration",
     expand: "Agrandir l’assistant de configuration",
     close: "Fermer l’assistant de configuration",

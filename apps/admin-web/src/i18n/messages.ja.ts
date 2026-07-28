@@ -74,12 +74,25 @@ export const japaneseMessages = {
       "Main から、デバイス評価または設定エージェントのメッセージ機能を利用できないと報告されています。表示されるデバイス情報は、Main の決定論的なランタイムレポートだけを基にしています。",
     failedMessage: "設定エージェントが応答できませんでした。設定は変更されていません。",
     secureStoreFailed: "認証情報を安全に保存できませんでした。設定チャットには送信されていません。",
-    secureTitle: "認証情報を安全に保存",
-    secureIntro:
-      "入力値はこの Main デバイスの管理対象シークレットストアへ直接送られます。エージェントが受け取るのは不透明な参照だけです。",
-    secureKindLabel: "認証情報の種類",
-    secureDatabaseOption: "データベース URI",
-    secureDiscordOption: "Discord Bot トークン",
+    guidedSetupTitle: "ガイド付きセットアップ",
+    guidedSetupIntro:
+      "目的を選択してください。エージェントが現在の設定を確認し、残っている手順だけを案内します。",
+    discordSetupTitle: "Discord を設定",
+    discordReviewTitle: "Discord 設定を確認・変更",
+    discordSetupDescription:
+      "トークンをチャットに残さず、Bot と 1 つ以上の Forum チャンネルを接続します。",
+    databaseSetupTitle: "外部 PostgreSQL を使用",
+    databaseSetupDescription: "SQLite はすでに稼働中です。データベース URI は不要です。",
+    discordSetupRequest:
+      "Discord Forum の設定を案内してください。まず現在のバインディングを確認し、Discord 側に残っている手順を説明して、足りない非機密情報だけを尋ねてください。Bot トークンをチャットに貼るよう求めず、安全なトークンフォームを使うタイミングを教えてください。",
+    databaseSetupRequest:
+      "まず現在のデータベース設定を説明してください。既定の SQLite には URI が不要です。外部 PostgreSQL を選ぶ場合は、変更を提案する前に移行とサービス再起動の要件を案内し、URI はチャットではなく安全なフォームに入力するよう教えてください。",
+    discordSecureTitle: "Discord Bot トークンを安全に保存",
+    discordSecureIntro:
+      "エージェントがトークンを求めたときだけ使用してください。OpenDelegate はこの Main に保存し、エージェントには不透明な参照だけを渡します。",
+    databaseSecureTitle: "外部 PostgreSQL の認証情報",
+    databaseSecureIntro:
+      "外部 PostgreSQL を選ぶ場合のみ使用する URI です。OpenDelegate はこの Main に保存し、エージェントには不透明な参照だけを渡します。",
     databaseUriLabel: "データベース URI",
     databaseUriPlaceholder: "PostgreSQL 接続 URI",
     discordTokenLabel: "Discord Bot トークン",
@@ -92,7 +105,7 @@ export const japaneseMessages = {
     secureDiscordReferenceMessage:
       "この安全な Discord Bot トークン参照を使用してください: {reference}。botTokenAlias は {alias} です。",
     title: "設定チャット",
-    subtitle: "デバイス設定はタスクの会話とは分けて管理されます。",
+    subtitle: "このデバイスと OpenDelegate サービスを設定します。タスクは Discord で進行します。",
     restore: "設定チャットを元のサイズに戻す",
     expand: "設定チャットを拡大",
     close: "設定チャットを閉じる",

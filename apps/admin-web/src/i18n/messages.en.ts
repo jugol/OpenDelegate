@@ -70,12 +70,25 @@ export const englishMessages = {
     failedMessage: "The Configuration Agent could not respond. No settings were changed.",
     secureStoreFailed:
       "The credential could not be stored securely. It was not sent to Configuration Chat.",
-    secureTitle: "Store a credential",
-    secureIntro:
-      "The value goes directly to this Main Device's managed Secret Store. The Agent receives only an opaque reference.",
-    secureKindLabel: "Credential type",
-    secureDatabaseOption: "Database URI",
-    secureDiscordOption: "Discord bot token",
+    guidedSetupTitle: "Guided setup",
+    guidedSetupIntro:
+      "Choose a goal. The Agent will inspect the current settings and guide only the steps that remain.",
+    discordSetupTitle: "Set up Discord",
+    discordReviewTitle: "Review or change Discord",
+    discordSetupDescription:
+      "Connect a bot and bind one or more Forum channels without putting its token in chat.",
+    databaseSetupTitle: "Use external PostgreSQL",
+    databaseSetupDescription: "SQLite is already active. No database URI is required.",
+    discordSetupRequest:
+      "Guide me through Discord Forum setup. Inspect the current binding first, explain the Discord-side steps that remain, and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+    databaseSetupRequest:
+      "Explain my current database setup first. SQLite is the default and requires no URI. If I choose external PostgreSQL, guide the migration and service restart requirements before proposing changes, and tell me to use the secure form instead of pasting the URI into chat.",
+    discordSecureTitle: "Store the Discord token securely",
+    discordSecureIntro:
+      "Use this only when the Agent asks for the token. OpenDelegate stores it on this Main and sends the Agent only an opaque reference.",
+    databaseSecureTitle: "External PostgreSQL credential",
+    databaseSecureIntro:
+      "This optional URI is for an external PostgreSQL deployment. OpenDelegate stores it on this Main and sends the Agent only an opaque reference.",
     databaseUriLabel: "Database URI",
     databaseUriPlaceholder: "PostgreSQL connection URI",
     discordTokenLabel: "Discord bot token",
@@ -89,7 +102,7 @@ export const englishMessages = {
     secureDiscordReferenceMessage:
       "Use this secure Discord bot token reference: {reference}. Its botTokenAlias is {alias}.",
     title: "Configuration Chat",
-    subtitle: "Device setup stays separate from Task conversations.",
+    subtitle: "Configure this Device and OpenDelegate services. Tasks stay in Discord.",
     restore: "Restore Configuration Chat",
     expand: "Expand Configuration Chat",
     close: "Close Configuration Chat",

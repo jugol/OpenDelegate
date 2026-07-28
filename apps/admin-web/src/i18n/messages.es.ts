@@ -78,12 +78,25 @@ export const spanishMessages = {
       "El agente de configuración no pudo responder. No se cambió ninguna configuración.",
     secureStoreFailed:
       "No se pudo guardar la credencial de forma segura. No se envió al chat de configuración.",
-    secureTitle: "Guardar una credencial de forma segura",
-    secureIntro:
-      "El valor se envía directamente al almacén de secretos administrado de este dispositivo principal. El agente solo recibe una referencia opaca.",
-    secureKindLabel: "Tipo de credencial",
-    secureDatabaseOption: "URI de base de datos",
-    secureDiscordOption: "Token del bot de Discord",
+    guidedSetupTitle: "Configuración guiada",
+    guidedSetupIntro:
+      "Elige un objetivo. El agente inspeccionará la configuración actual y guiará solo los pasos pendientes.",
+    discordSetupTitle: "Configurar Discord",
+    discordReviewTitle: "Revisar o cambiar Discord",
+    discordSetupDescription:
+      "Conecta un bot y uno o más canales de foro sin poner su token en el chat.",
+    databaseSetupTitle: "Usar PostgreSQL externo",
+    databaseSetupDescription: "SQLite ya está activo. No se necesita ninguna URI de base de datos.",
+    discordSetupRequest:
+      "Guíame por la configuración de un foro de Discord. Inspecciona primero la vinculación actual, explica los pasos pendientes en Discord y pide solo los valores no secretos que falten. Nunca me pidas pegar el token del bot en el chat; indícame cuándo usar el formulario seguro.",
+    databaseSetupRequest:
+      "Explica primero mi configuración de base de datos actual. SQLite es el valor predeterminado y no necesita URI. Si elijo PostgreSQL externo, guía la migración y los requisitos de reinicio del servicio antes de proponer cambios, e indícame que use el formulario seguro en lugar de pegar la URI en el chat.",
+    discordSecureTitle: "Guardar el token de Discord de forma segura",
+    discordSecureIntro:
+      "Úsalo solo cuando el agente solicite el token. OpenDelegate lo guarda en este dispositivo Main y solo entrega al agente una referencia opaca.",
+    databaseSecureTitle: "Credencial de PostgreSQL externo",
+    databaseSecureIntro:
+      "Esta URI opcional sirve para un despliegue PostgreSQL externo. OpenDelegate la guarda en este dispositivo Main y solo entrega al agente una referencia opaca.",
     databaseUriLabel: "URI de la base de datos",
     databaseUriPlaceholder: "URI de conexión de PostgreSQL",
     discordTokenLabel: "Token del bot de Discord",
@@ -98,7 +111,7 @@ export const spanishMessages = {
       "Usa esta referencia segura del token del bot de Discord: {reference}. Su botTokenAlias es {alias}.",
     title: "Chat de configuración",
     subtitle:
-      "La configuración del dispositivo se mantiene separada de las conversaciones de tareas.",
+      "Configura este dispositivo y los servicios de OpenDelegate. Las tareas continúan en Discord.",
     restore: "Restaurar el chat de configuración",
     expand: "Ampliar el chat de configuración",
     close: "Cerrar el chat de configuración",

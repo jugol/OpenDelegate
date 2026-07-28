@@ -61,6 +61,14 @@ test("Configuration Agent resumes one native session per target Device", async (
   assert.equal(adapter.starts[0]?.taskId, "configuration:device_worker");
   assert.equal(adapter.starts[0]?.workstreamId, "configuration");
   assert.match(adapter.starts[0]?.prompt ?? "", /Target Device ID: device_worker/);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /Guide Discord setup in dependency order.*Developer Portal.*Community.*Forum/isu,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /SQLite is the default and needs no database URI/isu,
+  );
   assert.match(adapter.resumes[0]?.prompt ?? "", /Propose a safer route\./);
   assert.equal(adapter.resumes[0]?.session.nativeSessionId, "native-configuration-session");
 });

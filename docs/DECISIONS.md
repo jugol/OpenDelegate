@@ -729,3 +729,30 @@ and claim-listener pair. Build failure leaves the installed version and supervis
 untouched. Agents must inspect the existing lifecycle before activation, use the
 packaged structured CLI rather than interpolated remote shell mutations, and
 describe foreground or transient preview runs as non-persistent validation only.
+
+## D-054 — Contextual guided setup before secure credential intake
+
+**Decision:** Configuration Chat does not render a generic credential chooser or a
+database URI field when it opens. On the fixed Main Device it first presents explicit
+guided setup goals. Embedded SQLite is described as the already-active default that
+needs no URI. External PostgreSQL is an owner-selected advanced path, and its secure
+URI form appears only after that selection.
+
+The Discord goal asks the Configuration Agent to inspect the current binding before
+guiding the owner through the Discord Developer Portal, bot, Community Server,
+Forum, intents, permissions, and missing non-secret identifiers. The raw bot token
+is accepted only by Main's secure intake form. The Agent then uses the existing typed
+configuration proposal, protected Approval, live activation validation, and rollback
+flow. Browser-only Discord actions remain explicit owner actions.
+
+**Rationale:** An unsolicited `Database URI` password field made the embedded
+database look incomplete and separated credentials from the reason they were
+needed. A generic secret form also failed to teach the owner which Discord-side
+dependencies precede a token or which steps OpenDelegate can complete itself.
+
+**Consequence:** Worker-specific Configuration Chats never offer Main-service
+credentials. Selecting a goal may create an ordinary, localized owner message in
+that Device's dedicated configuration session, but secret material still bypasses
+the transcript and only an opaque reference reaches the Agent. Storing a PostgreSQL
+URI or proposing database configuration does not claim to migrate the live database;
+the supported backup/restore and service reconfiguration path remains required.

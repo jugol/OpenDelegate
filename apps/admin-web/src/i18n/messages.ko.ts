@@ -73,12 +73,26 @@ export const koreanMessages = {
     failedMessage: "설정 에이전트가 응답하지 못했습니다. 설정은 변경되지 않았습니다.",
     secureStoreFailed:
       "인증 정보를 안전하게 저장하지 못했습니다. 설정 채팅에는 전송되지 않았습니다.",
-    secureTitle: "인증 정보 안전하게 저장",
-    secureIntro:
-      "입력값은 이 메인 장치의 관리형 비밀 저장소로 바로 전달됩니다. 에이전트에는 불투명한 참조만 전달됩니다.",
-    secureKindLabel: "인증 정보 종류",
-    secureDatabaseOption: "데이터베이스 URI",
-    secureDiscordOption: "Discord 봇 토큰",
+    guidedSetupTitle: "단계별 설정",
+    guidedSetupIntro:
+      "설정할 항목을 선택하세요. 에이전트가 현재 상태를 먼저 확인하고 남은 단계만 안내합니다.",
+    discordSetupTitle: "Discord 설정",
+    discordReviewTitle: "Discord 설정 확인 또는 변경",
+    discordSetupDescription:
+      "봇 토큰을 채팅에 남기지 않고 봇과 하나 이상의 Forum 채널을 연결합니다.",
+    databaseSetupTitle: "외부 PostgreSQL 사용",
+    databaseSetupDescription:
+      "SQLite가 이미 사용 중입니다. 데이터베이스 URI를 입력할 필요가 없습니다.",
+    discordSetupRequest:
+      "Discord Forum 설정을 단계별로 안내해 주세요. 먼저 현재 바인딩을 확인하고, Discord에서 아직 해야 할 일을 설명한 뒤 누락된 비밀 정보가 아닌 값만 물어보세요. 봇 토큰을 채팅에 붙여넣으라고 하지 말고 안전 입력 폼을 사용할 시점을 알려 주세요.",
+    databaseSetupRequest:
+      "먼저 현재 데이터베이스 설정을 설명해 주세요. 기본값인 SQLite에는 URI가 필요 없습니다. 외부 PostgreSQL을 선택할 경우 변경을 제안하기 전에 마이그레이션과 서비스 재시작 요구사항을 안내하고, URI는 채팅 대신 안전 입력 폼을 사용하라고 알려 주세요.",
+    discordSecureTitle: "Discord 봇 토큰 안전하게 저장",
+    discordSecureIntro:
+      "에이전트가 토큰을 요청했을 때만 사용하세요. OpenDelegate는 이 메인에 토큰을 저장하고 에이전트에는 불투명한 참조만 전달합니다.",
+    databaseSecureTitle: "외부 PostgreSQL 인증 정보",
+    databaseSecureIntro:
+      "외부 PostgreSQL 배포를 선택한 경우에만 쓰는 URI입니다. OpenDelegate는 이 메인에 저장하고 에이전트에는 불투명한 참조만 전달합니다.",
     databaseUriLabel: "데이터베이스 URI",
     databaseUriPlaceholder: "PostgreSQL 연결 URI",
     discordTokenLabel: "Discord 봇 토큰",
@@ -91,7 +105,7 @@ export const koreanMessages = {
     secureDiscordReferenceMessage:
       "이 안전한 Discord 봇 토큰 참조를 사용해 주세요: {reference}. botTokenAlias는 {alias}입니다.",
     title: "설정 채팅",
-    subtitle: "장치 설정은 작업 대화와 분리되어 있습니다.",
+    subtitle: "이 장치와 OpenDelegate 서비스를 설정합니다. 작업 대화는 Discord에서 이어집니다.",
     restore: "설정 채팅 원래 크기로 복원",
     expand: "설정 채팅 확대",
     close: "설정 채팅 닫기",

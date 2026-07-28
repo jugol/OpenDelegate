@@ -66,11 +66,23 @@ export const simplifiedChineseMessages = {
       "主设备报告设备评估或配置智能体消息功能不可用。当前显示的设备信息仅来自主设备的确定性运行环境报告。",
     failedMessage: "配置智能体无法响应。没有更改任何设置。",
     secureStoreFailed: "无法安全存储该凭据。它未发送到配置对话。",
-    secureTitle: "安全存储凭据",
-    secureIntro: "输入值会直接发送到此主设备的托管密钥存储。智能体只会收到一个不透明的引用。",
-    secureKindLabel: "凭据类型",
-    secureDatabaseOption: "数据库 URI",
-    secureDiscordOption: "Discord 机器人令牌",
+    guidedSetupTitle: "引导式设置",
+    guidedSetupIntro: "选择一个目标。智能体会先检查当前设置，只引导尚未完成的步骤。",
+    discordSetupTitle: "设置 Discord",
+    discordReviewTitle: "检查或更改 Discord",
+    discordSetupDescription: "连接机器人和一个或多个论坛频道，令牌不会进入聊天。",
+    databaseSetupTitle: "使用外部 PostgreSQL",
+    databaseSetupDescription: "SQLite 已在运行，无需数据库 URI。",
+    discordSetupRequest:
+      "请引导我设置 Discord 论坛。先检查当前绑定，说明 Discord 端仍需完成的步骤，并且只询问缺少的非机密值。绝不要让我把机器人令牌粘贴到聊天中；请告诉我何时使用安全令牌表单。",
+    databaseSetupRequest:
+      "请先说明我当前的数据库设置。SQLite 是默认选项，不需要 URI。如果我选择外部 PostgreSQL，请在提出更改前说明迁移和服务重启要求，并让我使用安全表单，而不是把 URI 粘贴到聊天中。",
+    discordSecureTitle: "安全存储 Discord 机器人令牌",
+    discordSecureIntro:
+      "仅在智能体要求令牌时使用。OpenDelegate 将它存储在此主设备上，只向智能体传递不透明引用。",
+    databaseSecureTitle: "外部 PostgreSQL 凭据",
+    databaseSecureIntro:
+      "此可选 URI 仅用于外部 PostgreSQL 部署。OpenDelegate 将它存储在此主设备上，只向智能体传递不透明引用。",
     databaseUriLabel: "数据库 URI",
     databaseUriPlaceholder: "PostgreSQL 连接 URI",
     discordTokenLabel: "Discord 机器人令牌",
@@ -83,7 +95,7 @@ export const simplifiedChineseMessages = {
     secureDiscordReferenceMessage:
       "请使用此安全 Discord 机器人令牌引用：{reference}。其 botTokenAlias 为 {alias}。",
     title: "配置对话",
-    subtitle: "设备配置与任务对话相互独立。",
+    subtitle: "配置此设备和 OpenDelegate 服务。任务在 Discord 中继续。",
     restore: "恢复配置对话",
     expand: "展开配置对话",
     close: "关闭配置对话",

@@ -737,6 +737,15 @@ may request a transition but cannot manufacture a state outside the transition r
     render time.
 20. Domain codes, API fields, durable events, schemas, logs, and source defaults
     remain English regardless of the selected presentation locale.
+21. Configuration Chat presents Main-service credentials only inside an
+    owner-selected guided setup goal. Embedded SQLite is the default and is described
+    as already usable without a URI; the external PostgreSQL credential form is an
+    explicit opt-in rather than an unsolicited chat field.
+22. Discord guided setup inspects the current binding first, explains the remaining
+    Developer Portal, Community Server, Forum, intent, and permission steps, asks only
+    for missing non-secret identifiers, and directs the raw bot token to Main's secure
+    intake form. It then uses the typed proposal and protected Approval lifecycle;
+    it never claims that browser-only Discord actions were completed by OpenDelegate.
 
 ### FR-16 — Policy and approvals
 

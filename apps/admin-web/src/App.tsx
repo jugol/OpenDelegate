@@ -203,9 +203,11 @@ export function App({
 
       {activeSection === "devices" ? (
         <ConfigurationChat
+          discordConfigured={discordConfigured}
           expanded={chatExpanded}
           focusRequestId={chatFocusRequestId}
           key={device.deviceId}
+          mainDevice={device.role === "main"}
           modal={chatModal}
           onClose={closeChat}
           {...(configurationAgentAvailable && onConfigurationMessage !== undefined

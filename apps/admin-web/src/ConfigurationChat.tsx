@@ -34,7 +34,7 @@ import {
 import type { ConfigurationSessionView } from "./view-model";
 
 type ProposalState = "proposed" | "reviewing" | "dismissed";
-type SecureCredentialKind = "database-uri" | "discord-bot-token";
+type GuidedSetupGoal = "database-uri" | "discord-bot-token";
 
 type SystemChatMessageKey = "failedMessage" | "secureStoreFailed" | "unavailableMessage";
 
@@ -53,8 +53,10 @@ type ChatMessage = {
 );
 
 interface ConfigurationChatProps {
+  readonly discordConfigured: boolean;
   readonly expanded: boolean;
   readonly focusRequestId: number;
+  readonly mainDevice: boolean;
   readonly modal: boolean;
   readonly onClose: () => void;
   readonly onIngestSecret?: (
@@ -68,8 +70,10 @@ interface ConfigurationChatProps {
 }
 
 export function ConfigurationChat({
+  discordConfigured,
   expanded,
   focusRequestId,
+  mainDevice,
   modal,
   onClose,
   onIngestSecret,
@@ -81,8 +85,7 @@ export function ConfigurationChat({
   const { messages: copy } = useAdminI18n();
   const [proposalState, setProposalState] = useState<ProposalState>("proposed");
   const [draft, setDraft] = useState("");
-  const [secureCredentialKind, setSecureCredentialKind] =
-    useState<SecureCredentialKind>("database-uri");
+  const [setupGoal, setSetupGoal] = useState<GuidedSetupGoal | null>(null);
   const [secureCredential, setSecureCredential] = useState("");
   const [storedReference, setStoredReference] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -133,6 +136,7 @@ export function ConfigurationChat({
 
   useEffect(() => {
     if (!open) {
+      setSetupGoal(null);
       setSecureCredential("");
       setStoredReference(null);
     }
@@ -164,14 +168,8 @@ export function ConfigurationChat({
     }
   }, [onSendMessage, open, pending]);
 
-  async function submitChatMessage(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
+  async function sendConversationMessage(message: string): Promise<void> {
     if (onSendMessage === undefined || pending) {
-      return;
-    }
-    const message = draft.trim();
-
-    if (message === "") {
       return;
     }
 
@@ -184,7 +182,6 @@ export function ConfigurationChat({
         content: message,
       },
     ]);
-    setDraft("");
     setPending(true);
     try {
       const response = await onSendMessage(message);
@@ -210,17 +207,41 @@ export function ConfigurationChat({
     }
   }
 
+  async function submitChatMessage(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const message = draft.trim();
+    if (message === "") {
+      return;
+    }
+    setDraft("");
+    await sendConversationMessage(message);
+  }
+
+  async function startGuidedSetup(goal: GuidedSetupGoal): Promise<void> {
+    if (onSendMessage === undefined || pending) {
+      return;
+    }
+    setSetupGoal(goal);
+    setSecureCredential("");
+    setStoredReference(null);
+    await sendConversationMessage(
+      goal === "discord-bot-token" ? copy.chat.discordSetupRequest : copy.chat.databaseSetupRequest,
+    );
+  }
+
   async function submitSecureSecret(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (
       onIngestSecret === undefined ||
       onSendMessage === undefined ||
       pending ||
+      setupGoal === null ||
       secureCredential.length === 0
     ) {
       return;
     }
 
+    const secureCredentialKind: GuidedSetupGoal = setupGoal;
     const material = new TextEncoder().encode(secureCredential);
     setSecureCredential("");
     setStoredReference(null);
@@ -390,37 +411,83 @@ export function ConfigurationChat({
             ))}
           </div>
 
-          {onIngestSecret !== undefined && onSendMessage !== undefined ? (
+          {mainDevice && onIngestSecret !== undefined && onSendMessage !== undefined ? (
+            <section aria-labelledby="guided-setup-title" className="guided-setup-panel">
+              <div className="guided-setup-heading">
+                <h3 id="guided-setup-title">{copy.chat.guidedSetupTitle}</h3>
+                <p>{copy.chat.guidedSetupIntro}</p>
+              </div>
+              <div className="guided-setup-options">
+                <button
+                  aria-label={
+                    discordConfigured ? copy.chat.discordReviewTitle : copy.chat.discordSetupTitle
+                  }
+                  aria-pressed={setupGoal === "discord-bot-token"}
+                  className="guided-setup-option"
+                  disabled={pending}
+                  onClick={() => void startGuidedSetup("discord-bot-token")}
+                  type="button"
+                >
+                  <span aria-hidden="true">
+                    <Bot />
+                  </span>
+                  <span>
+                    <strong>
+                      {discordConfigured
+                        ? copy.chat.discordReviewTitle
+                        : copy.chat.discordSetupTitle}
+                    </strong>
+                    <small>{copy.chat.discordSetupDescription}</small>
+                  </span>
+                </button>
+                <button
+                  aria-label={copy.chat.databaseSetupTitle}
+                  aria-pressed={setupGoal === "database-uri"}
+                  className="guided-setup-option"
+                  disabled={pending}
+                  onClick={() => void startGuidedSetup("database-uri")}
+                  type="button"
+                >
+                  <span aria-hidden="true">
+                    <Database />
+                  </span>
+                  <span>
+                    <strong>{copy.chat.databaseSetupTitle}</strong>
+                    <small>{copy.chat.databaseSetupDescription}</small>
+                  </span>
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {mainDevice &&
+          setupGoal !== null &&
+          onIngestSecret !== undefined &&
+          onSendMessage !== undefined ? (
             <section aria-labelledby="configuration-secret-title" className="secure-secret-panel">
               <div className="secure-secret-heading">
                 <span aria-hidden="true">
-                  {secureCredentialKind === "database-uri" ? <Database /> : <Bot />}
+                  {setupGoal === "database-uri" ? <Database /> : <Bot />}
                 </span>
                 <div>
-                  <h3 id="configuration-secret-title">{copy.chat.secureTitle}</h3>
-                  <p>{copy.chat.secureIntro}</p>
+                  <h3 id="configuration-secret-title">
+                    {setupGoal === "database-uri"
+                      ? copy.chat.databaseSecureTitle
+                      : copy.chat.discordSecureTitle}
+                  </h3>
+                  <p>
+                    {setupGoal === "database-uri"
+                      ? copy.chat.databaseSecureIntro
+                      : copy.chat.discordSecureIntro}
+                  </p>
                 </div>
               </div>
               <form
                 className="secure-secret-form"
                 onSubmit={(event) => void submitSecureSecret(event)}
               >
-                <label htmlFor="configuration-secret-kind">{copy.chat.secureKindLabel}</label>
-                <select
-                  disabled={pending}
-                  id="configuration-secret-kind"
-                  onChange={(event) => {
-                    setSecureCredentialKind(event.target.value as SecureCredentialKind);
-                    setSecureCredential("");
-                    setStoredReference(null);
-                  }}
-                  value={secureCredentialKind}
-                >
-                  <option value="database-uri">{copy.chat.secureDatabaseOption}</option>
-                  <option value="discord-bot-token">{copy.chat.secureDiscordOption}</option>
-                </select>
                 <label htmlFor="configuration-secret-value">
-                  {secureCredentialKind === "database-uri"
+                  {setupGoal === "database-uri"
                     ? copy.chat.databaseUriLabel
                     : copy.chat.discordTokenLabel}
                 </label>
@@ -434,7 +501,7 @@ export function ConfigurationChat({
                     id="configuration-secret-value"
                     onChange={(event) => setSecureCredential(event.target.value)}
                     placeholder={
-                      secureCredentialKind === "database-uri"
+                      setupGoal === "database-uri"
                         ? copy.chat.databaseUriPlaceholder
                         : copy.chat.discordTokenPlaceholder
                     }

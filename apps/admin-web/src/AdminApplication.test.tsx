@@ -397,13 +397,17 @@ describe("Admin authentication and Task control", () => {
       });
     const sendConfigurationMessage = vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValue("The secure reference is ready for owner review.");
+      .mockResolvedValueOnce("I will explain the optional PostgreSQL path first.")
+      .mockResolvedValueOnce("The secure reference is ready for owner review.");
     const api = createApi({ ingestSecret, sendConfigurationMessage });
     const user = userEvent.setup();
     render(<AdminApplication api={api} />);
 
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(screen.queryByLabelText("Database URI")).toBeNull();
+    expect(screen.getByText("SQLite is already active. No database URI is required.")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Use external PostgreSQL" }));
     const input = screen.getByLabelText("Database URI") as HTMLInputElement;
     expect(input.type).toBe("password");
     await user.type(input, rawDatabaseUri);
@@ -419,7 +423,11 @@ describe("Admin authentication and Task control", () => {
       windowsMain.deviceId,
       "Use this secure database reference: secret://main/database_secure_fixture",
     );
-    expect(sendConfigurationMessage.mock.calls[0]?.[1]).not.toContain("must-not-enter-chat");
+    expect(
+      sendConfigurationMessage.mock.calls.every(
+        ([, message]) => !message.includes("must-not-enter-chat"),
+      ),
+    ).toBe(true);
     expect(input.value).toBe("");
     expect(
       screen.getByText("Stored locally as secret://main/database_secure_fixture"),
@@ -441,14 +449,16 @@ describe("Admin authentication and Task control", () => {
       });
     const sendConfigurationMessage = vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValue("The Discord credential alias is ready for binding setup.");
+      .mockResolvedValueOnce("I will guide the Discord-side setup first.")
+      .mockResolvedValueOnce("The Discord credential alias is ready for binding setup.");
     const api = createApi({ ingestSecret, sendConfigurationMessage });
     const user = userEvent.setup();
     render(<AdminApplication api={api} />);
 
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
-    await user.selectOptions(screen.getByLabelText("Credential type"), "discord-bot-token");
+    expect(screen.queryByLabelText("Discord bot token")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Set up Discord" }));
     const input = screen.getByLabelText("Discord bot token") as HTMLInputElement;
     expect(input.type).toBe("password");
     await user.type(input, rawToken);
@@ -460,11 +470,19 @@ describe("Admin authentication and Task control", () => {
     expect(observedMaterial).toBe(rawToken);
     expect(ingestSecret.mock.calls[0]?.[0]).toBe("discord-bot-token");
     expect(ingestSecret.mock.calls[0]?.[1]?.every((byte) => byte === 0)).toBe(true);
-    expect(sendConfigurationMessage).toHaveBeenCalledWith(
+    expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
+      1,
+      windowsMain.deviceId,
+      "Guide me through Discord Forum setup. Inspect the current binding first, explain the Discord-side steps that remain, and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+    );
+    expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
+      2,
       windowsMain.deviceId,
       "Use this secure Discord bot token reference: secret://main/discord_secure_fixture. Its botTokenAlias is discord_secure_fixture.",
     );
-    expect(sendConfigurationMessage.mock.calls[0]?.[1]).not.toContain(rawToken);
+    expect(
+      sendConfigurationMessage.mock.calls.every(([, message]) => !message.includes(rawToken)),
+    ).toBe(true);
     expect(input.value).toBe("");
   });
 
@@ -474,12 +492,12 @@ describe("Admin authentication and Task control", () => {
 
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
-    await user.selectOptions(screen.getByLabelText("Credential type"), "discord-bot-token");
+    await user.click(screen.getByRole("button", { name: "Set up Discord" }));
     await user.type(screen.getByLabelText("Discord bot token"), "unsubmitted.discord.token");
     await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
 
     await user.click(screen.getByRole("button", { name: "Configure" }));
-    expect((screen.getByLabelText("Discord bot token") as HTMLInputElement).value).toBe("");
+    expect(screen.queryByLabelText("Discord bot token")).toBeNull();
   });
 
   it("re-renders a deterministic authentication error when the locale changes", async () => {
