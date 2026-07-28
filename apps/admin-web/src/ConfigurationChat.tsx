@@ -28,6 +28,8 @@ import {
   useAdminI18n,
 } from "./i18n";
 import {
+  type ConfigurationAgentReply,
+  type ConfigurationAgentSuggestedAction,
   mainSecretAlias,
   type SecureSecretIngestPurpose,
   type SecureSecretIngestReceipt,
@@ -48,11 +50,19 @@ interface GuidedSetupDescriptor {
   readonly toReferenceMessage: (receipt: SecureSecretIngestReceipt) => string;
 }
 
+interface SuggestedActionDescriptor {
+  readonly description: string;
+  readonly goal?: GuidedSetupGoal;
+  readonly icon: "bot" | "database";
+  readonly title: string;
+}
+
 type SystemChatMessageKey = "failedMessage" | "secureStoreFailed" | "unavailableMessage";
 
 type ChatMessage = {
   readonly id: string;
   readonly author: "agent" | "owner";
+  readonly suggestedActions?: readonly ConfigurationAgentSuggestedAction[];
 } & (
   | {
       readonly content: string;
@@ -74,7 +84,7 @@ interface ConfigurationChatProps {
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,
   ) => Promise<SecureSecretIngestReceipt>;
-  readonly onSendMessage?: (message: string) => Promise<string>;
+  readonly onSendMessage?: (message: string) => Promise<ConfigurationAgentReply>;
   readonly onToggleExpanded: () => void;
   readonly open: boolean;
   readonly session: ConfigurationSessionView;
@@ -96,6 +106,7 @@ export function ConfigurationChat({
   const [proposalState, setProposalState] = useState<ProposalState>("proposed");
   const [draft, setDraft] = useState("");
   const [setupGoal, setSetupGoal] = useState<GuidedSetupGoal | null>(null);
+  const [setupMessageId, setSetupMessageId] = useState<string | null>(null);
   const [secureCredential, setSecureCredential] = useState("");
   const [storedReference, setStoredReference] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -148,6 +159,7 @@ export function ConfigurationChat({
   useEffect(() => {
     if (!open) {
       setSetupGoal(null);
+      setSetupMessageId(null);
       setSecureCredential("");
       setStoredReference(null);
     }
@@ -201,7 +213,8 @@ export function ConfigurationChat({
         {
           id: `message-agent-${sequence + 1}`,
           author: "agent",
-          content: response,
+          content: response.content,
+          suggestedActions: response.suggestedActions,
         },
       ]);
     } catch {
@@ -228,14 +241,27 @@ export function ConfigurationChat({
     await sendConversationMessage(message);
   }
 
-  async function startGuidedSetup(goal: GuidedSetupGoal): Promise<void> {
+  async function handleSuggestedAction(
+    messageId: string,
+    action: ConfigurationAgentSuggestedAction,
+  ): Promise<void> {
     if (onSendMessage === undefined || pending) {
       return;
     }
+    if (action === "guide-discord" || action === "guide-external-postgresql") {
+      setSetupGoal(null);
+      setSetupMessageId(null);
+      setSecureCredential("");
+      setStoredReference(null);
+      const goal = action === "guide-discord" ? "discord" : "external-postgresql";
+      await sendConversationMessage(guidedSetupDescriptor(goal, copy).request);
+      return;
+    }
+    const goal = action === "ingest-discord-bot-token" ? "discord" : "external-postgresql";
     setSetupGoal(goal);
+    setSetupMessageId(messageId);
     setSecureCredential("");
     setStoredReference(null);
-    await sendConversationMessage(guidedSetupDescriptor(goal, copy).request);
   }
 
   async function submitSecureSecret(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -275,7 +301,8 @@ export function ConfigurationChat({
           {
             id: `message-agent-secure-reference-${sequence + 1}`,
             author: "agent",
-            content: response,
+            content: response.content,
+            suggestedActions: response.suggestedActions,
           },
         ]);
       } catch {
@@ -400,112 +427,119 @@ export function ConfigurationChat({
                     <Network aria-hidden="true" />
                   </span>
                 ) : null}
-                <p>
-                  {message.systemMessageKey === undefined
-                    ? message.content
-                    : copy.chat[message.systemMessageKey]}
-                </p>
+                <div className="chat-message-body">
+                  <p>
+                    {message.systemMessageKey === undefined
+                      ? message.content
+                      : copy.chat[message.systemMessageKey]}
+                  </p>
+                  {message.author === "agent" &&
+                  mainDevice &&
+                  onIngestSecret !== undefined &&
+                  onSendMessage !== undefined &&
+                  message.suggestedActions !== undefined &&
+                  message.suggestedActions.length > 0 ? (
+                    <div
+                      aria-label={copy.chat.guidedSetupTitle}
+                      className="guided-setup-options chat-message-actions"
+                    >
+                      {message.suggestedActions.map((action) => {
+                        const descriptor = suggestedActionDescriptor(action, copy);
+                        return (
+                          <button
+                            aria-label={descriptor.title}
+                            aria-pressed={
+                              setupMessageId === message.id &&
+                              setupGoal !== null &&
+                              descriptor.goal === setupGoal
+                            }
+                            className="guided-setup-option"
+                            disabled={pending}
+                            key={action}
+                            onClick={() => void handleSuggestedAction(message.id, action)}
+                            type="button"
+                          >
+                            <span aria-hidden="true">
+                              {descriptor.icon === "database" ? <Database /> : <Bot />}
+                            </span>
+                            <span>
+                              <strong>{descriptor.title}</strong>
+                              <small>{descriptor.description}</small>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {message.author === "agent" &&
+                  mainDevice &&
+                  setupMessageId === message.id &&
+                  activeSetup !== null &&
+                  onIngestSecret !== undefined &&
+                  onSendMessage !== undefined ? (
+                    <section
+                      aria-labelledby={`configuration-secret-title-${message.id}`}
+                      className="secure-secret-panel"
+                    >
+                      <div className="secure-secret-heading">
+                        <span aria-hidden="true">
+                          {activeSetup.icon === "database" ? <Database /> : <Bot />}
+                        </span>
+                        <div>
+                          <h3 id={`configuration-secret-title-${message.id}`}>
+                            {activeSetup.secureTitle}
+                          </h3>
+                          <p>{activeSetup.secureIntro}</p>
+                        </div>
+                      </div>
+                      <form
+                        className="secure-secret-form"
+                        onSubmit={(event) => void submitSecureSecret(event)}
+                      >
+                        <label htmlFor={`configuration-secret-value-${message.id}`}>
+                          {activeSetup.inputLabel}
+                        </label>
+                        <div>
+                          <input
+                            aria-describedby={`configuration-secret-value-notice-${message.id}`}
+                            autoCapitalize="none"
+                            autoComplete="off"
+                            data-1p-ignore="true"
+                            disabled={pending}
+                            id={`configuration-secret-value-${message.id}`}
+                            onChange={(event) => setSecureCredential(event.target.value)}
+                            placeholder={activeSetup.inputPlaceholder}
+                            spellCheck={false}
+                            type="password"
+                            value={secureCredential}
+                          />
+                          <button
+                            className="secondary-button"
+                            disabled={pending || secureCredential.length === 0}
+                            type="submit"
+                          >
+                            <LockKeyhole aria-hidden="true" />
+                            {pending ? copy.chat.secureStoring : copy.chat.secureStore}
+                          </button>
+                        </div>
+                        <p id={`configuration-secret-value-notice-${message.id}`}>
+                          {copy.chat.secureNotice}
+                        </p>
+                        {storedReference === null ? null : (
+                          <p className="secure-secret-receipt" role="status">
+                            <Check aria-hidden="true" />
+                            {formatMessage(copy.chat.secureStored, {
+                              reference: storedReference,
+                            })}
+                          </p>
+                        )}
+                      </form>
+                    </section>
+                  ) : null}
+                </div>
               </article>
             ))}
           </div>
-
-          {mainDevice && onIngestSecret !== undefined && onSendMessage !== undefined ? (
-            <section aria-labelledby="guided-setup-title" className="guided-setup-panel">
-              <div className="guided-setup-heading">
-                <h3 id="guided-setup-title">{copy.chat.guidedSetupTitle}</h3>
-                <p>{copy.chat.guidedSetupIntro}</p>
-              </div>
-              <div className="guided-setup-options">
-                <button
-                  aria-label={copy.chat.discordSetupTitle}
-                  aria-pressed={setupGoal === "discord"}
-                  className="guided-setup-option"
-                  disabled={pending}
-                  onClick={() => void startGuidedSetup("discord")}
-                  type="button"
-                >
-                  <span aria-hidden="true">
-                    <Bot />
-                  </span>
-                  <span>
-                    <strong>{copy.chat.discordSetupTitle}</strong>
-                    <small>{copy.chat.discordSetupDescription}</small>
-                  </span>
-                </button>
-                <button
-                  aria-label={copy.chat.databaseSetupTitle}
-                  aria-pressed={setupGoal === "external-postgresql"}
-                  className="guided-setup-option"
-                  disabled={pending}
-                  onClick={() => void startGuidedSetup("external-postgresql")}
-                  type="button"
-                >
-                  <span aria-hidden="true">
-                    <Database />
-                  </span>
-                  <span>
-                    <strong>{copy.chat.databaseSetupTitle}</strong>
-                    <small>{copy.chat.databaseSetupDescription}</small>
-                  </span>
-                </button>
-              </div>
-            </section>
-          ) : null}
-
-          {mainDevice &&
-          activeSetup !== null &&
-          onIngestSecret !== undefined &&
-          onSendMessage !== undefined ? (
-            <section aria-labelledby="configuration-secret-title" className="secure-secret-panel">
-              <div className="secure-secret-heading">
-                <span aria-hidden="true">
-                  {activeSetup.icon === "database" ? <Database /> : <Bot />}
-                </span>
-                <div>
-                  <h3 id="configuration-secret-title">{activeSetup.secureTitle}</h3>
-                  <p>{activeSetup.secureIntro}</p>
-                </div>
-              </div>
-              <form
-                className="secure-secret-form"
-                onSubmit={(event) => void submitSecureSecret(event)}
-              >
-                <label htmlFor="configuration-secret-value">{activeSetup.inputLabel}</label>
-                <div>
-                  <input
-                    aria-describedby="configuration-secret-value-notice"
-                    autoCapitalize="none"
-                    autoComplete="off"
-                    data-1p-ignore="true"
-                    disabled={pending}
-                    id="configuration-secret-value"
-                    onChange={(event) => setSecureCredential(event.target.value)}
-                    placeholder={activeSetup.inputPlaceholder}
-                    spellCheck={false}
-                    type="password"
-                    value={secureCredential}
-                  />
-                  <button
-                    className="secondary-button"
-                    disabled={pending || secureCredential.length === 0}
-                    type="submit"
-                  >
-                    <LockKeyhole aria-hidden="true" />
-                    {pending ? copy.chat.secureStoring : copy.chat.secureStore}
-                  </button>
-                </div>
-                <p id="configuration-secret-value-notice">{copy.chat.secureNotice}</p>
-                {storedReference === null ? null : (
-                  <p className="secure-secret-receipt" role="status">
-                    <Check aria-hidden="true" />
-                    {formatMessage(copy.chat.secureStored, {
-                      reference: storedReference,
-                    })}
-                  </p>
-                )}
-              </form>
-            </section>
-          ) : null}
 
           {session.proposal !== null && proposalState !== "dismissed" ? (
             <div className="proposal-stack">
@@ -660,4 +694,38 @@ function guidedSetupDescriptor(goal: GuidedSetupGoal, copy: Messages): GuidedSet
         reference: receipt.secretRef,
       }),
   };
+}
+
+function suggestedActionDescriptor(
+  action: ConfigurationAgentSuggestedAction,
+  copy: Messages,
+): SuggestedActionDescriptor {
+  switch (action) {
+    case "guide-discord":
+      return {
+        icon: "bot",
+        title: copy.chat.discordSetupTitle,
+        description: copy.chat.discordSetupDescription,
+      };
+    case "guide-external-postgresql":
+      return {
+        icon: "database",
+        title: copy.chat.databaseSetupTitle,
+        description: copy.chat.databaseSetupDescription,
+      };
+    case "ingest-discord-bot-token":
+      return {
+        icon: "bot",
+        goal: "discord",
+        title: copy.chat.discordSecureTitle,
+        description: copy.chat.discordSecureIntro,
+      };
+    case "ingest-database-uri":
+      return {
+        icon: "database",
+        goal: "external-postgresql",
+        title: copy.chat.databaseSecureTitle,
+        description: copy.chat.databaseSecureIntro,
+      };
+  }
 }

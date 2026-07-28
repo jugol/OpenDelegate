@@ -539,6 +539,17 @@ export interface SecureSecretIngestReceipt {
   readonly availability: "ready";
 }
 
+export type ConfigurationAgentSuggestedAction =
+  | "guide-discord"
+  | "guide-external-postgresql"
+  | "ingest-discord-bot-token"
+  | "ingest-database-uri";
+
+export interface ConfigurationAgentReply {
+  readonly content: string;
+  readonly suggestedActions: readonly ConfigurationAgentSuggestedAction[];
+}
+
 export function parseMainSecretReference(input: unknown): MainSecretReference {
   if (
     typeof input !== "string" ||
@@ -565,7 +576,7 @@ export interface AdminApi {
   listDevices(): Promise<readonly DeviceSummary[]>;
   assessDevice(deviceId: string): Promise<DeviceSummary>;
   runtimeFeatures(): Promise<RuntimeFeatures>;
-  sendConfigurationMessage(deviceId: string, message: string): Promise<string>;
+  sendConfigurationMessage(deviceId: string, message: string): Promise<ConfigurationAgentReply>;
   ingestSecret(
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,
@@ -669,15 +680,18 @@ export class BrowserAdminApi implements AdminApi {
     return this.#request("/api/v1/runtime/features");
   }
 
-  async sendConfigurationMessage(deviceId: string, message: string): Promise<string> {
-    const response = await this.#authenticatedRequest<{ readonly content: string }>(
+  async sendConfigurationMessage(
+    deviceId: string,
+    message: string,
+  ): Promise<ConfigurationAgentReply> {
+    const response = await this.#authenticatedRequest<unknown>(
       `/api/v1/devices/${encodeURIComponent(deviceId)}/configuration/messages`,
       {
         body: { message },
         method: "POST",
       },
     );
-    return response.content;
+    return asConfigurationAgentReply(response);
   }
 
   async ingestSecret(
@@ -950,6 +964,36 @@ function asSecureSecretIngestReceipt(value: unknown): SecureSecretIngestReceipt 
     schemaVersion: 1,
     secretRef: secretRef as MainSecretReference,
     availability: "ready",
+  };
+}
+
+function asConfigurationAgentReply(value: unknown): ConfigurationAgentReply {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw unexpectedResponse(502);
+  }
+  const record = value as Record<string, unknown>;
+  const content = asNonBlankString(record["content"]);
+  const rawActions = record["suggestedActions"] ?? [];
+  if (content === undefined || !Array.isArray(rawActions) || rawActions.length > 4) {
+    throw unexpectedResponse(502);
+  }
+  const suggestedActions = rawActions.map((action): ConfigurationAgentSuggestedAction => {
+    if (
+      action !== "guide-discord" &&
+      action !== "guide-external-postgresql" &&
+      action !== "ingest-discord-bot-token" &&
+      action !== "ingest-database-uri"
+    ) {
+      throw unexpectedResponse(502);
+    }
+    return action;
+  });
+  if (new Set(suggestedActions).size !== suggestedActions.length) {
+    throw unexpectedResponse(502);
+  }
+  return {
+    content,
+    suggestedActions,
   };
 }
 

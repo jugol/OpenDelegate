@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type {
   AdminApi,
+  ConfigurationAgentReply,
   RuntimeReleaseIdentity,
   SecureSecretIngestPurpose,
   SecureSecretIngestReceipt,
@@ -30,7 +31,10 @@ export interface AppProps {
   readonly initialChatOpen?: boolean;
   readonly initialSection?: AdminSection;
   readonly onAssessDevice?: (deviceId: string) => Promise<void>;
-  readonly onConfigurationMessage?: (deviceId: string, message: string) => Promise<string>;
+  readonly onConfigurationMessage?: (
+    deviceId: string,
+    message: string,
+  ) => Promise<ConfigurationAgentReply>;
   readonly onSecureSecretIngest?: (
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,

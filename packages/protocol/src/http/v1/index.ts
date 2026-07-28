@@ -87,9 +87,11 @@ export {
   ConfigurationAgentMessageParamsSchema,
   ConfigurationAgentMessageRequestSchema,
   ConfigurationAgentMessageResponseSchema,
+  ConfigurationAgentSuggestedActionSchema,
   type ConfigurationAgentMessageParamsV1,
   type ConfigurationAgentMessageRequestV1,
   type ConfigurationAgentMessageResponseV1,
+  type ConfigurationAgentSuggestedActionV1,
 } from "./configuration-agent.ts";
 export {
   DeviceAssessmentParamsSchema,

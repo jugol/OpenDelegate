@@ -87,6 +87,7 @@ const BENIGN_NOTIFICATION_METHODS = new Set([
   "model/verification",
   "rawResponse/completed",
   "rawResponseItem/completed",
+  "remoteControl/status/changed",
   "serverRequest/resolved",
   "thread/compacted",
   "thread/environment/connected",

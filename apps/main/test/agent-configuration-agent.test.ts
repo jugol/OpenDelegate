@@ -54,6 +54,7 @@ test("Configuration Agent resumes one native session per target Device", async (
   const second = await agent.sendMessage(message("request_two", "Propose a safer route."));
 
   assert.equal(first.content, "I inspected the available configuration context.");
+  assert.deepEqual(first.suggestedActions, ["guide-discord", "guide-external-postgresql"]);
   assert.equal(second.content, "I prepared a proposal; it has not been applied.");
   assert.equal(first.sessionId, second.sessionId);
   assert.equal(adapter.starts.length, 1);
@@ -391,6 +392,7 @@ class FakeConfigurationAdapter implements AgentAdapter {
             type: "final",
             content: "I inspected the available configuration context.",
             claimReceiptIds: [],
+            suggestedActions: ["guide-discord", "guide-external-postgresql"],
           }),
     );
   }

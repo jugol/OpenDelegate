@@ -68,6 +68,12 @@ if (provider === "codex-app-server") {
       continue;
     }
     if (message.method === "initialized") {
+      if (process.env.FIXTURE_EMIT_REMOTE_CONTROL_STATUS === "1") {
+        send({
+          method: "remoteControl/status/changed",
+          params: { status: "unavailable" },
+        });
+      }
       continue;
     }
     if (message.method === "thread/start" || message.method === "thread/resume") {

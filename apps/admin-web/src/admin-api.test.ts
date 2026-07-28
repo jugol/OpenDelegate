@@ -122,6 +122,7 @@ describe("BrowserAdminApi JSON responses", () => {
           messageId: "configuration_message_001",
           sessionId: "configuration_session_device_main",
           content: "The Device-scoped proposal is ready for review.",
+          suggestedActions: ["guide-discord"],
           occurredAt: "2026-07-24T01:02:00.000Z",
         }),
       );
@@ -131,7 +132,10 @@ describe("BrowserAdminApi JSON responses", () => {
     await api.login("correct horse battery staple");
     await expect(
       api.sendConfigurationMessage("device_main/with space", "Inspect this Device."),
-    ).resolves.toBe("The Device-scoped proposal is ready for review.");
+    ).resolves.toEqual({
+      content: "The Device-scoped proposal is ready for review.",
+      suggestedActions: ["guide-discord"],
+    });
 
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "/api/v1/devices/device_main%2Fwith%20space/configuration/messages",

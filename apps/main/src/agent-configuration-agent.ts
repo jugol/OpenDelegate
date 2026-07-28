@@ -25,6 +25,7 @@ import {
   type ConfigurationToolReceipt,
   type ConfigurationToolRequest,
 } from "@opendelegate/configuration";
+import type { ConfigurationAgentSuggestedActionV1 } from "@opendelegate/protocol";
 import type { ManagedSecretStore } from "@opendelegate/secrets";
 
 import type {
@@ -318,6 +319,7 @@ type ConfigurationAgentTurnResult =
       readonly type: "final";
       readonly content: string;
       readonly claimReceiptIds: readonly string[];
+      readonly suggestedActions: readonly ConfigurationAgentSuggestedActionV1[];
     };
 
 type ConfigurationAgentToolTurnResult =
@@ -527,6 +529,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
               .slice(0, 64)}`,
             sessionId: `configuration_${digest(sessionKey).slice("sha256:".length).slice(0, 64)}`,
             content,
+            ...(parsed.suggestedActions.length === 0
+              ? {}
+              : { suggestedActions: [...parsed.suggestedActions] }),
             occurredAt,
           } satisfies ConfigurationAgentMessageResponse;
           return await this.#recordResponse(operationKey, requestDigest, response);
@@ -805,8 +810,10 @@ function buildConfigurationPrompt(
       ? "No deterministic Device observation was supplied. Ask the owner to run Assess device before making capability recommendations."
       : `The following bounded Device observation is authoritative for this turn. Explain it when useful, but do not invent missing capabilities: ${JSON.stringify(input.deviceObservation)}`,
     "There is no generic shell, file-edit, network, or arbitrary tool in this conversation.",
+    'You may attach only these context-sensitive suggestedActions to a final response: "guide-discord", "guide-external-postgresql", "ingest-discord-bot-token", and "ingest-database-uri". These are owner-facing UI suggestions, not proof that any configuration changed.',
+    'Offer "guide-discord" or "guide-external-postgresql" only when that next conversation is relevant. Offer a secure ingest action only when its credential is the actual next missing value after explaining prerequisites. Never offer a Main-service action for a Worker Device.',
     "Do not expose private chain-of-thought.",
-    'When finished, return one exact JSON object and no Markdown fence: {"schemaVersion":1,"type":"final","content":"owner-visible response","claimReceiptIds":["every successful apply or rollback receipt, and no other receipt"]}.',
+    'When finished, return one exact JSON object and no Markdown fence: {"schemaVersion":1,"type":"final","content":"owner-visible response","claimReceiptIds":["every successful apply or rollback receipt, and no other receipt"],"suggestedActions":["zero or more context-sensitive actions from the allowlist"]}.',
     "",
     `Target Device ID: ${input.deviceId}`,
     `Owner message: ${input.message}`,
@@ -825,7 +832,7 @@ function buildToolResultPrompt(
     "OpenDelegate executed the requested deterministic typed configuration tool.",
     "The following JSON is authoritative. A succeeded result is backed by the included durable receipt. A failed result made no requested configuration mutation.",
     JSON.stringify(result),
-    "Continue with one typed tool JSON object, or return the exact final JSON object. Never invent or alter identifiers. The final claimReceiptIds must contain every successful apply or rollback receipt and no other receipt.",
+    "Continue with one typed tool JSON object, or return the exact final JSON object. Never invent or alter identifiers. The final claimReceiptIds must contain every successful apply or rollback receipt and no other receipt. suggestedActions may contain only the documented context-sensitive UI suggestions.",
   ].join("\n");
   if (Buffer.byteLength(prompt, "utf8") > maximumBytes) {
     throw unavailable("The Configuration Agent tool result exceeds its prompt budget.");
@@ -852,7 +859,14 @@ function parseConfigurationTurnResult(value: string | undefined): ConfigurationA
   }
   if (parsed["type"] === "final") {
     if (
-      !hasExactKeys(parsed, ["schemaVersion", "type", "content", "claimReceiptIds"]) ||
+      (!hasExactKeys(parsed, ["schemaVersion", "type", "content", "claimReceiptIds"]) &&
+        !hasExactKeys(parsed, [
+          "schemaVersion",
+          "type",
+          "content",
+          "claimReceiptIds",
+          "suggestedActions",
+        ])) ||
       typeof parsed["content"] !== "string" ||
       !Array.isArray(parsed["claimReceiptIds"]) ||
       parsed["claimReceiptIds"].length > 32
@@ -867,11 +881,16 @@ function parseConfigurationTurnResult(value: string | undefined): ConfigurationA
     if (new Set(claimReceiptIds).size !== claimReceiptIds.length) {
       throw unavailable("The Configuration Agent returned duplicate mutation claims.");
     }
+    const suggestedActions =
+      parsed["suggestedActions"] === undefined
+        ? []
+        : parseSuggestedActions(parsed["suggestedActions"]);
     return {
       schemaVersion: 1,
       type: "final",
       content: parsed["content"],
       claimReceiptIds,
+      suggestedActions,
     };
   }
   if (!hasExactKeys(parsed, ["schemaVersion", "type", "toolCallId", "request"])) {
@@ -1084,6 +1103,27 @@ function finalizeOwnerResponse(
   return content;
 }
 
+function parseSuggestedActions(value: unknown): readonly ConfigurationAgentSuggestedActionV1[] {
+  if (!Array.isArray(value) || value.length > 4) {
+    throw unavailable("The Configuration Agent returned invalid suggested actions.");
+  }
+  const actions = value.map((action): ConfigurationAgentSuggestedActionV1 => {
+    if (
+      action !== "guide-discord" &&
+      action !== "guide-external-postgresql" &&
+      action !== "ingest-discord-bot-token" &&
+      action !== "ingest-database-uri"
+    ) {
+      throw unavailable("The Configuration Agent returned invalid suggested actions.");
+    }
+    return action;
+  });
+  if (new Set(actions).size !== actions.length) {
+    throw unavailable("The Configuration Agent returned duplicate suggested actions.");
+  }
+  return Object.freeze(actions);
+}
+
 function isRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -1096,7 +1136,14 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
     typeof value["requestDigest"] !== "string" ||
     !/^sha256:[a-f0-9]{64}$/.test(value["requestDigest"]) ||
     !isRecord(value["response"]) ||
-    !hasExactKeys(value["response"], ["messageId", "sessionId", "content", "occurredAt"])
+    (!hasExactKeys(value["response"], ["messageId", "sessionId", "content", "occurredAt"]) &&
+      !hasExactKeys(value["response"], [
+        "messageId",
+        "sessionId",
+        "content",
+        "suggestedActions",
+        "occurredAt",
+      ]))
   ) {
     throw unavailable("The Configuration Agent response state is corrupt.");
   }
@@ -1104,6 +1151,9 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
   assertIdentifier(response["messageId"], "Message ID", 160);
   assertIdentifier(response["sessionId"], "Session ID", 160);
   assertIdentifier(response["content"], "Configuration Agent response", 32_768);
+  if (response["suggestedActions"] !== undefined) {
+    parseSuggestedActions(response["suggestedActions"]);
+  }
   if (typeof response["occurredAt"] !== "string" || !isRfc3339Instant(response["occurredAt"])) {
     throw unavailable("The Configuration Agent response state is corrupt.");
   }

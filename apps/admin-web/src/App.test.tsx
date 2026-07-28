@@ -24,9 +24,10 @@ function renderApp(device: DeviceOverviewViewModel = firstRunDevice) {
       }
       executionAvailable
       initialChatOpen
-      onConfigurationMessage={async (deviceId, message) =>
-        `Fixture response for ${deviceId}: ${message}`
-      }
+      onConfigurationMessage={async (deviceId, message) => ({
+        content: `Fixture response for ${deviceId}: ${message}`,
+        suggestedActions: [],
+      })}
     />,
   );
   if (device.role === "worker") {
@@ -392,9 +393,10 @@ describe("first-run Device overview", () => {
           configurationAgentAvailable
           deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
           executionAvailable
-          onConfigurationMessage={async (deviceId, message) =>
-            `Fixture response for ${deviceId}: ${message}`
-          }
+          onConfigurationMessage={async (deviceId, message) => ({
+            content: `Fixture response for ${deviceId}: ${message}`,
+            suggestedActions: [],
+          })}
         />,
       );
 

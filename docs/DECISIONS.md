@@ -756,3 +756,32 @@ that Device's dedicated configuration session, but secret material still bypasse
 the transcript and only an opaque reference reaches the Agent. Storing a PostgreSQL
 URI or proposing database configuration does not claim to migrate the live database;
 the supported backup/restore and service reconfiguration path remains required.
+
+## D-055 — Agent-returned setup actions belong to their conversation message
+
+**Decision:** D-054's fixed guided-goal surface is superseded. Configuration Chat
+does not render a persistent setup menu below the transcript. A Configuration Agent
+final response may attach up to four unique actions from a closed protocol allowlist:
+guide Discord, guide external PostgreSQL, ingest a Discord bot token securely, or
+ingest a database URI securely. Admin Web renders those actions inside the exact
+Agent message that returned them.
+
+Guide actions create an ordinary localized owner message in the same Device
+configuration session. A secure-ingest action reveals its form inline only after the
+Agent has explained why that credential is the next missing value. The resulting raw
+Secret still bypasses the transcript, SQL, and Agent context; only its opaque managed
+reference continues through the conversation. Suggested actions are presentation
+metadata, not executable configuration, mutation evidence, or durable receipts.
+
+**Rationale:** A fixed setup panel looked like disconnected application chrome and
+made options appear before the Agent had assessed the owner's intent or current
+state. Returning a narrow UI suggestion with the Agent's response preserves
+conversational context without allowing arbitrary Agent-authored components, URLs,
+commands, or actions.
+
+**Consequence:** Existing persisted Configuration Agent responses without
+suggestions remain valid. Unknown, duplicate, or excessive actions fail closed at
+the protocol and browser boundaries. Main-service actions are never offered in a
+Worker Configuration Chat. Discord prerequisites, SQLite-as-default guidance,
+protected Approval, live activation validation, and rollback retain the behavior
+defined by D-054.

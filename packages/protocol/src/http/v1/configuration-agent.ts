@@ -33,6 +33,17 @@ export type ConfigurationAgentMessageRequestV1 = Type.Static<
   typeof ConfigurationAgentMessageRequestSchema
 >;
 
+export const ConfigurationAgentSuggestedActionSchema = Type.Union([
+  Type.Literal("guide-discord"),
+  Type.Literal("guide-external-postgresql"),
+  Type.Literal("ingest-discord-bot-token"),
+  Type.Literal("ingest-database-uri"),
+]);
+
+export type ConfigurationAgentSuggestedActionV1 = Type.Static<
+  typeof ConfigurationAgentSuggestedActionSchema
+>;
+
 export const ConfigurationAgentMessageResponseSchema = Type.Object(
   {
     messageId: OpaqueIdSchema,
@@ -41,6 +52,12 @@ export const ConfigurationAgentMessageResponseSchema = Type.Object(
       minLength: 1,
       maxLength: 32_768,
     }),
+    suggestedActions: Type.Optional(
+      Type.Array(ConfigurationAgentSuggestedActionSchema, {
+        maxItems: 4,
+        uniqueItems: true,
+      }),
+    ),
     occurredAt: Rfc3339InstantSchema,
   },
   {

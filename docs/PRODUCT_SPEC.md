@@ -737,15 +737,22 @@ may request a transition but cannot manufacture a state outside the transition r
     render time.
 20. Domain codes, API fields, durable events, schemas, logs, and source defaults
     remain English regardless of the selected presentation locale.
-21. Configuration Chat presents Main-service credentials only inside an
-    owner-selected guided setup goal. Embedded SQLite is the default and is described
-    as already usable without a URI; the external PostgreSQL credential form is an
-    explicit opt-in rather than an unsolicited chat field.
-22. Discord guided setup inspects the current binding first, explains the remaining
+21. Configuration Chat does not pin a generic setup menu or credential form below
+    the conversation. A Configuration Agent final response may attach only bounded,
+    typed, allowlisted setup suggestions. Admin Web renders each suggestion inside
+    the Agent message that produced it, preserving the conversational reason for the
+    next action.
+22. Main-service credential intake appears only after the Configuration Agent
+    explicitly identifies that credential as the next missing value. Embedded SQLite
+    is the already-active default and needs no URI. Raw Secret material goes only to
+    Main's secure intake form, never to the transcript or Agent context; only the
+    resulting opaque reference continues through Configuration Chat.
+23. Discord guided setup inspects the current binding first, explains the remaining
     Developer Portal, Community Server, Forum, intent, and permission steps, asks only
-    for missing non-secret identifiers, and directs the raw bot token to Main's secure
-    intake form. It then uses the typed proposal and protected Approval lifecycle;
-    it never claims that browser-only Discord actions were completed by OpenDelegate.
+    for missing non-secret identifiers, and then offers secure bot-token intake when
+    it is actually required. It uses the typed proposal and protected Approval
+    lifecycle and never claims that browser-only Discord actions were completed by
+    OpenDelegate.
 
 ### FR-16 — Policy and approvals
 

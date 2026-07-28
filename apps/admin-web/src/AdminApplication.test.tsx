@@ -364,7 +364,10 @@ describe("Admin authentication and Task control", () => {
   it("routes Configuration Chat to the selected Device without translating owner content", async () => {
     const sendConfigurationMessage = vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValue("Agent-authored response stays unchanged.");
+      .mockResolvedValue({
+        content: "Agent-authored response stays unchanged.",
+        suggestedActions: [],
+      });
     const api = createApi({ sendConfigurationMessage });
     const user = userEvent.setup();
     render(<AdminApplication api={api} />);
@@ -397,8 +400,14 @@ describe("Admin authentication and Task control", () => {
       });
     const sendConfigurationMessage = vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValueOnce("I will explain the optional PostgreSQL path first.")
-      .mockResolvedValueOnce("The secure reference is ready for owner review.");
+      .mockResolvedValueOnce({
+        content: "The database URI is the next missing value.",
+        suggestedActions: ["ingest-database-uri"],
+      })
+      .mockResolvedValueOnce({
+        content: "The secure reference is ready for owner review.",
+        suggestedActions: [],
+      });
     const api = createApi({ ingestSecret, sendConfigurationMessage });
     const user = userEvent.setup();
     render(<AdminApplication api={api} />);
@@ -406,8 +415,18 @@ describe("Admin authentication and Task control", () => {
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
     expect(screen.queryByLabelText("Database URI")).toBeNull();
-    expect(screen.getByText("SQLite is already active. No database URI is required.")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Use external PostgreSQL" }));
+    expect(screen.queryByRole("button", { name: "External PostgreSQL credential" })).toBeNull();
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "Help me configure external PostgreSQL.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("The database URI is the next missing value.")).toBeTruthy();
+    const agentMessages = screen.getAllByRole("article", { name: "OpenDelegate" });
+    const contextualAction = within(agentMessages.at(-1)!).getByRole("button", {
+      name: "External PostgreSQL credential",
+    });
+    await user.click(contextualAction);
     const input = screen.getByLabelText("Database URI") as HTMLInputElement;
     expect(input.type).toBe("password");
     await user.type(input, rawDatabaseUri);
@@ -422,6 +441,11 @@ describe("Admin authentication and Task control", () => {
     expect(sendConfigurationMessage).toHaveBeenCalledWith(
       windowsMain.deviceId,
       "Use this secure database reference: secret://main/database_secure_fixture",
+    );
+    expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
+      1,
+      windowsMain.deviceId,
+      "Help me configure external PostgreSQL.",
     );
     expect(
       sendConfigurationMessage.mock.calls.every(
@@ -449,8 +473,18 @@ describe("Admin authentication and Task control", () => {
       });
     const sendConfigurationMessage = vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValueOnce("I will guide the Discord-side setup first.")
-      .mockResolvedValueOnce("The Discord credential alias is ready for binding setup.");
+      .mockResolvedValueOnce({
+        content: "Discord setup is available.",
+        suggestedActions: ["guide-discord"],
+      })
+      .mockResolvedValueOnce({
+        content: "The bot token is now the next missing value.",
+        suggestedActions: ["ingest-discord-bot-token"],
+      })
+      .mockResolvedValueOnce({
+        content: "The Discord credential alias is ready for binding setup.",
+        suggestedActions: [],
+      });
     const api = createApi({ ingestSecret, sendConfigurationMessage });
     const user = userEvent.setup();
     render(<AdminApplication api={api} />);
@@ -458,7 +492,16 @@ describe("Admin authentication and Task control", () => {
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
     expect(screen.queryByLabelText("Discord bot token")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Set up or review Discord" }));
+    expect(screen.queryByRole("button", { name: "Set up or review Discord" })).toBeNull();
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "Help me set up Discord.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.click(await screen.findByRole("button", { name: "Set up or review Discord" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Store the Discord token securely" }),
+    );
     const input = screen.getByLabelText("Discord bot token") as HTMLInputElement;
     expect(input.type).toBe("password");
     await user.type(input, rawToken);
@@ -473,10 +516,15 @@ describe("Admin authentication and Task control", () => {
     expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
       1,
       windowsMain.deviceId,
-      "Guide me through Discord Forum setup. Inspect the current binding first, explain the Discord-side steps that remain, and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+      "Help me set up Discord.",
     );
     expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
       2,
+      windowsMain.deviceId,
+      "Guide me through Discord Forum setup. Inspect the current binding first, explain the Discord-side steps that remain, and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+    );
+    expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
+      3,
       windowsMain.deviceId,
       "Use this secure Discord bot token reference: secret://main/discord_secure_fixture. Its botTokenAlias is discord_secure_fixture.",
     );
@@ -487,12 +535,25 @@ describe("Admin authentication and Task control", () => {
   });
 
   it("clears an unsubmitted secure credential when Configuration Chat closes", async () => {
+    const sendConfigurationMessage = vi
+      .fn<AdminApi["sendConfigurationMessage"]>()
+      .mockResolvedValue({
+        content: "Use secure intake for the token.",
+        suggestedActions: ["ingest-discord-bot-token"],
+      });
     const user = userEvent.setup();
-    render(<AdminApplication api={createApi()} />);
+    render(<AdminApplication api={createApi({ sendConfigurationMessage })} />);
 
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
-    await user.click(screen.getByRole("button", { name: "Set up or review Discord" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "I am ready to enter the Discord bot token.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Store the Discord token securely" }),
+    );
     await user.type(screen.getByLabelText("Discord bot token"), "unsubmitted.discord.token");
     await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
 
@@ -869,7 +930,7 @@ function createApi(overrides: Partial<AdminApi> = {}): AdminApi {
     runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue(readyFeatures),
     sendConfigurationMessage: vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValue("Configuration response."),
+      .mockResolvedValue({ content: "Configuration response.", suggestedActions: [] }),
     ingestSecret: vi.fn<AdminApi["ingestSecret"]>().mockResolvedValue({
       schemaVersion: 1,
       secretRef: parseMainSecretReference("secret://main/database_fixture"),

@@ -584,11 +584,13 @@ Deliver the required visual setup, Device specification, and operational surface
   rollback tools.
 - Add secure Discord-token intake and non-secret `discord.binding` proposals to
   Configuration Chat without exposing the raw token to chat, SQL, or Agent context.
-- Present secure intake only after the owner selects a guided Main-service setup
-  goal. Explain that embedded SQLite is already active without a URI, and make the
-  Discord guide inspect the current binding before walking through Discord-side
-  prerequisites, non-secret identifiers, secure token intake, proposal, Approval,
-  activation validation, and rollback.
+- Let Configuration Agent final responses attach only bounded, typed setup
+  suggestions and render them inside the originating Agent message rather than in a
+  fixed setup panel. Reveal secure intake only after the Agent identifies that
+  credential as the next missing value. Explain that embedded SQLite is already
+  active without a URI, and make the Discord guide inspect the current binding before
+  walking through Discord-side prerequisites, non-secret identifiers, secure token
+  intake, proposal, Approval, activation validation, and rollback.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.

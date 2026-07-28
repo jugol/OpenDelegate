@@ -25,7 +25,7 @@ const limits: AgentRunLimits = {
   maxDiagnosticBytes: 4 * 1024,
 };
 
-test("Codex App Server preserves native threads and consumes exact Main authorization", async () => {
+test("Codex App Server ignores remote-control status and preserves native threads", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
   try {
     const cwd = await realpath(process.cwd());
@@ -69,6 +69,9 @@ test("Codex App Server preserves native threads and consumes exact Main authoriz
             return { decision: "allow" as const, reasonCode: "POLICY_TRUSTED_PACKAGE_INSTALL" };
           },
         },
+      },
+      environment: {
+        FIXTURE_EMIT_REMOTE_CONTROL_STATUS: "1",
       },
       limits,
     };
