@@ -77,8 +77,7 @@ export const japaneseMessages = {
     guidedSetupTitle: "ガイド付きセットアップ",
     guidedSetupIntro:
       "目的を選択してください。エージェントが現在の設定を確認し、残っている手順だけを案内します。",
-    discordSetupTitle: "Discord を設定",
-    discordReviewTitle: "Discord 設定を確認・変更",
+    discordSetupTitle: "Discord を設定・確認",
     discordSetupDescription:
       "トークンをチャットに残さず、Bot と 1 つ以上の Forum チャンネルを接続します。",
     databaseSetupTitle: "外部 PostgreSQL を使用",
@@ -105,7 +104,8 @@ export const japaneseMessages = {
     secureDiscordReferenceMessage:
       "この安全な Discord Bot トークン参照を使用してください: {reference}。botTokenAlias は {alias} です。",
     title: "設定チャット",
-    subtitle: "このデバイスと OpenDelegate サービスを設定します。タスクは Discord で進行します。",
+    subtitle:
+      "ここでデバイスと OpenDelegate サービスを設定します。タスクの会話は分けて管理されます。",
     restore: "設定チャットを元のサイズに戻す",
     expand: "設定チャットを拡大",
     close: "設定チャットを閉じる",

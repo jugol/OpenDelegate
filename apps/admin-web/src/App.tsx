@@ -203,7 +203,6 @@ export function App({
 
       {activeSection === "devices" ? (
         <ConfigurationChat
-          discordConfigured={discordConfigured}
           expanded={chatExpanded}
           focusRequestId={chatFocusRequestId}
           key={device.deviceId}

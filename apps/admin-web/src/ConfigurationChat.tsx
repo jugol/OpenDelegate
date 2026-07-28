@@ -24,6 +24,7 @@ import {
   formatMessage,
   localizeCapabilityState,
   localizePresentationText,
+  type Messages,
   useAdminI18n,
 } from "./i18n";
 import {
@@ -34,7 +35,18 @@ import {
 import type { ConfigurationSessionView } from "./view-model";
 
 type ProposalState = "proposed" | "reviewing" | "dismissed";
-type GuidedSetupGoal = "database-uri" | "discord-bot-token";
+type GuidedSetupGoal = "discord" | "external-postgresql";
+
+interface GuidedSetupDescriptor {
+  readonly icon: "bot" | "database";
+  readonly inputLabel: string;
+  readonly inputPlaceholder: string;
+  readonly purpose: "database-uri" | "discord-bot-token";
+  readonly request: string;
+  readonly secureIntro: string;
+  readonly secureTitle: string;
+  readonly toReferenceMessage: (receipt: SecureSecretIngestReceipt) => string;
+}
 
 type SystemChatMessageKey = "failedMessage" | "secureStoreFailed" | "unavailableMessage";
 
@@ -53,7 +65,6 @@ type ChatMessage = {
 );
 
 interface ConfigurationChatProps {
-  readonly discordConfigured: boolean;
   readonly expanded: boolean;
   readonly focusRequestId: number;
   readonly mainDevice: boolean;
@@ -70,7 +81,6 @@ interface ConfigurationChatProps {
 }
 
 export function ConfigurationChat({
-  discordConfigured,
   expanded,
   focusRequestId,
   mainDevice,
@@ -89,6 +99,7 @@ export function ConfigurationChat({
   const [secureCredential, setSecureCredential] = useState("");
   const [storedReference, setStoredReference] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const activeSetup = setupGoal === null ? null : guidedSetupDescriptor(setupGoal, copy);
   const [conversationMessages, setConversationMessages] = useState<readonly ChatMessage[]>(() => [
     onSendMessage === undefined
       ? {
@@ -224,9 +235,7 @@ export function ConfigurationChat({
     setSetupGoal(goal);
     setSecureCredential("");
     setStoredReference(null);
-    await sendConversationMessage(
-      goal === "discord-bot-token" ? copy.chat.discordSetupRequest : copy.chat.databaseSetupRequest,
-    );
+    await sendConversationMessage(guidedSetupDescriptor(goal, copy).request);
   }
 
   async function submitSecureSecret(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -235,32 +244,21 @@ export function ConfigurationChat({
       onIngestSecret === undefined ||
       onSendMessage === undefined ||
       pending ||
-      setupGoal === null ||
+      activeSetup === null ||
       secureCredential.length === 0
     ) {
       return;
     }
 
-    const secureCredentialKind: GuidedSetupGoal = setupGoal;
+    const selectedSetup = activeSetup;
     const material = new TextEncoder().encode(secureCredential);
     setSecureCredential("");
     setStoredReference(null);
     setPending(true);
     const sequence = conversationMessages.length;
     try {
-      const receipt = await onIngestSecret(
-        secureCredentialKind === "database-uri" ? "database-uri" : "discord-bot-token",
-        material,
-      );
-      const referenceMessage =
-        secureCredentialKind === "database-uri"
-          ? formatMessage(copy.chat.secureReferenceMessage, {
-              reference: receipt.secretRef,
-            })
-          : formatMessage(copy.chat.secureDiscordReferenceMessage, {
-              reference: receipt.secretRef,
-              alias: mainSecretAlias(receipt.secretRef),
-            });
+      const receipt = await onIngestSecret(selectedSetup.purpose, material);
+      const referenceMessage = selectedSetup.toReferenceMessage(receipt);
       setStoredReference(receipt.secretRef);
       setConversationMessages((current) => [
         ...current,
@@ -419,33 +417,27 @@ export function ConfigurationChat({
               </div>
               <div className="guided-setup-options">
                 <button
-                  aria-label={
-                    discordConfigured ? copy.chat.discordReviewTitle : copy.chat.discordSetupTitle
-                  }
-                  aria-pressed={setupGoal === "discord-bot-token"}
+                  aria-label={copy.chat.discordSetupTitle}
+                  aria-pressed={setupGoal === "discord"}
                   className="guided-setup-option"
                   disabled={pending}
-                  onClick={() => void startGuidedSetup("discord-bot-token")}
+                  onClick={() => void startGuidedSetup("discord")}
                   type="button"
                 >
                   <span aria-hidden="true">
                     <Bot />
                   </span>
                   <span>
-                    <strong>
-                      {discordConfigured
-                        ? copy.chat.discordReviewTitle
-                        : copy.chat.discordSetupTitle}
-                    </strong>
+                    <strong>{copy.chat.discordSetupTitle}</strong>
                     <small>{copy.chat.discordSetupDescription}</small>
                   </span>
                 </button>
                 <button
                   aria-label={copy.chat.databaseSetupTitle}
-                  aria-pressed={setupGoal === "database-uri"}
+                  aria-pressed={setupGoal === "external-postgresql"}
                   className="guided-setup-option"
                   disabled={pending}
-                  onClick={() => void startGuidedSetup("database-uri")}
+                  onClick={() => void startGuidedSetup("external-postgresql")}
                   type="button"
                 >
                   <span aria-hidden="true">
@@ -461,36 +453,24 @@ export function ConfigurationChat({
           ) : null}
 
           {mainDevice &&
-          setupGoal !== null &&
+          activeSetup !== null &&
           onIngestSecret !== undefined &&
           onSendMessage !== undefined ? (
             <section aria-labelledby="configuration-secret-title" className="secure-secret-panel">
               <div className="secure-secret-heading">
                 <span aria-hidden="true">
-                  {setupGoal === "database-uri" ? <Database /> : <Bot />}
+                  {activeSetup.icon === "database" ? <Database /> : <Bot />}
                 </span>
                 <div>
-                  <h3 id="configuration-secret-title">
-                    {setupGoal === "database-uri"
-                      ? copy.chat.databaseSecureTitle
-                      : copy.chat.discordSecureTitle}
-                  </h3>
-                  <p>
-                    {setupGoal === "database-uri"
-                      ? copy.chat.databaseSecureIntro
-                      : copy.chat.discordSecureIntro}
-                  </p>
+                  <h3 id="configuration-secret-title">{activeSetup.secureTitle}</h3>
+                  <p>{activeSetup.secureIntro}</p>
                 </div>
               </div>
               <form
                 className="secure-secret-form"
                 onSubmit={(event) => void submitSecureSecret(event)}
               >
-                <label htmlFor="configuration-secret-value">
-                  {setupGoal === "database-uri"
-                    ? copy.chat.databaseUriLabel
-                    : copy.chat.discordTokenLabel}
-                </label>
+                <label htmlFor="configuration-secret-value">{activeSetup.inputLabel}</label>
                 <div>
                   <input
                     aria-describedby="configuration-secret-value-notice"
@@ -500,11 +480,7 @@ export function ConfigurationChat({
                     disabled={pending}
                     id="configuration-secret-value"
                     onChange={(event) => setSecureCredential(event.target.value)}
-                    placeholder={
-                      setupGoal === "database-uri"
-                        ? copy.chat.databaseUriPlaceholder
-                        : copy.chat.discordTokenPlaceholder
-                    }
+                    placeholder={activeSetup.inputPlaceholder}
                     spellCheck={false}
                     type="password"
                     value={secureCredential}
@@ -652,4 +628,36 @@ export function ConfigurationChat({
       </div>
     </div>
   );
+}
+
+function guidedSetupDescriptor(goal: GuidedSetupGoal, copy: Messages): GuidedSetupDescriptor {
+  if (goal === "discord") {
+    return {
+      icon: "bot",
+      inputLabel: copy.chat.discordTokenLabel,
+      inputPlaceholder: copy.chat.discordTokenPlaceholder,
+      purpose: "discord-bot-token",
+      request: copy.chat.discordSetupRequest,
+      secureIntro: copy.chat.discordSecureIntro,
+      secureTitle: copy.chat.discordSecureTitle,
+      toReferenceMessage: (receipt) =>
+        formatMessage(copy.chat.secureDiscordReferenceMessage, {
+          reference: receipt.secretRef,
+          alias: mainSecretAlias(receipt.secretRef),
+        }),
+    };
+  }
+  return {
+    icon: "database",
+    inputLabel: copy.chat.databaseUriLabel,
+    inputPlaceholder: copy.chat.databaseUriPlaceholder,
+    purpose: "database-uri",
+    request: copy.chat.databaseSetupRequest,
+    secureIntro: copy.chat.databaseSecureIntro,
+    secureTitle: copy.chat.databaseSecureTitle,
+    toReferenceMessage: (receipt) =>
+      formatMessage(copy.chat.secureReferenceMessage, {
+        reference: receipt.secretRef,
+      }),
+  };
 }

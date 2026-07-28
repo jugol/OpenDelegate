@@ -80,8 +80,7 @@ export const frenchMessages = {
     guidedSetupTitle: "Configuration guidée",
     guidedSetupIntro:
       "Choisissez un objectif. L’agent inspectera les réglages actuels et ne guidera que les étapes restantes.",
-    discordSetupTitle: "Configurer Discord",
-    discordReviewTitle: "Vérifier ou modifier Discord",
+    discordSetupTitle: "Configurer ou vérifier Discord",
     discordSetupDescription:
       "Connectez un bot et un ou plusieurs forums sans placer son jeton dans la conversation.",
     databaseSetupTitle: "Utiliser PostgreSQL externe",
@@ -111,7 +110,7 @@ export const frenchMessages = {
       "Utilisez cette référence sécurisée du jeton Discord : {reference}. Son botTokenAlias est {alias}.",
     title: "Assistant de configuration",
     subtitle:
-      "Configurez cet appareil et les services OpenDelegate. Les tâches restent dans Discord.",
+      "Configurez ici cet appareil et les services OpenDelegate. Les conversations de tâches restent séparées.",
     restore: "Restaurer l’assistant de configuration",
     expand: "Agrandir l’assistant de configuration",
     close: "Fermer l’assistant de configuration",

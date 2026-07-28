@@ -68,8 +68,7 @@ export const simplifiedChineseMessages = {
     secureStoreFailed: "无法安全存储该凭据。它未发送到配置对话。",
     guidedSetupTitle: "引导式设置",
     guidedSetupIntro: "选择一个目标。智能体会先检查当前设置，只引导尚未完成的步骤。",
-    discordSetupTitle: "设置 Discord",
-    discordReviewTitle: "检查或更改 Discord",
+    discordSetupTitle: "设置或检查 Discord",
     discordSetupDescription: "连接机器人和一个或多个论坛频道，令牌不会进入聊天。",
     databaseSetupTitle: "使用外部 PostgreSQL",
     databaseSetupDescription: "SQLite 已在运行，无需数据库 URI。",
@@ -95,7 +94,7 @@ export const simplifiedChineseMessages = {
     secureDiscordReferenceMessage:
       "请使用此安全 Discord 机器人令牌引用：{reference}。其 botTokenAlias 为 {alias}。",
     title: "配置对话",
-    subtitle: "配置此设备和 OpenDelegate 服务。任务在 Discord 中继续。",
+    subtitle: "在此配置设备和 OpenDelegate 服务。任务对话保持独立。",
     restore: "恢复配置对话",
     expand: "展开配置对话",
     close: "关闭配置对话",

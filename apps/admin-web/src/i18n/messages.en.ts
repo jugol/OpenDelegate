@@ -73,8 +73,7 @@ export const englishMessages = {
     guidedSetupTitle: "Guided setup",
     guidedSetupIntro:
       "Choose a goal. The Agent will inspect the current settings and guide only the steps that remain.",
-    discordSetupTitle: "Set up Discord",
-    discordReviewTitle: "Review or change Discord",
+    discordSetupTitle: "Set up or review Discord",
     discordSetupDescription:
       "Connect a bot and bind one or more Forum channels without putting its token in chat.",
     databaseSetupTitle: "Use external PostgreSQL",
@@ -102,7 +101,8 @@ export const englishMessages = {
     secureDiscordReferenceMessage:
       "Use this secure Discord bot token reference: {reference}. Its botTokenAlias is {alias}.",
     title: "Configuration Chat",
-    subtitle: "Configure this Device and OpenDelegate services. Tasks stay in Discord.",
+    subtitle:
+      "Configure this Device and OpenDelegate services here. Task conversations stay separate.",
     restore: "Restore Configuration Chat",
     expand: "Expand Configuration Chat",
     close: "Close Configuration Chat",

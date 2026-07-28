@@ -81,8 +81,7 @@ export const spanishMessages = {
     guidedSetupTitle: "Configuración guiada",
     guidedSetupIntro:
       "Elige un objetivo. El agente inspeccionará la configuración actual y guiará solo los pasos pendientes.",
-    discordSetupTitle: "Configurar Discord",
-    discordReviewTitle: "Revisar o cambiar Discord",
+    discordSetupTitle: "Configurar o revisar Discord",
     discordSetupDescription:
       "Conecta un bot y uno o más canales de foro sin poner su token en el chat.",
     databaseSetupTitle: "Usar PostgreSQL externo",
@@ -111,7 +110,7 @@ export const spanishMessages = {
       "Usa esta referencia segura del token del bot de Discord: {reference}. Su botTokenAlias es {alias}.",
     title: "Chat de configuración",
     subtitle:
-      "Configura este dispositivo y los servicios de OpenDelegate. Las tareas continúan en Discord.",
+      "Configura aquí este dispositivo y los servicios de OpenDelegate. Las conversaciones de tareas se mantienen separadas.",
     restore: "Restaurar el chat de configuración",
     expand: "Ampliar el chat de configuración",
     close: "Cerrar el chat de configuración",

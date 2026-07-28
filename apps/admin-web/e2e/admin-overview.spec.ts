@@ -593,11 +593,13 @@ test("Device configuration remains isolated from Task conversations", async ({ p
   await expect(composer).toBeEnabled();
   await expect(composer).toBeFocused();
   await expect(
-    dialog.getByText("Configure this Device and OpenDelegate services. Tasks stay in Discord."),
+    dialog.getByText(
+      "Configure this Device and OpenDelegate services here. Task conversations stay separate.",
+    ),
   ).toBeVisible();
   await expect(dialog.getByRole("region", { name: "Proposed change" })).toHaveCount(0);
   await expect(dialog.getByLabel("Discord bot token")).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Set up Discord" }).click();
+  await dialog.getByRole("button", { name: "Set up or review Discord" }).click();
   await expect(dialog.getByLabel("Discord bot token")).toHaveAttribute("type", "password");
   await expect(
     dialog.getByPlaceholder("Bot token from the Discord Developer Portal"),
@@ -613,12 +615,13 @@ test("Device configuration remains isolated from Task conversations", async ({ p
   );
   expect(hasHorizontalOverflow).toBe(false);
 
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Configure" })).toBeFocused();
 
-  const accessibility = await new AxeBuilder({ page }).analyze();
-  expect(accessibility.violations).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
 

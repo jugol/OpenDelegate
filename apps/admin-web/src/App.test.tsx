@@ -175,7 +175,7 @@ describe("first-run Device overview", () => {
     const chat = screen.getByRole("dialog", { name: "Configuration Chat" });
     expect(
       within(chat).getByText(
-        "Configure this Device and OpenDelegate services. Tasks stay in Discord.",
+        "Configure this Device and OpenDelegate services here. Task conversations stay separate.",
       ),
     ).toBeTruthy();
     expect(

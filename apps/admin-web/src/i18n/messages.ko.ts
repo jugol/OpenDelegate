@@ -76,8 +76,7 @@ export const koreanMessages = {
     guidedSetupTitle: "단계별 설정",
     guidedSetupIntro:
       "설정할 항목을 선택하세요. 에이전트가 현재 상태를 먼저 확인하고 남은 단계만 안내합니다.",
-    discordSetupTitle: "Discord 설정",
-    discordReviewTitle: "Discord 설정 확인 또는 변경",
+    discordSetupTitle: "Discord 설정 또는 확인",
     discordSetupDescription:
       "봇 토큰을 채팅에 남기지 않고 봇과 하나 이상의 Forum 채널을 연결합니다.",
     databaseSetupTitle: "외부 PostgreSQL 사용",
@@ -105,7 +104,7 @@ export const koreanMessages = {
     secureDiscordReferenceMessage:
       "이 안전한 Discord 봇 토큰 참조를 사용해 주세요: {reference}. botTokenAlias는 {alias}입니다.",
     title: "설정 채팅",
-    subtitle: "이 장치와 OpenDelegate 서비스를 설정합니다. 작업 대화는 Discord에서 이어집니다.",
+    subtitle: "여기에서 이 장치와 OpenDelegate 서비스를 설정합니다. 작업 대화는 별도로 유지됩니다.",
     restore: "설정 채팅 원래 크기로 복원",
     expand: "설정 채팅 확대",
     close: "설정 채팅 닫기",

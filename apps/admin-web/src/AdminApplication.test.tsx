@@ -458,7 +458,7 @@ describe("Admin authentication and Task control", () => {
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
     expect(screen.queryByLabelText("Discord bot token")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Set up Discord" }));
+    await user.click(screen.getByRole("button", { name: "Set up or review Discord" }));
     const input = screen.getByLabelText("Discord bot token") as HTMLInputElement;
     expect(input.type).toBe("password");
     await user.type(input, rawToken);
@@ -492,7 +492,7 @@ describe("Admin authentication and Task control", () => {
 
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
-    await user.click(screen.getByRole("button", { name: "Set up Discord" }));
+    await user.click(screen.getByRole("button", { name: "Set up or review Discord" }));
     await user.type(screen.getByLabelText("Discord bot token"), "unsubmitted.discord.token");
     await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
 
