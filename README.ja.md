@@ -6,6 +6,8 @@
 **Discord で望む成果を伝えてください。実行場所と方法は OpenDelegate が決めます。** 固定された常時稼働の
 Main が macOS、Windows、Linux を連携し、指示に使った端末は切断できます。
 
+![1 つの Discord 指示を常時稼働の Main から Windows・macOS・Linux へ自動分配する OpenDelegate](docs/design/opendelegate-orchestration-hero.png)
+
 > [!TIP]
 > **ここから始めてください:** [Agent に任せる推奨インストール](#推奨インストールagent-に任せる) ·
 > [詳細セットアップ](#詳細セットアップ) ·

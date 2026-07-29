@@ -6,6 +6,8 @@
 **只需在 Discord 中告诉 OpenDelegate 你想要的结果，执行位置和方式由它决定。** 固定且始终在线的 Main
 会协调 macOS、Windows 和 Linux；发出指令的手机或电脑随后可以断开连接。
 
+![OpenDelegate 将一条 Discord 指令通过始终在线的 Main 自动分配给 Windows、macOS 和 Linux 设备](docs/design/opendelegate-orchestration-hero.png)
+
 > [!TIP]
 > **从这里开始：** [交给 Agent 的推荐安装方式](#推荐安装交给你的-agent) ·
 > [详细设置](#详细设置) · [完整设置指南（英文）](docs/GETTING_STARTED.md) ·

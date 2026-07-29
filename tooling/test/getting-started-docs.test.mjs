@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 
 async function readRepositoryFile(path) {
@@ -24,11 +24,12 @@ function githubHeadingAnchor(heading) {
 }
 
 test("README leads with one simple Agent-first setup and keeps the detailed journey", async () => {
-  const [readme, guide, initSkill, supportMatrix] = await Promise.all([
+  const [readme, guide, initSkill, supportMatrix, heroImage] = await Promise.all([
     readRepositoryFile("README.md"),
     readRepositoryFile("docs/GETTING_STARTED.md"),
     readRepositoryFile("skills/opendelegate-init/SKILL.md"),
     readRepositoryFile("docs/release/SUPPORT_MATRIX.md"),
+    stat(new URL("../../docs/design/opendelegate-orchestration-hero.png", import.meta.url)),
   ]);
 
   const recommendedHeading = "## Recommended installation: ask your Agent";
@@ -39,6 +40,9 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
     /Tell OpenDelegate the outcome you want in Discord[\s\S]*decides where and how to run it/u,
   );
   assert.match(readmeLead, /> \[!TIP\]\r?\n> \*\*Start here:/u);
+  assert.equal(heroImage.isFile(), true);
+  assert.match(readmeLead, /docs\/design\/opendelegate-orchestration-hero\.png/u);
+  assertAppearsBefore(readme, "opendelegate-orchestration-hero.png", "**Start here:**");
   assert.match(readmeLead, /\[Complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
   assert.match(readmeLead, /\[Discord Forum setup\]\(docs\/DISCORD_SETUP\.md\)/u);
   assert.equal(readmeLead.includes(`(#${githubHeadingAnchor(recommendedHeading)})`), true);
@@ -46,9 +50,9 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   assertAppearsBefore(readme, recommendedHeading, detailedHeading);
   assertAppearsBefore(readme, detailedHeading, "## Why OpenDelegate");
   assert.equal(
-    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 15,
+    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 17,
     true,
-    "The recommended installation must be visible within the first 15 README lines",
+    "The hero and recommended installation must be visible within the first 17 README lines",
   );
   const setupJourney = readme.slice(
     readme.indexOf(recommendedHeading),
@@ -292,6 +296,8 @@ test("every localized README exposes the same simple Agent-first installation", 
     const content = await readRepositoryFile(locale.filename);
     const readmeLead = content.slice(0, content.indexOf(locale.heading));
     assert.match(readmeLead, locale.promisePattern);
+    assert.match(readmeLead, /docs\/design\/opendelegate-orchestration-hero\.png/u);
+    assertAppearsBefore(content, "opendelegate-orchestration-hero.png", locale.startHere);
     assert.match(readmeLead, /> \[!TIP\]\r?\n>/u);
     assert.match(readmeLead, /\(docs\/GETTING_STARTED\.md\)/u);
     assert.match(readmeLead, /\(docs\/DISCORD_SETUP\.md\)/u);
@@ -305,9 +311,9 @@ test("every localized README exposes the same simple Agent-first installation", 
     assertAppearsBefore(content, locale.detailedHeading, locale.nextHeading);
     assertAppearsBefore(content, locale.heading, locale.nextHeading);
     assert.equal(
-      content.slice(0, content.indexOf(locale.heading)).split(/\r?\n/u).length <= 15,
+      content.slice(0, content.indexOf(locale.heading)).split(/\r?\n/u).length <= 17,
       true,
-      `${locale.filename} recommended installation must be visible within the first 15 lines`,
+      `${locale.filename} hero and recommended installation must be visible within the first 17 lines`,
     );
     const quickStart = content.slice(
       content.indexOf(locale.heading),

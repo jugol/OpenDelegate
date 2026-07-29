@@ -6,6 +6,8 @@
 **Discord에서 원하는 결과만 말하세요. 실행 위치와 방법은 OpenDelegate가 결정합니다.** 휴대폰이나
 노트북이 꺼져도 고정된 상시 가동 Main이 macOS, Windows, Linux 작업을 조율합니다.
 
+![Discord 명령을 상시 가동 Main에서 Windows·macOS·Linux 장치로 자동 분배하는 OpenDelegate](docs/design/opendelegate-orchestration-hero.png)
+
 > [!TIP]
 > **여기서 시작하세요:** [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요) ·
 > [상세 설정](#상세-설정) ·

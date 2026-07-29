@@ -6,6 +6,8 @@ Langues : [English](README.md) · [한국어](README.ko.md) · [日本語](READM
 **Décrivez le résultat voulu dans Discord ; OpenDelegate décide où et comment l’exécuter.** Un Main
 fixe et toujours actif coordonne macOS, Windows et Linux ; votre téléphone ou ordinateur peut se déconnecter.
 
+![OpenDelegate distribue une demande Discord depuis un Main toujours actif vers des appareils Windows, macOS et Linux](docs/design/opendelegate-orchestration-hero.png)
+
 > [!TIP]
 > **Commencez ici :** [Installation recommandée avec votre Agent](#installation-recommandée-confiez-la-à-votre-agent) ·
 > [Configuration détaillée](#configuration-détaillée) ·

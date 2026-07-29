@@ -6,6 +6,8 @@ Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](
 **Tell OpenDelegate the outcome you want in Discord; it decides where and how to run it.** Your
 phone or laptop may disconnect while a fixed always-on Main coordinates macOS, Windows, and Linux.
 
+![OpenDelegate routes one Discord request through an always-on Main to Windows, macOS, and Linux Devices](docs/design/opendelegate-orchestration-hero.png)
+
 > [!TIP]
 > **Start here:** [Recommended installation](#recommended-installation-ask-your-agent) ·
 > [Detailed setup](#detailed-setup) ·
