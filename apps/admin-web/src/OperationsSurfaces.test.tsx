@@ -12,7 +12,8 @@ import type {
 import { ArtifactSurface } from "./ArtifactSurface";
 import { AuditSurface } from "./AuditSurface";
 import { JoinSurface } from "./JoinSurface";
-import { AdminI18nProvider } from "./i18n";
+import { AdminI18nProvider, formatMessage } from "./i18n";
+import { englishMessages } from "./i18n/messages.en";
 import { koreanMessages } from "./i18n/messages.ko";
 
 const NOW = "2026-07-25T00:00:00.000Z";
@@ -153,7 +154,11 @@ describe("owner operations surfaces", () => {
     expect(screen.getByRole("button", { name: "Download grant file" })).toBeTruthy();
     expect(screen.getByText(/opendelegate worker join --grant-file/u)).toBeTruthy();
     expect(
-      screen.getByText((content) => content.includes("https://github.com/jugol/OpenDelegate")),
+      screen.getByText(
+        formatMessage(englishMessages.join.agentPrompt, {
+          filename: issued.suggestedFilename,
+        }),
+      ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy Agent prompt" })).toBeTruthy();
     expect(screen.getByText(/appears in the left list/iu)).toBeTruthy();
