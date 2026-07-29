@@ -97,6 +97,15 @@ const heartbeat = {
           compatibility: "tested",
           version: "1.2.3",
           observedAtMs: 1_753_401_599_000,
+          modelCatalogObservedAtMs: 1_753_401_599_000,
+          models: [
+            {
+              modelId: "gpt-5.6-sol",
+              displayName: "GPT-5.6 Sol",
+              isDefault: true,
+              supportedEfforts: ["medium", "high"],
+            },
+          ],
         },
       ],
       wakeOnLan: {
@@ -604,6 +613,36 @@ describe("Device channel protocol", () => {
               {
                 ...heartbeat.payload.inventory.agentAdapters[0],
                 diagnostics: [{ message: "private provider output" }],
+              },
+            ],
+          },
+        },
+      },
+      {
+        ...heartbeat,
+        payload: {
+          ...heartbeat.payload,
+          inventory: {
+            ...heartbeat.payload.inventory,
+            agentAdapters: [
+              {
+                ...heartbeat.payload.inventory.agentAdapters[0],
+                modelCatalogObservedAtMs: undefined,
+              },
+            ],
+          },
+        },
+      },
+      {
+        ...heartbeat,
+        payload: {
+          ...heartbeat.payload,
+          inventory: {
+            ...heartbeat.payload.inventory,
+            agentAdapters: [
+              {
+                ...heartbeat.payload.inventory.agentAdapters[0],
+                modelCatalogObservedAtMs: heartbeat.payload.observedAtMs + 1,
               },
             ],
           },

@@ -658,6 +658,19 @@ function parseWorkerHeartbeat(input: unknown): WorkerHeartbeatV1 {
       "Wake-on-LAN evidence cannot be newer than its enclosing heartbeat.",
     );
   }
+  if (
+    inventory?.agentAdapters?.some(
+      (adapter) =>
+        adapter.observedAtMs > observedAtMs ||
+        (adapter.modelCatalogObservedAtMs !== undefined &&
+          adapter.modelCatalogObservedAtMs > observedAtMs),
+    )
+  ) {
+    throw protocolError(
+      "FRAME_INVALID",
+      "Agent Adapter evidence cannot be newer than its enclosing heartbeat.",
+    );
+  }
   return {
     protocolVersion: PROTOCOL_VERSION,
     deviceId: readIdentifier(record["deviceId"], "Device ID"),
@@ -959,7 +972,7 @@ function parseWorkerAgentAdapters(
     assertExactKeys(
       adapter,
       ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-      ["version"],
+      ["version", "modelCatalogObservedAtMs", "models"],
     );
     const provider = readEnum(
       adapter["provider"],
@@ -972,6 +985,18 @@ function parseWorkerAgentAdapters(
       throw protocolError("FRAME_INVALID", "Worker Agent adapters must be unique.");
     }
     seen.add(identity);
+    const modelCatalogObservedAtMs =
+      adapter["modelCatalogObservedAtMs"] === undefined
+        ? undefined
+        : readTimestampInteger(
+            adapter["modelCatalogObservedAtMs"],
+            "Agent model catalog observation time",
+          );
+    const models =
+      adapter["models"] === undefined ? undefined : parseWorkerAgentModels(adapter["models"]);
+    if ((modelCatalogObservedAtMs === undefined) !== (models === undefined)) {
+      throw protocolError("FRAME_INVALID", "Worker Agent model catalog metadata is incomplete.");
+    }
     return {
       provider,
       adapterId,
@@ -989,6 +1014,44 @@ function parseWorkerAgentAdapters(
         ? {}
         : { version: readIdentifier(adapter["version"], "Agent adapter version") }),
       observedAtMs: readTimestampInteger(adapter["observedAtMs"], "Agent adapter observation time"),
+      ...(modelCatalogObservedAtMs === undefined
+        ? {}
+        : { modelCatalogObservedAtMs, models: models! }),
+    };
+  });
+}
+
+function parseWorkerAgentModels(
+  input: unknown,
+): NonNullable<
+  NonNullable<NonNullable<WorkerHeartbeatV1["inventory"]>["agentAdapters"]>[number]["models"]
+> {
+  const values = readArray(input, "Worker Agent model catalog");
+  if (values.length > 128) {
+    throw protocolError("FRAME_INVALID", "Worker Agent model catalog exceeds its item bound.");
+  }
+  const seen = new Set<string>();
+  return values.map((value) => {
+    const model = readRecord(value, "Worker Agent model");
+    assertExactKeys(model, ["modelId", "displayName"], ["isDefault", "supportedEfforts"]);
+    const modelId = readIdentifier(model["modelId"], "Agent model ID");
+    if (seen.has(modelId)) {
+      throw protocolError("FRAME_INVALID", "Worker Agent model IDs must be unique.");
+    }
+    seen.add(modelId);
+    const isDefault =
+      model["isDefault"] === undefined
+        ? undefined
+        : readBoolean(model["isDefault"], "Agent model default marker");
+    const supportedEfforts =
+      model["supportedEfforts"] === undefined
+        ? undefined
+        : readUniqueIdentifiers(model["supportedEfforts"], "Agent model effort", 32);
+    return {
+      modelId,
+      displayName: readIdentifier(model["displayName"], "Agent model display name"),
+      ...(isDefault === undefined ? {} : { isDefault }),
+      ...(supportedEfforts === undefined ? {} : { supportedEfforts }),
     };
   });
 }

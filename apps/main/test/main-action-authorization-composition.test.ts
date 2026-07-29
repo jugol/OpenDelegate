@@ -345,11 +345,12 @@ function runScope() {
 }
 
 function heartbeat(): WorkerHeartbeatV1 {
+  const observedAtMs = Date.now();
   return {
     protocolVersion: "v1",
     deviceId: WORKER_DEVICE_ID,
     workerId: WORKER_ID,
-    observedAtMs: Date.now(),
+    observedAtMs,
     operationalState: "active",
     connectionState: "online",
     readiness: {
@@ -384,7 +385,15 @@ function heartbeat(): WorkerHeartbeatV1 {
           readiness: "ready",
           compatibility: "tested",
           version: "0.146.0",
-          observedAtMs: Date.now(),
+          observedAtMs,
+          modelCatalogObservedAtMs: observedAtMs,
+          models: [
+            {
+              modelId: "gpt-5.6-sol",
+              displayName: "GPT-5.6 Sol",
+              isDefault: true,
+            },
+          ],
         },
       ],
       workspaceIds: [],
