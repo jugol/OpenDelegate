@@ -44,6 +44,10 @@ approved product specification.
 21. [`0024-configuration-chat-history-and-approval-correlation.md`](0024-configuration-chat-history-and-approval-correlation.md)
 22. [`0025-proactive-task-and-discord-forum-origin.md`](0025-proactive-task-and-discord-forum-origin.md)
 23. [`0026-discord-chronological-controls-and-race-reconciliation.md`](0026-discord-chronological-controls-and-race-reconciliation.md)
+24. [`0027-discord-single-turn-lifecycle-and-retry-stable-planning.md`](0027-discord-single-turn-lifecycle-and-retry-stable-planning.md)
+25. [`0028-main-owned-read-only-task-answers.md`](0028-main-owned-read-only-task-answers.md)
+26. [`0029-wake-on-lan-readiness-evidence.md`](0029-wake-on-lan-readiness-evidence.md)
+27. [`0030-tiered-repository-validation.md`](0030-tiered-repository-validation.md)
 
 ## Proposed ADRs
 

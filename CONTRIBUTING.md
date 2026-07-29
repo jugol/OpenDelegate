@@ -106,6 +106,17 @@ release tag, or describe a contract fixture as live platform proof. See
   recovery data, and Device Knowledge outside the checkout.
 - Never commit private chain-of-thought or rely on it as durable Task state.
 
+### Validation cadence
+
+Every pull request runs one Ubuntu validation job covering documents, architecture, formatting,
+lint, types, deterministic tests, builds, and the Admin Web browser harness. Secret scanning and
+dependency review are the only additional required checks.
+
+Do not rerun the same full suite on every operating system for ordinary pull requests. Use the
+manually dispatched **Release validation** workflow when a release candidate or a platform-sensitive
+change needs the macOS, Windows, Linux, PostgreSQL, Node compatibility, native helper, and
+packaged-bundle matrix. CodeQL and dependency audits run weekly or on explicit manual request.
+
 ## Issues and security
 
 Use the Bug report form for reproducible behavior and the Product or implementation proposal form

@@ -1233,3 +1233,29 @@ gives the owner useful setup evidence without exporting a hardware address.
 armed for magic-packet wake before it went offline and can separately show why
 automatic wake is not yet ready. The compact Main Device directory may include these
 two bounded states, but it never includes the wake target or raw probe evidence.
+
+## D-070 — Repository validation is tiered by purpose
+
+**Decision:** A routine pull request has one required Ubuntu validation job covering
+canonical documents, architecture, formatting, lint, types, deterministic tests,
+builds, and the Admin Web browser harness. Secret scanning and dependency review are
+the only additional required pull-request checks. The same commit is not
+automatically retested after merge.
+
+The complete macOS, Windows, Linux, PostgreSQL, Node compatibility, native helper,
+browser, and packaged-bundle matrix is an explicitly dispatched Release validation
+workflow. CodeQL and dependency audits run weekly or by manual request. Supported
+release promotion still requires every automated, live-provider, native-service,
+Computer Use, and platform-lab proof named by the specification.
+
+**Rationale:** Repeating the complete TypeScript suite, application build, browser
+harness, package assembly, and static analysis across every operating system on
+every pull request spent tens of runner-minutes while providing mostly duplicate
+evidence. It also repeated the already-validated merge commit immediately after
+merge. A fast required gate gives contributors prompt feedback; expensive evidence
+belongs to platform-sensitive or release work.
+
+**Consequence:** Branch protection requires `Validate pull request`, `Secret scan`,
+and `Dependency review`. A green ordinary pull request is engineering evidence, not
+a supported-release claim. Maintainers explicitly invoke the full matrix whenever
+the affected platform boundary or release candidate requires it.

@@ -1,9 +1,6 @@
 name: Security
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
   schedule:
     - cron: "23 4 * * 1"

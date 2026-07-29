@@ -616,7 +616,7 @@ test("the release runtime pin matches local and hosted build configuration", asy
     REQUIRED_RELEASE_NODE_VERSION,
   );
   assert.match(
-    await readFile(join(repositoryRoot, ".github", "workflows", "ci.yml"), "utf8"),
+    await readFile(join(repositoryRoot, ".github", "workflows", "release-validation.yml"), "utf8"),
     new RegExp(`node-version: ${REQUIRED_RELEASE_NODE_VERSION.replaceAll(".", String.raw`\.`)}`),
   );
 });
@@ -637,7 +637,7 @@ test("the reviewed package-manager and dependency execution policies stay pinned
   assert.equal(manifest.packageManager, `pnpm@${PINNED_PNPM_VERSION}`);
   assert.equal(manifest.devDependencies?.pnpm, PINNED_PNPM_VERSION);
   assert.equal(manifest.engines?.pnpm, ">=11.15.1 <12");
-  for (const workflow of ["ci.yml", "security.yml"]) {
+  for (const workflow of ["ci.yml", "release-validation.yml", "security.yml"]) {
     assert.match(
       await readFile(join(repositoryRoot, ".github", "workflows", workflow), "utf8"),
       /version:\s*11\.15\.1/u,
