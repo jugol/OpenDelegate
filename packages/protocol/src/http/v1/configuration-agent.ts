@@ -33,6 +33,17 @@ export type ConfigurationAgentMessageRequestV1 = Type.Static<
   typeof ConfigurationAgentMessageRequestSchema
 >;
 
+export const ConfigurationAgentSuggestedActionSchema = Type.Union([
+  Type.Literal("guide-discord"),
+  Type.Literal("guide-external-postgresql"),
+  Type.Literal("ingest-discord-bot-token"),
+  Type.Literal("ingest-database-uri"),
+]);
+
+export type ConfigurationAgentSuggestedActionV1 = Type.Static<
+  typeof ConfigurationAgentSuggestedActionSchema
+>;
+
 export const ConfigurationAgentMessageResponseSchema = Type.Object(
   {
     messageId: OpaqueIdSchema,
@@ -41,6 +52,12 @@ export const ConfigurationAgentMessageResponseSchema = Type.Object(
       minLength: 1,
       maxLength: 32_768,
     }),
+    suggestedActions: Type.Optional(
+      Type.Array(ConfigurationAgentSuggestedActionSchema, {
+        maxItems: 4,
+        uniqueItems: true,
+      }),
+    ),
     occurredAt: Rfc3339InstantSchema,
   },
   {
@@ -51,4 +68,69 @@ export const ConfigurationAgentMessageResponseSchema = Type.Object(
 
 export type ConfigurationAgentMessageResponseV1 = Type.Static<
   typeof ConfigurationAgentMessageResponseSchema
+>;
+
+export const ConfigurationAgentConversationMessageSchema = Type.Union(
+  [
+    Type.Object(
+      {
+        messageId: OpaqueIdSchema,
+        role: Type.Literal("owner"),
+        content: Type.String({
+          minLength: 1,
+          maxLength: 32_768,
+        }),
+        responseStatus: Type.Optional(
+          Type.Union([
+            Type.Literal("completed"),
+            Type.Literal("interrupted"),
+            Type.Literal("pending"),
+          ]),
+        ),
+        occurredAt: Rfc3339InstantSchema,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        messageId: OpaqueIdSchema,
+        role: Type.Literal("agent"),
+        content: Type.String({
+          minLength: 1,
+          maxLength: 32_768,
+        }),
+        suggestedActions: Type.Optional(
+          Type.Array(ConfigurationAgentSuggestedActionSchema, {
+            maxItems: 4,
+            uniqueItems: true,
+          }),
+        ),
+        occurredAt: Rfc3339InstantSchema,
+      },
+      { additionalProperties: false },
+    ),
+  ],
+  {
+    $id: "OpenDelegateConfigurationAgentConversationMessageV1",
+  },
+);
+
+export type ConfigurationAgentConversationMessageV1 = Type.Static<
+  typeof ConfigurationAgentConversationMessageSchema
+>;
+
+export const ConfigurationAgentConversationResponseSchema = Type.Object(
+  {
+    messages: Type.Array(ConfigurationAgentConversationMessageSchema, {
+      maxItems: 2_000,
+    }),
+  },
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateConfigurationAgentConversationResponseV1",
+  },
+);
+
+export type ConfigurationAgentConversationResponseV1 = Type.Static<
+  typeof ConfigurationAgentConversationResponseSchema
 >;

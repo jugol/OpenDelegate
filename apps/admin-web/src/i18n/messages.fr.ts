@@ -74,22 +74,46 @@ export const frenchMessages = {
   chat: {
     unavailableMessage:
       "Le Main indique que l’évaluation de l’appareil ou la messagerie de l’agent de configuration est indisponible. Les informations visibles sur l’appareil proviennent uniquement du rapport déterministe de son environnement d’exécution.",
-    failedMessage: "L’agent de configuration n’a pas pu répondre. Aucun paramètre n’a été modifié.",
+    failedMessage:
+      "L’agent de configuration local était indisponible ou a été interrompu. OpenDelegate n’a pas relancé une opération de résultat incertain. Les modifications terminées restent durables ; vérifiez la configuration actuelle, puis réessayez.",
+    discordOnboardingMessage:
+      "Discord n’est pas encore connecté. Je vérifie la liaison actuelle et prépare les instructions de configuration.",
     secureStoreFailed:
       "L’identifiant n’a pas pu être stocké de manière sécurisée. Il n’a pas été envoyé à l’assistant de configuration.",
-    secureTitle: "Stocker un identifiant de base de données",
-    secureIntro:
-      "La valeur est envoyée directement au magasin de secrets géré de cet appareil principal. L’agent ne reçoit qu’une référence opaque.",
+    guidedSetupTitle: "Configuration guidée",
+    guidedSetupIntro:
+      "Choisissez un objectif. L’agent inspectera les réglages actuels et ne guidera que les étapes restantes.",
+    discordSetupTitle: "Configurer ou vérifier Discord",
+    discordSetupDescription:
+      "Connectez un bot et un ou plusieurs forums sans placer son jeton dans la conversation.",
+    databaseSetupTitle: "Utiliser PostgreSQL externe",
+    databaseSetupDescription:
+      "SQLite est déjà actif. Aucune URI de base de données n’est nécessaire.",
+    discordSetupRequest:
+      "Considérez que je configure peut-être un bot Discord pour la première fois. Inspectez d’abord la connexion actuelle et expliquez comment les publications du forum deviennent des Tasks OpenDelegate. Donnez-moi une courte vue d’ensemble, puis guidez-moi une étape restante à la fois. Pour l’étape actuelle, indiquez où aller, quoi faire, pourquoi c’est nécessaire, comment vérifier la réussite et ce que je dois vous transmettre, puis attendez ma confirmation avant de continuer. Définissez les termes inconnus et ne demandez que les valeurs non secrètes manquantes. Ne me demandez jamais de coller le jeton du bot dans la conversation ; indiquez-moi quand utiliser le formulaire sécurisé.",
+    databaseSetupRequest:
+      "Expliquez d’abord ma configuration de base de données actuelle. SQLite est la valeur par défaut et ne nécessite aucune URI. Si je choisis PostgreSQL externe, expliquez la migration et le redémarrage du service avant de proposer des changements, et demandez d’utiliser le formulaire sécurisé plutôt que de coller l’URI dans la conversation.",
+    discordSecureTitle: "Stocker le jeton Discord en sécurité",
+    discordSecureIntro:
+      "Utilisez ceci uniquement lorsque l’agent demande le jeton. OpenDelegate le stocke sur ce Main et ne transmet à l’agent qu’une référence opaque.",
+    databaseSecureTitle: "Identifiant PostgreSQL externe",
+    databaseSecureIntro:
+      "Cette URI facultative sert à un déploiement PostgreSQL externe. OpenDelegate la stocke sur ce Main et ne transmet à l’agent qu’une référence opaque.",
     databaseUriLabel: "URI de la base de données",
     databaseUriPlaceholder: "URI de connexion PostgreSQL",
+    discordTokenLabel: "Jeton du bot Discord",
+    discordTokenPlaceholder: "Jeton du bot depuis le portail développeur Discord",
     secureNotice:
       "Après l’envoi, la valeur d’origine est effacée de ce formulaire et ne devient jamais un message.",
     secureStore: "Stocker en sécurité",
     secureStoring: "Stockage sécurisé…",
     secureStored: "Stocké localement sous {reference}",
     secureReferenceMessage: "Utilisez cette référence sécurisée de base de données : {reference}",
+    secureDiscordReferenceMessage:
+      "Utilisez cette référence sécurisée du jeton Discord : {reference}. Son botTokenAlias est {alias}.",
     title: "Assistant de configuration",
-    subtitle: "La configuration de l’appareil reste séparée des conversations liées aux tâches.",
+    subtitle:
+      "Configurez ici cet appareil et les services OpenDelegate. Les conversations de tâches restent séparées.",
     restore: "Restaurer l’assistant de configuration",
     expand: "Agrandir l’assistant de configuration",
     close: "Fermer l’assistant de configuration",
@@ -108,6 +132,11 @@ export const frenchMessages = {
     askPlaceholder: "Posez une question sur cet appareil…",
     send: "Envoyer le message",
     open: "Ouvrir l’assistant de configuration",
+    openUnread: "Ouvrir l’assistant de configuration — nouvelle réponse disponible",
+    notificationRegion: "Notifications de l’assistant de configuration",
+    unreadAnnouncement: "Nouvelle réponse de configuration. Réponses non lues : {count}.",
+    unreadStatus: "Nouvelle réponse de configuration",
+    unreadCount: "Réponses non lues : {count}",
   },
   navigation: {
     devices: "Appareils",
@@ -127,6 +156,21 @@ export const frenchMessages = {
     runs: "Exécutions",
     authority: "Autorisations et ressources",
     configure: "Configurer",
+    assessDevice: "Évaluer l’appareil",
+    assessingDevice: "Évaluation…",
+    assessmentFailed:
+      "L’évaluation de l’appareil a échoué. L’observation enregistrée n’a pas été remplacée.",
+    localAgentSetup: "Configuration de l’Agent local",
+    localAgentSetupIntro:
+      "Le chat de configuration utilise le Main Agent choisi pendant l’initialisation d’OpenDelegate. Il devient disponible après l’installation et la connexion de l’adaptateur local, puis la réussite du contrôle de compatibilité.",
+    codexSetupGuide:
+      "Codex : choisissez Codex pendant l’initialisation et partagez explicitement un Codex home déjà authentifié pour le réutiliser.",
+    claudeSetupGuide:
+      "Claude : utilisez --claude-home pour réutiliser un répertoire Claude authentifié, ou authentifiez le profil Claude géré par Main sur cet appareil.",
+    agentCredentialNote:
+      "Les identifiants du fournisseur restent sur cet appareil. Ne les collez jamais dans le chat de configuration.",
+    assessmentScope:
+      "L’évaluation vérifie Codex, Claude, l’automatisation du navigateur, Computer Use et l’état du Knowledge local sans demander à un LLM de les déduire.",
     facts: "Informations sur l’appareil",
     roles: "Rôles",
     instructions: "Instructions",
@@ -135,12 +179,58 @@ export const frenchMessages = {
     noRoutes: "Aucune route de transport n’est configurée.",
     runtimeStatus: "État de l’environnement d’exécution",
     transportRoutes: "Routes de transport",
+    wakeOnLan: "Wake-on-LAN",
+    wakeTargetSetting: "Réglage de réveil de l’appareil",
+    automaticWake: "Réveil automatique par OpenDelegate",
+    wakeTargetEnabled: "Activé",
+    wakeTargetDisabled: "Désactivé",
+    wakeTargetUnsupported: "Non pris en charge",
+    wakeTargetUnknown: "Non vérifié",
+    automaticWakeRelayRequired: "Relais requis",
+    automaticWakeUnavailable: "Indisponible",
+    automaticWakeUnknown: "Non vérifié",
+    wakeRelayRequiredDescription:
+      "Cet appareil signale que le réveil par paquet magique est activé, mais OpenDelegate a encore besoin d’un relais en ligne vérifié sur le même réseau local. Tailscale ou un accès IP routé ne suffit pas à le réveiller.",
+    wakeUnavailableDescription:
+      "Le réveil automatique est indisponible, car le réveil par paquet magique est désactivé ou non pris en charge sur cet appareil.",
+    wakeUnknownDescription:
+      "OpenDelegate n’a pas pu vérifier le réglage de réveil de cet appareil et n’en déduit donc aucune disponibilité.",
+    wakeObserved: "Observé sur l’appareil · {time}",
+    wakeLastObserved: "Dernière observation avant la mise hors ligne · {time}",
+    wakeNeverObserved: "Aucune observation authentifiée pour le moment.",
     knowledgeHealth: "État des connaissances",
     currentWork: "Travail en cours",
     policies: "Politiques exécutables",
     noPolicies: "Aucune projection de politique exécutable n’est disponible.",
     agentAdapters: "Adaptateurs Agent",
     noAgentAdapters: "Aucune observation d’adaptateur Agent n’est disponible.",
+    agentExecution: "Exécution de l’Agent",
+    agentProfileTarget: "Cible du profil Agent",
+    workerAgent: "Agent d’exécution",
+    coordinatorAgent: "Agent coordinateur",
+    currentBinding: "Liaison actuelle",
+    automaticSelection: "OpenDelegate choisit une liaison testée pour chaque nouvelle session.",
+    agentProfileHint:
+      "Les profils s’appliquent aux nouvelles sessions natives. Les sessions Task existantes conservent leur liaison d’origine.",
+    profileMode: "Mode de sélection",
+    profileAuto: "Automatique",
+    profilePrefer: "Préféré",
+    profilePinned: "Épinglé",
+    profileAutoDescription:
+      "Choisit de façon déterministe un adaptateur et un modèle prêts et testés pour chaque nouvelle session.",
+    profilePreferDescription:
+      "Utilise d’abord la liaison principale, puis uniquement le repli explicite si nécessaire.",
+    profilePinnedDescription:
+      "Utilise exactement cette liaison. Si elle est indisponible, s’arrête sans substituer un autre modèle.",
+    primaryBinding: "Liaison principale",
+    fallbackBinding: "Liaison de repli",
+    noFallback: "Aucun repli",
+    noVerifiedModels:
+      "Aucun catalogue de modèles prêt et testé n’est disponible. Évaluez ce Device avant de choisir un modèle exact.",
+    configureAgentProfile: "Vérifier dans Configuration Chat",
+    modelCatalog: "{count} modèles vérifiés",
+    defaultModel: "Par défaut",
+    moreModels: "+{count} autres",
     resourceLocks: "Verrous de ressources",
     noResourceLocks: "Aucun verrou de ressource nommé n’est actif.",
     verifiedEvidence: "Vérifié · {source} · {time}",
@@ -410,7 +500,7 @@ export const frenchMessages = {
     eyebrow: "Inscription d’appareil",
     title: "Ajouter un appareil",
     intro:
-      "Créez un fichier d’inscription à courte durée et à usage unique, téléchargez-le une fois, puis lancez la commande Worker fournie sur le nouvel appareil.",
+      "Confiez l’installation du Worker à l’Agent déjà présent sur le nouveau Mac, appareil Windows ou Linux. Main fournit seulement un fichier d’inscription temporaire et à usage unique.",
     unavailable: "L’inscription d’appareils n’est pas configurée sur ce Main.",
     loadFailed: "Impossible de charger l’état de l’inscription des appareils.",
     deviceId: "ID de l’appareil",
@@ -433,9 +523,23 @@ export const frenchMessages = {
     fingerprint: "Empreinte Main attendue",
     endpoints: "Points de terminaison du canal Worker",
     download: "Télécharger le fichier",
-    joinCommand: "À exécuter sur le nouvel appareil",
+    joinCommand: "Commande manuelle (avancé)",
     copyCommand: "Copier la commande",
     copyDone: "Copiée",
+    recommended: "Recommandé",
+    agentAssistedTitle: "Confier l’installation à l’Agent du nouvel appareil",
+    agentAssistedDetail:
+      "Ouvrez Codex ou Claude sur le nouvel appareil. Après le téléchargement, donnez à l’Agent le chemin local du fichier, jamais son contenu, avec l’invite ci-dessous.",
+    agentPromptLabel: "Invite pour Codex ou Claude sur le nouvel appareil",
+    agentPrompt:
+      "Installe OpenDelegate Worker sur cet appareil depuis https://github.com/jugol/OpenDelegate. Suis le README et skills/opendelegate-join/SKILL.md. Rejoins Main avec le fichier d’inscription non ouvert <absolute-path-to/{filename}>. N’affiche, ne colle et ne journalise jamais son contenu. Configure le service natif de cet OS, vérifie la connexion à Main et signale quand l’appareil apparaît dans Admin Web.",
+    copyAgentPrompt: "Copier l’invite Agent",
+    afterJoin:
+      "Quand l’appareil apparaît à gauche, ouvrez son chat de configuration pour l’évaluer et définir son nom, ses rôles et ses instructions.",
+    needHelp: "Besoin d’être guidé par OpenDelegate ?",
+    helpDetail:
+      "Le chat de configuration explique le transfert sûr, la commande cible et la vérification sans exposer le fichier d’inscription.",
+    openSetupChat: "Demander au chat de configuration",
     recent: "Fichiers récents",
     none: "Aucun fichier d’inscription n’a été émis.",
     statusActive: "Actif",
@@ -443,9 +547,12 @@ export const frenchMessages = {
     statusExpired: "Expiré",
     statusRevoked: "Révoqué",
     stepsTitle: "Parcours d’ajout sécurisé",
-    stepOne: "Générez et téléchargez le fichier à usage unique sur Main.",
-    stepTwo: "Transférez-le par un moyen local sécurisé du système.",
-    stepThree: "Lancez la commande Worker fournie ; le fichier utilisé sera supprimé.",
+    stepOne:
+      "Ouvrez Codex ou Claude sur le nouvel appareil et demandez la préparation d’OpenDelegate Worker.",
+    stepTwo:
+      "Générez ici le fichier à usage unique, puis transférez-le sans l’ouvrir via une liaison authentifiée ou un transfert local sûr.",
+    stepThree:
+      "Donnez son chemin à l’Agent du nouvel appareil. Le Worker rejoint Main et supprime le fichier consommé.",
   },
   artifact: {
     eyebrow: "Sortie de tâche",
@@ -602,6 +709,10 @@ export const frenchMessages = {
     development: "Développement",
     computerUse: "Computer Use",
     browserAutomation: "Automatisation du navigateur",
+    configurationAssessmentIntro:
+      "Commencez par évaluer l’appareil. Je pourrai ensuite expliquer l’état observé de Codex, Claude, de l’automatisation du navigateur, de Computer Use et du Knowledge local, puis vous aider à proposer des rôles ou instructions. Le chat ne peut pas lancer l’évaluation et les identifiants du fournisseur ne doivent jamais figurer dans les messages.",
+    configurationAssessmentReadyIntro:
+      "L’évaluation de l’appareil est terminée. Je peux maintenant expliquer l’état observé de Codex, Claude, de l’automatisation du navigateur, de Computer Use et du Knowledge local, puis vous aider à proposer des rôles ou instructions. Ne saisissez pas les identifiants du fournisseur dans les messages.",
     localNetwork: "Réseau local",
     healthyPriorityOne: "Opérationnel · Priorité 1",
     healthyPriority: "Opérationnel · Priorité {priority}",

@@ -3,15 +3,57 @@
 Langues : [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) ·
 **[Français](README.fr.md)** · [Español](README.es.md) · [简体中文](README.zh-CN.md)
 
-OpenDelegate est un plan de contrôle personnel et auto-hébergé qui coordonne des agents d’IA entre
-un Main Device fixe et plusieurs Devices sous macOS, Windows et Linux.
+**Décrivez le résultat voulu dans Discord ; OpenDelegate décide où et comment l’exécuter.** Un Main
+fixe et toujours actif coordonne macOS, Windows et Linux ; votre téléphone ou ordinateur peut se déconnecter.
 
 > [!TIP]
-> **Commencez ici :** [Démarrage rapide](#démarrage-rapide) ·
+> **Commencez ici :** [Installation recommandée avec votre Agent](#installation-recommandée-confiez-la-à-votre-agent) ·
+> [Configuration détaillée](#configuration-détaillée) ·
 > [Guide de configuration complet (anglais)](docs/GETTING_STARTED.md) ·
 > [Configuration de Discord Forum](docs/DISCORD_SETUP.md)
 
-## Démarrage rapide
+## Installation recommandée : confiez-la à votre Agent
+
+**C’est le parcours le plus court et recommandé. Vous n’avez pas besoin d’apprendre les commandes
+OpenDelegate au préalable.**
+
+1. Allez sur l’ordinateur qui deviendra votre **Main Device** fixe et toujours actif.
+2. Ouvrez-y un Agent local compétent, tel que Codex ou Claude, et donnez-lui l’URL de ce dépôt.
+3. Envoyez-lui ceci :
+
+   > Configure OpenDelegate sur cet ordinateur comme mon Main Device fixe et toujours actif. Trouve
+   > et suis les instructions d’installation Main de ce dépôt, puis réalise tout ce que tu peux
+   > faire en sécurité. Ne me sollicite que lorsqu’une décision ou une action sécurisée réservée à
+   > l’Owner est nécessaire. Ne me demande jamais de coller des identifiants, jetons ou autres
+   > secrets dans le chat ; oriente-moi vers l’authentification native du Provider ou la saisie
+   > sécurisée d’OpenDelegate. Continue jusqu’à l’ouverture d’Admin Web afin que nous puissions y
+   > terminer la configuration.
+
+4. Répondez aux questions de l’Agent. Il découvre lui-même le skill d’initialisation, distingue le
+   source d’un release bundle, vérifie le support status, conserve les données Runtime hors du
+   checkout et ouvre Admin Web sans vous demander de traduire ce README en commandes shell.
+
+Quand Admin Web s’ouvre, poursuivez dans **Configuration Chat** à droite. Demandez à l’Agent
+d’inspecter l’état existant puis de vous guider en langage naturel pour l’évaluation du Device,
+SQLite intégré ou PostgreSQL externe, Codex et Claude, Discord Forum, les Routes de connexion, les
+modèles Agent, l’exposition des Artifacts, le démarrage du Service et les Devices supplémentaires.
+OpenDelegate présente les modifications structurées et vérifiables dans la conversation au lieu de
+vous faire chercher chaque écran de réglages.
+
+![Admin Web OpenDelegate avec l’évaluation du Device et Configuration Chat](docs/design/admin-configuration-chat-implemented.png)
+
+_Admin Web actuel capturé avec des Browser Fixtures déterministes. Commencez par **Évaluer
+l’appareil**, puis terminez la configuration dans Configuration Chat. La bannière indique
+correctement que ce source build n’est pas pris en charge ; l’image ne constitue pas une preuve de
+Platform ou de Release réelle._
+
+SQLite est le choix local par défaut et ne demande aucune URI. Ne collez jamais d’identifiants
+Provider ni de Token Discord dans le chat : lorsqu’ils sont réellement nécessaires, Configuration
+Chat en explique la raison et affiche le formulaire sécurisé dédié. Une fois Main prêt, utilisez
+**Ajouter un Device**, créez un Grant à usage unique et remettez-le à l’Agent de l’ordinateur
+supplémentaire ; il découvrira lui-même les instructions de connexion Worker.
+
+## Configuration détaillée
 
 > [!WARNING]
 > Ce dépôt produit une **préversion interne non prise en charge**, et non une release
@@ -23,40 +65,55 @@ un Main Device fixe et plusieurs Devices sous macOS, Windows et Linux.
 OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Owner n’utilise pas
 `npm run start`.
 
-1. Procurez-vous le bundle correspondant au système et à l’architecture, puis vérifiez `SHA256SUMS`
-   avec le digest obtenu séparément par le canal de publication fiable. Le dépôt ne produit
-   actuellement que des bundles de préversion interne clairement identifiés ; consultez
-   [Construire une préversion interne](#construire-une-préversion-interne).
-2. Si vous utilisez Discord, suivez le
-   [guide de configuration de Discord Forum](docs/DISCORD_SETUP.md) et préparez le Binding complet
-   avant la première initialisation du Main. Cette préversion ne peut ni ajouter ni remplacer un
-   Binding après l’initialisation.
-3. Ouvrez le répertoire du bundle extrait dans Codex ou Claude, puis envoyez exactement : _“Read
-   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
-   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
-   if a required safety check fails.”_
+1. Sur l’ordinateur destiné au Main, donnez l’URL de ce dépôt à Codex ou Claude. Si vous avez déjà
+   un bundle pris en charge pour la plateforme, ouvrez plutôt son répertoire extrait. L’Agent
+   distingue source et bundle, inspecte `supportStatus` et vérifie `SHA256SUMS`. Le source actuel ne
+   produit que la [préversion interne](#construire-une-préversion-interne) indiquée.
+2. Envoyez la demande de l’[installation recommandée](#installation-recommandée-confiez-la-à-votre-agent).
+   L’Agent découvre lui-même `AGENTS.md` et `skills/opendelegate-init/SKILL.md` ; l’Owner n’a pas à
+   connaître l’arborescence interne.
+3. Discord peut être omis lors de la première initialisation du Main. Vous pourrez ensuite ajouter,
+   remplacer, étendre ou désactiver le Binding Forum dans Configuration Chat après authentification
+   Owner. Suivez le [guide de configuration de Discord Forum](docs/DISCORD_SETUP.md) pour l’App, le
+   Forum, les Tags et les Permissions requis.
 4. Suivez l’Agent pour revendiquer l’accès Owner et conservez en lieu sûr les dix codes de
    récupération à usage unique.
-5. Dans Configuration Chat, en bas à droite d’Admin Web, vérifiez les Devices, Agents, Routes et
-   Artifacts ainsi que l’état Discord préparé avant l’initialisation.
+5. Dans Admin Web, lancez d’abord **Évaluer l’appareil** et examinez le résultat déterministe pour
+   Codex, Claude, l’automatisation du navigateur, Computer Use et le Knowledge. Terminez ensuite la
+   configuration des Devices, Agents, Routes, Artifacts et de Discord dans Configuration Chat. Ne
+   saisissez jamais d’identifiants Provider dans le chat ; le jeton Discord va uniquement dans le
+   panneau d’identifiants sécurisé.
 6. Pour ajouter un Device, demandez à Configuration Chat un Device Grant de courte durée et à usage
    unique. Transférez le fichier sans l’ouvrir par un moyen sûr contrôlé par l’Owner, puis demandez
-   à l’Agent du Device cible de suivre `skills/opendelegate-join/SKILL.md`.
+   à l’Agent du Device cible de connecter cet ordinateur comme Worker. Il découvre lui-même
+   `skills/opendelegate-join/SKILL.md`.
 7. Si Discord est configuré, créez une publication Forum pour chaque Task indépendante. Les réponses
    poursuivent la même Task et sa native Agent Session ; une nouvelle publication démarre avec un
    Context propre. Si Discord est désactivé ou indisponible, ouvrez **Admin Web → Tasks → Nouvelle
    tâche**.
+
+Chaque Device utilise **Exécution de l’Agent → Automatique** par défaut. Vous pouvez choisir
+**Préféré** ou **Épinglé** dans sa page, ou dire dans le Configuration Chat de ce Device :
+_« Utilise Claude Opus sur ce NAS. »_ Répétez l’opération sur la page du Mac Studio avec le modèle
+GPT souhaité. OpenDelegate résout chaque demande dans le catalogue de modèles testé du Device
+cible, affiche l’identifiant Provider-native exact pour vérification et n’applique le changement
+qu’aux nouvelles sessions natives.
 
 Consultez le [guide de configuration complet (en anglais)](docs/GETTING_STARTED.md), qui couvre la
 récupération de l’Owner, les Devices supplémentaires, la première Task et le dépannage.
 
 ## Pourquoi OpenDelegate
 
-Créez une Task depuis un téléphone ou un ordinateur, laissez le Main Agent la diviser en Work
-Orders, acheminer ces Work Orders vers les Devices éligibles, puis recevez un résultat unique,
-durable et inspectable sans avoir à rouvrir manuellement chaque session d’agent.
+Depuis un téléphone ou un ordinateur, décrivez le résultat plutôt qu’un plan de placement. Le Main
+Agent peut répartir le développement sous Windows, la compilation ou signature sous macOS et le
+déploiement sous Linux ; le planificateur choisit les Devices et les Routes.
 
 - Une publication Discord Forum correspond à une Task durable et à une frontière de contexte.
+- Des moniteurs déterministes facultatifs peuvent créer les mêmes Tasks ordinaires reliées au Forum
+  pour les incidents ou améliorations. Chaque catégorie peut être désactivée, proposée à la revue
+  ou exécutée sans contourner les Policies, approbations, budgets ni audits.
+- Le téléphone ou l’ordinateur qui envoie la commande peut se déconnecter. Seuls le Main fixe et les
+  Devices nécessaires au travail en cours doivent rester disponibles.
 - Un logiciel déterministe gère l’identité, les Policies, l’état de santé, le routage, les leases,
   les nouvelles tentatives, la persistance et les transitions d’état. Les agents prennent en charge
   le jugement sémantique et le travail qui leur est attribué.
@@ -66,8 +123,10 @@ durable et inspectable sans avoir à rouvrir manuellement chaque session d’age
   en conservant la possibilité de reprendre les sessions natives utiles des fournisseurs.
 - Chaque Device conserve son propre Knowledge Markdown sélectif et relié. Le Main ne reçoit jamais
   ses noms de fichiers, titres, liens, graphe, index, extraits ou contenu.
-- Les résultats riches peuvent devenir des Artifacts servis par le Main selon une Exposure Policy
-  explicite.
+- Le résultat peut être une réponse ou pièce jointe Discord, un fichier, un Artifact, une vue
+  hébergée ou une référence Git vérifiée.
+- Si un login, MFA, CAPTCHA, consentement légal ou permission OS exige l’Owner, la même Task se met
+  en pause sur un Owner Handoff via le Main, limité dans le temps et révocable, puis reprend.
 
 ## Architecture
 
@@ -192,7 +251,7 @@ revendication/connexion de l’Owner, l’aller-retour du cookie de session et l
 Le nom de la destination doit contenir `internal-preview`. Les fichiers générés
 `INTERNAL_PREVIEW.md` et `release-metadata.json` indiquent que le bundle n’est pas pris en charge et
 conservent l’état exact des preuves de release. Initialisez le bundle assemblé uniquement via le
-[Démarrage rapide](#démarrage-rapide) Agent-first ci-dessus afin que Discord et chaque choix de
+[installation recommandée](#installation-recommandée-confiez-la-à-votre-agent) Agent-first ci-dessus afin que Discord et chaque choix de
 l’Owner soient résolus avant la création de la configuration durable du Main. La préversion interne
 s’exécute au premier plan, n’installe aucun service OS persistant et ne doit pas être publiée sous
 un tag de release.
@@ -264,10 +323,13 @@ Ce serveur de développement n’est pas un parcours d’installation pour l’O
 `internal-preview` généré pour valider le Main empaqueté.
 
 L’authentification Codex et Claude est isolée par Device OpenDelegate, par défaut dans
-`state/providers/codex` et `state/providers/claude`. Après la configuration, authentifiez-vous
-interactivement dans ces controlled homes précis. OpenDelegate ne copie ni n’hérite d’une connexion
-provenant du provider home global de l’utilisateur, et les Runs first-class refusent les variables
-d’environnement contenant des identifiants.
+`state/providers/codex` et `state/providers/claude`. Pendant l’initialisation du Main, l’Owner peut fournir
+`--codex-home ABSOLUTE_PATH` ou `--claude-home ABSOLUTE_PATH` pendant l’initialisation du Main afin
+d’utiliser un répertoire Provider local existant comme SSOT partagé explicite. OpenDelegate
+enregistre ce chemin sans copier la connexion et utilise le même home pour l’exécution et
+l’évaluation du Device. Les réglages, plugins, caches et native sessions du Provider sont alors
+partagés, tandis que chaque Task conserve sa propre native session. Aucun home global n’est hérité
+implicitement.
 
 ## Organisation du dépôt
 

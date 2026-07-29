@@ -25,7 +25,7 @@ const limits: AgentRunLimits = {
   maxDiagnosticBytes: 4 * 1024,
 };
 
-test("Codex App Server preserves native threads and consumes exact Main authorization", async () => {
+test("Codex App Server ignores benign status and goal notifications across native threads", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
   try {
     const cwd = await realpath(process.cwd());
@@ -37,9 +37,30 @@ test("Codex App Server preserves native threads and consumes exact Main authoriz
       lineageId: () => "lineage-app-server",
     });
     const probe = await adapter.probe();
-    assert.equal(probe.version, "0.145.0");
+    assert.equal(probe.version, "0.146.0");
     assert.equal(probe.auth.state, "ready");
     assert.equal(probe.capabilities.approvalBridge, true);
+    const catalog = await adapter.listModels();
+    assert.deepEqual(catalog, {
+      observedAt: catalog.observedAt,
+      models: [
+        {
+          modelId: "gpt-5.6-sol",
+          displayName: "GPT-5.6 Sol",
+          isDefault: true,
+          supportedEfforts: ["high", "xhigh"],
+        },
+      ],
+    });
+    await assert.rejects(
+      adapter.listModels({
+        environment: {
+          FIXTURE_REPEAT_MODEL_CURSOR: "1",
+        },
+      }),
+      (error: unknown) =>
+        error instanceof AgentAdapterError && error.code === "MALFORMED_PROVIDER_OUTPUT",
+    );
     await assert.rejects(
       adapter.probe({ secretEnvironment: { CODEX_HOME: "must-not-override" } }),
       (error: unknown) =>
@@ -53,6 +74,7 @@ test("Codex App Server preserves native threads and consumes exact Main authoriz
       workstreamId: "implementation",
       sessionKey: "task-app-server/implementation",
       deviceId: "device-windows",
+      modelId: "gpt-5.6-sol",
       prompt: "Install dependencies and continue.",
       workspace: {
         workspaceId: "workspace-app-server",
@@ -70,6 +92,11 @@ test("Codex App Server preserves native threads and consumes exact Main authoriz
           },
         },
       },
+      environment: {
+        FIXTURE_EXPECT_MODEL: "gpt-5.6-sol",
+        FIXTURE_EMIT_REMOTE_CONTROL_STATUS: "1",
+        FIXTURE_EMIT_THREAD_GOAL_CLEARED: "1",
+      },
       limits,
     };
     const started = await adapter.start({ operation: "start", ...base });
@@ -81,6 +108,7 @@ test("Codex App Server preserves native threads and consumes exact Main authoriz
 
     assert.equal(first.status, "succeeded");
     assert.equal(first.session?.nativeSessionId, "019abcdef-app-server-thread");
+    assert.equal(first.session?.modelId, "gpt-5.6-sol");
     assert.equal(first.finalText, "Finished through App Server");
     assert.equal(first.usage?.inputTokens, 10);
     assert.equal(authorizations.length, 1);

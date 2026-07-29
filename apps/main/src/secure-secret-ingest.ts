@@ -26,9 +26,13 @@ const OPAQUE_SECRET_ID = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u;
 const LEDGER_RECORD_NAME = /^[a-f0-9]{64}\.json$/u;
 const LEDGER_TEMPORARY_NAME =
   /^(?<operationId>[a-f0-9]{64})\.(?<nonce>[a-f0-9]{32})\.(?<kind>create|replace)\.tmp$/u;
+const INITIAL_DISCORD_CAPABILITY_OPERATION = digest(
+  "opendelegate:init-discord-bot-token-capability:v1",
+);
 const PURPOSE_MAXIMUM_BYTES: Readonly<Record<SecureSecretIngestPurposeV1, number>> = Object.freeze({
   "api-token": 16 * 1024,
   "database-uri": 8 * 1024,
+  "discord-bot-token": 4 * 1024,
   "private-key": 64 * 1024,
   "service-credential": 64 * 1024,
 });
@@ -69,6 +73,7 @@ export class MainSecureSecretIngestService
   readonly #idSource: () => string;
   readonly #maximumLedgerEntries: number;
   readonly #availableReferences = new Set<string>();
+  readonly #referencePurposes = new Map<string, SecureSecretIngestPurposeV1>();
   readonly #operationTails = new Map<string, Promise<void>>();
   #ledgerDirectoryIdentity: BigIntStats | undefined;
   #ledgerMutationTail: Promise<void> = Promise.resolve();
@@ -115,6 +120,7 @@ export class MainSecureSecretIngestService
       input.scope.kind === "main" &&
       input.scope.id === this.#mainDeviceId &&
       input.key === "database.uri-ref" &&
+      this.#referencePurposes.get(input.secretRef) === "database-uri" &&
       this.#availableReferences.has(input.secretRef)
     );
   }
@@ -125,6 +131,76 @@ export class MainSecureSecretIngestService
    */
   public managedSecretAliases(): readonly string[] {
     return Object.freeze([...this.#availableReferences].map(aliasFromReference).sort());
+  }
+
+  /**
+   * Reads only durable, non-secret capability metadata. Platform-vault
+   * availability remains separate so an authoritative runtime can keep its
+   * retry lifecycle while the vault is temporarily unavailable.
+   */
+  public hasAliasPurpose(alias: string, purpose: SecureSecretIngestPurposeV1): boolean {
+    let normalizedAlias: string;
+    try {
+      normalizedAlias = requireOpaqueSecretId(alias);
+    } catch {
+      return false;
+    }
+    return this.#referencePurposes.get(`${SECRET_REFERENCE_PREFIX}${normalizedAlias}`) === purpose;
+  }
+
+  /**
+   * Records the one Discord alias explicitly selected by a fresh Main init.
+   * The fixed operation identity makes this a write-once capability: editing
+   * bootstrap files on a later start cannot authorize another alias.
+   */
+  public async registerInitialDiscordBotTokenAlias(alias: string): Promise<void> {
+    const secretRef = `${SECRET_REFERENCE_PREFIX}${requireOpaqueSecretId(alias)}`;
+    await this.#enqueue(INITIAL_DISCORD_CAPABILITY_OPERATION, async () => {
+      const path = join(this.#ledgerDirectory, `${INITIAL_DISCORD_CAPABILITY_OPERATION}.json`);
+      const snapshot = await this.#withLedgerMutation(async () => {
+        await this.#assertLedgerDirectory();
+        const existing = await this.#readRecordIfPresent(path);
+        if (existing !== undefined) {
+          return existing;
+        }
+        if (this.#recordCount >= this.#maximumLedgerEntries) {
+          throw new SecureSecretIngestPortError("SECRET_INGEST_UNAVAILABLE");
+        }
+        const record: IngestLedgerRecord = Object.freeze({
+          schemaVersion: 1,
+          state: "completed",
+          purpose: "discord-bot-token",
+          secretRef,
+        });
+        try {
+          const created = await this.#createRecord(
+            INITIAL_DISCORD_CAPABILITY_OPERATION,
+            path,
+            record,
+          );
+          this.#recordCount += 1;
+          return created;
+        } catch (error) {
+          const published = await this.#readRecordIfPresent(path).catch(() => undefined);
+          if (published !== undefined) {
+            this.#recordCount += 1;
+          }
+          throw error;
+        }
+      });
+      if (
+        snapshot.record.state !== "completed" ||
+        snapshot.record.purpose !== "discord-bot-token" ||
+        snapshot.record.secretRef !== secretRef
+      ) {
+        throw new SecureSecretIngestPortError("SECRET_INGEST_IDEMPOTENCY_CONFLICT");
+      }
+      this.#referencePurposes.set(secretRef, "discord-bot-token");
+      const availability = await this.#secretStore.availability(alias).catch(() => undefined);
+      if (availability?.ready === true && availability.alias === alias) {
+        this.#availableReferences.add(secretRef);
+      }
+    });
   }
 
   public async ingest(input: SecureSecretIngestInput): Promise<SecureSecretIngestReceiptV1> {
@@ -174,6 +250,7 @@ export class MainSecureSecretIngestService
         if (snapshot.record.state !== "completed") {
           return;
         }
+        this.#referencePurposes.set(snapshot.record.secretRef, snapshot.record.purpose);
         const alias = aliasFromReference(snapshot.record.secretRef);
         const availability = await this.#secretStore.availability(alias).catch(() => undefined);
         if (availability?.ready === true && availability.alias === alias) {
@@ -257,6 +334,7 @@ export class MainSecureSecretIngestService
         state: "completed",
       });
     }
+    this.#referencePurposes.set(record.secretRef, record.purpose);
     this.#availableReferences.add(record.secretRef);
   }
 
@@ -598,6 +676,10 @@ function copyAndValidateMaterial(value: Uint8Array, purpose: SecureSecretIngestP
     throw new SecureSecretIngestPortError("SECRET_INGEST_INVALID");
   }
   if (purpose === "api-token" && (text.length === 0 || /\s/u.test(text) || hasAsciiControl(text))) {
+    material.fill(0);
+    throw new SecureSecretIngestPortError("SECRET_INGEST_INVALID");
+  }
+  if (purpose === "discord-bot-token" && !/^[\x21-\x7e]+$/u.test(text)) {
     material.fill(0);
     throw new SecureSecretIngestPortError("SECRET_INGEST_INVALID");
   }

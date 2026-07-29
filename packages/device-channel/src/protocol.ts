@@ -652,6 +652,25 @@ function parseWorkerHeartbeat(input: unknown): WorkerHeartbeatV1 {
       "Hardware evidence cannot be newer than its enclosing heartbeat.",
     );
   }
+  if (inventory?.wakeOnLan !== undefined && inventory.wakeOnLan.observedAtMs > observedAtMs) {
+    throw protocolError(
+      "FRAME_INVALID",
+      "Wake-on-LAN evidence cannot be newer than its enclosing heartbeat.",
+    );
+  }
+  if (
+    inventory?.agentAdapters?.some(
+      (adapter) =>
+        adapter.observedAtMs > observedAtMs ||
+        (adapter.modelCatalogObservedAtMs !== undefined &&
+          adapter.modelCatalogObservedAtMs > observedAtMs),
+    )
+  ) {
+    throw protocolError(
+      "FRAME_INVALID",
+      "Agent Adapter evidence cannot be newer than its enclosing heartbeat.",
+    );
+  }
   return {
     protocolVersion: PROTOCOL_VERSION,
     deviceId: readIdentifier(record["deviceId"], "Device ID"),
@@ -708,7 +727,7 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
       "workspaceIds",
       "availableSecretRefs",
     ],
-    ["knowledgeHealth", "hardware", "agentAdapters", "resourceLocks"],
+    ["knowledgeHealth", "hardware", "wakeOnLan", "agentAdapters", "resourceLocks"],
   );
   const capabilityValues = readArray(record["capabilities"], "Worker capabilities");
   if (capabilityValues.length > 256) {
@@ -766,9 +785,28 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
       : parseWorkerResourceLocks(record["resourceLocks"]);
   const hardware =
     record["hardware"] === undefined ? undefined : parseWorkerHardware(record["hardware"]);
+  const wakeOnLan =
+    record["wakeOnLan"] === undefined ? undefined : parseWorkerWakeOnLan(record["wakeOnLan"]);
+  const osFamily = readEnum(
+    record["osFamily"],
+    ["linux", "macos", "windows"] as const,
+    "OS family",
+  );
+  if (
+    wakeOnLan !== undefined &&
+    wakeOnLan.source !== "probe-unavailable" &&
+    ((osFamily === "windows" && wakeOnLan.source !== "windows-netadapter-power") ||
+      (osFamily === "macos" && wakeOnLan.source !== "macos-pmset") ||
+      (osFamily === "linux" && wakeOnLan.source !== "linux-ethtool"))
+  ) {
+    throw protocolError(
+      "FRAME_INVALID",
+      "Worker Wake-on-LAN evidence does not match the Device OS.",
+    );
+  }
   return {
     deviceName: readIdentifier(record["deviceName"], "Device name"),
-    osFamily: readEnum(record["osFamily"], ["linux", "macos", "windows"] as const, "OS family"),
+    osFamily,
     platformRelease: readIdentifier(record["platformRelease"], "platform release"),
     architecture: readIdentifier(record["architecture"], "architecture"),
     serviceMode: readEnum(
@@ -786,6 +824,7 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
           ),
         }),
     ...(hardware === undefined ? {} : { hardware }),
+    ...(wakeOnLan === undefined ? {} : { wakeOnLan }),
     maximumConcurrentRuns: readBoundedPositiveInteger(
       record["maximumConcurrentRuns"],
       "maximum concurrent Runs",
@@ -800,6 +839,31 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
       "Secret reference",
       256,
     ),
+  };
+}
+
+function parseWorkerWakeOnLan(
+  input: unknown,
+): NonNullable<NonNullable<WorkerHeartbeatV1["inventory"]>["wakeOnLan"]> {
+  const record = readRecord(input, "Worker Wake-on-LAN observation");
+  assertExactKeys(record, ["state", "source", "observedAtMs"]);
+  const state = readEnum(
+    record["state"],
+    ["enabled", "disabled", "unsupported", "unknown"] as const,
+    "Wake-on-LAN target state",
+  );
+  const source = readEnum(
+    record["source"],
+    ["windows-netadapter-power", "macos-pmset", "linux-ethtool", "probe-unavailable"] as const,
+    "Wake-on-LAN probe source",
+  );
+  if (source === "probe-unavailable" && state !== "unknown") {
+    throw protocolError("FRAME_INVALID", "Unavailable Wake-on-LAN evidence must remain unknown.");
+  }
+  return {
+    state,
+    source,
+    observedAtMs: readTimestampInteger(record["observedAtMs"], "Wake-on-LAN observation time"),
   };
 }
 
@@ -908,7 +972,7 @@ function parseWorkerAgentAdapters(
     assertExactKeys(
       adapter,
       ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-      ["version"],
+      ["version", "modelCatalogObservedAtMs", "models"],
     );
     const provider = readEnum(
       adapter["provider"],
@@ -921,6 +985,18 @@ function parseWorkerAgentAdapters(
       throw protocolError("FRAME_INVALID", "Worker Agent adapters must be unique.");
     }
     seen.add(identity);
+    const modelCatalogObservedAtMs =
+      adapter["modelCatalogObservedAtMs"] === undefined
+        ? undefined
+        : readTimestampInteger(
+            adapter["modelCatalogObservedAtMs"],
+            "Agent model catalog observation time",
+          );
+    const models =
+      adapter["models"] === undefined ? undefined : parseWorkerAgentModels(adapter["models"]);
+    if ((modelCatalogObservedAtMs === undefined) !== (models === undefined)) {
+      throw protocolError("FRAME_INVALID", "Worker Agent model catalog metadata is incomplete.");
+    }
     return {
       provider,
       adapterId,
@@ -938,6 +1014,44 @@ function parseWorkerAgentAdapters(
         ? {}
         : { version: readIdentifier(adapter["version"], "Agent adapter version") }),
       observedAtMs: readTimestampInteger(adapter["observedAtMs"], "Agent adapter observation time"),
+      ...(modelCatalogObservedAtMs === undefined
+        ? {}
+        : { modelCatalogObservedAtMs, models: models! }),
+    };
+  });
+}
+
+function parseWorkerAgentModels(
+  input: unknown,
+): NonNullable<
+  NonNullable<NonNullable<WorkerHeartbeatV1["inventory"]>["agentAdapters"]>[number]["models"]
+> {
+  const values = readArray(input, "Worker Agent model catalog");
+  if (values.length > 128) {
+    throw protocolError("FRAME_INVALID", "Worker Agent model catalog exceeds its item bound.");
+  }
+  const seen = new Set<string>();
+  return values.map((value) => {
+    const model = readRecord(value, "Worker Agent model");
+    assertExactKeys(model, ["modelId", "displayName"], ["isDefault", "supportedEfforts"]);
+    const modelId = readIdentifier(model["modelId"], "Agent model ID");
+    if (seen.has(modelId)) {
+      throw protocolError("FRAME_INVALID", "Worker Agent model IDs must be unique.");
+    }
+    seen.add(modelId);
+    const isDefault =
+      model["isDefault"] === undefined
+        ? undefined
+        : readBoolean(model["isDefault"], "Agent model default marker");
+    const supportedEfforts =
+      model["supportedEfforts"] === undefined
+        ? undefined
+        : readUniqueIdentifiers(model["supportedEfforts"], "Agent model effort", 32);
+    return {
+      modelId,
+      displayName: readIdentifier(model["displayName"], "Agent model display name"),
+      ...(isDefault === undefined ? {} : { isDefault }),
+      ...(supportedEfforts === undefined ? {} : { supportedEfforts }),
     };
   });
 }

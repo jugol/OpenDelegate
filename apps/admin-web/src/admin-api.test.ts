@@ -122,6 +122,7 @@ describe("BrowserAdminApi JSON responses", () => {
           messageId: "configuration_message_001",
           sessionId: "configuration_session_device_main",
           content: "The Device-scoped proposal is ready for review.",
+          suggestedActions: ["guide-discord"],
           occurredAt: "2026-07-24T01:02:00.000Z",
         }),
       );
@@ -131,7 +132,10 @@ describe("BrowserAdminApi JSON responses", () => {
     await api.login("correct horse battery staple");
     await expect(
       api.sendConfigurationMessage("device_main/with space", "Inspect this Device."),
-    ).resolves.toBe("The Device-scoped proposal is ready for review.");
+    ).resolves.toEqual({
+      content: "The Device-scoped proposal is ready for review.",
+      suggestedActions: ["guide-discord"],
+    });
 
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "/api/v1/devices/device_main%2Fwith%20space/configuration/messages",
@@ -143,6 +147,60 @@ describe("BrowserAdminApi JSON responses", () => {
     expect(headers).toBeInstanceOf(Headers);
     expect((headers as Headers).get("x-opendelegate-csrf")).toBe("csrf-configuration");
     expect((headers as Headers).get("idempotency-key")).toMatch(/^admin-[0-9a-f-]{36}$/);
+    expect(fetchMock.mock.calls[1]?.[1]?.keepalive).toBe(true);
+  });
+
+  it("loads the durable Device-scoped Configuration Chat conversation", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ csrfToken: "csrf-configuration-history", session: ownerSession }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          messages: [
+            {
+              messageId: "configuration_owner_001",
+              role: "owner",
+              content: "Keep this after restart.",
+              responseStatus: "completed",
+              occurredAt: "2026-07-24T01:01:00.000Z",
+            },
+            {
+              messageId: "configuration_agent_001",
+              role: "agent",
+              content: "The conversation is durable.",
+              suggestedActions: ["guide-discord"],
+              occurredAt: "2026-07-24T01:02:00.000Z",
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const api = new BrowserAdminApi();
+
+    await api.login("correct horse battery staple");
+    await expect(api.listConfigurationMessages("device_main/with space")).resolves.toEqual([
+      {
+        messageId: "configuration_owner_001",
+        role: "owner",
+        content: "Keep this after restart.",
+        suggestedActions: [],
+        responseStatus: "completed",
+        occurredAt: "2026-07-24T01:01:00.000Z",
+      },
+      {
+        messageId: "configuration_agent_001",
+        role: "agent",
+        content: "The conversation is durable.",
+        suggestedActions: ["guide-discord"],
+        occurredAt: "2026-07-24T01:02:00.000Z",
+      },
+    ]);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "/api/v1/devices/device_main%2Fwith%20space/configuration/messages",
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("GET");
   });
 
   it("sends Secret bytes only through the authenticated secure-ingest endpoint", async () => {

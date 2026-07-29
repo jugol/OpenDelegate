@@ -9,6 +9,8 @@ import {
 import {
   AGENT_ADAPTER_CONTRACT_VERSION,
   type AgentAdapter,
+  type AgentModelCatalog,
+  type AgentModelDescriptor,
   type AgentAdapterProbe,
   type AgentAdapterProbeInput,
   type AgentResumeRequest,
@@ -36,8 +38,8 @@ import {
 } from "./session-reference.ts";
 import { ActiveRunSteeringController } from "./steering.ts";
 
-export const CLAUDE_AGENT_SDK_VERSION = "0.3.205";
-export const CLAUDE_AGENT_SDK_CLAUDE_CODE_VERSION = "2.1.205";
+export const CLAUDE_AGENT_SDK_VERSION = "0.3.220";
+export const CLAUDE_AGENT_SDK_CLAUDE_CODE_VERSION = "2.1.220";
 const CLAUDE_AGENT_SDK_MODULE = "@anthropic-ai/claude-agent-sdk";
 
 const ALLOWED_SDK_MESSAGE_TYPES = new Set([
@@ -78,6 +80,7 @@ export interface ClaudeAgentSdkQuery {
   interrupt?(): Promise<unknown>;
   streamInput?(stream: AsyncIterable<ClaudeAgentSdkUserMessage>): Promise<void>;
   close?(): void;
+  supportedModels?(): Promise<unknown>;
 }
 
 export interface ClaudeAgentSdkUserMessage {
@@ -230,6 +233,51 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
     };
   }
 
+  public async listModels(input: AgentAdapterProbeInput = {}): Promise<AgentModelCatalog> {
+    const probe = await this.probe(input);
+    if (
+      !probe.installed ||
+      probe.version !== CLAUDE_AGENT_SDK_VERSION ||
+      probe.auth.state !== "ready"
+    ) {
+      throw new AgentAdapterError(
+        "ADAPTER_NOT_READY",
+        "The pinned Claude Agent SDK must be installed and authenticated before listing models.",
+        true,
+      );
+    }
+    const sdk = await this.#resolveSdk();
+    const query = sdk.query({
+      prompt: emptyClaudeInput(),
+      options: {
+        cwd: process.cwd(),
+        env: {
+          ...buildChildEnvironment(input.environment, input.secretEnvironment),
+          CLAUDE_AGENT_SDK_CLIENT_APP: `opendelegate/${CLAUDE_AGENT_SDK_VERSION}`,
+          CLAUDE_CONFIG_DIR: this.#claudeHome,
+        },
+        settingSources: [],
+        tools: [],
+        strictMcpConfig: true,
+      },
+    });
+    try {
+      if (typeof query.supportedModels !== "function") {
+        throw new AgentAdapterError(
+          "MODEL_CATALOG_UNAVAILABLE",
+          "The pinned Claude Agent SDK does not expose supportedModels().",
+        );
+      }
+      const models = parseClaudeModelCatalog(await query.supportedModels());
+      return Object.freeze({
+        observedAt: new Date(this.#now()).toISOString(),
+        models,
+      });
+    } finally {
+      query.close?.();
+    }
+  }
+
   public async start(request: AgentStartRequest): Promise<AgentRunHandle> {
     return await this.#launch(request);
   }
@@ -356,6 +404,7 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
     const queryOptions = {
       abortController: sdkAbort,
       cwd,
+      ...(request.modelId === undefined ? {} : { model: request.modelId }),
       ...(request.operation === "resume" ? { resume: request.session.nativeSessionId } : {}),
       env: {
         ...buildChildEnvironment(request.environment, request.secretEnvironment),
@@ -683,6 +732,59 @@ function claudeMcpServers(
       },
     ]),
   );
+}
+
+async function* emptyClaudeInput(): AsyncGenerator<ClaudeAgentSdkUserMessage, void, void> {
+  yield* [];
+}
+
+function parseClaudeModelCatalog(input: unknown): readonly AgentModelDescriptor[] {
+  if (!Array.isArray(input) || input.length > 128) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Claude Agent SDK returned an invalid model catalog.",
+    );
+  }
+  const identities = new Set<string>();
+  return Object.freeze(
+    input.map((entry): AgentModelDescriptor => {
+      if (!isRecord(entry)) {
+        throw new AgentAdapterError(
+          "MALFORMED_PROVIDER_OUTPUT",
+          "Claude Agent SDK returned an invalid model catalog entry.",
+        );
+      }
+      const modelId = readClaudeModelText(entry["value"], "model ID");
+      const displayName = readClaudeModelText(entry["displayName"], "model display name");
+      if (identities.has(modelId)) {
+        throw new AgentAdapterError(
+          "MALFORMED_PROVIDER_OUTPUT",
+          "Claude Agent SDK returned duplicate model IDs.",
+        );
+      }
+      identities.add(modelId);
+      return Object.freeze({ modelId, displayName });
+    }),
+  );
+}
+
+function readClaudeModelText(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 256 ||
+    value !== value.trim() ||
+    [...value].some((character) => {
+      const point = character.codePointAt(0);
+      return point !== undefined && (point <= 31 || point === 127);
+    })
+  ) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      `Claude Agent SDK returned an invalid ${label}.`,
+    );
+  }
+  return value;
 }
 
 function isConfiguredDeviceLocalKnowledgeTool(

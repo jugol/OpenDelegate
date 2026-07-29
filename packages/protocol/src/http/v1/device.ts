@@ -136,9 +136,65 @@ const DeviceAgentAdapterSchema = Type.Object(
     ]),
     version: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
     observedAtMs: Type.Integer({ minimum: 0 }),
+    modelCatalogObservedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    models: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            modelId: Type.String({ minLength: 1, maxLength: 256 }),
+            displayName: Type.String({ minLength: 1, maxLength: 256 }),
+            isDefault: Type.Optional(Type.Boolean()),
+            supportedEfforts: Type.Optional(
+              Type.Array(Type.String({ minLength: 1, maxLength: 160 }), {
+                maxItems: 32,
+                uniqueItems: true,
+              }),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 128 },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
+
+const DeviceAgentBindingSchema = Type.Object(
+  {
+    provider: Type.Union([Type.Literal("codex"), Type.Literal("claude"), Type.Literal("generic")]),
+    adapterId: Type.String({ minLength: 1, maxLength: 160 }),
+    modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  },
+  { additionalProperties: false },
+);
+
+const DeviceAgentExecutionProfileSchema = Type.Union([
+  Type.Object(
+    {
+      schemaVersion: Type.Literal(1),
+      mode: Type.Literal("auto"),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      schemaVersion: Type.Literal(1),
+      mode: Type.Literal("prefer"),
+      primary: DeviceAgentBindingSchema,
+      fallbacks: Type.Array(DeviceAgentBindingSchema, { maxItems: 7 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      schemaVersion: Type.Literal(1),
+      mode: Type.Literal("pinned"),
+      primary: DeviceAgentBindingSchema,
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 const DeviceResourceLockHolderSchema = Type.Object(
   {
@@ -177,6 +233,42 @@ const DeviceCurrentRunSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const DeviceWakeOnLanPlatformSourceSchema = Type.Union([
+  Type.Literal("windows-netadapter-power"),
+  Type.Literal("macos-pmset"),
+  Type.Literal("linux-ethtool"),
+]);
+
+const DeviceWakeOnLanSchema = Type.Union([
+  Type.Object(
+    {
+      targetState: Type.Literal("enabled"),
+      automaticWakeState: Type.Literal("relay-required"),
+      source: DeviceWakeOnLanPlatformSourceSchema,
+      observedAtMs: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      targetState: Type.Union([Type.Literal("disabled"), Type.Literal("unsupported")]),
+      automaticWakeState: Type.Literal("unavailable"),
+      source: DeviceWakeOnLanPlatformSourceSchema,
+      observedAtMs: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      targetState: Type.Literal("unknown"),
+      automaticWakeState: Type.Literal("unknown"),
+      source: Type.Union([DeviceWakeOnLanPlatformSourceSchema, Type.Literal("probe-unavailable")]),
+      observedAtMs: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 export const DeviceSummarySchema = Type.Object(
   {
     deviceId: OpaqueIdSchema,
@@ -201,7 +293,10 @@ export const DeviceSummarySchema = Type.Object(
         {
           observedAtMs: Type.Integer({ minimum: 0 }),
           acceptedAtMs: Type.Integer({ minimum: 0 }),
-          source: Type.Literal("authenticated-heartbeat"),
+          source: Type.Union([
+            Type.Literal("authenticated-heartbeat"),
+            Type.Literal("local-assessment"),
+          ]),
         },
         { additionalProperties: false },
       ),
@@ -241,6 +336,9 @@ export const DeviceSummarySchema = Type.Object(
         uniqueItems: true,
       }),
     ),
+    agentExecutionProfile: Type.Optional(DeviceAgentExecutionProfileSchema),
+    coordinatorAgentExecutionProfile: Type.Optional(DeviceAgentExecutionProfileSchema),
+    wakeOnLan: Type.Optional(DeviceWakeOnLanSchema),
     routes: Type.Optional(
       Type.Array(DeviceRouteSchema, {
         maxItems: 64,
@@ -286,6 +384,38 @@ export const DeviceSummarySchema = Type.Object(
 );
 
 export type DeviceSummaryV1 = Type.Static<typeof DeviceSummarySchema>;
+
+export const DeviceAssessmentParamsSchema = Type.Object(
+  {
+    deviceId: OpaqueIdSchema,
+  },
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateDeviceAssessmentParamsV1",
+  },
+);
+
+export const DeviceAssessmentRequestSchema = Type.Object(
+  {},
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateDeviceAssessmentRequestV1",
+  },
+);
+
+export const DeviceAssessmentResponseSchema = Type.Object(
+  {
+    device: DeviceSummarySchema,
+  },
+  {
+    additionalProperties: false,
+    $id: "OpenDelegateDeviceAssessmentResponseV1",
+  },
+);
+
+export type DeviceAssessmentParamsV1 = Type.Static<typeof DeviceAssessmentParamsSchema>;
+export type DeviceAssessmentRequestV1 = Type.Static<typeof DeviceAssessmentRequestSchema>;
+export type DeviceAssessmentResponseV1 = Type.Static<typeof DeviceAssessmentResponseSchema>;
 
 export const DeviceListResponseSchema = Type.Object(
   {

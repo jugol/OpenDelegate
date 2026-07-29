@@ -901,6 +901,12 @@ function encodeAndValidateAction(action: DiscordOutboxAction): string {
 function validateOutboxAction(value: unknown): asserts value is DiscordOutboxAction {
   const action = assertPlainRecord(value, "Discord outbox action");
   const kind = requireBoundedString(action["kind"], "Discord outbox action kind", 64);
+  if (kind === "acknowledge-owner-message") {
+    assertOnlyKeys(action, ["kind", "taskId", "messageId"]);
+    requireTaskId(action["taskId"]);
+    assertSnowflake(action["messageId"], "Discord owner message ID");
+    return;
+  }
   if (kind === "sync-tags") {
     assertOnlyKeys(action, ["kind", "taskId", "state"]);
     requireTaskId(action["taskId"]);
@@ -911,6 +917,20 @@ function validateOutboxAction(value: unknown): asserts value is DiscordOutboxAct
     assertOnlyKeys(action, ["kind", "taskId", "projection"]);
     requireTaskId(action["taskId"]);
     validateProjection(action["projection"]);
+    return;
+  }
+  if (kind === "resolve-owner-prompt") {
+    assertOnlyKeys(action, ["kind", "taskId", "promptRequestKey", "projection"]);
+    requireTaskId(action["taskId"]);
+    requireBoundedString(action["promptRequestKey"], "Discord prompt request key", 512);
+    validateProjection(action["projection"]);
+    return;
+  }
+  if (kind === "complete-owner-message") {
+    assertOnlyKeys(action, ["kind", "taskId", "completion", "afterRequestKey"]);
+    requireTaskId(action["taskId"]);
+    validateOwnerMessageCompletion(action["completion"]);
+    requireBoundedString(action["afterRequestKey"], "Discord prerequisite request key", 512);
     return;
   }
   if (kind === "task-command") {
@@ -950,6 +970,13 @@ function validateOutboxAction(value: unknown): asserts value is DiscordOutboxAct
   throw persistenceConflict();
 }
 
+function validateOwnerMessageCompletion(value: unknown): void {
+  const completion = assertPlainRecord(value, "Discord owner-message completion");
+  assertOnlyKeys(completion, ["messageId", "outcome"]);
+  assertSnowflake(completion["messageId"], "Discord owner message ID");
+  requireOneOf(completion["outcome"], ["success", "failure"]);
+}
+
 function validateProjection(value: unknown): asserts value is TaskChannelProjection {
   const projection = assertPlainRecord(value, "Discord Task projection");
   assertOnlyKeys(projection, [
@@ -972,6 +999,9 @@ function validateProjection(value: unknown): asserts value is TaskChannelProject
   requireBoundedString(projection["objective"], "Task objective", 16_384);
   requireBoundedString(projection["summary"], "Task summary", 16_384, true);
   requireOneOf(projection["significance"], ["status", "question", "decision", "failure", "final"]);
+  if (projection["significance"] !== "status" && projection["sourceEventId"] === undefined) {
+    throw persistenceConflict();
+  }
   if (projection["progress"] !== undefined) {
     const progress = assertPlainRecord(projection["progress"], "Task progress");
     assertOnlyKeys(progress, ["completed", "total"]);

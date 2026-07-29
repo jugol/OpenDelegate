@@ -10,6 +10,8 @@ import {
 } from "./controlled-provider-home.ts";
 import {
   type AgentAdapter,
+  type AgentModelCatalog,
+  type AgentModelDescriptor,
   type AgentAdapterProbe,
   type AgentAdapterProbeInput,
   type AgentResumeRequest,
@@ -38,7 +40,7 @@ import {
 } from "./session-reference.ts";
 import { ActiveRunSteeringController } from "./steering.ts";
 
-export const CODEX_APP_SERVER_TESTED_VERSIONS = ["0.145.0"] as const;
+export const CODEX_APP_SERVER_TESTED_VERSIONS = ["0.146.0"] as const;
 
 const CODEX_APP_SERVER_DISABLED_FEATURES = [
   "apps",
@@ -87,10 +89,12 @@ const BENIGN_NOTIFICATION_METHODS = new Set([
   "model/verification",
   "rawResponse/completed",
   "rawResponseItem/completed",
+  "remoteControl/status/changed",
   "serverRequest/resolved",
   "thread/compacted",
   "thread/environment/connected",
   "thread/environment/disconnected",
+  "thread/goal/cleared",
   "thread/settings/updated",
   "thread/started",
   "thread/status/changed",
@@ -175,7 +179,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
         diagnostics: [
           {
             code: "CONTROLLED_PROVIDER_HOME_UNSAFE",
-            message: "The OpenDelegate-controlled Codex home is unavailable or unsafe.",
+            message: "The configured Codex home is unavailable or unsafe.",
           },
         ],
       };
@@ -204,6 +208,108 @@ export class CodexAppServerAdapter implements AgentAdapter {
 
   public async start(request: AgentStartRequest): Promise<AgentRunHandle> {
     return await this.#launch(request);
+  }
+
+  public async listModels(input: AgentAdapterProbeInput = {}): Promise<AgentModelCatalog> {
+    await prepareControlledProviderHome(this.#codexHome, "Codex");
+    const probe = await this.probe(input);
+    requireRunnableProbe(probe, this.#allowUntestedVersion);
+    const child = spawnCommand(
+      this.#command(
+        [
+          ...this.#prefixArgs,
+          "app-server",
+          "--stdio",
+          "--strict-config",
+          ...CODEX_APP_SERVER_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+        ],
+        process.cwd(),
+        input.environment,
+        input.secretEnvironment,
+      ),
+    );
+    const connection = new CodexJsonlConnection({
+      child,
+      maxLineBytes: 256 * 1024,
+      maxDiagnosticBytes: 16 * 1024,
+      cancellationGraceMs: 1_000,
+    });
+    connection.onServerMessage = async (message) => {
+      if (!isNotification(message) || !BENIGN_NOTIFICATION_METHODS.has(message.method)) {
+        throw new AgentAdapterError(
+          "UNKNOWN_PROVIDER_MESSAGE",
+          "Codex App Server emitted an unsupported message while listing models.",
+        );
+      }
+    };
+    try {
+      await connection.start();
+      await connection.request("initialize", {
+        clientInfo: {
+          name: "opendelegate",
+          title: "OpenDelegate",
+          version: probe.version,
+        },
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+          mcpServerOpenaiFormElicitation: false,
+        },
+      });
+      connection.notify("initialized", {});
+      const models: AgentModelDescriptor[] = [];
+      const identities = new Set<string>();
+      const cursors = new Set<string>();
+      let cursor: string | null = null;
+      let pageCount = 0;
+      while (models.length < 128 && pageCount < 16) {
+        pageCount += 1;
+        const previousModelCount = models.length;
+        const response = await connection.request("model/list", {
+          cursor,
+          limit: Math.min(100, 128 - models.length),
+          includeHidden: false,
+        });
+        const page = parseCodexModelPage(response);
+        for (const model of page.models) {
+          if (!identities.has(model.modelId)) {
+            identities.add(model.modelId);
+            models.push(model);
+          }
+        }
+        if (page.nextCursor === null) {
+          cursor = null;
+          break;
+        }
+        if (models.length >= 128) {
+          break;
+        }
+        if (
+          models.length === previousModelCount ||
+          page.nextCursor === cursor ||
+          cursors.has(page.nextCursor)
+        ) {
+          throw new AgentAdapterError(
+            "MALFORMED_PROVIDER_OUTPUT",
+            "Codex App Server returned a non-progressing model catalog cursor.",
+          );
+        }
+        cursors.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
+      if (pageCount >= 16 && cursor !== null && models.length < 128) {
+        throw new AgentAdapterError(
+          "MALFORMED_PROVIDER_OUTPUT",
+          "Codex App Server exceeded the bounded model catalog page limit.",
+        );
+      }
+      return Object.freeze({
+        observedAt: new Date(this.#now()).toISOString(),
+        models: Object.freeze(models),
+      });
+    } finally {
+      await connection.close();
+    }
   }
 
   public async resume(request: AgentResumeRequest): Promise<AgentRunHandle> {
@@ -532,6 +638,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
         threadId,
         input: [{ type: "text", text: request.prompt, text_elements: [] }],
         cwd,
+        ...(request.modelId === undefined ? {} : { model: request.modelId }),
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
       });
@@ -904,6 +1011,7 @@ function codexThreadParameters(
 ): Readonly<Record<string, unknown>> {
   return {
     cwd,
+    ...(request.modelId === undefined ? {} : { model: request.modelId }),
     approvalPolicy: request.permissions.mode === "deny" ? "never" : "on-request",
     approvalsReviewer: "user",
     sandbox: request.sandbox === "provider-default" ? "read-only" : request.sandbox,
@@ -930,6 +1038,84 @@ function codexMcpServers(
       },
     ]),
   );
+}
+
+function parseCodexModelPage(input: unknown): {
+  readonly models: readonly AgentModelDescriptor[];
+  readonly nextCursor: string | null;
+} {
+  if (!isRecord(input) || !Array.isArray(input["data"])) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server returned an invalid model catalog.",
+    );
+  }
+  const models = input["data"].map((entry): AgentModelDescriptor => {
+    if (!isRecord(entry)) {
+      throw new AgentAdapterError(
+        "MALFORMED_PROVIDER_OUTPUT",
+        "Codex App Server returned an invalid model catalog entry.",
+      );
+    }
+    const modelId = readBoundedCatalogText(entry["model"], "model ID", 256);
+    const displayName = readBoundedCatalogText(entry["displayName"], "model display name", 256);
+    const isDefault = entry["isDefault"];
+    if (typeof isDefault !== "boolean") {
+      throw new AgentAdapterError(
+        "MALFORMED_PROVIDER_OUTPUT",
+        "Codex App Server returned an invalid model default marker.",
+      );
+    }
+    const supportedEfforts = Array.isArray(entry["supportedReasoningEfforts"])
+      ? entry["supportedReasoningEfforts"].map((effort) => {
+          if (!isRecord(effort)) {
+            throw new AgentAdapterError(
+              "MALFORMED_PROVIDER_OUTPUT",
+              "Codex App Server returned invalid model effort metadata.",
+            );
+          }
+          return readBoundedCatalogText(effort["reasoningEffort"], "reasoning effort", 64);
+        })
+      : [];
+    return Object.freeze({
+      modelId,
+      displayName,
+      isDefault,
+      ...(supportedEfforts.length === 0
+        ? {}
+        : { supportedEfforts: Object.freeze([...new Set(supportedEfforts)]) }),
+    });
+  });
+  const nextCursor = input["nextCursor"];
+  if (nextCursor !== undefined && nextCursor !== null && typeof nextCursor !== "string") {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server returned an invalid model catalog cursor.",
+    );
+  }
+  return Object.freeze({
+    models: Object.freeze(models),
+    nextCursor: nextCursor ?? null,
+  });
+}
+
+function readBoundedCatalogText(value: unknown, label: string, maximumLength: number): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maximumLength ||
+    value !== value.trim() ||
+    [...value].some((character) => {
+      const point = character.codePointAt(0);
+      return point !== undefined && (point <= 31 || point === 127);
+    })
+  ) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      `Codex App Server returned an invalid ${label}.`,
+    );
+  }
+  return value;
 }
 
 function codexItemTool(item: Readonly<Record<string, unknown>>):
@@ -1095,7 +1281,7 @@ function requireRunnableProbe(probe: AgentAdapterProbe, allowUntestedVersion: bo
   if (probe.auth.state !== "ready") {
     throw new AgentAdapterError(
       "ADAPTER_AUTH_NOT_READY",
-      "Codex authentication is not ready in the OpenDelegate-controlled home.",
+      "Codex authentication is not ready in the configured home.",
       true,
     );
   }

@@ -1,4 +1,8 @@
 import type { ConfigurationDefinition } from "./index.ts";
+import {
+  DEFAULT_AGENT_EXECUTION_PROFILE,
+  isAgentExecutionProfile,
+} from "./agent-execution-profile.ts";
 import { isNullableCanonicalMainSecretReferenceValue } from "./secret-reference.ts";
 
 const isOneOf =
@@ -32,6 +36,42 @@ export const STANDARD_CONFIGURATION_DEFINITIONS = [
     validate: isOneOf(["reactive", "assisted", "autonomous"] as const),
   },
   {
+    key: "autonomy.incident-recovery",
+    defaultValue: "inherit",
+    scopes: ["instance", "main", "device"],
+    validate: isOneOf(["inherit", "disabled", "propose", "execute"] as const),
+  },
+  {
+    key: "autonomy.maintenance",
+    defaultValue: "inherit",
+    scopes: ["instance", "main", "device"],
+    validate: isOneOf(["inherit", "disabled", "propose", "execute"] as const),
+  },
+  {
+    key: "autonomy.capability-expansion",
+    defaultValue: "inherit",
+    scopes: ["instance", "main", "device"],
+    validate: isOneOf(["inherit", "disabled", "propose", "execute"] as const),
+  },
+  {
+    key: "autonomy.cleanup",
+    defaultValue: "inherit",
+    scopes: ["instance", "main", "device"],
+    validate: isOneOf(["inherit", "disabled", "propose", "execute"] as const),
+  },
+  {
+    key: "autonomy.cost-incurring-work",
+    defaultValue: "inherit",
+    scopes: ["instance", "main", "device"],
+    validate: isOneOf(["inherit", "disabled", "propose", "execute"] as const),
+  },
+  {
+    key: "autonomy.general-improvement",
+    defaultValue: "inherit",
+    scopes: ["instance", "main", "device"],
+    validate: isOneOf(["inherit", "disabled", "propose", "execute"] as const),
+  },
+  {
     key: "device.display-name",
     defaultValue: null,
     scopes: ["device"],
@@ -48,6 +88,18 @@ export const STANDARD_CONFIGURATION_DEFINITIONS = [
     defaultValue: [],
     scopes: ["device"],
     validate: isInstructionList,
+  },
+  {
+    key: "agent.worker-profile",
+    defaultValue: DEFAULT_AGENT_EXECUTION_PROFILE,
+    scopes: ["device"],
+    validate: isAgentExecutionProfile,
+  },
+  {
+    key: "agent.coordinator-profile",
+    defaultValue: DEFAULT_AGENT_EXECUTION_PROFILE,
+    scopes: ["main"],
+    validate: isAgentExecutionProfile,
   },
   {
     key: "database.adapter",

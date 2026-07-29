@@ -6,6 +6,7 @@ import { AdminApplication } from "./AdminApplication";
 import {
   AdminApiError,
   BrowserAdminApi,
+  parseMainSecretReference,
   type AdminApi,
   type ApprovalDetail,
   type DeviceSummary,
@@ -18,6 +19,9 @@ import { App } from "./App";
 import { AdminI18nProvider } from "./i18n";
 import { koreanMessages } from "./i18n/messages.ko";
 import { firstRunDevice } from "./view-model";
+
+const discordSetupRequest =
+  "I may be setting up a Discord bot for the first time. Inspect the current binding and explain how Forum posts become OpenDelegate Tasks. Give me a short roadmap, then guide me through one remaining step at a time. For the current step, tell me where to go, what to do, why it is needed, how to verify it, and what I should send back; wait for my confirmation before continuing. Define unfamiliar terms and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.";
 
 const ownerSession: OwnerSession = {
   sessionId: "session_owner_browser",
@@ -160,6 +164,32 @@ const windowsMain: DeviceSummary = {
   serviceMode: "foreground",
 };
 
+const assessedWindowsMain: DeviceSummary = {
+  ...windowsMain,
+  lastObservation: {
+    observedAtMs: 1_753_000_000_000,
+    acceptedAtMs: 1_753_000_000_000,
+    source: "local-assessment",
+  },
+  capabilities: [
+    { name: "browser-automation", verification: "detected" },
+    { name: "claude-code", verification: "degraded" },
+    { name: "codex", verification: "verified" },
+    { name: "computer-use", verification: "unavailable" },
+  ],
+  agentAdapters: [
+    {
+      provider: "codex",
+      adapterId: "codex-app-server",
+      readiness: "ready",
+      compatibility: "tested",
+      version: "0.145.0",
+      observedAtMs: 1_753_000_000_000,
+    },
+  ],
+  knowledgeHealth: "healthy",
+};
+
 const macosWorker: DeviceSummary = {
   deviceId: "device_macos_worker",
   name: "Design Mac — owner label",
@@ -209,6 +239,12 @@ const linuxWorker: DeviceSummary = {
       health: "degraded",
     },
   ],
+  wakeOnLan: {
+    targetState: "enabled",
+    automaticWakeState: "relay-required",
+    source: "linux-ethtool",
+    observedAtMs: Date.parse("2026-07-29T03:00:00.000Z"),
+  },
   capacity: {
     activeRuns: 2,
     maximumConcurrentRuns: 4,
@@ -217,7 +253,7 @@ const linuxWorker: DeviceSummary = {
   knowledgeHealth: "healthy",
 };
 
-const readyFeatures: RuntimeFeatures = {
+const discordUnconfiguredFeatures: RuntimeFeatures = {
   declaredReleaseChannel: "development",
   releaseChannel: "development",
   releaseVerification: { status: "not-applicable" },
@@ -226,9 +262,15 @@ const readyFeatures: RuntimeFeatures = {
   discord: { status: "unavailable", code: "DISCORD_NOT_CONFIGURED" },
 };
 
+const connectedFeatures: RuntimeFeatures = {
+  ...discordUnconfiguredFeatures,
+  discord: { status: "ready", code: "DISCORD_READY" },
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
   window.localStorage.clear();
+  window.sessionStorage.clear();
   document.documentElement.lang = "en";
 });
 
@@ -314,7 +356,7 @@ describe("Admin authentication and Task control", () => {
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     const artifacts = screen.getByRole("button", { name: "Artifacts" });
     const audit = screen.getByRole("button", { name: "Audit" });
-    const join = screen.getByRole("button", { name: "Join a device" });
+    const join = screen.getByRole("button", { name: "Add Device" });
     for (const control of [artifacts, audit, join]) {
       expect((control as HTMLButtonElement).disabled).toBe(false);
     }
@@ -330,14 +372,17 @@ describe("Admin authentication and Task control", () => {
     expect(await screen.findByText("DATABASE_READY")).toBeTruthy();
 
     await user.click(join);
-    expect(await screen.findByRole("heading", { level: 1, name: "Join a device" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Add a Device" })).toBeTruthy();
     expect(await screen.findByText("Secure join flow")).toBeTruthy();
   });
 
   it("routes Configuration Chat to the selected Device without translating owner content", async () => {
     const sendConfigurationMessage = vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValue("Agent-authored response stays unchanged.");
+      .mockResolvedValue({
+        content: "Agent-authored response stays unchanged.",
+        suggestedActions: [],
+      });
     const api = createApi({ sendConfigurationMessage });
     const user = userEvent.setup();
     render(<AdminApplication api={api} />);
@@ -355,6 +400,86 @@ describe("Admin authentication and Task control", () => {
     );
   });
 
+  it("starts Agent-guided Discord onboarding once when Main reports no binding", async () => {
+    const sendConfigurationMessage = vi
+      .fn<AdminApi["sendConfigurationMessage"]>()
+      .mockResolvedValue({
+        content: "Discord is not connected. I inspected the binding and can guide setup.",
+        suggestedActions: ["guide-discord"],
+      });
+    const api = createApi({
+      runtimeFeatures: vi
+        .fn<AdminApi["runtimeFeatures"]>()
+        .mockResolvedValue(discordUnconfiguredFeatures),
+      sendConfigurationMessage,
+    });
+    const user = userEvent.setup();
+    render(<AdminApplication api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
+    expect(sendConfigurationMessage).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+
+    expect(
+      await screen.findByText(
+        "Discord is not connected yet. I’m checking the current binding and preparing setup guidance.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(sendConfigurationMessage).toHaveBeenCalledWith(
+        windowsMain.deviceId,
+        discordSetupRequest,
+      ),
+    );
+    expect(
+      await screen.findByText(
+        "Discord is not connected. I inspected the binding and can guide setup.",
+      ),
+    ).toBeTruthy();
+    const agentMessages = screen.getAllByRole("article", { name: "OpenDelegate" });
+    expect(
+      within(agentMessages.at(-1)!).getByRole("button", {
+        name: "Set up or review Discord",
+      }),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(sendConfigurationMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries initial Discord guidance on the next open after an Agent failure", async () => {
+    const sendConfigurationMessage = vi
+      .fn<AdminApi["sendConfigurationMessage"]>()
+      .mockRejectedValueOnce(new Error("Configuration Agent fixture failure."))
+      .mockResolvedValueOnce({
+        content: "Discord guidance recovered on the next open.",
+        suggestedActions: ["guide-discord"],
+      });
+    const api = createApi({
+      runtimeFeatures: vi
+        .fn<AdminApi["runtimeFeatures"]>()
+        .mockResolvedValue(discordUnconfiguredFeatures),
+      sendConfigurationMessage,
+    });
+    const user = userEvent.setup();
+    render(<AdminApplication api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(
+      await screen.findByText(
+        "The local Configuration Agent was unavailable or interrupted. OpenDelegate did not replay an uncertain setup action. Completed changes remain durable; inspect the current settings, then try again.",
+      ),
+    ).toBeTruthy();
+    expect(sendConfigurationMessage).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(await screen.findByText("Discord guidance recovered on the next open.")).toBeTruthy();
+    expect(sendConfigurationMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("stores a database URI through secure ingest and sends only its reference to Configuration Chat", async () => {
     const rawDatabaseUri = "postgresql://owner:must-not-enter-chat@database.test/main";
     let observedMaterial = "";
@@ -364,19 +489,39 @@ describe("Admin authentication and Task control", () => {
         observedMaterial = new TextDecoder().decode(secret);
         return {
           schemaVersion: 1,
-          secretRef: "secret://main/database_secure_fixture",
+          secretRef: parseMainSecretReference("secret://main/database_secure_fixture"),
           availability: "ready",
         };
       });
     const sendConfigurationMessage = vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValue("The secure reference is ready for owner review.");
+      .mockResolvedValueOnce({
+        content: "The database URI is the next missing value.",
+        suggestedActions: ["ingest-database-uri"],
+      })
+      .mockResolvedValueOnce({
+        content: "The secure reference is ready for owner review.",
+        suggestedActions: [],
+      });
     const api = createApi({ ingestSecret, sendConfigurationMessage });
     const user = userEvent.setup();
     render(<AdminApplication api={api} />);
 
     expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(screen.queryByLabelText("Database URI")).toBeNull();
+    expect(screen.queryByRole("button", { name: "External PostgreSQL credential" })).toBeNull();
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "Help me configure external PostgreSQL.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(await screen.findByText("The database URI is the next missing value.")).toBeTruthy();
+    const agentMessages = screen.getAllByRole("article", { name: "OpenDelegate" });
+    const contextualAction = within(agentMessages.at(-1)!).getByRole("button", {
+      name: "External PostgreSQL credential",
+    });
+    await user.click(contextualAction);
     const input = screen.getByLabelText("Database URI") as HTMLInputElement;
     expect(input.type).toBe("password");
     await user.type(input, rawDatabaseUri);
@@ -392,11 +537,123 @@ describe("Admin authentication and Task control", () => {
       windowsMain.deviceId,
       "Use this secure database reference: secret://main/database_secure_fixture",
     );
-    expect(sendConfigurationMessage.mock.calls[0]?.[1]).not.toContain("must-not-enter-chat");
+    expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
+      1,
+      windowsMain.deviceId,
+      "Help me configure external PostgreSQL.",
+    );
+    expect(
+      sendConfigurationMessage.mock.calls.every(
+        ([, message]) => !message.includes("must-not-enter-chat"),
+      ),
+    ).toBe(true);
     expect(input.value).toBe("");
     expect(
       screen.getByText("Stored locally as secret://main/database_secure_fixture"),
     ).toBeTruthy();
+  });
+
+  it("stores a Discord bot token through secure ingest and sends only its alias reference to Configuration Chat", async () => {
+    const rawToken = "discord.bot.token.must-not-enter-chat";
+    let observedMaterial = "";
+    const ingestSecret = vi
+      .fn<AdminApi["ingestSecret"]>()
+      .mockImplementation(async (_purpose, secret) => {
+        observedMaterial = new TextDecoder().decode(secret);
+        return {
+          schemaVersion: 1,
+          secretRef: parseMainSecretReference("secret://main/discord_secure_fixture"),
+          availability: "ready",
+        };
+      });
+    const sendConfigurationMessage = vi
+      .fn<AdminApi["sendConfigurationMessage"]>()
+      .mockResolvedValueOnce({
+        content: "Discord setup is available.",
+        suggestedActions: ["guide-discord"],
+      })
+      .mockResolvedValueOnce({
+        content: "The bot token is now the next missing value.",
+        suggestedActions: ["ingest-discord-bot-token"],
+      })
+      .mockResolvedValueOnce({
+        content: "The Discord credential alias is ready for binding setup.",
+        suggestedActions: [],
+      });
+    const api = createApi({ ingestSecret, sendConfigurationMessage });
+    const user = userEvent.setup();
+    render(<AdminApplication api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(screen.queryByLabelText("Discord bot token")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Set up or review Discord" })).toBeNull();
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "Help me set up Discord.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.click(await screen.findByRole("button", { name: "Set up or review Discord" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Store the Discord token securely" }),
+    );
+    const input = screen.getByLabelText("Discord bot token") as HTMLInputElement;
+    expect(input.type).toBe("password");
+    await user.type(input, rawToken);
+    await user.click(screen.getByRole("button", { name: "Store securely" }));
+
+    expect(
+      await screen.findByText("The Discord credential alias is ready for binding setup."),
+    ).toBeTruthy();
+    expect(observedMaterial).toBe(rawToken);
+    expect(ingestSecret.mock.calls[0]?.[0]).toBe("discord-bot-token");
+    expect(ingestSecret.mock.calls[0]?.[1]?.every((byte) => byte === 0)).toBe(true);
+    expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
+      1,
+      windowsMain.deviceId,
+      "Help me set up Discord.",
+    );
+    expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
+      2,
+      windowsMain.deviceId,
+      discordSetupRequest,
+    );
+    expect(sendConfigurationMessage).toHaveBeenNthCalledWith(
+      3,
+      windowsMain.deviceId,
+      "Use this secure Discord bot token reference: secret://main/discord_secure_fixture. Its botTokenAlias is discord_secure_fixture.",
+    );
+    expect(
+      sendConfigurationMessage.mock.calls.every(([, message]) => !message.includes(rawToken)),
+    ).toBe(true);
+    expect(input.value).toBe("");
+  });
+
+  it("clears an unsubmitted secure credential when Configuration Chat closes", async () => {
+    const sendConfigurationMessage = vi
+      .fn<AdminApi["sendConfigurationMessage"]>()
+      .mockResolvedValue({
+        content: "Use secure intake for the token.",
+        suggestedActions: ["ingest-discord-bot-token"],
+      });
+    const user = userEvent.setup();
+    render(<AdminApplication api={createApi({ sendConfigurationMessage })} />);
+
+    expect(await screen.findByRole("heading", { name: "windows-main" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "I am ready to enter the Discord bot token.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Store the Discord token securely" }),
+    );
+    await user.type(screen.getByLabelText("Discord bot token"), "unsubmitted.discord.token");
+    await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
+
+    await user.click(screen.getByRole("button", { name: "Configure" }));
+    expect(screen.queryByLabelText("Discord bot token")).toBeNull();
   });
 
   it("re-renders a deterministic authentication error when the locale changes", async () => {
@@ -497,7 +754,9 @@ describe("Admin authentication and Task control", () => {
   });
 
   it("loads the authenticated Main Device without inventing capability or desktop state", async () => {
+    const assessDevice = vi.fn<AdminApi["assessDevice"]>().mockResolvedValue(assessedWindowsMain);
     const api = createApi({
+      assessDevice,
       listDevices: vi.fn<AdminApi["listDevices"]>().mockResolvedValue([windowsMain]),
     });
     const user = userEvent.setup();
@@ -520,11 +779,16 @@ describe("Admin authentication and Task control", () => {
     expect(screen.queryByText("Apple silicon")).toBeNull();
     expect(screen.queryByText("Verified")).toBeNull();
 
+    await user.click(screen.getByRole("button", { name: "Assess device" }));
+    await waitFor(() => expect(assessDevice).toHaveBeenCalledWith(windowsMain.deviceId));
+    expect(await screen.findByText("Local Agent setup")).toBeTruthy();
+    expect(screen.getByText("Verified")).toBeTruthy();
+
     await user.click(screen.getByRole("button", { name: "Configure" }));
     const chat = screen.getByRole("dialog", { name: "Configuration Chat" });
     expect(
       within(chat).getByText(
-        "I have not assessed this Device yet. Ask me to detect agent tools, browser automation, Computer Use readiness, or local Knowledge health before I propose changes.",
+        "Device assessment is current. I can now explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. Provider credentials must stay out of messages.",
       ),
     ).toBeTruthy();
     expect(
@@ -575,6 +839,9 @@ describe("Admin authentication and Task control", () => {
     expect(screen.getByText("Configured (user service)")).toBeTruthy();
     expect(screen.queryByText("Main Coordinator")).toBeNull();
     expect(screen.queryByText("Loopback")).toBeNull();
+    const wakeOnLan = screen.getByRole("region", { name: "Wake-on-LAN" });
+    expect(within(wakeOnLan).getAllByText("Not verified")).toHaveLength(2);
+    expect(within(wakeOnLan).getByText("No authenticated observation yet.")).toBeTruthy();
     expect(macosButton.getAttribute("aria-current")).toBe("page");
 
     await user.selectOptions(screen.getByLabelText("Language"), "ko");
@@ -614,6 +881,8 @@ describe("Admin authentication and Task control", () => {
     await user.click(screen.getByRole("tab", { name: "Routes" }));
     expect(screen.getByText("Omada VPN")).toBeTruthy();
     expect(screen.getByText("Degraded · Priority 1")).toBeTruthy();
+    expect(screen.getByText("Relay required")).toBeTruthy();
+    expect(screen.getByText(/Tailscale or routed IP access alone/)).toBeTruthy();
   });
 
   it.each([
@@ -757,13 +1026,14 @@ function createApi(overrides: Partial<AdminApi> = {}): AdminApi {
     beginRecovery: vi.fn<AdminApi["beginRecovery"]>(),
     completeRecovery: vi.fn<AdminApi["completeRecovery"]>(),
     listDevices: vi.fn<AdminApi["listDevices"]>().mockResolvedValue([windowsMain]),
-    runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue(readyFeatures),
+    assessDevice: vi.fn<AdminApi["assessDevice"]>().mockResolvedValue(windowsMain),
+    runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue(connectedFeatures),
     sendConfigurationMessage: vi
       .fn<AdminApi["sendConfigurationMessage"]>()
-      .mockResolvedValue("Configuration response."),
+      .mockResolvedValue({ content: "Configuration response.", suggestedActions: [] }),
     ingestSecret: vi.fn<AdminApi["ingestSecret"]>().mockResolvedValue({
       schemaVersion: 1,
-      secretRef: "secret://main/database_fixture",
+      secretRef: parseMainSecretReference("secret://main/database_fixture"),
       availability: "ready",
     }),
     listTasks: vi.fn<AdminApi["listTasks"]>().mockResolvedValue([runningTask]),

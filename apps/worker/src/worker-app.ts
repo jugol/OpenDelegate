@@ -31,6 +31,7 @@ import {
   type AgentActionAuthorizationPort,
   type AgentAdapter,
   type AgentAdapterProbe,
+  type AgentModelCatalog,
   type AgentPermissionInput,
   type SessionLeaseStore,
 } from "@opendelegate/agent-adapters";
@@ -120,6 +121,7 @@ import {
 import { createWorkerPlatformMutationSafetyBoundary } from "./platform-mutation-safety-boundary.ts";
 import { createPinnedWindowsNpmProcessRunner } from "./windows-npm-process-runner.ts";
 import { createConfiguredSystemPackageVerifier } from "./configured-system-package-verifier.ts";
+import { SystemWakeOnLanProbe } from "./wake-on-lan-probe.ts";
 
 const CONFIG_SCHEMA_VERSION = 1;
 const CONFIG_FILE_NAME = "worker.json";
@@ -766,6 +768,9 @@ export async function createWorkerRuntime(
         return {
           provider: adapter.provider,
           adapterId: adapter.adapterId,
+          ...(assignment.agentRequirement?.modelId === undefined
+            ? {}
+            : { modelId: assignment.agentRequirement.modelId }),
           workstreamId: assignment.workOrder.workOrderId,
           prompt: renderWorkOrderPrompt(assignment),
           sandbox: resolveWorkerAgentSandbox({
@@ -816,6 +821,7 @@ export async function createWorkerRuntime(
     inventoryProvider: createWorkerSchedulingInventoryProvider({
       adapters,
       ...(computerUse === undefined ? {} : { computerUseProbe: computerUse.probe }),
+      wakeOnLanProbe: new SystemWakeOnLanProbe(),
       ...(computerUse === undefined
         ? {}
         : { resourceLockProjection: computerUse.resourceLockProjection }),
@@ -2058,9 +2064,16 @@ export function createWorkerAgentAdapters(
   ]);
 }
 
+interface WorkerWakeOnLanCapabilityProbe {
+  probe():
+    | NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]>
+    | Promise<NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]>>;
+}
+
 export function createWorkerSchedulingInventoryProvider(input: {
   readonly adapters: readonly AgentAdapter[];
   readonly computerUseProbe?: WorkerComputerUseCapabilityProbe;
+  readonly wakeOnLanProbe?: WorkerWakeOnLanCapabilityProbe;
   readonly hardwareFactsProvider?: {
     snapshot(
       observedAtMs: number,
@@ -2084,7 +2097,9 @@ export function createWorkerSchedulingInventoryProvider(input: {
         readonly expiresAt: number;
         readonly observedAtMs: number;
         readonly probes: readonly AgentAdapterProbe[];
+        readonly modelCatalogs: ReadonlyMap<string, AgentModelCatalog>;
         readonly failedAdapters: readonly Pick<AgentAdapter, "adapterId" | "provider">[];
+        readonly wakeOnLan?: NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]>;
       }
     | undefined;
 
@@ -2108,11 +2123,41 @@ export function createWorkerSchedulingInventoryProvider(input: {
             failedAdapters.push({ adapterId: adapter.adapterId, provider: adapter.provider });
           }
         });
+        const catalogOutcomes = await Promise.allSettled(
+          input.adapters.map(async (adapter): Promise<AgentModelCatalog | undefined> => {
+            const probe = probes.find(
+              (candidate) =>
+                candidate.provider === adapter.provider &&
+                candidate.adapterId === adapter.adapterId,
+            );
+            if (
+              probe === undefined ||
+              adapter.listModels === undefined ||
+              adapterReadiness(probe) !== "ready"
+            ) {
+              return undefined;
+            }
+            return await adapter.listModels();
+          }),
+        );
+        const modelCatalogs = new Map<string, AgentModelCatalog>();
+        catalogOutcomes.forEach((outcome, index) => {
+          if (outcome.status === "fulfilled" && outcome.value !== undefined) {
+            const adapter = input.adapters[index]!;
+            modelCatalogs.set(
+              agentAdapterIdentity(adapter.provider, adapter.adapterId),
+              outcome.value,
+            );
+          }
+        });
+        const wakeOnLan = await probeWakeOnLanCapability(input.wakeOnLanProbe, now);
         cached = Object.freeze({
           expiresAt: now + probeCacheMs,
           observedAtMs: now,
           probes: Object.freeze(probes),
+          modelCatalogs,
           failedAdapters: Object.freeze(failedAdapters),
+          ...(wakeOnLan === undefined ? {} : { wakeOnLan: Object.freeze({ ...wakeOnLan }) }),
         });
       }
       const workspaces = (await input.workspaceRegistry.listSchedulingMetadata()).filter(
@@ -2163,16 +2208,36 @@ export function createWorkerSchedulingInventoryProvider(input: {
         .sort(([left], [right]) => left.localeCompare(right, "en"))
         .map(([, capability]) => Object.freeze(capability));
       const agentAdapters = [
-        ...cached.probes.map((probe) =>
-          Object.freeze({
+        ...cached.probes.map((probe) => {
+          const catalog = cached!.modelCatalogs.get(
+            agentAdapterIdentity(probe.provider, probe.adapterId),
+          );
+          return Object.freeze({
             provider: schedulingProvider(probe.provider),
             adapterId: probe.adapterId,
             readiness: adapterReadiness(probe),
             compatibility: probe.compatibility,
             ...(probe.version === undefined ? {} : { version: probe.version }),
             observedAtMs: cached!.observedAtMs,
-          }),
-        ),
+            ...(catalog === undefined
+              ? {}
+              : {
+                  modelCatalogObservedAtMs: Date.parse(catalog.observedAt),
+                  models: Object.freeze(
+                    catalog.models.map((model) =>
+                      Object.freeze({
+                        modelId: model.modelId,
+                        displayName: model.displayName,
+                        ...(model.isDefault === undefined ? {} : { isDefault: model.isDefault }),
+                        ...(model.supportedEfforts === undefined
+                          ? {}
+                          : { supportedEfforts: Object.freeze([...model.supportedEfforts]) }),
+                      }),
+                    ),
+                  ),
+                }),
+          });
+        }),
         ...cached.failedAdapters.map((adapter) =>
           Object.freeze({
             provider: schedulingProvider(adapter.provider),
@@ -2202,6 +2267,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
         architecture: arch(),
         serviceMode: workerServiceMode(input.environment),
         hardware,
+        ...(cached.wakeOnLan === undefined ? {} : { wakeOnLan: cached.wakeOnLan }),
         // The provider is only composed after LocalKnowledgeService.rebuild()
         // succeeds. No Knowledge graph metadata leaves this Device.
         knowledgeHealth: "healthy",
@@ -2216,6 +2282,39 @@ export function createWorkerSchedulingInventoryProvider(input: {
       });
     },
   });
+}
+
+async function probeWakeOnLanCapability(
+  probe: WorkerWakeOnLanCapabilityProbe | undefined,
+  observedAtMs: number,
+): Promise<NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]> | undefined> {
+  if (probe === undefined) {
+    return undefined;
+  }
+  try {
+    const observation = await probe.probe();
+    if (
+      !["enabled", "disabled", "unsupported", "unknown"].includes(observation.state) ||
+      !["windows-netadapter-power", "macos-pmset", "linux-ethtool", "probe-unavailable"].includes(
+        observation.source,
+      ) ||
+      (observation.source === "probe-unavailable" && observation.state !== "unknown") ||
+      !Number.isSafeInteger(observation.observedAtMs) ||
+      observation.observedAtMs < 0 ||
+      observation.observedAtMs > 8_640_000_000_000_000
+    ) {
+      throw new TypeError("Wake-on-LAN probe returned invalid evidence.");
+    }
+    return Object.freeze({ ...observation });
+  } catch {
+    // Optional inventory evidence must never prevent an otherwise healthy
+    // Worker heartbeat from reaching Main.
+    return Object.freeze({
+      state: "unknown",
+      source: "probe-unavailable",
+      observedAtMs,
+    });
+  }
 }
 
 function localHardwareFacts(
@@ -2318,6 +2417,10 @@ function schedulingProvider(
   provider: AgentAdapter["provider"],
 ): NonNullable<WorkerSchedulingInventoryV1["agentAdapters"]>[number]["provider"] {
   return provider === "generic" ? "generic-command" : provider;
+}
+
+function agentAdapterIdentity(provider: AgentAdapter["provider"], adapterId: string): string {
+  return `${provider}\0${adapterId}`;
 }
 
 function adapterReadiness(
@@ -2444,6 +2547,20 @@ export async function selectAgentAdapter(
         : allowedCompatibilities.has(probe.compatibility) &&
           (probe.compatibility === "tested" || configuration.allowUntestedVersion))
     ) {
+      if (requirement?.modelId !== undefined) {
+        if (adapter.listModels === undefined) {
+          continue;
+        }
+        let catalog;
+        try {
+          catalog = await adapter.listModels();
+        } catch {
+          continue;
+        }
+        if (!catalog.models.some((model) => model.modelId === requirement.modelId)) {
+          continue;
+        }
+      }
       return Object.freeze({ adapter, probe });
     }
   }
@@ -2467,6 +2584,15 @@ function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
     ...(order.constraints.length === 0
       ? []
       : ["", "## Constraints", ...order.constraints.map((item) => `- ${item}`)]),
+    ...(assignment.agentRequirement === undefined
+      ? []
+      : [
+          "",
+          "## Effective Agent binding",
+          `- Provider: ${assignment.agentRequirement.provider}`,
+          `- Adapter: ${assignment.agentRequirement.adapterId ?? "provider default"}`,
+          `- Model: ${assignment.agentRequirement.modelId ?? "adapter default"}`,
+        ]),
     "",
     `Task ID: ${assignment.taskId}`,
     `Work Order ID: ${order.workOrderId}`,

@@ -428,7 +428,8 @@ unrelated Tasks or surrendering orchestration and permission enforcement to a
 vendor UI.
 
 **Consequence:** Provider compatibility is version-pinned and fail-closed.
-OpenDelegate-owned provider homes and strict settings isolation are part of setup.
+OpenDelegate-owned provider homes and strict settings isolation are the default;
+an explicitly selected external Codex home follows D-049.
 Native Windows Claude SDK execution is not advertised until its required sandbox is
 enforceable; Codex, WSL2, or a configured container is used instead.
 
@@ -523,6 +524,12 @@ compatible or untested versions is explicit in the assignment and remains subjec
 to stricter Device policy. A successful provider-bound Run without a matching safe
 session observation is invalid.
 
+**Amendment (2026-07-29):** D-067 refines the assignment shape without mutating the
+Work Order. Main preserves the Work Order's original hard Agent requirement inside
+the assignment and records a separate exact effective binding that satisfies and may
+narrow it. Device-level `Auto` applies only when that original requirement is absent;
+retry and restart preserve both values.
+
 ## D-047 — Immutable candidates and externally trusted release promotion
 
 **Decision:** Platform-native code signing occurs before candidate integrity
@@ -558,3 +565,671 @@ Discord and provider credentials, notarization, and live proof remain external
 release blockers until their exact evidence is recorded. Configured release policy
 can revoke observer identities independently of publisher and promotion keys,
 platform identities, and promotion or receipt statement IDs.
+
+## D-048 — Live Discord binding replacement under owner Approval
+
+**Decision:** Discord binding is a nullable, Main-scoped Configuration value named
+`discord.binding`. It contains only the bot-token alias and the complete non-secret
+Forum binding; the credential remains in Main's managed Secret Store. After
+bootstrap, durable Configuration is authoritative and the owner may add, extend,
+replace, or disable the binding through Configuration Chat and the normal protected
+Approval flow without re-running `init`.
+
+Main owns exactly one serialized Discord Gateway lifecycle. Before committing an
+approved change, it validates the candidate value, verifies that its credential
+alias carries an explicit Discord-bot-token capability and is currently available,
+and composes the candidate runtime. It then closes the previous Gateway, activates
+the candidate, and commits the matching durable Configuration while holding the
+lifecycle lock. A new candidate must complete `start()` and still report Discord
+`READY` within a bounded activation window; a stale ready observation or merely
+entering a starting or reconnecting state is not enough. Candidate activation or
+Configuration commit failure restores the previous binding. A disabled binding is
+represented by explicit `null`, never an unset key or a second runtime mode.
+Initial durable Configuration always records an explicit binding or `null`, so
+the first-init alias capability is recorded once in the durable secure-ingest
+ledger and later bootstrap-file edits cannot authorize another alias or bypass
+Approval. The activation bound covers capability lookup, runtime composition,
+`start()`, and current `READY`; a runtime factory that resolves after cancellation
+must be closed before shutdown can report success. Main rechecks `READY` after the
+durable apply and before finalizing the prepared lifecycle transition; losing it
+causes durable compensation and runtime rollback. Authoritative startup and
+rollback retain a retry runtime through temporary Discord or Secret Store
+unavailability, while shutdown or singleton-ownership loss cancels startup,
+restoration, and queued replacement work before control-plane drain. Aborted
+prepared transitions release their lifecycle lock and reject any late commit.
+Discord binding Approvals are high-risk Main-targeted actions.
+
+**Rationale:** Treating Discord as first-init-only makes an ordinary token, bot,
+Guild, or Forum change require reinitializing the fixed Main Device. Starting old
+and new Gateways concurrently risks duplicate ingestion, while committing the new
+binding before it can run can strand the owner without the primary Task surface.
+
+**Consequence:** Existing Tasks, event history, Work Orders, and provider-native
+sessions survive a binding change because Main remains authoritative. External
+Discord thread identifiers are not silently migrated across Forums; new posts
+create new Tasks under the new binding. Failed candidates leave the prior
+credential and binding available for rollback, and Configuration Chat never
+receives or persists the raw bot token.
+
+## D-049 — Explicit shared Codex home
+
+**Decision:** Main and Worker use Device-local, OpenDelegate-managed provider homes
+by default. An owner may instead supply an existing absolute local Codex home with
+`--codex-home`. OpenDelegate persists that exact path as non-secret configuration,
+passes it as `CODEX_HOME`, and never discovers, copies, or silently inherits a
+global home.
+
+Codex does not expose a separate authentication-home selector. Selecting an
+external home therefore shares its authentication, settings, plugins, caches, and
+provider-native session storage with other local Codex consumers. OpenDelegate
+still keys every Task workstream to its own native session and remains authoritative
+for Task state, permissions, leases, and lifecycle.
+
+**Rationale:** A personal Device may already maintain one intentional Codex source
+of truth for services such as an Agent gateway. Requiring another interactive login
+creates independent refresh state and avoidable credential drift. Implicit ambient
+inheritance would be surprising and would silently import provider behavior, so
+sharing must be explicit and durable.
+
+**Consequence:** The external home becomes trusted Device configuration and must be
+an owner-restricted local directory outside the source checkout. Logging out,
+rotating authentication, or changing Codex configuration affects every local
+consumer of that home. Owners who want stronger settings and session isolation keep
+the default managed home. Claude remains managed unless an existing explicit
+Worker configuration selects an external Claude home.
+
+## D-050 — Ten-character owner passphrase floor
+
+**Decision:** Initial owner claim, normal Admin login, and recovery accept an owner
+passphrase containing at least 10 Unicode code points, including at least one
+non-whitespace code point, and at most 1024 UTF-8 bytes. The auth module is the
+authoritative validator; user-facing forms do not substitute UTF-16 browser length
+rules for that boundary.
+
+**Rationale:** OpenDelegate is a personal local-first system, and the Owner chose a
+more accommodating minimum while retaining Argon2id hashing, rate limiting, local
+claim, independent recovery codes, and the option to use a longer generated
+passphrase.
+
+**Consequence:** A non-blank 10-code-point passphrase is valid for claim, login, and
+recovery; nine or fewer code points fail before password hashing.
+
+## D-051 — Deterministic local Device assessment before configuration advice
+
+**Decision:** Admin Web exposes an authenticated, on-demand assessment for the fixed
+Main Device. Main probes both supported local Agent Adapters, browser automation,
+Computer Use readiness, and local Knowledge health without invoking an LLM. The
+bounded result is stored as an attributable, idempotency-bound event in Main's
+existing event store and is restored across restart. It does not masquerade as a
+Worker heartbeat or replace Worker runtime/load state. Configuration Chat receives
+a non-secret projection of that observation as authoritative context, but has no
+assessment tool and must not claim that it ran the probes.
+
+Worker capability assessment continues through the authenticated Worker heartbeat;
+Main does not pretend that a local button can execute arbitrary probes on a remote
+Worker. Provider authentication remains Device-local. Admin guidance names the
+selected-init-provider boundary, explicit shared Codex and Claude home options,
+their managed-profile alternatives, and the prohibition on pasting provider
+credentials into chat.
+
+**Rationale:** Asking an LLM to guess installed tools wastes context and can produce
+false capability claims. The previous unassessed chat copy also implied an action
+the Configuration Agent could not perform. A deterministic probe is cheaper,
+durable, and auditable, while the Agent remains useful for explaining the result
+and proposing Roles or Instructions.
+
+**Consequence:** The local Main assessment is explicit and refreshable; failed probes
+do not erase the last durable observation. Browser automation and Computer Use
+remain unavailable until an authenticated Worker observation or an equally strong
+explicit probe proves them. No Knowledge content, credential, provider output, or
+local path enters Main metadata or Configuration Chat.
+
+## D-052 — Explicit shared Claude home
+
+**Decision:** Main may receive an existing absolute local Claude configuration
+directory through `--claude-home`. OpenDelegate persists only that path, supplies it
+as `CLAUDE_CONFIG_DIR`, and uses it for both the Claude Adapter and deterministic
+Device assessment. It never copies, links, discovers, or stores Claude credentials.
+The shared Claude home may be configured while Codex remains the selected Main
+Agent so that both installed Adapters are assessed accurately.
+
+If `claude auth status --json` is not ready in that exact directory, setup instructs
+the Owner to run `claude auth login` with the same `CLAUDE_CONFIG_DIR` and reassess.
+The default remains the Device-local managed home when no explicit path is supplied.
+
+**Rationale:** A personal NAS may intentionally maintain one Claude authentication
+source of truth. Probing an unrelated managed home incorrectly reports a healthy
+local Claude installation as degraded and creates unnecessary duplicate login
+state.
+
+**Consequence:** Authentication rotation, logout, settings, hooks, plugins, caches,
+and provider-native sessions in that external directory are shared with its other
+local consumers. The directory must be owner-restricted and outside the source
+checkout. OpenDelegate still owns Task isolation, policy, session leases, and
+orchestration state.
+
+## D-053 — Non-disruptive bundle verification and supervisor-owned activation
+
+**Decision:** Bundle assembly and bundle activation are separate operations.
+Packaged smoke must use temporary state and an isolated dynamically selected
+adjacent loopback listener pair, with bounded fresh-pair retry if another local
+process claims the pair during startup handoff. It must not claim the configured
+Main listener, stop or restart an installed Main, edit its service definition, or
+change its active release pointer.
+
+An assembled bundle becomes active only through an explicit foreground launch or
+the native service lifecycle. Persistent installations use journaled
+`service install` or `service upgrade` with the exact active version, a
+caller-stable command ID, bounded health verification, and rollback. A transient
+supervisor invocation is a validation wrapper, not an installed service; stopping
+it may remove the supervisor registration as well as the process.
+
+**Rationale:** Release construction must be safe on the fixed Main Device while it
+is serving Admin, Worker, and orchestration traffic. Fixed smoke ports previously
+forced an operator to stop Main, and a transient systemd unit then disappeared
+when stopped. Conflating construction, process supervision, and activation turns a
+recoverable validation step into an avoidable outage.
+
+**Consequence:** A release build must coexist with an already occupied default Main
+and claim-listener pair. Build failure leaves the installed version and supervisor
+untouched. Agents must inspect the existing lifecycle before activation, use the
+packaged structured CLI rather than interpolated remote shell mutations, and
+describe foreground or transient preview runs as non-persistent validation only.
+
+## D-054 — Contextual guided setup before secure credential intake
+
+**Decision:** Configuration Chat does not render a generic credential chooser or a
+database URI field when it opens. On the fixed Main Device it first presents explicit
+guided setup goals. Embedded SQLite is described as the already-active default that
+needs no URI. External PostgreSQL is an owner-selected advanced path, and its secure
+URI form appears only after that selection.
+
+The Discord goal asks the Configuration Agent to inspect the current binding before
+guiding the owner through the Discord Developer Portal, bot, Community Server,
+Forum, intents, permissions, and missing non-secret identifiers. The raw bot token
+is accepted only by Main's secure intake form. The Agent then uses the existing typed
+configuration proposal, protected Approval, live activation validation, and rollback
+flow. Browser-only Discord actions remain explicit owner actions. The guide assumes
+no previous bot setup experience, explains the Forum-post-to-Task result and Discord
+terms before raw fields, and covers only missing stages, including installation into
+the selected server and Forum-access verification. It presents a brief roadmap, then
+names where to go, what to do, why it is needed, how to verify completion, and what
+non-secret value to return only for the current stage. It waits for owner confirmation
+before advancing and keeps one clear next action visible.
+
+**Rationale:** An unsolicited `Database URI` password field made the embedded
+database look incomplete and separated credentials from the reason they were
+needed. A generic secret form also failed to teach the owner which Discord-side
+dependencies precede a token or which steps OpenDelegate can complete itself.
+
+**Consequence:** Worker-specific Configuration Chats never offer Main-service
+credentials. Selecting a goal may create an ordinary, localized owner message in
+that Device's dedicated configuration session, but secret material still bypasses
+the transcript and only an opaque reference reaches the Agent. Storing a PostgreSQL
+URI or proposing database configuration does not claim to migrate the live database;
+the supported backup/restore and service reconfiguration path remains required.
+
+## D-055 — Agent-returned setup actions belong to their conversation message
+
+**Decision:** D-054's fixed guided-goal surface is superseded. Configuration Chat
+does not render a persistent setup menu below the transcript. A Configuration Agent
+final response may attach up to four unique actions from a closed protocol allowlist:
+guide Discord, guide external PostgreSQL, ingest a Discord bot token securely, or
+ingest a database URI securely. Admin Web renders those actions inside the exact
+Agent message that returned them.
+
+Guide actions create an ordinary localized owner message in the same Device
+configuration session. A secure-ingest action reveals its form inline only after the
+Agent has explained why that credential is the next missing value. The resulting raw
+Secret still bypasses the transcript, SQL, and Agent context; only its opaque managed
+reference continues through the conversation. Suggested actions are presentation
+metadata, not executable configuration, mutation evidence, or durable receipts.
+
+**Rationale:** A fixed setup panel looked like disconnected application chrome and
+made options appear before the Agent had assessed the owner's intent or current
+state. Returning a narrow UI suggestion with the Agent's response preserves
+conversational context without allowing arbitrary Agent-authored components, URLs,
+commands, or actions.
+
+**Consequence:** Existing persisted Configuration Agent responses without
+suggestions remain valid. Unknown, duplicate, or excessive actions fail closed at
+the protocol and browser boundaries. Main-service actions are never offered in a
+Worker Configuration Chat. Discord prerequisites, SQLite-as-default guidance,
+protected Approval, live activation validation, and rollback retain the behavior
+defined by D-054.
+
+## D-056 — First-time Discord guidance starts from exact runtime state
+
+**Decision:** When Main's public runtime feature reports the exact
+`DISCORD_NOT_CONFIGURED` code and the Configuration Agent is ready, the first opening
+of the Main Device's Configuration Chat in a browser session automatically submits
+the localized Discord guided-setup request to that Device's existing configuration
+session. The transcript first shows a deterministic Agent-status message explaining
+that OpenDelegate is inspecting the current binding. The actual guidance and any
+typed action suggestions are returned by the Configuration Agent and rendered inside
+its response as required by D-055.
+
+The browser records a successful onboarding turn in session storage, scoped to the
+Main Device, so closing, reopening, or reloading the same browser session does not
+spend another Agent turn. A failed turn is not recorded as complete. This marker is
+presentation state only; Main's runtime code remains authoritative.
+
+**Rationale:** A new owner should not need to guess the first prompt or already know
+that Discord Forum is the intended Task inbox. Triggering from an exact deterministic
+runtime state provides discoverability without restoring a permanent setup menu or
+asking an LLM to infer whether Discord is configured.
+
+**Consequence:** A configured Discord runtime that is starting, reconnecting,
+degraded, stopped, or unavailable never receives first-time onboarding merely because
+its status is not ready. Workers never initiate this Main-service flow. Raw tokens
+still enter only through secure intake after the Agent identifies them as the next
+missing value.
+
+## D-057 — Readable Configuration Agent responses and transient unread state
+
+**Decision:** Configuration Chat preserves Agent-authored paragraph boundaries and
+converts line-oriented numbered or bulleted steps into semantic lists. It does not
+interpret arbitrary HTML or provide a general Agent-authored component surface.
+The active Device conversation remains mounted while the owner navigates between
+Admin sections so an in-flight response is not discarded merely because its drawer
+closed.
+
+When an Agent response or bounded system failure arrives while Configuration Chat is
+closed or the Admin page is hidden, Admin Web records a transient unread count. The
+closed launcher exposes that state through a numeric badge, a localized visible
+summary, and an accessible live status. Opening the chat marks the count read; a
+visible open chat is already the notification surface. Unread state is browser
+presentation state, not durable configuration or orchestration state.
+
+While a native Configuration Agent turn is pending, the transcript renders a
+localized Agent activity message in the same visual position where the response will
+arrive. Animated dots supplement visible text and respect reduced-motion policy.
+Secret intake does not claim that the Agent is responding until secure storage has
+completed and the follow-up Agent turn actually begins.
+
+**Rationale:** Collapsing line breaks turns a detailed onboarding response into one
+dense paragraph. A long native Agent turn can also finish after the owner closes the
+drawer or moves to another Admin section, where a silent launcher gives no indication
+that guidance is ready.
+
+**Consequence:** Agent content remains plain, safely escaped React text while gaining
+paragraph and list structure. Unread presentation never creates a Task event, sends
+an external notification, or changes Agent session semantics. Switching or reloading
+Devices may reset this transient indicator. Completed Device-scoped conversation
+history is durable Main state and is independent from the transient unread count.
+
+## D-058 — Configuration continuation before tool execution
+
+**Decision:** If the initial native resume for one Configuration Agent request fails
+with the public unavailable condition before any typed configuration tool for that
+request has executed, Main retries that same complete current prompt by starting a
+fresh native session. The new native reference is appended to the existing
+Device-scoped configuration-session lineage. Main does not perform this automatic
+continuation after the request has reached a typed tool. Before executing the first
+typed tool, Main writes a durable request-bound attempt marker. If that request has no
+final response after interruption, later replay fails closed, including after Main
+restart. Configuration Chat is not a Task, so FR-9's Task Brief and Work Order
+checkpoint package does not apply; the recovered Agent discloses that chat-only
+or interrupted in-flight context may be missing, receives a bounded excerpt of
+completed durable Device-scoped exchanges, re-inspects durable configuration, and
+re-confirms any required value or choice absent from that excerpt before proposing a
+change.
+
+**Rationale:** A provider process can be interrupted while its native thread still
+appears resumable but refuses the next turn. Failing every later Configuration Chat
+message leaves deterministic configuration intact but makes recovery impossible.
+Before the first tool request, replaying the current prompt cannot duplicate a
+configuration mutation; after a tool request, that guarantee no longer holds. The
+durable boundary prevents a process restart from accidentally resetting this safety
+decision.
+
+**Consequence:** The owner may lose detail held only in the unavailable provider
+session or an interrupted unfinished turn. Completed visible exchanges survive Main
+restart, restore in Admin Web, and enter a bounded recovery excerpt alongside the
+complete current owner request, current Device observation, configuration protocol,
+and safety rules. Durable configuration and receipts remain authoritative. A failure
+after the durable tool boundary stays failed and requires a new owner request after
+inspecting current configuration; the interrupted request itself is never replayed.
+
+## D-059 — Outcome-oriented orchestration and bounded Owner Handoff
+
+**Decision:** OpenDelegate accepts Tasks as desired outcomes, not placement plans.
+Main infers capability and operating-system requirements, decomposes work across
+heterogeneous Devices when useful, and delegates actual Device and route selection to
+deterministic eligibility and scheduling. Main does not ask the owner to choose a
+Device, OS, Transport Profile, Agent provider, or multi-Device split unless that
+choice changes the intended outcome or cannot be derived from durable owner
+configuration. Actual assignments remain visible in Admin Web and audit.
+
+Results may be returned as Discord-native text or attachments, files, Artifacts,
+hosted views, or Git references, but every completion claim remains grounded in an
+authoritative Worker report. If login, MFA, CAPTCHA, legal confirmation, OS
+permission, or another irreducibly human step blocks work, the current Task enters
+`waiting_user` and may expose one Main-mediated Owner Handoff. A handoff uses an
+isolated interactive Artifact or configured remote-session gateway, follows an
+explicit exposure policy, is time-bounded, revocable, and audited, and contains no
+credential or raw Worker VNC/browser-debug endpoint in Discord or Agent context.
+After the owner returns control in the same Task, OpenDelegate resumes durable
+execution and the existing native-session lineage where possible.
+
+**Rationale:** The product's value is freedom from physical placement, not a prettier
+way to remote-control several computers. Requiring the owner to plan Windows,
+macOS, Linux, provider, or network handoffs would merely move orchestration into
+Discord. Some identity, consent, legal, and operating-system boundaries still require
+a person; making that pause explicit preserves security while keeping the Task
+continuous.
+
+**Consequence:** Device placement is observable output rather than routine user
+input. A fixed Main must still remain online; this decision does not add Main
+failover. The existing isolated interactive Artifact path is the first handoff
+surface. A VNC-like or browser-session gateway is an adapter behind Main and is not
+claimed as implemented until its expiry, revocation, audit, secret-isolation, and
+cross-network acceptance evidence passes. ADR-0023 defines the explicit Task record,
+trust, return, and gateway extension boundary; interactive presentation alone is not
+a Handoff.
+
+## D-060 — Placement questions are semantic, not lexically forbidden
+
+**Decision:** Device placement remains an internal orchestration choice by default,
+but Main may ask when placement changes privacy, data locality, cost, physical or
+interactive access, licensed-software availability, where a result may remain, or
+another owner-visible outcome that durable configuration cannot decide. Result
+validation enforces the shape and bound of one owner question; it does not reject
+sentences merely because they mention a Device, OS, or Worker.
+
+**Rationale:** A multilingual word-pattern filter cannot distinguish orchestration
+avoidance from a legitimate outcome choice. Prompt policy and durable owner
+preferences carry that semantic rule more accurately than a lexical parser.
+
+**Consequence:** Routine scheduling stays invisible to the owner, while a legitimate
+placement-dependent decision is not accidentally suppressed. Audit and Agent
+evaluation should flag repeated unnecessary placement questions as a quality issue,
+not misclassify them as a malformed protocol response.
+
+## D-061 — Configuration Approval execution and conversation recovery are deterministic
+
+**Decision:** Completed Configuration Chat exchanges are durable, Device-and-Adapter-
+scoped Main events and are restored independently of the provider-native session.
+Applying a
+protected proposal uses one durable Approval request identity derived from the target
+Device plus immutable proposal ID, while each chat tool execution keeps its
+request-bound replay identity. Owner approval executes the exact protected operation
+immediately; a follow-up chat request for the same proposal observes the existing
+Approval instead of requesting another one.
+
+**Rationale:** Provider sessions can disappear across process failure, while chat
+message idempotency keys necessarily change for each owner message. Basing protected
+operation identity on the chat turn caused “approval complete” follow-ups to create
+an endless sequence of new Approval IDs even though every one described the same
+proposal.
+
+**Consequence:** Main can recover completed conversational context without replaying
+provider-hidden work, and one target Device plus immutable proposal has one Approval
+record even when later chat messages use new tool operation IDs. The Agent inspects
+durable configuration after approval. An Approval whose execution failed remains
+visible as failed and is diagnosed; it is not silently replaced with a fresh Approval
+or confused with a compensated historical receipt.
+
+## D-062 — Proactive signals enter the ordinary Task path
+
+**Decision:** A proactive category inherits its profile or explicitly selects
+disabled, propose, or execute. A bounded monitor or system-incident signal under
+propose creates one idempotent manual-review Task; execute creates one idempotent auto
+Task. Existing Task coordination processes it. When Discord is ready, Main creates
+one bot-authored post in the first configured Forum, durably binds it to the Task, and
+uses the normal Forum projection thereafter. An uncertain Forum-create result is
+reconciled from deterministic Task markers across active and archived posts before
+retry.
+
+FR-4's bounded, tool-denied, Task-independent diagnostic Agent remains an explicit
+read-only exception after deterministic transport recovery is exhausted. Its result
+may be the system-incident signal for an ordinary recovery Task; it cannot perform
+the repair outside that Task.
+
+**Rationale:** A direct monitor-to-Agent repair path would create hidden mutation with
+different authorization and accounting. Treating remedial work as an ordinary Task
+preserves the same observable unit the owner already understands. An internally
+originated Task also needs an outbound Forum binding because Discord can project only
+Tasks already associated with a thread.
+
+**Consequence:** Deterministic monitoring spends no continuous LLM context and
+remedial work never bypasses Policy, approvals, budgets, locks, audit, Secret
+boundaries, or Task session isolation. The narrow FR-4 diagnostic may spend one
+bounded read-only Agent turn before Task origin. Discord automatically presents
+originated work when a Forum binding is ready; Admin remains authoritative when
+Discord is unavailable. The first configured Forum is the deterministic default
+until explicit category routing is added.
+
+## D-063 — Accepted Configuration messages survive an in-flight reload
+
+**Decision:** Main records an owner Configuration Chat message as a durable,
+Device-and-Adapter-scoped event before it starts or resumes the corresponding native
+Agent turn. The eventual Agent response is a separate terminal event correlated by
+the immutable request operation key. Conversation projection supports both these
+events and the legacy completed-exchange event without duplicating messages.
+
+While the original Main process still owns the request, the history projection marks
+the accepted owner message as pending. Admin Web restores it after reload, renders
+the ordinary Agent activity state, and polls the bounded history endpoint until the
+terminal response appears. An accepted message with no terminal response and no live
+request owner is rendered as interrupted rather than remaining pending forever.
+
+**Rationale:** Persisting the owner message only after a potentially long Agent turn
+made a reload look like data loss. The message disappeared until the Agent completed,
+and a failed or interrupted turn could erase the only visible copy entirely.
+Optimistic browser state is not an acceptable durability boundary.
+
+**Consequence:** A browser disconnect cannot erase an accepted message. Agent failure
+does not remove the owner's context, and a later recovery can include that visible
+owner message without treating an unfinished response as a verified completion.
+Secrets remain subject to pre-acceptance rejection and secure intake, and the first
+typed-tool marker remains the mutation replay boundary defined by D-058.
+
+## D-064 — Discord workflow state is bot-owned and current feedback is chronological
+
+**Decision:** An owner-created post in an approved Discord Forum starts exactly one
+Task without an owner-applied Intake tag. Workflow tags are bot-owned projections.
+Discord may omit `applied_tags` entirely for a thread with no tags; the wire boundary
+normalizes only that absent field to an empty tag set while continuing to reject
+null, malformed, oversized, or non-Snowflake tag data.
+Discord REST message responses may likewise omit their otherwise-known `guild_id`.
+The HTTP port supplies its configured Guild ID only when that field is absent and
+rejects any present mismatched or malformed Guild ID; Gateway messages remain
+self-identifying.
+When Gateway events arrive before a new thread or starter message is readable over
+Discord HTTP, the Adapter does not advance its durable or in-connection processed
+cursor. Gateway Resume replays the dispatch under bounded reconnect backoff, while
+the ordinary reconnect reconciliation path provides a second idempotent recovery
+surface.
+
+Each accepted owner message enqueues one idempotent ordinary working acknowledgement
+near the latest conversation position with applicable Task controls. A failure
+update preserves its owner-safe concrete cause or exhausted resource and places the
+Retry control on that chronological failure message. The stable starter status panel
+remains a compact dashboard, but it is not the sole actionable surface. Interactions
+from these chronological messages are accepted only when the authoritative Discord
+interaction payload identifies the configured bot as the source message author.
+
+**Rationale:** Requiring a manually applied Intake tag inverted the projection model
+and made a valid post appear inert. Editing only the starter panel hid activity and
+recovery controls above long conversations. Replacing concrete scheduling or
+executor evidence with a generic attention sentence made failures impossible to
+diagnose. Restricting interactions to one stored panel message prevented safe
+controls on later bot-authored updates.
+
+**Consequence:** Normal Forum use requires no tag knowledge. Transient Discord
+resource-visibility races recover without a continuous full reconciliation scan.
+Owners receive one durable acknowledgement per accepted message rather than
+heartbeat spam, and actionable failures stay next to their explanation. Forged
+controls on owner or webhook messages remain inert, while controls on any message
+authored by the configured bot can use the existing idempotent command path.
+
+The ordinary working-card portion of this decision is superseded by D-065. The
+tagless intake, visibility-race recovery, concrete failure, and bot-authored control
+decisions remain current.
+
+## D-065 — One Discord owner message has one visible turn lifecycle
+
+**Decision:** One accepted owner message is acknowledged on that exact Discord
+message with a best-effort `👀` reaction and typing refreshed while work remains
+active. Once a durable question, result, or failure is delivered, that exact message
+transitions to `✅` or `❌`. It does not create a generic ordinary working card. The
+stable Task panel is a neutral dashboard projection: it shows state and durable
+references but does not repeat the Forum title, the chronological owner-question
+body, or mutable Task controls. Questions, decisions, failures, and final results
+remain single ordinary replies at their chronological point, keyed by immutable
+Task source-event identity. An owner answer edits the existing question message into
+a control-free receipt before Task continuation.
+Existing full-projection outbox identities are adopted as aliases for the matching
+Task source event during upgrade. If a prior interrupted upgrade already produced
+multiple copies of that event's question, one accepted answer resolves every copy
+rather than leaving an older prompt active.
+
+The semantic plan identity is the owner-input execution-cycle identity, not the
+automatic-attempt identity. Deterministic Worker/resource retries in that cycle load
+the first durable plan instead of asking the Main Agent to reinterpret the same
+owner turn. A new accepted owner input creates a new cycle and may legitimately
+produce a new plan.
+
+**Rationale:** A generic working card, the stable panel, and a chronological question
+were three independent delivery paths rendering one turn. Attempt-scoped planning
+then allowed a transient Worker-selection failure to re-enter the native Agent
+session and recover an older question. The combined behavior produced the duplicate
+cards and repeated question visible to the owner.
+
+**Consequence:** Immediate activity remains visible beside the newest owner message
+without growing the transcript, and stale `👀` or question controls do not survive a
+terminal turn. The status panel and the conversation no longer compete as copies of
+one prompt. Restart and retry preserve one interpretation of an owner turn, while
+significant results and actionable failures remain durable and near the bottom of a
+long Forum post.
+
+## D-066 — Main may answer bounded read-only orchestration questions directly
+
+**Decision:** Before semantic planning, deterministic Main code may recognize a
+deliberately narrow Device-directory question and read an owner-safe projection of
+Main-owned Device state containing identity, display name, OS family,
+runtime/connection state, Roles, verified capability names, route health, and
+bounded capacity. It excludes Secrets, Device Instructions, Knowledge, private
+transcripts, local paths, Policy internals, and unverified capability claims.
+
+The deterministic path formats the answer without an LLM and mints authority for
+that exact decision, Task, and planning key. The authoritative executor rejects a
+planner's `completed` decision unless the trusted direct-completion authorizer
+recognizes it. A requested action, compound side-effect objective, selected external
+input, external lookup, file or system change, browser operation, or claim of
+execution must still become one or more Work Orders and can complete only from
+authoritative Worker evidence.
+
+The bounded generic-objective allowlist supports accepted locale code switching,
+including Korean-English test placeholders, before applying an exact latest owner
+query. A trusted deterministic answer is evaluated before a cached semantic plan so
+an upgraded classifier can recover a previously misplanned read-only Task through
+Retry. When the deterministic path does not mint an answer, the cached owner-cycle
+plan remains unchanged and retry-stable.
+
+**Rationale:** Asking which Devices are currently reachable is a query against state
+Main already owns. Dispatching an invented `device_inventory_read` Work Order to an
+offline Worker both wastes a Run and can fail to answer the very availability
+question being asked.
+
+**Consequence:** A routine Device availability question consumes neither a model
+turn nor a Worker Run. Main coordinator turns remain tool-denied under D-042.
+Side-effect authority, Worker leases, Policy, and evidence requirements are
+unchanged, and custom planners cannot forge the read-only exception by echoing a
+schema or completion criteria.
+
+## D-067 — Agent Adapter and exact model selection are typed Device profiles
+
+**Decision:** OpenDelegate represents an execution choice as an Agent Binding:
+provider, exact adapter identity when required, exact provider-native model ID, and
+optional provider tuning. Every Worker-capable Device, including Main's co-located
+Worker, owns a Worker Agent Execution Profile. Main separately owns a Coordinator
+profile. Profiles support `Auto`, `Prefer`, and `Pinned`. `Prefer` may use only its
+explicit fallback chain; `Pinned` fails closed.
+
+The Coordinator profile resolves exact models only against the authenticated Main
+Agent Adapter composed for the running service. A profile that names another provider
+or adapter fails closed. Provider/adapter replacement remains the existing explicit,
+authenticated Main Agent reconfiguration and service-restart lifecycle; a profile
+write alone never claims to hot-swap that runtime.
+
+The Worker reports a bounded verified model catalog from each ready first-class
+adapter. Human-friendly names in Configuration Chat and Admin Web are resolved
+against that target Device's catalog and the exact native ID is persisted. Main
+copies the effective binding into the immutable Run assignment. Native sessions
+retain their original binding; profile changes affect new Task or workstream
+sessions. A checkpoint continuation created for an existing session retains that
+session's recorded binding rather than re-resolving the current profile.
+
+Main's planning prompt receives a compact Device directory containing ready adapter
+identities and the effective Worker profile, not every model in every catalog.
+Workers receive the exact effective binding in their immutable assignment and prompt,
+plus the assigned Work Order and selective local Knowledge; they do not need the
+fleet profile or catalog. This keeps placement semantics available without spending
+routine context on transport or provider catalogs.
+
+**Rationale:** A Device's role describes what work fits there; it does not prove
+which local runner and model will execute it. Provider-only selection still allows
+silent model drift, while fleet-wide catalog injection wastes context. Separating
+typed durable selection from compact planning context makes execution reproducible
+and owner-visible.
+
+**Consequence:** On each target Device page, an owner can request “use Opus on this
+NAS” or “use GPT on this Mac Studio” through its Device-scoped Configuration Chat,
+or make the same exact choice in Admin Web. Only verified target-local choices are
+applied. Task-specific hard requirements are intersected with the Device profile and
+fail closed on conflict.
+
+## D-068 — Codex and Claude updates start with non-mutating release discovery
+
+**Decision:** OpenDelegate source provides a deterministic, discovery-only comparison
+for its first-class provider package and CLI targets. Dependency automation may
+propose an exact SDK change, but neither mechanism edits an installed Device or
+changes a running provider. A target may enter an explicitly unsupported internal
+preview after provider schema and adapter conformance checks; this `tested` adapter
+compatibility label is not a supported-platform claim. Authentication-safe live
+start/resume/cancel checks and applicable platform release gates remain mandatory
+before supported release promotion. A rollback-capable Device maintenance monitor
+and its `disabled`, `propose`, or verified-automation policy remain Phase 12 work and
+are not exposed as inert configuration today.
+
+**Rationale:** Provider CLIs and SDKs change independently and can break session or
+tool semantics even when installation succeeds. Blind latest-version upgrades would
+violate deterministic execution and make an always-on personal system fragile.
+
+**Consequence:** Maintainers can run `corepack pnpm providers:check`, and weekly
+dependency automation can surface an SDK candidate without silently upgrading an
+owner's fleet. Owners continue to update installed release bundles explicitly.
+Runtime automatic provider upgrades are unavailable until the durable verification,
+rollback, and audit lifecycle is implemented.
+
+## D-069 — Wake target readiness and automatic wake readiness are separate
+
+See [ADR-0029](adr/0029-wake-on-lan-readiness-evidence.md).
+
+**Decision:** Every Worker may publish one bounded read-only Wake-on-LAN target
+observation: `enabled`, `disabled`, `unsupported`, or `unknown`, plus its source and
+observation time. The observation contains no interface name, MAC address, SecureOn
+value, raw probe output, or other local network identifier. Main retains the latest
+authenticated observation in the existing durable Device observation store so it
+remains visible after the Worker is offline.
+
+An enabled target is not an automatic-wake claim. Automatic wake becomes `ready`
+only after a separate wake-path adapter proves an online Main-local or Worker relay
+on the target broadcast domain, keeps the exact wake target outside Agent context,
+emits a bounded and rate-limited magic packet under Policy and audit, and observes
+the authenticated Worker return. Until that lifecycle exists, Main and Admin report
+`relay-required`. Ordinary routed connectivity, Omada or Tailscale membership, and
+subnet routing do not satisfy this proof.
+
+**Rationale:** The powered-down target cannot report current state or run its own
+Tailscale client, and IP reachability does not transport the Layer-2 wake packet.
+Treating an OS setting as end-to-end readiness would make the UI promise a recovery
+path that may not exist. Persisting the last authenticated target observation still
+gives the owner useful setup evidence without exporting a hardware address.
+
+**Consequence:** Device details can truthfully show that Windows, macOS, or Linux was
+armed for magic-packet wake before it went offline and can separately show why
+automatic wake is not yet ready. The compact Main Device directory may include these
+two bounded states, but it never includes the wake target or raw probe evidence.

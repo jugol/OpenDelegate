@@ -29,23 +29,34 @@ The contract-tested fallback versions for this source revision are:
 
 | Adapter | Tested version | Non-interactive surface |
 | --- | --- | --- |
-| `CodexAppServerAdapter` | `codex-cli 0.145.0` | App Server JSONL over stdio |
-| `ClaudeAgentSdkAdapter` | SDK `0.3.205` / Claude Code `2.1.205` | SDK `query()` async stream |
-| `CodexCliAdapter` | `codex-cli 0.145.0` | `codex exec --json` and `codex exec resume` |
-| `ClaudeCliAdapter` | Claude Code `2.1.205` | `claude -p --output-format stream-json` |
+| `CodexAppServerAdapter` | `codex-cli 0.146.0` | App Server JSONL over stdio |
+| `ClaudeAgentSdkAdapter` | SDK `0.3.220` / Claude Code `2.1.220` | SDK `query()` async stream |
+| `CodexCliAdapter` | `codex-cli 0.146.0` | `codex exec --json` and `codex exec resume` |
+| `ClaudeCliAdapter` | Claude Code `2.1.220` | `claude -p --output-format stream-json` |
 
 `probe()` runs version and authentication-status commands only. It does not submit a
 model turn. An installed version outside the configured tested set is reported as
 `untested` and execution fails closed unless the owner explicitly configures
 `allowUntestedVersion`.
 
-Every first-class Codex and Claude adapter uses an absolute
-OpenDelegate-controlled provider home and rejects ambient or per-Run attempts to
-override it. The default Worker paths are `state/providers/codex` and
-`state/providers/claude`. Existing authentication from a user's global provider
-home is deliberately not copied; the owner must authenticate each controlled home
-through the provider's normal interactive login. Keep these homes outside the
-checkout and restrict them to the Worker service identity.
+Repository maintainers can run `corepack pnpm providers:check` to compare all three
+provider pins with the package registry. The command only discovers candidates; it
+does not edit dependencies or an installed Device. Dependabot checks the exact
+Claude SDK pin weekly. Codex and Claude CLI candidates still require schema review
+where available, adapter conformance, and the affected release gates before their
+tested-version constants may change.
+
+CLI bindings reuse their provider's authenticated programmatic model-catalog
+discovery, so an exact model is verified before CLI execution instead of being
+accepted as an unchecked string.
+
+Every first-class Codex and Claude adapter uses an absolute, explicitly configured
+provider home and rejects ambient or per-Run attempts to override it. The default
+Device paths are `state/providers/codex` and `state/providers/claude`. Existing
+authentication is never copied. An owner may explicitly select an existing local
+Codex home as the Device's shared source of truth; otherwise the owner authenticates
+the managed home through the provider's normal interactive login. Keep every
+provider home outside the checkout and restrict it to the runtime identity.
 
 Claude SDK also ignores ambient settings, skills, and plugins and requires its
 fail-closed sandbox. Native Windows Claude SDK execution is reported incompatible
@@ -55,7 +66,7 @@ container.
 The CLI adapters pass prompts through stdin, never a command-line argument. Child
 processes always use `shell: false`. Only a narrow OS environment allowlist is
 inherited. First-class provider Runs reject `secretEnvironment`; provider
-authentication belongs in the controlled home, while future Task credentials must
+authentication belongs in the configured home, while future Task credentials must
 cross a typed, exact Run-scoped Secret helper. The generic adapter may accept an
 explicit secret environment when its caller deliberately composes that separate
 contract, and known values and common encoded forms are redacted from normalized
@@ -87,9 +98,9 @@ backpressure when the consumer stops.
 `probe().capabilities.steering` is `true` only for the pinned programmatic
 integrations:
 
-- Codex App Server `0.145.0` sends stable `turn/steer` with the exact active
+- Codex App Server `0.146.0` sends stable `turn/steer` with the exact active
   `threadId` and `expectedTurnId`.
-- Claude Agent SDK `0.3.205` keeps one streaming-input channel open and sends an
+- Claude Agent SDK `0.3.220` keeps one streaming-input channel open and sends an
   `SDKUserMessage` with `priority: "now"` to the exact active Query.
 
 Those adapters expose `AgentRunHandle.steer`. CLI and generic-command handles do

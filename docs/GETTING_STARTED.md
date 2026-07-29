@@ -1,11 +1,26 @@
 # Getting started
 
-OpenDelegate is installed with an Agent, then operated through Admin Web and Discord. You do not
-start it with `npm run start`, copy credentials into a prompt, or configure every pair of Devices
-with SSH.
+OpenDelegate is installed with an Agent, then operated through Admin Web and Discord. You describe
+the desired outcome; OpenDelegate decides which eligible Device, OS, Agent, route, or combination
+should perform it. You do not start it with `npm run start`, copy credentials into a prompt,
+configure every pair of Devices with SSH, or manually coordinate cross-Device handoffs.
 
 This guide takes one owner from an empty Main computer to a first isolated Task and an additional
 Worker Device.
+
+The shortest honest setup request is to give this repository URL or an extracted, verified release
+bundle to Codex or Claude and say:
+
+> Install OpenDelegate from this repository. Discover and follow its Main installation instructions.
+> Set up this computer as my fixed, always-on Main, keep runtime state outside the checkout or
+> bundle, and guide me through only the owner decisions that affect my intent. Do not ask me to
+> choose a Device, OS, route, or Agent for future Tasks.
+
+That Agent owns the checklist below and discovers `AGENTS.md` plus
+`skills/opendelegate-init/SKILL.md` itself. On each additional computer, give the same repository or
+platform bundle plus the unopened, short-lived grant and ask its Agent to join that computer as a
+Worker; it discovers `skills/opendelegate-join/SKILL.md`. The owner should not have to translate
+this guide into shell commands or know the repository's internal file layout.
 
 > [!IMPORTANT]
 > Read `release-metadata.json` before setup. When `supportStatus` begins with `internal-preview`,
@@ -25,17 +40,16 @@ Prepare:
 - a password manager or another safe place for the owner passphrase and recovery codes, plus the bot
   token when Discord is enabled.
 
-When `release-metadata.json` reports an internal preview and you want Discord, complete the
-[Discord Forum setup](DISCORD_SETUP.md) manual path before the first deterministic `init`. An
-internal preview cannot add or replace a Discord binding after Main has been initialized, and
-Configuration Chat must not pretend that it can. You may instead initialize without Discord and use
-Admin Web, but that Main will remain Discord-disabled in the preview.
+Discord is optional during deterministic `init`. You may initialize without it and add a binding
+later, or initialize with a prepared non-secret binding. In either case, create the external App,
+bot, Community Forum, workflow tags, intents, and permissions by following the
+[Discord Forum setup](DISCORD_SETUP.md). After owner claim, Configuration Chat can add, replace,
+extend, or disable the live binding without deleting Main's durable Tasks or native Agent sessions.
 
-For a release candidate or the same bytes after supported promotion, do not apply that preview
-workaround. When you want Discord, use the candidate's verified Configuration Chat path after owner
-claim. If you selected Discord and the path is absent or cannot reach ready state, treat the
-candidate as invalid rather than falling back to preview behavior. If you decline Discord, continue
-with Discord disabled; that choice does not invalidate the installation.
+For a release candidate or the same bytes after supported promotion, the authenticated
+Configuration Chat path is a required release feature. If it is absent or cannot activate and
+validate a selected binding, treat the candidate as invalid. Declining Discord remains valid and
+leaves Admin Web as the Task entry point.
 
 The Main computer may run macOS, Windows, or Linux and is also enrolled as a normal Worker. Other
 Devices connect outbound to Main. They never need pairwise SSH trust or database credentials.
@@ -60,25 +74,27 @@ Knowledge, and generated Artifacts outside it. The init Agent verifies the bundl
 
 The current source checkout has no supported download. From a clean checkout, use **Build an
 internal preview** in the [repository README](../README.md). If this guide is already inside an
-assembled bundle, return to that README and continue the Quick Start for the exact `supportStatus`
-instead of building again. Do not publish an internal-preview directory under a release tag.
+assembled bundle, return to that README and continue its recommended Agent-first installation for
+the exact `supportStatus` instead of building again. Do not publish an internal-preview directory
+under a release tag.
 
 ## 2. Initialize the fixed Main Device
 
 Open the extracted bundle directory as the workspace in Codex, or start Claude from that directory.
 Then send this prompt:
 
-> Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
-> Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop if
-> a required safety check fails.
+> Install OpenDelegate from this directory. Discover and follow its Main installation instructions,
+> then initialize this computer as my fixed, always-on OpenDelegate Main Device. Guide me through
+> every owner decision, keep runtime state outside this bundle, do not ask me to choose a Device,
+> OS, route, or Agent for future Tasks, and stop if a required safety check fails.
 
-Before invoking the launcher for the first time, tell the Agent whether Discord is part of this
-installation. If you selected Discord for an internal preview, the Agent must finish the manual
-Discord guide, obtain the complete non-secret binding through the documented safe boundaries, and
-include it in the first initialization. If you selected Discord for release-candidate bytes, the
-Agent records the intent and uses the verified Configuration Chat path after owner claim; it does
-not apply the preview workaround. If you declined Discord, the Agent initializes Main explicitly
-Discord-disabled and skips both paths.
+The Agent discovers and follows `skills/opendelegate-init/SKILL.md`; the path is documented here for
+auditing, not because the owner must name it.
+
+Before invoking the launcher for the first time, tell the Agent whether you want to configure
+Discord now, defer it until after owner claim, or keep it disabled. A prepared non-secret binding
+may still be included in the first initialization, but it is no longer required. A deferred or
+declined choice initializes Main explicitly Discord-disabled and never blocks Admin Web.
 
 The Agent will inspect the host, verify the bundle, and ask only for choices that affect your intent.
 Unless you choose otherwise, the accepted defaults are:
@@ -97,7 +113,7 @@ avoids a bootstrap deadlock in which Configuration Chat needs the same provider 
 was expected to configure.
 
 First read `supportStatus`. A release candidate must expose a packaged provider login and probe
-boundary that uses the same command resolver as Main, authenticates the controlled home through
+boundary that uses the same command resolver as Main, authenticates the configured home through
 owner-interactive stdio, persists the canonical command identity and tested version, and revalidates
 them on foreground and service startup. If that boundary is absent, the candidate is invalid and
 must not be promoted or represented as supported.
@@ -106,26 +122,33 @@ The current internal preview does not expose that deterministic boundary. Its in
 following foreground-only validation path, but this does not prove a pinned executable identity or
 service readiness:
 
-1. resolve the exact `MAIN_HOME` and create only the selected provider's owner-restricted home;
+1. resolve the exact `MAIN_HOME` and the selected provider's owner-restricted home;
 2. resolve one installed provider command from the same owner environment that will launch the
    foreground Main, then verify the exact version against the
    [support matrix](release/SUPPORT_MATRIX.md);
-3. authenticate and inspect only the controlled home:
+3. authenticate and inspect only the configured home:
 
-   - Codex: `MAIN_HOME/state/providers/codex`, supplied as `CODEX_HOME`; run `codex login` in the
-     owner's interactive session, then require `codex login status` to pass.
-   - Claude: `MAIN_HOME/state/providers/claude`, supplied as `CLAUDE_CONFIG_DIR`; run
-     `claude auth login` in the owner's interactive session, then require
-     `claude auth status --json` to report ready. Native Windows does not select Claude until its
-     fail-closed sandbox is available; use Codex or an explicitly configured WSL2/container path.
+   - Codex: use `MAIN_HOME/state/providers/codex` by default. When the owner explicitly chooses an
+     existing local Codex source of truth, use that absolute path and retain it for
+     `--codex-home ABSOLUTE_PATH`. Supply the selected path as `CODEX_HOME`, run `codex login` only
+     when `codex login status` is not already ready, and require the status check to pass.
+   - Claude: use `MAIN_HOME/state/providers/claude` by default. To reuse an existing local Claude
+     SSOT, retain its absolute path for `--claude-home ABSOLUTE_PATH`. Supply the selected path as
+     `CLAUDE_CONFIG_DIR`, run `claude auth login` only when `claude auth status --json` is not
+     already ready, and require the status check to pass. Native Windows does not select Claude
+     until its fail-closed sandbox is available; use Codex or an explicitly configured
+     WSL2/container path.
 
-The Agent must not copy or inherit the global provider home, accept a login token through a prompt,
-or place credentials in argv, an environment value other than the non-secret home selector, a log,
-or the bundle. It initializes Main with the selected `--agent codex` or `--agent claude` only after
-the preview version and authentication checks pass, keeps Main in that exact foreground owner
-environment, and continues to the local claim flow. `Auto` means choosing a provider that passes
-this preview boundary, not accepting the first installed but unauthenticated CLI. It never upgrades
-the preview into a persistent or supported installation.
+The Agent must not discover an ambient provider home or copy login material. An external provider
+home is used only when the owner explicitly supplies it. Codex and Claude then share their settings,
+plugins, caches, and native-session storage as well as login with other local consumers of that
+directory. The Agent never accepts a login token through a prompt or places credentials in argv, an
+unrelated environment value, a log, or the bundle. It initializes Main with the selected
+`--agent codex` or `--agent claude` and any explicit `--codex-home ABSOLUTE_PATH` or
+`--claude-home ABSOLUTE_PATH` only after the preview version and authentication checks pass. It
+keeps Main in that exact foreground owner environment and continues to the local claim flow. `Auto`
+means choosing a provider that passes this preview boundary, not accepting the first installed but
+unauthenticated CLI. It never upgrades the preview into a persistent or supported installation.
 
 The Agent also enrolls the Main computer as its own co-located Worker. OpenDelegate does not treat
 Main as a control-only exception.
@@ -172,15 +195,25 @@ foreground process and does not establish service or release readiness.
 Sign in to Admin Web and open **Configuration Chat** from the lower-right corner. This conversation
 configures OpenDelegate itself; it is separate from Task conversations.
 
+Before asking for capability recommendations, select **Assess device** in the Local Agent setup
+panel. Main deterministically checks both supported Agent Adapters, browser automation, Computer Use
+readiness, and local Knowledge health, then stores the bounded result in its local metadata
+database. The assessment does not invoke an LLM, expose provider output or credentials, or send
+Knowledge content to Main. Configuration Chat receives only that non-secret result and cannot run
+the assessment itself. If the assessment fails, the previous stored observation remains available.
+
 Work through these items with the Configuration Agent:
 
 1. review detected Main Device Facts and capabilities;
 2. approve the proposed Device name, Roles, and Instructions;
 3. confirm the bootstrapped Main Agent Adapter is ready, then configure any additional Worker or
-   custom Agent Adapters;
-4. when Discord was selected, inspect the persisted binding and feature state for a preview or
-   complete the verified candidate Discord configuration path. When Discord was declined, confirm
-   that it remains disabled and skip Discord setup;
+   custom Agent Adapters; leave each Worker Agent Execution Profile on `Auto`, choose an exact
+   `Prefer` or `Pinned` binding in **Device → Agent execution**, or describe the per-Device choices
+   in Configuration Chat;
+4. inspect the current `discord.binding`: if first init already seeded the intended binding, do not
+   upload the token again or submit a no-op proposal—confirm its IDs and require
+   `ready / DISCORD_READY`; for deferred, new, or changed Discord setup, use the secure credential
+   panel and complete the approved proposal; otherwise confirm that the binding remains disabled;
 5. define ordered routes that Workers may use to reach Main;
 6. choose Artifact exposure and retention;
 7. when a supported bundle exposes verified service commands, decide whether the core service
@@ -189,8 +222,19 @@ Work through these items with the Configuration Agent:
 8. review the exact diff before applying any persistent configuration change.
 
 The initial Main provider login already happened through the init Agent in section 2. Additional
-Codex and Claude adapters use their own OpenDelegate-controlled provider homes and the same normal
-owner-interactive login rule; never copy a global credential directory.
+Codex and Claude adapters use managed provider homes by default and the same normal
+owner-interactive login rule. Explicit external Codex and Claude homes remain shared by reference;
+never copy a global credential directory. If either Adapter is degraded only because authentication
+is not ready, authenticate the exact configured home and run **Assess device** again.
+
+An Agent Binding contains the provider, exact adapter, and exact provider-native model ID. The
+selection list comes only from the target Device's latest tested model catalog. Configuration Chat
+is intentionally Device-scoped: on the NAS page, say _“Use Claude Opus on this Device”_; on the Mac
+Studio page, repeat with the exact GPT model you want. Each conversation resolves only its own
+target-local ID, shows the typed profile diff, and uses the ordinary approval path. `Auto` is the
+default. `Prefer` uses only the fallbacks you explicitly list. `Pinned` stops when its exact binding
+is unavailable. A change affects new native sessions; an existing Task continues with the binding
+recorded in its own session.
 
 If Configuration Chat nevertheless reports that its Agent is unavailable, use its read-only
 checklist and return to the init Agent's provider-readiness flow. Do not attempt the missing login
@@ -198,33 +242,38 @@ inside the unavailable chat, and do not simulate a configuration response.
 
 ## 5. Connect Discord Forum
 
-Use the path that matches `release-metadata.json`.
-
-If you did not select Discord, skip this section, keep the installation explicitly
-Discord-disabled, and create Tasks through **Admin Web → Tasks → New task**.
+If you do not want Discord, skip this section and create Tasks through
+**Admin Web → Tasks → New task**. You can return later without reinitializing Main.
 
 ### Internal preview
 
-When Discord was selected for an internal preview, its App, bot, Forum, workflow tags, non-secret
-binding, and bot credential were prepared before the first Main initialization. Configuration Chat
-may inspect that binding but does not create the App, Forum, tags, or a replacement binding. The
-preview cannot add or replace a Discord binding on an existing Main.
-
-Follow the [Discord Forum setup](DISCORD_SETUP.md) internal-preview manual path for the exact setup,
-token rotation, permission, and first-Task verification flow.
+Internal previews remain unsupported, but their Configuration Chat uses the same deterministic
+binding lifecycle as the candidate: secure token intake, typed proposal, owner Approval, serialized
+Gateway replacement, and failure rollback. Follow the [Discord Forum setup](DISCORD_SETUP.md) for
+the external Discord work and the exact IDs. The chat does not create the Discord App, Forum, tags,
+intents, or permissions for you.
 
 ### Release candidate or promoted supported release
 
-When Discord was selected, open **Configuration Chat → Discord** and follow the verified
-Configuration Chat path for that candidate. It must guide the owner through the Discord Application,
-bot, Forum, workflow tags, intents, permissions, owner identity, Secret-safe credential ingress, and
-binding validation without using the internal-preview first-init workaround. A release candidate
-configured for Discord that does not expose or complete this path is invalid and must not be
-promoted.
+First inspect the effective `discord.binding`. If first init already seeded the intended binding and
+provisioned its token, confirm the Application, bot, guild, Forum, six workflow-tag, owner-user, and
+optional Role IDs, then wait for `ready / DISCORD_READY`; do not upload a duplicate token or submit a
+no-op proposal. For a deferred, new, or changed binding, open **Configuration Chat**, select
+**Discord bot token** in its secure credential panel, store the token, and let the Agent use only the
+returned opaque alias. Review the complete diff, approve the protected change in **Approvals**, and
+wait for `ready / DISCORD_READY`.
 
-When Discord is configured through either path, sign in to Admin Web and confirm that it reports
-`ready / DISCORD_READY`, the correct Forum is bound, and the owner identity is allowlisted. The token
-must never enter a chat message, JSON file, environment variable, or command argument.
+Adding a Forum preserves the existing `forumBindings` entries and appends a distinct Channel.
+Replacing a bot, guild, or Forum submits the complete replacement object. Disabling sets
+`discord.binding` to `null`. These operations preserve durable Tasks, event history, and native
+Agent sessions, but OpenDelegate never silently migrates an old Discord thread identity into a new
+Forum; start new Forum posts for new Tasks as needed.
+
+The token must never enter a chat message, JSON file, environment variable, command argument, or
+log. The runtime checks that the credential alias exists before stopping the current Gateway. It
+then starts the candidate binding under a single serialized lifecycle; activation or Configuration
+commit failure restores the previous binding. A release candidate that cannot complete this path is
+invalid and must not be promoted.
 
 Discord is a client of the durable Task service, not its database. If Discord is offline, Admin Web,
 Task state, and recovery remain available on Main. After connectivity returns, reconciliation
@@ -255,11 +304,13 @@ unopened file with an owner-controlled local or operating-system-secure handoff.
 
 On the new Device, open its bundle directory in Codex or Claude and send:
 
-> Read `skills/opendelegate-join/SKILL.md` and join this computer to my fixed OpenDelegate Main using
-> the unopened grant file at `ABSOLUTE_GRANT_FILE`. Detect its capabilities, keep all Knowledge
-> local, and ask before any network or privileged change.
+> Join this computer to my fixed OpenDelegate Main using the unopened grant file at
+> `ABSOLUTE_GRANT_FILE`. Discover and follow this directory's Worker installation instructions,
+> detect its capabilities, keep all Knowledge local, and ask before any network or privileged
+> change.
 
-The join Agent passes only the file path to the packaged Worker. The Worker generates its own
+The join Agent discovers `skills/opendelegate-join/SKILL.md` and passes only the file path to the
+packaged Worker. The Worker generates its own
 Device-local key, validates Main's identity, consumes the grant, and confirms the mutual-TLS
 channel. If the grant expired or was consumed, delete any retained handoff copy and issue a new one;
 never edit or reuse it.
@@ -289,6 +340,19 @@ Role, policy, route, and health state, and reports progress back to the post. Wh
 shown visually, OpenDelegate may attach it or publish an Artifact link under the configured exposure
 policy.
 
+Do not name a Device, OS, route, or Agent unless that placement is part of the result you actually
+want. A Task may move from Windows development to macOS build or signing and then to Linux
+deployment without an owner-managed handoff. The actual assignments and reasons remain inspectable
+in Admin Web and audit.
+
+The final result may be a Discord response or attachment, downloadable file, Artifact, hosted view,
+or verified Git reference. If login, MFA, CAPTCHA, legal confirmation, or an OS permission needs
+you, OpenDelegate keeps this Task in `waiting_user` and may show an **Open interactive result**
+action. Open only the Main-mediated action, perform the requested step without posting a credential,
+then reply in the same Forum post so the Task can continue. OpenDelegate does not publish a raw
+Worker VNC or browser-debug endpoint by default; a configured remote-session gateway is a future
+adapter until its release evidence passes.
+
 Use Admin Web to inspect the durable Task journal, Work Orders, Device health, approvals, audit
 events, and Artifacts. Discord remains the conversational surface. The Main database remains the
 source of truth, and Admin Web exposes that durable operational state.
@@ -311,6 +375,8 @@ it does not create or mirror a Forum conversation.
   policy-gated actions proceed.
 - Let deterministic routes exhaust their configured attempts before asking an Agent to diagnose a
   connection failure.
+- Build candidate bundles without stopping Main. Bundle smoke uses separate temporary state and
+  listeners; activate a persistent update only through the packaged service lifecycle.
 - Keep Main backed up according to [Backup and restore](BACKUP_AND_RESTORE.md). Device Knowledge is
   intentionally local and may be lost with that Device.
 
@@ -340,6 +406,7 @@ Keep diagnostic output redacted before sharing it.
 | Computer Use is unavailable | Check the per-Device graphical helper, unlocked desktop, and OS privacy permissions. Headless Linux remains healthy with Computer Use unavailable. |
 | Owner access is lost | Use one saved recovery code locally, rotate the passphrase, and replace the remaining recovery set. Do not depend on Discord for recovery. |
 | An update fails | Keep the previous active version, inspect the bounded health failure, and follow [Service lifecycle](SERVICE_LIFECYCLE.md). Do not bypass rollback. |
+| A stopped preview wrapper no longer restarts | A transient supervisor is not an installed service and may remove its registration when stopped. Relaunch the exact validated foreground command, then use the native service lifecycle for any persistent supported installation. |
 
 For security-sensitive issues, follow [Security policy](../SECURITY.md). For the exact distinction
 between an internal preview, release candidate, and supported release, see

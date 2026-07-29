@@ -3,15 +3,54 @@
 Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](README.ja.md) ·
 [Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md)
 
-OpenDelegate is a personal, self-hosted control plane for coordinating AI agents across one fixed
-Main Device and multiple macOS, Windows, and Linux Devices.
+**Tell OpenDelegate the outcome you want in Discord; it decides where and how to run it.** Your
+phone or laptop may disconnect while a fixed always-on Main coordinates macOS, Windows, and Linux.
 
 > [!TIP]
-> **Start here:** [Quick Start](#quick-start) ·
+> **Start here:** [Recommended installation](#recommended-installation-ask-your-agent) ·
+> [Detailed setup](#detailed-setup) ·
 > [Complete setup guide](docs/GETTING_STARTED.md) ·
 > [Discord Forum setup](docs/DISCORD_SETUP.md)
 
-## Quick Start
+## Recommended installation: ask your Agent
+
+**This is the shortest and recommended path. You do not need to learn OpenDelegate commands
+first.**
+
+1. Go to the computer you want to keep as your fixed, always-on **Main Device**.
+2. Open a capable local Agent such as Codex or Claude and give it this repository URL.
+3. Send this:
+
+   > Set up OpenDelegate on this computer as my fixed, always-on Main Device. Follow the
+   > repository's own Main installation instructions and do everything you safely can. Ask me only
+   > when you need a decision or a secure owner-only action. Never ask me to paste credentials,
+   > tokens, or other secrets into chat; guide me through provider-native authentication or
+   > OpenDelegate's secure intake instead. Continue until Admin Web opens and setup is ready to
+   > finish there.
+
+4. Follow the Agent's questions. It will discover the repository's init skill, distinguish source
+   from a release bundle, verify the support status, keep runtime data outside the checkout, and
+   bring up Admin Web without making you translate this README into shell commands.
+
+When Admin Web opens, continue in the **Configuration Chat** on the right. Ask the Agent to inspect
+what is already configured and guide you through the rest in natural language: Device assessment,
+embedded SQLite or external PostgreSQL, Codex and Claude, Discord Forum, connection routes, Agent
+models, Artifact exposure, service startup, and additional Devices. OpenDelegate shows reviewable
+structured changes in the conversation instead of expecting you to find every settings screen.
+
+![OpenDelegate Admin Web with Device assessment and Configuration Chat](docs/design/admin-configuration-chat-implemented.png)
+
+_Current Admin Web captured from deterministic browser fixtures. Start with **Assess device**, then
+use Configuration Chat for the remaining setup. The banner accurately marks this source build as
+unsupported; the image is not live-platform or release evidence._
+
+SQLite is already the zero-configuration local default, so it does not need a database URI.
+Provider credentials and Discord tokens never belong in chat: when one is genuinely needed,
+Configuration Chat explains why and exposes the dedicated secure intake form. After Main is ready,
+use **Add Device** and give each additional computer's Agent its single-use grant; that Agent will
+discover the Worker join instructions.
+
+## Detailed setup
 
 > [!WARNING]
 > This repository currently builds an **unsupported internal preview**, not a supported OpenDelegate
@@ -21,34 +60,55 @@ Main Device and multiple macOS, Windows, and Linux Devices.
 
 OpenDelegate is installed with an Agent; there is no `npm run start` owner workflow.
 
-1. Get the platform-specific bundle and verify `SHA256SUMS` against the digest from its trusted
-   publication channel. The current repository produces marked internal-preview bundles only; see
-   [Build an internal preview](#build-an-internal-preview).
-2. If you want Discord, complete the [Discord Forum setup guide](docs/DISCORD_SETUP.md) before the
-   first Main initialization. This preview cannot add or replace a Discord binding later.
-3. Open the extracted bundle directory in Codex or Claude.
-4. Send: _“Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed
-   OpenDelegate Main Device. Guide me through every owner decision, keep runtime state outside this
-   bundle, and stop if a required safety check fails.”_
-5. Follow the Agent through owner claim, save the ten recovery codes, and finish Device, Agent,
-   route, and Artifact setup in Admin Web Configuration Chat.
-6. To add a computer, ask Configuration Chat for a short-lived Device grant, transfer the unopened
-   file through an owner-controlled secure handoff, and ask the Agent on that computer to follow
-   `skills/opendelegate-join/SKILL.md`.
-7. If Discord is configured, create a Discord Forum post. One post is one durable Task; replies
+1. Give this repository URL to Codex or Claude on the intended Main computer. If you already have a
+   supported platform bundle,
+   open its extracted directory instead. The Agent will identify the source or bundle, inspect
+   `supportStatus`, and verify `SHA256SUMS`; the current source can produce only the marked
+   [internal preview described below](#build-an-internal-preview).
+2. Send the prompt from [Recommended installation](#recommended-installation-ask-your-agent). The
+   Agent discovers the repository contract and `skills/opendelegate-init/SKILL.md`; you do not need
+   to know its internal file layout.
+3. Discord is optional during first initialization. You can add, replace, extend, or disable its
+   Forum binding later through the owner-authenticated Configuration Chat; use the
+   [Discord Forum setup guide](docs/DISCORD_SETUP.md) for the required App, Forum, tags, and
+   permissions.
+4. Follow the Agent through owner claim, save the ten recovery codes, then select **Assess device**
+   in Admin Web. Review the deterministic Codex, Claude, browser automation, Computer Use, and
+   Knowledge result before finishing Device, Agent, route, Artifact, and optional Discord setup in
+   Configuration Chat. Provider credentials never go into chat; Discord tokens use only the secure
+   credential panel.
+5. To add a computer, give its Agent this repository or the matching verified bundle plus the
+   unopened short-lived Device grant, and ask it to join that computer as a Worker. The Agent
+   discovers `skills/opendelegate-join/SKILL.md`. Workers connect only to Main; you do not choose
+   future placement or build pairwise SSH trust.
+6. If Discord is configured, create a Discord Forum post containing the outcome you want. One post
+   is one durable Task; replies
    continue its native Agent session, while a new post starts a clean context. If Discord is
    unavailable or disabled, use **Admin Web → Tasks → New task** to create a minimal Task.
+
+Each Device defaults to **Agent execution → Auto**. You can choose **Prefer** or **Pinned** from its
+Device page, or tell that Device’s Configuration Chat, for example, _“Use Claude Opus on this
+NAS.”_ Repeat on the Mac Studio with the GPT model you want. OpenDelegate resolves each request
+against that target Device’s tested model catalog, shows the exact provider-native model ID for
+review, and applies it only to new native sessions.
 
 Read the [complete setup guide](docs/GETTING_STARTED.md), including owner recovery, additional
 Devices, the first Task, and troubleshooting.
 
 ## Why OpenDelegate
 
-Create a Task from a phone or computer, let the Main Agent divide it into Work Orders, route those
-Work Orders to eligible Devices, and receive one durable, inspectable result without manually
-reopening every agent session.
+Create a Task from a phone or computer and state the result, not the placement plan. The Main Agent
+can divide it into Windows development, macOS build or signing, and Linux server Work Orders, while
+deterministic scheduling chooses the eligible Devices and routes.
 
 - One Discord Forum post maps to one durable Task and context boundary.
+- Optional deterministic monitors can originate the same ordinary Forum-backed Tasks
+  for incidents or improvements. Per-category authority can disable, propose for
+  review, or execute them without bypassing Policy, approvals, budgets, or audit.
+- Your command-sending phone or laptop can disconnect. Only the fixed Main and Devices needed for
+  current work must be available.
+- Placement is visible in Admin and audit, but routine Tasks do not require you to choose a Device,
+  OS, route, or Agent provider.
 - Deterministic software owns identity, policy, health, routing, leases, retries, persistence, and
   state transitions. Agents handle semantic judgment and assigned work.
 - Workers connect only to Main. They do not need an NxN SSH mesh or direct database access.
@@ -56,7 +116,11 @@ reopening every agent session.
   sessions remain resumable.
 - Each Device keeps its own selective, linked Markdown Knowledge. Main never receives its filenames,
   titles, links, graph, index, snippets, or content.
-- Rich results can become Artifacts served by Main under an explicit exposure policy.
+- Results can arrive as a Discord response or attachment, file, Artifact, hosted view, or verified
+  Git reference.
+- If login, MFA, CAPTCHA, legal confirmation, or OS permission needs you, the same Task can pause
+  with a time-bounded, revocable Owner Handoff through Main and continue after you reply. A raw
+  Worker VNC endpoint or credential is never posted to Discord by default.
 
 ## Architecture
 
@@ -174,10 +238,16 @@ claim/login, session-cookie round-trip, and clean shutdown.
 
 The destination name must contain `internal-preview`. Generated `INTERNAL_PREVIEW.md` and
 `release-metadata.json` record that the bundle is unsupported and preserve the exact release
-evidence state. Initialize the assembled bundle only through the Agent-first [Quick Start](#quick-start)
+evidence state. Initialize the assembled bundle only through the Agent-first
+[recommended installation](#recommended-installation-ask-your-agent)
 above so Discord and every other owner choice are resolved before the durable Main configuration is
 created. The internal preview runs in the foreground, does not install a persistent OS service, and
 must not be published under a release tag.
+
+The builder smokes the bundle with temporary state and an isolated dynamic loopback listener pair.
+It can run while an existing Main owns its configured ports and never stops, reconfigures, or
+upgrades that Main. Building creates inactive bytes; persistent activation belongs exclusively to
+the packaged native service lifecycle.
 
 A production build intentionally fails while any acceptance criterion is incomplete:
 
@@ -245,10 +315,13 @@ This development server is not an owner installation path. Use the generated int
 launcher when validating the bundled Main.
 
 Codex and Claude authentication is isolated per OpenDelegate Device under
-`state/providers/codex` and `state/providers/claude` by default. Authenticate those
-exact controlled homes interactively after setup. OpenDelegate intentionally does
-not copy or inherit a login from the user's global provider home, and first-class
-provider Runs reject credential environment variables.
+`state/providers/codex` and `state/providers/claude` by default. An owner may pass
+`--codex-home ABSOLUTE_PATH` or `--claude-home ABSOLUTE_PATH` during Main init to use
+an existing local provider directory as an explicit shared source of truth.
+OpenDelegate persists the path without copying login material and uses that same
+home for execution and Device assessment. Provider settings, plugins, caches, and
+native-session storage are then shared, while each Task still keeps its own native
+session. Ambient global homes are never inherited.
 
 ## Repository map
 

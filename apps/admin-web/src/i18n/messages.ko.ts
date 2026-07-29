@@ -70,21 +70,44 @@ export const koreanMessages = {
   chat: {
     unavailableMessage:
       "메인에서 장치 평가 또는 설정 에이전트 메시지 기능을 사용할 수 없다고 보고했습니다. 화면에 표시되는 장치 정보는 메인의 결정론적 런타임 보고서에서만 가져옵니다.",
-    failedMessage: "설정 에이전트가 응답하지 못했습니다. 설정은 변경되지 않았습니다.",
+    failedMessage:
+      "로컬 설정 에이전트가 준비되지 않았거나 응답 중 중단되었습니다. OpenDelegate는 결과가 불확실한 설정 작업을 자동으로 다시 실행하지 않았습니다. 이미 완료된 변경은 유지되므로 현재 설정을 확인한 뒤 다시 요청해 주세요.",
+    discordOnboardingMessage:
+      "Discord가 아직 연결되지 않았습니다. 현재 바인딩을 확인하고 설정 안내를 준비하고 있습니다.",
     secureStoreFailed:
       "인증 정보를 안전하게 저장하지 못했습니다. 설정 채팅에는 전송되지 않았습니다.",
-    secureTitle: "데이터베이스 인증 정보 저장",
-    secureIntro:
-      "입력값은 이 메인 장치의 관리형 비밀 저장소로 바로 전달됩니다. 에이전트에는 불투명한 참조만 전달됩니다.",
+    guidedSetupTitle: "단계별 설정",
+    guidedSetupIntro:
+      "설정할 항목을 선택하세요. 에이전트가 현재 상태를 먼저 확인하고 남은 단계만 안내합니다.",
+    discordSetupTitle: "Discord 설정 또는 확인",
+    discordSetupDescription:
+      "봇 토큰을 채팅에 남기지 않고 봇과 하나 이상의 Forum 채널을 연결합니다.",
+    databaseSetupTitle: "외부 PostgreSQL 사용",
+    databaseSetupDescription:
+      "SQLite가 이미 사용 중입니다. 데이터베이스 URI를 입력할 필요가 없습니다.",
+    discordSetupRequest:
+      "Discord 봇을 처음 설정하는 사용자라고 생각해 주세요. 먼저 현재 연결 상태를 확인하고 Forum 게시글이 OpenDelegate Task가 되는 방식을 설명해 주세요. 전체 과정은 짧게 보여 주되, 남은 단계는 한 번에 하나씩 안내해 주세요. 지금 단계에서는 어디로 가야 하는지, 무엇을 해야 하는지, 왜 필요한지, 완료 여부를 어떻게 확인하는지, 무엇을 전달해야 하는지 알려 주고 제 확인을 받은 뒤 다음 단계로 넘어가세요. 낯선 용어를 설명하고 누락된 비밀 정보가 아닌 값만 물어보세요. 봇 토큰을 채팅에 붙여넣으라고 하지 말고 안전 입력 폼을 사용할 시점을 알려 주세요.",
+    databaseSetupRequest:
+      "먼저 현재 데이터베이스 설정을 설명해 주세요. 기본값인 SQLite에는 URI가 필요 없습니다. 외부 PostgreSQL을 선택할 경우 변경을 제안하기 전에 마이그레이션과 서비스 재시작 요구사항을 안내하고, URI는 채팅 대신 안전 입력 폼을 사용하라고 알려 주세요.",
+    discordSecureTitle: "Discord 봇 토큰 안전하게 저장",
+    discordSecureIntro:
+      "에이전트가 토큰을 요청했을 때만 사용하세요. OpenDelegate는 이 메인에 토큰을 저장하고 에이전트에는 불투명한 참조만 전달합니다.",
+    databaseSecureTitle: "외부 PostgreSQL 인증 정보",
+    databaseSecureIntro:
+      "외부 PostgreSQL 배포를 선택한 경우에만 쓰는 URI입니다. OpenDelegate는 이 메인에 저장하고 에이전트에는 불투명한 참조만 전달합니다.",
     databaseUriLabel: "데이터베이스 URI",
     databaseUriPlaceholder: "PostgreSQL 연결 URI",
+    discordTokenLabel: "Discord 봇 토큰",
+    discordTokenPlaceholder: "Discord Developer Portal에서 발급한 봇 토큰",
     secureNotice: "제출 후 원본 값은 이 입력란에서 지워지며 채팅 메시지로 저장되지 않습니다.",
     secureStore: "안전하게 저장",
     secureStoring: "안전하게 저장 중…",
     secureStored: "로컬에 {reference}(으)로 저장됨",
     secureReferenceMessage: "이 안전한 데이터베이스 참조를 사용해 주세요: {reference}",
+    secureDiscordReferenceMessage:
+      "이 안전한 Discord 봇 토큰 참조를 사용해 주세요: {reference}. botTokenAlias는 {alias}입니다.",
     title: "설정 채팅",
-    subtitle: "장치 설정은 작업 대화와 분리되어 있습니다.",
+    subtitle: "여기에서 이 장치와 OpenDelegate 서비스를 설정합니다. 작업 대화는 별도로 유지됩니다.",
     restore: "설정 채팅 원래 크기로 복원",
     expand: "설정 채팅 확대",
     close: "설정 채팅 닫기",
@@ -103,6 +126,11 @@ export const koreanMessages = {
     askPlaceholder: "이 장치에 관해 질문하세요…",
     send: "메시지 보내기",
     open: "설정 채팅 열기",
+    openUnread: "설정 채팅 열기 — 새 응답 있음",
+    notificationRegion: "설정 채팅 알림",
+    unreadAnnouncement: "설정 채팅에 새 응답이 있습니다. 읽지 않은 응답 {count}개.",
+    unreadStatus: "새 설정 채팅 응답",
+    unreadCount: "읽지 않은 응답 {count}개",
   },
   navigation: {
     devices: "장치",
@@ -122,6 +150,20 @@ export const koreanMessages = {
     runs: "실행",
     authority: "권한 및 리소스",
     configure: "설정",
+    assessDevice: "장치 평가",
+    assessingDevice: "평가 중…",
+    assessmentFailed: "장치 평가에 실패했습니다. 저장된 기존 관측값은 바뀌지 않았습니다.",
+    localAgentSetup: "로컬 Agent 설정",
+    localAgentSetupIntro:
+      "환경설정 채팅은 OpenDelegate init에서 선택한 Main Agent를 사용합니다. 로컬 어댑터가 설치되고 로그인되어 호환성 검사를 통과하면 사용할 수 있습니다.",
+    codexSetupGuide:
+      "Codex: init에서 Codex를 선택하고, 기존 인증을 재사용하려면 인증된 Codex home을 명시적으로 공유하세요.",
+    claudeSetupGuide:
+      "Claude: --claude-home으로 인증된 Claude 설정 디렉터리를 재사용하거나, 이 장치의 Main 관리형 Claude 프로필을 인증하세요.",
+    agentCredentialNote:
+      "프로바이더 자격 증명은 이 장치에만 남습니다. 환경설정 채팅에는 절대 붙여넣지 마세요.",
+    assessmentScope:
+      "평가는 LLM의 추측 없이 Codex, Claude, 브라우저 자동화, Computer Use 준비 상태와 로컬 Knowledge 상태를 확인합니다.",
     facts: "장치 정보",
     roles: "역할",
     instructions: "지침",
@@ -130,12 +172,57 @@ export const koreanMessages = {
     noRoutes: "설정된 연결 경로가 없습니다.",
     runtimeStatus: "런타임 상태",
     transportRoutes: "연결 경로",
+    wakeOnLan: "Wake-on-LAN",
+    wakeTargetSetting: "장치 깨우기 설정",
+    automaticWake: "OpenDelegate 자동 깨우기",
+    wakeTargetEnabled: "활성화",
+    wakeTargetDisabled: "비활성화",
+    wakeTargetUnsupported: "지원되지 않음",
+    wakeTargetUnknown: "확인되지 않음",
+    automaticWakeRelayRequired: "릴레이 필요",
+    automaticWakeUnavailable: "사용할 수 없음",
+    automaticWakeUnknown: "확인되지 않음",
+    wakeRelayRequiredDescription:
+      "이 장치는 매직 패킷 깨우기가 활성화된 것으로 보고했지만, 같은 로컬 네트워크의 검증된 온라인 릴레이가 아직 필요합니다. Tailscale이나 라우팅된 IP 연결만으로는 이 장치를 깨울 수 없습니다.",
+    wakeUnavailableDescription:
+      "이 장치에서 매직 패킷 깨우기가 비활성화되어 있거나 지원되지 않아 자동으로 깨울 수 없습니다.",
+    wakeUnknownDescription:
+      "OpenDelegate가 이 장치의 깨우기 설정을 확인하지 못해 깨우기 가능 여부를 추측하지 않습니다.",
+    wakeObserved: "장치에서 확인 · {time}",
+    wakeLastObserved: "오프라인 전 마지막 확인 · {time}",
+    wakeNeverObserved: "아직 인증된 관측 정보가 없습니다.",
     knowledgeHealth: "로컬 지식 상태",
     currentWork: "현재 작업",
     policies: "실행 정책",
     noPolicies: "표시할 실행 정책이 없습니다.",
     agentAdapters: "Agent 어댑터",
     noAgentAdapters: "표시할 Agent 어댑터 관측 정보가 없습니다.",
+    agentExecution: "Agent 실행",
+    agentProfileTarget: "Agent 프로필 대상",
+    workerAgent: "작업 Agent",
+    coordinatorAgent: "조정 Agent",
+    currentBinding: "현재 바인딩",
+    automaticSelection: "새 세션마다 OpenDelegate가 검증된 바인딩을 선택합니다.",
+    agentProfileHint:
+      "프로필 변경은 새 네이티브 세션부터 적용됩니다. 기존 Task 세션은 원래 바인딩을 유지합니다.",
+    profileMode: "선택 모드",
+    profileAuto: "자동",
+    profilePrefer: "우선",
+    profilePinned: "고정",
+    profileAutoDescription: "새 세션마다 준비되고 검증된 어댑터와 모델을 결정론적으로 선택합니다.",
+    profilePreferDescription:
+      "기본 바인딩을 우선 사용하고, 필요할 때 명시된 대체 바인딩만 사용합니다.",
+    profilePinnedDescription:
+      "이 바인딩만 정확히 사용합니다. 사용할 수 없으면 다른 모델로 대체하지 않고 중단합니다.",
+    primaryBinding: "기본 바인딩",
+    fallbackBinding: "대체 바인딩",
+    noFallback: "대체 바인딩 없음",
+    noVerifiedModels:
+      "준비되고 검증된 모델 카탈로그가 없습니다. 정확한 모델을 고르기 전에 이 Device를 평가하세요.",
+    configureAgentProfile: "Configuration Chat에서 변경 검토",
+    modelCatalog: "검증된 모델 {count}개",
+    defaultModel: "기본값",
+    moreModels: "외 {count}개",
     resourceLocks: "리소스 잠금",
     noResourceLocks: "활성화된 명명 리소스 잠금이 없습니다.",
     verifiedEvidence: "검증됨 · {source} · {time}",
@@ -395,9 +482,9 @@ export const koreanMessages = {
   },
   join: {
     eyebrow: "장치 등록",
-    title: "장치 연결",
+    title: "장치 추가",
     intro:
-      "유효 시간이 짧은 일회용 등록 파일을 생성해 한 번 다운로드한 뒤, 새 장치에서 패키지에 포함된 Worker 연결 명령을 실행하세요.",
+      "새 Mac, Windows 또는 Linux 장치에서 이미 사용하는 Agent에게 Worker 설치를 맡기세요. Main은 유효 시간이 짧은 일회용 등록 파일만 제공합니다.",
     unavailable: "이 메인에는 장치 등록 기능이 설정되어 있지 않습니다.",
     loadFailed: "장치 등록 상태를 불러오지 못했습니다.",
     deviceId: "장치 ID",
@@ -417,9 +504,23 @@ export const koreanMessages = {
     fingerprint: "예상 메인 지문",
     endpoints: "Worker 채널 엔드포인트",
     download: "등록 파일 다운로드",
-    joinCommand: "새 장치에서 실행",
+    joinCommand: "수동 명령(고급)",
     copyCommand: "명령 복사",
     copyDone: "복사됨",
+    recommended: "권장",
+    agentAssistedTitle: "새 장치의 Agent에게 설치 맡기기",
+    agentAssistedDetail:
+      "새 장치에서 Codex 또는 Claude를 여세요. 등록 파일을 받은 뒤 파일 내용이 아닌 로컬 경로와 아래 프롬프트를 Agent에게 전달하세요.",
+    agentPromptLabel: "새 장치의 Codex 또는 Claude에게 전달할 프롬프트",
+    agentPrompt:
+      "이 장치에 https://github.com/jugol/OpenDelegate 저장소의 OpenDelegate Worker를 설치하세요. README와 skills/opendelegate-join/SKILL.md를 따르세요. 열어보지 않은 등록 파일 <absolute-path-to/{filename}>을 사용해 이 장치를 연결하세요. 등록 파일 내용은 출력·붙여넣기·로그 기록하지 마세요. 이 OS의 네이티브 서비스를 설정하고 Main 연결을 검증한 뒤 Admin Web에 장치가 나타나면 보고하세요.",
+    copyAgentPrompt: "Agent 프롬프트 복사",
+    afterJoin:
+      "왼쪽 목록에 장치가 나타나면 해당 장치의 환경설정 채팅을 열어 평가하고, 별명·역할·지침을 정하세요.",
+    needHelp: "OpenDelegate의 안내가 필요한가요?",
+    helpDetail:
+      "환경설정 채팅에서 등록 파일을 노출하지 않고 안전한 파일 전달, 대상 장치 명령, 등록 확인 방법을 안내받을 수 있습니다.",
+    openSetupChat: "환경설정 채팅에 물어보기",
     recent: "최근 등록 파일",
     none: "발급된 등록 파일이 없습니다.",
     statusActive: "사용 가능",
@@ -427,9 +528,11 @@ export const koreanMessages = {
     statusExpired: "만료됨",
     statusRevoked: "취소됨",
     stepsTitle: "안전한 연결 흐름",
-    stepOne: "메인에서 일회용 등록 파일을 생성하고 다운로드합니다.",
-    stepTwo: "운영체제의 안전한 로컬 전달 방식으로 파일을 옮깁니다.",
-    stepThree: "패키지의 Worker 연결 명령을 실행하면 사용된 등록 파일이 삭제됩니다.",
+    stepOne: "새 장치에서 Codex 또는 Claude를 열고 OpenDelegate Worker 준비를 요청합니다.",
+    stepTwo:
+      "여기서 일회용 등록 파일을 생성·다운로드한 뒤 인증된 연결이나 안전한 로컬 전달 방식으로 열지 않은 채 옮깁니다.",
+    stepThree:
+      "새 장치의 Agent에게 파일 경로를 줍니다. Worker가 Main에 연결되고 사용한 등록 파일은 삭제됩니다.",
   },
   artifact: {
     eyebrow: "작업 결과물",
@@ -586,6 +689,10 @@ export const koreanMessages = {
     development: "개발",
     computerUse: "Computer Use",
     browserAutomation: "브라우저 자동화",
+    configurationAssessmentIntro:
+      "먼저 장치 평가를 실행하세요. 그 후 관측된 Codex, Claude, 브라우저 자동화, Computer Use, 로컬 Knowledge 상태를 설명하고 역할이나 지침 제안을 도와드릴 수 있습니다. 채팅 자체는 평가를 실행할 수 없으며, 프로바이더 자격 증명은 메시지에 입력하면 안 됩니다.",
+    configurationAssessmentReadyIntro:
+      "장치 평가가 완료되었습니다. 이제 관측된 Codex, Claude, 브라우저 자동화, Computer Use, 로컬 Knowledge 상태를 설명하고 역할이나 지침 제안을 도와드릴 수 있습니다. 프로바이더 자격 증명은 메시지에 입력하지 마세요.",
     localNetwork: "로컬 네트워크",
     healthyPriorityOne: "정상 · 우선순위 1",
     healthyPriority: "정상 · 우선순위 {priority}",

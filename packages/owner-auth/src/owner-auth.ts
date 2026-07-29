@@ -816,13 +816,13 @@ function assertLocalClaimChannel(channel: LocalClaimChannel): void {
 function assertPassphrase(passphrase: string): void {
   if (
     typeof passphrase !== "string" ||
-    passphrase.trim().length === 0 ||
-    [...passphrase].length < 12 ||
+    !/\P{White_Space}/u.test(passphrase) ||
+    [...passphrase].length < 10 ||
     Buffer.byteLength(passphrase, "utf8") > 1024
   ) {
     throw new OwnerAuthError(
       "PASSPHRASE_INVALID",
-      "The owner passphrase must contain at least 12 Unicode code points and at most 1024 UTF-8 bytes.",
+      "The owner passphrase must contain at least 10 Unicode code points, including at least one non-whitespace code point, and at most 1024 UTF-8 bytes.",
     );
   }
 }

@@ -122,7 +122,7 @@ prefix.
 This is acceptable only for a marked, foreground-only internal preview. It is a
 release blocker for `release-candidate` and supported channels. A candidate must
 provide one packaged provider login and probe boundary that shares Main's resolver,
-authenticates the exact controlled provider home through owner-interactive stdio,
+authenticates the exact configured provider home through owner-interactive stdio,
 persists the canonical command identity and tested version, and revalidates both
 on every foreground and service start. Until that boundary and its cross-platform
 proof exist, a successful provider status command or
@@ -135,8 +135,8 @@ service readiness.
 | --- | --- |
 | Bundled Node.js | 24.18.0, verified against the repository-pinned official archive digest |
 | pnpm | 11.15.1 |
-| Codex App Server and CLI | 0.145.0 |
-| Claude Agent SDK and authentication CLI | SDK 0.3.205; Claude Code 2.1.205 |
+| Codex App Server and CLI | 0.146.0 |
+| Claude Agent SDK and authentication CLI | SDK 0.3.220; Claude Code 2.1.220 |
 | Discord API | v10 |
 | Graphical Linux reference | Ubuntu 24.04.4 LTS, GNOME, Wayland |
 

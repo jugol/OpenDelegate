@@ -12,7 +12,8 @@ import type {
 import { ArtifactSurface } from "./ArtifactSurface";
 import { AuditSurface } from "./AuditSurface";
 import { JoinSurface } from "./JoinSurface";
-import { AdminI18nProvider } from "./i18n";
+import { AdminI18nProvider, formatMessage } from "./i18n";
+import { englishMessages } from "./i18n/messages.en";
 import { koreanMessages } from "./i18n/messages.ko";
 
 const NOW = "2026-07-25T00:00:00.000Z";
@@ -138,7 +139,8 @@ describe("owner operations surfaces", () => {
 
     render(<JoinSurface api={api} />);
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Join a device" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Add a Device" })).toBeTruthy();
+    expect(screen.getByText("Let the new Device’s Agent install it")).toBeTruthy();
     await user.type(await screen.findByLabelText("Device ID"), "device_worker");
     await user.click(await screen.findByRole("button", { name: "Generate grant" }));
 
@@ -151,6 +153,15 @@ describe("owner operations surfaces", () => {
     expect(await screen.findByRole("heading", { name: "Grant ready to download" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Download grant file" })).toBeTruthy();
     expect(screen.getByText(/opendelegate worker join --grant-file/u)).toBeTruthy();
+    expect(
+      screen.getByText(
+        formatMessage(englishMessages.join.agentPrompt, {
+          filename: issued.suggestedFilename,
+        }),
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy Agent prompt" })).toBeTruthy();
+    expect(screen.getByText(/appears in the left list/iu)).toBeTruthy();
     expect(document.body.textContent).not.toContain(issued.document.token);
     expect(screen.getByText(/downloaded file is a credential/iu)).toBeTruthy();
   });

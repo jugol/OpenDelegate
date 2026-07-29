@@ -6,6 +6,10 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { Pool } from "pg";
+import {
+  ConfigurationService,
+  STANDARD_CONFIGURATION_DEFINITIONS,
+} from "@opendelegate/configuration";
 import type {
   ManagedSecretDeletion,
   ManagedSecretMutation,
@@ -13,9 +17,11 @@ import type {
   ManagedSecretStoreHealth,
   SecretAvailability,
 } from "@opendelegate/secrets";
+import { SqlConfigurationRepository } from "@opendelegate/storage-sql";
 
 import { browserOpenCommand, openBrowser, parseArguments } from "../src/cli.ts";
 import {
+  inspectPersistedMainConfiguration,
   listenMainRuntime,
   loadMainConfiguration,
   MainSingletonOwnershipError,
@@ -31,6 +37,10 @@ const DEVELOPMENT_RELEASE_IDENTITY = {
   declaredReleaseChannel: "development",
   releaseChannel: "development",
   releaseVerification: { status: "not-applicable" },
+} as const;
+const DEVELOPMENT_RUNTIME_IDENTITY = {
+  build: { version: "0.1.0-test", buildId: "release-candidate-spoof" },
+  ...DEVELOPMENT_RELEASE_IDENTITY,
 } as const;
 
 test("CLI init accepts secret-free database and exact HTTPS listener configuration", () => {
@@ -115,6 +125,34 @@ test("CLI init accepts secret-free database and exact HTTPS listener configurati
     /enabled or disabled/,
   );
   assert.throws(() => parseArguments(["init", "--agent", "unknown"]), /must be auto/);
+  const sharedCodex = parseArguments([
+    "init",
+    "--agent",
+    "codex",
+    "--codex-home",
+    "/srv/codex-ssot",
+    "--claude-home",
+    "/srv/claude-ssot",
+  ]);
+  assert.equal(sharedCodex.agentProvider, "codex");
+  assert.equal(sharedCodex.codexHome, resolve("/srv/codex-ssot"));
+  assert.equal(sharedCodex.claudeHome, resolve("/srv/claude-ssot"));
+  assert.throws(
+    () => parseArguments(["init", "--agent", "auto", "--codex-home", "/srv/codex-ssot"]),
+    /requires --agent codex/,
+  );
+  assert.throws(
+    () => parseArguments(["init", "--agent", "auto", "--claude-home", "/srv/claude-ssot"]),
+    /requires --agent codex or --agent claude/,
+  );
+  assert.throws(
+    () => parseArguments(["serve", "--codex-home", "/srv/codex-ssot"]),
+    /available only with init/,
+  );
+  assert.throws(
+    () => parseArguments(["serve", "--claude-home", "/srv/claude-ssot"]),
+    /available only with init/,
+  );
   assert.throws(
     () => parseArguments(["init", "--discord-token-stdin"]),
     /requires --discord-config/,
@@ -295,6 +333,107 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
   assert.equal(await readFile(resumed.paths.sqliteFile).then(Boolean), true);
 });
 
+test("a pre-dynamic Configuration database migrates Discord to explicit disabled state", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-discord-migration-"));
+  const cleanup: { runtime?: Awaited<ReturnType<typeof createMainRuntime>> } = {};
+  t.after(async () => {
+    await cleanup.runtime?.close();
+    await rm(home, { force: true, recursive: true });
+  });
+  const mainSecrets = createMainTestSecretContext(home);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot: await createAdminFixture(home),
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+    discord: {
+      schemaVersion: 1,
+      enabled: true,
+      botTokenAlias: "legacy-discord-token",
+      forum: {
+        applicationId: "11111111111111111",
+        botUserId: "22222222222222222",
+        guildId: "33333333333333333",
+        forumBindings: [
+          {
+            channelId: "44444444444444444",
+            workflowTagIds: {
+              done: "50000000000000001",
+              failed: "50000000000000002",
+              intake: "50000000000000003",
+              review: "50000000000000004",
+              running: "50000000000000005",
+              waiting: "50000000000000006",
+            },
+          },
+        ],
+        ownerUserIds: ["60000000000000001"],
+        allowedRoleIds: [],
+      },
+      secretBackend: {
+        backend: "windows-dpapi",
+        vaultRoot: join(home, "legacy-discord-vault"),
+      },
+    },
+  });
+  const repository = await SqlConfigurationRepository.openSqlite({
+    filename: initialized.paths.sqliteFile,
+    migrationMode: "verify",
+  });
+  try {
+    let sequence = 0;
+    const legacyService = new ConfigurationService({
+      definitions: STANDARD_CONFIGURATION_DEFINITIONS,
+      repository,
+      idSource: () => `legacy_configuration_${++sequence}`,
+      clock: () => new Date().toISOString(),
+    });
+    const proposal = await legacyService.propose({
+      actor: "legacy-opendelegate-init",
+      reason: "Create a pre-dynamic Configuration revision.",
+      changes: [
+        {
+          operation: "set",
+          key: "database.adapter",
+          scope: { kind: "main", id: initialized.configuration.deviceId },
+          value: "sqlite",
+        },
+      ],
+    });
+    await legacyService.apply({
+      proposalId: proposal.id,
+      expectedRevision: 0,
+      actor: "legacy-opendelegate-init",
+    });
+  } finally {
+    await repository.close();
+  }
+
+  const runtime = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "discord-migration" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+  cleanup.runtime = runtime;
+  assert.equal(runtime.discord, undefined);
+  const persisted = await inspectPersistedMainConfiguration({
+    configuration: initialized.configuration,
+    home,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+  assert.equal(persisted["discord.binding"]?.value, null);
+  assert.equal(persisted["discord.binding"]?.candidates.length, 1);
+  assert.equal(
+    persisted["discord.binding"]?.candidates[0]?.scope.id,
+    initialized.configuration.deviceId,
+  );
+});
+
 test("runtime state rejects a managed symlink or Windows junction before writing through it", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-main-links-"));
   t.after(() => rm(root, { force: true, recursive: true }));
@@ -337,10 +476,71 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     configuration: initialized.configuration,
     home,
     build: { version: "0.1.0-test", buildId: "release-candidate-spoof" },
-    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    releaseIdentity: DEVELOPMENT_RUNTIME_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    mainDeviceAssessment: {
+      probeAgentAdapters: async () => [
+        {
+          contractVersion: 1,
+          adapterId: "codex-app-server",
+          provider: "codex",
+          installed: true,
+          version: "0.145.0",
+          compatibility: "tested",
+          auth: { state: "ready" },
+          capabilities: {
+            start: true,
+            resume: true,
+            streaming: true,
+            cancellation: true,
+            approvalBridge: true,
+            steering: true,
+            checkpointContinuation: true,
+            workspaceIsolation: ["none"],
+          },
+          diagnostics: [],
+        },
+        {
+          contractVersion: 1,
+          adapterId: "claude-agent-sdk",
+          provider: "claude",
+          installed: true,
+          version: "0.2.114",
+          compatibility: "tested",
+          auth: { state: "not_ready" },
+          capabilities: {
+            start: true,
+            resume: true,
+            streaming: true,
+            cancellation: true,
+            approvalBridge: true,
+            steering: true,
+            checkpointContinuation: true,
+            workspaceIsolation: ["none"],
+          },
+          diagnostics: [{ code: "AUTH_NOT_READY", message: "Authentication is not ready." }],
+        },
+      ],
+      probeBrowserAutomation: async () => ({
+        verification: "verified",
+        version: "test-browser-1",
+      }),
+    },
+  });
+  const initialConfiguration = await inspectPersistedMainConfiguration({
+    configuration: initialized.configuration,
+    home,
     sourceCheckout: resolve("."),
     managedSecretStore: mainSecrets.store,
   });
+  assert.equal(initialConfiguration["discord.binding"]?.value, null);
+  assert.deepEqual(initialConfiguration["discord.binding"]?.candidates, [
+    {
+      scope: { kind: "main", id: initialized.configuration.deviceId },
+      value: null,
+    },
+  ]);
   if (process.platform === "win32") {
     const stateEntries = await readdir(initialized.paths.stateDirectory);
     assert.ok(stateEntries.includes("main.sqlite3-wal"));
@@ -381,6 +581,14 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
         serviceMode: "foreground",
         roles: ["main-coordinator"],
         instructions: [],
+        agentExecutionProfile: {
+          schemaVersion: 1,
+          mode: "auto",
+        },
+        coordinatorAgentExecutionProfile: {
+          schemaVersion: 1,
+          mode: "auto",
+        },
         policies: [
           {
             policyId: "policy.official-package-install",
@@ -451,6 +659,59 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
     },
     discord: { status: "unavailable", code: "DISCORD_NOT_CONFIGURED" },
   });
+
+  const assessment = await runtime.app.inject({
+    method: "POST",
+    url: `/api/v1/devices/${initialized.configuration.deviceId}/assessment`,
+    headers: {
+      host: "127.0.0.1:4380",
+      origin: "http://127.0.0.1:4380",
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      cookie,
+      "x-opendelegate-csrf": login.csrfToken,
+      "idempotency-key": "main-device-assessment-1",
+    },
+    payload: {},
+  });
+  assert.equal(assessment.statusCode, 200);
+  assert.deepEqual(
+    assessment
+      .json()
+      .device.capabilities.map(
+        (capability: { name: string; verification: string; version?: string }) => capability,
+      ),
+    [
+      {
+        name: "browser-automation",
+        verification: "verified",
+        observedAtMs: assessment.json().device.lastObservation.observedAtMs,
+        evidenceSource: "capability-probe",
+        version: "test-browser-1",
+      },
+      {
+        name: "claude-code",
+        verification: "degraded",
+        observedAtMs: assessment.json().device.lastObservation.observedAtMs,
+        evidenceSource: "agent-adapter",
+        version: "0.2.114",
+      },
+      {
+        name: "codex",
+        verification: "verified",
+        observedAtMs: assessment.json().device.lastObservation.observedAtMs,
+        evidenceSource: "agent-adapter",
+        version: "0.145.0",
+      },
+      {
+        name: "computer-use",
+        verification: "unavailable",
+        observedAtMs: assessment.json().device.lastObservation.observedAtMs,
+        evidenceSource: "capability-probe",
+      },
+    ],
+  );
+  assert.equal(assessment.json().device.knowledgeHealth, "healthy");
 
   const admin = await runtime.app.inject({
     method: "GET",
@@ -553,6 +814,21 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
   });
   assert.equal(restored.statusCode, 200);
   assert.equal(restored.json().objective, "Survive Main restart.");
+  const restoredDevices = await restarted.app.inject({
+    method: "GET",
+    url: "/api/v1/devices",
+    headers: {
+      host: "127.0.0.1:4380",
+      cookie: `__Host-opendelegate_session=${restoredLogin.sessionToken}`,
+    },
+  });
+  assert.equal(restoredDevices.statusCode, 200);
+  assert.deepEqual(
+    restoredDevices
+      .json()
+      .devices[0].capabilities.map((capability: { name: string }) => capability.name),
+    ["browser-automation", "claude-code", "codex", "computer-use"],
+  );
 });
 
 test("one Main owns an installation and restart reconciliation begins only after release", async (t) => {

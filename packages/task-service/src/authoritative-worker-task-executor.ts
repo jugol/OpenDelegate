@@ -49,11 +49,31 @@ export type TaskWorkPlanDecision =
       readonly publicMessage?: string;
     }
   | {
+      /**
+       * A deterministic read-only answer synthesized exclusively from a bounded
+       * Main-owned orchestration snapshot. The executor still requires its trusted
+       * direct-completion authorizer to recognize this exact decision.
+       */
+      readonly state: "completed";
+      readonly publicMessage: string;
+      readonly verifiedCompletionCriteria: readonly string[];
+    }
+  | {
       readonly state: "ready";
       readonly plan: SemanticPlanningResponseV1;
     };
 
 export interface TaskWorkPlanner {
+  /**
+   * Optional side-effect-free fast path evaluated before a native-turn Budget is
+   * consumed. It may return only a deterministically authorized completion.
+   */
+  planDeterministically?(input: {
+    readonly task: TaskExecutionRequest["task"];
+    readonly attempt: number;
+    readonly executionKey: string;
+    readonly signal: AbortSignal;
+  }): Promise<Extract<TaskWorkPlanDecision, { readonly state: "completed" }> | undefined>;
   plan(input: {
     readonly task: TaskExecutionRequest["task"];
     readonly attempt: number;
@@ -62,10 +82,26 @@ export interface TaskWorkPlanner {
   }): Promise<TaskWorkPlanDecision>;
 }
 
+export interface DirectPlanningCompletionAuthorizer {
+  /**
+   * Authorizes the narrow Main-owned, read-only completion exception.
+   *
+   * A planner decision is never sufficient authority on its own. Production
+   * composition supplies an authorizer that recognizes only decisions produced
+   * by a deterministic, side-effect-free query path.
+   */
+  authorize(input: {
+    readonly task: TaskExecutionRequest["task"];
+    readonly executionKey: string;
+    readonly decision: Extract<TaskWorkPlanDecision, { readonly state: "completed" }>;
+  }): boolean;
+}
+
 export interface WorkerDispatchTarget {
   readonly deviceId: string;
   readonly workerId: string;
   readonly routeId: string;
+  readonly agentRequirement?: WorkerRunAssignmentV1["agentRequirement"];
 }
 
 export interface WorkerDispatchTargetResolver {
@@ -143,6 +179,7 @@ export interface AuthoritativeWorkerTaskExecutorOptions {
   readonly leaseDurationMs?: number;
   readonly budget?: TaskBudgetEnforcementPort;
   readonly checkpoints?: TaskContinuationCheckpointPort;
+  readonly directCompletionAuthorizer?: DirectPlanningCompletionAuthorizer;
 }
 
 export interface WorkerEventAcceptance {
@@ -327,6 +364,7 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
   readonly #idSource: AuthoritativeWorkerTaskExecutorIdSource;
   readonly #budget: TaskBudgetEnforcementPort | undefined;
   readonly #checkpoints: TaskContinuationCheckpointPort | undefined;
+  readonly #directCompletionAuthorizer: DirectPlanningCompletionAuthorizer | undefined;
   readonly #leaseDurationMs: number;
   readonly #active = new Map<string, ActiveTaskExecution>();
   readonly #runWaiters = new Map<string, Set<() => void>>();
@@ -351,6 +389,7 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     this.#idSource = options.idSource;
     this.#budget = options.budget;
     this.#checkpoints = options.checkpoints;
+    this.#directCompletionAuthorizer = options.directCompletionAuthorizer;
     this.#leaseDurationMs = leaseDurationMs;
   }
 
@@ -378,6 +417,13 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
 
     try {
       const planned = await this.#loadOrCreatePlan(request, active.controller.signal);
+      if (planned.state === "completed") {
+        return {
+          state: "completed",
+          publicMessage: planned.publicMessage,
+          verifiedCompletionCriteria: planned.verifiedCompletionCriteria,
+        };
+      }
       if (planned.state !== "ready") {
         return {
           state: planned.state,
@@ -389,7 +435,7 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       const workOrders = planned.plan.workOrders;
       await this.#budget?.registerWorkOrders({
         taskId: request.task.taskId,
-        operationId: `authoritative-plan:${request.executionKey}`,
+        operationId: `authoritative-plan:${request.planningKey}`,
         workOrders,
       });
       const result = await this.#executeDependencyWaves(
@@ -779,20 +825,30 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     request: TaskExecutionRequest,
     signal: AbortSignal,
   ): Promise<TaskWorkPlanDecision> {
-    const existing = await this.#loadPlan(request.executionKey, request.task.taskId);
+    assertNotAborted(signal);
+    const deterministic = await this.#planner.planDeterministically?.({
+      task: request.task,
+      attempt: request.attempt,
+      executionKey: request.planningKey,
+      signal,
+    });
+    if (deterministic !== undefined) {
+      assertNotAborted(signal);
+      return this.#validateDirectPlanningCompletion(request, deterministic);
+    }
+    const existing = await this.#loadPlan(request.planningKey, request.task.taskId);
     if (existing !== undefined) {
       return { state: "ready", plan: existing };
     }
-    assertNotAborted(signal);
     await this.#budget?.beginNativeTurn({
       taskId: request.task.taskId,
-      operationId: `authoritative-planner:${request.executionKey}`,
+      operationId: `authoritative-planner:${request.planningKey}`,
       source: "main-planner",
     });
     const decision = await this.#planner.plan({
       task: request.task,
       attempt: request.attempt,
-      executionKey: request.executionKey,
+      executionKey: request.planningKey,
       signal,
     });
     assertNotAborted(signal);
@@ -808,6 +864,9 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
           : { publicMessage: validatePublicMessage(decision.publicMessage) }),
       };
     }
+    if (decision.state === "completed") {
+      return this.#validateDirectPlanningCompletion(request, decision);
+    }
     if (decision.state !== "ready") {
       throw new TaskExecutorError(
         "WORK_PLAN_INVALID",
@@ -815,23 +874,57 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       );
     }
     const plan = validatePlan(decision.plan, request.task.taskId);
-    const streamId = planStreamId(request.executionKey);
+    const streamId = planStreamId(request.planningKey);
     const payload: PlanRecordedPayload = {
       schemaVersion: 1,
-      executionKeyDigest: digest(request.executionKey),
+      executionKeyDigest: digest(request.planningKey),
       taskId: request.task.taskId,
       plan,
     };
     await this.#appendEvent({
       streamId,
       expectedVersion: 0,
-      eventId: `event_plan_${digest(request.executionKey)}`,
+      eventId: `event_plan_${digest(request.planningKey)}`,
       type: "task.worker-plan-recorded",
       payload,
     });
     return {
       state: "ready",
-      plan: (await this.#loadPlan(request.executionKey, request.task.taskId)) ?? plan,
+      plan: (await this.#loadPlan(request.planningKey, request.task.taskId)) ?? plan,
+    };
+  }
+
+  #validateDirectPlanningCompletion(
+    request: TaskExecutionRequest,
+    decision: Extract<TaskWorkPlanDecision, { readonly state: "completed" }>,
+  ): Extract<TaskWorkPlanDecision, { readonly state: "completed" }> {
+    if (
+      this.#directCompletionAuthorizer?.authorize({
+        task: request.task,
+        executionKey: request.planningKey,
+        decision,
+      }) !== true
+    ) {
+      throw new TaskExecutorError(
+        "WORK_PLAN_INVALID",
+        "A planning answer cannot complete a Task without deterministic read-only authority.",
+      );
+    }
+    const completed = validateVerifierResult(
+      {
+        state: "completed",
+        publicMessage: decision.publicMessage,
+        verifiedCompletionCriteria: decision.verifiedCompletionCriteria,
+      },
+      request.task.completionCriteria,
+    );
+    if (completed.state !== "completed") {
+      throw invalidVerifierResult();
+    }
+    return {
+      state: "completed",
+      publicMessage: validatePublicMessage(decision.publicMessage),
+      verifiedCompletionCriteria: completed.verifiedCompletionCriteria,
     };
   }
 
@@ -1111,14 +1204,25 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       }
     }
     assertNotAborted(signal);
+    const agentRequirement = target.agentRequirement ?? workOrder.requiredAgent;
+    if (
+      workOrder.requiredAgent !== undefined &&
+      (agentRequirement === undefined ||
+        !agentRequirementSatisfies(agentRequirement, workOrder.requiredAgent))
+    ) {
+      throw new TaskExecutorError(
+        "WORKER_SELECTION_INVALID",
+        "The Worker target widened or contradicted the Work Order Agent requirement.",
+      );
+    }
     const assignment: WorkerRunAssignmentV1 = deepFreeze({
       taskId: request.task.taskId,
       workOrder,
       ...(continuationCheckpoint === undefined ? {} : { continuationCheckpoint }),
-      ...(workOrder.requiredAgent === undefined
-        ? {}
-        : { agentRequirement: workOrder.requiredAgent }),
-      ...target,
+      ...(agentRequirement === undefined ? {} : { agentRequirement }),
+      deviceId: target.deviceId,
+      workerId: target.workerId,
+      routeId: target.routeId,
       runId,
       leaseId,
       fencingToken:
@@ -2324,7 +2428,7 @@ function normalizeAssignment(
   if (
     workOrder.requiredAgent !== undefined &&
     (agentRequirement === undefined ||
-      !isDeepStrictEqual(agentRequirement, workOrder.requiredAgent))
+      !agentRequirementSatisfies(agentRequirement, workOrder.requiredAgent))
   ) {
     throw corruptState();
   }
@@ -2395,7 +2499,8 @@ function assertAgentSessionMatchesAssignment(
   const requirement = assignment.agentRequirement;
   if (
     session.provider !== requirement.provider ||
-    (requirement.adapterId !== undefined && session.adapterId !== requirement.adapterId)
+    (requirement.adapterId !== undefined && session.adapterId !== requirement.adapterId) ||
+    (requirement.modelId !== undefined && session.modelId !== requirement.modelId)
   ) {
     throw replay ? corruptState() : invalidWorkerEvent();
   }
@@ -2479,7 +2584,14 @@ function validateVerifierResult(
 }
 
 function validateTarget(value: WorkerDispatchTarget): WorkerDispatchTarget {
-  if (!isRecord(value) || !hasExactKeys(value, ["deviceId", "workerId", "routeId"])) {
+  if (
+    !isRecord(value) ||
+    !hasAllowedAndRequiredKeys(
+      value,
+      ["deviceId", "workerId", "routeId", "agentRequirement"],
+      ["deviceId", "workerId", "routeId"],
+    )
+  ) {
     throw new TaskExecutorError(
       "WORKER_SELECTION_INVALID",
       "The Worker target resolver returned an invalid selection.",
@@ -2489,13 +2601,40 @@ function validateTarget(value: WorkerDispatchTarget): WorkerDispatchTarget {
     assertIdentifier(value.deviceId, "Device ID");
     assertIdentifier(value.workerId, "Worker ID");
     assertIdentifier(value.routeId, "route ID");
+    if (value.agentRequirement !== undefined) {
+      parseWorkerAgentRequirement(value.agentRequirement);
+    }
   } catch {
     throw new TaskExecutorError(
       "WORKER_SELECTION_INVALID",
       "The Worker target resolver returned an invalid selection.",
     );
   }
-  return Object.freeze({ ...value });
+  return Object.freeze({
+    deviceId: value.deviceId,
+    workerId: value.workerId,
+    routeId: value.routeId,
+    ...(value.agentRequirement === undefined
+      ? {}
+      : { agentRequirement: parseWorkerAgentRequirement(value.agentRequirement) }),
+  });
+}
+
+function agentRequirementSatisfies(
+  candidate: NonNullable<WorkerRunAssignmentV1["agentRequirement"]>,
+  required: NonNullable<WorkOrderV1["requiredAgent"]>,
+): boolean {
+  if (
+    candidate.provider !== required.provider ||
+    (required.adapterId !== undefined && candidate.adapterId !== required.adapterId) ||
+    (required.modelId !== undefined && candidate.modelId !== required.modelId)
+  ) {
+    return false;
+  }
+  const allowed = new Set(required.allowedCompatibilities ?? (["tested"] as const));
+  return (candidate.allowedCompatibilities ?? (["tested"] as const)).every((compatibility) =>
+    allowed.has(compatibility),
+  );
 }
 
 function validatePublicMessage(value: string): string {
@@ -2518,12 +2657,16 @@ function assertOptions(options: AuthoritativeWorkerTaskExecutorOptions): void {
     !isRecord(options) ||
     !hasMethods(options.eventStore, ["append", "readStream"]) ||
     !hasMethods(options.planner, ["plan"]) ||
+    (options.planner.planDeterministically !== undefined &&
+      typeof options.planner.planDeterministically !== "function") ||
     !hasMethods(options.targetResolver, ["resolve"]) ||
     !hasMethods(options.dispatch, ["enqueue"]) ||
     !hasMethods(options.verifier, ["verify"]) ||
     !hasMethods(options.clock, ["now"]) ||
     !hasMethods(options.idSource, ["nextId"]) ||
     (options.checkpoints !== undefined && !hasMethods(options.checkpoints, ["build"])) ||
+    (options.directCompletionAuthorizer !== undefined &&
+      !hasMethods(options.directCompletionAuthorizer, ["authorize"])) ||
     (options.budget !== undefined &&
       !hasMethods(options.budget, [
         "ensureTask",
@@ -2544,6 +2687,7 @@ function assertExecutionRequest(request: TaskExecutionRequest): void {
     !isRecord(request) ||
     !isRecord(request.task) ||
     typeof request.executionKey !== "string" ||
+    typeof request.planningKey !== "string" ||
     !Number.isSafeInteger(request.attempt) ||
     request.attempt < 1 ||
     !isRecord(request.signal)
@@ -2551,6 +2695,7 @@ function assertExecutionRequest(request: TaskExecutionRequest): void {
     throw new TypeError("The Task execution request is invalid.");
   }
   assertIdentifier(request.executionKey, "execution key");
+  assertIdentifier(request.planningKey, "planning key");
   assertIdentifier(request.task.taskId, "Task ID");
 }
 

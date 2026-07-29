@@ -74,6 +74,60 @@ test(
   },
 );
 
+test("production Main treats controlled provider contents as opaque behind a sealed root", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-provider-home-native-"));
+  const home = join(root, "home");
+  const outside = join(root, "provider-executable");
+  const cleanup: { runtime?: MainRuntime } = {};
+  t.after(async () => {
+    await cleanup.runtime?.close();
+    await rm(root, { force: true, recursive: true });
+  });
+  const adminRoot = await createAdminFixture(root);
+  const mainSecrets = createMainTestSecretContext(root);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot,
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+  });
+  const providerArgumentRoot = join(
+    initialized.paths.stateDirectory,
+    "providers",
+    "codex",
+    "tmp",
+    "arg0",
+    "codex-arg0-fixture",
+  );
+  await Promise.all([
+    mkdir(providerArgumentRoot, { mode: 0o700, recursive: true }),
+    mkdir(outside, { mode: 0o700 }),
+  ]);
+  await symlink(
+    outside,
+    join(providerArgumentRoot, "codex"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  cleanup.runtime = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "provider-home-native" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+
+  const providerRoot = join(initialized.paths.stateDirectory, "providers", "codex");
+  const providerMetadata = await lstat(providerRoot);
+  assert.equal(providerMetadata.isDirectory(), true);
+  assert.equal(providerMetadata.isSymbolicLink(), false);
+  if (process.platform !== "win32") {
+    assert.equal(providerMetadata.mode & 0o077, 0);
+  }
+});
+
 test("production Main rejects a runtime junction without mutating its target", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-runtime-junction-native-"));
   t.after(() => rm(root, { force: true, recursive: true }));

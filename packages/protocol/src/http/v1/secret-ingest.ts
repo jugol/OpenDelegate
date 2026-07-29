@@ -4,6 +4,7 @@ export const SecureSecretIngestPurposeSchema = Type.Union(
   [
     Type.Literal("api-token"),
     Type.Literal("database-uri"),
+    Type.Literal("discord-bot-token"),
     Type.Literal("private-key"),
     Type.Literal("service-credential"),
   ],

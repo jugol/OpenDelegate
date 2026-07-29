@@ -3,7 +3,7 @@ import Type from "typebox";
 import { OpaqueIdSchema, Rfc3339InstantSchema } from "./common.ts";
 
 const PassphraseSchema = Type.String({
-  minLength: 12,
+  minLength: 10,
   maxLength: 1024,
 });
 

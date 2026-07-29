@@ -83,6 +83,22 @@ type ResolvedWsDiscordGatewayPortOptions = Omit<
   readonly socketFactory: DiscordGatewaySocketFactory;
 };
 
+interface PendingGatewayShutdown {
+  readonly generation: number;
+  readonly socket: DiscordGatewaySocket;
+  resolve(): void;
+  reject(error: unknown): void;
+  timer: object | undefined;
+}
+
+interface PendingGatewayOpen {
+  readonly attempt: number;
+  readonly promise: Promise<void>;
+  cancel(): void;
+}
+
+const GATEWAY_OPEN_CANCELLED = Symbol("gateway-open-cancelled");
+
 export class WsDiscordGatewayPort implements DiscordGatewayPort {
   readonly #options: ResolvedWsDiscordGatewayPortOptions;
 
@@ -137,6 +153,10 @@ class GatewaySupervisor implements DiscordGatewayConnection {
   #resumeGatewayUrl: string | undefined;
   #reconnectAttempt = 0;
   #dispatchTail: Promise<void> = Promise.resolve();
+  #closePromise: Promise<void> | undefined;
+  #shutdownClose: PendingGatewayShutdown | undefined;
+  #openAttempt = 0;
+  #pendingOpen: PendingGatewayOpen | undefined;
 
   public constructor(
     configuration: ResolvedWsDiscordGatewayPortOptions,
@@ -158,38 +178,144 @@ class GatewaySupervisor implements DiscordGatewayConnection {
     }
   }
 
-  public async close(): Promise<void> {
-    if (this.#closed) {
-      return;
+  public close(): Promise<void> {
+    if (this.#closePromise === undefined) {
+      this.#closePromise = this.#close();
     }
+    return this.#closePromise;
+  }
+
+  async #close(): Promise<void> {
     this.#closed = true;
+    this.#openAttempt += 1;
     this.#clearHeartbeat();
     this.#clearReconnect();
+    const pendingOpen = this.#pendingOpen;
+    pendingOpen?.cancel();
+    await pendingOpen?.promise.catch(() => undefined);
     const socket = this.#socket;
-    this.#socket = undefined;
     if (socket !== undefined) {
-      try {
-        socket.close(1000, "OpenDelegate shutdown");
-      } catch {
-        try {
-          socket.terminate();
-        } catch {
-          // The supervised connection is already terminal.
-        }
-      }
+      await this.#closeSocket(socket, this.#generation);
+      this.#socket = undefined;
     }
     await this.#dispatchTail.catch(() => undefined);
   }
 
-  async #openSocket(): Promise<void> {
-    if (this.#closed || this.#terminal) {
+  #closeSocket(socket: DiscordGatewaySocket, generation: number): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const pending: PendingGatewayShutdown = {
+        generation,
+        socket,
+        resolve: () => {
+          if (this.#shutdownClose !== pending) {
+            return;
+          }
+          this.#clearShutdownCloseTimer(pending);
+          this.#shutdownClose = undefined;
+          resolve();
+        },
+        reject: (error: unknown) => {
+          if (this.#shutdownClose !== pending) {
+            return;
+          }
+          this.#clearShutdownCloseTimer(pending);
+          this.#shutdownClose = undefined;
+          reject(error);
+        },
+        timer: undefined,
+      };
+      this.#shutdownClose = pending;
+      pending.timer = this.#configuration.scheduler.setTimeout(
+        () => this.#forceSocketTermination(pending),
+        this.#configuration.handshakeTimeoutMs,
+      );
+      try {
+        socket.close(1000, "OpenDelegate shutdown");
+      } catch {
+        this.#forceSocketTermination(pending);
+      }
+    });
+  }
+
+  #forceSocketTermination(pending: PendingGatewayShutdown): void {
+    if (this.#shutdownClose !== pending) {
       return;
     }
-    const baseUrl =
+    this.#clearShutdownCloseTimer(pending);
+    try {
+      pending.socket.terminate();
+    } catch {
+      pending.reject(
+        new DiscordApiError("OFFLINE", "Discord Gateway shutdown could not be confirmed."),
+      );
+      return;
+    }
+    if (this.#shutdownClose !== pending) {
+      return;
+    }
+    pending.timer = this.#configuration.scheduler.setTimeout(() => {
+      pending.reject(
+        new DiscordApiError("OFFLINE", "Discord Gateway shutdown could not be confirmed."),
+      );
+    }, this.#configuration.handshakeTimeoutMs);
+  }
+
+  #clearShutdownCloseTimer(pending: PendingGatewayShutdown): void {
+    if (pending.timer !== undefined) {
+      this.#configuration.scheduler.clearTimeout(pending.timer);
+      pending.timer = undefined;
+    }
+  }
+
+  #openSocket(): Promise<void> {
+    if (this.#closed || this.#terminal) {
+      return Promise.resolve();
+    }
+    if (this.#pendingOpen !== undefined) {
+      return this.#pendingOpen.promise;
+    }
+    const attempt = this.#openAttempt + 1;
+    this.#openAttempt = attempt;
+    let cancel = (): void => undefined;
+    const cancelled = new Promise<typeof GATEWAY_OPEN_CANCELLED>((resolve) => {
+      cancel = () => resolve(GATEWAY_OPEN_CANCELLED);
+    });
+    const promise = Promise.resolve().then(() => this.#openSocketAttempt(attempt, cancelled));
+    const pending: PendingGatewayOpen = { attempt, promise, cancel };
+    this.#pendingOpen = pending;
+    void promise.then(
+      () => {
+        if (this.#pendingOpen === pending) {
+          this.#pendingOpen = undefined;
+        }
+      },
+      () => {
+        if (this.#pendingOpen === pending) {
+          this.#pendingOpen = undefined;
+        }
+      },
+    );
+    return promise;
+  }
+
+  async #openSocketAttempt(
+    attempt: number,
+    cancelled: Promise<typeof GATEWAY_OPEN_CANCELLED>,
+  ): Promise<void> {
+    if (!this.#canOpen(attempt)) {
+      return;
+    }
+    const discoveredBaseUrl =
       this.#sessionId === undefined || this.#resumeGatewayUrl === undefined
-        ? await this.#configuration.discovery.getGatewayBotUrl()
+        ? await Promise.race([this.#configuration.discovery.getGatewayBotUrl(), cancelled])
         : this.#resumeGatewayUrl;
-    const url = gatewayUrl(baseUrl);
+    if (discoveredBaseUrl === GATEWAY_OPEN_CANCELLED || !this.#canOpen(attempt)) {
+      return;
+    }
+    const url = gatewayUrl(discoveredBaseUrl);
+    if (!this.#canOpen(attempt)) {
+      return;
+    }
     const generation = this.#generation + 1;
     this.#generation = generation;
     this.#clearHeartbeat();
@@ -199,7 +325,6 @@ class GatewaySupervisor implements DiscordGatewayConnection {
       maximumFrameBytes: this.#configuration.maximumFrameBytes,
       handshakeTimeoutMs: this.#configuration.handshakeTimeoutMs,
     });
-    this.#socket = socket;
     socket.onOpen(() => {
       this.#diagnostic("discord.gateway.socket_opened", { generation });
     });
@@ -217,6 +342,15 @@ class GatewaySupervisor implements DiscordGatewayConnection {
         this.#diagnostic("discord.gateway.socket_error", { generation });
       }
     });
+    if (!this.#canOpen(attempt)) {
+      await this.#closeSocket(socket, generation);
+      return;
+    }
+    this.#socket = socket;
+  }
+
+  #canOpen(attempt: number): boolean {
+    return attempt === this.#openAttempt && !this.#closed && !this.#terminal;
   }
 
   #receiveFrame(data: string | Uint8Array, isBinary: boolean, generation: number): void {
@@ -478,6 +612,13 @@ class GatewaySupervisor implements DiscordGatewayConnection {
   }
 
   #onSocketClosed(generation: number, code: number): void {
+    if (generation === this.#generation) {
+      this.#socket = undefined;
+    }
+    if (this.#shutdownClose?.generation === generation) {
+      this.#shutdownClose.resolve();
+      return;
+    }
     if (
       generation !== this.#generation ||
       this.#closed ||

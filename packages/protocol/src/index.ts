@@ -84,6 +84,7 @@ export type WorkerAgentCompatibilityV1 = "compatible" | "tested" | "untested";
 export interface WorkerAgentRequirementV1 {
   readonly provider: WorkerAgentProviderV1;
   readonly adapterId?: string;
+  readonly modelId?: string;
   readonly allowedCompatibilities?: readonly WorkerAgentCompatibilityV1[];
 }
 
@@ -123,6 +124,7 @@ export interface WorkerAgentSessionObservationV1 {
   readonly provider: WorkerAgentProviderV1;
   readonly adapterId: string;
   readonly adapterVersion: string;
+  readonly modelId?: string;
   readonly nativeSessionId: string;
   readonly workstreamId: string;
   readonly workspaceId: string;
@@ -474,7 +476,7 @@ function parseWorkerAgentRequirementAt(input: unknown, prefix: string): WorkerAg
   const value = requireExactObjectKeys(
     input,
     ["provider"],
-    ["adapterId", "allowedCompatibilities"],
+    ["adapterId", "modelId", "allowedCompatibilities"],
     prefix,
   );
   const rawCompatibilities = value["allowedCompatibilities"];
@@ -507,6 +509,11 @@ function parseWorkerAgentRequirementAt(input: unknown, prefix: string): WorkerAg
       : {
           adapterId: parseBoundedIdentifier(value["adapterId"], fieldPath(prefix, "adapterId")),
         }),
+    ...(value["modelId"] === undefined
+      ? {}
+      : {
+          modelId: parseBoundedIdentifier(value["modelId"], fieldPath(prefix, "modelId")),
+        }),
     ...(allowedCompatibilities === undefined ? {} : { allowedCompatibilities }),
   });
 }
@@ -526,7 +533,7 @@ function parseWorkerAgentSessionObservationAt(
       "workspaceId",
       "lineage",
     ],
-    [],
+    ["modelId"],
     prefix,
   );
   const lineagePath = fieldPath(prefix, "lineage");
@@ -543,6 +550,11 @@ function parseWorkerAgentSessionObservationAt(
       value["adapterVersion"],
       fieldPath(prefix, "adapterVersion"),
     ),
+    ...(value["modelId"] === undefined
+      ? {}
+      : {
+          modelId: parseBoundedIdentifier(value["modelId"], fieldPath(prefix, "modelId")),
+        }),
     nativeSessionId: parseBoundedIdentifier(
       value["nativeSessionId"],
       fieldPath(prefix, "nativeSessionId"),

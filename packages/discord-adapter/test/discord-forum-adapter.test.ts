@@ -17,6 +17,7 @@ import {
   type TaskChannelProjection,
   redactDiscordSecrets,
   renderStatusPanel,
+  renderTaskUpdate,
 } from "../src/index.ts";
 
 const GUILD_ID = "100000000000000001";
@@ -54,6 +55,7 @@ class FakeTaskPort implements DiscordTaskPort {
   public readonly calls: Array<Record<string, unknown>> = [];
   public readonly taskByIdempotency = new Map<string, string>();
   public blockCommands: Promise<void> | undefined;
+  public afterAppendTaskInput: (() => void) | undefined;
 
   public async createTask(input: Parameters<DiscordTaskPort["createTask"]>[0]) {
     this.calls.push({ kind: "create", ...input });
@@ -68,6 +70,7 @@ class FakeTaskPort implements DiscordTaskPort {
 
   public async appendTaskInput(input: Parameters<DiscordTaskPort["appendTaskInput"]>[0]) {
     this.calls.push({ kind: "append", ...input });
+    this.afterAppendTaskInput?.();
   }
 
   public async commandTask(input: Parameters<DiscordTaskPort["commandTask"]>[0]) {
@@ -112,6 +115,7 @@ class FakeDiscordApi implements DiscordApiPort {
   public readonly operations: Array<Record<string, unknown>> = [];
   public readonly acknowledgedInteractions = new Set<string>();
   public readonly missingStatusPanelMessageIds = new Set<string>();
+  readonly #messageByRequestKey = new Map<string, string>();
   #nextMessage = 900;
 
   public async probeInstallation(): Promise<DiscordInstallationProbe> {
@@ -172,6 +176,41 @@ class FakeDiscordApi implements DiscordApiPort {
     return { messages, hasMore: false };
   }
 
+  public async createForumPost(input: {
+    forumChannelId: string;
+    requestKey: string;
+    name: string;
+    content: string;
+    appliedTagIds: readonly string[];
+  }): Promise<{ thread: DiscordThread; starterMessage: DiscordMessage }> {
+    this.#assertOnline();
+    const threadId = (800_000_000_000_000_000n + BigInt(this.threads.size)).toString();
+    const thread: DiscordThread = {
+      id: threadId,
+      guildId: GUILD_ID,
+      parentId: input.forumChannelId,
+      type: 11,
+      name: input.name,
+      ownerId: BOT_ID,
+      appliedTagIds: [...input.appliedTagIds],
+      archived: false,
+      locked: false,
+    };
+    const starterMessage: DiscordMessage = {
+      id: threadId,
+      guildId: GUILD_ID,
+      channelId: threadId,
+      author: { id: BOT_ID, bot: true, roleIds: [] },
+      content: input.content,
+      attachments: [],
+      createdAtMs: 1_000,
+    };
+    this.threads.set(threadId, thread);
+    this.messages.set(threadId, [starterMessage]);
+    this.operations.push({ kind: "forum-post", ...input, threadId });
+    return { thread, starterMessage };
+  }
+
   public async updateThreadTags(threadId: string, appliedTagIds: readonly string[]): Promise<void> {
     this.#assertOnline();
     this.operations.push({ kind: "tags", threadId, appliedTagIds: [...appliedTagIds] });
@@ -205,9 +244,49 @@ class FakeDiscordApi implements DiscordApiPort {
     payload: DiscordMessagePayload;
   }): Promise<{ messageId: string }> {
     this.#assertOnline();
+    const existing = this.#messageByRequestKey.get(input.requestKey);
+    if (existing !== undefined) {
+      this.operations.push({ kind: "message-reconciled", ...input, messageId: existing });
+      return { messageId: existing };
+    }
     const messageId = String(this.#nextMessage++);
+    this.#messageByRequestKey.set(input.requestKey, messageId);
     this.operations.push({ kind: "message", ...input, messageId });
     return { messageId };
+  }
+
+  public async editMessage(input: {
+    threadId: string;
+    messageId: string;
+    payload: DiscordMessagePayload;
+  }): Promise<void> {
+    this.#assertOnline();
+    this.operations.push({ kind: "message-edit", ...input });
+  }
+
+  public async acknowledgeMessage(input: {
+    threadId: string;
+    messageId: string;
+  }): Promise<{ reactionVisible: boolean; typingVisible: boolean }> {
+    this.#assertOnline();
+    this.operations.push({ kind: "message-acknowledgement", ...input });
+    return { reactionVisible: true, typingVisible: true };
+  }
+
+  public async refreshTyping(input: { threadId: string }): Promise<boolean> {
+    this.#assertOnline();
+    this.operations.push({ kind: "typing-refresh", ...input });
+    return true;
+  }
+
+  public async completeMessageAcknowledgement(input: {
+    threadId: string;
+    messageId: string;
+    outcome: "success" | "failure";
+  }): Promise<{ acknowledgementRemoved: boolean; outcomeVisible: boolean }> {
+    this.#assertOnline();
+    this.operations.push({ kind: "message-acknowledgement-completed", ...input });
+    return { acknowledgementRemoved: true, outcomeVisible: true };
   }
 
   public async deferInteraction(input: {
@@ -298,6 +377,30 @@ function fixture(options?: {
   return { adapter, api, tasks, repository, clock };
 }
 
+async function recordDeliveredOutbox(
+  repository: InMemoryDiscordStateRepository,
+  clock: FakeClock,
+  id: string,
+  action: Parameters<InMemoryDiscordStateRepository["enqueueOutbox"]>[0]["action"],
+): Promise<void> {
+  await repository.enqueueOutbox({
+    id,
+    action,
+    createdAtMs: clock.nowMs(),
+    notBeforeMs: clock.nowMs(),
+  });
+  const claimed = await repository.claimReadyOutbox({
+    owner: "migration-test",
+    nowMs: clock.nowMs(),
+    leaseMs: 30_000,
+    limit: 100,
+  });
+  const item = claimed.find((candidate) => candidate.id === id);
+  assert.notEqual(item, undefined);
+  await repository.completeOutbox({ id, owner: "migration-test" });
+  clock.value += 1;
+}
+
 test("installation probe requires Community, Forum type, Gateway intents, and least permissions", async () => {
   const { adapter, api } = fixture();
   const ready = await adapter.verifyInstallation();
@@ -326,6 +429,35 @@ test("installation probe requires Community, Forum type, Gateway intents, and le
     "Channel 100000000000000002 lacks permissions: ATTACH_FILES, MANAGE_THREADS, READ_MESSAGE_HISTORY, SEND_MESSAGES, SEND_MESSAGES_IN_THREADS.",
   ]);
   assert.equal(JSON.stringify(invalid).includes("token"), false);
+});
+
+test("a bot-originated Task creates one recoverable Forum post and durable binding", async () => {
+  const initial = fixture();
+  const projection: TaskChannelProjection = {
+    taskId: "task-proactive-001",
+    state: "intake",
+    objective: "Recover the degraded Worker route.",
+    summary: "A deterministic monitor created this Task.",
+    sourceEventId: "event_proactive_task_created",
+    significance: "decision",
+  };
+
+  const created = await initial.adapter.createTaskThread(projection);
+  assert.equal(created.taskId, projection.taskId);
+  assert.equal(created.forumChannelId, FORUM_ID);
+  assert.equal(created.threadId, created.starterMessageId);
+  assert.equal(
+    initial.api.operations.filter((operation) => operation["kind"] === "forum-post").length,
+    1,
+  );
+
+  const restarted = fixture({ api: initial.api });
+  const recovered = await restarted.adapter.createTaskThread(projection);
+  assert.equal(recovered.threadId, created.threadId);
+  assert.equal(
+    initial.api.operations.filter((operation) => operation["kind"] === "forum-post").length,
+    1,
+  );
 });
 
 test("live startup supplies the durable Resume cursor and pinned API contract to the Gateway port", async () => {
@@ -463,6 +595,232 @@ test("starter message and thread events in either order create exactly one bound
   assert.equal((await repository.getGatewayCursor())?.sequence, 9);
 });
 
+test("accepted owner messages use quiet in-place acknowledgement instead of working-card spam", async () => {
+  const { adapter, api, clock } = fixture();
+  const thread = { ...forumThread("300000000000000002"), appliedTagIds: [] };
+  const starter = ownerMessage(thread.id, thread.id, "Start without a manual Intake tag.");
+  const reply = ownerMessage("300000000000000003", thread.id, "Continue with this detail.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter, reply]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.flushOutbox();
+  await adapter.handleGatewayDispatch(messageDispatch(2, reply));
+  await adapter.flushOutbox();
+  clock.value += 8_000;
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Start without a manual Intake tag.",
+    summary: "OpenDelegate is working on this Task.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+  await adapter.handleGatewayDispatch(messageDispatch(2, reply));
+  await adapter.flushOutbox();
+
+  const acknowledgements = api.operations.filter(
+    (operation) => operation["kind"] === "message-acknowledgement",
+  );
+  assert.deepEqual(
+    acknowledgements.map((operation) => operation["messageId"]),
+    [starter.id, reply.id],
+  );
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 0);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "typing-refresh").length,
+    1,
+  );
+});
+
+test("a new owner message closes the prior acknowledgement after an adapter restart", async () => {
+  const initial = fixture();
+  const thread = forumThread("300000000000000005");
+  const starter = ownerMessage(thread.id, thread.id, "Start the first turn.");
+  const reply = ownerMessage("300000000000000006", thread.id, "Continue after the restart.");
+  initial.api.threads.set(thread.id, thread);
+  initial.api.messages.set(thread.id, [starter, reply]);
+
+  await initial.adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await initial.adapter.flushOutbox();
+
+  const restarted = fixture({
+    repository: new InMemoryDiscordStateRepository(initial.repository.snapshot()),
+    api: initial.api,
+    tasks: initial.tasks,
+    clock: initial.clock,
+  });
+  await restarted.adapter.handleGatewayDispatch(messageDispatch(2, reply));
+  await restarted.adapter.flushOutbox();
+
+  assert.deepEqual(
+    initial.api.operations
+      .filter((operation) => operation["kind"] === "message-acknowledgement-completed")
+      .map((operation) => [operation["messageId"], operation["outcome"]]),
+    [[starter.id, "success"]],
+  );
+  assert.deepEqual(
+    initial.api.operations
+      .filter((operation) => operation["kind"] === "message-acknowledgement")
+      .map((operation) => operation["messageId"]),
+    [starter.id, reply.id],
+  );
+});
+
+test("one owner answer resolves the one durable question in place and resumes once", async () => {
+  const initial = fixture();
+  const { adapter, api, tasks, repository, clock } = initial;
+  const thread = forumThread("300000000000000004");
+  const starter = ownerMessage(thread.id, thread.id, "테스트를 위한 일감");
+  const answer = ownerMessage(
+    "300000000000000005",
+    thread.id,
+    "지금 접속 가능한 디바이스가 뭐뭐가 있어?",
+  );
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter, answer]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "waiting_user",
+    objective: "테스트를 위한 일감",
+    summary: "테스트에서 수행할 구체적인 작업과 기대 결과는 무엇인가요?",
+    sourceEventId: "event_initial_owner_question",
+    significance: "question",
+  });
+  await adapter.flushOutbox();
+
+  tasks.afterAppendTaskInput = () => {
+    api.online = false;
+  };
+  await adapter.handleGatewayDispatch(messageDispatch(2, answer));
+  const restartedRepository = new InMemoryDiscordStateRepository(repository.snapshot());
+  const restarted = fixture({
+    repository: restartedRepository,
+    api,
+    tasks,
+    clock,
+  });
+  clock.value += 60_000;
+  api.online = true;
+  await restarted.adapter.flushOutbox();
+  await restarted.adapter.handleGatewayDispatch(messageDispatch(2, answer));
+
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "append").length, 1);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-reconciled").length,
+    1,
+  );
+  const edit = api.operations.find((operation) => operation["kind"] === "message-edit");
+  const rendered = JSON.stringify(edit?.["payload"]);
+  assert.match(rendered, /Input received/u);
+  assert.match(rendered, /테스트에서 수행할 구체적인 작업/u);
+  assert.doesNotMatch(rendered, /od:v1:/u);
+  assert.equal(
+    (await restartedRepository.listOutbox()).filter(
+      (item) => item.action.kind === "resolve-owner-prompt" && item.delivered,
+    ).length,
+    1,
+  );
+  assert.equal(
+    (await restartedRepository.listOutbox()).filter((item) => !item.delivered).length,
+    0,
+  );
+});
+
+test("source-event delivery identity adopts a delivered legacy projection after upgrade", async () => {
+  const { adapter, api, repository, clock } = fixture();
+  const thread = forumThread("300000000000000007");
+  const starter = ownerMessage(thread.id, thread.id, "Retain the delivered question.");
+  const projection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "waiting_user",
+    objective: "Retain the delivered question.",
+    summary: "Which release channel should OpenDelegate use?",
+    sourceEventId: "event_legacy_question",
+    significance: "question",
+  };
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await recordDeliveredOutbox(repository, clock, "legacy-projection-digest:03-update", {
+    kind: "post-task-update",
+    taskId: projection.taskId,
+    projection,
+  });
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 0);
+  assert.equal(
+    (await repository.listOutbox()).filter(
+      (item) =>
+        item.action.kind === "post-task-update" &&
+        item.action.projection.sourceEventId === projection.sourceEventId,
+    ).length,
+    1,
+  );
+});
+
+test("one owner answer resolves every duplicate projection of the same legacy prompt", async () => {
+  const { adapter, api, tasks, repository, clock } = fixture();
+  const thread = forumThread("300000000000000008");
+  const starter = ownerMessage(thread.id, thread.id, "테스트를 위한 일감");
+  const answer = ownerMessage("300000000000000010", thread.id, "현재 기기 목록을 알려줘.");
+  const projection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "waiting_user",
+    objective: "테스트를 위한 일감",
+    summary: "테스트에서 수행할 구체적인 작업과 기대 결과는 무엇인가요?",
+    sourceEventId: "event_duplicated_legacy_question",
+    significance: "question",
+  };
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter, answer]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+  const original = (await repository.listOutbox()).find(
+    (item) =>
+      item.action.kind === "post-task-update" &&
+      item.action.projection.sourceEventId === projection.sourceEventId,
+  );
+  assert.notEqual(original, undefined);
+  if (original?.action.kind !== "post-task-update") {
+    throw new Error("The canonical question delivery was not recorded.");
+  }
+  await repository.enqueueOutbox({
+    id: "duplicate-legacy-projection:03-update",
+    action: {
+      kind: "post-task-update",
+      taskId: projection.taskId,
+      projection: original.action.projection,
+    },
+    createdAtMs: clock.nowMs() + 1,
+    notBeforeMs: clock.nowMs(),
+  });
+  await adapter.flushOutbox();
+  await adapter.handleGatewayDispatch(messageDispatch(2, answer));
+  await adapter.flushOutbox();
+
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "append").length, 1);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 2);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-edit").length,
+    2,
+  );
+  assert.equal(
+    (await repository.listOutbox()).filter(
+      (item) => item.action.kind === "resolve-owner-prompt" && item.delivered,
+    ).length,
+    2,
+  );
+});
+
 test("replies resume only their bound Task and unauthorized content never reaches the Task port", async () => {
   const { adapter, api, tasks } = fixture();
   const firstThread = forumThread("300000000000000011");
@@ -581,17 +939,20 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
     state: "completed",
     objective: "Render the report",
     summary: "The report is ready with all checks passing.",
+    sourceEventId: "event_report_completed",
     significance: "final",
+  };
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+  clock.value += 5_000;
+  await adapter.publishTaskProjection({
+    ...projection,
     artifact: {
       label: "Open report",
       url: "https://artifacts.example.test/reports/release",
     },
     inspectUrl: "https://admin.example.test/tasks/task-1",
-  };
-  await adapter.publishTaskProjection(projection);
-  await adapter.flushOutbox();
-  clock.value += 5_000;
-  await adapter.publishTaskProjection(projection);
+  });
   await adapter.flushOutbox();
 
   const tagOperations = api.operations.filter((operation) => operation["kind"] === "tags");
@@ -603,14 +964,25 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
     STATUS_TAGS.done,
   ]);
   const panels = api.operations.filter((operation) => operation["kind"] === "panel");
-  assert.equal(panels.length, 1);
-  const panelPayload = panels[0]?.["payload"];
+  assert.equal(panels.length, 2);
+  const panelPayload = panels.at(-1)?.["payload"];
   assert.match(JSON.stringify(panelPayload), /Open report/);
   assert.match(JSON.stringify(panelPayload), /32768/);
-  assert.equal((await repository.getBindingByTask("task-1"))?.statusPanelMessageId, "900");
+  const statusPanelMessageId = panels.at(-1)?.["messageId"];
+  assert.equal(
+    (await repository.getBindingByTask("task-1"))?.statusPanelMessageId,
+    statusPanelMessageId,
+  );
   assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.deepEqual(
+    api.operations
+      .filter((operation) => operation["kind"] === "message-acknowledgement-completed")
+      .map((operation) => operation["outcome"]),
+    ["success"],
+  );
 
-  api.missingStatusPanelMessageIds.add("900");
+  assert.equal(typeof statusPanelMessageId, "string");
+  api.missingStatusPanelMessageIds.add(statusPanelMessageId as string);
   await adapter.publishTaskProjection({
     ...projection,
     state: "running",
@@ -619,14 +991,10 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
   });
   await adapter.flushOutbox();
   const restored = await repository.getBindingByTask("task-1");
-  assert.equal(restored?.statusPanelMessageId, "902");
+  const restoredPanel = api.operations.filter((operation) => operation["kind"] === "panel").at(-1);
+  assert.equal(restored?.statusPanelMessageId, restoredPanel?.["messageId"]);
   assert.equal(restored?.externalState, "available");
-  assert.equal(
-    api.operations.filter((operation) => operation["kind"] === "panel").at(-1)?.[
-      "requestedMessageId"
-    ],
-    undefined,
-  );
+  assert.equal(restoredPanel?.["requestedMessageId"], undefined);
 });
 
 test("a completed Task without links renders valid Components v2 without an empty action row", () => {
@@ -635,6 +1003,7 @@ test("a completed Task without links renders valid Components v2 without an empt
     state: "completed",
     objective: "Finish cleanly",
     summary: "Nothing else needs to be opened.",
+    sourceEventId: "event_task_completed",
     significance: "final",
   });
   const container = payload.components[0];
@@ -642,6 +1011,65 @@ test("a completed Task without links renders valid Components v2 without an empt
   assert.equal(
     container?.type === 17 && container.components.some((component) => component.type === 1),
     false,
+  );
+});
+
+test("the stable status panel does not repeat the Forum title or chronological owner question", () => {
+  const payload = renderStatusPanel({
+    taskId: "task-waiting",
+    state: "waiting_user",
+    objective: "테스트를 위한 일감",
+    summary: "테스트에서 수행할 구체적인 작업과 기대 결과는 무엇인가요?",
+    sourceEventId: "event_owner_question",
+    significance: "question",
+  });
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /Task status/u);
+  assert.match(rendered, /Waiting/u);
+  assert.match(rendered, /latest message/u);
+  assert.doesNotMatch(rendered, /테스트를 위한 일감/u);
+  assert.doesNotMatch(rendered, /테스트에서 수행할 구체적인 작업/u);
+  assert.doesNotMatch(rendered, /od:v1:/u);
+});
+
+test("a chronological failure update carries its Retry control", () => {
+  const payload = renderTaskUpdate({
+    taskId: "task-failed",
+    state: "failed",
+    objective: "Reach an eligible Worker.",
+    summary: "No eligible Worker is online after three automatic attempts.",
+    sourceEventId: "event_worker_failed",
+    significance: "failure",
+  });
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /Task needs attention/);
+  assert.match(rendered, /No eligible Worker is online/);
+  assert.match(rendered, /Retry/);
+  assert.match(rendered, /od:v1:retry/);
+});
+
+test("a failed turn replaces the newest owner-message acknowledgement with failure", async () => {
+  const { adapter, api } = fixture();
+  const thread = forumThread("300000000000000034");
+  const starter = ownerMessage(thread.id, thread.id, "Reach an eligible Worker.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Reach an eligible Worker.",
+    summary: "No eligible Worker is online after three automatic attempts.",
+    sourceEventId: "event_worker_failed",
+    significance: "failure",
+  });
+  await adapter.flushOutbox();
+
+  assert.deepEqual(
+    api.operations
+      .filter((operation) => operation["kind"] === "message-acknowledgement-completed")
+      .map((operation) => [operation["messageId"], operation["outcome"]]),
+    [[starter.id, "failure"]],
   );
 });
 
@@ -789,6 +1217,7 @@ test("approve/reject controls use the approval callback and unauthorized control
     state: "waiting_user",
     objective: "Approval task",
     summary: "A protected action is waiting.",
+    sourceEventId: "event_approval_question",
     significance: "question",
     approval: { approvalId: "approval-1", description: "Allow package repository change?" },
   });
@@ -815,6 +1244,19 @@ test("approve/reject controls use the approval callback and unauthorized control
       messageId: "900",
       customId: "od:v1:cancel",
       author: { id: "999999999999999999", bot: false, roleIds: [] },
+      receivedAtMs: 1_000,
+    }),
+  );
+  await adapter.handleGatewayDispatch(
+    interactionDispatch(4, {
+      id: "400000000000000013",
+      token: "forged-control-token",
+      guildId: GUILD_ID,
+      channelId: thread.id,
+      messageId: "899",
+      messageAuthorId: OWNER_ID,
+      customId: "od:v1:cancel",
+      author: { id: OWNER_ID, bot: false, roleIds: [] },
       receivedAtMs: 1_000,
     }),
   );
@@ -978,13 +1420,21 @@ function threadDispatch(sequence: number, thread: DiscordThread): DiscordGateway
 
 function interactionDispatch(
   sequence: number,
-  interaction: Extract<DiscordGatewayDispatch, { type: "INTERACTION_CREATE" }>["interaction"],
+  interaction: Omit<
+    Extract<DiscordGatewayDispatch, { type: "INTERACTION_CREATE" }>["interaction"],
+    "messageAuthorId"
+  > & {
+    readonly messageAuthorId?: string;
+  },
 ): DiscordGatewayDispatch {
   return {
     sessionId: "gateway-session",
     resumeGatewayUrl: "wss://gateway.discord.gg",
     sequence,
     type: "INTERACTION_CREATE",
-    interaction,
+    interaction: {
+      ...interaction,
+      messageAuthorId: interaction.messageAuthorId ?? BOT_ID,
+    },
   };
 }

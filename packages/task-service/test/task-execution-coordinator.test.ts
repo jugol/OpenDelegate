@@ -159,6 +159,58 @@ test("retryable execution failure is bounded durably and cannot run away", async
   assert.equal(attempts, 3);
   assert.equal(failed.state, "failed");
   assert.equal(failed.events.filter((event) => event.type === "task.execution-recorded").length, 6);
+  assert.match(failed.messages.at(-1)?.content ?? "", /No eligible Worker is online/);
+  assert.match(failed.messages.at(-1)?.content ?? "", /WORKER_OFFLINE/);
+  await coordinator.close();
+});
+
+test("the final retry preserves a structured waiting-resource explanation", async () => {
+  const taskService = fixture();
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    executor: {
+      async execute() {
+        return {
+          state: "waiting_resource",
+          publicMessage: "No enrolled Device currently satisfies this Work Order.",
+        };
+      },
+    },
+    maximumAutomaticAttempts: 1,
+    retryDelayMs: 0,
+  });
+
+  const task = await coordinator.create(taskInput("resource-explanation", "Need a capable Device"));
+  await coordinator.waitForIdle();
+  const failed = await coordinator.get(task.taskId);
+
+  assert.equal(failed.state, "failed");
+  assert.equal(
+    failed.messages.at(-1)?.content,
+    "No enrolled Device currently satisfies this Work Order.",
+  );
+  await coordinator.close();
+});
+
+test("a failed executor result cannot omit its owner-visible diagnostic", async () => {
+  const taskService = fixture();
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    executor: {
+      async execute() {
+        return { state: "failed" };
+      },
+    },
+    retryDelayMs: 0,
+  });
+
+  const task = await coordinator.create(taskInput("failed-without-message", "Explain failure"));
+  await coordinator.waitForIdle();
+  const failed = await coordinator.get(task.taskId);
+
+  assert.equal(failed.state, "failed");
+  assert.match(failed.messages.at(-1)?.content ?? "", /without an owner-safe explanation/u);
+  assert.match(failed.messages.at(-1)?.content ?? "", /Task Runs/u);
   await coordinator.close();
 });
 

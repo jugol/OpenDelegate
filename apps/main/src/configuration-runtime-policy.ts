@@ -115,7 +115,27 @@ export class MainConfigurationRuntimePolicy {
     options?: { readonly deviceId?: string },
   ): Promise<MainProactiveDisposition> {
     requireProactiveWorkKind(kind);
-    const profile = await this.autonomyProfile(options);
+    const effective = await this.#inspect({
+      ...this.#baseContext,
+      deviceId:
+        options?.deviceId === undefined
+          ? this.#mainDeviceId
+          : requireScopeId(options.deviceId, "Device ID"),
+    });
+    const override = requireOneOf(effective[`autonomy.${kind}`], `autonomy.${kind}`, [
+      "inherit",
+      "disabled",
+      "propose",
+      "execute",
+    ] as const);
+    if (override !== "inherit") {
+      return override;
+    }
+    const profile = requireOneOf(effective["autonomy.profile"], "autonomy.profile", [
+      "reactive",
+      "assisted",
+      "autonomous",
+    ] as const);
     switch (profile) {
       case "reactive":
         return kind === "incident-recovery" ? "propose" : "disabled";

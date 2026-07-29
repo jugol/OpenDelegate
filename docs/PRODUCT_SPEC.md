@@ -6,7 +6,7 @@ Intended license: **Apache License 2.0**
 
 Default product and repository language: **English**
 
-Last updated: **2026-07-25**
+Last updated: **2026-07-28**
 
 ## Document contract
 
@@ -40,7 +40,9 @@ solution that asks an LLM to remember every IP address, route, health state, ret
 rule, and permission wastes context and behaves unpredictably. A central shared
 memory also leaks Device-specific operational detail into unrelated Tasks.
 
-The owner needs one system that:
+The owner needs one system where they describe the result and do not have to care
+which physical computer, operating system, route, or agent performs each step. That
+system must:
 
 - receives work from an interface available on a phone or laptop;
 - preserves a separate durable context for every Task;
@@ -76,16 +78,22 @@ configuration-focused chat assistant helps the owner progressively configure the
 system, proposes settings based on detected facts, and applies structured changes
 through the same Policy Engine used by every other actor.
 
-Long or visual results become Artifacts. OpenDelegate uses Discord-native components,
-images, and files where they fit and serves Markdown, PDF, images, logs, or static
-HTML through a Main-hosted Artifact Gateway where a richer interface is useful.
+Long, visual, or interactive results become Artifacts. OpenDelegate uses
+Discord-native components, images, and files where they fit and serves Markdown,
+PDF, images, logs, static HTML, or an isolated interactive view through a Main-hosted
+Artifact Gateway. When login, MFA, CAPTCHA, legal confirmation, or an OS permission
+requires a human, the same Task may pause with a bounded Owner Handoff and continue
+after the owner returns control.
 
 ### Product promise
 
-The owner can create a Task from Discord on any Device, leave the Main computer and
-Workers running, and expect OpenDelegate to choose eligible resources, continue
-native agent sessions, coordinate work, preserve Task context, and return a useful,
-inspectable result without manually operating every machine.
+The owner can tell OpenDelegate the desired outcome from Discord on a phone or
+computer, then disconnect that client. A fixed always-on Main chooses eligible
+resources, hides routine Device, OS, route, and multi-Device placement decisions,
+continues native agent sessions, coordinates work, preserves Task context, and
+returns a useful result as a Discord response, file, Artifact, hosted view, or Git
+reference. If a step truly requires the owner, OpenDelegate asks for that one action
+through a secure handoff and resumes the same Task afterward.
 
 ### Design principles
 
@@ -106,6 +114,12 @@ inspectable result without manually operating every machine.
    but an informed owner may configure more permissive behavior.
 8. **Personal-first simplicity.** Solve one owner's multi-Device workflow before
    introducing organizations, tenants, billing, or shared ownership.
+9. **Outcome over placement.** The Task states what success means. OpenDelegate
+   exposes actual placement for observability but does not make the owner plan the
+   Device, OS, route, provider, or cross-Device workflow.
+10. **Humans only where necessary.** Automation pauses for irreducible identity,
+    consent, legal, or OS-security boundaries and resumes from the same durable Task
+    after a bounded Owner Handoff.
 
 ## Actors
 
@@ -329,6 +343,20 @@ inspectable result without manually operating every machine.
     so that an unclaimed public endpoint cannot be taken over remotely.
 96. As an owner, I want OpenDelegate upgrades verified and recoverable, so that an
     automatic service update cannot strand every Device.
+97. As an owner, I want to describe only the result in Discord, so that I do not have
+    to choose a Device, operating system, route, or Agent provider.
+98. As an owner, I want one Task to span Windows development, macOS build or signing,
+    and Linux deployment when needed, so that I do not have to coordinate the
+    handoffs myself.
+99. As an owner, I want the result delivered in the most useful form—Discord, file,
+    Artifact, hosted view, or Git reference—so that chat is not an output-format
+    limitation.
+100. As an owner, I want a secure, temporary handoff when login, MFA, CAPTCHA, legal
+     confirmation, or OS permission requires me, so that I can act and let the same
+     Task continue without sending credentials through chat.
+101. As an owner, I want an offline Worker Device to show whether magic-packet wake
+     is enabled and whether OpenDelegate has a usable wake path, so that I can tell
+     whether the Device can be brought back without physically visiting it.
 
 ## Functional Requirements
 
@@ -354,6 +382,13 @@ inspectable result without manually operating every machine.
    return structured status, and resume a session.
 10. Every bootstrap step is resumable and idempotent. A failed step must not require
     deleting the Instance and starting over.
+11. The repository and release documentation supports an owner giving the repository
+    URL or verified bundle to a capable local Agent and asking it to install
+    OpenDelegate. The Agent discovers the init skill and explains only choices that
+    affect owner intent.
+12. The init and join skills give separate, complete Main and Worker procedures so
+    the owner does not need to translate a control-plane topology into manual
+    commands.
 
 ### FR-2 — Device enrollment and identity
 
@@ -385,6 +420,36 @@ inspectable result without manually operating every machine.
 7. Main may automatically apply Role and Instruction changes and records old and new
    values for rollback.
 8. A Worker or Main Agent cannot automatically relax executable Policy.
+9. Every ready first-class Agent Adapter reports a bounded verified catalog of
+   provider-native model IDs and display metadata. Catalog discovery is deterministic
+   operational state and is not injected wholesale into normal Task context.
+10. Every Worker-capable Device has a typed Worker Agent Execution Profile. Main has
+    a separate Coordinator profile so its planning runner and co-located Worker can
+    use different bindings. A Coordinator model on the active authenticated adapter
+    is a normal profile change; replacing the composed Coordinator provider or
+    adapter remains an explicit authenticated Main Agent reconfiguration and service
+    restart rather than an in-process profile mutation.
+11. Agent Execution Profile modes are `Auto`, `Prefer`, and `Pinned`. Prefer uses
+    only an explicit fallback chain. Pinned fails closed when its exact adapter or
+    model is unavailable.
+12. Owner aliases and display names are resolved against the target Device's current
+    verified catalog. Durable configuration stores the exact provider-native model
+    ID, never an unresolved alias.
+13. Windows, macOS, and Linux Workers run a bounded read-only Wake-on-LAN target
+    probe. It reports `enabled`, `disabled`, `unsupported`, or `unknown`, its source,
+    and observation time without exporting an interface name, MAC address, SecureOn
+    value, raw command output, or another local network identifier.
+14. Main retains the last authenticated Wake-on-LAN target observation when a Worker
+    goes offline and marks it as historical rather than treating an absent heartbeat
+    as proof that the setting changed.
+15. Wake target readiness and orchestration readiness are separate. An enabled target
+    still requires an online Main-local or Worker relay on the target broadcast
+    domain plus a securely stored exact wake target. Routed IP reachability,
+    Tailscale membership, or a subnet route alone does not prove that path.
+16. Until the relay, target-secret boundary, magic-packet delivery, boot observation,
+    throttling, Policy, and audit lifecycle is implemented and verified, Admin Web
+    reports `relay required` instead of claiming that OpenDelegate can wake the
+    Device.
 
 ### FR-4 — Connectivity and transport profiles
 
@@ -414,7 +479,9 @@ inspectable result without manually operating every machine.
 2. A new approved Forum post creates a Task with an immutable Task ID and stores the
    Discord channel, thread, post, and message identifiers as external bindings.
    Thread and starter-message events may share an external identifier and arrive in
-   either order; ingestion remains idempotent.
+   either order; ingestion remains idempotent. The owner never has to apply an
+   Intake or other workflow-status tag to start work. Workflow tags are projections
+   that the bot applies after binding the Task.
 3. A reply creates an idempotent Task event and resumes the Task's Coordinator
    Session when appropriate.
 4. The Discord Adapter reconciles messages after reconnect using persisted cursors
@@ -425,9 +492,22 @@ inspectable result without manually operating every machine.
    such as priority or category. The database is authoritative when Discord's
    20-available-tag and five-applied-tag limits cannot represent internal state.
 7. The bot maintains a concise status surface and edits it instead of posting a new
-   message for every heartbeat.
+   message for every heartbeat. The surface shows Task state and references but does
+   not repeat the Forum title, the current owner question, or mutable Task controls.
+   Each accepted owner message receives one idempotent in-place acknowledgement on
+   that exact message: a best-effort `👀` reaction plus Discord's typing indicator.
+   Typing is refreshed while the turn remains active; after a durable question,
+   result, or failure is delivered, the same message transitions to `✅` or `❌`.
+   OpenDelegate does not post a second generic working card for the same input.
 8. Significant decisions, questions, failures, and final results remain ordinary
-   replies in chronological order.
+   replies exactly once in chronological order, keyed by their immutable Task source
+   event rather than mutable Artifact or link enrichment. The full owner question
+   exists only in its chronological reply, while the status surface says only that
+   input is needed. The first eligible owner answer resolves that same question
+   message in place, removes its controls, and resumes the Task once. A failure reply
+   includes the owner-safe concrete reason or exhausted resource and the applicable
+   recovery control, such as Retry; the owner is never left with only a generic
+   attention notice.
 9. Buttons and menus offer pause, cancel, retry, approve, reject, inspect Runs, and
    open Artifact actions where Discord permits.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
@@ -436,6 +516,10 @@ inspectable result without manually operating every machine.
     marked broken.
 12. System incidents and recommendations may create their own Forum posts according
     to the Autonomy Profile.
+13. After bootstrap, the owner may add, extend, replace, or disable the Main-scoped
+    Discord binding through Configuration Chat and protected Approval. A replacement
+    becomes durable only after the candidate Gateway proves `READY`; failure restores
+    the prior binding without changing Task or native-session identity.
 
 ### FR-6 — Task intake and lifecycle
 
@@ -453,6 +537,20 @@ inspectable result without manually operating every machine.
 9. The owner may pause, resume, cancel, reopen, or archive a Task.
 10. Completion requires Main to reconcile every required Work Order and verify the
     Task completion criteria, not merely receive one successful Worker response.
+11. A narrowly recognized read-only Device-directory question that is fully
+    answerable from a bounded, owner-safe, Main-owned orchestration snapshot may
+    complete through deterministic Main code before an Agent turn. Unverified
+    capabilities are excluded. A planner-supplied `completed` shape is not authority;
+    the authoritative executor accepts only the exact decision minted by the trusted
+    deterministic query path. This exception cannot authorize or claim a file,
+    system, network, browser, or other external side effect; execution still
+    requires authoritative Worker evidence.
+12. Deterministic retries within one owner-input cycle reuse the first durable
+    semantic plan. The trusted Main-owned direct-query fast path is checked first so
+    an upgraded deterministic classifier may replace a stale artificial Work Order
+    without an LLM turn. Otherwise, a retry never asks the Main Agent to reinterpret
+    the same owner turn merely because Worker selection, dispatch, or another
+    deterministic resource stage failed.
 
 #### Canonical Task states
 
@@ -476,8 +574,8 @@ may request a transition but cannot manufacture a state outside the transition r
 
 1. Each Work Order has a stable ID, explicit brief, completion criteria, constraints,
    selected inputs, required Capabilities, scheduling hints, and an optional Agent
-   requirement naming a provider plus an optional exact adapter and allowed
-   compatibility set.
+   requirement naming a provider plus an optional exact adapter, exact model, and
+   allowed compatibility set.
 2. A deterministic eligibility stage filters Devices by health, connection, Policy,
    Capability, Secret availability, resource capacity, and hard Task constraints.
 3. A deterministic score may rank workload, route cost, artifact locality, session
@@ -504,12 +602,33 @@ may request a transition but cannot manufacture a state outside the transition r
     is still live at the authoritative, monotonically non-decreasing journal
     acceptance instant; an expired or replaced Run cannot be credited with
     completion. Replay preserves and revalidates that original event instant.
-14. Main copies any Work Order Agent requirement into the immutable Run assignment.
-    Retry and restart replay preserve that exact requirement; they do not widen it.
+14. The immutable Run assignment retains the original Work Order, including any hard
+    Agent requirement, unchanged. Its separate effective Agent binding is resolved
+    from the selected Device's profile and current verified catalog. With no hard
+    requirement the profile decides the binding; with one, the binding must refine
+    and satisfy it without widening provider, adapter, model, or allowed
+    compatibility. Retry and restart replay preserve both the original requirement
+    and that exact effective binding.
 15. A terminal Worker event may return the actual provider, adapter ID and version,
     native session ID, Workspace ID, workstream ID, and session lineage. This safe
     observation excludes Device-local paths, worktree paths, and session keys and is
     durably preserved by Main.
+16. Normal Task intake does not ask the owner to select a Device, OS family, route,
+    Agent provider, or multi-Device split when the objective, registered Workspaces,
+    verified Capabilities, Policy, and deterministic eligibility can decide.
+17. Main may decompose one Task into ordered or parallel Work Orders across different
+    OS families. The owner observes assignments and rationale through Admin and audit
+    but does not manually coordinate the handoffs.
+18. Main asks about placement only when the choice changes the intended outcome or an
+    owner preference cannot be derived from durable configuration.
+19. Main Agent instructions treat a direct routine placement question as a planning
+    defect, but structural result validation does not infer intent from Device words
+    or reject a question lexically. Placement questions remain valid when privacy,
+    data locality, cost, physical or interactive access, licensed software, result
+    location, compatibility, legal, Policy, or another owner-visible outcome changes.
+20. Scheduling intersects Task hard requirements with the Device Agent Execution
+    Profile. A conflict excludes the Device with an owner-visible reason instead of
+    silently widening either requirement.
 
 ### FR-8 — Concurrency and resource locks
 
@@ -550,7 +669,8 @@ may request a transition but cannot manufacture a state outside the transition r
 
 1. The common Agent Adapter contract supports detection, version inspection, auth
    readiness, start, resume, steer when supported, cancel, event streaming, final
-   result, diagnostics, and session cleanup.
+   result, diagnostics, session cleanup, and bounded model-catalog discovery for
+   first-class providers.
 2. Codex and Claude are first-class adapters through their supported programmatic
    interfaces.
 3. CLI non-interactive execution and resume provide fallback paths where an SDK
@@ -569,18 +689,22 @@ may request a transition but cannot manufacture a state outside the transition r
    file or command results relevant to the Task, decisions, approvals, and Artifacts.
 11. It does not require hidden reasoning, internal model state, or an exact visual
     mirror of a vendor's Desktop conversation.
-12. Context pressure, provider compaction, retention expiry, corruption, or Device
-    loss triggers a checkpoint and continuation session.
-13. A continuation receives a bounded package: Task Brief, rolling summary,
-    decisions, pending Work Orders, selected Artifact index, relevant current
+12. For Task Coordinator and Worker sessions, context pressure, provider compaction,
+    retention expiry, corruption, or Device loss triggers a checkpoint and
+    continuation session. Configuration Chat follows its separate recovery contract
+    in FR-15 because it is not a Task and does not own a Task Brief or Work Orders.
+13. A Task or Worker continuation receives a bounded package: Task Brief, rolling
+    summary, decisions, pending Work Orders, selected Artifact index, relevant current
     messages, and explicit constraints.
 14. A Worker uses Device-level automatic adapter selection only when its Run has no
-    Agent requirement. When a requirement exists, the provider is mandatory, the
-    exact adapter and compatibility set are enforced when present, and an
-    unavailable binding fails closed without silently substituting another
-    provider. Omitting the compatibility set means tested-only.
+    Agent requirement or resolved Device profile binding. When a requirement exists,
+    the provider is mandatory, the exact adapter, exact model, and compatibility set
+    are enforced when present, and an unavailable binding fails closed without
+    silently substituting another provider or model. Omitting the compatibility set
+    means tested-only.
 15. A successful provider-bound Run reports a safe native-session observation whose
-    provider and exact adapter, when required, match the durable assignment.
+    provider, exact adapter, and exact model, when required, match the durable
+    assignment.
 
 ### FR-10 — Context isolation and compaction
 
@@ -591,7 +715,8 @@ may request a transition but cannot manufacture a state outside the transition r
    lost merely because chat was compacted.
 4. Artifact contents are referenced and opened only when required.
 5. Worker prompts receive a Work Order package, not the entire Coordinator
-   conversation.
+   conversation. The package includes the exact immutable Agent Binding selected for
+   the Run.
 6. Cross-Task retrieval is disabled by default.
 7. An explicit owner link or Main-created dependency names exactly which external
    information becomes input.
@@ -641,6 +766,11 @@ may request a transition but cannot manufacture a state outside the transition r
    equivalent OS security controls.
 10. Browser-only work should prefer structured browser automation when it is more
     reliable than pixel-level desktop control.
+11. Login, MFA, CAPTCHA, legal confirmation, and other human-only interactions pause
+    the current Task rather than inviting the Agent to bypass the boundary.
+12. When an eligible interactive surface exists, Main presents a bounded Owner
+    Handoff. After the owner returns control through the same Task, execution resumes
+    from durable state and the existing session lineage where possible.
 
 ### FR-13 — Knowledge-aware capability development
 
@@ -679,6 +809,20 @@ may request a transition but cannot manufacture a state outside the transition r
 11. Interactive HTML is an explicit, more permissive Artifact mode and cannot share
     Admin Web cookies or origin authority.
 12. Temporary Artifacts expire according to policy; the owner may pin an Artifact.
+13. Final presentation may be a Discord-native response or attachment, downloadable
+    file, Artifact, hosted result, or Git reference proven by an authoritative Worker
+    report.
+14. An Owner Handoff is Task-scoped and Main-mediated. It may use an isolated
+    interactive Artifact or a configured remote-session gateway, but raw Worker VNC
+    or browser-debug endpoints are not exposed to Discord by default.
+15. Owner Handoff access follows an explicit exposure policy, is time-bounded,
+    revocable, and audited, and carries no credential in its Discord URL or Agent
+    prompt.
+16. The handoff asks the owner for one clear action, never requests a credential in
+    chat, and preserves the Task context boundary while waiting.
+17. Credentials or provider tokens retained after owner authorization remain in the
+    relevant Device Secret Store under Policy; only a non-secret capability
+    reference may enter Task state.
 
 ### FR-15 — Admin Web
 
@@ -686,13 +830,19 @@ may request a transition but cannot manufacture a state outside the transition r
 2. Admin Web requires application authentication even on a private network.
 3. Initial owner claim is available only through a local bootstrap channel on Main
    and produces independent recovery credentials.
-4. The first milestone provides a strong local owner authentication method and may
-   add optional reverse-proxy or identity-provider adapters. Discord identity alone
-   is not the only Admin recovery method.
+4. The first milestone provides a local owner passphrase protected by Argon2id.
+   Owner creation and recovery accept 10 or more Unicode code points including at
+   least one non-whitespace code point, up to 1024 UTF-8 bytes. Optional
+   reverse-proxy or identity-provider adapters may be added, and Discord identity
+   alone is not the only Admin recovery method.
 5. Initial navigation shows the current Device and expands to a left-side Device list
    as more Devices enroll.
 6. Device detail includes name, OS, health, Facts, Capabilities, Roles, Instructions,
-   Policies, connections, Agent Adapters, locks, load, and current Runs.
+   Policies, connections, Agent Adapters, their verified model catalogs, the effective
+   Worker Agent Execution Profile, Wake-on-LAN target and orchestration readiness for
+   Worker Devices, locks, load, and current Runs. A Worker with no authenticated
+   Wake-on-LAN observation shows an explicit `not assessed`/`unknown` state instead
+   of omitting the section.
 7. Knowledge content is never proxied to Admin Web. At most, local service health is
    shown.
 8. Task inspection shows the Task state, event timeline, Coordinator Session lineage,
@@ -707,22 +857,100 @@ may request a transition but cannot manufacture a state outside the transition r
    rollback tools rather than editing opaque settings text.
 13. The Agent may recommend settings from observed facts, explain consequences, and
     ask for values that cannot be discovered.
-14. Protected configuration changes use the same Policy and approval mechanisms as
-    Task work.
-15. Admin Web does not attempt to reproduce the complete Discord Task chat in the
+14. Admin Web exposes an explicit deterministic assessment for the local Main Device.
+    It probes local Codex and Claude adapters, browser automation, Computer Use
+    readiness, and local Knowledge health without spending LLM context. The bounded,
+    non-secret result is durable in Main metadata and is supplied to Configuration
+    Chat as authoritative context. Configuration Chat cannot claim that it ran the
+    assessment. An Owner may explicitly bind existing Device-local Codex and Claude
+    configuration homes by absolute path; assessment and execution use those same
+    homes without copying or discovering credentials.
+15. Protected configuration changes use the same Policy and approval mechanisms as
+    Task work. Admin Web can select `Auto`, `Prefer`, or `Pinned` from target-local
+    verified adapters and model IDs. Configuration Chat can propose the same typed
+    change in natural language, including distinct Coordinator and co-located Worker
+    profiles for Main. Both surfaces read and write the same profile source of truth.
+    They explain that selecting a Coordinator binding on a different provider or
+    adapter does not replace the running Main Agent; the authenticated Main Agent
+    reconfiguration and restart must complete first.
+16. Admin Web does not attempt to reproduce the complete Discord Task chat in the
     first release.
-16. English is the canonical fallback and the initial locale when no explicit owner
+17. English is the canonical fallback and the initial locale when no explicit owner
     choice has been stored. Admin Web exposes a language selector before and after
     authentication for Korean, Japanese, French, Spanish, and Simplified Chinese.
-17. The explicit locale choice persists locally, updates the document language,
+18. The explicit locale choice persists locally, updates the document language,
     accessibility names, tooltips, status labels, and locale-sensitive dates without
     requiring a reload, and is included as `Accept-Language` on Admin requests.
-18. Owner-authored Device names, Roles, Task objectives, criteria, constraints, and
+19. Owner-authored Device names, Roles, Task objectives, criteria, constraints, and
     historical owner or Agent conversation content are never machine-translated.
     Stable product chrome and deterministic built-in state labels are translated at
     render time.
-19. Domain codes, API fields, durable events, schemas, logs, and source defaults
+20. Domain codes, API fields, durable events, schemas, logs, and source defaults
     remain English regardless of the selected presentation locale.
+21. Configuration Chat does not pin a generic setup menu or credential form below
+    the conversation. A Configuration Agent final response may attach only bounded,
+    typed, allowlisted setup suggestions. Admin Web renders each suggestion inside
+    the Agent message that produced it, preserving the conversational reason for the
+    next action.
+22. Main-service credential intake appears only after the Configuration Agent
+    explicitly identifies that credential as the next missing value. Embedded SQLite
+    is the already-active default and needs no URI. Raw Secret material goes only to
+    Main's secure intake form, never to the transcript or Agent context; only the
+    resulting opaque reference continues through Configuration Chat.
+23. Discord guided setup inspects the current binding first, explains the remaining
+    Developer Portal, Community Server, Forum, intent, and permission steps, asks only
+    for missing non-secret identifiers, and then offers secure bot-token intake when
+    it is actually required. It uses the typed proposal and protected Approval
+    lifecycle and never claims that browser-only Discord actions were completed by
+    OpenDelegate. The guide assumes no prior bot experience, first explains how one
+    Forum post maps to one Task, defines unfamiliar Discord terms, and walks through
+    only the missing stages, including installing the configured bot into the selected
+    server and verifying its Forum access. It gives a brief roadmap, then explains
+    only the current stage in detail: where to go, what to do, why it is required,
+    how to verify completion, and what non-secret value, if any, to return. It waits
+    for owner confirmation before advancing, presenting a single clear next action
+    instead of an unexplained identifier dump or a full manual in one response.
+24. When Main reports the exact `DISCORD_NOT_CONFIGURED` runtime state, the first
+    opening of Main's Configuration Chat in a browser session transparently starts
+    one Agent-guided Discord onboarding turn. A deterministic in-chat status explains
+    that the current binding is being inspected; the resulting guidance and actions
+    still come from the Agent response. Degraded or reconnecting Discord states do not
+    masquerade as first-time setup.
+25. Configuration Chat preserves Agent-authored paragraph breaks and renders
+    line-oriented numbered or bulleted steps as readable semantic lists without
+    accepting arbitrary Agent-authored HTML. If an Agent response arrives while the
+    chat is closed or the Admin page is hidden, Admin Web retains the conversation
+    across section navigation and exposes a localized unread badge, visible summary,
+    and accessible live notification. Opening the chat marks those responses read.
+    While an Agent turn is in flight, the transcript itself shows a localized
+    Agent-authored-position activity message; a disabled composer placeholder is not
+    the only progress indication.
+26. If the first native resume attempt for a Configuration Agent request fails before
+    any typed configuration tool for that request has executed, Main starts a fresh
+    native continuation with the complete current prompt and records the new lineage.
+    It does not automatically restart after a tool has executed, because replay could
+    duplicate a mutation or misrepresent its receipt. The continuation tells the owner
+    that provider-private or interrupted in-flight context may be unavailable,
+    receives a bounded excerpt of completed Device-scoped Configuration Chat
+    exchanges, re-inspects durable configuration, and re-confirms any required value
+    or choice that is absent from the excerpt before proposing a change. Main durably
+    records the first typed-tool attempt for each owner request before execution; an
+    interrupted request with that boundary and no final response fails closed across
+    restart instead of replaying.
+27. Main durably records an accepted owner Configuration Chat message before starting
+    or resuming its Agent turn. Admin Web restores that message immediately after
+    reload, shows whether its response is still pending or was interrupted, and
+    reconciles the eventual Agent response without requiring another reload.
+    Completed owner and Agent exchanges remain stored per target Device and Adapter
+    across Main restart. They remain separate from Task conversations and never
+    include provider-hidden reasoning or raw Secret material. Enter sends a message,
+    while Shift+Enter inserts a newline in the multiline composer.
+28. Approving a protected Configuration proposal atomically executes that exact
+    proposal through the Approval service. A follow-up chat message never creates a
+    second Approval for the same target Device and proposal: the durable Approval
+    request identity is derived from that immutable pair, while each chat tool
+    execution retains its own replay boundary. After the owner reports approval, the
+    Agent inspects current durable configuration instead of blindly applying again.
 
 ### FR-16 — Policy and approvals
 
@@ -781,6 +1009,14 @@ may request a transition but cannot manufacture a state outside the transition r
    Profile.
 7. Autonomous work creates an ordinary auditable Task and does not operate outside
    Task accounting.
+8. Each proactive category may inherit its profile or explicitly select disabled,
+   propose, or execute. A bounded monitor or system-incident signal with propose
+   authority creates a manual-review Task; execute creates an auto Task. Both enter
+   the ordinary Task coordinator, Policy, approval, budget, lock, and audit paths
+   rather than a privileged monitor-only execution path. When Discord is ready, Main
+   creates and durably binds one bot-authored post in the configured Forum before
+   using the ordinary Task projection. FR-4's bounded read-only diagnostic Agent may
+   produce the incident signal, but it cannot perform remedial work outside the Task.
 
 ### FR-19 — Persistence
 
@@ -791,7 +1027,8 @@ may request a transition but cannot manufacture a state outside the transition r
 3. Main is the only database client.
 4. Durable concepts include Instance, owner bindings, Devices, profiles, transport
    metadata, Agent Adapter metadata, Tasks, Task events, Work Orders, Runs, session
-   references, approvals, policies, locks, Artifacts, audit events, and settings.
+   references, exact Agent Bindings, model-catalog observations, approvals, policies,
+   locks, Artifacts, audit events, and settings.
 5. Knowledge and Secret values are explicitly excluded.
 6. Artifact bytes are stored separately from relational metadata.
 7. Database migrations are transactional where supported, restart-safe, and tested
@@ -813,6 +1050,13 @@ may request a transition but cannot manufacture a state outside the transition r
 5. An owner-facing incident bundle is exportable without Secret values.
 6. Token, cost, duration, and retry metrics are tracked when the provider exposes
    them.
+7. Deterministic release tooling compares the exact Codex and Claude source targets
+   with registry candidates without editing source or an installed Device. Scheduled
+   repository dependency automation may propose a candidate. A future Device
+   maintenance monitor may expose `disabled`, `propose`, and rollback-capable
+   verified automation only after Phase 12 implements its durable lifecycle.
+   Discovery never proves a supported release or bypasses applicable Agent and
+   platform gates.
 
 ### FR-21 — Failure and recovery
 
@@ -924,6 +1168,9 @@ separate runtime roles with separate authority.
 - Main is one logical process group on one fixed Device.
 - The Control Plane owns database migrations and refuses to start normal work after a
   failed or incompatible migration.
+- Bundle assembly and packaged smoke use temporary state and dynamically selected
+  loopback listeners. They never stop, restart, reconfigure, or activate the
+  installed Main.
 - Main may expose several authenticated listener URLs through LAN or configured
   private/tunnel networks.
 - Admin Web and Artifact Gateway have separate authorization and origin boundaries.
@@ -938,6 +1185,9 @@ separate runtime roles with separate authority.
 - Linux integrates with systemd where available and provides a supervised foreground
   fallback for environments without systemd.
 - Service installation, upgrade, restart, uninstall, and diagnostics are idempotent.
+- Bundle activation is owned by the native service lifecycle, including exact
+  active-version verification, bounded health checks, and failed-upgrade rollback;
+  constructing a bundle never changes the active version.
 - An interactive per-user helper may be distinct from a boot service where Computer
   Use requires access to the logged-in desktop.
 - The headless daemon never assumes that a desktop session exists.
@@ -986,6 +1236,9 @@ selection call is required.
 - Applying a patch validates schema, runs Policy, commits atomically, and emits audit.
 - Network and Agent diagnostics may include detailed configuration only when needed;
   routine Task context does not carry it.
+- `agent.worker-profile` is Device-scoped and `agent.coordinator-profile` is
+  Main-scoped. Profile values use exact provider-native IDs resolved from verified
+  catalogs.
 
 ### Artifact security model
 
@@ -1006,6 +1259,8 @@ selection call is required.
 | Recovery summary and session lineage | Main database |
 | Device facts and runtime probes | Worker observation, accepted by Main |
 | Roles and Instructions | Main Device Profile |
+| Worker and Coordinator Agent Execution Profiles | Main typed configuration |
+| Installed and verified adapter/model catalogs | Worker observation accepted by Main |
 | Executable Policy | Main policy configuration enforced again by Worker |
 | Secret values | Relevant Device Secret Store |
 | Knowledge Markdown and index | Relevant Worker Device |
@@ -1101,8 +1356,9 @@ The first milestone must prove:
 
 The milestone is accepted only when all of the following are demonstrated:
 
-1. Starting from an unconfigured checkout or release, the owner invokes the init
-   skill and reaches a running Main service and Admin Web without manually using a
+1. Starting from an unconfigured checkout or release, the owner gives the repository
+   or verified bundle to a capable Agent, which discovers the init skill and reaches
+   a running Main service and Admin Web without requiring the owner to use a
    development start command.
 2. The current Device appears as the only initial Device.
 3. The owner configures an embedded database and can alternatively validate and use
@@ -1111,34 +1367,44 @@ The milestone is accepted only when all of the following are demonstrated:
 5. The owner enrolls macOS, Windows, and Linux Devices through single-use grants.
 6. Every OS service survives process restart and expected host restart behavior.
 7. Device facts, verified Capabilities, Roles, Instructions, Policies, routes, health,
-   and current Runs appear correctly.
+   current Runs, and Worker Wake-on-LAN target and automatic-path readiness appear
+   correctly, including the last authenticated target observation while offline.
 8. Different Devices use different configured connection methods without exposing
-   route mechanics to the Main Agent prompt.
+   route mechanics to the Main Agent prompt, and routed or Tailscale reachability is
+   never presented as a verified Wake-on-LAN path.
 9. A Forum post creates exactly one Task and a reply resumes it.
 10. A different Forum post creates a context-isolated Task.
 11. A clear Task starts automatically and an ambiguous Task asks one useful question.
-12. Main decomposes one Task into parallel Work Orders on at least two Devices and
-    synthesizes the reports.
+12. Main decomposes one outcome-only Task into parallel Work Orders on at least two
+    OS families without asking the owner to choose placement, then synthesizes the
+    reports and leaves the assignments inspectable.
 13. General Agent Runs execute concurrently while Computer Use is limited by the
     desktop-session lock.
 14. Codex and Claude start through programmatic adapters, return observable events,
     and resume native sessions by Task or workstream.
 15. Coordinator provider pinning and Worker provider participation behave as
-    specified: Main preserves an immutable per-Run provider requirement, Worker
-    never silently substitutes it, Device Auto applies only without a requirement,
-    and safe actual provider/adapter/native-session lineage survives Main and Worker
-    restart replay.
+    specified: Main preserves each Work Order's hard requirement unchanged, records
+    one exact effective binding that satisfies it, and Worker never silently
+    substitutes either. Safe actual provider/adapter/model/native-session lineage
+    survives Main and Worker restart replay. Every Worker-capable Device, including
+    Main, exposes target-local verified adapter/model choices; Auto, Prefer, and
+    Pinned produce the specified immutable Run binding, a pinned unavailable model
+    fails closed, and changing a profile does not rewrite an existing native
+    session's binding.
 16. A forced native-session loss continues from a durable checkpoint.
 17. A Worker uses relevant local Markdown Knowledge without uploading Knowledge
     content or index data to Main.
 18. A Worker records a qualifying new Knowledge file or update and deterministically
     rebuilds its index.
 19. Computer Use completes the reference interaction on macOS, Windows, and supported
-    graphical Linux, produces screenshot evidence, and honors cancellation.
+    graphical Linux, produces screenshot evidence, honors cancellation, and pauses
+    and resumes the same Task through a bounded Owner Handoff for the reference
+    human-only step.
 20. A headless NAS-style Linux Worker remains fully usable for non-desktop
     Capabilities and reports Computer Use unavailable.
-21. A Worker-generated report is uploaded to Main and shown as both a concise Discord
-    result and an Artifact link.
+21. Worker-generated outcomes are shown as a concise Discord result and the useful
+    available form—file, Artifact, hosted result, or verified Git reference—and an
+    interactive result uses a credential-free Owner Handoff link when required.
 22. At least private-network, authenticated, signed-link, and intentionally public
     Artifact modes are proven.
 23. Agent-generated HTML cannot access Admin Web credentials or execute scripts in
@@ -1211,6 +1477,8 @@ The following normally require no LLM:
 - Discord event reconciliation and tag projection;
 - package-source classification when mechanically known;
 - Policy decisions;
+- narrowly recognized read-only Device-directory query rendering from bounded
+  Main-owned state;
 - Markdown indexing and graph extraction;
 - Artifact upload, serving, and retention; and
 - service supervision.

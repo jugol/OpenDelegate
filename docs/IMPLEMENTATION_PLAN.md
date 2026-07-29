@@ -394,6 +394,9 @@ Move execution onto authenticated remote Devices without adding real LLM provide
 - Add LAN and generic HTTPS/WSS transports; treat Omada and Tailscale as configured
   network paths rather than embedded dependencies.
 - Add optional deterministic Tailscale diagnostic probes when the CLI is present.
+- Add bounded read-only Windows, macOS, and Linux Wake-on-LAN target probes. Persist
+  their last authenticated non-secret observation for offline Device inspection and
+  keep target readiness separate from the future relay execution path.
 - Implement sanitized diagnostic bundles and Agent escalation only after route
   exhaustion.
 - Implement Device drain, disable, revoke, and offline behavior.
@@ -405,6 +408,8 @@ Move execution onto authenticated remote Devices without adding real LLM provide
   profile.
 - Main never initiates SSH and Workers never receive database credentials.
 - Route failover, disconnect buffering, replay, revocation, and Main restart pass.
+- An offline Worker retains its last authenticated Wake-on-LAN target observation;
+  no routed or Tailscale endpoint is mislabeled as a verified wake relay.
 
 ## Phase 4 — Cross-platform service and user-session runtime
 
@@ -425,7 +430,10 @@ Make Main and Worker roles truly persistent on all target operating systems.
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
-- Build release bundles and smoke them on clean hosts.
+- Build release bundles and smoke them on clean hosts using isolated temporary state
+  and dynamically selected adjacent loopback listeners.
+- Keep bundle assembly independent from service activation. Installed systems switch
+  versions only through the journaled native service lifecycle.
 
 ### Exit gate
 
@@ -435,6 +443,8 @@ Make Main and Worker roles truly persistent on all target operating systems.
 - User-session helper loss removes graphical Capabilities without dropping headless
   work.
 - Failed upgrades roll back to a healthy version.
+- A bundle build completes while an existing Main remains healthy on its configured
+  listeners, without changing its process, service definition, or active version.
 
 ## Phase 5 — Device discovery, profile evolution, and resource control
 
@@ -485,6 +495,12 @@ Replace fake agents with resumable, observable first-class providers.
 - Implement generic command adapter with explicit lifecycle and output schema.
 - Add adapter version pinning, compatibility probes, capability degradation, and
   diagnostics.
+- Add bounded model-catalog discovery for ready Codex and Claude adapters and carry
+  exact provider-native model IDs through requirements, assignments, requests,
+  observations, and native-session lineage.
+- Implement typed Worker and Coordinator Agent Execution Profiles with Auto, Prefer,
+  and Pinned modes. Resolve owner aliases only against the target Device catalog,
+  intersect profiles with Work Order hard requirements, and fail closed on conflict.
 - Add an optional Work Order Agent requirement and copy it into each immutable Run
   assignment. Require the named provider, optionally require one exact adapter and
   allowed compatibility set, and use Device Auto only when the assignment omits the
@@ -507,8 +523,11 @@ Replace fake agents with resumable, observable first-class providers.
 - Two unrelated Tasks never share a native session.
 - Related Worker follow-up resumes the correct native session.
 - Coordinator provider remains pinned while another provider participates as Worker.
-- Provider-bound Worker Runs fail closed when the required binding is unavailable;
-  exact retry and restart replay cannot widen or substitute that binding.
+- Provider-bound Worker Runs fail closed when the required binding, including an
+  exact required model, is unavailable; exact retry and restart replay cannot widen
+  or substitute that binding.
+- Profile changes affect new Task or workstream sessions. A checkpoint continuation
+  retains the binding recorded for the existing session it replaces.
 - Main replay preserves the actual safe provider, adapter, native-session, and
   lineage observation reported by the Worker.
 - Simulated session deletion continues from checkpoint with an explicit lineage
@@ -527,22 +546,66 @@ Make Discord the complete primary Task interface.
   permission verification, owner allowlist, and Forum binding.
 - Implement Gateway session management, heartbeat, resume, and thread/message events.
 - Implement HTTP reconciliation for missed messages and archived threads.
-- Map Forum post to internal Task and make ingestion idempotent.
+- Map Forum post to internal Task and make ingestion idempotent without requiring an
+  owner-applied workflow tag. Treat Intake and later workflow tags only as bot-owned
+  projections. During transient thread/starter visibility races, leave the Gateway
+  dispatch cursor unadvanced so Resume replays it under bounded reconnect backoff
+  and the ordinary reconnect reconciliation path.
 - Implement Task status projection with one workflow tag and a stable Components v2
-  status panel.
+  status panel. Keep the panel neutral: state and references only, without repeating
+  the Forum title, chronological question body, or mutable Task controls.
+- Acknowledge each accepted owner message in place with one idempotent best-effort
+  `👀` reaction and a typing signal refreshed during active work. Close that exact
+  reaction lifecycle with `✅` or `❌` only after the durable question, result, or
+  failure delivery succeeds. Do not post a generic working card.
 - Implement concise progress, targeted questions, final result, file/media, and
-  Artifact link presentation.
+  Artifact link presentation. Questions, decisions, failures, and final results are
+  each posted once at the latest chronological position using immutable Task
+  source-event identity. Mutable Artifact/link enrichment updates the stable panel,
+  not another result message. Resolve an answered question by editing that same
+  nonce-recoverable message and removing its controls. Adopt a matching delivered
+  legacy projection key during upgrade; if duplicate copies already exist, resolve
+  every copy of that source event from one accepted answer. Chronological failure
+  replies must include the owner-safe concrete reason or exhausted resource plus the
+  relevant recovery control, including Retry for failed Tasks.
+- Present interactive Artifacts with a distinct owner action label. Never place a
+  credential, signed bearer value, raw Worker desktop address, or browser-debug
+  endpoint in a Discord message.
 - Implement pause, resume, cancel, retry, approval, denial, and inspect interactions.
 - Implement system incident and recommendation post creation.
 - Handle archive, lock, reopen, delete, permission loss, rate limit, and reconnect.
+- Implement owner-approved live add, extension, replacement, and disable for the
+  Main-scoped Discord binding. Serialize one Gateway lifecycle, require bounded
+  `READY` proof before durable replacement commit, and restore the prior binding on
+  activation or Configuration failure.
 
 ### Exit gate
 
 - The owner completes the canonical Task journey from desktop and mobile Discord.
 - A second Forum post remains context-isolated.
 - Main outage and Gateway reconnect reconcile without missing or duplicating work.
+- A tagless owner-created Forum post starts exactly one Task and receives the bot's
+  Intake projection even when thread and starter resources become visible in
+  different Gateway/HTTP cycles.
+- A long conversation exposes current work and failure recovery at the latest
+  chronological position rather than only on its starter status panel.
+- One owner reply produces one in-place acknowledgement and no duplicate working or
+  question cards; typing stays alive, the reaction closes, an answered prompt is
+  edited in place, and automatic resource retries reuse that owner turn's durable
+  plan across Main restart.
+- A narrowly recognized read-only Device availability question is answered
+  deterministically from bounded Main-owned state without an LLM turn or artificial
+  Worker Run. Generic supported-locale test placeholders, including Korean-English
+  code switching, may be clarified by one exact owner query. The trusted direct
+  answer precedes a stale cached semantic plan on Retry, while untrusted planner
+  completion and unverified capabilities fail closed.
 - Unauthorized messages never reach an Agent.
+- An outcome-only Task does not require a Device, OS, route, provider, or
+  multi-Device-placement answer when durable configuration and eligibility can
+  decide it.
 - A locked or deleted post degrades to Admin Web without losing Task state.
+- Approved binding changes survive Main restart, duplicate Approval replay opens no
+  second Gateway, and failed candidates preserve the prior live and durable binding.
 
 ## Phase 8 — Admin Web and Configuration Agent
 
@@ -556,6 +619,16 @@ Deliver the required visual setup, Device specification, and operational surface
 - Implement first-run shell with one current Device and left-side Device navigation.
 - Implement Device Facts, Capabilities, Roles, Instructions, Policies, routes, Agent
   Adapters, locks, health, load, and Runs.
+- Show target-local verified adapter/model catalogs and the effective Worker profile
+  on every Device. On Main, separately show the Coordinator and co-located Worker
+  profiles.
+- Add an authenticated on-demand Main Device assessment that probes local Codex and
+  Claude adapters, browser automation, Computer Use readiness, and local Knowledge
+  health, stores only the bounded observation in Main metadata, and exposes it to the
+  Configuration Agent without Secret material.
+- Allow explicit owner-selected Codex and Claude configuration homes to be persisted
+  by path and reused by both execution and assessment, with managed homes as the
+  default and exact-home login guidance when authentication is not ready.
 - Implement Task, Work Order, Run, session lineage, event, approval, Artifact, error,
   and audit inspectors.
 - Implement emergency Task creation, pause, cancel, retry, drain, revoke, and stale
@@ -564,9 +637,64 @@ Deliver the required visual setup, Device specification, and operational surface
 - Implement bottom-right Configuration Chat in a separate native Agent Session.
 - Give the Configuration Agent typed inspect, propose, validate, diff, apply, and
   rollback tools.
+- Add typed `agent.worker-profile` and `agent.coordinator-profile` definitions.
+  Support exact natural-language profile changes and explicit Admin selection through
+  the same configuration source of truth. Coordinator model changes apply on the
+  active Main Agent Adapter; provider/adapter replacement continues through the
+  separately authenticated Main Agent reconfiguration and service restart.
+- Add secure Discord-token intake and non-secret `discord.binding` proposals to
+  Configuration Chat without exposing the raw token to chat, SQL, or Agent context.
+- Let Configuration Agent final responses attach only bounded, typed setup
+  suggestions and render them inside the originating Agent message rather than in a
+  fixed setup panel. Reveal secure intake only after the Agent identifies that
+  credential as the next missing value. Explain that embedded SQLite is already
+  active without a URI, and make the Discord guide inspect the current binding before
+  walking through Discord-side prerequisites, non-secret identifiers, secure token
+  intake, proposal, Approval, activation validation, and rollback. Treat the owner as
+  new to Discord bots: explain the Forum-post-to-Task outcome and unfamiliar terms,
+  cover only missing stages (including server installation and Forum-access
+  verification), show a brief roadmap, and give where/what/why/verification/return
+  value detail only for the current stage. Keep one explicit next action visible and
+  wait for owner confirmation before advancing.
+- When Main reports exactly `DISCORD_NOT_CONFIGURED`, start one transparent
+  Agent-guided Discord onboarding turn on the first Main Configuration Chat opening
+  in that browser session. Do not trigger first-time onboarding for a configured but
+  degraded, reconnecting, starting, or unavailable Discord runtime.
+- Preserve Agent-authored paragraph breaks and turn line-oriented numbered or
+  bulleted steps into semantic Configuration Chat lists. Keep an in-flight
+  configuration conversation mounted across Admin section navigation, and surface
+  responses that arrive off-screen through a localized unread badge, visible
+  summary, and accessible live notification until the owner opens the chat. Show a
+  transient Agent activity message inside the transcript while a native turn is
+  pending, independently of the composer placeholder.
+- If a Configuration Agent request cannot complete its initial native resume before
+  executing any typed tool, start and durably record a fresh native continuation from
+  the complete current prompt plus a bounded durable excerpt of completed Device
+  exchanges, disclose the possible loss of provider-private or interrupted in-flight
+  context, re-inspect durable state, and re-confirm any missing value before proposing
+  a change. Persist each accepted owner message before Agent execution and persist
+  each completed Agent response separately per Device. After reload, Admin Web must
+  restore an accepted message immediately, distinguish a live pending response from
+  an interrupted turn, and poll only while a live response remains pending. A fresh
+  native continuation receives the bounded durable conversation excerpt after reload
+  or Main restart. Record the first typed-tool attempt before broker execution and
+  fail an interrupted request closed across restart; never auto-restart or replay
+  after that boundary.
+- Derive protected Configuration Approval request identity from target Device plus
+  immutable proposal ID while keeping each chat tool execution request-bound.
+  Approval executes the protected operation immediately; a later “approval complete”
+  message inspects durable configuration and cannot create a duplicate Approval for
+  the same proposal or misread a compensated historical receipt as current state.
+- Use a multiline Configuration Chat composer where Enter sends and Shift+Enter adds
+  a newline.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service
   persistence, Admin auto-open, transports, Autonomy Profiles, Artifact exposure,
   and Device join.
+- Make the init and join journeys readable by an Agent that receives only the
+  repository URL or verified bundle plus an owner request to install OpenDelegate.
+  The init Agent chooses and explains the fixed always-on Main boundary; each join
+  Agent completes one outbound Worker without requiring the owner to design the
+  topology or placement policy.
 - Keep English as the canonical Admin default and add complete, typed Korean,
   Japanese, French, Spanish, and Simplified Chinese presentation catalogs with an
   explicit pre-authentication and authenticated language selector.
@@ -579,9 +707,14 @@ Deliver the required visual setup, Device specification, and operational surface
 
 - A new owner completes setup through the init skill and Admin Web without reading
   source code.
+- The same owner can give the repository or verified bundle to Codex or Claude on
+  Main and each Worker and receive an accurate, resumable Main-versus-Worker setup
+  journey without manually translating documentation into commands.
 - The required Device UI matches the product specification.
 - A configuration change can be proposed conversationally, previewed, policy-checked,
   applied, audited, and rolled back.
+- Local Agent onboarding names the init/authentication boundary accurately, and an
+  assessment survives Main restart without implying that Configuration Chat ran it.
 - Discord outage still permits inspection and emergency control.
 - All six Admin locales pass catalog completeness, locale persistence, accessibility,
   untranslated-owner-content, date-formatting, and desktop/mobile overflow tests.
@@ -634,13 +767,21 @@ Turn Worker output into durable, useful, safely viewable results.
 - Implement viewer access profiles and Artifact exposure precedence.
 - Implement private-network, authenticated, signed-link, public, and custom modes.
 - Implement isolated static and interactive HTML origins.
+- Implement the Owner Handoff presentation contract on the interactive origin:
+  Task-scoped access, explicit exposure policy, expiry, revocation, audit, and a
+  credential-free Discord/Admin action. Keep a remote-session gateway behind an
+  adapter boundary; never default to direct Worker VNC exposure.
 - Add Artifact pin, revoke, expire, and audit.
 
 ### Exit gate
 
 - An Artifact generated on an Omada-reachable Worker uploads to Main and opens from a
   Tailscale-reachable laptop without direct Worker access.
-- Discord shows a useful native summary and Open Report button.
+- Discord shows a useful native summary and labels report and interactive-result
+  actions distinctly.
+- The reference Owner Handoff opens through Main, expires or revokes cleanly, leaks
+  no credential or raw Worker endpoint, and resumes the same Task after the owner
+  replies.
 - Every exposure mode passes authorization and audit tests.
 - Malicious generated content cannot cross the Artifact security boundary.
 
@@ -664,6 +805,10 @@ Ship Computer Use as a real, schedulable, cross-platform Capability.
 - Capture screenshots and an action summary as Task Artifacts.
 - Implement locked, logged-out, permission-denied, helper-crashed, display-changed,
   and timeout behavior.
+- When login, MFA, CAPTCHA, legal confirmation, OS permission, or another human-only
+  step is reached, pause the same Task, offer an eligible Main-mediated Owner
+  Handoff, and resume only after the owner returns control. Never attempt to bypass
+  the boundary or request a credential in chat.
 - Add an owner-visible active Computer Use indicator and kill control.
 
 ### Exit gate
@@ -674,6 +819,8 @@ Ship Computer Use as a real, schedulable, cross-platform Capability.
 - Coherent rollback and cloned-service fixtures cannot create two input-capable
   controllers, even when each local snapshot is internally valid.
 - Permission failure is actionable and does not trigger unsafe bypass attempts.
+- The reference human-only interaction uses a bounded Owner Handoff and preserves
+  Task and session continuity across the pause.
 - Emergency stop prevents further input.
 - A headless NAS-style Linux Device remains healthy and accurately lacks the
   capability.
@@ -689,10 +836,25 @@ Make the system useful over time, not only during a happy-path demo.
 - Implement deterministic monitors for service, transport, database, Discord,
   provider, Artifact Store, lock, lease, and disk conditions.
 - Implement Reactive, Assisted, and Autonomous behavior by category.
-- Create system incident and recommendation Tasks.
+- Give every category an inherit, disabled, propose, or execute disposition. Convert
+  each bounded deterministic signal into one idempotent ordinary manual-review or
+  auto Task, then let the existing coordinator own it. When Discord is ready, create
+  one bot-authored starter post in the first configured Forum, persist the Task
+  binding, and let the existing Forum projection own subsequent updates. Reconcile an
+  uncertain create from deterministic Task markers across active and archived posts
+  before retrying.
+- Create system incident and recommendation Tasks without granting monitors a bypass
+  around Task Policy, approvals, budgets, locks, audit, or Secret boundaries.
+- Preserve FR-4's bounded, tool-denied diagnostic Agent as a read-only pre-Task
+  exception after deterministic transport recovery is exhausted; use its result as
+  the incident signal and perform every repair inside the resulting Task.
 - Implement diagnostics escalation packages and guided configuration repair.
 - Add retention and cleanup jobs with dry-run and audit.
 - Add provider usage and cost metrics where available.
+- Implement the deterministic Codex and Claude release monitor and typed
+  `disabled`, `propose`, and `verified-auto` maintenance policy. A candidate can
+  become active only after adapter contract and applicable platform smoke gates pass;
+  preserve the last verified version for rollback.
 - Implement owner export of a redacted support bundle.
 - Add upgrade compatibility windows and rolling Worker upgrade behavior.
 - Add rate limiting, circuit breakers, overload handling, and resource ceilings.
@@ -721,6 +883,9 @@ Prove the complete product on real target systems and publish it responsibly.
 - Run headless Linux NAS tests.
 - Test Omada-like routed private networking and Tailscale paths separately and
   together through configured Transport Profiles.
+- Verify Wake-on-LAN target detection on all three OS families and prove that any
+  future automatic wake path uses an online relay on the target broadcast domain,
+  rate limiting, Policy, audit, and observed boot completion.
 - Test private and externally exposed Artifact policies.
 - Perform threat-model review and security regression.
 - Perform upgrade from the earliest internal persisted schema and service bundle.

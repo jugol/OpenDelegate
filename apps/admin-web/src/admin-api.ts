@@ -20,6 +20,29 @@ export interface OwnerSession {
   readonly absoluteExpiresAt: string;
 }
 
+export interface AgentBindingSummary {
+  readonly provider: "codex" | "claude" | "generic";
+  readonly adapterId: string;
+  readonly modelId?: string;
+}
+
+export type AgentExecutionProfileSummary =
+  | {
+      readonly schemaVersion: 1;
+      readonly mode: "auto";
+    }
+  | {
+      readonly schemaVersion: 1;
+      readonly mode: "prefer";
+      readonly primary: AgentBindingSummary;
+      readonly fallbacks: readonly AgentBindingSummary[];
+    }
+  | {
+      readonly schemaVersion: 1;
+      readonly mode: "pinned";
+      readonly primary: AgentBindingSummary;
+    };
+
 export interface DeviceSummary {
   readonly deviceId: string;
   readonly name: string;
@@ -33,7 +56,7 @@ export interface DeviceSummary {
   readonly lastObservation?: {
     readonly observedAtMs: number;
     readonly acceptedAtMs: number;
-    readonly source: "authenticated-heartbeat";
+    readonly source: "authenticated-heartbeat" | "local-assessment";
   };
   readonly roles?: readonly string[];
   readonly instructions?: readonly string[];
@@ -73,7 +96,23 @@ export interface DeviceSummary {
     readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
     readonly version?: string;
     readonly observedAtMs: number;
+    readonly modelCatalogObservedAtMs?: number;
+    readonly models?: readonly {
+      readonly modelId: string;
+      readonly displayName: string;
+      readonly isDefault?: boolean;
+      readonly supportedEfforts?: readonly string[];
+    }[];
   }[];
+  readonly agentExecutionProfile?: AgentExecutionProfileSummary;
+  readonly coordinatorAgentExecutionProfile?: AgentExecutionProfileSummary;
+  readonly wakeOnLan?: {
+    readonly targetState: "enabled" | "disabled" | "unsupported" | "unknown";
+    readonly automaticWakeState: "relay-required" | "unavailable" | "unknown";
+    readonly source:
+      "windows-netadapter-power" | "macos-pmset" | "linux-ethtool" | "probe-unavailable";
+    readonly observedAtMs: number;
+  };
   readonly routes?: readonly {
     readonly routeId: string;
     readonly label: string;
@@ -520,12 +559,61 @@ export interface RuntimeFeature {
 }
 
 export type SecureSecretIngestPurpose =
-  "api-token" | "database-uri" | "private-key" | "service-credential";
+  "api-token" | "database-uri" | "discord-bot-token" | "private-key" | "service-credential";
+
+declare const mainSecretReferenceBrand: unique symbol;
+declare const mainSecretAliasBrand: unique symbol;
+
+export type MainSecretReference = string & {
+  readonly [mainSecretReferenceBrand]: true;
+};
+
+export type MainSecretAlias = string & {
+  readonly [mainSecretAliasBrand]: true;
+};
 
 export interface SecureSecretIngestReceipt {
   readonly schemaVersion: 1;
-  readonly secretRef: string;
+  readonly secretRef: MainSecretReference;
   readonly availability: "ready";
+}
+
+export type ConfigurationAgentSuggestedAction =
+  | "guide-discord"
+  | "guide-external-postgresql"
+  | "ingest-discord-bot-token"
+  | "ingest-database-uri";
+
+export interface ConfigurationAgentReply {
+  readonly content: string;
+  readonly suggestedActions: readonly ConfigurationAgentSuggestedAction[];
+}
+
+export interface ConfigurationAgentConversationMessage {
+  readonly messageId: string;
+  readonly role: "owner" | "agent";
+  readonly content: string;
+  readonly suggestedActions: readonly ConfigurationAgentSuggestedAction[];
+  readonly responseStatus?: "completed" | "interrupted" | "pending";
+  readonly occurredAt: string;
+}
+
+export function parseMainSecretReference(input: unknown): MainSecretReference {
+  if (
+    typeof input !== "string" ||
+    !/^secret:\/\/main\/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u.test(input)
+  ) {
+    throw invalidSecretIngestResponse();
+  }
+  return input as MainSecretReference;
+}
+
+export function mainSecretAlias(reference: MainSecretReference): MainSecretAlias {
+  const match = /^secret:\/\/main\/([A-Za-z0-9][A-Za-z0-9._~-]{0,127})$/u.exec(reference);
+  if (match?.[1] === undefined) {
+    throw invalidSecretIngestResponse();
+  }
+  return match[1] as MainSecretAlias;
 }
 
 export interface AdminApi {
@@ -534,8 +622,12 @@ export interface AdminApi {
   beginRecovery(recoveryCode: string): Promise<{ readonly recoveryToken: string }>;
   completeRecovery(recoveryToken: string, newPassphrase: string): Promise<RecoveryResult>;
   listDevices(): Promise<readonly DeviceSummary[]>;
+  assessDevice(deviceId: string): Promise<DeviceSummary>;
   runtimeFeatures(): Promise<RuntimeFeatures>;
-  sendConfigurationMessage(deviceId: string, message: string): Promise<string>;
+  sendConfigurationMessage(deviceId: string, message: string): Promise<ConfigurationAgentReply>;
+  listConfigurationMessages?(
+    deviceId: string,
+  ): Promise<readonly ConfigurationAgentConversationMessage[]>;
   ingestSecret(
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,
@@ -624,19 +716,43 @@ export class BrowserAdminApi implements AdminApi {
     return response.devices;
   }
 
+  async assessDevice(deviceId: string): Promise<DeviceSummary> {
+    const response = await this.#authenticatedRequest<{ readonly device: DeviceSummary }>(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/assessment`,
+      {
+        body: {},
+        method: "POST",
+      },
+    );
+    return response.device;
+  }
+
   async runtimeFeatures(): Promise<RuntimeFeatures> {
     return this.#request("/api/v1/runtime/features");
   }
 
-  async sendConfigurationMessage(deviceId: string, message: string): Promise<string> {
-    const response = await this.#authenticatedRequest<{ readonly content: string }>(
+  async sendConfigurationMessage(
+    deviceId: string,
+    message: string,
+  ): Promise<ConfigurationAgentReply> {
+    const response = await this.#authenticatedRequest<unknown>(
       `/api/v1/devices/${encodeURIComponent(deviceId)}/configuration/messages`,
       {
         body: { message },
+        keepalive: true,
         method: "POST",
       },
     );
-    return response.content;
+    return asConfigurationAgentReply(response);
+  }
+
+  async listConfigurationMessages(
+    deviceId: string,
+  ): Promise<readonly ConfigurationAgentConversationMessage[]> {
+    const response = await this.#request<unknown>(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/configuration/messages`,
+    );
+    return asConfigurationAgentConversation(response);
   }
 
   async ingestSecret(
@@ -797,6 +913,7 @@ export class BrowserAdminApi implements AdminApi {
     path: string,
     options: {
       readonly body: unknown;
+      readonly keepalive?: boolean;
       readonly method: "POST";
     },
   ): Promise<TValue> {
@@ -821,6 +938,7 @@ export class BrowserAdminApi implements AdminApi {
       readonly body?: unknown;
       readonly csrfToken?: string;
       readonly idempotencyKey?: string;
+      readonly keepalive?: boolean;
       readonly method?: "GET" | "POST";
     } = {},
   ): Promise<TValue> {
@@ -844,6 +962,7 @@ export class BrowserAdminApi implements AdminApi {
     const response = await fetch(path, {
       credentials: "same-origin",
       headers,
+      keepalive: options.keepalive ?? false,
       method: options.method ?? "GET",
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
     });
@@ -873,6 +992,8 @@ function secureSecretMaximumBytes(purpose: SecureSecretIngestPurpose): number {
       return 8 * 1024;
     case "api-token":
       return 16 * 1024;
+    case "discord-bot-token":
+      return 4 * 1024;
     case "private-key":
     case "service-credential":
       return 64 * 1024;
@@ -899,19 +1020,103 @@ function asSecureSecretIngestReceipt(value: unknown): SecureSecretIngestReceipt 
     throw invalidSecretIngestResponse();
   }
   const record = value as Record<string, unknown>;
-  if (
-    record["schemaVersion"] !== 1 ||
-    record["availability"] !== "ready" ||
-    typeof record["secretRef"] !== "string" ||
-    !/^secret:\/\/main\/[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/u.test(record["secretRef"])
-  ) {
+  if (record["schemaVersion"] !== 1 || record["availability"] !== "ready") {
     throw invalidSecretIngestResponse();
   }
+  const secretRef = parseMainSecretReference(record["secretRef"]);
   return {
     schemaVersion: 1,
-    secretRef: record["secretRef"],
+    secretRef: secretRef as MainSecretReference,
     availability: "ready",
   };
+}
+
+function asConfigurationAgentReply(value: unknown): ConfigurationAgentReply {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw unexpectedResponse(502);
+  }
+  const record = value as Record<string, unknown>;
+  const content = asNonBlankString(record["content"]);
+  const rawActions = record["suggestedActions"] ?? [];
+  if (content === undefined || !Array.isArray(rawActions) || rawActions.length > 4) {
+    throw unexpectedResponse(502);
+  }
+  const suggestedActions = rawActions.map((action): ConfigurationAgentSuggestedAction => {
+    if (
+      action !== "guide-discord" &&
+      action !== "guide-external-postgresql" &&
+      action !== "ingest-discord-bot-token" &&
+      action !== "ingest-database-uri"
+    ) {
+      throw unexpectedResponse(502);
+    }
+    return action;
+  });
+  if (new Set(suggestedActions).size !== suggestedActions.length) {
+    throw unexpectedResponse(502);
+  }
+  return {
+    content,
+    suggestedActions,
+  };
+}
+
+function asConfigurationAgentConversation(
+  value: unknown,
+): readonly ConfigurationAgentConversationMessage[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw unexpectedResponse(502);
+  }
+  const rawMessages = (value as Record<string, unknown>)["messages"];
+  if (!Array.isArray(rawMessages) || rawMessages.length > 2_000) {
+    throw unexpectedResponse(502);
+  }
+  return rawMessages.map((value): ConfigurationAgentConversationMessage => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw unexpectedResponse(502);
+    }
+    const record = value as Record<string, unknown>;
+    const messageId = asNonBlankString(record["messageId"]);
+    const content = asNonBlankString(record["content"]);
+    const occurredAt = asNonBlankString(record["occurredAt"]);
+    const role = record["role"];
+    const responseStatus = record["responseStatus"];
+    const rawActions = record["suggestedActions"] ?? [];
+    if (
+      messageId === undefined ||
+      content === undefined ||
+      occurredAt === undefined ||
+      (role !== "owner" && role !== "agent") ||
+      (responseStatus !== undefined &&
+        responseStatus !== "completed" &&
+        responseStatus !== "interrupted" &&
+        responseStatus !== "pending") ||
+      (role === "agent" && responseStatus !== undefined) ||
+      !Array.isArray(rawActions) ||
+      rawActions.length > 4
+    ) {
+      throw unexpectedResponse(502);
+    }
+    const suggestedActions = rawActions.map((action): ConfigurationAgentSuggestedAction => {
+      if (
+        action !== "guide-discord" &&
+        action !== "guide-external-postgresql" &&
+        action !== "ingest-discord-bot-token" &&
+        action !== "ingest-database-uri"
+      ) {
+        throw unexpectedResponse(502);
+      }
+      return action;
+    });
+    return {
+      messageId,
+      role,
+      content,
+      suggestedActions,
+      ...(responseStatus === undefined ? {} : { responseStatus }),
+      occurredAt,
+    };
+  });
 }
 
 function invalidSecretIngestResponse(): AdminApiError {

@@ -41,6 +41,7 @@ const intentionalCanonicalEnglishKeys: Readonly<
     "budget.metricTokens",
     "device.roles",
     "device.runIdentity",
+    "device.wakeOnLan",
     "known.computerUse",
   ],
   fr: [
@@ -51,6 +52,7 @@ const intentionalCanonicalEnglishKeys: Readonly<
     "device.instructions",
     "device.routes",
     "device.runIdentity",
+    "device.wakeOnLan",
     "join.fifteenMinutes",
     "join.fiveMinutes",
     "join.thirtyMinutes",
@@ -61,9 +63,15 @@ const intentionalCanonicalEnglishKeys: Readonly<
     "task.conversation",
     "task.mode",
   ],
-  ja: ["artifact.checksum", "budget.workOrderReference", "device.runIdentity", "known.computerUse"],
-  ko: ["approval.fingerprint", "artifact.checksum", "known.computerUse"],
-  "zh-CN": ["artifact.checksum", "device.runIdentity", "known.computerUse"],
+  ja: [
+    "artifact.checksum",
+    "budget.workOrderReference",
+    "device.runIdentity",
+    "device.wakeOnLan",
+    "known.computerUse",
+  ],
+  ko: ["approval.fingerprint", "artifact.checksum", "device.wakeOnLan", "known.computerUse"],
+  "zh-CN": ["artifact.checksum", "device.runIdentity", "device.wakeOnLan", "known.computerUse"],
 };
 
 afterEach(() => {
@@ -161,6 +169,7 @@ describe("Admin language selection", () => {
           readiness: "ready",
           compatibility: "tested",
           observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+          models: [],
         },
       ],
       currentRuns: [
@@ -182,18 +191,21 @@ describe("Admin language selection", () => {
           chatOpen={false}
           device={deviceWithOperationalStates}
           onConfigure={() => undefined}
+          onConfigureAgentProfile={() => undefined}
         />
       </AdminI18nProvider>,
     );
 
     expect(screen.getByRole("heading", { name: englishMessages.device.facts })).toBeTruthy();
     expect(screen.getByText(firstRunDevice.name)).toBeTruthy();
+    expect(screen.getByText("EN")).toBeTruthy();
 
     await user.selectOptions(screen.getByLabelText(englishMessages.common.language), "ko");
 
     expect(screen.getByRole("heading", { name: koreanMessages.device.facts })).toBeTruthy();
     expect(screen.getByText(koreanMessages.known.mainCoordinator)).toBeTruthy();
     expect(screen.getByText(firstRunDevice.name)).toBeTruthy();
+    expect(screen.getByText("한국")).toBeTruthy();
     expect(document.documentElement.lang).toBe("ko");
     expect(meta.content).toBe(koreanMessages.common.metaDescription);
     expect(window.localStorage.getItem(ADMIN_LOCALE_STORAGE_KEY)).toBe("ko");
@@ -226,7 +238,12 @@ describe("Admin language selection", () => {
 
     render(
       <AdminI18nProvider initialLocale="ko">
-        <DeviceSurface chatOpen={false} device={ownerDevice} onConfigure={() => undefined} />
+        <DeviceSurface
+          chatOpen={false}
+          device={ownerDevice}
+          onConfigure={() => undefined}
+          onConfigureAgentProfile={() => undefined}
+        />
       </AdminI18nProvider>,
     );
 

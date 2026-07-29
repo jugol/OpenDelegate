@@ -143,6 +143,60 @@ describe("Worker Computer Use capability composition", () => {
     }
   });
 
+  it("publishes bounded Wake-on-LAN evidence without allowing a failed probe to block inventory", async () => {
+    const workspaceRegistry = { listSchedulingMetadata: async () => [] };
+    const observed = createWorkerSchedulingInventoryProvider({
+      adapters: [],
+      environment: {},
+      workspaceRegistry,
+      wakeOnLanProbe: {
+        probe: async () => ({
+          state: "enabled" as const,
+          source: "linux-ethtool" as const,
+          observedAtMs: 1_000,
+        }),
+      },
+    });
+    assert.deepEqual((await observed.snapshot()).wakeOnLan, {
+      state: "enabled",
+      source: "linux-ethtool",
+      observedAtMs: 1_000,
+    });
+
+    const unavailable = createWorkerSchedulingInventoryProvider({
+      adapters: [],
+      environment: {},
+      workspaceRegistry,
+      wakeOnLanProbe: {
+        probe: async () => {
+          throw new Error("private platform probe failure");
+        },
+      },
+    });
+    const fallback = (await unavailable.snapshot()).wakeOnLan;
+    assert.equal(fallback?.state, "unknown");
+    assert.equal(fallback?.source, "probe-unavailable");
+    assert.equal(typeof fallback?.observedAtMs, "number");
+    assert.equal(JSON.stringify(fallback).includes("private platform probe failure"), false);
+
+    const contradictory = createWorkerSchedulingInventoryProvider({
+      adapters: [],
+      environment: {},
+      workspaceRegistry,
+      wakeOnLanProbe: {
+        probe: async () => ({
+          state: "enabled" as const,
+          source: "probe-unavailable" as const,
+          observedAtMs: 1_000,
+        }),
+      },
+    });
+    const contradictoryFallback = (await contradictory.snapshot()).wakeOnLan;
+    assert.equal(contradictoryFallback?.state, "unknown");
+    assert.equal(contradictoryFallback?.source, "probe-unavailable");
+    assert.equal(typeof contradictoryFallback?.observedAtMs, "number");
+  });
+
   it("accepts only bounded descriptive GPU evidence from an explicit platform probe", async () => {
     const provider = createWorkerSchedulingInventoryProvider({
       adapters: [],

@@ -13,6 +13,7 @@ import {
 } from "@opendelegate/agent-adapters";
 import {
   type AuthoritativeWorkerReport,
+  type DirectPlanningCompletionAuthorizer,
   type TaskContinuationCheckpointPort,
   type TaskEvidenceVerifier,
   TaskExecutorError,
@@ -25,6 +26,7 @@ import {
 import {
   sanitizeTaskContinuationText,
   serializeTaskContinuationCheckpoint,
+  type DeviceSummaryV1,
   type TaskContinuationCheckpointV1,
 } from "@opendelegate/protocol";
 
@@ -140,6 +142,20 @@ export interface AgentBackedTaskExecutorOptions {
   readonly sandbox: AgentSandbox;
   readonly permissions: AgentPermissionInput;
   readonly limits: AgentRunLimits;
+  /**
+   * Main-owned, owner-safe Device state made available to planning turns for
+   * read-only orchestration questions. Secrets, Device instructions, Knowledge,
+   * and private transcripts must not be exposed by this port.
+   */
+  readonly deviceDirectory?: {
+    list(): Promise<readonly DeviceSummaryV1[]>;
+  };
+  /**
+   * Resolves the exact provider-native model for a newly created Coordinator
+   * session. Existing sessions and checkpoint continuations retain their
+   * recorded model and do not call this resolver.
+   */
+  readonly resolveNewSessionModelId?: () => Promise<string | undefined>;
   readonly maximumPromptBytes?: number;
 }
 
@@ -156,7 +172,7 @@ interface AgentCoordinatorTurn {
 }
 
 export class AgentBackedTaskExecutor
-  implements TaskExecutor, TaskWorkPlanner, TaskEvidenceVerifier
+  implements TaskExecutor, TaskWorkPlanner, TaskEvidenceVerifier, DirectPlanningCompletionAuthorizer
 {
   readonly #adapter: AgentAdapter;
   readonly #sessionRepository: MainNativeSessionRepository;
@@ -166,9 +182,15 @@ export class AgentBackedTaskExecutor
   readonly #sandbox: AgentSandbox;
   readonly #permissions: AgentPermissionInput;
   readonly #limits: AgentRunLimits;
+  readonly #deviceDirectory: AgentBackedTaskExecutorOptions["deviceDirectory"];
+  readonly #resolveNewSessionModelId: AgentBackedTaskExecutorOptions["resolveNewSessionModelId"];
   readonly #maximumPromptBytes: number;
   readonly #active = new Map<string, AgentRunHandle>();
   readonly #taskTails = new Map<string, Promise<void>>();
+  readonly #directPlanningCompletions = new WeakMap<
+    object,
+    { readonly taskId: string; readonly executionKey: string }
+  >();
 
   constructor(options: AgentBackedTaskExecutorOptions) {
     assertAdapter(options.adapter);
@@ -177,6 +199,20 @@ export class AgentBackedTaskExecutor
     assertIdentifier(options.deviceId, "Main Device ID");
     assertWorkspace(options.workspace);
     assertExecutionOptions(options.sandbox, options.permissions, options.limits);
+    if (
+      options.deviceDirectory !== undefined &&
+      (options.deviceDirectory === null ||
+        typeof options.deviceDirectory !== "object" ||
+        typeof options.deviceDirectory.list !== "function")
+    ) {
+      throw new TypeError("The Main Agent Device directory is invalid.");
+    }
+    if (
+      options.resolveNewSessionModelId !== undefined &&
+      typeof options.resolveNewSessionModelId !== "function"
+    ) {
+      throw new TypeError("The Coordinator model resolver is invalid.");
+    }
     const maximumPromptBytes = options.maximumPromptBytes ?? DEFAULT_MAXIMUM_PROMPT_BYTES;
     if (!Number.isSafeInteger(maximumPromptBytes) || maximumPromptBytes < 4_096) {
       throw new TypeError("maximumPromptBytes must be a safe integer of at least 4096.");
@@ -189,6 +225,8 @@ export class AgentBackedTaskExecutor
     this.#sandbox = options.sandbox;
     this.#permissions = structuredClone(options.permissions);
     this.#limits = { ...options.limits };
+    this.#deviceDirectory = options.deviceDirectory;
+    this.#resolveNewSessionModelId = options.resolveNewSessionModelId;
     this.#maximumPromptBytes = maximumPromptBytes;
   }
 
@@ -207,6 +245,11 @@ export class AgentBackedTaskExecutor
   }
 
   async plan(input: Parameters<TaskWorkPlanner["plan"]>[0]): Promise<TaskWorkPlanDecision> {
+    const directAnswer = await this.planDeterministically(input);
+    if (directAnswer !== undefined) {
+      return directAnswer;
+    }
+    const deviceContext = await this.#readPlanningDeviceContext(input.signal);
     return this.#enqueueTaskTurn(input.task.taskId, input.signal, async () =>
       parsePlanningResult(
         await this.#runAgentTurn({
@@ -220,11 +263,65 @@ export class AgentBackedTaskExecutor
               this.#maximumPromptBytes,
               sessionAction,
               checkpoint,
+              deviceContext,
             ),
         }),
-        input.task.taskId,
+        input.task,
       ),
     );
+  }
+
+  async planDeterministically(
+    input: Parameters<NonNullable<TaskWorkPlanner["planDeterministically"]>>[0],
+  ): Promise<Extract<TaskWorkPlanDecision, { readonly state: "completed" }> | undefined> {
+    if (deviceDirectoryQueryLocaleForTask(input.task) === undefined) {
+      return undefined;
+    }
+    const deviceContext = await this.#readPlanningDeviceContext(input.signal);
+    const directAnswer = answerDeviceDirectoryQuestion(input.task, deviceContext);
+    if (directAnswer !== undefined) {
+      this.#directPlanningCompletions.set(directAnswer, {
+        taskId: input.task.taskId,
+        executionKey: input.executionKey,
+      });
+    }
+    return directAnswer;
+  }
+
+  authorize(input: Parameters<DirectPlanningCompletionAuthorizer["authorize"]>[0]): boolean {
+    const authority = this.#directPlanningCompletions.get(input.decision);
+    return authority?.taskId === input.task.taskId && authority.executionKey === input.executionKey;
+  }
+
+  async #readPlanningDeviceContext(
+    signal: AbortSignal,
+  ): Promise<readonly PlanningDeviceObservation[] | undefined> {
+    if (this.#deviceDirectory === undefined) {
+      return undefined;
+    }
+    if (signal.aborted) {
+      throw new TaskExecutorError(
+        "EXECUTION_CANCELLED",
+        "The Main Agent planning turn was cancelled.",
+      );
+    }
+    let devices: readonly DeviceSummaryV1[];
+    try {
+      devices = await this.#deviceDirectory.list();
+    } catch {
+      throw new TaskExecutorError(
+        "MAIN_CONTEXT_UNAVAILABLE",
+        "The Main-owned Device directory is temporarily unavailable.",
+        true,
+      );
+    }
+    if (signal.aborted) {
+      throw new TaskExecutorError(
+        "EXECUTION_CANCELLED",
+        "The Main Agent planning turn was cancelled.",
+      );
+    }
+    return projectPlanningDeviceContext(devices);
   }
 
   async verify(input: Parameters<TaskEvidenceVerifier["verify"]>[0]): Promise<TaskExecutionResult> {
@@ -269,6 +366,7 @@ export class AgentBackedTaskExecutor
           taskId: input.task.taskId,
           workspace: this.#workspace,
           sessionKey,
+          modelId: session.modelId,
         });
       }
     } catch (error) {
@@ -285,6 +383,8 @@ export class AgentBackedTaskExecutor
       session === undefined
         ? ({ kind: "start" } as const)
         : await resolveNativeSessionAction(this.#adapter, session);
+    const modelId =
+      session === undefined ? await this.#resolveModelForNewSession() : session.modelId;
     let checkpoint: TaskContinuationCheckpointV1 | undefined;
     if (sessionAction.kind === "continuation") {
       try {
@@ -315,6 +415,7 @@ export class AgentBackedTaskExecutor
       sandbox: this.#sandbox,
       permissions: structuredClone(this.#permissions),
       limits: { ...this.#limits },
+      ...(modelId === undefined ? {} : { modelId }),
     } as const;
 
     let handle: AgentRunHandle;
@@ -356,7 +457,7 @@ export class AgentBackedTaskExecutor
     }
 
     try {
-      const eventCompletion = this.#consumeEvents(handle, input.task.taskId, sessionKey);
+      const eventCompletion = this.#consumeEvents(handle, input.task.taskId, sessionKey, modelId);
       const [eventResult, result] = await Promise.allSettled([eventCompletion, handle.result]);
       if (input.signal.aborted) {
         throw new TaskExecutorError(
@@ -385,6 +486,7 @@ export class AgentBackedTaskExecutor
           taskId: input.task.taskId,
           workspace: this.#workspace,
           sessionKey,
+          modelId,
         });
         await this.#sessionRepository.save(result.value.session);
       }
@@ -415,6 +517,41 @@ export class AgentBackedTaskExecutor
       input.signal.removeEventListener("abort", abort);
       this.#active.delete(input.turnId);
     }
+  }
+
+  async #resolveModelForNewSession(): Promise<string | undefined> {
+    if (this.#resolveNewSessionModelId === undefined) {
+      return undefined;
+    }
+    let modelId: string | undefined;
+    try {
+      modelId = await this.#resolveNewSessionModelId();
+    } catch (error) {
+      if (error instanceof TaskExecutorError) {
+        throw error;
+      }
+      throw new TaskExecutorError(
+        "MAIN_AGENT_PROFILE_UNAVAILABLE",
+        "The configured Coordinator Agent model is unavailable.",
+        true,
+      );
+    }
+    if (
+      modelId !== undefined &&
+      (modelId.length === 0 ||
+        modelId.length > 256 ||
+        modelId !== modelId.trim() ||
+        [...modelId].some((character) => {
+          const point = character.codePointAt(0);
+          return point !== undefined && (point <= 31 || point === 127);
+        }))
+    ) {
+      throw new TaskExecutorError(
+        "MAIN_AGENT_PROFILE_INVALID",
+        "The configured Coordinator Agent model ID is invalid.",
+      );
+    }
+    return modelId;
   }
 
   #enqueueTaskTurn<TResult>(
@@ -457,7 +594,12 @@ export class AgentBackedTaskExecutor
     }
   }
 
-  async #consumeEvents(handle: AgentRunHandle, taskId: string, sessionKey: string): Promise<void> {
+  async #consumeEvents(
+    handle: AgentRunHandle,
+    taskId: string,
+    sessionKey: string,
+    modelId: string | undefined,
+  ): Promise<void> {
     for await (const event of handle.events) {
       if (event.type !== "session_started") {
         continue;
@@ -468,6 +610,7 @@ export class AgentBackedTaskExecutor
         taskId,
         workspace: this.#workspace,
         sessionKey,
+        modelId,
       });
       await this.#sessionRepository.save(event.session);
     }
@@ -480,6 +623,7 @@ interface ExpectedSessionBinding {
   readonly taskId: string;
   readonly workspace: WorkspaceBinding;
   readonly sessionKey: string;
+  readonly modelId: string | undefined;
 }
 
 function assertSessionBinding(
@@ -496,7 +640,8 @@ function assertSessionBinding(
     canonical.sessionKey !== expected.sessionKey ||
     canonical.workspaceId !== expected.workspace.workspaceId ||
     canonical.cwd !== expected.workspace.cwd ||
-    canonical.worktreePath !== expected.workspace.worktreePath
+    canonical.worktreePath !== expected.workspace.worktreePath ||
+    canonical.modelId !== expected.modelId
   ) {
     throw new TaskExecutorError(
       "NATIVE_SESSION_BINDING_MISMATCH",
@@ -504,6 +649,17 @@ function assertSessionBinding(
     );
   }
 }
+
+const OUTCOME_ORCHESTRATION_INSTRUCTIONS = Object.freeze([
+  "The owner specifies the outcome, not Device placement, by default. Treat Device, OS, route, Agent provider, and multi-Device selection as internal orchestration when capability requirements and deterministic scheduling can decide.",
+  "Ask about placement only when it changes an owner-visible outcome or an unavailable durable preference, such as privacy or data locality, cost, a physical or interactive screen, licensed software, or where a result must remain.",
+  "Infer the required capabilities and OS constraints from the objective, express them in Work Orders when planning, and let OpenDelegate select the actual Devices and routes.",
+  "Ask the owner only about a choice that changes the intended outcome or Policy, or an irreducible human action.",
+  "If login, MFA, CAPTCHA, legal confirmation, or OS permission requires the owner, return waiting_user with one clear question. Refer to an existing OpenDelegate interactive Artifact action when one is available, never invent a handoff URL or put a credential in chat, and continue this same Task after the owner replies.",
+]);
+
+const OUTCOME_PRESENTATION_INSTRUCTION =
+  "Present the verified outcome in the most useful available form: Discord summary, file, Artifact, hosted result, or Git reference. Mention only results supported by authoritative Worker reports.";
 
 function buildCoordinatorPrompt(
   request: TaskExecutionRequest,
@@ -520,6 +676,8 @@ function buildCoordinatorPrompt(
         "You are the OpenDelegate Main Agent continuing exactly one durable Task after its provider-native session became unavailable.",
         "The versioned, hash-verified public checkpoint below is the only prior Task context. Keep it isolated from every other Task.",
         "Worker Run reports remain the only authority for execution side effects. Never infer a side effect from an omitted checkpoint item.",
+        ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+        OUTCOME_PRESENTATION_INSTRUCTION,
         "Do not expose private chain-of-thought. Return one exact JSON object and no Markdown fence.",
         'Return either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"} or {"schemaVersion":1,"state":"waiting_resource|review|failed","publicMessage":"owner-visible text"}.',
         "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -533,6 +691,8 @@ function buildCoordinatorPrompt(
     "You are the OpenDelegate Main Agent for exactly one durable Task.",
     "Keep this Task isolated from every unrelated Task. You may plan and synthesize, but deterministic OpenDelegate modules own dispatch, policy, routes, leases, and durable state.",
     "Worker Run reports are the only authority for execution side effects. Never claim that a Work Order, Run, artifact, command, or external action completed from your own text.",
+    ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+    OUTCOME_PRESENTATION_INSTRUCTION,
     "Do not expose private chain-of-thought. Return one exact JSON object and no Markdown fence.",
     'Return either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"} or {"schemaVersion":1,"state":"waiting_resource|review|failed","publicMessage":"owner-visible text"}.',
     "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -584,6 +744,7 @@ function buildPlanningPrompt(
   maximumBytes: number,
   sessionAction: "start" | "resume" | "continuation",
   checkpoint?: TaskContinuationCheckpointV1,
+  deviceContext?: readonly PlanningDeviceObservation[],
 ): string {
   if (sessionAction === "continuation") {
     return buildCheckpointPrompt({
@@ -594,10 +755,13 @@ function buildPlanningPrompt(
         "You are the OpenDelegate Main Agent continuing planning for exactly one durable Task after its provider-native session became unavailable.",
         "Use only the versioned, hash-verified public checkpoint below. Omitted counts are explicit; do not invent omitted details or import another Task's context.",
         "Deterministic OpenDelegate code validates dependencies, selects eligible Devices, issues authority, dispatches Runs, and enforces Policy.",
+        ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
         "Do not claim execution happened. Do not expose private chain-of-thought.",
+        ...planningContextInstructions(deviceContext),
         "Return one exact JSON object and no Markdown fence.",
         'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
-        'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":[],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}.',
+        'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":[],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}.',
+        "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
         "A continuation checkpoint never carries Secret references. If a Work Order needs one, return waiting_user so deterministic configuration can bind it without exposing a credential.",
         "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
         `Attempt: ${String(attempt)}`,
@@ -607,10 +771,13 @@ function buildPlanningPrompt(
   const prefix = [
     "You are the OpenDelegate Main Agent planning exactly one durable Task.",
     "Return a bounded Work Order plan. Deterministic OpenDelegate code will validate dependencies, select eligible Devices, issue leases, dispatch Runs, and enforce Policy.",
+    ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
     "Do not claim any execution happened. Do not expose private chain-of-thought.",
+    ...planningContextInstructions(deviceContext),
     "Return one exact JSON object and no Markdown fence.",
     'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
-    'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":["..."],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}. Omit requiredAgent when any ready provider may perform the Work Order; when present, tested-only is the default if allowedCompatibilities is omitted.',
+    'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":["..."],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}. Omit requiredAgent when the Device profile may choose any ready binding; when present, use only an outcome-relevant hard requirement and tested-only is the default if allowedCompatibilities is omitted.',
+    "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
     "Use stable Task-scoped Work Order IDs and explicit completion criteria. Keep independent work parallel by leaving dependsOn empty; add dependencies only when evidence must flow between Work Orders.",
     "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
     "",
@@ -671,6 +838,8 @@ function buildVerificationPrompt(
       "The versioned, hash-verified public checkpoint is the only prior Task context. The bounded Worker evidence below was accepted from durable authenticated Run events.",
       "Lease, fencing, route, credential, local-path, Knowledge, and private transcript data are intentionally absent.",
       "Judge only whether the evidence satisfies every exact completion criterion in the checkpoint. Never invent omitted evidence.",
+      ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+      OUTCOME_PRESENTATION_INSTRUCTION,
       "Return one exact JSON object and no Markdown fence.",
       'If every criterion is satisfied: {"schemaVersion":1,"state":"completed","publicMessage":"owner-visible synthesis","verifiedCompletionCriteria":["copy every exact Task criterion"]}.',
       'Otherwise return either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"} or {"schemaVersion":1,"state":"review|waiting_resource|failed","publicMessage":"owner-visible gap"}.',
@@ -693,6 +862,8 @@ function buildVerificationPrompt(
     "You are the OpenDelegate Main Agent verifying exactly one durable Task.",
     "Every record below was accepted by deterministic OpenDelegate code from the authenticated, current, unexpired Worker Run named in that record.",
     "You cannot manufacture, alter, or infer execution evidence. Judge only whether these authoritative reports satisfy every exact Task completion criterion.",
+    ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+    OUTCOME_PRESENTATION_INSTRUCTION,
     "Return one exact JSON object and no Markdown fence.",
     'If every criterion is satisfied: {"schemaVersion":1,"state":"completed","publicMessage":"owner-visible synthesis","verifiedCompletionCriteria":["copy every exact Task criterion"]}.',
     'Otherwise return either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"} or {"schemaVersion":1,"state":"review|waiting_resource|failed","publicMessage":"owner-visible gap"}.',
@@ -866,7 +1037,10 @@ async function resolveNativeSessionAction(
   );
 }
 
-function parsePlanningResult(value: string | undefined, taskId: string): TaskWorkPlanDecision {
+function parsePlanningResult(
+  value: string | undefined,
+  task: TaskExecutionRequest["task"],
+): TaskWorkPlanDecision {
   const parsed = parseAgentJson(value, "WORK_PLAN_INVALID");
   if (parsed["schemaVersion"] !== 1 || typeof parsed["state"] !== "string") {
     throw invalidWorkPlan();
@@ -894,7 +1068,7 @@ function parsePlanningResult(value: string | undefined, taskId: string): TaskWor
     hasExactKeys(parsed, ["schemaVersion", "state", "plan"]) &&
     isRecord(parsed["plan"]) &&
     parsed["plan"]["protocolVersion"] === "v1" &&
-    parsed["plan"]["taskId"] === taskId &&
+    parsed["plan"]["taskId"] === task.taskId &&
     Array.isArray(parsed["plan"]["workOrders"])
   ) {
     type ReadyPlan = Extract<TaskWorkPlanDecision, { readonly state: "ready" }>["plan"];
@@ -904,6 +1078,284 @@ function parsePlanningResult(value: string | undefined, taskId: string): TaskWor
     };
   }
   throw invalidWorkPlan();
+}
+
+interface PlanningDeviceObservation {
+  readonly deviceId: string;
+  readonly name: string;
+  readonly osFamily: DeviceSummaryV1["osFamily"];
+  readonly role: DeviceSummaryV1["role"];
+  readonly connection: DeviceSummaryV1["connection"];
+  readonly runtime: DeviceSummaryV1["runtime"];
+  readonly roles: readonly string[];
+  readonly capabilities: readonly string[];
+  readonly readyAgentAdapters: readonly {
+    readonly provider: string;
+    readonly adapterId: string;
+  }[];
+  readonly workerAgentProfile?: DeviceSummaryV1["agentExecutionProfile"];
+  readonly wakeOnLan?: {
+    readonly targetState: NonNullable<DeviceSummaryV1["wakeOnLan"]>["targetState"];
+    readonly automaticWakeState: NonNullable<DeviceSummaryV1["wakeOnLan"]>["automaticWakeState"];
+    readonly observedAtMs: number;
+  };
+  readonly routes: readonly {
+    readonly label: string;
+    readonly health: string;
+  }[];
+  readonly activeRuns: number;
+  readonly maximumConcurrentRuns?: number;
+}
+
+function projectPlanningDeviceContext(
+  devices: readonly DeviceSummaryV1[],
+): readonly PlanningDeviceObservation[] {
+  if (!Array.isArray(devices) || devices.length > 256) {
+    throw new TaskExecutorError(
+      "MAIN_CONTEXT_INVALID",
+      "The Main-owned Device directory returned invalid state.",
+    );
+  }
+  const seen = new Set<string>();
+  const projected = devices.map((device) => {
+    if (
+      device === null ||
+      typeof device !== "object" ||
+      typeof device.deviceId !== "string" ||
+      device.deviceId.length === 0 ||
+      seen.has(device.deviceId)
+    ) {
+      throw new TaskExecutorError(
+        "MAIN_CONTEXT_INVALID",
+        "The Main-owned Device directory returned invalid state.",
+      );
+    }
+    seen.add(device.deviceId);
+    return Object.freeze({
+      deviceId: device.deviceId,
+      name: device.name,
+      osFamily: device.osFamily,
+      role: device.role,
+      connection: device.connection,
+      runtime: device.runtime,
+      roles: Object.freeze([...(device.roles ?? [])]),
+      capabilities: Object.freeze(
+        (device.capabilities ?? [])
+          .filter(
+            (capability: NonNullable<DeviceSummaryV1["capabilities"]>[number]) =>
+              capability.verification === "verified",
+          )
+          .map(
+            (capability: NonNullable<DeviceSummaryV1["capabilities"]>[number]) => capability.name,
+          ),
+      ),
+      readyAgentAdapters: Object.freeze(
+        (device.agentAdapters ?? [])
+          .filter(
+            (adapter: NonNullable<DeviceSummaryV1["agentAdapters"]>[number]) =>
+              adapter.readiness === "ready",
+          )
+          .map((adapter: NonNullable<DeviceSummaryV1["agentAdapters"]>[number]) =>
+            Object.freeze({
+              provider: adapter.provider,
+              adapterId: adapter.adapterId,
+            }),
+          ),
+      ),
+      ...(device.agentExecutionProfile === undefined
+        ? {}
+        : { workerAgentProfile: structuredClone(device.agentExecutionProfile) }),
+      ...(device.role !== "worker" || device.wakeOnLan === undefined
+        ? {}
+        : {
+            wakeOnLan: Object.freeze({
+              targetState: device.wakeOnLan.targetState,
+              automaticWakeState: device.wakeOnLan.automaticWakeState,
+              observedAtMs: device.wakeOnLan.observedAtMs,
+            }),
+          }),
+      routes: Object.freeze(
+        (device.routes ?? []).map((route: NonNullable<DeviceSummaryV1["routes"]>[number]) =>
+          Object.freeze({ label: route.label, health: route.health }),
+        ),
+      ),
+      activeRuns: device.capacity?.activeRuns ?? device.currentRuns?.length ?? 0,
+      ...(device.capacity === undefined
+        ? {}
+        : { maximumConcurrentRuns: device.capacity.maximumConcurrentRuns }),
+    });
+  });
+  return Object.freeze(projected);
+}
+
+function planningContextInstructions(
+  devices: readonly PlanningDeviceObservation[] | undefined,
+): readonly string[] {
+  if (devices === undefined) {
+    return Object.freeze([
+      "Main-owned orchestration context is unavailable. Do not invent Device state.",
+    ]);
+  }
+  return Object.freeze([
+    "The following JSON is a current, bounded, Main-owned, owner-safe Device snapshot for planning target preferences. Only verified capability names are included:",
+    "For an offline Worker, wakeOnLan is its last authenticated target observation. relay-required means the target reported magic-packet wake enabled, but OpenDelegate has no verified online relay and must not claim that it can wake the Device.",
+    JSON.stringify({ schemaVersion: 1, devices }),
+  ]);
+}
+
+type DeviceDirectoryQueryLocale = "en" | "fr" | "ja" | "ko" | "es" | "zh";
+
+const DEVICE_DIRECTORY_QUERY_PATTERNS: Readonly<
+  Record<DeviceDirectoryQueryLocale, readonly RegExp[]>
+> = Object.freeze({
+  en: Object.freeze([
+    /^(?:(?:which|what)\s+(?:devices?|computers?|machines?)\s+(?:are\s+)?(?:currently\s+)?(?:available|online|reachable|connected|registered)(?:\s+(?:right\s+now|now))?|what\s+(?:devices?|computers?|machines?)\s+can\s+(?:i|you|opendelegate)\s+(?:reach|access|use)(?:\s+(?:right\s+now|now))?)[?!.]*$/iu,
+    /^(?:show|list|tell\s+me|give\s+me)\s+(?:the\s+)?(?:current\s+)?(?:(?:available|online|reachable|connected|registered)\s+)?(?:devices?|computers?|machines?)(?:\s+(?:list|status|roles?|capabilities|routes?|operating\s+systems?))?[?!.]*$/iu,
+  ]),
+  fr: Object.freeze([
+    /^(?:quels?|quelles?)\s+(?:appareils?|ordinateurs?|machines?)\s+(?:sont\s+)?(?:actuellement\s+)?(?:disponibles?|en\s+ligne|accessibles?|connect[eé]s?)[ ?!.]*$/iu,
+  ]),
+  ja: Object.freeze([
+    /^(?:現在|今)(?:接続可能な|オンラインの|利用可能な|登録済みの)?(?:デバイス|端末|コンピュータ(?:ー)?)(?:は)?(?:何|どれ|どのようなもの)(?:がありますか|ですか)?[？?！!.]*$/u,
+    /^(?:現在|今)の?(?:接続可能な|オンラインの|利用可能な|登録済みの)?(?:デバイス|端末|コンピュータ(?:ー)?)の?(?:一覧|状態)を?(?:見せて|教えてください|教えて)[？?！!.]*$/u,
+  ]),
+  ko: Object.freeze([
+    /^(?:(?:지금|현재)\s*)?(?:(?:접속|연결|사용)\s*)?(?:(?:가능한|가능|된|되어\s*있는|중인|온라인인)\s*)?(?:디바이스|기기|장치|컴퓨터)(?:가|는|들이|들은)?\s*(?:뭐뭐가?|뭐가|무엇(?:이|인가요?)?|어떤(?:\s*것들이?|\s*게)?|몇\s*대)(?:\s*(?:있어(?:요)?|있나(?:요)?|있습니까|인가요?|야))?[?!.~]*$/u,
+    /^(?:(?:지금|현재)\s*)?(?:(?:접속\s*가능한|연결된|온라인인|등록된)\s*)?(?:디바이스|기기|장치|컴퓨터)(?:들)?(?:의|을|를)?\s*(?:목록|상태)?(?:을|를)?\s*(?:알려\s*줘|보여\s*줘|말해\s*줘|나열해\s*줘)(?:요)?[?!.~]*$/u,
+  ]),
+  es: Object.freeze([
+    /^(?:qu[eé]|cu[aá]les)\s+(?:dispositivos?|ordenadores?|computadoras?|m[aá]quinas?)\s+(?:est[aá]n\s+)?(?:actualmente\s+)?(?:disponibles?|en\s+l[ií]nea|accesibles?|conectados?)[ ?!.]*$/iu,
+  ]),
+  zh: Object.freeze([
+    /^(?:现在|目前)?(?:有哪些|哪些)(?:可连接的?|在线的?|可用的?|已连接的?|已注册的?)?(?:设备|电脑|计算机)[？?！!.]*$/u,
+    /^(?:请)?(?:显示|列出|告诉我)(?:现在|目前)?(?:可连接的?|在线的?|可用的?|已连接的?|已注册的?)?(?:设备|电脑|计算机)(?:列表|状态)?[？?！!.]*$/u,
+  ]),
+});
+
+const VAGUE_TASK_OBJECTIVE_PATTERNS = Object.freeze([
+  /^(?:(?:test|testing|테스트)\s*(?:(?:를\s*위한|용|for)\s*)?(?:task|일감|작업)|(?:task|일감|작업)\s*(?:(?:를\s*위한|용|for)\s*)?(?:test|testing|테스트))[?!.~]*$/iu,
+  /^(?:test task|task for testing|new task|untitled task)[?!.]*$/iu,
+  /^(?:테스트(?:를 위한)? 일감|테스트(?:용)? 작업|새 작업)[?!.~]*$/u,
+  /^(?:テスト用タスク|テストタスク|新しいタスク)[？?！!.]*$/u,
+  /^(?:t[aâ]che de test|nouvelle t[aâ]che|t[aâ]che sans titre)[ ?!.]*$/iu,
+  /^(?:tarea de prueba|nueva tarea|tarea sin t[ií]tulo)[ ?!.]*$/iu,
+  /^(?:测试任务|新任务|未命名任务)[？?！!.]*$/u,
+]);
+
+function answerDeviceDirectoryQuestion(
+  task: TaskExecutionRequest["task"],
+  devices: readonly PlanningDeviceObservation[] | undefined,
+): Extract<TaskWorkPlanDecision, { readonly state: "completed" }> | undefined {
+  if (devices === undefined) {
+    return undefined;
+  }
+  const locale = deviceDirectoryQueryLocaleForTask(task);
+  if (locale === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    state: "completed",
+    publicMessage: renderDeviceDirectoryAnswer(devices, locale),
+    verifiedCompletionCriteria: Object.freeze([...task.completionCriteria]),
+  });
+}
+
+function deviceDirectoryQueryLocaleForTask(
+  task: TaskExecutionRequest["task"],
+): DeviceDirectoryQueryLocale | undefined {
+  if (task.selectedInputRefs.length > 0 || task.constraints.length > 0) {
+    return undefined;
+  }
+  const ownerMessages = task.messages.filter((message) => message.role === "owner");
+  if (ownerMessages.length > 1) {
+    return undefined;
+  }
+  const latestOwnerMessage = ownerMessages.at(-1)?.content;
+  const query = normalizeNaturalLanguage(latestOwnerMessage ?? task.objective);
+  const locale = deviceDirectoryQueryLocale(query);
+  if (locale === undefined) {
+    return undefined;
+  }
+  if (latestOwnerMessage === undefined) {
+    return locale;
+  }
+  const objective = normalizeNaturalLanguage(task.objective);
+  if (
+    deviceDirectoryQueryLocale(objective) === undefined &&
+    !VAGUE_TASK_OBJECTIVE_PATTERNS.some((pattern) => pattern.test(objective))
+  ) {
+    return undefined;
+  }
+  return locale;
+}
+
+function deviceDirectoryQueryLocale(query: string): DeviceDirectoryQueryLocale | undefined {
+  for (const locale of ["ko", "en", "ja", "fr", "es", "zh"] as const) {
+    if (DEVICE_DIRECTORY_QUERY_PATTERNS[locale].some((pattern) => pattern.test(query))) {
+      return locale;
+    }
+  }
+  return undefined;
+}
+
+function normalizeNaturalLanguage(value: string): string {
+  return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function renderDeviceDirectoryAnswer(
+  devices: readonly PlanningDeviceObservation[],
+  locale: DeviceDirectoryQueryLocale,
+): string {
+  const visible = devices.slice(0, 16);
+  const online = devices.filter((device) => device.connection === "online").length;
+  const header =
+    locale === "ko"
+      ? `현재 등록된 기기 ${devices.length.toString()}대 중 ${online.toString()}대에 접속할 수 있습니다.`
+      : locale === "ja"
+        ? `登録済みデバイス${devices.length.toString()}台のうち、現在${online.toString()}台に接続できます。`
+        : locale === "fr"
+          ? `${online.toString()} appareil(s) sur ${devices.length.toString()} sont actuellement accessibles.`
+          : locale === "es"
+            ? `${online.toString()} de ${devices.length.toString()} dispositivos están disponibles actualmente.`
+            : locale === "zh"
+              ? `当前可连接 ${online.toString()} 台设备，共注册 ${devices.length.toString()} 台。`
+              : `${online.toString()} of ${devices.length.toString()} registered Devices are reachable now.`;
+  const lines = visible.map((device) => {
+    const connection =
+      locale === "ko"
+        ? device.connection === "online"
+          ? "접속 가능"
+          : "오프라인"
+        : locale === "ja"
+          ? device.connection === "online"
+            ? "接続可能"
+            : "オフライン"
+          : locale === "fr"
+            ? device.connection === "online"
+              ? "accessible"
+              : "hors ligne"
+            : locale === "es"
+              ? device.connection === "online"
+                ? "disponible"
+                : "sin conexión"
+              : locale === "zh"
+                ? device.connection === "online"
+                  ? "可连接"
+                  : "离线"
+                : device.connection === "online"
+                  ? "reachable"
+                  : "offline";
+    return `- ${device.name} — ${connection} · ${device.osFamily} · ${device.role} · runtime ${device.runtime}`;
+  });
+  if (visible.length < devices.length) {
+    const omitted = devices.length - visible.length;
+    lines.push(
+      locale === "ko"
+        ? `- 그 외 ${omitted.toString()}대는 관리자 페이지에서 확인할 수 있습니다.`
+        : `- ${omitted.toString()} additional Devices are available in Admin Web.`,
+    );
+  }
+  return [header, "", ...lines].join("\n");
 }
 
 function parseVerificationResult(value: string | undefined): TaskExecutionResult {
@@ -1073,6 +1525,9 @@ function validateReference(value: unknown): NativeSessionReference {
       throw sessionStateCorrupt();
     }
   }
+  if (value["modelId"] !== undefined) {
+    assertReferenceIdentifier(value["modelId"]);
+  }
   const lineage = value["lineage"];
   if (
     !isRecord(lineage) ||
@@ -1105,6 +1560,7 @@ function assertValidReplacement(
   for (const key of [
     "provider",
     "adapterId",
+    "modelId",
     "sessionKey",
     "taskId",
     "workstreamId",
@@ -1266,8 +1722,10 @@ function hasExactOrOptionalReferenceKeys(value: Record<string, unknown>): boolea
     "createdAt",
   ];
   return (
-    Object.keys(value).every((key) => [...keys, "worktreePath"].includes(key)) &&
-    keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+    Object.keys(value).every((key) => [...keys, "modelId", "worktreePath"].includes(key)) &&
+    keys
+      .filter((key) => key !== "modelId")
+      .every((key) => Object.prototype.hasOwnProperty.call(value, key))
   );
 }
 

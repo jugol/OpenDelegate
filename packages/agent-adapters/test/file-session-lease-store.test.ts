@@ -143,7 +143,7 @@ test(
     const statePath = join(directory, "native-session-leases.json");
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
-      ["--experimental-strip-types", windowsEpermFixturePath, statePath],
+      ["--no-warnings", "--experimental-strip-types", windowsEpermFixturePath, statePath],
       {
         encoding: "utf8",
         timeout: 10_000,

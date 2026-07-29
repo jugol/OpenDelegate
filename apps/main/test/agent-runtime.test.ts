@@ -14,6 +14,7 @@ import {
 
 import {
   MainAgentRuntimeError,
+  probeMainAgentAdapters,
   resolveMainAgentComposition,
   type MainAgentRuntimePaths,
 } from "../src/agent-runtime.ts";
@@ -72,6 +73,104 @@ test("an explicit provider is persisted and conflicting startup fails closed", a
     (error: unknown) =>
       error instanceof MainAgentRuntimeError && error.code === "AGENT_PROVIDER_CONFLICT",
   );
+});
+
+test("explicit shared provider homes upgrade one selection and survive restart", async (context) => {
+  const paths = await runtimePaths(context);
+  const sharedCodexHome = await mkdtemp(join(tmpdir(), "opendelegate-codex-ssot-"));
+  const sharedClaudeHome = await mkdtemp(join(tmpdir(), "opendelegate-claude-ssot-"));
+  context.after(async () => {
+    await rm(sharedCodexHome, { force: true, recursive: true });
+    await rm(sharedClaudeHome, { force: true, recursive: true });
+  });
+  const observedHomes: string[] = [];
+  const createAdapter = (
+    provider: "codex" | "claude",
+    _leaseStore: unknown,
+    providerHome: string,
+  ): AgentAdapter => {
+    observedHomes.push(providerHome);
+    return new ProbeOnlyAdapter(probe(provider, "ready"));
+  };
+
+  await resolveMainAgentComposition({
+    paths,
+    requestedProvider: "codex",
+    createAdapter,
+  });
+  const upgraded = await resolveMainAgentComposition({
+    paths,
+    requestedProvider: "codex",
+    requestedCodexHome: sharedCodexHome,
+    requestedClaudeHome: sharedClaudeHome,
+    createAdapter,
+  });
+  await probeMainAgentAdapters({
+    paths,
+    createAdapter,
+  });
+  const restarted = await resolveMainAgentComposition({
+    paths,
+    createAdapter,
+  });
+
+  assert.equal(upgraded.status, "ready");
+  assert.equal(restarted.status, "ready");
+  assert.deepEqual(observedHomes, [
+    join(paths.stateDirectory, "providers", "codex"),
+    sharedCodexHome,
+    sharedCodexHome,
+    sharedClaudeHome,
+    sharedCodexHome,
+  ]);
+  assert.deepEqual(JSON.parse(await readFile(join(paths.configDirectory, "agent.json"), "utf8")), {
+    schemaVersion: 3,
+    provider: "codex",
+    codexHome: sharedCodexHome,
+    claudeHome: sharedClaudeHome,
+  });
+});
+
+test("a shared Claude home survives signed-out setup for owner reconnect", async (context) => {
+  const paths = await runtimePaths(context);
+  const sharedClaudeHome = await mkdtemp(join(tmpdir(), "opendelegate-claude-ssot-"));
+  context.after(async () => {
+    await rm(sharedClaudeHome, { force: true, recursive: true });
+  });
+  const observedHomes: string[] = [];
+  const createAdapter = (
+    provider: "codex" | "claude",
+    _leaseStore: unknown,
+    providerHome: string,
+  ): AgentAdapter => {
+    observedHomes.push(providerHome);
+    return new ProbeOnlyAdapter(
+      probe(provider, provider === "claude" && observedHomes.length === 1 ? "signed-out" : "ready"),
+    );
+  };
+
+  const signedOut = await resolveMainAgentComposition({
+    paths,
+    requestedProvider: "claude",
+    requestedClaudeHome: sharedClaudeHome,
+    createAdapter,
+  });
+  const recovered = await resolveMainAgentComposition({
+    paths,
+    createAdapter,
+  });
+
+  assert.equal(signedOut.status, "unavailable");
+  assert.equal(signedOut.code, "AGENT_AUTH_NOT_READY");
+  assert.equal(recovered.status, "ready");
+  assert.equal(recovered.provider, "claude");
+  assert.deepEqual(observedHomes, [sharedClaudeHome, sharedClaudeHome]);
+  assert.deepEqual(JSON.parse(await readFile(join(paths.configDirectory, "agent.json"), "utf8")), {
+    schemaVersion: 3,
+    provider: "claude",
+    codexHome: null,
+    claudeHome: sharedClaudeHome,
+  });
 });
 
 test("auto leaves selection resumable when no provider is ready", async (context) => {
@@ -155,7 +254,12 @@ async function runtimePaths(context: test.TestContext): Promise<MainAgentRuntime
     mkdir(configDirectory, { recursive: true }),
     mkdir(stateDirectory, { recursive: true }),
   ]);
-  return { home, configDirectory, stateDirectory };
+  return {
+    home,
+    configDirectory,
+    sourceCheckoutRoot: join(home, "source-checkout"),
+    stateDirectory,
+  };
 }
 
 function factory(

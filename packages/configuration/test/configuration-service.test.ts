@@ -9,6 +9,7 @@ import {
   type ConfigurationDefinition,
   type ConfigurationMutationAuthorization,
   type ConfigurationSecretReferenceAuthority,
+  isAgentExecutionProfile,
 } from "../src/index.ts";
 
 const definitions = [
@@ -44,6 +45,60 @@ const definitions = [
         typeof (value as { secretRef?: unknown }).secretRef === "string"),
   },
 ] as const satisfies readonly ConfigurationDefinition[];
+
+test("Agent execution profile validation rejects malformed or ambiguous bindings", () => {
+  assert.equal(isAgentExecutionProfile({ schemaVersion: 1, mode: "auto" }), true);
+  assert.equal(
+    isAgentExecutionProfile({
+      schemaVersion: 1,
+      mode: "pinned",
+      primary: {
+        provider: "codex",
+        adapterId: "codex-app-server",
+        modelId: "gpt-5.6-sol",
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    isAgentExecutionProfile({
+      schemaVersion: 1,
+      mode: "pinned",
+      primary: { provider: "codex", adapterId: "codex-app-server" },
+    }),
+    false,
+  );
+  assert.equal(
+    isAgentExecutionProfile({
+      schemaVersion: 1,
+      mode: "prefer",
+      primary: {
+        provider: "claude",
+        adapterId: "claude-agent-sdk",
+        modelId: "claude-opus",
+      },
+      fallbacks: [
+        {
+          provider: "claude",
+          adapterId: "claude-agent-sdk",
+          modelId: "claude-opus",
+        },
+      ],
+    }),
+    false,
+  );
+  assert.equal(
+    isAgentExecutionProfile({
+      schemaVersion: 1,
+      mode: "auto",
+      primary: {
+        provider: "generic",
+        adapterId: "unexpected",
+      },
+    }),
+    false,
+  );
+});
 
 test("effective values use each setting's explicit least-to-most-specific precedence", async () => {
   const service = fixture();
@@ -701,6 +756,14 @@ test("standard defaults preserve the owner's accepted automatic and safety decis
   assert.equal(effective["device.display-name"]?.value, null);
   assert.deepEqual(effective["device.roles"]?.value, []);
   assert.deepEqual(effective["device.instructions"]?.value, []);
+  assert.deepEqual(effective["agent.worker-profile"]?.value, {
+    schemaVersion: 1,
+    mode: "auto",
+  });
+  assert.deepEqual(effective["agent.coordinator-profile"]?.value, {
+    schemaVersion: 1,
+    mode: "auto",
+  });
   assert.equal(effective["database.adapter"]?.value, "sqlite");
   assert.equal(effective["artifact.exposure"]?.value, "private-network");
   assert.equal(effective["artifact.interactive-html"]?.value, false);

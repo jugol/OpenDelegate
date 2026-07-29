@@ -97,8 +97,22 @@ const heartbeat = {
           compatibility: "tested",
           version: "1.2.3",
           observedAtMs: 1_753_401_599_000,
+          modelCatalogObservedAtMs: 1_753_401_599_000,
+          models: [
+            {
+              modelId: "gpt-5.6-sol",
+              displayName: "GPT-5.6 Sol",
+              isDefault: true,
+              supportedEfforts: ["medium", "high"],
+            },
+          ],
         },
       ],
+      wakeOnLan: {
+        state: "enabled",
+        source: "windows-netadapter-power",
+        observedAtMs: 1_753_401_599_000,
+      },
       resourceLocks: [
         {
           resourceName: "desktop-session",
@@ -354,6 +368,30 @@ describe("Device channel protocol", () => {
     assert.deepEqual(decoded, heartbeat);
     assert.equal(Object.isFrozen(decoded), true);
     assert.equal(Object.isFrozen(decoded.payload), true);
+
+    const uncertain = {
+      ...heartbeat,
+      payload: {
+        ...heartbeat.payload,
+        inventory: {
+          ...heartbeat.payload.inventory,
+          wakeOnLan: {
+            ...heartbeat.payload.inventory.wakeOnLan,
+            state: "unknown",
+          },
+        },
+      },
+    } as const;
+    const uncertainDecoded = decodeDeviceChannelFrame(
+      JSON.stringify(uncertain),
+      "worker-1",
+      "worker-to-main",
+    );
+    assert.equal(uncertainDecoded.type, "worker.heartbeat");
+    if (uncertainDecoded.type !== "worker.heartbeat") {
+      throw new Error("Expected a Worker heartbeat.");
+    }
+    assert.equal(uncertainDecoded.payload.inventory?.wakeOnLan?.state, "unknown");
   });
 
   test("accepts only the dedicated fingerprint-bound route incident contract", () => {
@@ -447,6 +485,58 @@ describe("Device channel protocol", () => {
           ...heartbeat.payload,
           inventory: {
             ...heartbeat.payload.inventory,
+            wakeOnLan: {
+              ...heartbeat.payload.inventory.wakeOnLan,
+              observedAtMs: heartbeat.payload.observedAtMs + 1,
+            },
+          },
+        },
+      },
+      {
+        ...heartbeat,
+        payload: {
+          ...heartbeat.payload,
+          inventory: {
+            ...heartbeat.payload.inventory,
+            wakeOnLan: {
+              ...heartbeat.payload.inventory.wakeOnLan,
+              source: "macos-pmset",
+            },
+          },
+        },
+      },
+      {
+        ...heartbeat,
+        payload: {
+          ...heartbeat.payload,
+          inventory: {
+            ...heartbeat.payload.inventory,
+            wakeOnLan: {
+              ...heartbeat.payload.inventory.wakeOnLan,
+              source: "probe-unavailable",
+            },
+          },
+        },
+      },
+      {
+        ...heartbeat,
+        payload: {
+          ...heartbeat.payload,
+          inventory: {
+            ...heartbeat.payload.inventory,
+            wakeOnLan: {
+              ...heartbeat.payload.inventory.wakeOnLan,
+              macAddress: "00:11:22:33:44:55",
+            },
+          },
+        },
+      },
+      {
+        ...heartbeat,
+        payload: {
+          ...heartbeat.payload,
+          inventory: {
+            ...heartbeat.payload.inventory,
             hardware: {
               ...heartbeat.payload.inventory.hardware,
               gpu: {
@@ -523,6 +613,36 @@ describe("Device channel protocol", () => {
               {
                 ...heartbeat.payload.inventory.agentAdapters[0],
                 diagnostics: [{ message: "private provider output" }],
+              },
+            ],
+          },
+        },
+      },
+      {
+        ...heartbeat,
+        payload: {
+          ...heartbeat.payload,
+          inventory: {
+            ...heartbeat.payload.inventory,
+            agentAdapters: [
+              {
+                ...heartbeat.payload.inventory.agentAdapters[0],
+                modelCatalogObservedAtMs: undefined,
+              },
+            ],
+          },
+        },
+      },
+      {
+        ...heartbeat,
+        payload: {
+          ...heartbeat.payload,
+          inventory: {
+            ...heartbeat.payload.inventory,
+            agentAdapters: [
+              {
+                ...heartbeat.payload.inventory.agentAdapters[0],
+                modelCatalogObservedAtMs: heartbeat.payload.observedAtMs + 1,
               },
             ],
           },

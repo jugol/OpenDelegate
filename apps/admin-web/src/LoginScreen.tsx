@@ -86,7 +86,6 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                     autoFocus
                     disabled={pending}
                     id="owner-passphrase"
-                    minLength={12}
                     name="passphrase"
                     required
                     type="password"
@@ -137,7 +136,6 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                     autoComplete="new-password"
                     disabled={pending}
                     id="new-owner-passphrase"
-                    minLength={12}
                     name="newPassphrase"
                     required
                     type="password"
@@ -149,7 +147,6 @@ export function LoginScreen({ api, onAuthenticated }: LoginScreenProps): React.J
                     autoComplete="new-password"
                     disabled={pending}
                     id="confirm-owner-passphrase"
-                    minLength={12}
                     name="passphraseConfirmation"
                     required
                     type="password"

@@ -83,6 +83,7 @@ export interface DiscordInteraction {
   readonly guildId: string;
   readonly channelId: string;
   readonly messageId: string;
+  readonly messageAuthorId: string;
   readonly customId: string;
   readonly author: DiscordAuthor;
   readonly receivedAtMs: number;
@@ -244,6 +245,21 @@ export interface DiscordApiPort {
     readonly hasMore: boolean;
     readonly nextAfter?: string;
   }>;
+  /**
+   * Creates one bot-authored starter post in a configured Forum. Callers must
+   * reconcile by their durable Task binding before retrying because Discord's
+   * Forum-create endpoint has no first-class idempotency key.
+   */
+  createForumPost(input: {
+    readonly forumChannelId: string;
+    readonly requestKey: string;
+    readonly name: string;
+    readonly content: string;
+    readonly appliedTagIds: readonly string[];
+  }): Promise<{
+    readonly thread: DiscordThread;
+    readonly starterMessage: DiscordMessage;
+  }>;
   updateThreadTags(threadId: string, appliedTagIds: readonly string[]): Promise<void>;
   /**
    * A production implementation uses `requestKey` as a Discord nonce/reconciliation
@@ -260,6 +276,29 @@ export interface DiscordApiPort {
     requestKey: string;
     payload: DiscordMessagePayload;
   }): Promise<{ readonly messageId: string }>;
+  editMessage(input: {
+    threadId: string;
+    messageId: string;
+    payload: DiscordMessagePayload;
+  }): Promise<void>;
+  /**
+   * Quietly acknowledges one accepted owner message in place. Implementations
+   * should add the bot's 👀 reaction and trigger Discord's transient typing
+   * indicator. A missing optional reaction permission must not block Task work.
+   */
+  acknowledgeMessage(input: { threadId: string; messageId: string }): Promise<{
+    readonly reactionVisible: boolean;
+    readonly typingVisible: boolean;
+  }>;
+  refreshTyping(input: { threadId: string }): Promise<boolean>;
+  completeMessageAcknowledgement(input: {
+    threadId: string;
+    messageId: string;
+    outcome: "success" | "failure";
+  }): Promise<{
+    readonly acknowledgementRemoved: boolean;
+    readonly outcomeVisible: boolean;
+  }>;
   /**
    * Consumes the raw interaction token immediately and returns an opaque local
    * response reference. The raw token must never be persisted by the adapter.
@@ -371,7 +410,17 @@ export interface DiscordInboundRecord {
   readonly updatedAtMs: number;
 }
 
+export interface DiscordOwnerMessageCompletion {
+  readonly messageId: string;
+  readonly outcome: "success" | "failure";
+}
+
 export type DiscordOutboxAction =
+  | {
+      readonly kind: "acknowledge-owner-message";
+      readonly taskId: string;
+      readonly messageId: string;
+    }
   | {
       readonly kind: "sync-tags";
       readonly taskId: string;
@@ -386,6 +435,18 @@ export type DiscordOutboxAction =
       readonly kind: "post-task-update";
       readonly taskId: string;
       readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "resolve-owner-prompt";
+      readonly taskId: string;
+      readonly promptRequestKey: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "complete-owner-message";
+      readonly taskId: string;
+      readonly completion: DiscordOwnerMessageCompletion;
+      readonly afterRequestKey: string;
     }
   | {
       readonly kind: "task-command";

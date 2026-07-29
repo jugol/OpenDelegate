@@ -3,55 +3,99 @@
 语言：[English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) ·
 [Français](README.fr.md) · [Español](README.es.md) · **[简体中文](README.zh-CN.md)**
 
-OpenDelegate 是一个个人自托管控制平面，用于在一台固定的 Main Device 与多台 macOS、Windows 和 Linux
-Device 之间协调 AI Agent。
+**只需在 Discord 中告诉 OpenDelegate 你想要的结果，执行位置和方式由它决定。** 固定且始终在线的 Main
+会协调 macOS、Windows 和 Linux；发出指令的手机或电脑随后可以断开连接。
 
 > [!TIP]
-> **从这里开始：** [快速开始](#快速开始) · [完整设置指南（英文）](docs/GETTING_STARTED.md) ·
+> **从这里开始：** [交给 Agent 的推荐安装方式](#推荐安装交给你的-agent) ·
+> [详细设置](#详细设置) · [完整设置指南（英文）](docs/GETTING_STARTED.md) ·
 > [Discord Forum 设置](docs/DISCORD_SETUP.md)
 
-## 快速开始
+## 推荐安装：交给你的 Agent
+
+**这是最简短、最推荐的方式。你不需要先学习 OpenDelegate 命令。**
+
+1. 前往你准备作为固定、始终在线 **Main Device** 的电脑。
+2. 在这台电脑上打开 Codex 或 Claude 等可靠的本地 Agent，并把此仓库 URL 交给它。
+3. 发送：
+
+   > 请把这台电脑设置为我固定且始终在线的 OpenDelegate Main Device。自行查找并遵循此仓库中的
+   > Main 安装说明，安全范围内能完成的工作都直接完成。只有在需要我做决定或执行仅限 Owner 的安全
+   > 操作时才提问。切勿让我把凭据、令牌或其他秘密粘贴到聊天中；请引导我使用 Provider
+   > 原生认证或 OpenDelegate 的安全输入界面。请持续进行，直到 Admin Web
+   > 打开并可以在那里完成其余设置。
+
+4. 回答 Agent 的问题。它会自行发现 init skill、区分源代码和 release bundle、验证 support
+   status、把 Runtime 数据保存在 checkout 之外，并在不要求你把 README 改写成 shell 命令的
+   情况下打开 Admin Web。
+
+Admin Web 打开后，请在右侧的 **Configuration Chat** 中继续。让 Agent 先检查已有配置，再用自然
+语言引导你完成 Device 评估、内置 SQLite 或外部 PostgreSQL、Codex 与 Claude、Discord Forum、
+连接 Route、Agent Model、Artifact 公开方式、Service 启动方式以及添加 Device。OpenDelegate
+会在对话中展示可审核的结构化变更，而不是要求你逐个寻找设置页面。
+
+![显示 Device 评估与 Configuration Chat 的 OpenDelegate Admin Web](docs/design/admin-configuration-chat-implemented.png)
+
+_这是使用确定性 Browser Fixture 截取的当前 Admin Web。请先运行**评估设备**，再通过
+Configuration Chat 完成其余设置。顶部 banner 会如实标记此 source build 不受支持；该图片不是
+真实 Platform 或 Release 证据。_
+
+SQLite 是无需 URI 的本地默认选项。不要在聊天中粘贴 Provider 凭据或 Discord Token：只有确实
+需要时，Configuration Chat 才会说明原因并显示专用安全输入表单。Main 准备完成后，使用**添加
+Device**签发一次性 Grant，并交给新增电脑上的 Agent；它会自行发现 Worker 加入说明。
+
+## 详细设置
 
 > [!WARNING]
 > 此仓库构建的是**不受支持的内部预览版**，而不是受支持的 Release。平台、Provider、Discord、网络、权限和打包所需的真实环境证据仍不完整。请勿将其描述为已发布产品，也不要将其用作无人值守的生产控制平面。详情请参阅[当前源代码状态](#当前源代码状态)。
 
 OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run start`。
 
-1. 获取与操作系统和架构匹配的 bundle，并使用通过可信发布渠道独立取得的 digest 核验
-   `SHA256SUMS`。当前仓库只能生成带有明确标识的内部预览 bundle；请参阅
-   [构建内部预览版](#构建内部预览版)。
-2. 如需使用 Discord，请先按照
-   [Discord Forum 设置指南](docs/DISCORD_SETUP.md)，在首次 Main 初始化之前准备完整的 Binding。当前预览版无法在初始化后添加或替换 Binding。
-3. 在 Codex 或 Claude 中打开解压后的 bundle 目录，并原样发送以下内容： _“Read
-   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
-   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
-   if a required safety check fails.”_
+1. 在准备作为 Main 的电脑上，把此仓库 URL 交给 Codex 或 Claude。如果已有受支持的平台 bundle，
+   也可以打开解压后的目录。Agent 会区分源代码和 bundle、检查 `supportStatus` 并核验
+   `SHA256SUMS`。当前源代码只能生成标记明确的[内部预览版](#构建内部预览版)。
+2. 发送[交给 Agent 的推荐安装方式](#推荐安装交给你的-agent)中的请求。Agent 会自行找到
+   `AGENTS.md` 和 `skills/opendelegate-init/SKILL.md`，Owner 不需要了解内部文件结构。
+3. 首次初始化 Main 时可以暂不配置 Discord。之后可在经过 Owner 身份验证的 Configuration Chat
+   中添加、替换、扩展或禁用 Forum Binding。所需的 App、Forum、Tag 和 Permission 请参阅
+   [Discord Forum 设置指南](docs/DISCORD_SETUP.md)。
 4. 按照 Agent 的引导完成 Owner Claim，并妥善保存全部十个一次性恢复代码。
-5. 在 Admin Web 右下角的 Configuration
-   Chat 中检查 Device、Agent、Route 和 Artifact 配置，以及初始化前准备的 Discord 状态。
+5. 先在 Admin Web 中运行 **评估设备**，查看 Codex、Claude、浏览器自动化、Computer Use 和
+   Knowledge 的确定性结果，再通过右下角的 Configuration Chat 完成 Device、Agent、Route、
+   Artifact 以及可选的 Discord 设置。切勿在聊天中输入 Provider 凭据；Discord
+   令牌只能输入安全凭据面板。
 6. 添加 Device 时，请通过 Configuration Chat 签发一份短期、一次性的 Device
-   Grant。不要打开该文件；使用 Owner 控制的安全方式将其交给目标 Device，然后让该 Device 上的 Agent 按照
-   `skills/opendelegate-join/SKILL.md` 操作。
+   Grant。不要打开该文件；使用 Owner 控制的安全方式将其交给目标 Device，然后让该 Device 上的 Agent
+   将这台电脑连接为 Worker。Agent 会自行找到 `skills/opendelegate-join/SKILL.md`。
 7. 如果已配置 Discord，请为每个独立 Task 创建一个 Forum 新帖子。同一帖子的回复会延续同一 Task 及其 native
    Agent Session；新帖子则从干净的 Context 开始。如果 Discord 已禁用或不可用，请选择 **Admin Web →
    Tasks → 新建任务**。
+
+每台 Device 默认使用 **Agent 执行 → 自动**。你可以在 Device 页面选择**优先**或**固定**，也可以
+在该 Device 的 Configuration Chat 中说：_“这台 NAS 使用 Claude Opus。”_ 然后在 Mac Studio
+页面用同样的方法选择所需的 GPT 模型。OpenDelegate 会将每个请求与对应 Device 已测试的模型目录
+核对，展示精确的 Provider-native 模型 ID 供你审核，并且只对新的原生 Session 应用更改。
 
 请阅读[完整设置指南（英文）](docs/GETTING_STARTED.md)，其中包括 Owner 恢复、添加 Device、创建首个 Task 和故障排查。
 
 ## 为什么选择 OpenDelegate
 
-你可以通过手机或电脑创建 Task，让 Main Agent 将其拆分为 Work Order，把这些 Work
-Order 路由到符合条件的 Device，并获得一个持久、可检查的统一结果，而无需手动重新打开每个 Agent
-Session。
+通过手机或电脑描述想要的结果，而不是设备安排。Main Agent 可以按需拆分 Windows 开发、macOS
+构建或签名以及 Linux 部署；确定性调度器会选择实际 Device 和 Route。
 
 - 一个 Discord Forum 帖子对应一个持久的 Task 和一个上下文边界。
+- 可选的确定性监控器可将故障或改进创建为同一种普通的 Forum 支持 Task。每个类别都可设为禁用、提交审核或
+  自动执行，但不会绕过 Policy、审批、预算或审计。
+- 发出指令的手机或电脑可以断开连接；只需固定 Main 和当前工作所需的 Device 保持可用。
 - 确定性软件负责身份、Policy、健康状态、路由、lease、重试、持久化和状态转换。Agent负责语义判断和分配给它们的工作。
 - Worker 只连接到 Main。它们不需要 NxN SSH 网状网络，也不需要直接访问数据库。
 - Codex、Claude 和自定义 runner 位于 Agent Adapter 契约之后，同时仍可恢复有价值的 provider-native
   session。
 - 每台 Device 都保留自己选择性检索、相互链接的 Markdown
   Knowledge。Main 永远不会收到其中的文件名、标题、链接、图谱、索引、片段或内容。
-- 丰富的结果可以成为 Artifact，并由 Main 按照明确的 Exposure Policy 提供。
+- 结果可以是 Discord 回复或附件、文件、Artifact、托管页面或经过验证的 Git 引用。
+- 如果登录、MFA、CAPTCHA、法律确认或 OS 权限需要 Owner，同一 Task 会通过 Main 提供限时、可撤销的
+  Owner Handoff，并在 Owner 回复后继续。
 
 ## 架构
 
@@ -155,7 +199,7 @@ cookie 往返和正常关闭的有限 smoke evidence。
 
 目标名称必须包含 `internal-preview`。生成的 `INTERNAL_PREVIEW.md` 和 `release-metadata.json`
 会记录该 bundle 不受支持，并保留准确的 Release evidence 状态。请仅通过上方 Agent-first
-[快速开始](#快速开始)初始化已组装的 bundle，以便在创建持久 Main 配置之前确定 Discord 和其他所有 Owner 选择。内部预览版以前台方式运行，不会安装持久化的操作系统服务，也不得以 Release
+[推荐安装](#推荐安装交给你的-agent)初始化已组装的 bundle，以便在创建持久 Main 配置之前确定 Discord 和其他所有 Owner 选择。内部预览版以前台方式运行，不会安装持久化的操作系统服务，也不得以 Release
 tag 发布。
 
 只要有任何验收标准尚未完成，生产构建就会按设计失败：
@@ -222,9 +266,11 @@ pnpm dev:admin
 此开发服务器不是 Owner 安装路径。验证打包后的 Main 时，请使用生成的 `internal-preview` launcher。
 
 Codex 和 Claude 身份验证默认按 OpenDelegate Device 隔离在 `state/providers/codex` 与
-`state/providers/claude` 中。设置完成后，请直接在对应的 controlled
-home 中以交互方式完成身份验证。OpenDelegate 不会从用户的全局 provider
-home 复制或继承登录状态，并且 first-class provider Run 会拒绝包含凭据的环境变量。
+`state/providers/claude` 中。Owner 可以在 Main init 时指定
+`--codex-home ABSOLUTE_PATH` 或 `--claude-home ABSOLUTE_PATH`，将现有本地 Provider 目录明确
+用作共享 SSOT。OpenDelegate 只保存该路径，不复制登录信息，并在执行与 Device 评估中使用同一
+home。Provider 设置、插件、缓存和 native session 存储会被共享，但每个 Task 仍使用各自独立的
+native session。系统绝不会隐式继承全局 home。
 
 ## 仓库结构
 

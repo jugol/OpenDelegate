@@ -157,6 +157,16 @@ test("authenticated heartbeat becomes scheduling and Admin metadata without loca
         observedAtMs: 9_900,
       },
     ],
+    agentExecutionProfile: {
+      schemaVersion: 1,
+      mode: "auto",
+    },
+    wakeOnLan: {
+      targetState: "enabled",
+      automaticWakeState: "relay-required",
+      source: "windows-netadapter-power",
+      observedAtMs: 9_900,
+    },
     routes: [
       {
         routeId,
@@ -247,6 +257,12 @@ test("restart keeps the last durable observation while live scheduling remains o
   assert.equal(offline?.capabilities?.[0]?.name, "codex");
   assert.deepEqual(offline?.roles, ["release-engineering"]);
   assert.deepEqual(offline?.instructions, ["Use signed release workspaces only."]);
+  assert.deepEqual(offline?.wakeOnLan, {
+    targetState: "enabled",
+    automaticWakeState: "relay-required",
+    source: "windows-netadapter-power",
+    observedAtMs: 9_900,
+  });
   assert.equal(offline?.capacity, undefined);
   assert.equal(offline?.currentRuns, undefined);
   assert.equal(offline?.resourceLocks, undefined);
@@ -415,6 +431,11 @@ function heartbeat(overrides: Partial<WorkerHeartbeatV1> = {}): WorkerHeartbeatV
           observedAtMs: 9_900,
         },
       ],
+      wakeOnLan: {
+        state: "enabled",
+        source: "windows-netadapter-power",
+        observedAtMs: 9_900,
+      },
       resourceLocks: [
         {
           resourceName: "desktop-session",

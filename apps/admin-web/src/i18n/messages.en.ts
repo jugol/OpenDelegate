@@ -67,22 +67,45 @@ export const englishMessages = {
   chat: {
     unavailableMessage:
       "Main reports that Device assessment or Configuration Agent messaging is unavailable. The visible Device facts come only from Main's deterministic runtime report.",
-    failedMessage: "The Configuration Agent could not respond. No settings were changed.",
+    failedMessage:
+      "The local Configuration Agent was unavailable or interrupted. OpenDelegate did not replay an uncertain setup action. Completed changes remain durable; inspect the current settings, then try again.",
+    discordOnboardingMessage:
+      "Discord is not connected yet. I’m checking the current binding and preparing setup guidance.",
     secureStoreFailed:
       "The credential could not be stored securely. It was not sent to Configuration Chat.",
-    secureTitle: "Store a database credential",
-    secureIntro:
-      "The value goes directly to this Main Device's managed Secret Store. The Agent receives only an opaque reference.",
+    guidedSetupTitle: "Guided setup",
+    guidedSetupIntro:
+      "Choose a goal. The Agent will inspect the current settings and guide only the steps that remain.",
+    discordSetupTitle: "Set up or review Discord",
+    discordSetupDescription:
+      "Connect a bot and bind one or more Forum channels without putting its token in chat.",
+    databaseSetupTitle: "Use external PostgreSQL",
+    databaseSetupDescription: "SQLite is already active. No database URI is required.",
+    discordSetupRequest:
+      "I may be setting up a Discord bot for the first time. Inspect the current binding and explain how Forum posts become OpenDelegate Tasks. Give me a short roadmap, then guide me through one remaining step at a time. For the current step, tell me where to go, what to do, why it is needed, how to verify it, and what I should send back; wait for my confirmation before continuing. Define unfamiliar terms and ask only for missing non-secret values. Never ask me to paste the bot token into chat; tell me when to use the secure token form.",
+    databaseSetupRequest:
+      "Explain my current database setup first. SQLite is the default and requires no URI. If I choose external PostgreSQL, guide the migration and service restart requirements before proposing changes, and tell me to use the secure form instead of pasting the URI into chat.",
+    discordSecureTitle: "Store the Discord token securely",
+    discordSecureIntro:
+      "Use this only when the Agent asks for the token. OpenDelegate stores it on this Main and sends the Agent only an opaque reference.",
+    databaseSecureTitle: "External PostgreSQL credential",
+    databaseSecureIntro:
+      "This optional URI is for an external PostgreSQL deployment. OpenDelegate stores it on this Main and sends the Agent only an opaque reference.",
     databaseUriLabel: "Database URI",
     databaseUriPlaceholder: "PostgreSQL connection URI",
+    discordTokenLabel: "Discord bot token",
+    discordTokenPlaceholder: "Bot token from the Discord Developer Portal",
     secureNotice:
       "The original value is cleared from this form after submission and never becomes a chat message.",
     secureStore: "Store securely",
     secureStoring: "Storing securely…",
     secureStored: "Stored locally as {reference}",
     secureReferenceMessage: "Use this secure database reference: {reference}",
+    secureDiscordReferenceMessage:
+      "Use this secure Discord bot token reference: {reference}. Its botTokenAlias is {alias}.",
     title: "Configuration Chat",
-    subtitle: "Device setup stays separate from Task conversations.",
+    subtitle:
+      "Configure this Device and OpenDelegate services here. Task conversations stay separate.",
     restore: "Restore Configuration Chat",
     expand: "Expand Configuration Chat",
     close: "Close Configuration Chat",
@@ -101,6 +124,11 @@ export const englishMessages = {
     askPlaceholder: "Ask about this Device…",
     send: "Send message",
     open: "Open Configuration Chat",
+    openUnread: "Open Configuration Chat — new response available",
+    notificationRegion: "Configuration Chat notifications",
+    unreadAnnouncement: "New Configuration Chat response. {count} unread.",
+    unreadStatus: "New Configuration Chat response",
+    unreadCount: "{count} unread",
   },
   navigation: {
     devices: "Devices",
@@ -109,7 +137,7 @@ export const englishMessages = {
     artifacts: "Artifacts",
     audit: "Audit",
     adminSections: "Admin sections",
-    joinDevice: "Join a device",
+    joinDevice: "Add Device",
   },
   device: {
     sections: "Device sections",
@@ -120,6 +148,20 @@ export const englishMessages = {
     runs: "Runs",
     authority: "Authority & resources",
     configure: "Configure",
+    assessDevice: "Assess device",
+    assessingDevice: "Assessing…",
+    assessmentFailed: "Device assessment failed. No stored observation was replaced.",
+    localAgentSetup: "Local Agent setup",
+    localAgentSetupIntro:
+      "Configuration Chat uses the Main Agent selected during OpenDelegate init. It becomes available after the local adapter is installed, signed in, and passes its compatibility probe.",
+    codexSetupGuide:
+      "Codex: select Codex during init and explicitly share an existing authenticated Codex home when you want to reuse it.",
+    claudeSetupGuide:
+      "Claude: pass --claude-home to reuse an authenticated Claude config directory, or authenticate the Main-managed Claude profile on this Device.",
+    agentCredentialNote:
+      "Provider credentials stay on this Device. Never paste them into Configuration Chat.",
+    assessmentScope:
+      "Assessment checks Codex, Claude, browser automation, Computer Use readiness, and local Knowledge health without asking an LLM to infer them.",
     facts: "Device facts",
     roles: "Roles",
     instructions: "Instructions",
@@ -128,12 +170,58 @@ export const englishMessages = {
     noRoutes: "No transport route is configured.",
     runtimeStatus: "Runtime status",
     transportRoutes: "Transport routes",
+    wakeOnLan: "Wake-on-LAN",
+    wakeTargetSetting: "Device wake setting",
+    automaticWake: "OpenDelegate automatic wake",
+    wakeTargetEnabled: "Enabled",
+    wakeTargetDisabled: "Disabled",
+    wakeTargetUnsupported: "Not supported",
+    wakeTargetUnknown: "Not verified",
+    automaticWakeRelayRequired: "Relay required",
+    automaticWakeUnavailable: "Unavailable",
+    automaticWakeUnknown: "Not verified",
+    wakeRelayRequiredDescription:
+      "This Device reported magic-packet wake enabled, but OpenDelegate still needs a verified online relay on the same local network. Tailscale or routed IP access alone cannot wake it.",
+    wakeUnavailableDescription:
+      "Automatic wake is unavailable because magic-packet wake is disabled or unsupported on this Device.",
+    wakeUnknownDescription:
+      "OpenDelegate could not verify this Device’s wake setting, so it does not infer wake readiness.",
+    wakeObserved: "Observed on Device · {time}",
+    wakeLastObserved: "Last observed before offline · {time}",
+    wakeNeverObserved: "No authenticated observation yet.",
     knowledgeHealth: "Knowledge health",
     currentWork: "Current work",
     policies: "Executable policies",
     noPolicies: "No executable Policy projection is available.",
     agentAdapters: "Agent adapters",
     noAgentAdapters: "No Agent Adapter observation is available.",
+    agentExecution: "Agent execution",
+    agentProfileTarget: "Agent profile target",
+    workerAgent: "Worker Agent",
+    coordinatorAgent: "Coordinator Agent",
+    currentBinding: "Current binding",
+    automaticSelection: "OpenDelegate selects a tested binding for each new session.",
+    agentProfileHint:
+      "Profiles apply to new native sessions. Existing Task sessions keep their original binding.",
+    profileMode: "Selection mode",
+    profileAuto: "Auto",
+    profilePrefer: "Prefer",
+    profilePinned: "Pinned",
+    profileAutoDescription:
+      "Choose a tested, ready adapter and model deterministically for each new session.",
+    profilePreferDescription:
+      "Use the primary binding first, then only the explicit fallback when needed.",
+    profilePinnedDescription:
+      "Use exactly this binding. If it is unavailable, stop instead of substituting another model.",
+    primaryBinding: "Primary binding",
+    fallbackBinding: "Fallback binding",
+    noFallback: "No fallback",
+    noVerifiedModels:
+      "No tested, ready model catalog is available. Assess this Device before selecting an exact model.",
+    configureAgentProfile: "Review change in Configuration Chat",
+    modelCatalog: "{count} verified models",
+    defaultModel: "Default",
+    moreModels: "+{count} more",
     resourceLocks: "Resource locks",
     noResourceLocks: "No named resource lock is active.",
     verifiedEvidence: "Verified · {source} · {time}",
@@ -393,9 +481,9 @@ export const englishMessages = {
   },
   join: {
     eyebrow: "Device enrollment",
-    title: "Join a device",
+    title: "Add a Device",
     intro:
-      "Create a short-lived, single-use grant, download it once, then run the packaged Worker join command on the new device.",
+      "Use the Agent already on the new Mac, Windows, or Linux device to install its Worker. Main supplies one short-lived enrollment file; the new Device handles the rest.",
     unavailable: "Device enrollment is not configured on this Main.",
     loadFailed: "Device enrollment status could not be loaded.",
     deviceId: "Device ID",
@@ -415,9 +503,23 @@ export const englishMessages = {
     fingerprint: "Expected Main fingerprint",
     endpoints: "Worker channel endpoints",
     download: "Download grant file",
-    joinCommand: "Run on the new device",
+    joinCommand: "Manual command (advanced)",
     copyCommand: "Copy command",
     copyDone: "Copied",
+    recommended: "Recommended",
+    agentAssistedTitle: "Let the new Device’s Agent install it",
+    agentAssistedDetail:
+      "Open Codex or Claude on the new Device. After you download the grant, give its local path—not its contents—to that Agent with the prompt shown here.",
+    agentPromptLabel: "Give this prompt to Codex or Claude on the new Device",
+    agentPrompt:
+      "Install OpenDelegate Worker on this Device from https://github.com/jugol/OpenDelegate. Follow the repository README and skills/opendelegate-join/SKILL.md. Join it using the unopened grant file at <absolute-path-to/{filename}>. Never print, paste, or log the grant contents. Configure the native service for this OS, verify Main connectivity, and report when this Device appears in Admin Web.",
+    copyAgentPrompt: "Copy Agent prompt",
+    afterJoin:
+      "When the Device appears in the left list, open its Configuration Chat to assess it, choose a name, and set Roles and Instructions.",
+    needHelp: "Want OpenDelegate to guide you?",
+    helpDetail:
+      "Configuration Chat can explain secure file transfer, the target Device command, and how to verify enrollment without asking you to expose the grant.",
+    openSetupChat: "Ask Configuration Chat",
     recent: "Recent grants",
     none: "No enrollment grants have been issued.",
     statusActive: "Active",
@@ -425,9 +527,11 @@ export const englishMessages = {
     statusExpired: "Expired",
     statusRevoked: "Revoked",
     stepsTitle: "Secure join flow",
-    stepOne: "Generate and download the one-time grant on Main.",
-    stepTwo: "Move the file through an OS-secure local handoff.",
-    stepThree: "Run the packaged Worker join command; the Worker deletes the consumed grant.",
+    stepOne: "Open Codex or Claude on the new Device and ask it to prepare OpenDelegate Worker.",
+    stepTwo:
+      "Generate and download the one-time grant here, then move the unopened file over an authenticated link or secure local handoff.",
+    stepThree:
+      "Give the file path to the new Device’s Agent. The Worker joins Main and deletes the consumed grant.",
   },
   artifact: {
     eyebrow: "Task output",
@@ -584,6 +688,10 @@ export const englishMessages = {
     development: "Development",
     computerUse: "Computer Use",
     browserAutomation: "Browser automation",
+    configurationAssessmentIntro:
+      "Start with Assess device. I can then explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. I cannot run the assessment from chat, and provider credentials must stay out of messages.",
+    configurationAssessmentReadyIntro:
+      "Device assessment is current. I can now explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. Provider credentials must stay out of messages.",
     localNetwork: "Local network",
     healthyPriorityOne: "Healthy · Priority 1",
     healthyPriority: "Healthy · Priority {priority}",

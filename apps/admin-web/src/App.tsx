@@ -1,8 +1,10 @@
 import { MessageCircle } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   AdminApi,
+  ConfigurationAgentConversationMessage,
+  ConfigurationAgentReply,
   RuntimeReleaseIdentity,
   SecureSecretIngestPurpose,
   SecureSecretIngestReceipt,
@@ -12,7 +14,7 @@ import { ApprovalSurface } from "./ApprovalSurface";
 import { AuditSurface } from "./AuditSurface";
 import { ConfigurationChat } from "./ConfigurationChat";
 import { AdminRail, type AdminSection, DeviceSurface } from "./DeviceSurface";
-import { useAdminI18n } from "./i18n";
+import { formatMessage, useAdminI18n } from "./i18n";
 import { JoinSurface } from "./JoinSurface";
 import { TaskSurface } from "./TaskSurface";
 import { useMediaQuery } from "./use-media-query";
@@ -25,11 +27,19 @@ export interface AppProps {
   readonly configurationAgentAvailable?: boolean;
   readonly deviceFleet: DeviceFleetViewModel;
   readonly discordConfigured?: boolean;
+  readonly discordSetupRecommended?: boolean;
   readonly executionAvailable?: boolean;
   readonly initialArtifactId?: string;
   readonly initialChatOpen?: boolean;
   readonly initialSection?: AdminSection;
-  readonly onConfigurationMessage?: (deviceId: string, message: string) => Promise<string>;
+  readonly onAssessDevice?: (deviceId: string) => Promise<void>;
+  readonly onConfigurationMessage?: (
+    deviceId: string,
+    message: string,
+  ) => Promise<ConfigurationAgentReply>;
+  readonly onLoadConfigurationMessages?: (
+    deviceId: string,
+  ) => Promise<readonly ConfigurationAgentConversationMessage[]>;
   readonly onSecureSecretIngest?: (
     purpose: SecureSecretIngestPurpose,
     secret: Uint8Array,
@@ -42,11 +52,14 @@ export function App({
   configurationAgentAvailable = false,
   deviceFleet,
   discordConfigured = false,
+  discordSetupRecommended = false,
   executionAvailable = false,
   initialArtifactId,
   initialChatOpen = false,
   initialSection = "devices",
+  onAssessDevice,
   onConfigurationMessage,
+  onLoadConfigurationMessages,
   onSecureSecretIngest,
   releaseIdentity = {
     declaredReleaseChannel: "development",
@@ -60,6 +73,12 @@ export function App({
   const [chatOpen, setChatOpen] = useState(initialChatOpen && initialSection === "devices");
   const [chatExpanded, setChatExpanded] = useState(false);
   const [chatFocusRequestId, setChatFocusRequestId] = useState(0);
+  const [unreadChatMessages, setUnreadChatMessages] = useState(0);
+  const [chatDraftRequest, setChatDraftRequest] = useState<{
+    readonly deviceId: string;
+    readonly requestId: number;
+    readonly message: string;
+  }>();
   const chatWasOpenRef = useRef(chatOpen);
   const launcherRef = useRef<HTMLButtonElement | null>(null);
   const lastChatTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -85,6 +104,10 @@ export function App({
   const mainDevice = resolveMainDevice(deviceFleet);
   const device =
     deviceFleet.devices.find((candidate) => candidate.deviceId === selectedDeviceId) ?? mainDevice;
+  const loadSelectedDeviceConfigurationMessages = useCallback(
+    () => onLoadConfigurationMessages?.(device.deviceId) ?? Promise.resolve([]),
+    [device.deviceId, onLoadConfigurationMessages],
+  );
 
   useEffect(() => {
     if (!deviceFleet.devices.some((candidate) => candidate.deviceId === selectedDeviceId)) {
@@ -107,11 +130,40 @@ export function App({
     focusTarget?.focus();
   }, [chatOpen]);
 
+  useEffect(() => {
+    if (!chatOpen) {
+      return;
+    }
+
+    const markVisibleChatAsRead = (): void => {
+      if (document.visibilityState === "visible") {
+        setUnreadChatMessages(0);
+      }
+    };
+    document.addEventListener("visibilitychange", markVisibleChatAsRead);
+    markVisibleChatAsRead();
+    return () => document.removeEventListener("visibilitychange", markVisibleChatAsRead);
+  }, [chatOpen]);
+
+  const recordUnreadAgentMessage = useCallback(() => {
+    setUnreadChatMessages((current) => Math.min(current + 1, 99));
+  }, []);
+
   function openChat(trigger: HTMLButtonElement): void {
     lastChatTriggerRef.current = trigger;
     setActiveSection("devices");
     setChatOpen(true);
     setChatFocusRequestId((current) => current + 1);
+    setUnreadChatMessages(0);
+  }
+
+  function configureAgentProfile(message: string, trigger: HTMLButtonElement): void {
+    setChatDraftRequest((current) => ({
+      deviceId: device.deviceId,
+      requestId: (current?.requestId ?? 0) + 1,
+      message,
+    }));
+    openChat(trigger);
   }
 
   function closeChat(): void {
@@ -186,40 +238,73 @@ export function App({
         ) : activeSection === "audit" && api !== undefined ? (
           <AuditSurface api={api} />
         ) : activeSection === "join" && api !== undefined ? (
-          <JoinSurface api={api} />
+          <JoinSurface api={api} onOpenConfigurationChat={openChat} />
         ) : (
-          <DeviceSurface chatOpen={chatOpen} device={device} onConfigure={openChat} />
+          <DeviceSurface
+            chatOpen={chatOpen}
+            device={device}
+            onConfigure={openChat}
+            onConfigureAgentProfile={configureAgentProfile}
+            {...(device.role === "main" && onAssessDevice !== undefined
+              ? { onAssess: () => onAssessDevice(device.deviceId) }
+              : {})}
+          />
         )}
       </div>
 
-      {activeSection === "devices" ? (
-        <ConfigurationChat
-          expanded={chatExpanded}
-          focusRequestId={chatFocusRequestId}
-          key={device.deviceId}
-          modal={chatModal}
-          onClose={closeChat}
-          {...(configurationAgentAvailable && onConfigurationMessage !== undefined
-            ? {
-                ...(onSecureSecretIngest === undefined
-                  ? {}
-                  : { onIngestSecret: onSecureSecretIngest }),
-                onSendMessage: (message: string) =>
-                  onConfigurationMessage(device.deviceId, message),
-              }
-            : {})}
-          onToggleExpanded={() => setChatExpanded((current) => !current)}
-          open={chatOpen}
-          session={device.configurationSession}
-        />
-      ) : null}
+      <ConfigurationChat
+        deviceId={device.deviceId}
+        discordSetupRecommended={discordSetupRecommended}
+        {...(chatDraftRequest?.deviceId === device.deviceId
+          ? {
+              draftRequest: {
+                requestId: chatDraftRequest.requestId,
+                message: chatDraftRequest.message,
+              },
+            }
+          : {})}
+        expanded={chatExpanded}
+        focusRequestId={chatFocusRequestId}
+        key={device.deviceId}
+        mainDevice={device.role === "main"}
+        modal={chatModal}
+        onClose={closeChat}
+        onUnreadAgentMessage={recordUnreadAgentMessage}
+        {...(onLoadConfigurationMessages === undefined
+          ? {}
+          : { onLoadMessages: loadSelectedDeviceConfigurationMessages })}
+        {...(configurationAgentAvailable && onConfigurationMessage !== undefined
+          ? {
+              ...(onSecureSecretIngest === undefined
+                ? {}
+                : { onIngestSecret: onSecureSecretIngest }),
+              onSendMessage: (message: string) => onConfigurationMessage(device.deviceId, message),
+            }
+          : {})}
+        onToggleExpanded={() => setChatExpanded((current) => !current)}
+        open={chatOpen}
+        session={device.configurationSession}
+      />
+
+      <span
+        aria-label={messages.chat.notificationRegion}
+        aria-live="polite"
+        className="sr-only"
+        role="status"
+      >
+        {unreadChatMessages > 0
+          ? formatMessage(messages.chat.unreadAnnouncement, {
+              count: unreadChatMessages,
+            })
+          : ""}
+      </span>
 
       {!chatOpen ? (
         <button
           aria-controls="configuration-chat"
           aria-expanded="false"
-          aria-label={messages.chat.open}
-          className={`chat-launcher ${
+          aria-label={unreadChatMessages > 0 ? messages.chat.openUnread : messages.chat.open}
+          className={`chat-launcher${unreadChatMessages > 0 ? " chat-launcher--unread" : ""} ${
             activeSection === "tasks"
               ? "chat-launcher--tasks"
               : activeSection === "approvals"
@@ -231,6 +316,21 @@ export function App({
           type="button"
         >
           <MessageCircle aria-hidden="true" />
+          {unreadChatMessages > 0 ? (
+            <>
+              <span aria-hidden="true" className="chat-launcher-badge">
+                {unreadChatMessages}
+              </span>
+              <span aria-hidden="true" className="chat-launcher-unread-copy">
+                <strong>{messages.chat.unreadStatus}</strong>
+                <small>
+                  {formatMessage(messages.chat.unreadCount, {
+                    count: unreadChatMessages,
+                  })}
+                </small>
+              </span>
+            </>
+          ) : null}
         </button>
       ) : null}
     </div>

@@ -72,20 +72,43 @@ export const japaneseMessages = {
   chat: {
     unavailableMessage:
       "Main から、デバイス評価または設定エージェントのメッセージ機能を利用できないと報告されています。表示されるデバイス情報は、Main の決定論的なランタイムレポートだけを基にしています。",
-    failedMessage: "設定エージェントが応答できませんでした。設定は変更されていません。",
+    failedMessage:
+      "ローカル設定エージェントが利用できないか、応答中に中断されました。OpenDelegate は結果が不明な設定操作を自動再実行していません。完了済みの変更は保持されるため、現在の設定を確認してから再度依頼してください。",
+    discordOnboardingMessage:
+      "Discord はまだ接続されていません。現在のバインディングを確認し、セットアップ手順を準備しています。",
     secureStoreFailed: "認証情報を安全に保存できませんでした。設定チャットには送信されていません。",
-    secureTitle: "データベース認証情報を保存",
-    secureIntro:
-      "入力値はこの Main デバイスの管理対象シークレットストアへ直接送られます。エージェントが受け取るのは不透明な参照だけです。",
+    guidedSetupTitle: "ガイド付きセットアップ",
+    guidedSetupIntro:
+      "目的を選択してください。エージェントが現在の設定を確認し、残っている手順だけを案内します。",
+    discordSetupTitle: "Discord を設定・確認",
+    discordSetupDescription:
+      "トークンをチャットに残さず、Bot と 1 つ以上の Forum チャンネルを接続します。",
+    databaseSetupTitle: "外部 PostgreSQL を使用",
+    databaseSetupDescription: "SQLite はすでに稼働中です。データベース URI は不要です。",
+    discordSetupRequest:
+      "Discord Bot を初めて設定する利用者として案内してください。まず現在の接続状態を確認し、Forum の投稿が OpenDelegate Task になる仕組みを説明してください。全体の流れは短く示し、残っている手順は一度に一つずつ案内してください。現在の手順では、どこを開くか、何をするか、なぜ必要か、完了をどう確認するか、何を伝えるかを示し、私の確認を待ってから次へ進んでください。初めて出る用語を説明し、不足している機密ではない値だけを尋ねてください。Bot トークンをチャットに貼るよう求めず、安全なトークンフォームを使うタイミングを教えてください。",
+    databaseSetupRequest:
+      "まず現在のデータベース設定を説明してください。既定の SQLite には URI が不要です。外部 PostgreSQL を選ぶ場合は、変更を提案する前に移行とサービス再起動の要件を案内し、URI はチャットではなく安全なフォームに入力するよう教えてください。",
+    discordSecureTitle: "Discord Bot トークンを安全に保存",
+    discordSecureIntro:
+      "エージェントがトークンを求めたときだけ使用してください。OpenDelegate はこの Main に保存し、エージェントには不透明な参照だけを渡します。",
+    databaseSecureTitle: "外部 PostgreSQL の認証情報",
+    databaseSecureIntro:
+      "外部 PostgreSQL を選ぶ場合のみ使用する URI です。OpenDelegate はこの Main に保存し、エージェントには不透明な参照だけを渡します。",
     databaseUriLabel: "データベース URI",
     databaseUriPlaceholder: "PostgreSQL 接続 URI",
+    discordTokenLabel: "Discord Bot トークン",
+    discordTokenPlaceholder: "Discord Developer Portal の Bot トークン",
     secureNotice: "送信後、元の値はこのフォームから消去され、チャットメッセージにはなりません。",
     secureStore: "安全に保存",
     secureStoring: "安全に保存中…",
     secureStored: "ローカルに {reference} として保存しました",
     secureReferenceMessage: "この安全なデータベース参照を使用してください: {reference}",
+    secureDiscordReferenceMessage:
+      "この安全な Discord Bot トークン参照を使用してください: {reference}。botTokenAlias は {alias} です。",
     title: "設定チャット",
-    subtitle: "デバイス設定はタスクの会話とは分けて管理されます。",
+    subtitle:
+      "ここでデバイスと OpenDelegate サービスを設定します。タスクの会話は分けて管理されます。",
     restore: "設定チャットを元のサイズに戻す",
     expand: "設定チャットを拡大",
     close: "設定チャットを閉じる",
@@ -104,6 +127,11 @@ export const japaneseMessages = {
     askPlaceholder: "このデバイスについて質問する…",
     send: "メッセージを送信",
     open: "設定チャットを開く",
+    openUnread: "設定チャットを開く — 新しい返信があります",
+    notificationRegion: "設定チャットの通知",
+    unreadAnnouncement: "設定チャットに新しい返信があります。未読 {count} 件。",
+    unreadStatus: "設定チャットに新しい返信",
+    unreadCount: "未読 {count} 件",
   },
   navigation: {
     devices: "デバイス",
@@ -123,6 +151,20 @@ export const japaneseMessages = {
     runs: "実行",
     authority: "権限とリソース",
     configure: "設定",
+    assessDevice: "デバイスを評価",
+    assessingDevice: "評価中…",
+    assessmentFailed: "デバイスの評価に失敗しました。保存済みの観測結果は変更されていません。",
+    localAgentSetup: "ローカル Agent の設定",
+    localAgentSetupIntro:
+      "設定チャットは OpenDelegate init で選択した Main Agent を使用します。ローカルアダプターのインストールとサインインが完了し、互換性プローブに合格すると利用できます。",
+    codexSetupGuide:
+      "Codex: init で Codex を選択し、既存の認証を再利用する場合は認証済みの Codex home を明示的に共有します。",
+    claudeSetupGuide:
+      "Claude: --claude-home で認証済みの Claude 設定ディレクトリを再利用するか、このデバイス上の Main 管理 Claude プロファイルを認証します。",
+    agentCredentialNote:
+      "プロバイダーの認証情報はこのデバイスにだけ保存されます。設定チャットには貼り付けないでください。",
+    assessmentScope:
+      "評価では LLM に推測させず、Codex、Claude、ブラウザー自動化、Computer Use、ローカル Knowledge の状態を確認します。",
     facts: "デバイス情報",
     roles: "役割",
     instructions: "指示",
@@ -131,12 +173,58 @@ export const japaneseMessages = {
     noRoutes: "接続経路が設定されていません。",
     runtimeStatus: "ランタイム状態",
     transportRoutes: "接続経路",
+    wakeOnLan: "Wake-on-LAN",
+    wakeTargetSetting: "デバイスのウェイク設定",
+    automaticWake: "OpenDelegate による自動ウェイク",
+    wakeTargetEnabled: "有効",
+    wakeTargetDisabled: "無効",
+    wakeTargetUnsupported: "未対応",
+    wakeTargetUnknown: "未確認",
+    automaticWakeRelayRequired: "リレーが必要",
+    automaticWakeUnavailable: "利用不可",
+    automaticWakeUnknown: "未確認",
+    wakeRelayRequiredDescription:
+      "このデバイスではマジックパケットによるウェイクが有効ですが、同じローカルネットワーク上の検証済みオンラインリレーが必要です。Tailscale やルーティングされた IP 接続だけではウェイクできません。",
+    wakeUnavailableDescription:
+      "このデバイスではマジックパケットによるウェイクが無効または未対応のため、自動ウェイクを利用できません。",
+    wakeUnknownDescription:
+      "OpenDelegate はこのデバイスのウェイク設定を確認できないため、ウェイク可能性を推測しません。",
+    wakeObserved: "デバイスで確認 · {time}",
+    wakeLastObserved: "オフライン前の最終確認 · {time}",
+    wakeNeverObserved: "認証済みの観測情報はまだありません。",
     knowledgeHealth: "ナレッジの状態",
     currentWork: "現在の作業",
     policies: "実行ポリシー",
     noPolicies: "表示できる実行ポリシーがありません。",
     agentAdapters: "Agent アダプター",
     noAgentAdapters: "Agent アダプターの観測情報がありません。",
+    agentExecution: "Agent の実行",
+    agentProfileTarget: "Agent プロファイルの対象",
+    workerAgent: "ワーカー Agent",
+    coordinatorAgent: "コーディネーター Agent",
+    currentBinding: "現在のバインディング",
+    automaticSelection: "新しいセッションごとに、検証済みのバインディングを選択します。",
+    agentProfileHint:
+      "プロファイルの変更は新しいネイティブセッションから適用されます。既存の Task セッションは元のバインディングを維持します。",
+    profileMode: "選択モード",
+    profileAuto: "自動",
+    profilePrefer: "優先",
+    profilePinned: "固定",
+    profileAutoDescription:
+      "新しいセッションごとに、準備済みで検証済みのアダプターとモデルを決定的に選択します。",
+    profilePreferDescription:
+      "プライマリを優先し、必要な場合にのみ明示したフォールバックを使用します。",
+    profilePinnedDescription:
+      "このバインディングだけを使用します。利用できない場合、別のモデルに置き換えず停止します。",
+    primaryBinding: "プライマリバインディング",
+    fallbackBinding: "フォールバックバインディング",
+    noFallback: "フォールバックなし",
+    noVerifiedModels:
+      "準備済みで検証済みのモデルカタログがありません。正確なモデルを選ぶ前にこの Device を評価してください。",
+    configureAgentProfile: "Configuration Chat で変更を確認",
+    modelCatalog: "検証済みモデル {count} 件",
+    defaultModel: "デフォルト",
+    moreModels: "ほか {count} 件",
     resourceLocks: "リソースロック",
     noResourceLocks: "有効な名前付きリソースロックはありません。",
     verifiedEvidence: "検証済み · {source} · {time}",
@@ -399,9 +487,9 @@ export const japaneseMessages = {
   },
   join: {
     eyebrow: "デバイス登録",
-    title: "デバイスを参加させる",
+    title: "デバイスを追加",
     intro:
-      "有効期間の短い一回限りの登録ファイルを作成して一度ダウンロードし、新しいデバイスで同梱の Worker 参加コマンドを実行します。",
+      "新しい Mac、Windows、Linux デバイスにある Agent に Worker のインストールを任せます。Main は短期間有効な一回限りの登録ファイルだけを提供します。",
     unavailable: "この Main にはデバイス登録が設定されていません。",
     loadFailed: "デバイス登録の状態を読み込めませんでした。",
     deviceId: "デバイス ID",
@@ -421,9 +509,23 @@ export const japaneseMessages = {
     fingerprint: "想定される Main フィンガープリント",
     endpoints: "Worker チャネルのエンドポイント",
     download: "登録ファイルをダウンロード",
-    joinCommand: "新しいデバイスで実行",
+    joinCommand: "手動コマンド（上級者向け）",
     copyCommand: "コマンドをコピー",
     copyDone: "コピーしました",
+    recommended: "推奨",
+    agentAssistedTitle: "新しいデバイスの Agent にインストールを任せる",
+    agentAssistedDetail:
+      "新しいデバイスで Codex または Claude を開きます。登録ファイルの内容ではなく、ローカルパスと下のプロンプトを渡してください。",
+    agentPromptLabel: "新しいデバイスの Codex または Claude に渡すプロンプト",
+    agentPrompt:
+      "https://github.com/jugol/OpenDelegate からこのデバイスに OpenDelegate Worker をインストールしてください。README と skills/opendelegate-join/SKILL.md に従い、未開封の登録ファイル <absolute-path-to/{filename}> で参加してください。登録ファイルの内容を表示、貼り付け、ログ記録しないでください。この OS のネイティブサービスを設定し、Main への接続を確認し、Admin Web に表示されたら報告してください。",
+    copyAgentPrompt: "Agent プロンプトをコピー",
+    afterJoin:
+      "左の一覧に表示されたら、そのデバイスの設定チャットで評価、名前、ロール、指示を設定します。",
+    needHelp: "OpenDelegate の案内が必要ですか？",
+    helpDetail:
+      "設定チャットは登録ファイルを公開せず、安全な転送、対象デバイスのコマンド、登録確認を案内します。",
+    openSetupChat: "設定チャットに聞く",
     recent: "最近の登録ファイル",
     none: "発行済みの登録ファイルはありません。",
     statusActive: "有効",
@@ -431,9 +533,12 @@ export const japaneseMessages = {
     statusExpired: "期限切れ",
     statusRevoked: "取り消し済み",
     stepsTitle: "安全な参加フロー",
-    stepOne: "Main で一回限りの登録ファイルを生成してダウンロードします。",
-    stepTwo: "OS の安全なローカル受け渡しでファイルを移動します。",
-    stepThree: "同梱の Worker 参加コマンドを実行すると、使用済みファイルが削除されます。",
+    stepOne:
+      "新しいデバイスで Codex または Claude を開き、OpenDelegate Worker の準備を依頼します。",
+    stepTwo:
+      "ここで一回限りの登録ファイルを生成し、認証済み接続か安全なローカル受け渡しで未開封のまま移動します。",
+    stepThree:
+      "新しいデバイスの Agent にファイルパスを渡します。Worker が Main に参加し、使用済みファイルを削除します。",
   },
   artifact: {
     eyebrow: "タスク出力",
@@ -589,6 +694,10 @@ export const japaneseMessages = {
     development: "開発",
     computerUse: "Computer Use",
     browserAutomation: "ブラウザー自動化",
+    configurationAssessmentIntro:
+      "まず「デバイスを評価」を実行してください。その後、観測された Codex、Claude、ブラウザー自動化、Computer Use、ローカル Knowledge の状態を説明し、役割や指示の提案を支援できます。チャット自体は評価を実行できず、プロバイダーの認証情報をメッセージに含めてはいけません。",
+    configurationAssessmentReadyIntro:
+      "デバイス評価が完了しました。観測された Codex、Claude、ブラウザー自動化、Computer Use、ローカル Knowledge の状態を説明し、役割や指示の提案を支援できます。プロバイダーの認証情報をメッセージに含めないでください。",
     localNetwork: "ローカルネットワーク",
     healthyPriorityOne: "正常 · 優先度 1",
     healthyPriority: "正常 · 優先度 {priority}",

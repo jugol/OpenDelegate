@@ -84,17 +84,29 @@ export {
   type ReadinessV1,
 } from "./common.ts";
 export {
+  ConfigurationAgentConversationMessageSchema,
+  ConfigurationAgentConversationResponseSchema,
   ConfigurationAgentMessageParamsSchema,
   ConfigurationAgentMessageRequestSchema,
   ConfigurationAgentMessageResponseSchema,
+  ConfigurationAgentSuggestedActionSchema,
+  type ConfigurationAgentConversationMessageV1,
+  type ConfigurationAgentConversationResponseV1,
   type ConfigurationAgentMessageParamsV1,
   type ConfigurationAgentMessageRequestV1,
   type ConfigurationAgentMessageResponseV1,
+  type ConfigurationAgentSuggestedActionV1,
 } from "./configuration-agent.ts";
 export {
+  DeviceAssessmentParamsSchema,
+  DeviceAssessmentRequestSchema,
+  DeviceAssessmentResponseSchema,
   DeviceListResponseSchema,
   DeviceOsFamilySchema,
   DeviceSummarySchema,
+  type DeviceAssessmentParamsV1,
+  type DeviceAssessmentRequestV1,
+  type DeviceAssessmentResponseV1,
   type DeviceListResponseV1,
   type DeviceSummaryV1,
 } from "./device.ts";

@@ -71,6 +71,8 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Added an explicit, durable `--codex-home` Main option so an owner can share one existing local
+  Codex home as a Device SSOT while managed provider homes remain the default.
 - Made the fixed Main computer a normal co-located Worker Device under the same service lifecycle
   and Device policy instead of a control-only scheduling exception.
 - Replaced the Admin design-only fixture path with authenticated Task operations and explicit
@@ -106,6 +108,15 @@ represents a supported release or completed first milestone.
   platforms.
 - Overrode the Claude SDK's transitive Hono Node adapter to the compatible patched 2.0.10 release
   and made dependency review and audit reject every moderate-or-higher advisory.
+- Sealed OpenDelegate-controlled provider homes at their owner-only root while treating their
+  provider-owned contents as opaque, so supported Codex temporary executable links no longer make an
+  otherwise safe Linux Main fail runtime-path validation.
+
+### Fixed
+
+- Accepted the exact private `0550` directory and `0440` file modes emitted by current systemd
+  credential mounts, allowing headless Linux vaults to become ready without permitting general
+  group-readable credential paths.
 
 ### Security
 

@@ -6,6 +6,7 @@ import Value from "typebox/value";
 import {
   AuditEventListResponseSchema,
   BrowserSessionSchema,
+  ConfigurationAgentConversationResponseSchema,
   ConfigurationAgentMessageRequestSchema,
   ConfigurationAgentMessageResponseSchema,
   CreateTaskRequestSchema,
@@ -40,13 +41,49 @@ test("Configuration Agent messages are bounded and never carry raw configuration
     messageId: "configuration_message_001",
     sessionId: "configuration_session_device_main",
     content: "I can inspect the Device and prepare a reviewable proposal.",
+    suggestedActions: ["guide-discord", "guide-external-postgresql"],
     occurredAt: NOW,
   };
   assert.equal(Value.Check(ConfigurationAgentMessageResponseSchema, response), true);
   assert.equal(
     Value.Check(ConfigurationAgentMessageResponseSchema, {
       ...response,
+      suggestedActions: ["open-arbitrary-url"],
+    }),
+    false,
+  );
+  assert.equal(
+    Value.Check(ConfigurationAgentMessageResponseSchema, {
+      ...response,
       configurationPatch: [{ operation: "set", key: "policy.network-change" }],
+    }),
+    false,
+  );
+  assert.equal(
+    Value.Check(ConfigurationAgentConversationResponseSchema, {
+      messages: [
+        {
+          messageId: "configuration_owner_pending",
+          role: "owner",
+          content: "Keep this visible during reload.",
+          responseStatus: "pending",
+          occurredAt: NOW,
+        },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(ConfigurationAgentConversationResponseSchema, {
+      messages: [
+        {
+          messageId: "configuration_agent_invalid",
+          role: "agent",
+          content: "An Agent response cannot be pending.",
+          responseStatus: "pending",
+          occurredAt: NOW,
+        },
+      ],
     }),
     false,
   );
@@ -257,6 +294,12 @@ test("Device list exposes only explicit scheduling and runtime facts", () => {
             observedAtMs: 2_000,
           },
         ],
+        wakeOnLan: {
+          targetState: "enabled",
+          automaticWakeState: "relay-required",
+          source: "windows-netadapter-power",
+          observedAtMs: 2_000,
+        },
         routes: [
           {
             routeId: "main-local",
@@ -314,6 +357,69 @@ test("Device list exposes only explicit scheduling and runtime facts", () => {
         {
           ...response.devices[0],
           tailscale: "connected",
+        },
+      ],
+    }),
+    false,
+  );
+  for (const wakeOnLan of [
+    {
+      targetState: "enabled",
+      automaticWakeState: "ready",
+      source: "windows-netadapter-power",
+      observedAtMs: 2_000,
+    },
+    {
+      targetState: "enabled",
+      automaticWakeState: "unavailable",
+      source: "windows-netadapter-power",
+      observedAtMs: 2_000,
+    },
+    {
+      targetState: "unknown",
+      automaticWakeState: "relay-required",
+      source: "linux-ethtool",
+      observedAtMs: 2_000,
+    },
+    {
+      targetState: "enabled",
+      automaticWakeState: "relay-required",
+      source: "probe-unavailable",
+      observedAtMs: 2_000,
+    },
+  ]) {
+    assert.equal(
+      Value.Check(DeviceListResponseSchema, {
+        devices: [{ ...response.devices[0], wakeOnLan }],
+      }),
+      false,
+    );
+  }
+  assert.equal(
+    Value.Check(DeviceListResponseSchema, {
+      devices: [
+        {
+          ...response.devices[0],
+          wakeOnLan: {
+            targetState: "unknown",
+            automaticWakeState: "unknown",
+            source: "linux-ethtool",
+            observedAtMs: 2_000,
+          },
+        },
+      ],
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(DeviceListResponseSchema, {
+      devices: [
+        {
+          ...response.devices[0],
+          wakeOnLan: {
+            ...response.devices[0]!.wakeOnLan,
+            macAddress: "00:11:22:33:44:55",
+          },
         },
       ],
     }),

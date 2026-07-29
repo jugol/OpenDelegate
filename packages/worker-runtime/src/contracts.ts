@@ -137,6 +137,13 @@ export interface WorkerSchedulingAgentAdapterV1 {
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
   readonly version?: string;
   readonly observedAtMs: number;
+  readonly modelCatalogObservedAtMs?: number;
+  readonly models?: readonly {
+    readonly modelId: string;
+    readonly displayName: string;
+    readonly isDefault?: boolean;
+    readonly supportedEfforts?: readonly string[];
+  }[];
 }
 
 export interface WorkerSchedulingResourceLockV1 {
@@ -200,6 +207,11 @@ export interface WorkerSchedulingInventoryV1 {
    * references, search terms, paths, and contents never cross this boundary.
    */
   readonly knowledgeHealth?: "healthy" | "degraded" | "unavailable";
+  /**
+   * Sanitized Device-local observation only. It intentionally carries no MAC
+   * address, interface name, SecureOn value, or raw platform output.
+   */
+  readonly wakeOnLan?: WorkerWakeOnLanObservationV1;
   readonly maximumConcurrentRuns: number;
   readonly capabilities: readonly {
     readonly name: string;
@@ -212,6 +224,17 @@ export interface WorkerSchedulingInventoryV1 {
   readonly resourceLocks?: readonly WorkerSchedulingResourceLockV1[];
   readonly workspaceIds: readonly string[];
   readonly availableSecretRefs: readonly string[];
+}
+
+export type WorkerWakeOnLanTargetStateV1 = "enabled" | "disabled" | "unsupported" | "unknown";
+
+export type WorkerWakeOnLanProbeSourceV1 =
+  "windows-netadapter-power" | "macos-pmset" | "linux-ethtool" | "probe-unavailable";
+
+export interface WorkerWakeOnLanObservationV1 {
+  readonly state: WorkerWakeOnLanTargetStateV1;
+  readonly source: WorkerWakeOnLanProbeSourceV1;
+  readonly observedAtMs: number;
 }
 
 export interface WorkerSchedulingInventoryProvider {

@@ -17,6 +17,7 @@ import {
 } from "@opendelegate/control-plane";
 import {
   ConfigurationError,
+  isAgentExecutionProfile,
   type ConfigurationChange,
   type ConfigurationContext,
   type ConfigurationMutationAuthorizer,
@@ -25,6 +26,11 @@ import {
   type ConfigurationToolReceipt,
   type ConfigurationToolRequest,
 } from "@opendelegate/configuration";
+import type {
+  ConfigurationAgentConversationMessageV1,
+  ConfigurationAgentConversationResponseV1,
+  ConfigurationAgentSuggestedActionV1,
+} from "@opendelegate/protocol";
 import type { ManagedSecretStore } from "@opendelegate/secrets";
 
 import type {
@@ -38,6 +44,41 @@ interface ConfigurationResponseEventPayload {
   readonly schemaVersion: 1;
   readonly requestDigest: string;
   readonly response: ConfigurationAgentMessageResponse;
+}
+
+interface ConfigurationToolAttemptEventPayload {
+  readonly schemaVersion: 1;
+  readonly requestDigest: string;
+  readonly toolOperationId: string;
+  readonly tool: ConfigurationToolRequest["tool"];
+}
+
+interface ConfigurationConversationExchangeEventPayload {
+  readonly schemaVersion: 1;
+  readonly operationKey: string;
+  readonly requestDigest: string;
+  readonly ownerMessage: ConfigurationAgentConversationMessageV1;
+  readonly response: ConfigurationAgentMessageResponse;
+}
+
+interface ConfigurationConversationOwnerMessageEventPayload {
+  readonly schemaVersion: 1;
+  readonly operationKey: string;
+  readonly requestDigest: string;
+  readonly ownerMessage: ConfigurationAgentConversationMessageV1;
+}
+
+interface ConfigurationConversationTurn {
+  readonly operationKey: string;
+  readonly requestDigest: string;
+  readonly ownerMessage: ConfigurationAgentConversationMessageV1;
+  readonly response?: ConfigurationAgentMessageResponse;
+}
+
+interface StoredConfigurationConversationEvent {
+  readonly streamVersion: number;
+  readonly type: string;
+  readonly payload: unknown;
 }
 
 export interface AgentBackedConfigurationAgentClock {
@@ -318,6 +359,7 @@ type ConfigurationAgentTurnResult =
       readonly type: "final";
       readonly content: string;
       readonly claimReceiptIds: readonly string[];
+      readonly suggestedActions: readonly ConfigurationAgentSuggestedActionV1[];
     };
 
 type ConfigurationAgentToolTurnResult =
@@ -345,6 +387,12 @@ type ConfigurationAgentToolTurnResult =
 const DEFAULT_MAXIMUM_PROMPT_BYTES = 64 * 1024;
 const DEFAULT_MAXIMUM_TOOL_TURNS = 8;
 const CONFIGURATION_RESPONSE_EVENT = "configuration-agent.response-recorded";
+const CONFIGURATION_TOOL_ATTEMPT_EVENT = "configuration-agent.tool-attempted";
+const CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT =
+  "configuration-agent.conversation-owner-message-recorded";
+const CONFIGURATION_CONVERSATION_EXCHANGE_EVENT =
+  "configuration-agent.conversation-exchange-recorded";
+const MAXIMUM_CONFIGURATION_CONVERSATION_EXCHANGES = 1_000;
 const DATABASE_URI_MATERIAL =
   /\b(?:amqps?|mariadb|mongodb(?:\+srv)?|mysql|postgres(?:ql)?|rediss?):\/\/[^\s<>"']+/iu;
 const USERINFO_URI_MATERIAL = /\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s/:@]+:[^\s/@]+@[^\s<>"']+/iu;
@@ -440,13 +488,29 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       return active.result;
     }
 
-    const result = this.#enqueue(request.deviceId, async () => {
-      const stored = await this.#loadStoredResponse(operationKey, requestDigest);
-      if (stored !== undefined) {
-        return stored;
-      }
-      return this.#runAndRecord(request, operationKey, requestDigest);
-    });
+    const result = (async () => {
+      const ownerMessage = await this.#recordConversationOwnerMessage({
+        deviceId: request.deviceId,
+        operationKey,
+        ownerMessage: request.message,
+        requestDigest,
+      });
+      return this.#enqueue(request.deviceId, async () => {
+        const stored = await this.#loadStoredResponse(operationKey, requestDigest);
+        if (stored !== undefined) {
+          return stored;
+        }
+        const storedExchange = await this.#loadStoredConversationExchange(
+          request.deviceId,
+          operationKey,
+          requestDigest,
+        );
+        if (storedExchange !== undefined) {
+          return storedExchange;
+        }
+        return this.#runAndRecord(request, operationKey, requestDigest, ownerMessage);
+      });
+    })();
     this.#activeRequests.set(operationKey, { requestDigest, result });
     const cleanup = (): void => {
       if (this.#activeRequests.get(operationKey)?.result === result) {
@@ -455,6 +519,55 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     };
     void result.then(cleanup, cleanup);
     return result;
+  }
+
+  async listMessages(input: {
+    readonly deviceId: string;
+    readonly principalId: string;
+  }): Promise<ConfigurationAgentConversationResponseV1> {
+    assertIdentifier(input.deviceId, "Target Device ID", 160);
+    assertIdentifier(input.principalId, "Owner principal ID", 160);
+    let events: readonly StoredConfigurationConversationEvent[];
+    try {
+      events = await this.#eventStore.readStream(
+        conversationStreamId(input.deviceId, this.#adapter.adapterId),
+      );
+    } catch {
+      throw unavailable("The Configuration Chat history could not be read.");
+    }
+    const turns = projectConversationTurns(events).slice(
+      -MAXIMUM_CONFIGURATION_CONVERSATION_EXCHANGES,
+    );
+    return {
+      messages: turns.flatMap((turn) => {
+        const active = this.#activeRequests.get(turn.operationKey);
+        const responseStatus =
+          turn.response !== undefined
+            ? ("completed" as const)
+            : active?.requestDigest === turn.requestDigest
+              ? ("pending" as const)
+              : ("interrupted" as const);
+        return [
+          {
+            ...structuredClone(turn.ownerMessage),
+            responseStatus,
+          },
+          ...(turn.response === undefined
+            ? []
+            : [
+                {
+                  messageId: turn.response.messageId,
+                  role: "agent" as const,
+                  content: turn.response.content,
+                  ...(turn.response.suggestedActions === undefined
+                    ? {}
+                    : { suggestedActions: [...turn.response.suggestedActions] }),
+                  occurredAt: turn.response.occurredAt,
+                },
+              ]),
+        ];
+      }),
+    };
   }
 
   #enqueue<TResult>(deviceId: string, operation: () => Promise<TResult>): Promise<TResult> {
@@ -477,7 +590,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     input: ConfigurationAgentMessageInput,
     operationKey: string,
     requestDigest: string,
+    ownerMessage: ConfigurationAgentConversationMessageV1,
   ): Promise<ConfigurationAgentMessageResponse> {
+    await this.#assertNoInterruptedToolAttempt(operationKey, requestDigest);
     const sessionKey = configurationSessionKey(input.deviceId, this.#adapter.adapterId);
     let session: NativeSessionReference | undefined;
     try {
@@ -501,18 +616,55 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     const baseRunId = `configuration_${operationKey.slice("sha256:".length)}`;
     let prompt = buildConfigurationPrompt(input, this.#maximumPromptBytes);
     let toolCallCount = 0;
+    let toolAttemptRecorded = false;
     const receipts = new Map<string, ConfigurationToolReceipt>();
 
     try {
       for (let turnIndex = 0; turnIndex <= this.#maximumToolTurns; turnIndex += 1) {
-        const turn = await this.#runTurn({
-          baseRunId,
-          turnIndex,
-          prompt,
-          session,
-          targetDeviceId: input.deviceId,
-          sessionKey,
-        });
+        let turn: {
+          readonly session: NativeSessionReference;
+          readonly finalText: string | undefined;
+        };
+        try {
+          turn = await this.#runTurn({
+            baseRunId,
+            turnIndex,
+            prompt,
+            session,
+            targetDeviceId: input.deviceId,
+            sessionKey,
+          });
+        } catch (error) {
+          if (
+            turnIndex !== 0 ||
+            session === undefined ||
+            !(error instanceof ConfigurationAgentPortError) ||
+            error.code !== "CONFIGURATION_AGENT_UNAVAILABLE"
+          ) {
+            throw error;
+          }
+          const conversation = await this.listMessages({
+            deviceId: input.deviceId,
+            principalId: input.principalId,
+          });
+          turn = await this.#runTurn({
+            baseRunId: `${baseRunId}_continuation`,
+            turnIndex,
+            prompt: buildConfigurationContinuationPrompt(
+              prompt,
+              conversation.messages.filter(
+                (message) => message.role !== "owner" || message.responseStatus !== "pending",
+              ),
+              this.#maximumPromptBytes,
+            ),
+            session: undefined,
+            continuationOf: session,
+            continuationReason:
+              "Initial Configuration Agent native resume was unavailable before tool execution.",
+            targetDeviceId: input.deviceId,
+            sessionKey,
+          });
+        }
         session = turn.session;
         const parsed = parseConfigurationTurnResult(turn.finalText);
         if (parsed.type === "final") {
@@ -527,8 +679,18 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
               .slice(0, 64)}`,
             sessionId: `configuration_${digest(sessionKey).slice("sha256:".length).slice(0, 64)}`,
             content,
+            ...(parsed.suggestedActions.length === 0
+              ? {}
+              : { suggestedActions: [...parsed.suggestedActions] }),
             occurredAt,
           } satisfies ConfigurationAgentMessageResponse;
+          await this.#recordConversationExchange({
+            deviceId: input.deviceId,
+            operationKey,
+            ownerMessage,
+            requestDigest,
+            response,
+          });
           return await this.#recordResponse(operationKey, requestDigest, response);
         }
 
@@ -537,6 +699,15 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         }
         toolCallCount += 1;
         const toolOperationId = configurationToolOperationId(operationKey, parsed.toolCallId);
+        if (!toolAttemptRecorded) {
+          await this.#recordToolAttempt({
+            operationKey,
+            requestDigest,
+            toolOperationId,
+            tool: parsed.request.tool,
+          });
+          toolAttemptRecorded = true;
+        }
         let toolResult: ConfigurationAgentToolTurnResult;
         try {
           const receipt = await this.#toolBroker.execute({
@@ -594,6 +765,8 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     readonly turnIndex: number;
     readonly prompt: string;
     readonly session: NativeSessionReference | undefined;
+    readonly continuationOf?: NativeSessionReference;
+    readonly continuationReason?: string;
     readonly targetDeviceId: string;
     readonly sessionKey: string;
   }): Promise<{
@@ -619,7 +792,16 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     try {
       handle =
         input.session === undefined
-          ? await this.#adapter.start({ operation: "start", ...common })
+          ? await this.#adapter.start({
+              operation: "start",
+              ...common,
+              ...(input.continuationOf === undefined
+                ? {}
+                : {
+                    continuationOf: input.continuationOf,
+                    continuationReason: input.continuationReason,
+                  }),
+            })
           : await this.#adapter.resume({
               operation: "resume",
               ...common,
@@ -711,7 +893,207 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       if (stored !== undefined) {
         return stored;
       }
-      throw unavailable("The Configuration Agent response could not be stored durably.");
+      // The Device-scoped conversation stream is the canonical durable copy.
+      // This per-operation stream is only a fast idempotency lookup.
+      return structuredClone(response);
+    }
+  }
+
+  async #recordConversationOwnerMessage(input: {
+    readonly deviceId: string;
+    readonly operationKey: string;
+    readonly ownerMessage: string;
+    readonly requestDigest: string;
+  }): Promise<ConfigurationAgentConversationMessageV1> {
+    const streamId = conversationStreamId(input.deviceId, this.#adapter.adapterId);
+    const occurredAt = this.#clock.now();
+    if (!isRfc3339Instant(occurredAt)) {
+      throw unavailable("The Configuration Agent clock returned an invalid instant.");
+    }
+    const ownerMessage: ConfigurationAgentConversationMessageV1 = {
+      messageId: `owner_${digest(`${input.operationKey}\u0000owner`)
+        .slice("sha256:".length)
+        .slice(0, 64)}`,
+      role: "owner",
+      content: input.ownerMessage,
+      occurredAt,
+    };
+    const payload = {
+      schemaVersion: 1,
+      operationKey: input.operationKey,
+      requestDigest: input.requestDigest,
+      ownerMessage,
+    } satisfies ConfigurationConversationOwnerMessageEventPayload;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const events = await this.#eventStore.readStream(streamId);
+      const existing = findConversationOwnerMessage(events, input.operationKey);
+      if (existing !== undefined) {
+        if (
+          existing.requestDigest !== input.requestDigest ||
+          existing.ownerMessage.content !== input.ownerMessage
+        ) {
+          throw idempotencyConflict();
+        }
+        return structuredClone(existing.ownerMessage);
+      }
+      try {
+        await this.#eventStore.append({
+          streamId,
+          expectedVersion: events.length,
+          events: [
+            {
+              eventId: `event_${digest(`${streamId}\u0000${input.operationKey}\u0000owner`)
+                .slice("sha256:".length)
+                .slice(0, 64)}`,
+              type: CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT,
+              payload,
+            },
+          ],
+        });
+        return structuredClone(ownerMessage);
+      } catch {
+        // Re-read to distinguish a concurrent idempotent append from storage failure.
+      }
+    }
+    throw unavailable("The Configuration Chat owner message could not be stored durably.");
+  }
+
+  async #recordConversationExchange(input: {
+    readonly deviceId: string;
+    readonly operationKey: string;
+    readonly ownerMessage: ConfigurationAgentConversationMessageV1;
+    readonly requestDigest: string;
+    readonly response: ConfigurationAgentMessageResponse;
+  }): Promise<void> {
+    const streamId = conversationStreamId(input.deviceId, this.#adapter.adapterId);
+    const payload = {
+      schemaVersion: 1,
+      operationKey: input.operationKey,
+      requestDigest: input.requestDigest,
+      ownerMessage: input.ownerMessage,
+      response: input.response,
+    } satisfies ConfigurationConversationExchangeEventPayload;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const events = await this.#eventStore.readStream(streamId);
+      const existing = findConversationExchange(events, input.operationKey);
+      if (existing !== undefined) {
+        if (
+          existing.requestDigest !== input.requestDigest ||
+          JSON.stringify(existing.response) !== JSON.stringify(input.response)
+        ) {
+          throw idempotencyConflict();
+        }
+        return;
+      }
+      try {
+        await this.#eventStore.append({
+          streamId,
+          expectedVersion: events.length,
+          events: [
+            {
+              eventId: `event_${digest(`${streamId}\u0000${input.operationKey}`)
+                .slice("sha256:".length)
+                .slice(0, 64)}`,
+              type: CONFIGURATION_CONVERSATION_EXCHANGE_EVENT,
+              payload,
+            },
+          ],
+        });
+        return;
+      } catch {
+        // Re-read to distinguish a concurrent idempotent append from storage failure.
+      }
+    }
+    throw unavailable("The Configuration Chat exchange could not be stored durably.");
+  }
+
+  async #loadStoredConversationExchange(
+    deviceId: string,
+    operationKey: string,
+    requestDigest: string,
+  ): Promise<ConfigurationAgentMessageResponse | undefined> {
+    let events: readonly StoredConfigurationConversationEvent[];
+    try {
+      events = await this.#eventStore.readStream(
+        conversationStreamId(deviceId, this.#adapter.adapterId),
+      );
+    } catch {
+      throw unavailable("The Configuration Chat history could not be read.");
+    }
+    const existing = findConversationExchange(events, operationKey);
+    if (existing === undefined) {
+      return undefined;
+    }
+    if (existing.requestDigest !== requestDigest) {
+      throw idempotencyConflict();
+    }
+    return structuredClone(existing.response);
+  }
+
+  async #assertNoInterruptedToolAttempt(
+    operationKey: string,
+    requestDigest: string,
+  ): Promise<void> {
+    let events: readonly {
+      readonly streamVersion: number;
+      readonly type: string;
+      readonly payload: unknown;
+    }[];
+    try {
+      events = await this.#eventStore.readStream(toolAttemptStreamId(operationKey));
+    } catch {
+      throw unavailable("The Configuration Agent tool-attempt state could not be read.");
+    }
+    if (events.length === 0) {
+      return;
+    }
+    if (
+      events.length !== 1 ||
+      events[0]?.streamVersion !== 1 ||
+      events[0].type !== CONFIGURATION_TOOL_ATTEMPT_EVENT
+    ) {
+      throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+    }
+    const payload = validateToolAttemptEventPayload(events[0].payload);
+    if (payload.requestDigest !== requestDigest) {
+      throw idempotencyConflict();
+    }
+    throw unavailable(
+      "A previous Configuration Agent attempt reached a deterministic tool without recording a final response. OpenDelegate did not replay it.",
+    );
+  }
+
+  async #recordToolAttempt(input: {
+    readonly operationKey: string;
+    readonly requestDigest: string;
+    readonly toolOperationId: string;
+    readonly tool: ConfigurationToolRequest["tool"];
+  }): Promise<void> {
+    const streamId = toolAttemptStreamId(input.operationKey);
+    const payload = {
+      schemaVersion: 1,
+      requestDigest: input.requestDigest,
+      toolOperationId: input.toolOperationId,
+      tool: input.tool,
+    } satisfies ConfigurationToolAttemptEventPayload;
+    try {
+      await this.#eventStore.append({
+        streamId,
+        expectedVersion: 0,
+        events: [
+          {
+            eventId: `event_${digest(`${streamId}\u0000${input.requestDigest}`)
+              .slice("sha256:".length)
+              .slice(0, 64)}`,
+            type: CONFIGURATION_TOOL_ATTEMPT_EVENT,
+            payload,
+          },
+        ],
+      });
+    } catch {
+      throw unavailable(
+        "The Configuration Agent tool-attempt boundary could not be stored durably.",
+      );
     }
   }
 
@@ -791,11 +1173,36 @@ function buildConfigurationPrompt(
     "Inspect before changing configuration. Use the returned revision in every later typed request. Never invent proposal, change-set, revision, or receipt identifiers.",
     "The Main-scoped boolean admin.open-on-login controls whether the owner-session helper opens the canonical Admin origin once per login session. It is discoverable through inspect and changeable through the normal propose/apply flow.",
     "After applying or rolling back admin.open-on-login, explain that the installed helper still needs the separately elevated service reconfigure flow. Configuration Chat never elevates or restarts native services.",
+    "autonomy.profile sets the broad proactive default: reactive, assisted, or autonomous. Each proactive category can independently inherit that profile or be disabled, proposed, or executed through autonomy.incident-recovery, autonomy.maintenance, autonomy.capability-expansion, autonomy.cleanup, autonomy.cost-incurring-work, and autonomy.general-improvement.",
+    "Explain proactive authority in outcome terms. A deterministic monitor may originate an ordinary auditable Task and Discord Forum post without continuously running an LLM. proposed creates a manual review Task; executed creates an auto Task, but Action Policy, approvals, budgets, resource locks, and Secret boundaries still apply. Never imply that autonomous mode bypasses them.",
+    'The Device-scoped agent.worker-profile is exactly {"schemaVersion":1,"mode":"auto"}, {"schemaVersion":1,"mode":"pinned","primary":{"provider":"codex|claude|generic","adapterId":"exact ID","modelId":"exact provider-native ID when the provider exposes models"}}, or {"schemaVersion":1,"mode":"prefer","primary":BINDING,"fallbacks":[BINDING,...]}. Prefer has no implicit fallback. Pinned fails closed.',
+    "The Main-scoped agent.coordinator-profile uses the same shape and controls Main planning only. Main's agent.worker-profile separately controls ordinary Work Orders executed by its co-located Worker. If the owner says Main Agent or Coordinator, change coordinator only; if they say work on Main, change the Worker profile; if they clearly say every Agent on Main, propose both changes in one diff.",
+    "A Coordinator model change on the active Main Agent Adapter applies to new Task sessions through configuration alone. A Coordinator provider or adapter change also requires the authenticated Main Agent reconfiguration flow and service restart; do not claim that changing agent.coordinator-profile by itself replaced the running Coordinator.",
+    "Resolve friendly model names only against the target Device's authoritative ready adapter model catalog below. Persist the exact modelId and adapterId; never invent, shorten, or transfer a model ID from another Device. If no exact unambiguous match exists, explain the available choices and ask one focused question.",
+    "Changing an Agent profile affects only new Task or workstream sessions. Existing native sessions and any checkpoint continuation created from them retain their recorded provider, adapter, and model binding. Explain this when it matters.",
+    'The Main-scoped discord.binding controls the live Discord Forum connection. Its value is null when disabled, or exactly {"schemaVersion":1,"enabled":true,"botTokenAlias":"opaque managed-store alias","forum":{"applicationId":"17-20 digit ID","botUserId":"17-20 digit ID","guildId":"17-20 digit ID","forumBindings":[{"channelId":"17-20 digit ID","workflowTagIds":{"done":"ID","failed":"ID","intake":"ID","review":"ID","running":"ID","waiting":"ID"}}],"ownerUserIds":["ID"],"allowedRoleIds":["ID"]}}.',
+    "Disable Discord by setting discord.binding to explicit null. Never unset this key; null is the durable disabled-state marker.",
+    "Adding another Forum means preserving the existing object and adding a distinct forumBindings entry. Replacing the bot, guild, or Forum means proposing the complete replacement object. Disabling means setting discord.binding to null. Durable Tasks and native Agent sessions remain in Main; Discord thread identities are not silently migrated.",
+    "A secure Discord token intake returns secret://main/ALIAS. Store only ALIAS as botTokenAlias after removing the exact secret://main/ prefix. Never put the token or the secret:// reference itself in discord.binding. Applying, replacing, or disabling Discord requires the normal owner Approval; the runtime validates the credential and installation and restores the previous binding if activation fails.",
+    "Approving a Configuration Approval executes that exact proposal immediately; the owner does not need to return to chat to trigger apply. If the owner says an Approval was completed, inspect current durable configuration first. Never submit apply again merely because the owner said approved. If inspection does not show the requested value, ask the owner to inspect that Approval's execution status and error instead of creating a replacement Approval blindly.",
+    "Guide Discord setup in dependency order: inspect the current binding; guide the owner through creating or selecting an Application and bot in the Discord Developer Portal; confirm the server has Community enabled and a Forum channel; confirm the required Gateway intents and least-privilege bot permissions; collect only missing non-secret Application, bot user, Guild, Forum, workflow tag, owner, and optional role IDs; direct token entry to the secure token form; then propose the complete discord.binding for Approval. Discord-side browser actions remain owner actions, so never claim you completed them.",
+    "Assume the owner may be creating a Discord bot for the first time. Use reassuring plain language, answer in the owner's language when it is evident, and define Application, bot, server or Guild, Forum, tag, and ID when each term first appears.",
+    "Before giving setup steps, explain the outcome: one Discord Forum post becomes one OpenDelegate Task, replies continue the same Task, and the Forum list plus workflow tags form a task dashboard. Inspect first, then summarize what is already connected and what is still missing without leading with raw configuration fields.",
+    "After inspection, give a brief roadmap of only the missing stages and clearly label the single current stage. Explain only that current stage in detail: where to go, what to do, why it is needed, how to verify it worked, and what, if anything, to send back to OpenDelegate. End with an explicit completion check and wait for the owner to confirm before advancing to the next stage. Do not present an unexplained wall of identifiers or a full manual in one response.",
+    "Use Discord's current setup boundaries accurately: create or select the Application in the Developer Portal; configure the bot and privileged MESSAGE_CONTENT toggle on its Bot page; configure Guild Install scopes and least-privilege permissions on Installation or OAuth2; open the resulting install link, add the bot to the selected server, and verify that it appears in the member list and can see the Forum; enable Community in Discord Server Settings before creating a Forum; create the workflow tags intake, running, waiting, review, done, and failed; then enable Developer Mode in User Settings > Advanced and use Copy ID for the required non-secret IDs. Explain that IDs are safe to provide in chat but the bot token is a secret and must only use the secure token form.",
+    "For Discord, explain that the OpenDelegate runtime uses the GUILDS, GUILD_MESSAGES, and MESSAGE_CONTENT Gateway intents, while only privileged MESSAGE_CONTENT needs the Developer Portal toggle for an unverified personal bot. Prefer VIEW_CHANNEL, READ_MESSAGE_HISTORY, SEND_MESSAGES, SEND_MESSAGES_IN_THREADS, ATTACH_FILES, and MANAGE_THREADS; explain the reason for each permission and request MANAGE_CHANNELS only when OpenDelegate must create or configure the Forum.",
+    "SQLite is the default and needs no database URI. Treat external PostgreSQL as an explicit owner opt-in. Before proposing database.adapter or database.uri-ref, explain that storing a URI or changing durable Configuration does not migrate the live database: the owner needs the supported backup/restore and service reconfiguration path. Never claim that the active database changed without a deterministic runtime receipt that proves it.",
     "Mutation claims must reference the exact successful durable receipt returned by OpenDelegate. Failed tool results prove that no requested mutation occurred.",
-    "Never request or repeat a raw secret, private key, enrollment grant, database URI, or Agent credential. Direct the owner to the platform secret-store flow instead.",
+    "Never request or repeat a raw secret, Discord bot token, private key, enrollment grant, database URI, or Agent credential. Direct the owner to the platform secret-store flow instead.",
+    "Device assessment is a separate deterministic Admin action. You cannot run it with any of your six tools and must never claim that you did.",
+    input.deviceObservation === undefined
+      ? "No deterministic Device observation was supplied. Ask the owner to run Assess device before making capability recommendations."
+      : `The following bounded Device observation is authoritative for this turn. Explain it when useful, but do not invent missing capabilities: ${JSON.stringify(input.deviceObservation)}`,
     "There is no generic shell, file-edit, network, or arbitrary tool in this conversation.",
+    'You may attach only these context-sensitive suggestedActions to a final response: "guide-discord", "guide-external-postgresql", "ingest-discord-bot-token", and "ingest-database-uri". These are owner-facing UI suggestions, not proof that any configuration changed.',
+    'Offer "guide-discord" or "guide-external-postgresql" only when that next conversation is relevant. Offer a secure ingest action only when its credential is the actual next missing value after explaining prerequisites. Never offer a Main-service action for a Worker Device.',
     "Do not expose private chain-of-thought.",
-    'When finished, return one exact JSON object and no Markdown fence: {"schemaVersion":1,"type":"final","content":"owner-visible response","claimReceiptIds":["every successful apply or rollback receipt, and no other receipt"]}.',
+    'When finished, return one exact JSON object and no Markdown fence: {"schemaVersion":1,"type":"final","content":"owner-visible response","claimReceiptIds":["every successful apply or rollback receipt, and no other receipt"],"suggestedActions":["zero or more context-sensitive actions from the allowlist"]}.',
     "",
     `Target Device ID: ${input.deviceId}`,
     `Owner message: ${input.message}`,
@@ -806,6 +1213,53 @@ function buildConfigurationPrompt(
   return prompt;
 }
 
+function buildConfigurationContinuationPrompt(
+  prompt: string,
+  messages: readonly ConfigurationAgentConversationMessageV1[],
+  maximumBytes: number,
+): string {
+  const prefix = [
+    "Native session recovery notice: the prior provider-native Configuration Agent session is unavailable.",
+    "Briefly tell the owner that you recovered in a new native session. Accepted visible owner messages and completed Agent responses are durable and supplied below; provider-only hidden context may still be unavailable.",
+    "Use the durable visible-conversation excerpt as context, but re-inspect durable configuration before proposing a change. Reconfirm any required value or choice that is absent from the excerpt.",
+  ];
+  const suffix = ["", "Complete current request:", prompt];
+  const fixedBytes = Buffer.byteLength(
+    [...prefix, "Durable visible conversation:", ...suffix].join("\n"),
+    "utf8",
+  );
+  let remainingBytes = maximumBytes - fixedBytes;
+  const selected: string[] = [];
+  let omitted = 0;
+  for (const message of [...messages].reverse()) {
+    const line = JSON.stringify({ role: message.role, content: message.content });
+    const bytes = Buffer.byteLength(`${line}\n`, "utf8");
+    if (bytes > remainingBytes) {
+      omitted += 1;
+      continue;
+    }
+    selected.unshift(line);
+    remainingBytes -= bytes;
+  }
+  const history =
+    selected.length === 0
+      ? [`No durable visible message fits the continuation budget; ${String(omitted)} omitted.`]
+      : [
+          ...selected,
+          ...(omitted === 0 ? [] : [`${String(omitted)} older message(s) omitted by budget.`]),
+        ];
+  const continuationPrompt = [
+    ...prefix,
+    "Durable visible conversation:",
+    ...history,
+    ...suffix,
+  ].join("\n");
+  if (Buffer.byteLength(continuationPrompt, "utf8") > maximumBytes) {
+    throw unavailable("The Configuration Agent continuation exceeds its prompt budget.");
+  }
+  return continuationPrompt;
+}
+
 function buildToolResultPrompt(
   result: ConfigurationAgentToolTurnResult,
   maximumBytes: number,
@@ -814,7 +1268,7 @@ function buildToolResultPrompt(
     "OpenDelegate executed the requested deterministic typed configuration tool.",
     "The following JSON is authoritative. A succeeded result is backed by the included durable receipt. A failed result made no requested configuration mutation.",
     JSON.stringify(result),
-    "Continue with one typed tool JSON object, or return the exact final JSON object. Never invent or alter identifiers. The final claimReceiptIds must contain every successful apply or rollback receipt and no other receipt.",
+    "Continue with one typed tool JSON object, or return the exact final JSON object. Never invent or alter identifiers. The final claimReceiptIds must contain every successful apply or rollback receipt and no other receipt. suggestedActions may contain only the documented context-sensitive UI suggestions.",
   ].join("\n");
   if (Buffer.byteLength(prompt, "utf8") > maximumBytes) {
     throw unavailable("The Configuration Agent tool result exceeds its prompt budget.");
@@ -841,7 +1295,14 @@ function parseConfigurationTurnResult(value: string | undefined): ConfigurationA
   }
   if (parsed["type"] === "final") {
     if (
-      !hasExactKeys(parsed, ["schemaVersion", "type", "content", "claimReceiptIds"]) ||
+      (!hasExactKeys(parsed, ["schemaVersion", "type", "content", "claimReceiptIds"]) &&
+        !hasExactKeys(parsed, [
+          "schemaVersion",
+          "type",
+          "content",
+          "claimReceiptIds",
+          "suggestedActions",
+        ])) ||
       typeof parsed["content"] !== "string" ||
       !Array.isArray(parsed["claimReceiptIds"]) ||
       parsed["claimReceiptIds"].length > 32
@@ -856,11 +1317,16 @@ function parseConfigurationTurnResult(value: string | undefined): ConfigurationA
     if (new Set(claimReceiptIds).size !== claimReceiptIds.length) {
       throw unavailable("The Configuration Agent returned duplicate mutation claims.");
     }
+    const suggestedActions =
+      parsed["suggestedActions"] === undefined
+        ? []
+        : parseSuggestedActions(parsed["suggestedActions"]);
     return {
       schemaVersion: 1,
       type: "final",
       content: parsed["content"],
       claimReceiptIds,
+      suggestedActions,
     };
   }
   if (!hasExactKeys(parsed, ["schemaVersion", "type", "toolCallId", "request"])) {
@@ -1073,6 +1539,27 @@ function finalizeOwnerResponse(
   return content;
 }
 
+function parseSuggestedActions(value: unknown): readonly ConfigurationAgentSuggestedActionV1[] {
+  if (!Array.isArray(value) || value.length > 4) {
+    throw unavailable("The Configuration Agent returned invalid suggested actions.");
+  }
+  const actions = value.map((action): ConfigurationAgentSuggestedActionV1 => {
+    if (
+      action !== "guide-discord" &&
+      action !== "guide-external-postgresql" &&
+      action !== "ingest-discord-bot-token" &&
+      action !== "ingest-database-uri"
+    ) {
+      throw unavailable("The Configuration Agent returned invalid suggested actions.");
+    }
+    return action;
+  });
+  if (new Set(actions).size !== actions.length) {
+    throw unavailable("The Configuration Agent returned duplicate suggested actions.");
+  }
+  return Object.freeze(actions);
+}
+
 function isRevision(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
@@ -1085,7 +1572,14 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
     typeof value["requestDigest"] !== "string" ||
     !/^sha256:[a-f0-9]{64}$/.test(value["requestDigest"]) ||
     !isRecord(value["response"]) ||
-    !hasExactKeys(value["response"], ["messageId", "sessionId", "content", "occurredAt"])
+    (!hasExactKeys(value["response"], ["messageId", "sessionId", "content", "occurredAt"]) &&
+      !hasExactKeys(value["response"], [
+        "messageId",
+        "sessionId",
+        "content",
+        "suggestedActions",
+        "occurredAt",
+      ]))
   ) {
     throw unavailable("The Configuration Agent response state is corrupt.");
   }
@@ -1093,10 +1587,200 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
   assertIdentifier(response["messageId"], "Message ID", 160);
   assertIdentifier(response["sessionId"], "Session ID", 160);
   assertIdentifier(response["content"], "Configuration Agent response", 32_768);
+  if (response["suggestedActions"] !== undefined) {
+    parseSuggestedActions(response["suggestedActions"]);
+  }
   if (typeof response["occurredAt"] !== "string" || !isRfc3339Instant(response["occurredAt"])) {
     throw unavailable("The Configuration Agent response state is corrupt.");
   }
   return structuredClone(value) as unknown as ConfigurationResponseEventPayload;
+}
+
+function validateConversationExchangeEvent(
+  event: StoredConfigurationConversationEvent,
+): ConfigurationConversationExchangeEventPayload {
+  if (
+    !Number.isSafeInteger(event.streamVersion) ||
+    event.streamVersion < 1 ||
+    event.type !== CONFIGURATION_CONVERSATION_EXCHANGE_EVENT ||
+    !isRecord(event.payload) ||
+    !hasExactKeys(event.payload, [
+      "schemaVersion",
+      "operationKey",
+      "requestDigest",
+      "ownerMessage",
+      "response",
+    ]) ||
+    event.payload["schemaVersion"] !== 1 ||
+    typeof event.payload["operationKey"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.payload["operationKey"]) ||
+    typeof event.payload["requestDigest"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.payload["requestDigest"]) ||
+    !isRecord(event.payload["ownerMessage"]) ||
+    !hasExactKeys(event.payload["ownerMessage"], ["messageId", "role", "content", "occurredAt"])
+  ) {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  const ownerMessage = event.payload["ownerMessage"];
+  assertIdentifier(ownerMessage["messageId"], "Configuration owner message ID", 160);
+  if (ownerMessage["role"] !== "owner") {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  assertIdentifier(ownerMessage["content"], "Configuration owner message", 8_192);
+  if (
+    typeof ownerMessage["occurredAt"] !== "string" ||
+    !isRfc3339Instant(ownerMessage["occurredAt"])
+  ) {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  const response = validateResponseEventPayload({
+    schemaVersion: 1,
+    requestDigest: event.payload["requestDigest"],
+    response: event.payload["response"],
+  }).response;
+  return {
+    schemaVersion: 1,
+    operationKey: event.payload["operationKey"],
+    requestDigest: event.payload["requestDigest"],
+    ownerMessage: structuredClone(ownerMessage) as ConfigurationAgentConversationMessageV1,
+    response,
+  };
+}
+
+function validateConversationOwnerMessageEvent(
+  event: StoredConfigurationConversationEvent,
+): ConfigurationConversationOwnerMessageEventPayload {
+  if (
+    !Number.isSafeInteger(event.streamVersion) ||
+    event.streamVersion < 1 ||
+    event.type !== CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT ||
+    !isRecord(event.payload) ||
+    !hasExactKeys(event.payload, [
+      "schemaVersion",
+      "operationKey",
+      "requestDigest",
+      "ownerMessage",
+    ]) ||
+    event.payload["schemaVersion"] !== 1 ||
+    typeof event.payload["operationKey"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.payload["operationKey"]) ||
+    typeof event.payload["requestDigest"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(event.payload["requestDigest"]) ||
+    !isRecord(event.payload["ownerMessage"]) ||
+    !hasExactKeys(event.payload["ownerMessage"], ["messageId", "role", "content", "occurredAt"])
+  ) {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  const ownerMessage = event.payload["ownerMessage"];
+  assertIdentifier(ownerMessage["messageId"], "Configuration owner message ID", 160);
+  if (ownerMessage["role"] !== "owner") {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  assertIdentifier(ownerMessage["content"], "Configuration owner message", 8_192);
+  if (
+    typeof ownerMessage["occurredAt"] !== "string" ||
+    !isRfc3339Instant(ownerMessage["occurredAt"])
+  ) {
+    throw unavailable("The Configuration Chat history is corrupt.");
+  }
+  return {
+    schemaVersion: 1,
+    operationKey: event.payload["operationKey"],
+    requestDigest: event.payload["requestDigest"],
+    ownerMessage: structuredClone(ownerMessage) as ConfigurationAgentConversationMessageV1,
+  };
+}
+
+function projectConversationTurns(
+  events: readonly StoredConfigurationConversationEvent[],
+): readonly ConfigurationConversationTurn[] {
+  const turns: ConfigurationConversationTurn[] = [];
+  const indexes = new Map<string, number>();
+  for (const event of events) {
+    const projected:
+      | ConfigurationConversationExchangeEventPayload
+      | ConfigurationConversationOwnerMessageEventPayload =
+      event.type === CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT
+        ? validateConversationOwnerMessageEvent(event)
+        : validateConversationExchangeEvent(event);
+    const existingIndex = indexes.get(projected.operationKey);
+    if (existingIndex === undefined) {
+      indexes.set(projected.operationKey, turns.length);
+      turns.push({
+        operationKey: projected.operationKey,
+        requestDigest: projected.requestDigest,
+        ownerMessage: structuredClone(projected.ownerMessage),
+        ...(isConversationExchange(projected)
+          ? { response: structuredClone(projected.response) }
+          : {}),
+      });
+      continue;
+    }
+    const existing = turns[existingIndex];
+    if (
+      existing === undefined ||
+      existing.requestDigest !== projected.requestDigest ||
+      JSON.stringify(existing.ownerMessage) !== JSON.stringify(projected.ownerMessage) ||
+      !isConversationExchange(projected) ||
+      existing.response !== undefined
+    ) {
+      throw unavailable("The Configuration Chat history is corrupt.");
+    }
+    turns[existingIndex] = {
+      ...existing,
+      response: structuredClone(projected.response),
+    };
+  }
+  return turns;
+}
+
+function isConversationExchange(
+  event:
+    | ConfigurationConversationExchangeEventPayload
+    | ConfigurationConversationOwnerMessageEventPayload,
+): event is ConfigurationConversationExchangeEventPayload {
+  return "response" in event;
+}
+
+function findConversationExchange(
+  events: readonly StoredConfigurationConversationEvent[],
+  operationKey: string,
+): ConfigurationConversationExchangeEventPayload | undefined {
+  return events
+    .filter((event) => event.type === CONFIGURATION_CONVERSATION_EXCHANGE_EVENT)
+    .map((event) => validateConversationExchangeEvent(event))
+    .find((exchange) => exchange.operationKey === operationKey);
+}
+
+function findConversationOwnerMessage(
+  events: readonly StoredConfigurationConversationEvent[],
+  operationKey: string,
+): ConfigurationConversationTurn | undefined {
+  return projectConversationTurns(events).find((turn) => turn.operationKey === operationKey);
+}
+
+function validateToolAttemptEventPayload(value: unknown): ConfigurationToolAttemptEventPayload {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["schemaVersion", "requestDigest", "toolOperationId", "tool"]) ||
+    value["schemaVersion"] !== 1 ||
+    typeof value["requestDigest"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(value["requestDigest"])
+  ) {
+    throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+  }
+  assertIdentifier(value["toolOperationId"], "Configuration tool operation ID", 160);
+  if (
+    value["tool"] !== "inspect" &&
+    value["tool"] !== "validate" &&
+    value["tool"] !== "propose" &&
+    value["tool"] !== "diff" &&
+    value["tool"] !== "apply" &&
+    value["tool"] !== "rollback"
+  ) {
+    throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+  }
+  return structuredClone(value) as unknown as ConfigurationToolAttemptEventPayload;
 }
 
 function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgentMessageInput {
@@ -1107,12 +1791,208 @@ function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgen
   assertIdentifier(input.principalId, "Principal ID", 160);
   assertIdentifier(input.idempotencyKey, "Idempotency key", 160);
   assertIdentifier(input.message, "Owner message", 8_192);
+  const deviceObservation =
+    input.deviceObservation === undefined
+      ? undefined
+      : validateDeviceObservation(input.deviceObservation);
   return {
     deviceId: input.deviceId,
     principalId: input.principalId,
     idempotencyKey: input.idempotencyKey,
     message: input.message,
+    ...(deviceObservation === undefined ? {} : { deviceObservation }),
   };
+}
+
+function validateDeviceObservation(
+  value: ConfigurationAgentMessageInput["deviceObservation"],
+): NonNullable<ConfigurationAgentMessageInput["deviceObservation"]> {
+  if (
+    !isRecord(value) ||
+    (value.osFamily !== "linux" && value.osFamily !== "macos" && value.osFamily !== "windows") ||
+    (value.role !== "main" && value.role !== "worker") ||
+    (value.knowledgeHealth !== "healthy" &&
+      value.knowledgeHealth !== "degraded" &&
+      value.knowledgeHealth !== "unknown") ||
+    !Array.isArray(value.capabilities) ||
+    !Array.isArray(value.agentAdapters)
+  ) {
+    throw unavailable("The Device observation supplied to Configuration Agent is invalid.");
+  }
+  const observedAtMs = optionalObservationTime(value.observedAtMs);
+  assertIdentifier(value.name, "Observed Device name", 256);
+  assertIdentifier(value.platformRelease, "Observed platform release", 256);
+  assertIdentifier(value.architecture, "Observed architecture", 256);
+  const capabilities = value.capabilities.map((capability) =>
+    sanitizeObservedCapability(capability),
+  );
+  const agentAdapters = value.agentAdapters.map((adapter) => sanitizeObservedAgentAdapter(adapter));
+  if (
+    (value.agentExecutionProfile !== undefined &&
+      !isAgentExecutionProfile(value.agentExecutionProfile)) ||
+    (value.coordinatorAgentExecutionProfile !== undefined &&
+      !isAgentExecutionProfile(value.coordinatorAgentExecutionProfile))
+  ) {
+    throw unavailable("The Device Agent Execution Profile observation is invalid.");
+  }
+  const sanitized: NonNullable<ConfigurationAgentMessageInput["deviceObservation"]> = {
+    name: value.name,
+    osFamily: value.osFamily,
+    platformRelease: value.platformRelease,
+    architecture: value.architecture,
+    role: value.role,
+    ...(observedAtMs === undefined ? {} : { observedAtMs }),
+    capabilities,
+    agentAdapters,
+    ...(value.agentExecutionProfile === undefined
+      ? {}
+      : { agentExecutionProfile: structuredClone(value.agentExecutionProfile) }),
+    ...(value.coordinatorAgentExecutionProfile === undefined
+      ? {}
+      : {
+          coordinatorAgentExecutionProfile: structuredClone(value.coordinatorAgentExecutionProfile),
+        }),
+    knowledgeHealth: value.knowledgeHealth,
+  };
+  if (Buffer.byteLength(JSON.stringify(sanitized), "utf8") > 64 * 1024) {
+    throw unavailable("The Device observation supplied to Configuration Agent is too large.");
+  }
+  return sanitized;
+}
+
+function sanitizeObservedCapability(
+  value: unknown,
+): NonNullable<ConfigurationAgentMessageInput["deviceObservation"]>["capabilities"][number] {
+  if (
+    !isRecord(value) ||
+    (value.verification !== "detected" &&
+      value.verification !== "verified" &&
+      value.verification !== "degraded" &&
+      value.verification !== "unavailable" &&
+      value.verification !== "disabled") ||
+    (value.evidenceSource !== undefined &&
+      value.evidenceSource !== "agent-adapter" &&
+      value.evidenceSource !== "capability-probe" &&
+      value.evidenceSource !== "workspace-registry")
+  ) {
+    throw unavailable("The Device capability observation is invalid.");
+  }
+  const observedAtMs = optionalObservationTime(value.observedAtMs);
+  assertIdentifier(value.name, "Observed capability name", 256);
+  if (value.version !== undefined) {
+    assertIdentifier(value.version, "Observed capability version", 256);
+  }
+  return {
+    name: value.name,
+    verification: value.verification,
+    ...(observedAtMs === undefined ? {} : { observedAtMs }),
+    ...(value.evidenceSource === undefined ? {} : { evidenceSource: value.evidenceSource }),
+    ...(value.version === undefined ? {} : { version: value.version }),
+  };
+}
+
+function sanitizeObservedAgentAdapter(
+  value: unknown,
+): NonNullable<ConfigurationAgentMessageInput["deviceObservation"]>["agentAdapters"][number] {
+  if (
+    !isRecord(value) ||
+    (value.provider !== "codex" &&
+      value.provider !== "claude" &&
+      value.provider !== "generic-command") ||
+    (value.readiness !== "ready" &&
+      value.readiness !== "degraded" &&
+      value.readiness !== "unavailable") ||
+    (value.compatibility !== "tested" &&
+      value.compatibility !== "compatible" &&
+      value.compatibility !== "untested" &&
+      value.compatibility !== "incompatible") ||
+    typeof value.observedAtMs !== "number" ||
+    !Number.isSafeInteger(value.observedAtMs) ||
+    value.observedAtMs < 0
+  ) {
+    throw unavailable("The Device Agent Adapter observation is invalid.");
+  }
+  assertIdentifier(value.adapterId, "Observed Agent Adapter ID", 160);
+  if (value.version !== undefined) {
+    assertIdentifier(value.version, "Observed Agent Adapter version", 256);
+  }
+  const modelCatalogObservedAtMs = optionalObservationTime(value.modelCatalogObservedAtMs);
+  const models = value.models === undefined ? undefined : sanitizeObservedAgentModels(value.models);
+  if ((modelCatalogObservedAtMs === undefined) !== (models === undefined)) {
+    throw unavailable("The Device Agent model catalog observation is incomplete.");
+  }
+  return {
+    provider: value.provider,
+    adapterId: value.adapterId,
+    readiness: value.readiness,
+    compatibility: value.compatibility,
+    ...(value.version === undefined ? {} : { version: value.version }),
+    observedAtMs: value.observedAtMs,
+    ...(modelCatalogObservedAtMs === undefined
+      ? {}
+      : { modelCatalogObservedAtMs, models: models! }),
+  };
+}
+
+function sanitizeObservedAgentModels(
+  value: unknown,
+): NonNullable<
+  NonNullable<
+    ConfigurationAgentMessageInput["deviceObservation"]
+  >["agentAdapters"][number]["models"]
+> {
+  if (!Array.isArray(value) || value.length > 128) {
+    throw unavailable("The Device Agent model catalog is invalid.");
+  }
+  const seen = new Set<string>();
+  return value.map((model) => {
+    if (!isRecord(model)) {
+      throw unavailable("The Device Agent model catalog is invalid.");
+    }
+    assertIdentifier(model.modelId, "Observed Agent model ID", 256);
+    assertIdentifier(model.displayName, "Observed Agent model display name", 256);
+    if (seen.has(model.modelId)) {
+      throw unavailable("The Device Agent model catalog contains duplicate IDs.");
+    }
+    seen.add(model.modelId);
+    if (model.isDefault !== undefined && typeof model.isDefault !== "boolean") {
+      throw unavailable("The Device Agent model default marker is invalid.");
+    }
+    const supportedEfforts =
+      model.supportedEfforts === undefined
+        ? undefined
+        : sanitizeObservedEfforts(model.supportedEfforts);
+    return {
+      modelId: model.modelId,
+      displayName: model.displayName,
+      ...(model.isDefault === undefined ? {} : { isDefault: model.isDefault }),
+      ...(supportedEfforts === undefined ? {} : { supportedEfforts }),
+    };
+  });
+}
+
+function sanitizeObservedEfforts(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 32) {
+    throw unavailable("The Device Agent model effort catalog is invalid.");
+  }
+  const efforts = value.map((effort) => {
+    assertIdentifier(effort, "Observed Agent model effort", 160);
+    return effort;
+  });
+  if (new Set(efforts).size !== efforts.length) {
+    throw unavailable("The Device Agent model effort catalog contains duplicates.");
+  }
+  return efforts;
+}
+
+function optionalObservationTime(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw unavailable("The Device observation time is invalid.");
+  }
+  return value;
 }
 
 function assertAdapter(adapter: AgentAdapter): void {
@@ -1263,12 +2143,22 @@ function configurationSessionKey(targetDeviceId: string, adapterId: string): str
   return `configuration:${targetDeviceId}:${adapterId}`;
 }
 
+function conversationStreamId(targetDeviceId: string, adapterId: string): string {
+  return `configuration-conversation:${digest(`${targetDeviceId}\u0000${adapterId}`).slice(
+    "sha256:".length,
+  )}`;
+}
+
 function configurationTaskId(targetDeviceId: string): string {
   return `configuration:${targetDeviceId}`;
 }
 
 function responseStreamId(operationKey: string): string {
   return `configuration-response:${operationKey.slice("sha256:".length)}`;
+}
+
+function toolAttemptStreamId(operationKey: string): string {
+  return `configuration-tool-attempt:${operationKey.slice("sha256:".length)}`;
 }
 
 function configurationToolOperationId(operationKey: string, toolCallId: string): string {

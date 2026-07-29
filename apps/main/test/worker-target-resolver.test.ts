@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { DeviceCandidate } from "@opendelegate/scheduler";
 
 import {
+  type AgentAwareWorkerCandidate,
   DeterministicWorkerTargetResolver,
   type WorkerCandidateSource,
 } from "../src/worker-target-resolver.ts";
@@ -131,7 +132,213 @@ test("an explicit Agent provider requirement is a mechanical scheduling gate", a
   assert.equal(selected.deviceId, "device-claude");
 });
 
-function source(candidates: readonly DeviceCandidate[]): WorkerCandidateSource {
+test("a Device profile resolves one exact adapter and model into the dispatch target", async () => {
+  const resolver = new DeterministicWorkerTargetResolver({
+    candidates: source([
+      {
+        ...candidate("device-nas", {
+          capabilities: [{ name: "claude-code", verification: "verified" }],
+        }),
+        agentExecutionProfile: {
+          schemaVersion: 1,
+          mode: "pinned",
+          primary: {
+            provider: "claude",
+            adapterId: "claude-agent-sdk",
+            modelId: "claude-opus-5",
+          },
+        },
+        agentAdapters: [
+          {
+            provider: "claude",
+            adapterId: "claude-agent-sdk",
+            readiness: "ready",
+            compatibility: "tested",
+            models: [{ modelId: "claude-opus-5", isDefault: true }],
+          },
+        ],
+      },
+    ]),
+  });
+
+  const selected = await resolver.resolve({
+    task: task(),
+    workOrder: { ...workOrder(), requiredCapabilities: [] },
+    previousRuns: [],
+    signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(selected.agentRequirement, {
+    provider: "claude",
+    adapterId: "claude-agent-sdk",
+    modelId: "claude-opus-5",
+    allowedCompatibilities: ["tested"],
+  });
+});
+
+test("a Prefer profile falls back in declared order when its primary binding is unavailable", async () => {
+  const resolver = new DeterministicWorkerTargetResolver({
+    candidates: source([
+      {
+        ...candidate("device-prefer"),
+        agentExecutionProfile: {
+          schemaVersion: 1,
+          mode: "prefer",
+          primary: {
+            provider: "codex",
+            adapterId: "codex-app-server",
+            modelId: "gpt-primary",
+          },
+          fallbacks: [
+            {
+              provider: "codex",
+              adapterId: "codex-cli",
+              modelId: "gpt-fallback",
+            },
+            {
+              provider: "claude",
+              adapterId: "claude-cli",
+              modelId: "claude-fallback",
+            },
+          ],
+        },
+        agentAdapters: [
+          {
+            provider: "codex",
+            adapterId: "codex-app-server",
+            readiness: "degraded",
+            compatibility: "tested",
+            models: [{ modelId: "gpt-primary", isDefault: true }],
+          },
+          {
+            provider: "codex",
+            adapterId: "codex-cli",
+            readiness: "ready",
+            compatibility: "tested",
+            models: [{ modelId: "gpt-fallback", isDefault: true }],
+          },
+          {
+            provider: "claude",
+            adapterId: "claude-cli",
+            readiness: "ready",
+            compatibility: "tested",
+            models: [{ modelId: "claude-fallback", isDefault: true }],
+          },
+        ],
+      },
+    ]),
+  });
+
+  const selected = await resolver.resolve({
+    task: task(),
+    workOrder: workOrder(),
+    previousRuns: [],
+    signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(selected.agentRequirement, {
+    provider: "codex",
+    adapterId: "codex-cli",
+    modelId: "gpt-fallback",
+    allowedCompatibilities: ["tested"],
+  });
+});
+
+test("a Pinned profile fails closed when it conflicts with a Work Order hard requirement", async () => {
+  const resolver = new DeterministicWorkerTargetResolver({
+    candidates: source([
+      {
+        ...candidate("device-conflict", {
+          capabilities: [
+            { name: "codex", verification: "verified" },
+            { name: "claude-code", verification: "verified" },
+          ],
+        }),
+        agentExecutionProfile: {
+          schemaVersion: 1,
+          mode: "pinned",
+          primary: {
+            provider: "claude",
+            adapterId: "claude-agent-sdk",
+            modelId: "claude-opus",
+          },
+        },
+        agentAdapters: [
+          {
+            provider: "codex",
+            adapterId: "codex-app-server",
+            readiness: "ready",
+            compatibility: "tested",
+            models: [{ modelId: "gpt-required", isDefault: true }],
+          },
+          {
+            provider: "claude",
+            adapterId: "claude-agent-sdk",
+            readiness: "ready",
+            compatibility: "tested",
+            models: [{ modelId: "claude-opus", isDefault: true }],
+          },
+        ],
+      },
+    ]),
+  });
+
+  await assert.rejects(
+    resolver.resolve({
+      task: task(),
+      workOrder: {
+        ...workOrder(),
+        requiredAgent: {
+          provider: "codex",
+          adapterId: "codex-app-server",
+          modelId: "gpt-required",
+          allowedCompatibilities: ["tested"],
+        },
+      },
+      previousRuns: [],
+      signal: new AbortController().signal,
+    }),
+    {
+      code: "AGENT_BINDING_UNAVAILABLE",
+      retryable: true,
+    },
+  );
+});
+
+test("automatic first-class Agent selection fails closed without a verified model catalog", async () => {
+  const resolver = new DeterministicWorkerTargetResolver({
+    candidates: source([
+      {
+        ...candidate("device-model-catalog-missing"),
+        agentExecutionProfile: { schemaVersion: 1, mode: "auto" },
+        agentAdapters: [
+          {
+            provider: "codex",
+            adapterId: "codex-app-server",
+            readiness: "ready",
+            compatibility: "tested",
+            models: [],
+          },
+        ],
+      },
+    ]),
+  });
+
+  await assert.rejects(
+    resolver.resolve({
+      task: task(),
+      workOrder: workOrder(),
+      previousRuns: [],
+      signal: new AbortController().signal,
+    }),
+    {
+      code: "AGENT_BINDING_UNAVAILABLE",
+      retryable: true,
+    },
+  );
+});
+
+function source(candidates: readonly AgentAwareWorkerCandidate[]): WorkerCandidateSource {
   return {
     list: async () => structuredClone(candidates),
   };

@@ -3,14 +3,50 @@
 언어: [English](README.md) · **[한국어](README.ko.md)** · [日本語](README.ja.md) ·
 [Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md)
 
-OpenDelegate는 하나의 고정 Main Device와 여러 macOS, Windows, Linux Device에서 AI Agent를 조율하기
-위한 개인용 셀프 호스팅 Control Plane입니다.
+**Discord에서 원하는 결과만 말하세요. 실행 위치와 방법은 OpenDelegate가 결정합니다.** 휴대폰이나
+노트북이 꺼져도 고정된 상시 가동 Main이 macOS, Windows, Linux 작업을 조율합니다.
 
 > [!TIP]
-> **여기서 시작하세요:** [빠른 시작](#빠른-시작) ·
+> **여기서 시작하세요:** [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요) ·
+> [상세 설정](#상세-설정) ·
 > [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
 
-## 빠른 시작
+## 권장 설치: Agent에게 맡기세요
+
+**가장 짧고 권장되는 방법입니다. OpenDelegate 명령어부터 배울 필요가 없습니다.**
+
+1. 고정된 상시 가동 **Main Device**로 사용할 컴퓨터로 갑니다.
+2. 그 컴퓨터에서 Codex나 Claude 같은 유능한 로컬 Agent를 열고 이 저장소 URL을 줍니다.
+3. 다음과 같이 말합니다.
+
+   > 이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 저장소의
+   > Main 설치 지침을 직접 찾아 따르고, 안전하게 할 수 있는 일은 모두 처리해 줘. 내 결정이나 Owner
+   > 전용 보안 작업이 필요할 때만 질문해 줘. 인증 정보, Token 등 비밀값을 채팅에 붙여 넣으라고 하지
+   > 말고 Provider의 기본 인증 절차나 OpenDelegate 보안 입력 화면으로 안내해 줘. Admin Web이 열려서
+   > 나머지 설정을 마칠 수 있을 때까지 계속 진행해 줘.
+
+4. Agent가 묻는 내용에 답합니다. Agent는 저장소의 init skill을 스스로 찾고, 소스와 Release
+   Bundle을 구분하고, 지원 상태를 확인하고, Runtime 데이터를 Checkout 밖에 보관하며, 사용자가 이
+   README를 Shell 명령으로 옮겨 적지 않아도 Admin Web을 실행합니다.
+
+Admin Web이 열리면 우측 **Configuration Chat**에서 계속 설정하세요. 이미 설정된 내용을 먼저
+확인해 달라고 한 뒤, Device 평가, 내장 SQLite 또는 외부 PostgreSQL, Codex와 Claude, Discord
+Forum, 연결 Route, Agent Model, Artifact 공개 방식, Service 시작 방식, 추가 Device까지 자연어로
+안내해 달라고 하면 됩니다. OpenDelegate는 사용자가 모든 설정 화면을 직접 찾아다니게 하지 않고,
+대화 안에서 검토 가능한 구조화된 변경안을 보여 줍니다.
+
+![Device 평가와 Configuration Chat이 열린 OpenDelegate Admin Web](docs/design/admin-configuration-chat-implemented.png)
+
+_결정론적 Browser Fixture에서 캡처한 현재 Admin Web입니다. 먼저 **장치 평가**를 실행한 뒤 나머지
+설정은 Configuration Chat에서 진행하세요. 상단 배너는 이 Source Build가 지원되지 않는다는 사실을
+정확히 표시하며, 이 이미지는 실제 Platform 또는 Release 증거가 아닙니다._
+
+SQLite는 별도 URI가 필요 없는 기본 로컬 Database입니다. Provider 인증 정보나 Discord Token은
+채팅에 입력하지 마세요. 실제로 필요할 때 Configuration Chat이 이유를 설명하고 전용 보안 입력
+Form을 띄웁니다. Main 설정이 끝나면 **Device 추가**에서 일회용 Grant를 발급하고, 추가 컴퓨터의
+Agent에게 전달하세요. 그 Agent가 Worker Join 지침을 스스로 찾아 진행합니다.
+
+## 상세 설정
 
 > [!WARNING]
 > 이 저장소는 지원되는 릴리스가 아니라 **지원되지 않는 내부 프리뷰**를 빌드합니다. 실제
@@ -20,36 +56,48 @@ OpenDelegate는 하나의 고정 Main Device와 여러 macOS, Windows, Linux Dev
 
 OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run start`는 없습니다.
 
-1. 운영체제와 아키텍처에 맞는 bundle을 준비하고, 신뢰할 수 있는 배포 채널에서 bundle과 별도로 받은
-   digest로 `SHA256SUMS`를 검증합니다. 현재 저장소가 만드는 것은 명시적으로 표시된 내부 프리뷰
-   bundle뿐입니다. [내부 프리뷰 빌드](#내부-프리뷰-빌드)를 참고하십시오.
-2. Discord를 사용하려면 [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따라 최초 Main 초기화
-   전에 완전한 Binding을 준비합니다. 현재 프리뷰는 초기화 후 Binding을 추가하거나 교체할 수
-   없습니다.
-3. 압축을 푼 bundle 디렉터리를 Codex 또는 Claude에서 열고 다음 문장을 그대로 보냅니다: _“Read
-   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
-   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
-   if a required safety check fails.”_
+1. Main으로 사용할 컴퓨터에서 이 저장소 URL을 Codex 또는 Claude에게 주십시오. 이미 지원되는 플랫폼
+   bundle이 있다면 압축을 푼 디렉터리를 대신 여십시오. Agent가 소스와 bundle을 구분하고
+   `supportStatus`와 `SHA256SUMS`를 확인합니다. 현재 소스는 표시된
+   [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
+2. [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요)의 문장을 보냅니다. Agent가
+   `AGENTS.md`와 `skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가 내부 파일 구조를
+   알 필요가 없습니다.
+3. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
+   Forum Binding을 추가·교체·확장·비활성화할 수 있습니다. 필요한 App, Forum, Tag, Permission은
+   [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따르세요.
 4. Agent의 안내에 따라 Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
-5. Admin Web 우측 하단의 Configuration Chat에서 Device, Agent, Route, Artifact 설정과 미리 준비한
-   Discord 상태를 검토합니다.
+5. Admin Web에서 **장치 평가**를 먼저 실행하고 Codex, Claude, 브라우저 자동화, Computer Use,
+   Knowledge의 결정론적 결과를 확인한 뒤 우측 하단 Configuration Chat에서 Device, Agent, Route,
+   Artifact와 선택적 Discord 설정을 마칩니다. Provider 자격 증명은 채팅에 입력하지 않으며,
+   Discord 토큰은 보안 인증 정보 패널에만 입력합니다.
 6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
    파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
-   `skills/opendelegate-join/SKILL.md`를 따르도록 요청합니다.
+   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent가 `skills/opendelegate-join/SKILL.md`를
+   스스로 찾습니다.
 7. Discord를 설정했다면 독립된 Task마다 Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은
    동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
    Discord를 사용하지 않거나 사용할 수 없으면 **Admin Web → Tasks → 새 작업**에서 만듭니다.
+
+각 Device의 기본값은 **Agent 실행 → 자동**입니다. Device 화면에서 **우선** 또는 **고정**을
+선택하거나 해당 Device의 Configuration Chat에 _“이 NAS에서는 Claude Opus를 사용해 줘”_라고
+말할 수 있습니다. Mac Studio 화면에서는 원하는 GPT 모델을 같은 방식으로 설정합니다.
+OpenDelegate는 각 요청을 해당 Device의 검증된 모델 카탈로그와 대조해 정확한 Provider-native
+모델 ID를 검토용으로 보여 주며, 변경은 새 native Session부터 적용합니다.
 
 Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
 [전체 설정 가이드(영문)](docs/GETTING_STARTED.md)를 참고하십시오.
 
 ## OpenDelegate를 만드는 이유
 
-휴대폰이나 컴퓨터에서 Task를 만들면 Main Agent가 이를 Work Order로 나누고, 해당 Work Order를 수행할
-수 있는 Device로 전달합니다. 사용자는 Agent 세션을 하나씩 다시 열지 않아도 지속성 있고 점검 가능한
-하나의 결과를 받을 수 있습니다.
+휴대폰이나 컴퓨터에서 배치 계획이 아니라 원하는 결과를 말하십시오. Main Agent는 필요하면 Windows
+개발, macOS 빌드·서명, Linux 배포로 나누고 실제 Device와 Route는 결정론적 스케줄러가 고릅니다.
 
 - Discord Forum 게시글 하나는 지속성 있는 Task 하나와 하나의 컨텍스트 경계에 대응합니다.
+- 선택적 결정론적 모니터는 장애나 개선 사항을 동일한 일반 Forum 기반 Task로 만들 수 있습니다.
+  카테고리별로 비활성화, 검토 제안, 자동 실행을 선택해도 Policy, 승인, 예산, 감사는 우회하지 않습니다.
+- 명령을 보낸 휴대폰이나 노트북은 연결을 끊어도 됩니다. 현재 작업에 필요한 고정 Main과 Device만
+  사용 가능하면 됩니다.
 - 결정론적 소프트웨어가 ID, Policy, 상태, 라우팅, Lease, 재시도, 영속성, 상태 전이를 담당합니다.
   Agent는 의미론적 판단과 할당된 작업을 담당합니다.
 - Worker는 Main에만 연결됩니다. NxN SSH 메시나 데이터베이스 직접 접근은 필요하지 않습니다.
@@ -57,7 +105,9 @@ Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
   세션은 재개할 수 있습니다.
 - 각 Device는 선택적으로 사용하는 연결된 Markdown Knowledge를 로컬에 보관합니다. Main은 파일명,
   제목, 링크, 그래프, 인덱스, 스니펫 또는 내용을 절대 전달받지 않습니다.
-- 풍부한 결과물은 명시적인 노출 Policy에 따라 Main이 제공하는 Artifact가 될 수 있습니다.
+- 결과는 Discord 응답·첨부, 파일, Artifact, 호스팅 화면 또는 검증된 Git 참조로 받을 수 있습니다.
+- 로그인, MFA, CAPTCHA, 법적 확인 또는 OS 권한이 필요하면 같은 Task가 Main을 통한 만료·취소 가능한
+  Owner Handoff에서 잠시 멈췄다가 사용자의 응답 후 이어집니다.
 
 ## 아키텍처
 
@@ -173,7 +223,7 @@ Claim/Login, Session-cookie Round-trip 및 정상 종료에 대한 제한된 Smo
 Destination 이름에는 `internal-preview`가 포함되어야 합니다. 생성된 `INTERNAL_PREVIEW.md`와
 `release-metadata.json`에는 Bundle이 지원되지 않는다는 사실과 정확한 Release Evidence 상태가
 기록됩니다. Discord와 기타 Owner 선택이 지속성 있는 Main 설정 생성 전에 모두 확정되도록, 조립된
-Bundle은 위의 Agent-first [빠른 시작](#빠른-시작)을 통해서만 초기화하십시오. 내부 프리뷰는
+Bundle은 위의 Agent-first [권장 설치](#권장-설치-agent에게-맡기세요)를 통해서만 초기화하십시오. 내부 프리뷰는
 Foreground에서 실행되고 지속성 있는 OS 서비스를 설치하지 않으며 Release Tag로 게시해서는 안 됩니다.
 
 인수 기준이 하나라도 미완료이면 프로덕션 빌드는 의도적으로 실패합니다.
@@ -241,9 +291,12 @@ pnpm dev:admin
 Launcher를 사용하십시오.
 
 Codex와 Claude 인증은 기본적으로 각 OpenDelegate Device의 `state/providers/codex` 및
-`state/providers/claude`에 격리됩니다. 설정이 끝나면 바로 그 controlled home에서 대화형으로
-인증하십시오. OpenDelegate는 사용자의 전역 provider home에서 로그인을 복사하거나 상속하지 않으며,
-first-class provider Run은 자격 증명 환경 변수를 거부합니다.
+`state/providers/claude`에 격리됩니다. Owner는 Main init에서
+`--codex-home ABSOLUTE_PATH` 또는 `--claude-home ABSOLUTE_PATH`를 지정해 기존 로컬 Provider
+디렉터리를 명시적인 공유 SSOT로 사용할 수 있습니다. OpenDelegate는 로그인 정보를 복사하지 않고
+그 경로를 저장하며, 실행과 장치 평가에 같은 home을 사용합니다. Provider 설정, 플러그인, 캐시 및
+native session 저장소는 공유되지만 각 Task는 계속 별도의 native session을 사용합니다. 전역 home을
+암묵적으로 상속하지는 않습니다.
 
 ## 저장소 구성
 

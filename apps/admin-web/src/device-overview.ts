@@ -76,12 +76,62 @@ export function mapDeviceOverview(device: DeviceSummary): DeviceOverviewViewMode
       ),
     ),
     agentAdapters: Object.freeze(
-      [...(device.agentAdapters ?? [])].sort(
-        (left, right) =>
-          left.provider.localeCompare(right.provider, "en") ||
-          left.adapterId.localeCompare(right.adapterId, "en"),
-      ),
+      [...(device.agentAdapters ?? [])]
+        .sort(
+          (left, right) =>
+            left.provider.localeCompare(right.provider, "en") ||
+            left.adapterId.localeCompare(right.adapterId, "en"),
+        )
+        .map((adapter) =>
+          Object.freeze({
+            provider: adapter.provider,
+            adapterId: adapter.adapterId,
+            ...(adapter.version === undefined ? {} : { version: adapter.version }),
+            readiness: adapter.readiness,
+            compatibility: adapter.compatibility,
+            observedAtMs: adapter.observedAtMs,
+            ...(adapter.modelCatalogObservedAtMs === undefined
+              ? {}
+              : { modelCatalogObservedAtMs: adapter.modelCatalogObservedAtMs }),
+            models: Object.freeze(
+              (adapter.models ?? []).map((model) =>
+                Object.freeze({
+                  modelId: model.modelId,
+                  displayName: model.displayName,
+                  isDefault: model.isDefault === true,
+                  supportedEfforts: Object.freeze([...(model.supportedEfforts ?? [])]),
+                }),
+              ),
+            ),
+          }),
+        ),
     ),
+    agentExecutionProfile: cloneAgentExecutionProfile(device.agentExecutionProfile),
+    ...(device.coordinatorAgentExecutionProfile === undefined
+      ? {}
+      : {
+          coordinatorAgentExecutionProfile: cloneAgentExecutionProfile(
+            device.coordinatorAgentExecutionProfile,
+          ),
+        }),
+    ...(main
+      ? {}
+      : {
+          wakeOnLan: Object.freeze(
+            device.wakeOnLan === undefined
+              ? {
+                  targetState: "unknown" as const,
+                  automaticWakeState: "unknown" as const,
+                  historical: false,
+                }
+              : {
+                  targetState: device.wakeOnLan.targetState,
+                  automaticWakeState: device.wakeOnLan.automaticWakeState,
+                  observedAtMs: device.wakeOnLan.observedAtMs,
+                  historical: !connectionOnline,
+                },
+          ),
+        }),
     routes: mapRoutes(device.routes, main),
     resourceLocks: Object.freeze(
       [...(device.resourceLocks ?? [])]
@@ -128,10 +178,35 @@ export function mapDeviceOverview(device: DeviceSummary): DeviceOverviewViewMode
     knowledge: knowledgeStatus(device.knowledgeHealth),
     configurationSession: {
       assistantMessage:
-        "I have not assessed this Device yet. Ask me to detect agent tools, browser automation, Computer Use readiness, or local Knowledge health before I propose changes.",
+        device.lastObservation?.source === "local-assessment"
+          ? builtInText(
+              "Device assessment is current. I can now explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. Provider credentials must stay out of messages.",
+              "configurationAssessmentReadyIntro",
+            )
+          : builtInText(
+              "Start with Assess device. I can then explain the observed Codex, Claude, browser automation, Computer Use, and local Knowledge status and help you propose Roles or Instructions. I cannot run the assessment from chat, and provider credentials must stay out of messages.",
+              "configurationAssessmentIntro",
+            ),
       proposal: null,
     },
   };
+}
+
+function cloneAgentExecutionProfile(
+  profile: DeviceSummary["agentExecutionProfile"],
+): DeviceOverviewViewModel["agentExecutionProfile"] {
+  if (profile === undefined || profile.mode === "auto") {
+    return { schemaVersion: 1, mode: "auto" };
+  }
+  const primary = { ...profile.primary };
+  return profile.mode === "pinned"
+    ? { schemaVersion: 1, mode: "pinned", primary }
+    : {
+        schemaVersion: 1,
+        mode: "prefer",
+        primary,
+        fallbacks: profile.fallbacks.map((binding) => ({ ...binding })),
+      };
 }
 
 function mapFacts(

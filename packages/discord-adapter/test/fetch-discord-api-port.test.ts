@@ -31,7 +31,7 @@ test("the HTTP port verifies Application, Community Forum, intents, tags, and ef
       owner_id: "100000000000000099",
       features: ["COMMUNITY"],
     }),
-    [`GET /api/v10/guilds/${GUILD_ID}/members/@me`]: json({
+    [`GET /api/v10/guilds/${GUILD_ID}/members/${BOT_USER_ID}`]: json({
       user: { id: BOT_USER_ID, bot: true },
       roles: ["100000000000000010"],
     }),
@@ -172,6 +172,99 @@ test("the HTTP port paginates archived threads and messages with bounded oldest-
   );
 });
 
+test("the HTTP port accepts Discord's omitted applied_tags field for a tagless Forum thread", async () => {
+  const taglessThread = rawThread(THREAD_ID, false, "2026-07-24T00:00:00.000Z") as Record<
+    string,
+    unknown
+  >;
+  delete taglessThread["applied_tags"];
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("tagless-thread-secret"),
+    fetch: routeFetch([], {
+      [`GET /api/v10/guilds/${GUILD_ID}/threads/active`]: json({
+        threads: [taglessThread],
+      }),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:tagless",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const threads = await api.listActiveThreads(GUILD_ID);
+
+  assert.equal(threads.length, 1);
+  assert.deepEqual(threads[0]?.appliedTagIds, []);
+});
+
+test("the HTTP port still rejects a present null applied_tags field", async () => {
+  const malformedThread = rawThread(THREAD_ID, false, "2026-07-24T00:00:00.000Z") as Record<
+    string,
+    unknown
+  >;
+  malformedThread["applied_tags"] = null;
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("malformed-tag-secret"),
+    fetch: routeFetch([], {
+      [`GET /api/v10/guilds/${GUILD_ID}/threads/active`]: json({
+        threads: [malformedThread],
+      }),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:malformed-tag",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  await assert.rejects(api.listActiveThreads(GUILD_ID), hasDiscordApiCode("INVALID_RESPONSE"));
+});
+
+test("the HTTP port restores its configured Guild ID when a REST message omits guild_id", async () => {
+  const starter = rawMessage(THREAD_ID, "Tagless starter") as Record<string, unknown>;
+  delete starter["guild_id"];
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    guildId: GUILD_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("message-guild-secret"),
+    fetch: routeFetch([], {
+      [`GET /api/v10/channels/${THREAD_ID}/messages/${THREAD_ID}`]: json(starter),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:message-guild",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const message = await api.getMessage(THREAD_ID, THREAD_ID);
+
+  assert.equal(message.guildId, GUILD_ID);
+});
+
+test("the HTTP port rejects a REST message that names another Guild", async () => {
+  const starter = rawMessage(THREAD_ID, "Wrong Guild") as Record<string, unknown>;
+  starter["guild_id"] = "100000000000000099";
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    guildId: GUILD_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("wrong-guild-secret"),
+    fetch: routeFetch([], {
+      [`GET /api/v10/channels/${THREAD_ID}/messages/${THREAD_ID}`]: json(starter),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:wrong-guild",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  await assert.rejects(api.getMessage(THREAD_ID, THREAD_ID), hasDiscordApiCode("INVALID_RESPONSE"));
+});
+
 test("Components v2 writes use a deterministic enforced nonce no longer than 25 characters", async () => {
   const requests: CapturedRequest[] = [];
   const fetch = routeFetch(requests, {
@@ -215,6 +308,172 @@ test("Components v2 writes use a deterministic enforced nonce no longer than 25 
   assert.equal(createBody["flags"], DISCORD_COMPONENTS_V2_FLAG);
   assert.equal("nonce" in editBody, false);
   assert.equal("enforce_nonce" in editBody, false);
+});
+
+test("owner-message acknowledgement uses an in-place reaction and Discord typing", async () => {
+  const messageId = "100000000000000090";
+  const requests: CapturedRequest[] = [];
+  const reactionPath = `/api/v10/channels/${THREAD_ID}/messages/${messageId}/reactions/${encodeURIComponent(
+    "👀",
+  )}/@me`;
+  const typingPath = `/api/v10/channels/${THREAD_ID}/typing`;
+  const fetch = routeFetch(requests, {
+    [`PUT ${reactionPath}`]: new Response(null, { status: 204 }),
+    [`POST ${typingPath}`]: new Response(null, { status: 204 }),
+  });
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("acknowledgement-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:acknowledgement",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const acknowledgement = await api.acknowledgeMessage({
+    threadId: THREAD_ID,
+    messageId,
+  });
+
+  assert.deepEqual(acknowledgement, { reactionVisible: true, typingVisible: true });
+  assert.deepEqual(
+    requests.map((request) => `${request.method} ${request.pathname}`).sort(),
+    [`POST ${typingPath}`, `PUT ${reactionPath}`].sort(),
+  );
+});
+
+test("owner-message activity refreshes and closes on the same message without posting chatter", async () => {
+  const messageId = "100000000000000091";
+  const requests: CapturedRequest[] = [];
+  const typingPath = `/api/v10/channels/${THREAD_ID}/typing`;
+  const reactionRoot = `/api/v10/channels/${THREAD_ID}/messages/${messageId}/reactions`;
+  const fetch = routeFetch(requests, {
+    [`POST ${typingPath}`]: new Response(null, { status: 204 }),
+    [`DELETE ${reactionRoot}/${encodeURIComponent("👀")}/@me`]: new Response(null, {
+      status: 204,
+    }),
+    [`PUT ${reactionRoot}/${encodeURIComponent("✅")}/@me`]: new Response(null, {
+      status: 204,
+    }),
+    [`PATCH /api/v10/channels/${THREAD_ID}/messages/${messageId}`]: json({
+      id: messageId,
+    }),
+  });
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("activity-lifecycle-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:activity",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  assert.equal(await api.refreshTyping({ threadId: THREAD_ID }), true);
+  assert.deepEqual(
+    await api.completeMessageAcknowledgement({
+      threadId: THREAD_ID,
+      messageId,
+      outcome: "success",
+    }),
+    { acknowledgementRemoved: true, outcomeVisible: true },
+  );
+  await api.editMessage({
+    threadId: THREAD_ID,
+    messageId,
+    payload: componentsPayload(),
+  });
+
+  assert.deepEqual(
+    requests.map((request) => `${request.method} ${request.pathname}`).sort(),
+    [
+      `POST ${typingPath}`,
+      `DELETE ${reactionRoot}/${encodeURIComponent("👀")}/@me`,
+      `PUT ${reactionRoot}/${encodeURIComponent("✅")}/@me`,
+      `PATCH /api/v10/channels/${THREAD_ID}/messages/${messageId}`,
+    ].sort(),
+  );
+});
+
+test("optional acknowledgement permission failures do not block Task processing", async () => {
+  const messageId = "100000000000000090";
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("acknowledgement-fallback-secret"),
+    fetch: routeFetch([], {
+      [`PUT /api/v10/channels/${THREAD_ID}/messages/${messageId}/reactions/${encodeURIComponent(
+        "👀",
+      )}/@me`]: json({ message: "Missing Permissions" }, { status: 403 }),
+      [`POST /api/v10/channels/${THREAD_ID}/typing`]: new Response(null, { status: 204 }),
+    }),
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:acknowledgement-fallback",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  assert.deepEqual(await api.acknowledgeMessage({ threadId: THREAD_ID, messageId }), {
+    reactionVisible: false,
+    typingVisible: true,
+  });
+});
+
+test("the HTTP port creates a Forum post with one starter message and workflow tag", async () => {
+  const requests: CapturedRequest[] = [];
+  const fetch = routeFetch(requests, {
+    [`POST /api/v10/channels/${FORUM_ID}/threads`]: json({
+      id: THREAD_ID,
+      guild_id: GUILD_ID,
+      parent_id: FORUM_ID,
+      type: 11,
+      name: "OD-route Recover the Worker route",
+      owner_id: BOT_USER_ID,
+      applied_tags: ["100000000000000020"],
+      thread_metadata: { archived: false, locked: false },
+      message: {
+        id: THREAD_ID,
+        guild_id: GUILD_ID,
+        channel_id: THREAD_ID,
+        author: { id: BOT_USER_ID, bot: true },
+        content: "OpenDelegate Task task-route-001",
+        attachments: [],
+        timestamp: "2026-07-24T00:00:00.000Z",
+      },
+    }),
+  });
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("forum-create-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:forum-create",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const result = await api.createForumPost({
+    forumChannelId: FORUM_ID,
+    requestKey: "outbound-task:task-route-001",
+    name: "OD-route Recover the Worker route",
+    content: "OpenDelegate Task task-route-001",
+    appliedTagIds: ["100000000000000020"],
+  });
+
+  assert.equal(result.thread.id, THREAD_ID);
+  assert.equal(result.starterMessage.id, THREAD_ID);
+  assert.deepEqual(requests[0]?.body, {
+    name: "OD-route Recover the Worker route",
+    message: {
+      content: "OpenDelegate Task task-route-001",
+      allowed_mentions: { parse: [] },
+    },
+    applied_tags: ["100000000000000020"],
+  });
 });
 
 test("interaction deferral keeps the token only in the injected vault and persists an opaque reference", async () => {

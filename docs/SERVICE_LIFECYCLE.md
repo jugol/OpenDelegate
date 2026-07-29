@@ -121,6 +121,22 @@ Unknown or locale-dependent host output remains `unknown`; it is never promoted 
 implies Computer Use readiness. Until authenticated helper IPC supplies unlocked
 desktop and permission evidence, Computer Use remains `unavailable`.
 
+## Bundle assembly is not activation
+
+`pnpm release:build` verifies a new bundle with temporary state and an isolated,
+dynamically selected adjacent loopback listener pair. It does not use the configured
+Main listeners, mutate the stable release pointer, or stop, restart, install, or
+upgrade a service. A build on the fixed Main Device must therefore coexist with the
+currently active version.
+
+Activate persistent bytes only with the mutating commands below after the exact
+bundle and external authority pass preflight. Never stop Main to make room for
+packaged smoke, and never replace a journaled upgrade with a remote shell one-liner.
+A process launched through `systemd-run` or another transient wrapper may be useful
+for bounded internal-preview validation, but stopping it can remove the transient
+unit itself. It is not a persistent installation and must not be used as upgrade,
+restart, reboot, or release evidence.
+
 ## Mutating commands
 
 ```text

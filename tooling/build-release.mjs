@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import {
   chmod,
   copyFile,
@@ -16,6 +16,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { createServer } from "node:net";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -322,8 +323,6 @@ const bundleReadmeLanguages = Object.freeze([
   Object.freeze({ filename: "README.zh-CN.md", label: "简体中文", locale: "zh-CN" }),
 ]);
 
-const bundleInitAgentPrompt =
-  "Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop if a required safety check fails.";
 const bundleJoinAgentPrompt =
   "Read `skills/opendelegate-join/SKILL.md` and join this computer to my fixed OpenDelegate Main using the unopened grant file at `ABSOLUTE_GRANT_FILE`. Detect its capabilities, keep all Knowledge local, and ask before any network or privileged change.";
 
@@ -340,11 +339,11 @@ const bundleReadmeCopy = Object.freeze({
     claimStep: "Complete owner claim and save all 10 one-time recovery codes.",
     cliIntroduction: "For deterministic CLI inspection:",
     configurationStep:
-      "After owner claim, finish Device, Agent, route, and Artifact setup in Admin Web Configuration Chat and inspect any preconfigured Discord binding.",
+      "After owner claim, finish Device, Agent, route, Artifact, and optional Discord setup in Admin Web Configuration Chat.",
     documentation:
       "See `docs/release/README.md` for release semantics, `SECURITY.md` for private\nvulnerability reporting, and `THIRD_PARTY_NOTICES.json` for the complete bundled\ndependency legal inventory.",
     discordStep:
-      "If you want Discord, complete `docs/DISCORD_SETUP.md` before the first Main initialization. This package cannot add or replace a Discord binding later.",
+      "Discord may be deferred. After owner claim, follow `docs/DISCORD_SETUP.md`; put the token only in Configuration Chat's secure credential panel, then add or replace the approved binding.",
     firstTaskStep:
       "If Discord is configured, create one Discord Forum post for each independent Task. Replies continue that Task and its native Agent session; a new post starts a clean context. If Discord is unavailable or disabled, use Admin Web → Tasks → New task for a minimal Task.",
     firstTaskHeading: "Create your first Task",
@@ -355,6 +354,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "Continue with `docs/GETTING_STARTED.md` for the complete owner journey and\n`docs/DISCORD_SETUP.md` for Discord App, bot, Forum, intent, permission, and first-Task setup.",
     implementationLabel: "Implementation",
+    initAgentPrompt:
+      "Set up OpenDelegate on this computer as my fixed, always-on Main Device. Follow this bundle's own Main installation instructions and do everything you safely can. Ask me only when you need a decision or a secure owner-only action. Never ask me to paste credentials, tokens, or other secrets into chat; guide me through provider-native authentication or OpenDelegate's secure intake instead. Continue until Admin Web opens and setup is ready to finish there.",
     integrity:
       "Verify `SHA256SUMS` against a digest obtained through a trusted publication channel\nbefore relying on the payload. The enclosed manifest proves only internal\nconsistency, not publisher identity.",
     integrityStep:
@@ -369,7 +370,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "Read `INTERNAL_PREVIEW.md`. This bundle is unsupported and must not be published under a release tag.",
     candidateTitle: "unpublished release candidate",
-    startHeading: "Quick Start",
+    startHeading: "Recommended installation: ask your Agent",
     stateStep:
       "Keep runtime state, databases, credentials, logs, and generated Artifacts outside\n   this bundle.",
     supportStatusLabel: "Support status",
@@ -386,11 +387,11 @@ const bundleReadmeCopy = Object.freeze({
     claimStep: "Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관하세요.",
     cliIntroduction: "결정적인 CLI 인터페이스를 확인하려면 다음을 사용하세요.",
     configurationStep:
-      "Owner Claim 후 Admin Web Configuration Chat에서 Device, Agent, Route 및 Artifact 설정을 마치고 미리 준비한 Discord Binding을 점검하세요.",
+      "Owner Claim 후 Admin Web Configuration Chat에서 Device, Agent, Route, Artifact 및 선택적 Discord 설정을 마치세요.",
     documentation:
       "릴리스 의미는 `docs/release/README.md`, 비공개 취약점 신고 방법은 `SECURITY.md`,\n번들된 의존성의 전체 법적 목록은 `THIRD_PARTY_NOTICES.json`을 확인하세요.",
     discordStep:
-      "Discord를 사용하려면 최초 Main 초기화 전에 `docs/DISCORD_SETUP.md`를 완료하세요. 이 패키지는 나중에 Discord Binding을 추가하거나 교체할 수 없습니다.",
+      "Discord 설정은 나중으로 미뤄도 됩니다. Owner Claim 후 `docs/DISCORD_SETUP.md`를 따르고, 토큰은 Configuration Chat의 보안 인증 정보 패널에만 입력한 뒤 승인된 Binding을 추가하거나 교체하세요.",
     firstTaskStep:
       "Discord를 설정했다면 독립된 Task마다 Discord Forum 게시글을 하나 만드세요. 같은 게시글의 답글은 해당 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context로 시작합니다. Discord를 사용하지 않거나 사용할 수 없으면 Admin Web → Tasks → 새 작업에서 만드세요.",
     firstTaskHeading: "첫 Task 만들기",
@@ -401,6 +402,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "전체 Owner 여정은 `docs/GETTING_STARTED.md`, Discord App, Bot, Forum, Intent,\nPermission 및 첫 Task 설정은 `docs/DISCORD_SETUP.md`를 참고하세요.",
     implementationLabel: "구현",
+    initAgentPrompt:
+      "이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 Bundle에 포함된 Main 설치 지침을 직접 찾아 따르고, 안전하게 할 수 있는 일은 모두 처리해 줘. 내 결정이나 Owner 전용 보안 작업이 필요할 때만 질문해 줘. 인증 정보, Token 등 비밀값을 채팅에 붙여 넣으라고 하지 말고 Provider의 기본 인증 절차나 OpenDelegate 보안 입력 화면으로 안내해 줘. Admin Web이 열려서 나머지 설정을 마칠 수 있을 때까지 계속 진행해 줘.",
     integrity:
       "이 payload를 신뢰하기 전에 신뢰할 수 있는 배포 채널에서 얻은 digest와\n`SHA256SUMS`를 대조하세요. 포함된 manifest는 내부 일관성만 증명하며 게시자 신원은\n증명하지 않습니다.",
     integrityStep:
@@ -415,7 +418,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "`INTERNAL_PREVIEW.md`를 먼저 읽으세요. 이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다.",
     candidateTitle: "게시되지 않은 릴리스 후보",
-    startHeading: "빠른 시작",
+    startHeading: "권장 설치: Agent에게 맡기세요",
     stateStep:
       "runtime 상태, 데이터베이스, 자격 증명, 로그 및 생성된 Artifact는 이 번들 밖에\n   보관하세요.",
     supportStatusLabel: "지원 상태",
@@ -432,11 +435,11 @@ const bundleReadmeCopy = Object.freeze({
     claimStep: "Owner Claim を完了し、10 個の one-time Recovery Code をすべて安全に保存します。",
     cliIntroduction: "決定的な CLI インターフェースを確認するには、次を実行します。",
     configurationStep:
-      "Owner Claim 後、Admin Web の Configuration Chat で Device、Agent、Route、Artifact の設定を完了し、事前に用意した Discord Binding を確認します。",
+      "Owner Claim 後、Admin Web の Configuration Chat で Device、Agent、Route、Artifact、および任意の Discord 設定を完了します。",
     documentation:
       "リリースの意味は `docs/release/README.md`、非公開の脆弱性報告は `SECURITY.md`、\nバンドルされた依存関係の完全な法的一覧は `THIRD_PARTY_NOTICES.json` を確認してください。",
     discordStep:
-      "Discord を使用する場合は、最初の Main 初期化前に `docs/DISCORD_SETUP.md` を完了します。このパッケージでは後から Discord Binding を追加または置換できません。",
+      "Discord 設定は後回しにできます。Owner Claim 後に `docs/DISCORD_SETUP.md` に従い、トークンは Configuration Chat の安全な認証情報パネルにのみ入力して、承認済み Binding を追加または置換します。",
     firstTaskStep:
       "Discord を設定した場合は、独立した Task ごとに Discord Forum へ新しい投稿を作成します。同じ投稿への返信はその Task と native Agent Session を継続し、新しい投稿はクリーンな Context から始まります。Discord を使用しない場合や利用できない場合は、Admin Web → Tasks → 新しいタスクから作成します。",
     firstTaskHeading: "最初の Task を作成",
@@ -447,6 +450,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "Owner の全手順は `docs/GETTING_STARTED.md`、Discord App、Bot、Forum、Intent、\nPermission、最初の Task の設定は `docs/DISCORD_SETUP.md` を参照してください。",
     implementationLabel: "実装",
+    initAgentPrompt:
+      "このコンピューターを、固定された常時稼働の OpenDelegate Main Device としてセットアップしてください。この Bundle に含まれる Main インストール手順を自分で見つけて従い、安全に実行できる作業はすべて進めてください。私の判断または Owner 専用の安全な操作が必要なときだけ質問してください。認証情報、Token、その他の Secret をチャットに貼り付けるよう求めず、Provider 本来の認証手順または OpenDelegate の安全な入力画面へ案内してください。Admin Web が開いて残りの設定を完了できる状態になるまで続けてください。",
     integrity:
       "この payload を信頼する前に、信頼できる公開チャネルから取得した digest と\n`SHA256SUMS` を照合してください。同梱の manifest が証明するのは内部整合性のみで、\n公開者の身元ではありません。",
     integrityStep:
@@ -462,7 +467,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "`INTERNAL_PREVIEW.md` を先に読んでください。このバンドルはサポート対象外であり、リリースタグで公開してはいけません。",
     candidateTitle: "未公開のリリース候補",
-    startHeading: "クイックスタート",
+    startHeading: "推奨インストール：Agent に任せる",
     stateStep:
       "runtime 状態、データベース、認証情報、ログ、生成された Artifact はこのバンドルの\n   外に保存してください。",
     supportStatusLabel: "サポート状況",
@@ -480,11 +485,11 @@ const bundleReadmeCopy = Object.freeze({
       "Revendiquez l’accès Owner et conservez en lieu sûr les 10 codes de récupération à usage unique.",
     cliIntroduction: "Pour inspecter l’interface CLI déterministe :",
     configurationStep:
-      "Après l’accès Owner, terminez la configuration des Devices, Agents, Routes et Artifacts dans Configuration Chat d’Admin Web et vérifiez le Binding Discord préparé.",
+      "Après l’accès Owner, terminez la configuration des Devices, Agents, Routes, Artifacts et, si souhaité, de Discord dans Configuration Chat d’Admin Web.",
     documentation:
       "Consultez `docs/release/README.md` pour la sémantique des releases, `SECURITY.md`\npour signaler une vulnérabilité en privé et `THIRD_PARTY_NOTICES.json` pour\nl’inventaire juridique complet des dépendances incluses.",
     discordStep:
-      "Pour utiliser Discord, terminez `docs/DISCORD_SETUP.md` avant la première initialisation du Main. Ce package ne peut ni ajouter ni remplacer un Binding Discord ensuite.",
+      "Discord peut être configuré plus tard. Après l’accès Owner, suivez `docs/DISCORD_SETUP.md`, saisissez le jeton uniquement dans le panneau sécurisé de Configuration Chat, puis ajoutez ou remplacez le Binding approuvé.",
     firstTaskStep:
       "Si Discord est configuré, créez une publication Discord Forum pour chaque Task indépendante. Les réponses poursuivent cette Task et sa native Agent Session ; une nouvelle publication démarre avec un Context propre. Si Discord est désactivé ou indisponible, ouvrez Admin Web → Tasks → Nouvelle tâche.",
     firstTaskHeading: "Créer votre première Task",
@@ -495,6 +500,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "Poursuivez avec `docs/GETTING_STARTED.md` pour le parcours complet de l’Owner et\n`docs/DISCORD_SETUP.md` pour configurer l’App, le Bot, le Forum, les Intents, les Permissions et la première Task.",
     implementationLabel: "Implémentation",
+    initAgentPrompt:
+      "Configure OpenDelegate sur cet ordinateur comme mon Main Device fixe et toujours actif. Trouve et suis les instructions d’installation Main incluses dans ce bundle, puis réalise tout ce que tu peux faire en sécurité. Ne me sollicite que lorsqu’une décision ou une action sécurisée réservée à l’Owner est nécessaire. Ne me demande jamais de coller des identifiants, jetons ou autres secrets dans le chat ; oriente-moi vers l’authentification native du Provider ou la saisie sécurisée d’OpenDelegate. Continue jusqu’à l’ouverture d’Admin Web afin que nous puissions y terminer la configuration.",
     integrity:
       "Avant d’utiliser ce payload, comparez `SHA256SUMS` à un digest obtenu par un canal\nde publication fiable. Le manifest inclus prouve uniquement la cohérence interne,\npas l’identité de l’éditeur.",
     integrityStep:
@@ -510,7 +517,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "Lisez d’abord `INTERNAL_PREVIEW.md`. Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release.",
     candidateTitle: "candidat de version non publié",
-    startHeading: "Démarrage rapide",
+    startHeading: "Installation recommandée : confiez-la à votre Agent",
     stateStep:
       "Conservez l’état du runtime, les bases de données, les identifiants, les logs et les\n   Artifacts générés en dehors de ce bundle.",
     supportStatusLabel: "Statut de prise en charge",
@@ -528,11 +535,11 @@ const bundleReadmeCopy = Object.freeze({
       "Reclama el acceso de Owner y guarda de forma segura los 10 códigos de recuperación de un solo uso.",
     cliIntroduction: "Para inspeccionar la interfaz CLI determinista:",
     configurationStep:
-      "Después de reclamar el acceso del Owner, completa la configuración de Devices, Agents, Routes y Artifacts en Configuration Chat de Admin Web y revisa el Binding de Discord ya preparado.",
+      "Después de reclamar el acceso del Owner, completa la configuración de Devices, Agents, Routes, Artifacts y, si quieres, Discord en Configuration Chat de Admin Web.",
     documentation:
       "Consulta `docs/release/README.md` para conocer la semántica de las releases,\n`SECURITY.md` para informar de vulnerabilidades en privado y\n`THIRD_PARTY_NOTICES.json` para ver el inventario legal completo de las dependencias incluidas.",
     discordStep:
-      "Para usar Discord, completa `docs/DISCORD_SETUP.md` antes de la primera inicialización del Main. Este paquete no puede añadir ni sustituir después un Binding de Discord.",
+      "Puedes configurar Discord más adelante. Después de reclamar el acceso del Owner, sigue `docs/DISCORD_SETUP.md`, introduce el token solo en el panel seguro de Configuration Chat y añade o sustituye el Binding aprobado.",
     firstTaskStep:
       "Si Discord está configurado, crea una publicación en Discord Forum para cada Task independiente. Las respuestas continúan esa Task y su native Agent Session; una publicación nueva empieza con un Context limpio. Si Discord está desactivado o no está disponible, abre Admin Web → Tasks → Nueva tarea.",
     firstTaskHeading: "Crear tu primera Task",
@@ -543,6 +550,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "Continúa con `docs/GETTING_STARTED.md` para el recorrido completo del Owner y con\n`docs/DISCORD_SETUP.md` para configurar la App, el Bot, el Forum, los Intents, los Permissions y la primera Task.",
     implementationLabel: "Implementación",
+    initAgentPrompt:
+      "Configura OpenDelegate en este ordenador como mi Main Device fijo y siempre encendido. Busca y sigue las instrucciones de instalación Main incluidas en este bundle y realiza todo lo que puedas hacer de forma segura. Pregúntame solo cuando haga falta una decisión o una acción segura reservada al Owner. No me pidas nunca que pegue credenciales, tokens u otros secretos en el chat; guíame a la autenticación nativa del Provider o a la entrada segura de OpenDelegate. Continúa hasta que se abra Admin Web y podamos terminar allí el resto de la configuración.",
     integrity:
       "Antes de confiar en este payload, compara `SHA256SUMS` con un digest obtenido por\nun canal de publicación fiable. El manifest incluido solo demuestra la coherencia\ninterna, no la identidad de quien lo publica.",
     integrityStep:
@@ -558,7 +567,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "Lee primero `INTERNAL_PREVIEW.md`. Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release.",
     candidateTitle: "candidato de versión no publicado",
-    startHeading: "Inicio rápido",
+    startHeading: "Instalación recomendada: pídeselo a tu Agent",
     stateStep:
       "Mantén el estado del runtime, las bases de datos, las credenciales, los logs y los\n   Artifacts generados fuera de este bundle.",
     supportStatusLabel: "Estado de soporte",
@@ -574,11 +583,11 @@ const bundleReadmeCopy = Object.freeze({
     claimStep: "完成 Owner Claim，并妥善保存全部 10 个一次性恢复代码。",
     cliIntroduction: "如需检查确定性的 CLI 界面，请运行：",
     configurationStep:
-      "完成 Owner Claim 后，在 Admin Web 的 Configuration Chat 中设置 Device、Agent、Route 和 Artifact，并检查预先准备的 Discord Binding。",
+      "完成 Owner Claim 后，在 Admin Web 的 Configuration Chat 中设置 Device、Agent、Route、Artifact 以及可选的 Discord。",
     documentation:
       "Release 语义请参阅 `docs/release/README.md`，私下报告安全漏洞请参阅\n`SECURITY.md`，随附依赖项的完整法律清单请参阅 `THIRD_PARTY_NOTICES.json`。",
     discordStep:
-      "如需使用 Discord，请在首次 Main 初始化之前完成 `docs/DISCORD_SETUP.md`。此软件包无法在之后添加或替换 Discord Binding。",
+      "Discord 可以稍后配置。完成 Owner Claim 后，请按照 `docs/DISCORD_SETUP.md` 操作，只在 Configuration Chat 的安全凭据面板中输入令牌，然后添加或替换获批的 Binding。",
     firstTaskStep:
       "如果已配置 Discord，请为每个独立 Task 创建一个 Discord Forum 新帖子。同一帖子的回复会继续该 Task 及其 Agent 原生 Session；新帖子则从干净的 Context 开始。如果 Discord 已禁用或不可用，请选择 Admin Web → Tasks → 新建任务。",
     firstTaskHeading: "创建首个 Task",
@@ -589,6 +598,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "完整 Owner 流程请参阅 `docs/GETTING_STARTED.md`；Discord App、Bot、Forum、Intent、\nPermission 和首个 Task 的配置请参阅 `docs/DISCORD_SETUP.md`。",
     implementationLabel: "实现",
+    initAgentPrompt:
+      "请把这台电脑设置为我固定且始终在线的 OpenDelegate Main Device。自行查找并遵循此 Bundle 中包含的 Main 安装说明，安全范围内能完成的工作都直接完成。只有在需要我做决定或执行仅限 Owner 的安全操作时才提问。切勿让我把凭据、令牌或其他秘密粘贴到聊天中；请引导我使用 Provider 原生认证或 OpenDelegate 的安全输入界面。请持续进行，直到 Admin Web 打开并可以在那里完成其余设置。",
     integrity:
       "在信任此 payload 之前，请使用从可信发布渠道获得的 digest 校验 `SHA256SUMS`。\n随附的 manifest 只能证明内部一致性，不能证明发布者身份。",
     integrityStep: "运行任何内容之前，请使用可信发布渠道提供的 digest 验证 `SHA256SUMS`。",
@@ -602,7 +613,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "请先阅读 `INTERNAL_PREVIEW.md`。此捆绑包不受支持，且不得在 Release tag 下发布。",
     candidateTitle: "未发布的候选版本",
-    startHeading: "快速开始",
+    startHeading: "推荐安装：交给你的 Agent",
     stateStep: "请将 runtime 状态、数据库、凭据、日志和生成的 Artifact 保存在此捆绑包之外。",
     supportStatusLabel: "支持状态",
   }),
@@ -651,7 +662,7 @@ ${copy.supportStatusLabel}: \`${supportStatus}\`.
 3. ${copy.stateStep}
 4. ${copy.agentStep}
 
-   > ${bundleInitAgentPrompt}
+   > ${copy.initAgentPrompt}
 
 5. ${preview ? copy.discordStep : copy.claimStep}
 6. ${preview ? copy.claimStep : copy.candidateConfigurationStep}
@@ -2760,6 +2771,134 @@ const PORTABLE_PACKAGED_MAIN_READINESS_PHASE_TIMEOUT_MS = 20_000;
 // Keep the smoke bound above any one 60-second native command without allowing
 // a stalled packaged Main to wait indefinitely.
 const WINDOWS_PACKAGED_MAIN_READINESS_PHASE_TIMEOUT_MS = 180_000;
+const MINIMUM_PACKAGED_SMOKE_PORT = 1_024;
+const MAXIMUM_PACKAGED_SMOKE_MAIN_PORT = 65_534;
+const DEFAULT_PACKAGED_SMOKE_PORT_FLOOR = 20_000;
+const DEFAULT_PACKAGED_SMOKE_PORT_CEILING = 60_000;
+const MAXIMUM_PACKAGED_SMOKE_PORT_ATTEMPTS = 128;
+const MAXIMUM_PACKAGED_SMOKE_START_ATTEMPTS = 3;
+const PACKAGED_SMOKE_LISTENER_UNAVAILABLE_CODE = "MAIN_LISTENER_UNAVAILABLE";
+
+export async function reservePackagedSmokeListener(options = {}) {
+  const excludedMainPorts = new Set(options.excludedMainPorts ?? []);
+  for (const port of excludedMainPorts) {
+    if (
+      !Number.isSafeInteger(port) ||
+      port < MINIMUM_PACKAGED_SMOKE_PORT ||
+      port > MAXIMUM_PACKAGED_SMOKE_MAIN_PORT
+    ) {
+      throw new Error("The packaged smoke listener exclusion is invalid.");
+    }
+  }
+  const startPort =
+    options.startPort ??
+    randomInt(DEFAULT_PACKAGED_SMOKE_PORT_FLOOR, DEFAULT_PACKAGED_SMOKE_PORT_CEILING);
+  if (
+    !Number.isSafeInteger(startPort) ||
+    startPort < MINIMUM_PACKAGED_SMOKE_PORT ||
+    startPort > MAXIMUM_PACKAGED_SMOKE_MAIN_PORT
+  ) {
+    throw new Error("The packaged smoke listener start port is invalid.");
+  }
+
+  for (let attempt = 0; attempt < MAXIMUM_PACKAGED_SMOKE_PORT_ATTEMPTS; attempt += 1) {
+    const mainPort = packagedSmokePortCandidate(startPort, attempt);
+    if (excludedMainPorts.has(mainPort)) {
+      continue;
+    }
+    const mainServer = await tryReserveLoopbackPort(mainPort);
+    if (mainServer === undefined) {
+      continue;
+    }
+    const claimPort = mainPort + 1;
+    const claimServer = await tryReserveLoopbackPort(claimPort);
+    if (claimServer === undefined) {
+      await closeReservedLoopbackServer(mainServer);
+      continue;
+    }
+
+    let released = false;
+    return Object.freeze({
+      host: "127.0.0.1",
+      mainPort,
+      claimPort,
+      mainOrigin: `http://127.0.0.1:${String(mainPort)}`,
+      claimOrigin: `http://127.0.0.1:${String(claimPort)}`,
+      release: async () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        await Promise.all([
+          closeReservedLoopbackServer(mainServer),
+          closeReservedLoopbackServer(claimServer),
+        ]);
+      },
+    });
+  }
+  throw new Error("Could not reserve an isolated adjacent loopback pair for packaged smoke.");
+}
+
+function packagedSmokePortCandidate(startPort, attempt) {
+  const candidateRange = MAXIMUM_PACKAGED_SMOKE_MAIN_PORT - MINIMUM_PACKAGED_SMOKE_PORT + 1;
+  return (
+    MINIMUM_PACKAGED_SMOKE_PORT +
+    ((startPort - MINIMUM_PACKAGED_SMOKE_PORT + attempt * 2) % candidateRange)
+  );
+}
+
+async function tryReserveLoopbackPort(port) {
+  const server = createServer();
+  server.unref();
+  try {
+    await new Promise((resolvePromise, rejectPromise) => {
+      server.once("error", rejectPromise);
+      server.listen({ exclusive: true, host: "127.0.0.1", port }, () => {
+        server.removeListener("error", rejectPromise);
+        resolvePromise();
+      });
+    });
+    return server;
+  } catch (error) {
+    await closeReservedLoopbackServer(server);
+    if (error?.code === "EADDRINUSE" || error?.code === "EACCES") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function closeReservedLoopbackServer(server) {
+  if (!server.listening) {
+    return;
+  }
+  await new Promise((resolvePromise, rejectPromise) => {
+    server.close((error) => {
+      if (error === undefined) {
+        resolvePromise();
+      } else {
+        rejectPromise(error);
+      }
+    });
+  });
+}
+
+async function packagedSmokeListenerPairIsUnavailable(listener) {
+  const mainServer = await tryReserveLoopbackPort(listener.mainPort);
+  if (mainServer === undefined) {
+    return true;
+  }
+  const claimServer = await tryReserveLoopbackPort(listener.claimPort);
+  if (claimServer === undefined) {
+    await closeReservedLoopbackServer(mainServer);
+    return true;
+  }
+  await Promise.all([
+    closeReservedLoopbackServer(mainServer),
+    closeReservedLoopbackServer(claimServer),
+  ]);
+  return false;
+}
 
 export async function waitForPackagedMainReadiness({
   exited,
@@ -2948,29 +3087,107 @@ async function smokeBundle(staging, buildId, productVersion) {
   };
 }
 
-async function runPackagedMainSmoke({
+export async function runPackagedMainSmoke(input, dependencies = {}) {
+  const runAttempt = dependencies.runAttempt ?? runPackagedMainSmokeAttempt;
+  const attemptedMainPorts = [];
+  for (let attempt = 0; attempt < MAXIMUM_PACKAGED_SMOKE_START_ATTEMPTS; attempt += 1) {
+    const smokeListener = await reservePackagedSmokeListener({
+      excludedMainPorts: attemptedMainPorts,
+    });
+    attemptedMainPorts.push(smokeListener.mainPort);
+    await smokeListener.release();
+    try {
+      return await runAttempt({
+        ...input,
+        smokeListener,
+      });
+    } catch (error) {
+      const listenerCollision =
+        isPackagedSmokeListenerUnavailableError(error) ||
+        (await packagedSmokeListenerPairIsUnavailable(smokeListener));
+      if (!listenerCollision || attempt === MAXIMUM_PACKAGED_SMOKE_START_ATTEMPTS - 1) {
+        throw error;
+      }
+    }
+  }
+  throw new Error("The packaged Main smoke exhausted its listener start attempts.");
+}
+
+function isPackagedSmokeListenerUnavailableError(error) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    error.code === PACKAGED_SMOKE_LISTENER_UNAVAILABLE_CODE
+  );
+}
+
+function packagedSmokeListenerUnavailableError(error) {
+  return Object.assign(
+    new Error("The packaged Main could not acquire its isolated smoke listeners.", {
+      cause: error,
+    }),
+    {
+      code: PACKAGED_SMOKE_LISTENER_UNAVAILABLE_CODE,
+    },
+  );
+}
+
+export function createPackagedMainSmokeContract({ entrypoint, fixture, smokeHome, smokeListener }) {
+  return Object.freeze({
+    arguments: Object.freeze([
+      entrypoint,
+      "init",
+      "--home",
+      smokeHome,
+      "--listen-host",
+      smokeListener.host,
+      "--listen-port",
+      String(smokeListener.mainPort),
+      "--listen-origin",
+      smokeListener.mainOrigin,
+      ...fixture.initArguments,
+    ]),
+    mainOrigin: smokeListener.mainOrigin,
+    claimOrigin: smokeListener.claimOrigin,
+    healthUrl: `${smokeListener.mainOrigin}/health/live`,
+    adminUrl: `${smokeListener.mainOrigin}/`,
+    claimUrl: `${smokeListener.claimOrigin}/`,
+    claimApiUrl: `${smokeListener.claimOrigin}/api/v1/auth/claim`,
+    loginUrl: `${smokeListener.mainOrigin}/api/v1/auth/login`,
+    sessionUrl: `${smokeListener.mainOrigin}/api/v1/auth/session`,
+  });
+}
+
+async function runPackagedMainSmokeAttempt({
   buildId,
   entrypoint,
   fixture,
   productVersion,
   releaseEnvironment,
   runtime,
+  smokeListener,
   staging,
 }) {
   const smokeHome = await mkdtemp(join(dirname(staging), ".od-home-"));
-  const child = spawn(
-    runtime,
-    [entrypoint, "init", "--home", smokeHome, ...fixture.initArguments],
-    {
-      cwd: staging,
-      env: {
-        ...releaseEnvironment,
-        ...fixture.environment,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
+  const contract = createPackagedMainSmokeContract({
+    entrypoint,
+    fixture,
+    smokeHome,
+    smokeListener,
+  });
+  const child = spawn(runtime, contract.arguments, {
+    cwd: staging,
+    env: {
+      ...releaseEnvironment,
+      ...fixture.environment,
     },
-  );
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let childClosed = false;
+  child.once("close", () => {
+    childClosed = true;
+  });
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
@@ -2986,6 +3203,7 @@ async function runPackagedMainSmoke({
   let shutdownTimedOut = false;
   let forcedTermination = false;
   let shutdownEvaluation;
+  let smokeFailure;
   try {
     await waitForPackagedMainReadiness({
       exited: () => hasChildExited(child),
@@ -2993,13 +3211,13 @@ async function runPackagedMainSmoke({
     });
 
     const [health, admin, claim] = await Promise.all([
-      fetch("http://127.0.0.1:4380/health/live", {
+      fetch(contract.healthUrl, {
         signal: AbortSignal.timeout(5_000),
       }),
-      fetch("http://127.0.0.1:4380/", {
+      fetch(contract.adminUrl, {
         signal: AbortSignal.timeout(5_000),
       }),
-      fetch("http://127.0.0.1:4381/", {
+      fetch(contract.claimUrl, {
         signal: AbortSignal.timeout(5_000),
       }),
     ]);
@@ -3024,11 +3242,11 @@ async function runPackagedMainSmoke({
       throw new Error("The packaged local-claim page did not contain its one-time credential.");
     }
     const smokePassphrase = "release-smoke-correct-horse-2026";
-    const claimed = await fetch("http://127.0.0.1:4381/api/v1/auth/claim", {
+    const claimed = await fetch(contract.claimApiUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        origin: "http://127.0.0.1:4381",
+        origin: contract.claimOrigin,
         "sec-fetch-site": "same-origin",
       },
       body: JSON.stringify({ claimToken, passphrase: smokePassphrase }),
@@ -3042,11 +3260,11 @@ async function runPackagedMainSmoke({
       throw new Error("The packaged loopback owner claim did not produce recovery credentials.");
     }
 
-    const login = await fetch("http://127.0.0.1:4380/api/v1/auth/login", {
+    const login = await fetch(contract.loginUrl, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        origin: "http://127.0.0.1:4380",
+        origin: contract.mainOrigin,
         "sec-fetch-site": "same-origin",
       },
       body: JSON.stringify({ passphrase: smokePassphrase }),
@@ -3069,7 +3287,7 @@ async function runPackagedMainSmoke({
       throw new Error("The packaged owner could not authenticate after local claim.");
     }
     const cookiePair = sessionCookie.split(";", 1)[0];
-    const session = await fetch("http://127.0.0.1:4380/api/v1/auth/session", {
+    const session = await fetch(contract.sessionUrl, {
       headers: {
         cookie: cookiePair,
       },
@@ -3088,6 +3306,8 @@ async function runPackagedMainSmoke({
       stat(join(smokeHome, "config", "main.json")),
       stat(join(smokeHome, "state", "main.sqlite3")),
     ]);
+  } catch (error) {
+    smokeFailure = error;
   } finally {
     if (!hasChildExited(child)) {
       child.stdin.end();
@@ -3100,6 +3320,7 @@ async function runPackagedMainSmoke({
       }
       await waitUntil(() => hasChildExited(child), 5_000);
     });
+    await waitUntil(() => childClosed, 5_000);
     shutdownEvaluation = evaluateSmokeShutdown({
       stdout,
       exitCode: child.exitCode,
@@ -3108,6 +3329,12 @@ async function runPackagedMainSmoke({
       forcedTermination,
     });
     await rm(smokeHome, { force: true, recursive: true });
+  }
+  if (smokeFailure !== undefined) {
+    if (stderr.includes(`"code":"${PACKAGED_SMOKE_LISTENER_UNAVAILABLE_CODE}"`)) {
+      throw packagedSmokeListenerUnavailableError(smokeFailure);
+    }
+    throw smokeFailure;
   }
   if (!shutdownEvaluation.accepted) {
     throw new Error(

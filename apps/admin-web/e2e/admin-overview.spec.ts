@@ -56,10 +56,21 @@ const mainDevice = {
       adapterId: "codex-app-server",
       readiness: "ready",
       compatibility: "tested",
-      version: "0.145.0",
+      version: "0.146.0",
       observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+      modelCatalogObservedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+      models: [
+        {
+          modelId: "gpt-5.6-sol",
+          displayName: "GPT-5.6 Sol",
+          isDefault: true,
+          supportedEfforts: ["medium", "high"],
+        },
+      ],
     },
   ],
+  agentExecutionProfile: { schemaVersion: 1, mode: "auto" },
+  coordinatorAgentExecutionProfile: { schemaVersion: 1, mode: "auto" },
   currentRuns: [
     {
       taskId: "task_prepare_release",
@@ -101,6 +112,12 @@ const workerDevices = [
     connection: "offline",
     runtime: "unavailable",
     serviceMode: "system-service",
+    wakeOnLan: {
+      targetState: "enabled",
+      automaticWakeState: "relay-required",
+      source: "windows-netadapter-power",
+      observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+    },
   },
   {
     deviceId: "device_linux_worker",
@@ -112,6 +129,12 @@ const workerDevices = [
     connection: "online",
     runtime: "degraded",
     serviceMode: "system-service",
+    wakeOnLan: {
+      targetState: "enabled",
+      automaticWakeState: "relay-required",
+      source: "linux-ethtool",
+      observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+    },
   },
 ] as const;
 
@@ -441,7 +464,7 @@ test("all Admin locales update loaded chrome while preserving owner content", as
   }
 
   await page.locator(".language-selector select").selectOption("ko");
-  await page.getByRole("button", { name: koreanMessages.navigation.tasks }).click();
+  await page.getByRole("button", { name: koreanMessages.navigation.tasks, exact: true }).click();
   await expect(
     page.getByRole("button", { name: runningTask.objective, exact: true }),
   ).toBeVisible();
@@ -460,6 +483,37 @@ test("all Admin locales update loaded chrome while preserving owner content", as
       path: testInfo.outputPath("admin-localization-ko.png"),
     });
   }
+});
+
+test("owner selects an exact tested Device model through Configuration Chat review", async ({
+  page,
+}, testInfo) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await installApi(page, { signedIn: true });
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: englishMessages.device.agentExecution }),
+  ).toBeVisible();
+  await expect(page.getByText("gpt-5.6-sol")).toBeVisible();
+  await page
+    .getByRole("combobox", { name: englishMessages.device.profileMode })
+    .selectOption("pinned");
+  await expect(page.getByText(englishMessages.device.profilePinnedDescription)).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  if (process.env["OPENDELEGATE_CAPTURE_AGENT_PROFILE"] === "1") {
+    await page.screenshot({
+      fullPage: true,
+      path: testInfo.outputPath("admin-agent-profile.png"),
+    });
+  }
+
+  await page.getByRole("button", { name: englishMessages.device.configureAgentProfile }).click();
+  const composer = page.getByRole("textbox", { name: englishMessages.chat.messageLabel });
+  await expect(composer).toHaveValue(/"modelId":"gpt-5\.6-sol"/u);
+  await expect(composer).toHaveValue(/"agent\.worker-profile"/u);
+  expect(consoleErrors).toEqual([]);
 });
 
 test("authenticated Admin lists and controls canonical Tasks without Discord", async ({ page }) => {
@@ -533,8 +587,8 @@ test("authenticated owner can enroll a Device, inspect Artifacts, and diagnose M
   await installApi(page, { signedIn: true });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Join a device" }).click();
-  await expect(page.getByRole("heading", { name: "Join a device" })).toBeVisible();
+  await page.getByRole("button", { name: "Add Device" }).click();
+  await expect(page.getByRole("heading", { name: "Add a Device" })).toBeVisible();
   await page.getByLabel("Device ID").fill("device_browser_worker");
   await page.getByRole("button", { name: "Generate grant" }).click();
   await expect(page.getByRole("heading", { name: "Grant ready to download" })).toBeVisible();
@@ -593,13 +647,22 @@ test("Device configuration remains isolated from Task conversations", async ({ p
   await expect(composer).toBeEnabled();
   await expect(composer).toBeFocused();
   await expect(
-    dialog.getByText("Device setup stays separate from Task conversations."),
+    dialog.getByText(
+      "Configure this Device and OpenDelegate services here. Task conversations stay separate.",
+    ),
   ).toBeVisible();
   await expect(dialog.getByRole("region", { name: "Proposed change" })).toHaveCount(0);
+  await expect(dialog.getByLabel("Discord bot token")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Set up or review Discord" }).click();
+  await dialog.getByRole("button", { name: "Store the Discord token securely" }).click();
+  await expect(dialog.getByLabel("Discord bot token")).toHaveAttribute("type", "password");
+  await expect(
+    dialog.getByPlaceholder("Bot token from the Discord Developer Portal"),
+  ).toBeVisible();
 
   await composer.fill("Recommend a safe role for this Device");
   await dialog.getByRole("button", { name: "Send message" }).click();
-  await expect(dialog.getByText("I reviewed the deterministic Device facts.")).toBeVisible();
+  await expect(dialog.getByText("I reviewed the deterministic Device facts.").last()).toBeVisible();
   await expect(dialog.getByText("Recommend a safe role for this Device")).toBeVisible();
 
   const hasHorizontalOverflow = await page.evaluate(
@@ -607,12 +670,13 @@ test("Device configuration remains isolated from Task conversations", async ({ p
   );
   expect(hasHorizontalOverflow).toBe(false);
 
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Configure" })).toBeFocused();
 
-  const accessibility = await new AxeBuilder({ page }).analyze();
-  expect(accessibility.violations).toEqual([]);
   expect(consoleErrors).toEqual([]);
 });
 
@@ -638,6 +702,7 @@ test("Device navigation keeps one Main and selects macOS, Windows, and Linux Wor
     await expect(deviceList.getByRole("button", { name: accessibleName })).toBeVisible();
   }
   await expect(deviceList.getByRole("button").first()).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("region", { name: "Wake-on-LAN" })).toHaveCount(0);
 
   const selections = [
     {
@@ -670,6 +735,17 @@ test("Device navigation keeps one Main and selects macOS, Windows, and Linux Wor
       page.getByRole("region", { name: "Device facts" }).getByText(selection.operatingSystem),
     ).toBeVisible();
     await expect(button).toHaveAttribute("aria-current", "page");
+    if (selection.heading === "Design Mac — owner label") {
+      const wakeOnLan = page.getByRole("region", { name: "Wake-on-LAN" });
+      await expect(wakeOnLan.getByText("Not verified", { exact: true })).toHaveCount(2);
+      await expect(wakeOnLan.getByText("No authenticated observation yet.")).toBeVisible();
+    } else if (selection.heading === "Windows Build Rig") {
+      const wakeOnLan = page.getByRole("region", { name: "Wake-on-LAN" });
+      await expect(wakeOnLan.getByText("Enabled", { exact: true })).toBeVisible();
+      await expect(wakeOnLan.getByText("Relay required", { exact: true })).toBeVisible();
+      await expect(wakeOnLan.getByText(/Tailscale or routed IP access alone/)).toBeVisible();
+      await expect(wakeOnLan.getByText(/Last observed before offline/)).toBeVisible();
+    }
     await expectNoHorizontalOverflow(page);
   }
 
@@ -680,6 +756,17 @@ test("Device navigation keeps one Main and selects macOS, Windows, and Linux Wor
       name: `NAS 工作站, ${koreanMessages.known.worker}, ${koreanMessages.known.online}`,
     }),
   ).toHaveAttribute("aria-current", "page");
+  const koreanWakeOnLan = page.getByRole("region", {
+    name: koreanMessages.device.wakeOnLan,
+  });
+  await expect(
+    koreanWakeOnLan.getByText(koreanMessages.device.wakeTargetEnabled, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    koreanWakeOnLan.getByText(koreanMessages.device.automaticWakeRelayRequired, { exact: true }),
+  ).toBeVisible();
+  await expect(koreanWakeOnLan.getByText(/장치에서 확인/)).toBeVisible();
+  await koreanWakeOnLan.scrollIntoViewIfNeeded();
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
@@ -699,6 +786,7 @@ async function installApi(
   let authenticated = signedIn;
   let task: TaskDetail = runningTask;
   let approval: ApprovalDetail = pendingApproval;
+  let configurationMessageCount = 0;
 
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -748,15 +836,35 @@ async function installApi(
     }
 
     if (
-      path === `/api/v1/devices/${mainDevice.deviceId}/configuration/messages` &&
+      /^\/api\/v1\/devices\/[^/]+\/configuration\/messages$/u.test(path) &&
+      request.method() === "GET"
+    ) {
+      await route.fulfill({ json: { messages: [] } });
+      return;
+    }
+
+    if (
+      /^\/api\/v1\/devices\/[^/]+\/configuration\/messages$/u.test(path) &&
       request.method() === "POST"
     ) {
+      configurationMessageCount += 1;
+      const discordGuidance = configurationMessageCount === 1;
+      const discordCredential = configurationMessageCount === 2;
       await route.fulfill({
         json: {
           messageId: "message_configuration_browser",
           sessionId: "configuration_browser",
-          content: "I reviewed the deterministic Device facts.",
+          content: discordGuidance
+            ? "Discord setup guidance is ready."
+            : discordCredential
+              ? "The Discord bot token is the next missing value."
+              : "I reviewed the deterministic Device facts.",
           occurredAt: "2026-07-24T01:34:00.000Z",
+          suggestedActions: discordGuidance
+            ? ["guide-discord"]
+            : discordCredential
+              ? ["ingest-discord-bot-token"]
+              : [],
         },
       });
       return;

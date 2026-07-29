@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createServer } from "node:net";
 import {
   access,
   copyFile,
@@ -35,6 +36,7 @@ import {
   collectShaBoundAttestationPaths,
   createCommittedSourceSnapshot,
   createChecksumManifest,
+  createPackagedMainSmokeContract,
   createMainDeployArguments,
   createWorkerDeployArguments,
   createPayloadManifest,
@@ -59,6 +61,7 @@ import {
   renderWindowsLauncher,
   renderReleaseRouter,
   resolvePackageLegalFiles,
+  runPackagedMainSmoke,
   validateReleaseDestination,
   validateReleaseDestinationName,
   validateReleaseAttestationDiff,
@@ -1700,7 +1703,7 @@ test("isolated bundle assembly preserves live dependency state on success and fa
   await assert.rejects(readFile(failedSnapshot, "utf8"), { code: "ENOENT" });
 });
 
-test("bundle guidance is launcher-first and never presents source-checkout commands", () => {
+test("bundle guidance is Agent-first and never presents source-checkout commands", () => {
   const readme = renderBundleReadme(
     "internal-preview-blocked",
     {
@@ -1716,9 +1719,12 @@ test("bundle guidance is launcher-first and never presents source-checkout comma
   assert.match(readme, /win32\/arm64/u);
   assert.match(readme, /\.\\opendelegate\.cmd help/u);
   assert.doesNotMatch(readme, /\.\\opendelegate\.cmd init(?:\s|$)/u);
-  assert.match(readme, /skills\/opendelegate-init\/SKILL\.md/u);
-  assert.match(readme, /before the first Main initialization/u);
-  assert.match(readme, /cannot add or replace a Discord binding later/u);
+  assert.match(readme, /Set up OpenDelegate on this computer as my fixed, always-on Main Device/u);
+  assert.match(readme, /Never ask me to paste credentials, tokens, or other secrets into chat/u);
+  assert.doesNotMatch(readme, /ask me only when you need a choice or credential/u);
+  assert.doesNotMatch(readme, /Read `skills\/opendelegate-init\/SKILL\.md`/u);
+  assert.match(readme, /Discord may be deferred/u);
+  assert.match(readme, /add or replace the approved binding/u);
   assert.match(readme, /Implementation: partial=36/u);
   assert.match(readme, /THIRD_PARTY_NOTICES\.json/u);
   assert.doesNotMatch(readme, /THIRD_PARTY_NOTICES\.md/u);
@@ -1743,8 +1749,11 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "Live proof",
       locale: "en",
       supportStatusLabel: "Support status",
+      initPrompt:
+        /Set up OpenDelegate.*Never ask me to paste credentials, tokens, or other secrets into chat/u,
       adminTask: /Admin Web → Tasks → New task/u,
-      previewRestriction: /cannot add or replace a Discord binding later/u,
+      previewRestriction:
+        /Discord may be deferred.*secure credential panel.*add or replace the approved binding/u,
       unsupported: /This bundle is unsupported and must not be published under a release tag/u,
       candidate:
         /This candidate is not a supported release until it is promoted through the documented release channel/u,
@@ -1762,8 +1771,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "실제 증거",
       locale: "ko",
       supportStatusLabel: "지원 상태",
+      initPrompt: /이 컴퓨터가.*비밀값을 채팅에 붙여 넣으라고 하지 말고/u,
       adminTask: /Admin Web → Tasks → 새 작업/u,
-      previewRestriction: /나중에 Discord Binding을 추가하거나 교체할 수 없습니다/u,
+      previewRestriction:
+        /Discord 설정은 나중으로 미뤄도 됩니다.*승인된 Binding을 추가하거나 교체하세요/u,
       unsupported: /이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다/u,
       candidate: /이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다/u,
       candidateDiscordPath: /Discord를 사용하려면.*검증된 Configuration Chat 절차를 따르세요/u,
@@ -1779,8 +1790,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "実環境の証拠",
       locale: "ja",
       supportStatusLabel: "サポート状況",
+      initPrompt: /このコンピューターを.*チャットに貼り付けるよう求めず/u,
       adminTask: /Admin Web → Tasks → 新しいタスク/u,
-      previewRestriction: /後から Discord Binding を追加または置換できません/u,
+      previewRestriction:
+        /Discord 設定は後回しにできます.*承認済み Binding を追加または置換します/u,
       unsupported: /このバンドルはサポート対象外であり、リリースタグで公開してはいけません/u,
       candidate:
         /この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません/u,
@@ -1798,8 +1811,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "Preuves réelles",
       locale: "fr",
       supportStatusLabel: "Statut de prise en charge",
+      initPrompt: /Configure OpenDelegate.*secrets dans le chat/u,
       adminTask: /Admin Web → Tasks → Nouvelle tâche/u,
-      previewRestriction: /ne peut ni ajouter ni remplacer un Binding Discord ensuite/u,
+      previewRestriction:
+        /Discord peut être configuré plus tard.*ajoutez ou remplacez le Binding approuvé/u,
       unsupported:
         /Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release/u,
       candidate:
@@ -1817,8 +1832,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "Evidencia real",
       locale: "es",
       supportStatusLabel: "Estado de soporte",
+      initPrompt: /Configura OpenDelegate.*secretos en el chat/u,
       adminTask: /Admin Web → Tasks → Nueva tarea/u,
-      previewRestriction: /no puede añadir ni sustituir después un Binding de Discord/u,
+      previewRestriction:
+        /Puedes configurar Discord más adelante.*añade o sustituye el Binding aprobado/u,
       unsupported:
         /Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release/u,
       candidate:
@@ -1836,8 +1853,9 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "真实证据",
       locale: "zh-CN",
       supportStatusLabel: "支持状态",
+      initPrompt: /请把这台电脑设置为.*秘密粘贴到聊天中/u,
       adminTask: /Admin Web → Tasks → 新建任务/u,
-      previewRestriction: /无法在之后添加或替换 Discord Binding/u,
+      previewRestriction: /Discord 可以稍后配置.*添加或替换获批的 Binding/u,
       unsupported: /此捆绑包不受支持，且不得在 Release tag 下发布/u,
       candidate: /在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release/u,
       candidateDiscordPath: /如需使用 Discord.*已验证的 Configuration Chat 流程/u,
@@ -1878,7 +1896,9 @@ test("assembled bundle documentation includes complete localized launcher guidan
     );
     assert.match(content, /\.\\opendelegate\.cmd help/u);
     assert.doesNotMatch(content, /\.\\opendelegate\.cmd init(?:\s|$)/u);
-    assert.match(content, /skills\/opendelegate-init\/SKILL\.md/u);
+    assert.match(content, readme.initPrompt);
+    assert.doesNotMatch(content, /ask me only when you need a choice or credential/u);
+    assert.doesNotMatch(content, /Read `skills\/opendelegate-init\/SKILL\.md`/u);
     assert.match(content, /skills\/opendelegate-join\/SKILL\.md/u);
     assert.match(content, /docs\/GETTING_STARTED\.md/u);
     assert.match(content, /docs\/DISCORD_SETUP\.md/u);
@@ -1896,6 +1916,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
       true,
     );
     if (readme.locale !== "en") {
+      assert.doesNotMatch(
+        content,
+        /Set up OpenDelegate on this computer as my fixed, always-on Main Device/u,
+      );
       assert.doesNotMatch(content, /^Support status:/mu);
       assert.doesNotMatch(content, /^- Implementation:/mu);
       assert.doesNotMatch(content, /^- Live proof:/mu);
@@ -1933,7 +1957,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
     assert.match(candidate, /\.\/opendelegate device grant/u);
     assert.match(candidate, readme.adminTask);
     assert.doesNotMatch(candidate, /INTERNAL_PREVIEW\.md/u);
-    const agentOffset = candidate.indexOf("Read `skills/opendelegate-init/SKILL.md`");
+    const agentOffset = readme.initPrompt.exec(candidate)?.index ?? -1;
     const claimOffset = readme.claimStep.exec(candidate)?.index ?? -1;
     const discordOffset = readme.candidateDiscordPath.exec(candidate)?.index ?? -1;
     assert.notEqual(agentOffset, -1);
@@ -2157,6 +2181,63 @@ test("release smoke accepts only a natural zero exit with the shutdown marker", 
   }
 });
 
+test("packaged Main smoke retries through its real orchestration seam when the selected pair is claimed during handoff", async (t) => {
+  const collisionServers = [];
+  t.after(async () => {
+    await Promise.all(collisionServers.map((server) => closeServer(server)));
+  });
+
+  const observedListeners = [];
+  const result = await runPackagedMainSmoke(
+    {},
+    {
+      runAttempt: async ({ smokeListener }) => {
+        observedListeners.push(smokeListener);
+        const contract = createPackagedMainSmokeContract({
+          entrypoint: "/bundle/opendelegate.mjs",
+          fixture: { initArguments: ["--agent", "auto"] },
+          smokeHome: "/temporary/smoke-home",
+          smokeListener,
+        });
+        assert.deepEqual(contract.arguments, [
+          "/bundle/opendelegate.mjs",
+          "init",
+          "--home",
+          "/temporary/smoke-home",
+          "--listen-host",
+          "127.0.0.1",
+          "--listen-port",
+          String(smokeListener.mainPort),
+          "--listen-origin",
+          smokeListener.mainOrigin,
+          "--agent",
+          "auto",
+        ]);
+        assert.equal(contract.healthUrl, `${smokeListener.mainOrigin}/health/live`);
+        assert.equal(contract.adminUrl, `${smokeListener.mainOrigin}/`);
+        assert.equal(contract.claimUrl, `${smokeListener.claimOrigin}/`);
+        assert.equal(contract.claimApiUrl, `${smokeListener.claimOrigin}/api/v1/auth/claim`);
+        assert.equal(contract.loginUrl, `${smokeListener.mainOrigin}/api/v1/auth/login`);
+        assert.equal(contract.sessionUrl, `${smokeListener.mainOrigin}/api/v1/auth/session`);
+        if (observedListeners.length === 1) {
+          collisionServers.push(await listenLoopback(smokeListener.mainPort));
+          collisionServers.push(await listenLoopback(smokeListener.claimPort));
+          await Promise.all(collisionServers.map((server) => closeServer(server)));
+          throw Object.assign(new Error("Simulated transient listener handoff collision."), {
+            code: "MAIN_LISTENER_UNAVAILABLE",
+          });
+        }
+        return "passed-after-retry";
+      },
+    },
+  );
+
+  assert.equal(result, "passed-after-retry");
+  assert.equal(observedListeners.length, 2);
+  assert.notEqual(observedListeners[1].mainPort, observedListeners[0].mainPort);
+  assert.equal(observedListeners[1].claimPort, observedListeners[1].mainPort + 1);
+});
+
 test("packaged Main smoke keeps Windows ACL initialization and listener readiness separately bounded", async () => {
   let output = "";
   const observedTimeouts = [];
@@ -2274,3 +2355,30 @@ test("portable release payloads reject directory symlinks or Windows junctions",
 
   await assert.rejects(assertPortableTree(root), /symbolic link or junction/u);
 });
+
+function listenLoopback(port) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", rejectPromise);
+    server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+      server.removeListener("error", rejectPromise);
+      resolvePromise(server);
+    });
+  });
+}
+
+function closeServer(server) {
+  if (!server.listening) {
+    return Promise.resolve();
+  }
+  return new Promise((resolvePromise, rejectPromise) => {
+    server.close((error) => {
+      if (error === undefined) {
+        resolvePromise();
+      } else {
+        rejectPromise(error);
+      }
+    });
+  });
+}

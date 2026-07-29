@@ -60,7 +60,7 @@ export class SystemdCredentialKeyProvider implements SecretKeyProvider {
       if (
         !directoryMetadata.isDirectory() ||
         directoryMetadata.isSymbolicLink() ||
-        (process.platform !== "win32" && (directoryMetadata.mode & 0o077) !== 0)
+        (process.platform !== "win32" && !hasSafeCredentialDirectoryMode(directoryMetadata.mode))
       ) {
         throw backendUnavailable();
       }
@@ -76,7 +76,7 @@ export class SystemdCredentialKeyProvider implements SecretKeyProvider {
         !metadata.isFile() ||
         metadata.nlink !== 1 ||
         metadata.size !== KEY_BYTES ||
-        (process.platform !== "win32" && (metadata.mode & 0o077) !== 0)
+        (process.platform !== "win32" && !hasSafeCredentialFileMode(metadata.mode))
       ) {
         throw backendUnavailable();
       }
@@ -105,6 +105,18 @@ export class SystemdCredentialKeyProvider implements SecretKeyProvider {
       await handle?.close().catch(() => undefined);
     }
   }
+}
+
+function hasSafeCredentialDirectoryMode(mode: number): boolean {
+  const permissions = mode & 0o777;
+  // systemd 259 exposes service credentials through a private mount as 0550/0440.
+  // Owner-only fixture and foreground modes remain accepted for compatibility.
+  return (permissions & 0o077) === 0 || permissions === 0o550;
+}
+
+function hasSafeCredentialFileMode(mode: number): boolean {
+  const permissions = mode & 0o777;
+  return (permissions & 0o077) === 0 || permissions === 0o440;
 }
 
 async function canonicalizeIfPresent(path: string): Promise<string> {

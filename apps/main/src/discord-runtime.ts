@@ -86,7 +86,12 @@ export interface DiscordRuntimeScheduler {
 export interface DiscordMainRuntimeOptions {
   readonly adapter: Pick<
     DiscordForumAdapter,
-    "close" | "flushOutbox" | "publishTaskProjection" | "start"
+    | "close"
+    | "createTaskThread"
+    | "flushOutbox"
+    | "publishTaskProjection"
+    | "reconcilePending"
+    | "start"
   >;
   readonly repository: Pick<DiscordStateRepository, "getGatewayCursor" | "listBindings">;
   readonly tasks: DiscordProjectionTaskPort;
@@ -189,6 +194,19 @@ export class DiscordMainRuntime {
     return Object.freeze(this.#diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
   }
 
+  public async presentTask(taskId: string): Promise<void> {
+    if (this.#status.code !== "DISCORD_READY") {
+      throw new DiscordApiError("OFFLINE", "Discord is not ready to present a new Task.");
+    }
+    const task = await this.#tasks.get(taskId);
+    let artifact: NonNullable<TaskChannelProjection["artifact"]> | undefined;
+    if (this.#artifactPresentation !== undefined) {
+      artifact = await this.#artifactPresentation.forTask(task.taskId);
+    }
+    await this.#adapter.createTaskThread(projectTask(task, artifact));
+    await this.#adapter.flushOutbox();
+  }
+
   public async start(): Promise<DiscordRuntimeStatus> {
     if (this.#closed) {
       return this.#status;
@@ -256,6 +274,8 @@ export class DiscordMainRuntime {
         this.#cursorAtConnectionStart = cursorFingerprint(before);
         await this.#adapter.start();
         this.#adapterStarted = true;
+      } else {
+        await this.#adapter.reconcilePending();
       }
 
       const cursor = await this.#repository.getGatewayCursor();
@@ -623,6 +643,7 @@ export async function createProductionDiscordRuntime(
       options.api ??
       new FetchDiscordApiPort({
         applicationId: options.config.applicationId,
+        guildId: options.config.guildId,
         productVersion: options.productVersion,
         credentialProvider,
         interactionTokenVault,

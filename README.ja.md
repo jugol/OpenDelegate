@@ -3,15 +3,53 @@
 言語：[English](README.md) · [한국어](README.ko.md) · **[日本語](README.ja.md)** ·
 [Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md)
 
-OpenDelegate は、1 台の固定 Main Device と複数の macOS、Windows、Linux Device にまたがる AI
-Agent を連携させる、個人向けのセルフホスト型 Control Plane です。
+**Discord で望む成果を伝えてください。実行場所と方法は OpenDelegate が決めます。** 固定された常時稼働の
+Main が macOS、Windows、Linux を連携し、指示に使った端末は切断できます。
 
 > [!TIP]
-> **ここから始めてください:** [クイックスタート](#クイックスタート) ·
+> **ここから始めてください:** [Agent に任せる推奨インストール](#推奨インストールagent-に任せる) ·
+> [詳細セットアップ](#詳細セットアップ) ·
 > [完全セットアップガイド（英語）](docs/GETTING_STARTED.md) ·
 > [Discord Forum セットアップ](docs/DISCORD_SETUP.md)
 
-## クイックスタート
+## 推奨インストール：Agent に任せる
+
+**これが最短の推奨手順です。最初に OpenDelegate のコマンドを覚える必要はありません。**
+
+1. 固定された常時稼働の **Main Device** として使うコンピューターへ移動します。
+2. そのコンピューターで Codex や Claude などの有能なローカル Agent を開き、このリポジトリの
+   URL を渡します。
+3. 次のように依頼します。
+
+   > このコンピューターを、固定された常時稼働の OpenDelegate Main Device としてセットアップして
+   > ください。このリポジトリ内の Main インストール手順を自分で見つけて従い、安全に実行できる
+   > 作業はすべて進めてください。私の判断または Owner 専用の安全な操作が必要なときだけ質問して
+   > ください。認証情報、Token、その他の Secret をチャットに貼り付けるよう求めず、Provider
+   > 本来の認証手順または OpenDelegate の安全な入力画面へ案内してください。Admin Web が開いて
+   > 残りの設定を完了できる状態になるまで続けてください。
+
+4. Agent の質問に答えます。Agent は init skill を自分で見つけ、source と release bundle を
+   区別し、support status を検証し、Runtime データを checkout の外に保持して、README を
+   shell コマンドへ書き換える作業なしで Admin Web を起動します。
+
+Admin Web が開いたら、右側の **Configuration Chat** で続けます。現在の設定を確認してから、
+Device Assessment、内蔵 SQLite または外部 PostgreSQL、Codex と Claude、Discord Forum、
+接続 Route、Agent Model、Artifact の公開方法、Service の起動、追加 Device を自然言語で案内する
+よう依頼してください。OpenDelegate は設定画面を一つずつ探させるのではなく、会話の中にレビュー
+可能な構造化変更を表示します。
+
+![Device Assessment と Configuration Chat を表示した OpenDelegate Admin Web](docs/design/admin-configuration-chat-implemented.png)
+
+_決定論的な Browser Fixture から取得した現在の Admin Web です。まず **デバイスを評価** を実行し、
+残りの設定は Configuration Chat で進めてください。上部の banner はこの source build が
+未サポートであることを正確に示しており、この画像は実 Platform や Release の証拠ではありません。_
+
+SQLite は URI 不要のローカル既定値です。Provider の認証情報や Discord Token をチャットへ
+貼り付けないでください。実際に必要な場合だけ、Configuration Chat が理由を説明して専用の安全な
+入力フォームを表示します。Main の準備後は **Device を追加** で one-time Grant を発行し、追加
+コンピューターの Agent に渡してください。その Agent が Worker join 手順を自分で見つけます。
+
+## 詳細セットアップ
 
 > [!WARNING]
 > このリポジトリがビルドするのは、**サポート対象外の内部プレビュー**です。実環境の Platform、Provider、Discord、Network、Permission、Packaging の証拠は未完成です。リリース済みと表示したり、無人の本番 Control
@@ -20,35 +58,50 @@ Agent を連携させる、個人向けのセルフホスト型 Control Plane �
 OpenDelegate は Agent とともにインストールします。Owner 向けの導入手順に `npm run start`
 はありません。
 
-1. OS とアーキテクチャに合う bundle を用意し、信頼できる公開チャネルから bundle とは別に取得した digest と
-   `SHA256SUMS`
-   を照合します。現在作成できるのは明示的に表示された内部プレビューの bundle だけです。[内部プレビューのビルド](#内部プレビューのビルド)を参照してください。
-2. Discord を使用する場合は、[Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従い、最初の Main 初期化前に完全な Binding を用意します。現在のプレビューでは初期化後に Binding を追加または置換できません。
-3. 展開した bundle ディレクトリを Codex または Claude で開き、次の文をそのまま送信します: _“Read
-   `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main
-   Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop
-   if a required safety check fails.”_
+1. Main にするコンピューターで、このリポジトリ URL を Codex または Claude に渡してください。
+   対応済みの platform bundle がある場合は、展開したディレクトリを代わりに開きます。Agent が
+   source と bundle を判定し、`supportStatus` と `SHA256SUMS` を確認します。現在の source が
+   生成できるのは表示済みの[内部プレビュー](#内部プレビューのビルド)だけです。
+2. [Agent に任せる推奨インストール](#推奨インストールagent-に任せる)の依頼文を送信します。
+   Agent が `AGENTS.md` と `skills/opendelegate-init/SKILL.md` を自分で見つけるため、Owner が
+   内部のファイル構成を知る必要はありません。
+3. 最初の Main 初期化では Discord を省略できます。後から Owner 認証済みの Configuration Chat
+   で Forum Binding を追加、置換、拡張、無効化できます。必要な App、Forum、Tag、Permission は
+   [Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従ってください。
 4. Agent の案内に従って Owner Claim を完了し、10 個の one-time Recovery
    Code をすべて安全に保存します。
-5. Admin Web 右下の Configuration
-   Chat で Device、Agent、Route、Artifact の設定と、事前に準備した Discord の状態を確認します。
+5. Admin Web で先に **デバイスを評価** を実行し、Codex、Claude、ブラウザー自動化、Computer Use、
+   Knowledge の決定論的な結果を確認してから、右下の Configuration Chat で Device、Agent、Route、
+   Artifact、および任意の Discord 設定を完了します。Provider の認証情報はチャットに入力せず、
+   Discord トークンは安全な認証情報パネルにのみ入力します。
 6. Device を追加する際は、Configuration Chat で有効期間の短い Single-use Device
-   Grant を発行します。ファイルを開かずに Owner が管理する安全な方法で転送し、対象 Device の Agent に
-   `skills/opendelegate-join/SKILL.md` の手順を実行するよう依頼してください。
+   Grant を発行します。ファイルを開かずに Owner が管理する安全な方法で転送し、対象 Device の Agent
+   にこのコンピューターを Worker として接続するよう依頼してください。Agent が
+   `skills/opendelegate-join/SKILL.md` を自分で見つけます。
 7. Discord を設定した場合は、独立した Task ごとに Forum へ新しい投稿を作成します。同じ投稿への返信は同じ Task と native
    Agent
    Session を継続し、新しい投稿はクリーンな Context から始まります。Discord を使用しない場合や利用できない場合は、**Admin
    Web → Tasks →新しいタスク**から作成します。
+
+各 Device の既定値は **Agent の実行 → 自動**です。Device 画面で **優先**または**固定**を
+選ぶか、その Device の Configuration Chat に _「この NAS では Claude Opus を使用して」_と
+伝えられます。Mac Studio の画面では、希望する GPT モデルを同じ方法で設定します。
+OpenDelegate は各リクエストを対象 Device の検証済みモデルカタログと照合し、正確な
+Provider-native モデル ID をレビュー用に表示して、新しい native Session から適用します。
 
 Owner Recovery、追加 Device、最初の Task、トラブルシューティングを含む
 [完全なセットアップガイド（英語）](docs/GETTING_STARTED.md)を参照してください。
 
 ## OpenDelegate が必要な理由
 
-スマートフォンやコンピューターから Task を作成すると、Main Agent が Task を Work
-Order に分割し、実行可能な Device へ振り分けます。すべての Agent セッションを手作業で開き直すことなく、永続的で検証可能な 1 つの結果を受け取れます。
+スマートフォンやコンピューターから、配置計画ではなく成果を伝えます。Main Agent は必要に応じて
+Windows 開発、macOS ビルドや署名、Linux 配備へ分割し、実際の Device と Route は決定論的に選ばれます。
 
 - Discord Forum の 1 つの投稿が、1 つの永続的な Task と Context Boundary に対応します。
+- 任意の決定論的 Monitor は、障害や改善を同じ通常の Forum 連携 Task として作成できます。
+  Category ごとに無効化、Review 提案、自動実行を選べますが、Policy、Approval、Budget、Audit は迂回しません。
+- 指示に使ったスマートフォンやノート PC は切断できます。現在の作業に必要な固定 Main と Device
+  だけが利用可能であれば動作します。
 - 決定論的なソフトウェアが ID、Policy、Health、Routing、Lease、Retry、Persistence、State
   Transition を管理します。Agent は意味的な判断と割り当てられた作業を担当します。
 - Worker は Main にのみ接続します。NxN SSH Mesh も、データベースへの直接アクセスも必要ありません。
@@ -56,7 +109,9 @@ Order に分割し、実行可能な Device へ振り分けます。すべての
   Contract の背後に配置され、有用な Provider-native Session は再開できます。
 - 各 Device は、選択的に使用するリンク済み Markdown
   Knowledge をローカルに保持します。Main がそのファイル名、タイトル、リンク、グラフ、インデックス、スニペット、内容を受け取ることはありません。
-- リッチな結果は、明示的な Exposure Policy の下で Main が配信する Artifact にできます。
+- 結果は Discord の返信や添付、ファイル、Artifact、ホストされた画面、検証済み Git 参照として返せます。
+- Login、MFA、CAPTCHA、法的確認、OS Permission が必要な場合、同じ Task は Main 経由の期限・取消可能な
+  Owner Handoff で一時停止し、Owner の返信後に再開します。
 
 ## アーキテクチャ
 
@@ -172,7 +227,8 @@ Round-trip、Clean Shutdown の限定的な Smoke Evidence が含まれます。
 Destination 名には `internal-preview` を含める必要があります。生成される `INTERNAL_PREVIEW.md` と
 `release-metadata.json` は、Bundle がサポート対象外であることと、正確な Release Evidence
 State を記録します。Discord とその他の Owner の選択を永続的な Main 設定の作成前に確定できるよう、組み立て済み Bundle は上記の Agent-first
-[クイックスタート](#クイックスタート)からのみ初期化してください。内部プレビューは Foreground で動作し、永続的な OS
+[推奨インストール](#推奨インストールagent-に任せる)からのみ初期化してください。内部プレビューは Foreground
+で動作し、永続的な OS
 Service をインストールせず、Release Tag として公開してはいけません。
 
 Acceptance Criterion が 1 つでも未完了の場合、Production Build は意図的に失敗します。
@@ -246,9 +302,12 @@ pnpm dev:admin
 Launcher を使用してください。
 
 Codex と Claude の認証は、既定で OpenDelegate Device ごとの `state/providers/codex` と
-`state/providers/claude` に分離されます。セットアップ後、その controlled
-home 自体で対話的に認証してください。OpenDelegate はユーザーのグローバルな provider
-home からログインをコピーも継承もせず、first-class provider Run は認証情報の環境変数を拒否します。
+`state/providers/claude` に分離されます。Owner は Main init で
+`--codex-home ABSOLUTE_PATH` または `--claude-home ABSOLUTE_PATH` を指定し、既存のローカル
+Provider ディレクトリを明示的な共有 SSOT として利用できます。OpenDelegate はログイン情報を
+コピーせず、そのパスを保存し、実行とデバイス評価に同じ home を使用します。Provider の設定・
+プラグイン・キャッシュ・native session ストレージは共有されますが、各 Task は引き続き固有の
+native session を使用します。グローバル home を暗黙に継承することはありません。
 
 ## リポジトリ構成
 

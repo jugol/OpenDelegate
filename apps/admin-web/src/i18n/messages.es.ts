@@ -75,23 +75,44 @@ export const spanishMessages = {
     unavailableMessage:
       "El Main indica que la evaluación del dispositivo o la mensajería del agente de configuración no están disponibles. Los datos visibles del dispositivo proceden únicamente del informe determinista del entorno de ejecución del Main.",
     failedMessage:
-      "El agente de configuración no pudo responder. No se cambió ninguna configuración.",
+      "El agente de configuración local no estaba disponible o fue interrumpido. OpenDelegate no repitió una operación de resultado incierto. Los cambios completados se conservan; revisa la configuración actual y vuelve a intentarlo.",
+    discordOnboardingMessage:
+      "Discord todavía no está conectado. Estoy comprobando la vinculación actual y preparando la guía de configuración.",
     secureStoreFailed:
       "No se pudo guardar la credencial de forma segura. No se envió al chat de configuración.",
-    secureTitle: "Guardar una credencial de base de datos",
-    secureIntro:
-      "El valor se envía directamente al almacén de secretos administrado de este dispositivo principal. El agente solo recibe una referencia opaca.",
+    guidedSetupTitle: "Configuración guiada",
+    guidedSetupIntro:
+      "Elige un objetivo. El agente inspeccionará la configuración actual y guiará solo los pasos pendientes.",
+    discordSetupTitle: "Configurar o revisar Discord",
+    discordSetupDescription:
+      "Conecta un bot y uno o más canales de foro sin poner su token en el chat.",
+    databaseSetupTitle: "Usar PostgreSQL externo",
+    databaseSetupDescription: "SQLite ya está activo. No se necesita ninguna URI de base de datos.",
+    discordSetupRequest:
+      "Supón que quizá estoy configurando un bot de Discord por primera vez. Inspecciona primero la conexión actual y explica cómo las publicaciones del foro se convierten en Tasks de OpenDelegate. Dame un resumen breve y después guíame por una sola etapa pendiente cada vez. Para la etapa actual, dime adónde ir, qué hacer, por qué es necesario, cómo comprobar que funcionó y qué debo enviarte; espera mi confirmación antes de continuar. Define los términos desconocidos y pide solo los valores no secretos que falten. Nunca me pidas pegar el token del bot en el chat; indícame cuándo usar el formulario seguro.",
+    databaseSetupRequest:
+      "Explica primero mi configuración de base de datos actual. SQLite es el valor predeterminado y no necesita URI. Si elijo PostgreSQL externo, guía la migración y los requisitos de reinicio del servicio antes de proponer cambios, e indícame que use el formulario seguro en lugar de pegar la URI en el chat.",
+    discordSecureTitle: "Guardar el token de Discord de forma segura",
+    discordSecureIntro:
+      "Úsalo solo cuando el agente solicite el token. OpenDelegate lo guarda en este dispositivo Main y solo entrega al agente una referencia opaca.",
+    databaseSecureTitle: "Credencial de PostgreSQL externo",
+    databaseSecureIntro:
+      "Esta URI opcional sirve para un despliegue PostgreSQL externo. OpenDelegate la guarda en este dispositivo Main y solo entrega al agente una referencia opaca.",
     databaseUriLabel: "URI de la base de datos",
     databaseUriPlaceholder: "URI de conexión de PostgreSQL",
+    discordTokenLabel: "Token del bot de Discord",
+    discordTokenPlaceholder: "Token del bot del portal para desarrolladores de Discord",
     secureNotice:
       "Tras enviarlo, el valor original se borra de este formulario y nunca se convierte en un mensaje.",
     secureStore: "Guardar de forma segura",
     secureStoring: "Guardando de forma segura…",
     secureStored: "Guardado localmente como {reference}",
     secureReferenceMessage: "Usa esta referencia segura de base de datos: {reference}",
+    secureDiscordReferenceMessage:
+      "Usa esta referencia segura del token del bot de Discord: {reference}. Su botTokenAlias es {alias}.",
     title: "Chat de configuración",
     subtitle:
-      "La configuración del dispositivo se mantiene separada de las conversaciones de tareas.",
+      "Configura aquí este dispositivo y los servicios de OpenDelegate. Las conversaciones de tareas se mantienen separadas.",
     restore: "Restaurar el chat de configuración",
     expand: "Ampliar el chat de configuración",
     close: "Cerrar el chat de configuración",
@@ -110,6 +131,11 @@ export const spanishMessages = {
     askPlaceholder: "Pregunta sobre este dispositivo…",
     send: "Enviar mensaje",
     open: "Abrir el chat de configuración",
+    openUnread: "Abrir el chat de configuración — hay una respuesta nueva",
+    notificationRegion: "Notificaciones del chat de configuración",
+    unreadAnnouncement: "Hay una respuesta nueva en el chat de configuración. {count} sin leer.",
+    unreadStatus: "Nueva respuesta de configuración",
+    unreadCount: "{count} sin leer",
   },
   navigation: {
     devices: "Dispositivos",
@@ -129,6 +155,21 @@ export const spanishMessages = {
     runs: "Ejecuciones",
     authority: "Autoridad y recursos",
     configure: "Configurar",
+    assessDevice: "Evaluar dispositivo",
+    assessingDevice: "Evaluando…",
+    assessmentFailed:
+      "La evaluación del dispositivo falló. No se reemplazó la observación guardada.",
+    localAgentSetup: "Configuración del Agent local",
+    localAgentSetupIntro:
+      "El chat de configuración usa el Main Agent elegido durante la inicialización de OpenDelegate. Estará disponible cuando el adaptador local esté instalado, autenticado y supere la comprobación de compatibilidad.",
+    codexSetupGuide:
+      "Codex: elige Codex durante la inicialización y comparte explícitamente un Codex home ya autenticado si quieres reutilizarlo.",
+    claudeSetupGuide:
+      "Claude: usa --claude-home para reutilizar un directorio de Claude autenticado, o autentica el perfil de Claude administrado por Main en este dispositivo.",
+    agentCredentialNote:
+      "Las credenciales del proveedor permanecen en este dispositivo. Nunca las pegues en el chat de configuración.",
+    assessmentScope:
+      "La evaluación comprueba Codex, Claude, la automatización del navegador, Computer Use y el Knowledge local sin pedir a un LLM que los deduzca.",
     facts: "Datos del dispositivo",
     roles: "Roles",
     instructions: "Instrucciones",
@@ -137,12 +178,58 @@ export const spanishMessages = {
     noRoutes: "No hay ninguna ruta de transporte configurada.",
     runtimeStatus: "Estado del entorno de ejecución",
     transportRoutes: "Rutas de transporte",
+    wakeOnLan: "Wake-on-LAN",
+    wakeTargetSetting: "Configuración de activación del dispositivo",
+    automaticWake: "Activación automática de OpenDelegate",
+    wakeTargetEnabled: "Activada",
+    wakeTargetDisabled: "Desactivada",
+    wakeTargetUnsupported: "No compatible",
+    wakeTargetUnknown: "Sin verificar",
+    automaticWakeRelayRequired: "Se necesita un relé",
+    automaticWakeUnavailable: "No disponible",
+    automaticWakeUnknown: "Sin verificar",
+    wakeRelayRequiredDescription:
+      "Este dispositivo indica que la activación mediante paquete mágico está habilitada, pero OpenDelegate aún necesita un relé en línea verificado en la misma red local. Tailscale o el acceso IP enrutado no bastan para activarlo.",
+    wakeUnavailableDescription:
+      "La activación automática no está disponible porque el paquete mágico está deshabilitado o no es compatible con este dispositivo.",
+    wakeUnknownDescription:
+      "OpenDelegate no pudo verificar la configuración de activación de este dispositivo, por lo que no infiere si puede activarse.",
+    wakeObserved: "Observado en el dispositivo · {time}",
+    wakeLastObserved: "Última observación antes de quedar sin conexión · {time}",
+    wakeNeverObserved: "Aún no hay una observación autenticada.",
     knowledgeHealth: "Estado del conocimiento local",
     currentWork: "Trabajo actual",
     policies: "Políticas ejecutables",
     noPolicies: "No hay una proyección de políticas ejecutables disponible.",
     agentAdapters: "Adaptadores de Agent",
     noAgentAdapters: "No hay observaciones de adaptadores de Agent.",
+    agentExecution: "Ejecución del Agent",
+    agentProfileTarget: "Destino del perfil de Agent",
+    workerAgent: "Agent ejecutor",
+    coordinatorAgent: "Agent coordinador",
+    currentBinding: "Vinculación actual",
+    automaticSelection: "OpenDelegate elige una vinculación probada para cada sesión nueva.",
+    agentProfileHint:
+      "Los perfiles se aplican a sesiones nativas nuevas. Las sesiones Task existentes conservan su vinculación original.",
+    profileMode: "Modo de selección",
+    profileAuto: "Automático",
+    profilePrefer: "Preferir",
+    profilePinned: "Fijado",
+    profileAutoDescription:
+      "Elige de forma determinista un adaptador y modelo listos y probados para cada sesión nueva.",
+    profilePreferDescription:
+      "Usa primero la vinculación principal y solo el respaldo explícito cuando sea necesario.",
+    profilePinnedDescription:
+      "Usa exactamente esta vinculación. Si no está disponible, se detiene sin sustituir otro modelo.",
+    primaryBinding: "Vinculación principal",
+    fallbackBinding: "Vinculación de respaldo",
+    noFallback: "Sin respaldo",
+    noVerifiedModels:
+      "No hay un catálogo de modelos listo y probado. Evalúa este Device antes de elegir un modelo exacto.",
+    configureAgentProfile: "Revisar en Configuration Chat",
+    modelCatalog: "{count} modelos verificados",
+    defaultModel: "Predeterminado",
+    moreModels: "+{count} más",
     resourceLocks: "Bloqueos de recursos",
     noResourceLocks: "No hay ningún bloqueo de recurso con nombre activo.",
     verifiedEvidence: "Verificado · {source} · {time}",
@@ -408,9 +495,9 @@ export const spanishMessages = {
   },
   join: {
     eyebrow: "Inscripción de dispositivo",
-    title: "Unir un dispositivo",
+    title: "Añadir un dispositivo",
     intro:
-      "Crea un archivo de inscripción de corta duración y un solo uso, descárgalo una vez y ejecuta el comando Worker incluido en el dispositivo nuevo.",
+      "Deja que el Agent del nuevo Mac, dispositivo Windows o Linux instale su Worker. Main solo proporciona un archivo de inscripción temporal y de un solo uso.",
     unavailable: "La inscripción de dispositivos no está configurada en este Main.",
     loadFailed: "No se pudo cargar el estado de inscripción de dispositivos.",
     deviceId: "ID del dispositivo",
@@ -431,9 +518,23 @@ export const spanishMessages = {
     fingerprint: "Huella de Main esperada",
     endpoints: "Endpoints del canal Worker",
     download: "Descargar archivo",
-    joinCommand: "Ejecutar en el dispositivo nuevo",
+    joinCommand: "Comando manual (avanzado)",
     copyCommand: "Copiar comando",
     copyDone: "Copiado",
+    recommended: "Recomendado",
+    agentAssistedTitle: "Deja que el Agent del dispositivo nuevo lo instale",
+    agentAssistedDetail:
+      "Abre Codex o Claude en el dispositivo nuevo. Tras descargar el archivo, entrega al Agent su ruta local —no su contenido— junto con el texto siguiente.",
+    agentPromptLabel: "Texto para Codex o Claude en el dispositivo nuevo",
+    agentPrompt:
+      "Instala OpenDelegate Worker en este dispositivo desde https://github.com/jugol/OpenDelegate. Sigue el README y skills/opendelegate-join/SKILL.md. Únelo usando el archivo de inscripción sin abrir <absolute-path-to/{filename}>. Nunca muestres, pegues ni registres su contenido. Configura el servicio nativo de este sistema operativo, verifica la conexión con Main e informa cuando el dispositivo aparezca en Admin Web.",
+    copyAgentPrompt: "Copiar texto para el Agent",
+    afterJoin:
+      "Cuando aparezca a la izquierda, abre su chat de configuración para evaluarlo y definir nombre, roles e instrucciones.",
+    needHelp: "¿Quieres que OpenDelegate te guíe?",
+    helpDetail:
+      "El chat de configuración explica la transferencia segura, el comando del dispositivo y la verificación sin exponer el archivo.",
+    openSetupChat: "Preguntar al chat de configuración",
     recent: "Archivos recientes",
     none: "No se ha emitido ningún archivo de inscripción.",
     statusActive: "Activo",
@@ -441,9 +542,12 @@ export const spanishMessages = {
     statusExpired: "Caducado",
     statusRevoked: "Revocado",
     stepsTitle: "Flujo de unión seguro",
-    stepOne: "Genera y descarga el archivo de un solo uso en Main.",
-    stepTwo: "Muévelo mediante una transferencia local segura del sistema.",
-    stepThree: "Ejecuta el comando Worker incluido; el archivo usado se elimina.",
+    stepOne:
+      "Abre Codex o Claude en el dispositivo nuevo y pídele que prepare OpenDelegate Worker.",
+    stepTwo:
+      "Genera aquí el archivo de un solo uso y muévelo sin abrir mediante una conexión autenticada o una transferencia local segura.",
+    stepThree:
+      "Da la ruta al Agent del dispositivo nuevo. El Worker se une a Main y elimina el archivo usado.",
   },
   artifact: {
     eyebrow: "Resultado de tarea",
@@ -601,6 +705,10 @@ export const spanishMessages = {
     development: "Desarrollo",
     computerUse: "Computer Use",
     browserAutomation: "Automatización del navegador",
+    configurationAssessmentIntro:
+      "Empieza por evaluar el dispositivo. Después podré explicar el estado observado de Codex, Claude, la automatización del navegador, Computer Use y el Knowledge local, y ayudarte a proponer roles o instrucciones. El chat no puede ejecutar la evaluación y las credenciales del proveedor no deben incluirse en los mensajes.",
+    configurationAssessmentReadyIntro:
+      "La evaluación del dispositivo está completa. Ahora puedo explicar el estado observado de Codex, Claude, la automatización del navegador, Computer Use y el Knowledge local, y ayudarte a proponer roles o instrucciones. No incluyas credenciales del proveedor en los mensajes.",
     localNetwork: "Red local",
     healthyPriorityOne: "En buen estado · Prioridad 1",
     healthyPriority: "En buen estado · Prioridad {priority}",

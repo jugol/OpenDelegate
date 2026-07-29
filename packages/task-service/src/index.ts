@@ -1253,6 +1253,7 @@ export {
   type AuthoritativeWorkerTaskExecutorClock,
   type AuthoritativeWorkerTaskExecutorIdSource,
   type AuthoritativeWorkerTaskExecutorOptions,
+  type DirectPlanningCompletionAuthorizer,
   type TaskEvidenceVerifier,
   type TaskWorkPlanDecision,
   type TaskWorkPlanner,

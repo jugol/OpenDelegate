@@ -7,15 +7,18 @@ compacted or lost. It is not a substitute for the full product specification.
 
 ## Product in one paragraph
 
-OpenDelegate is a personal, self-hosted control plane that runs continuously on one
-fixed Main Device. An approved owner creates work primarily through Discord Forum
-posts. A Main Agent keeps one coordinator session per Task, decomposes work, selects
-eligible Devices, and launches configured Codex, Claude, or custom agent adapters on
-those Devices. Deterministic software handles identity, health, routing, leases,
+OpenDelegate is a personal, self-hosted intent-to-outcome control plane that runs
+continuously on one fixed Main Device. An approved owner states the desired outcome
+primarily through a Discord Forum post; the owner does not choose a Device, operating
+system, route, Agent provider, or multi-Device split unless that choice materially
+changes the requested outcome. A Main Agent keeps one coordinator session per Task,
+decomposes work, and launches configured Codex, Claude, or custom agent adapters on
+eligible Devices. Deterministic software handles identity, health, routing, leases,
 policy, retries, persistence, and presentation. Workers report observable progress
-and artifacts to the Main, which continues the Task. Each Device also owns a
-strictly local, Obsidian-style directory of linked Markdown Knowledge files used only
-as selective context for agents running on that Device.
+and artifacts to Main, which continues the Task and returns the outcome as a Discord
+result, file, Artifact, hosted view, Git reference, or bounded Owner Handoff. Each
+Device also owns a strictly local, Obsidian-style directory of linked Markdown
+Knowledge files used only as selective context for agents running on that Device.
 
 ## Non-negotiable invariants
 
@@ -79,6 +82,39 @@ as selective context for agents running on that Device.
     parallel, but one Codex or Claude session cannot receive concurrent turns.
 23. **Automatic work is bounded.** Auto and Autonomous modes still obey configurable
     time, retry, Work Order, token, and cost budgets.
+24. **The owner specifies outcomes, not placement.** Main infers capability and OS
+    requirements, may decompose one Task across heterogeneous Devices, and leaves
+    actual placement and route selection to deterministic eligibility and scheduling.
+    Placement remains observable in Admin and audit, but is not routine Task input.
+25. **Human intervention is bounded and resumable.** Login, MFA, CAPTCHA, legal
+    confirmation, OS permission, or another irreducibly human step pauses the same
+    Task and uses a Main-mediated Owner Handoff when available. Handoff access is
+    authenticated or explicitly exposed, time-bounded, revocable, and audited. Raw
+    Worker desktop endpoints and credentials are never placed in Discord or Agent
+    context by default.
+26. **Agent selection is durable configuration.** Main stores a typed Agent
+    Execution Profile for every Worker-capable Device, including its own co-located
+    Worker, and a separate Coordinator profile for Main. Profiles select an Agent
+    Adapter and an exact provider-native model; ordinary Task context does not carry
+    the complete model catalog. The Coordinator profile selects within the
+    authenticated Main Agent runtime composed at startup; changing that runtime's
+    provider or adapter remains an explicit Main Agent reconfiguration and restart.
+27. **Exact Agent bindings fail closed.** A pinned adapter or model is never silently
+    substituted. Prefer-mode fallback is used only when it is explicitly configured,
+    and the exact effective binding is copied into the immutable Run assignment and
+    native-session lineage.
+28. **Provider updates are release-gated maintenance.** Registry comparison and
+    dependency automation may discover or propose Codex and Claude versions, but
+    discovery never mutates an installed Device. A source compatibility target is
+    not a supported release; applicable live Agent and platform gates remain required
+    before release promotion. Device-side automatic upgrades are not exposed until a
+    durable rollback-capable maintenance runtime exists.
+29. **Wake-on-LAN readiness is evidence, not an inference.** A Worker may report a
+    bounded, non-secret observation that a local network adapter is enabled for magic
+    packet wake. Main retains the last authenticated observation while that Worker is
+    offline. OpenDelegate reports automatic wake as ready only when a separately
+    verified, online wake relay can reach the target broadcast domain; a Tailscale or
+    ordinary routed endpoint alone is not a wake path.
 
 ## Core domain terms
 
@@ -114,6 +150,8 @@ sections:
 - **Instructions** — persistent guidance for agents working on the Device.
 - **Policies** — machine-enforced action permissions.
 - **Runtime Status** — health, load, active Runs, locks, and connection state.
+- **Agent Execution Profile** — Auto, Prefer, or Pinned selection for the Device's
+  Worker Agent Adapter and exact model, including only explicit fallbacks.
 
 Workers may update observations and propose Role or Instruction changes. Main may
 accept and persist those changes autonomously with an audit record. Workers cannot
@@ -169,8 +207,23 @@ Worker Session.
 ### Agent Adapter
 
 The integration boundary for detecting, starting, resuming, steering, cancelling,
-and observing an agent runner. First-class adapters target Codex and Claude; a
-generic command adapter supports extension.
+observing, and listing supported models for an agent runner. First-class adapters
+target Codex and Claude; a generic command adapter supports extension.
+
+### Agent Binding
+
+The exact Agent Adapter provider, adapter identity, provider-native model ID, and
+optional provider tuning selected for one Run or native session. Display labels and
+owner aliases are resolved against the target Device's verified catalog and are not
+stored as substitutes for the provider-native model ID.
+
+### Agent Execution Profile
+
+Durable typed configuration controlling Agent Binding selection. `Auto` lets
+deterministic eligibility choose among ready adapters. `Prefer` tries a primary
+binding followed only by configured fallbacks. `Pinned` requires its exact binding
+and fails closed when unavailable. Main has separate Coordinator and co-located
+Worker profiles.
 
 ### Resource Lock
 
@@ -189,6 +242,13 @@ useful, Device-specific operational memory.
 A durable Task result such as Markdown, an image, a PDF, a log bundle, a patch, or a
 static HTML report. Artifact metadata lives in Main's database; bytes live in a
 configured artifact store.
+
+### Owner Handoff
+
+A Task-scoped pause in which the owner performs an irreducibly human action through a
+Main-mediated interactive Artifact or configured session gateway, then replies in
+the same Task so the existing coordinator can continue. It is not a raw Worker VNC
+address, a credential-sharing channel, or a new Task.
 
 ### Exposure Policy
 

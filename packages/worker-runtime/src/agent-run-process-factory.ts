@@ -46,6 +46,7 @@ import {
 export interface WorkerAgentExecutionPlan {
   readonly provider: AgentProvider;
   readonly adapterId: string;
+  readonly modelId?: string;
   readonly workstreamId: string;
   readonly prompt: string;
   readonly sandbox: AgentSandbox;
@@ -374,6 +375,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       workstreamId: prepared.plan.workstreamId,
       sessionKey: prepared.sessionKey,
       deviceId: context.assignment.deviceId,
+      ...(prepared.plan.modelId === undefined ? {} : { modelId: prepared.plan.modelId }),
       prompt,
       workspace: cloneWorkspace(prepared.workspace),
       sandbox: prepared.plan.sandbox,
@@ -603,6 +605,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
     await assertAgentRequirementAvailable(
       adapter,
       immutableAssignment.agentRequirement,
+      plan.modelId,
       plan.environment,
       plan.secretEnvironment,
     );
@@ -612,6 +615,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       deviceId: assignment.deviceId,
       provider: plan.provider,
       adapterId: plan.adapterId,
+      ...(plan.modelId === undefined ? {} : { modelId: plan.modelId }),
       workspaceId: workspace.workspaceId,
     });
     let session: NativeSessionReference | undefined;
@@ -648,6 +652,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       assertSessionBinding(session, {
         provider: plan.provider,
         adapterId: plan.adapterId,
+        ...(plan.modelId === undefined ? {} : { modelId: plan.modelId }),
         sessionKey,
         taskId: assignment.taskId,
         workstreamId: plan.workstreamId,
@@ -1220,6 +1225,7 @@ class AdapterRunProcess implements RunProcess {
 interface SessionBinding {
   readonly provider: AgentProvider;
   readonly adapterId: string;
+  readonly modelId?: string;
   readonly sessionKey: string;
   readonly taskId: string;
   readonly workstreamId: string;
@@ -1232,6 +1238,7 @@ function assertSessionBinding(session: NativeSessionReference, expected: Session
     session.schemaVersion !== 1 ||
     session.provider !== expected.provider ||
     session.adapterId !== expected.adapterId ||
+    session.modelId !== expected.modelId ||
     session.sessionKey !== expected.sessionKey ||
     session.taskId !== expected.taskId ||
     session.workstreamId !== expected.workstreamId ||
@@ -1316,6 +1323,7 @@ async function resolveWorkerSessionAction(
 async function assertAgentRequirementAvailable(
   adapter: AgentAdapter,
   requirement: WorkerAgentRequirementV1 | undefined,
+  modelId?: string,
   environment?: Readonly<Record<string, string>>,
   secretEnvironment?: Readonly<Record<string, string>>,
 ): Promise<void> {
@@ -1324,7 +1332,8 @@ async function assertAgentRequirementAvailable(
   }
   if (
     adapter.provider !== requirement.provider ||
-    (requirement.adapterId !== undefined && adapter.adapterId !== requirement.adapterId)
+    (requirement.adapterId !== undefined && adapter.adapterId !== requirement.adapterId) ||
+    (requirement.modelId !== undefined && modelId !== requirement.modelId)
   ) {
     throw agentRequirementUnavailable();
   }
@@ -1352,6 +1361,23 @@ async function assertAgentRequirementAvailable(
   ) {
     throw agentRequirementUnavailable();
   }
+  if (requirement.modelId !== undefined) {
+    if (adapter.listModels === undefined) {
+      throw agentRequirementUnavailable();
+    }
+    let catalog;
+    try {
+      catalog = await adapter.listModels({
+        ...(environment === undefined ? {} : { environment }),
+        ...(secretEnvironment === undefined ? {} : { secretEnvironment }),
+      });
+    } catch {
+      throw agentRequirementUnavailable();
+    }
+    if (!catalog.models.some((model) => model.modelId === requirement.modelId)) {
+      throw agentRequirementUnavailable();
+    }
+  }
 }
 
 function agentRequirementUnavailable(): AgentRunBridgeError {
@@ -1369,6 +1395,7 @@ function toWorkerAgentSessionObservation(
     provider: session.provider,
     adapterId: session.adapterId,
     adapterVersion: session.adapterVersion,
+    ...(session.modelId === undefined ? {} : { modelId: session.modelId }),
     nativeSessionId: session.nativeSessionId,
     workstreamId: session.workstreamId,
     workspaceId: session.workspaceId,
@@ -1430,6 +1457,9 @@ function buildWorkerContinuationPrompt(
     dependsOn: order.dependsOn,
     requiredCapabilities: order.requiredCapabilities,
     ...(order.requiredAgent === undefined ? {} : { requiredAgent: order.requiredAgent }),
+    ...(assignment.agentRequirement === undefined
+      ? {}
+      : { effectiveAgentBinding: assignment.agentRequirement }),
     ...(order.requiredOsFamily === undefined ? {} : { requiredOsFamily: order.requiredOsFamily }),
     ...(order.workspaceId === undefined ? {} : { workspaceId: order.workspaceId }),
   };
@@ -1630,6 +1660,9 @@ function validateExecutionPlan(
     throw invalidExecutionPlan();
   }
   assertIdentifier(plan.adapterId, "Agent adapter ID", "INVALID_EXECUTION_PLAN");
+  if (plan.modelId !== undefined) {
+    assertIdentifier(plan.modelId, "Agent model ID", "INVALID_EXECUTION_PLAN");
+  }
   assertIdentifier(plan.workstreamId, "Workstream ID", "INVALID_EXECUTION_PLAN");
   if (
     (plan.provider !== "codex" && plan.provider !== "claude" && plan.provider !== "generic") ||
@@ -1888,22 +1921,25 @@ function createSessionKey(input: {
   readonly deviceId: string;
   readonly provider: AgentProvider;
   readonly adapterId: string;
+  readonly modelId?: string;
   readonly workspaceId: string;
 }): string {
+  const version = input.modelId === undefined ? "v1" : "v2";
   const digest = createHash("sha256")
     .update(
       JSON.stringify([
-        "opendelegate.worker-session.v1",
+        `opendelegate.worker-session.${version}`,
         input.taskId,
         input.workstreamId,
         input.deviceId,
         input.provider,
         input.adapterId,
+        ...(input.modelId === undefined ? [] : [input.modelId]),
         input.workspaceId,
       ]),
     )
     .digest("hex");
-  return `opendelegate.worker-session.v1:${digest}`;
+  return `opendelegate.worker-session.${version}:${digest}`;
 }
 
 function cloneWorkspace(workspace: WorkspaceBinding): WorkspaceBinding {

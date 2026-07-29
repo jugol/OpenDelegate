@@ -19,6 +19,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
+    "providers:check": "node tooling/check-agent-provider-updates.mjs",
     "release:build": "node tooling/build-release.mjs",
     "release:configure": "node --experimental-strip-types tooling/configure-release.mjs",
     "release:examples": "node tooling/create-release-examples.mjs",

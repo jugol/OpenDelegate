@@ -20,6 +20,12 @@ export interface TaskExecutionRequest {
   readonly task: TaskDetailV1;
   readonly attempt: number;
   readonly executionKey: string;
+  /**
+   * Stable identity for semantic planning across deterministic retries in one
+   * owner-input cycle. The first attempt's execution key is retained so plans
+   * written by earlier releases remain reusable after upgrade.
+   */
+  readonly planningKey: string;
   readonly signal: AbortSignal;
 }
 
@@ -412,6 +418,7 @@ export class TaskExecutionCoordinator {
     const resumesInterruptedAttempt = task.state === "running" && runningRecords.length > 0;
     const attempt = resumesInterruptedAttempt ? runningRecords.length : runningRecords.length + 1;
     const executionKey = `task-execution:${taskId}:cycle:${cycle.cycleId}:attempt:${attempt}`;
+    const planningKey = `task-execution:${taskId}:cycle:${cycle.cycleId}:attempt:1`;
     setExecutionKey(executionKey);
 
     if (attempt > this.#maximumAutomaticAttempts) {
@@ -420,6 +427,7 @@ export class TaskExecutionCoordinator {
         idempotencyKey: `${executionKey}:attempt-limit`,
         state: "failed",
         expectedTaskVersion: task.version,
+        publicMessage: latestPublicMessage(cycle.records) ?? exhaustedResourceMessage(attempt - 1),
       });
       return false;
     }
@@ -461,6 +469,7 @@ export class TaskExecutionCoordinator {
           task,
           attempt,
           executionKey,
+          planningKey,
           signal: budgetGuard?.signal ?? signal,
         }),
       );
@@ -503,6 +512,7 @@ export class TaskExecutionCoordinator {
           idempotencyKey: `${executionKey}:attempt-limit`,
           state: "failed",
           expectedTaskVersion: task.version,
+          publicMessage: result.publicMessage ?? exhaustedResourceMessage(attempt),
         });
         return false;
       }
@@ -511,7 +521,11 @@ export class TaskExecutionCoordinator {
         idempotencyKey: `${executionKey}:${result.state}`,
         state: result.state,
         expectedTaskVersion: task.version,
-        ...(result.publicMessage === undefined ? {} : { publicMessage: result.publicMessage }),
+        ...(result.publicMessage === undefined
+          ? result.state === "failed"
+            ? { publicMessage: missingFailureExplanationMessage() }
+            : {}
+          : { publicMessage: result.publicMessage }),
       });
       return result.state === "waiting_resource";
     } catch (error) {
@@ -557,6 +571,7 @@ export class TaskExecutionCoordinator {
         idempotencyKey: `${executionKey}:${willRetry ? "waiting-resource" : "failed"}`,
         state: willRetry ? "waiting_resource" : "failed",
         expectedTaskVersion: task.version,
+        publicMessage: executorFailureMessage(executorError, willRetry),
       });
       return willRetry;
     } finally {
@@ -702,6 +717,31 @@ export class TaskExecutionCoordinator {
     }
     this.#notifyIdle();
   }
+}
+
+function latestPublicMessage(records: readonly TaskExecutionRecord[]): string | undefined {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const message = records[index]?.publicMessage;
+    if (message !== null && message !== undefined) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+function exhaustedResourceMessage(attempts: number): string {
+  return `OpenDelegate could not find an eligible Device, route, Secret, or lock after ${attempts.toString()} automatic attempts. Check Device health and Runs, then retry.`;
+}
+
+function executorFailureMessage(error: TaskExecutorError, willRetry: boolean): string {
+  const retryStatus = willRetry
+    ? "OpenDelegate will retry automatically."
+    : "Automatic retries are exhausted. Check the Task Runs, then retry.";
+  return `${error.message} ${retryStatus} Failure code: ${error.code}.`;
+}
+
+function missingFailureExplanationMessage(): string {
+  return "The Task executor reported failure without an owner-safe explanation. Inspect the Task Runs for the failing step, then retry.";
 }
 
 function isAutomaticallyExecutable(state: TaskSummaryV1["state"]): boolean {

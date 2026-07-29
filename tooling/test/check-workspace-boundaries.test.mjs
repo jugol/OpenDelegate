@@ -34,6 +34,7 @@ test("Phase 2 services keep their accepted inward dependency directions", () => 
     "@opendelegate/discord-adapter",
     "@opendelegate/domain",
     "@opendelegate/event-store",
+    "@opendelegate/knowledge",
     "@opendelegate/owner-auth",
     "@opendelegate/platform-services",
     "@opendelegate/policy",

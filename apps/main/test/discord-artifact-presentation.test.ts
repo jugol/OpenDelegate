@@ -59,7 +59,7 @@ test("Discord projects the newest available private-network report to its isolat
   ]).forTask("task-report");
 
   assert.deepEqual(projected, {
-    label: "Open report",
+    label: "Open interactive result",
     url: "https://interactive.example.test/artifacts/artifact-new",
   });
 });

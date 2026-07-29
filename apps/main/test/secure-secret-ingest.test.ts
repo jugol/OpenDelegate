@@ -135,6 +135,8 @@ test("secure ingest stores only bytes in the Main-local store and replays an ava
       }),
       false,
     );
+    assert.equal(service.hasAliasPurpose("database_1", "database-uri"), true);
+    assert.equal(service.hasAliasPurpose("database_1", "discord-bot-token"), false);
 
     const replay = await service.ingest({
       principalId: "owner_personal",
@@ -165,11 +167,83 @@ test("secure ingest stores only bytes in the Main-local store and replays an ava
       }),
       true,
     );
+    assert.equal(restarted.hasAliasPurpose("database_1", "database-uri"), true);
     raw.fill(0);
   } finally {
     for (const value of store.values.values()) {
       value.fill(0);
     }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("secure ingest durably distinguishes Discord bot tokens from generic credentials", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-secure-ingest-discord-"));
+  const store = new TestManagedSecretStore();
+  try {
+    const service = await MainSecureSecretIngestService.open({
+      mainDeviceId: "device_main",
+      ledgerDirectory: join(root, "ledger"),
+      secretStore: store,
+      idSource: () => "discord_purpose",
+    });
+    const receipt = await service.ingest({
+      principalId: "owner_personal",
+      idempotencyKey: "discord-token-1",
+      purpose: "discord-bot-token",
+      secret: Buffer.alloc(4 * 1024, 0x41),
+    });
+
+    assert.equal(receipt.secretRef, "secret://main/discord_purpose");
+    assert.equal(service.hasAliasPurpose("discord_purpose", "discord-bot-token"), true);
+    assert.equal(service.hasAliasPurpose("discord_purpose", "api-token"), false);
+    assert.equal(
+      service.isAvailable({
+        key: "database.uri-ref",
+        locality: "main",
+        scope: { kind: "main", id: "device_main" },
+        secretRef: receipt.secretRef,
+      }),
+      false,
+    );
+
+    const restarted = await MainSecureSecretIngestService.open({
+      mainDeviceId: "device_main",
+      ledgerDirectory: join(root, "ledger"),
+      secretStore: store,
+    });
+    assert.equal(restarted.hasAliasPurpose("discord_purpose", "discord-bot-token"), true);
+  } finally {
+    for (const value of store.values.values()) {
+      value.fill(0);
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the initial Discord capability is durable and cannot be rebound by editing bootstrap input", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-secure-ingest-bootstrap-discord-"));
+  const store = new TestManagedSecretStore();
+  try {
+    const service = await MainSecureSecretIngestService.open({
+      mainDeviceId: "device_main",
+      ledgerDirectory: join(root, "ledger"),
+      secretStore: store,
+    });
+    await service.registerInitialDiscordBotTokenAlias("discord_initial");
+    assert.equal(service.hasAliasPurpose("discord_initial", "discord-bot-token"), true);
+
+    const restarted = await MainSecureSecretIngestService.open({
+      mainDeviceId: "device_main",
+      ledgerDirectory: join(root, "ledger"),
+      secretStore: store,
+    });
+    await assert.rejects(restarted.registerInitialDiscordBotTokenAlias("discord_edited"), {
+      code: "SECRET_INGEST_IDEMPOTENCY_CONFLICT",
+    });
+    assert.equal(restarted.hasAliasPurpose("discord_initial", "discord-bot-token"), true);
+    assert.equal(restarted.hasAliasPurpose("discord_edited", "discord-bot-token"), false);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -205,6 +279,24 @@ test("secure ingest rejects idempotency conflicts, invalid purpose material, and
         idempotencyKey: "invalid-database-uri",
         purpose: "database-uri",
         secret: Buffer.from("not a database URI", "utf8"),
+      }),
+      { code: "SECRET_INGEST_INVALID" },
+    );
+    await assert.rejects(
+      service.ingest({
+        principalId: "owner_personal",
+        idempotencyKey: "oversized-discord-token",
+        purpose: "discord-bot-token",
+        secret: Buffer.alloc(4 * 1024 + 1, 0x41),
+      }),
+      { code: "SECRET_INGEST_INVALID" },
+    );
+    await assert.rejects(
+      service.ingest({
+        principalId: "owner_personal",
+        idempotencyKey: "unicode-discord-token",
+        purpose: "discord-bot-token",
+        secret: Buffer.from("Discord.Token.é", "utf8"),
       }),
       { code: "SECRET_INGEST_INVALID" },
     );

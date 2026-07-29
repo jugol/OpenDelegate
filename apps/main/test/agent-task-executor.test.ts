@@ -13,14 +13,17 @@ import {
 import { InMemoryEventStore } from "@opendelegate/event-store";
 import {
   createTaskContinuationCheckpoint,
+  type DeviceSummaryV1,
   type TaskContinuationCheckpointV1,
 } from "@opendelegate/protocol";
 import type { TaskExecutionRequest } from "@opendelegate/task-service";
+import type { AgentExecutionProfile } from "@opendelegate/configuration";
 
 import {
   AgentBackedTaskExecutor,
   EventStoreMainNativeSessionRepository,
 } from "../src/agent-task-executor.ts";
+import { resolveCoordinatorModelId } from "../src/coordinator-agent-profile.ts";
 
 const NOW = "2026-07-25T12:00:00.000Z";
 const limits = {
@@ -80,6 +83,75 @@ test("Main Agent starts once per Task, resumes its exact native session, and par
   );
 });
 
+test("Coordinator profile pins an exact model for a new Task while its existing session retains that model", async () => {
+  const adapter = new FakeAgentAdapter();
+  let profile: AgentExecutionProfile = {
+    schemaVersion: 1,
+    mode: "pinned",
+    primary: {
+      provider: "generic",
+      adapterId: "fixture-main-agent",
+      modelId: "fixture-opus",
+    },
+  };
+  let resolutions = 0;
+  const executor = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+    resolveNewSessionModelId: async () => {
+      resolutions += 1;
+      return resolveCoordinatorModelId(profile, adapter);
+    },
+  });
+
+  await executor.execute(request(1));
+  profile = {
+    schemaVersion: 1,
+    mode: "pinned",
+    primary: {
+      provider: "generic",
+      adapterId: "fixture-main-agent",
+      modelId: "fixture-sonnet",
+    },
+  };
+  await executor.execute(request(2, "Continue the existing Task."));
+
+  assert.equal(resolutions, 1);
+  assert.equal(adapter.starts[0]?.modelId, "fixture-opus");
+  assert.equal(adapter.resumes[0]?.modelId, "fixture-opus");
+  assert.equal(adapter.resumes[0]?.session.modelId, "fixture-opus");
+});
+
+test("Coordinator profile fails closed when it selects a different active adapter", async () => {
+  const adapter = new FakeAgentAdapter();
+  const profile: AgentExecutionProfile = {
+    schemaVersion: 1,
+    mode: "pinned",
+    primary: {
+      provider: "codex",
+      adapterId: "codex-app-server",
+      modelId: "gpt-5.6-sol",
+    },
+  };
+
+  await assert.rejects(resolveCoordinatorModelId(profile, adapter), {
+    code: "MAIN_AGENT_PROFILE_UNAVAILABLE",
+    retryable: false,
+  });
+});
+
 test("Main Agent cannot self-authorize Task completion and preserves Task isolation", async () => {
   const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
   const repository = new EventStoreMainNativeSessionRepository(eventStore);
@@ -134,6 +206,54 @@ test("Main Agent must ask exactly one targeted owner question", async () => {
   });
 });
 
+test("Main Agent result parsing does not guess intent from Device words", async () => {
+  const executor = new AgentBackedTaskExecutor({
+    adapter: new FakeAgentAdapter("placement-question"),
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  assert.deepEqual(await executor.execute(request(1)), {
+    state: "waiting_user",
+    publicMessage: "Would you like this built by the Mac or Windows worker?",
+  });
+});
+
+test("Main Agent may clarify an OS requirement that changes the requested outcome", async () => {
+  const executor = new AgentBackedTaskExecutor({
+    adapter: new FakeAgentAdapter("outcome-platform-question"),
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  assert.deepEqual(await executor.execute(request(1)), {
+    state: "waiting_user",
+    publicMessage: "Which operating systems must the release support?",
+  });
+});
+
 test("Main Agent creates an explicit checkpoint continuation when resume is deterministically unavailable", async () => {
   const adapter = new FakeAgentAdapter();
   const repository = new EventStoreMainNativeSessionRepository(
@@ -179,6 +299,11 @@ test("Main Agent creates an explicit checkpoint continuation when resume is dete
   assert.equal(continuation?.continuationReason, "native-session-resume-unavailable");
   assert.match(continuation?.prompt ?? "", /Durable checkpoint continuation package/u);
   assert.match(continuation?.prompt ?? "", /Continue from the durable checkpoint\./u);
+  assert.match(
+    continuation?.prompt ?? "",
+    /The owner specifies the outcome, not Device placement/u,
+  );
+  assert.match(continuation?.prompt ?? "", /never invent a handoff URL/u);
   assert.doesNotMatch(
     continuation?.prompt ?? "",
     /THIS-REQUEST-OBJECT-MUST-NOT-BE-THE-CHECKPOINT/u,
@@ -189,6 +314,58 @@ test("Main Agent creates an explicit checkpoint continuation when resume is dete
   assert.equal(stored?.nativeSessionId, "native-task-session-continuation");
   assert.equal(stored?.lineage.parentNativeSessionId, "native-task-session");
   assert.equal(stored?.lineage.continuationReason, "native-session-resume-unavailable");
+});
+
+test("outcome-first rules survive planning and verification checkpoint continuation", async () => {
+  for (const turn of ["planning", "verification"] as const) {
+    const adapter = new FakeAgentAdapter("outcome-continuation");
+    adapter.resumeAvailable = false;
+    const repository = new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    );
+    const cwd = await realpath(".");
+    await repository.save(persistedCoordinatorSession(cwd));
+    const executor = new AgentBackedTaskExecutor({
+      adapter,
+      sessionRepository: repository,
+      checkpoints: checkpointProvider("Continue from the durable checkpoint."),
+      deviceId: "device_main",
+      workspace: {
+        workspaceId: "workspace_main_coordinator",
+        cwd,
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: { mode: "deny" },
+      limits,
+    });
+    const task = request(2).task;
+    const controller = new AbortController();
+
+    if (turn === "planning") {
+      const decision = await executor.plan({
+        task,
+        attempt: 2,
+        executionKey: "task-execution:task_release:attempt:2",
+        signal: controller.signal,
+      });
+      assert.equal(decision.state, "ready");
+    } else {
+      const result = await executor.verify({
+        task,
+        workOrders: [releaseWorkOrder()],
+        reports: [releaseWorkerReport()],
+        signal: controller.signal,
+      });
+      assert.equal(result.state, "completed");
+    }
+
+    const prompt = adapter.starts[0]?.prompt ?? "";
+    assert.match(prompt, new RegExp(`continuing ${turn}`, "u"));
+    assert.match(prompt, /The owner specifies the outcome, not Device placement/u);
+    assert.match(prompt, /never invent a handoff URL/u);
+    assert.equal(adapter.starts[0]?.continuationReason, "native-session-resume-unavailable");
+  }
 });
 
 test("Main Agent plans Work Orders and verifies completion only from authoritative Worker reports", async () => {
@@ -225,25 +402,25 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   assert.equal(planned.plan.taskId, task.taskId);
   assert.equal(planned.plan.workOrders[0]?.workOrderId, "work_release_build");
   assert.match(adapter.starts[0]?.prompt ?? "", /Return a bounded Work Order plan/u);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /The owner specifies the outcome, not Device placement/u,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /Treat Device, OS, route, Agent provider, and multi-Device selection as internal orchestration/u,
+  );
+  assert.match(adapter.starts[0]?.prompt ?? "", /privacy or data locality.*physical/isu);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /login, MFA, CAPTCHA, legal confirmation, or OS permission/u,
+  );
+  assert.match(adapter.starts[0]?.prompt ?? "", /never invent a handoff URL/u);
 
   const verified = await reasoner.verify({
     task,
     workOrders: planned.plan.workOrders,
-    reports: [
-      {
-        taskId: task.taskId,
-        workOrderId: "work_release_build",
-        deviceId: "device_worker",
-        workerId: "worker_primary",
-        routeId: "route_private",
-        runId: "run_release_build",
-        leaseId: "lease_release_build",
-        fencingToken: 7,
-        report: "The Worker built the release and attached the test evidence.",
-        artifactIds: ["artifact_release_evidence"],
-        acceptedAtMs: Date.parse(NOW),
-      },
-    ],
+    reports: [releaseWorkerReport()],
     signal: controller.signal,
   });
   assert.deepEqual(verified, {
@@ -261,6 +438,262 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
     adapter.resumes[0]?.prompt ?? "",
     /You cannot manufacture, alter, or infer execution evidence/u,
   );
+  assert.match(
+    adapter.resumes[0]?.prompt ?? "",
+    /Discord summary, file, Artifact, hosted result, or Git reference/u,
+  );
+});
+
+test("Main Agent answers read-only Device questions from the bounded Main-owned directory", async () => {
+  const adapter = new FakeAgentAdapter("device-directory-answer");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+    deviceDirectory: {
+      list: async () => [
+        {
+          deviceId: "device_main",
+          name: "NAS Main",
+          osFamily: "linux",
+          platformRelease: "26",
+          architecture: "x64",
+          role: "main",
+          connection: "online",
+          runtime: "healthy",
+          serviceMode: "system-service",
+          roles: ["main-coordinator"],
+          instructions: ["PRIVATE_DEVICE_INSTRUCTION_SENTINEL"],
+          routes: [
+            {
+              routeId: "main-local:device_main",
+              label: "Main-local",
+              priority: 0,
+              health: "healthy",
+            },
+          ],
+          knowledgeHealth: "healthy",
+        },
+        {
+          deviceId: "device_mac",
+          name: "Mac Studio",
+          osFamily: "macos",
+          platformRelease: "26",
+          architecture: "arm64",
+          role: "worker",
+          connection: "offline",
+          runtime: "unavailable",
+          serviceMode: "user-service",
+          roles: ["build"],
+          knowledgeHealth: "unknown",
+        },
+      ],
+    },
+  });
+  const controller = new AbortController();
+  const baseTask = request(1).task;
+  const task = {
+    ...baseTask,
+    objective: "test 를 위한 task",
+    completionCriteria: ["The current Device availability is reported."],
+    constraints: [],
+    messages: [
+      {
+        messageId: "message_device_question",
+        role: "owner" as const,
+        content: "지금 접속 가능한 디바이스가 뭐뭐가 있어?",
+        occurredAt: NOW,
+      },
+    ],
+  };
+
+  const result = await reasoner.plan({
+    task,
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_1:attempt:1",
+    signal: controller.signal,
+  });
+
+  assert.equal(result.state, "completed");
+  if (result.state !== "completed") {
+    throw new Error("The deterministic Device query did not complete.");
+  }
+  assert.match(result.publicMessage, /현재 등록된 기기 2대 중 1대/u);
+  assert.match(result.publicMessage, /NAS Main — 접속 가능/u);
+  assert.match(result.publicMessage, /Mac Studio — 오프라인/u);
+  assert.doesNotMatch(result.publicMessage, /PRIVATE_DEVICE_INSTRUCTION_SENTINEL/u);
+  assert.deepEqual(result.verifiedCompletionCriteria, [
+    "The current Device availability is reported.",
+  ]);
+  assert.equal(adapter.starts.length, 0);
+  assert.equal(
+    reasoner.authorize({
+      task,
+      executionKey: "task-execution:task_release:cycle:cycle_1:attempt:1",
+      decision: result,
+    }),
+    true,
+  );
+});
+
+test("Main planning exposes only verified capabilities and never Device instructions", async () => {
+  const adapter = new FakeAgentAdapter("orchestration");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+    deviceDirectory: {
+      list: async () => [
+        {
+          deviceId: "device_worker",
+          name: "Build Worker",
+          osFamily: "windows",
+          platformRelease: "26",
+          architecture: "x64",
+          role: "worker",
+          connection: "online",
+          runtime: "healthy",
+          serviceMode: "system-service",
+          instructions: ["PRIVATE_DEVICE_INSTRUCTION_SENTINEL"],
+          capabilities: [
+            { name: "codex", verification: "verified" },
+            { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
+            { name: "DEGRADED_CAPABILITY_SENTINEL", verification: "degraded" },
+          ],
+          wakeOnLan: {
+            targetState: "enabled",
+            automaticWakeState: "relay-required",
+            source: "windows-netadapter-power",
+            observedAtMs: 9_900,
+          },
+          knowledgeHealth: "healthy",
+        },
+      ],
+    },
+  });
+
+  const planned = await reasoner.plan({
+    task: request(1).task,
+    attempt: 1,
+    executionKey: "verified-capability-planning",
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(planned.state, "ready");
+  const prompt = adapter.starts[0]?.prompt ?? "";
+  assert.match(prompt, /"capabilities":\["codex"\]/u);
+  assert.match(
+    prompt,
+    /"wakeOnLan":\{"targetState":"enabled","automaticWakeState":"relay-required","observedAtMs":9900\}/u,
+  );
+  assert.match(prompt, /must not claim that it can wake the Device/u);
+  assert.doesNotMatch(prompt, /UNVERIFIED_CAPABILITY_SENTINEL/u);
+  assert.doesNotMatch(prompt, /DEGRADED_CAPABILITY_SENTINEL/u);
+  assert.doesNotMatch(prompt, /PRIVATE_DEVICE_INSTRUCTION_SENTINEL/u);
+});
+
+test("Main Device queries fail closed when their directory is unavailable or already cancelled", async () => {
+  let directoryCalls = 0;
+  const createReasoner = (list: () => Promise<readonly DeviceSummaryV1[]>) =>
+    new AgentBackedTaskExecutor({
+      adapter: new FakeAgentAdapter(),
+      sessionRepository: new EventStoreMainNativeSessionRepository(
+        new InMemoryEventStore({ clock: { now: () => NOW } }),
+      ),
+      checkpoints: checkpointProvider(),
+      deviceId: "device_main",
+      workspace: {
+        workspaceId: "workspace_main_coordinator",
+        cwd: process.cwd(),
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: { mode: "deny" },
+      limits,
+      deviceDirectory: { list },
+    });
+  const baseTask = request(1).task;
+  const queryTask = {
+    ...baseTask,
+    objective: "Which Devices are reachable now?",
+    constraints: [],
+    messages: [
+      {
+        messageId: "message_device_query",
+        role: "owner" as const,
+        content: "Which Devices are reachable now?",
+        occurredAt: NOW,
+      },
+    ],
+  };
+  const unavailable = createReasoner(async () => {
+    directoryCalls += 1;
+    throw new Error("private backend detail");
+  });
+  await assert.rejects(
+    unavailable.plan({
+      task: queryTask,
+      attempt: 1,
+      executionKey: "unavailable-device-directory",
+      signal: new AbortController().signal,
+    }),
+    { code: "MAIN_CONTEXT_UNAVAILABLE" },
+  );
+
+  const controller = new AbortController();
+  controller.abort("owner-cancelled");
+  const cancelled = createReasoner(async () => {
+    directoryCalls += 1;
+    return [];
+  });
+  await assert.rejects(
+    cancelled.plan({
+      task: queryTask,
+      attempt: 1,
+      executionKey: "cancelled-device-directory",
+      signal: controller.signal,
+    }),
+    { code: "EXECUTION_CANCELLED" },
+  );
+  const compound = createReasoner(async () => {
+    directoryCalls += 1;
+    return [];
+  });
+  assert.equal(
+    await compound.planDeterministically({
+      task: {
+        ...queryTask,
+        objective: "Prepare and deploy the release.",
+      },
+      attempt: 1,
+      executionKey: "compound-side-effect-device-query",
+      signal: new AbortController().signal,
+    }),
+    undefined,
+  );
+  assert.equal(directoryCalls, 1);
 });
 
 function request(attempt: number, ownerMessage?: string): TaskExecutionRequest {
@@ -268,6 +701,7 @@ function request(attempt: number, ownerMessage?: string): TaskExecutionRequest {
   return {
     attempt,
     executionKey: `task-execution:task_release:attempt:${attempt}`,
+    planningKey: "task-execution:task_release:attempt:1",
     signal: controller.signal,
     task: {
       taskId: "task_release",
@@ -348,17 +782,79 @@ function checkpointProvider(latestMessage?: string): {
   };
 }
 
+function releaseWorkOrder() {
+  return {
+    protocolVersion: "v1" as const,
+    taskId: "task_release",
+    workOrderId: "work_release_build",
+    title: "Build the release",
+    brief: "Build and test the requested release.",
+    completionCriteria: ["The release build and tests succeed."],
+    constraints: ["Do not waive release evidence."],
+    selectedInputIds: [],
+    dependsOn: [],
+    schedulingHints: {
+      preferredDeviceIds: [],
+      preferredRoles: ["development"],
+    },
+    requiredCapabilities: ["codex"],
+    requiredSecretRefs: [],
+  };
+}
+
+function releaseWorkerReport() {
+  return {
+    taskId: "task_release",
+    workOrderId: "work_release_build",
+    deviceId: "device_worker",
+    workerId: "worker_primary",
+    routeId: "route_private",
+    runId: "run_release_build",
+    leaseId: "lease_release_build",
+    fencingToken: 7,
+    report: "The Worker built the release and attached the test evidence.",
+    artifactIds: ["artifact_release_evidence"],
+    acceptedAtMs: Date.parse(NOW),
+  };
+}
+
+function persistedCoordinatorSession(cwd: string): NativeSessionReference {
+  return {
+    schemaVersion: 1,
+    provider: "generic",
+    adapterId: "fixture-main-agent",
+    adapterVersion: "1.0.0",
+    nativeSessionId: "native-task-session",
+    sessionKey: "task:task_release:coordinator:fixture-main-agent",
+    taskId: "task_release",
+    workstreamId: "coordinator",
+    deviceId: "device_main",
+    workspaceId: "workspace_main_coordinator",
+    cwd,
+    lineage: { lineageId: "lineage-task-release" },
+    createdAt: NOW,
+  };
+}
+
+type FakeAgentMode =
+  | "normal"
+  | "invalid-completion"
+  | "multiple-questions"
+  | "placement-question"
+  | "outcome-platform-question"
+  | "orchestration"
+  | "device-directory-answer"
+  | "outcome-continuation";
+
 class FakeAgentAdapter implements AgentAdapter {
   readonly adapterId = "fixture-main-agent";
   readonly provider = "generic" as const;
   readonly starts: AgentStartRequest[] = [];
   readonly resumes: AgentResumeRequest[] = [];
-  readonly #mode: "normal" | "invalid-completion" | "multiple-questions" | "orchestration";
+  readonly #mode: FakeAgentMode;
   resumeAvailable = true;
 
-  constructor(
-    mode: "normal" | "invalid-completion" | "multiple-questions" | "orchestration" = "normal",
-  ) {
+  constructor(mode: FakeAgentMode = "normal") {
     this.#mode = mode;
   }
 
@@ -385,8 +881,43 @@ class FakeAgentAdapter implements AgentAdapter {
     };
   }
 
+  async listModels() {
+    return {
+      observedAt: NOW,
+      models: [
+        { modelId: "fixture-opus", displayName: "Fixture Opus", isDefault: true },
+        { modelId: "fixture-sonnet", displayName: "Fixture Sonnet" },
+      ],
+    };
+  }
+
   async start(input: AgentStartRequest): Promise<AgentRunHandle> {
     this.starts.push(structuredClone(input));
+    if (this.#mode === "outcome-continuation") {
+      const result = input.prompt.includes("continuing planning")
+        ? {
+            schemaVersion: 1,
+            state: "ready",
+            plan: {
+              protocolVersion: "v1",
+              taskId: input.taskId,
+              workOrders: [releaseWorkOrder()],
+            },
+          }
+        : input.prompt.includes("continuing verification")
+          ? {
+              schemaVersion: 1,
+              state: "completed",
+              publicMessage: "The authoritative Worker evidence satisfies the Task.",
+              verifiedCompletionCriteria: ["Every release gate is verified."],
+            }
+          : {
+              schemaVersion: 1,
+              state: "waiting_user",
+              ownerQuestion: "Which release channel should I use?",
+            };
+      return handle(session(input), result);
+    }
     return handle(
       session(input),
       this.#mode === "invalid-completion"
@@ -402,38 +933,57 @@ class FakeAgentAdapter implements AgentAdapter {
               state: "waiting_user",
               ownerQuestion: "Which release channel should I use? Should it be signed?",
             }
-          : this.#mode === "orchestration"
+          : this.#mode === "placement-question"
             ? {
                 schemaVersion: 1,
-                state: "ready",
-                plan: {
-                  protocolVersion: "v1",
-                  taskId: input.taskId,
-                  workOrders: [
-                    {
-                      protocolVersion: "v1",
-                      workOrderId: "work_release_build",
-                      title: "Build the release",
-                      brief: "Build and test the requested release.",
-                      completionCriteria: ["The release build and tests succeed."],
-                      constraints: ["Do not waive release evidence."],
-                      selectedInputIds: [],
-                      dependsOn: [],
-                      schedulingHints: {
-                        preferredDeviceIds: [],
-                        preferredRoles: ["development"],
-                      },
-                      requiredCapabilities: ["codex"],
-                      requiredSecretRefs: [],
-                    },
-                  ],
-                },
-              }
-            : {
-                schemaVersion: 1,
                 state: "waiting_user",
-                ownerQuestion: "Which release channel should I use?",
-              },
+                ownerQuestion: "Would you like this built by the Mac or Windows worker?",
+              }
+            : this.#mode === "outcome-platform-question"
+              ? {
+                  schemaVersion: 1,
+                  state: "waiting_user",
+                  ownerQuestion: "Which operating systems must the release support?",
+                }
+              : this.#mode === "device-directory-answer"
+                ? {
+                    schemaVersion: 1,
+                    state: "completed",
+                    publicMessage: "NAS Main is online. Mac Studio is currently offline.",
+                    verifiedCompletionCriteria: ["The current Device availability is reported."],
+                  }
+                : this.#mode === "orchestration"
+                  ? {
+                      schemaVersion: 1,
+                      state: "ready",
+                      plan: {
+                        protocolVersion: "v1",
+                        taskId: input.taskId,
+                        workOrders: [
+                          {
+                            protocolVersion: "v1",
+                            workOrderId: "work_release_build",
+                            title: "Build the release",
+                            brief: "Build and test the requested release.",
+                            completionCriteria: ["The release build and tests succeed."],
+                            constraints: ["Do not waive release evidence."],
+                            selectedInputIds: [],
+                            dependsOn: [],
+                            schedulingHints: {
+                              preferredDeviceIds: [],
+                              preferredRoles: ["development"],
+                            },
+                            requiredCapabilities: ["codex"],
+                            requiredSecretRefs: [],
+                          },
+                        ],
+                      },
+                    }
+                  : {
+                      schemaVersion: 1,
+                      state: "waiting_user",
+                      ownerQuestion: "Which release channel should I use?",
+                    },
     );
   }
 
@@ -473,6 +1023,7 @@ function session(input: AgentStartRequest): NativeSessionReference {
     taskId: input.taskId,
     workstreamId: input.workstreamId,
     deviceId: input.deviceId,
+    ...(input.modelId === undefined ? {} : { modelId: input.modelId }),
     workspaceId: input.workspace.workspaceId,
     cwd: input.workspace.cwd,
     lineage:

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   ApprovalPortError,
   type ApprovalDecisionInput,
@@ -38,10 +40,23 @@ export interface ConfigurationApprovalRuntimeOptions {
     nextId(): string;
   };
   readonly expirationMs?: number;
+  readonly lifecycle?: ConfigurationApplyLifecycle;
   readonly additionalExecutors?: readonly {
     readonly kind: string;
     readonly executor: ApprovalExecutionPort;
   }[];
+}
+
+export interface PreparedConfigurationApply {
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+}
+
+export interface ConfigurationApplyLifecycle {
+  prepare(input: {
+    readonly context: ConfigurationContext;
+    readonly diff: readonly ConfigurationDiff[];
+  }): Promise<PreparedConfigurationApply | undefined>;
 }
 
 export interface ConfigurationApprovalRuntime {
@@ -55,7 +70,10 @@ const DEFAULT_APPROVAL_EXPIRATION_MS = 24 * 60 * 60 * 1_000;
 export function createConfigurationApprovalRuntime(
   options: ConfigurationApprovalRuntimeOptions,
 ): ConfigurationApprovalRuntime {
-  const configurationExecutor = new ConfigurationApprovalExecutor(options.configuration);
+  const configurationExecutor = new ConfigurationApprovalExecutor(
+    options.configuration,
+    options.lifecycle,
+  );
   const executor = new RoutedApprovalExecutionPort(
     configurationExecutor,
     options.additionalExecutors ?? [],
@@ -119,8 +137,9 @@ class RoutedApprovalExecutionPort implements ApprovalExecutionPort {
 
 export class ConfigurationApprovalExecutor implements ApprovalExecutionPort {
   readonly #configuration: ConfigurationService;
+  readonly #lifecycle: ConfigurationApplyLifecycle | undefined;
 
-  constructor(configuration: ConfigurationService) {
+  constructor(configuration: ConfigurationService, lifecycle?: ConfigurationApplyLifecycle) {
     if (
       configuration === null ||
       typeof configuration !== "object" ||
@@ -128,7 +147,16 @@ export class ConfigurationApprovalExecutor implements ApprovalExecutionPort {
     ) {
       throw new TypeError("A Configuration Service is required for Approval execution.");
     }
+    if (
+      lifecycle !== undefined &&
+      (lifecycle === null ||
+        typeof lifecycle !== "object" ||
+        typeof lifecycle.prepare !== "function")
+    ) {
+      throw new TypeError("The Configuration apply lifecycle is invalid.");
+    }
     this.#configuration = configuration;
+    this.#lifecycle = lifecycle;
   }
 
   async execute(input: ApprovalExecutionContext): Promise<ActionTargetValue> {
@@ -144,43 +172,88 @@ export class ConfigurationApprovalExecutor implements ApprovalExecutionPort {
     if (expectedFingerprint !== input.approval.actionFingerprint) {
       throw new Error("The approved Configuration action fingerprint no longer matches.");
     }
-    const receipt = await this.#configuration.executeTool({
-      operationId: payload.configurationOperationId,
-      actor: input.approval.decision?.decidedBy ?? "owner",
+    const actor = input.approval.decision?.decidedBy ?? "owner";
+    const prepared = await this.#lifecycle?.prepare({
       context: payload.context,
-      request: {
-        tool: "apply",
-        proposalId: payload.proposalId,
-        expectedRevision: payload.expectedRevision,
-      },
-      authorizeMutation: (authorization) => {
-        const actual = createActionFingerprint(
-          actionDescriptor(
-            authorization.context,
-            payload.expectedRevision,
-            payload.proposalId,
-            encodeDiff(authorization.diff),
-          ),
-        );
-        if (
-          authorization.tool !== "apply" ||
-          authorization.proposalId !== payload.proposalId ||
-          actual !== input.approval.actionFingerprint
-        ) {
-          return {
-            decision: "deny",
-            code: "APPROVAL_SCOPE_MISMATCH",
-          };
-        }
-        return {
-          decision: "allow",
-          authority: "owner",
-          decisionId: input.approval.approvalId,
-        };
-      },
+      diff: decodeDiff(payload.changes),
     });
+    let receipt: Awaited<ReturnType<ConfigurationService["executeTool"]>>;
+    try {
+      receipt = await this.#configuration.executeTool({
+        operationId: payload.configurationOperationId,
+        actor,
+        context: payload.context,
+        request: {
+          tool: "apply",
+          proposalId: payload.proposalId,
+          expectedRevision: payload.expectedRevision,
+        },
+        authorizeMutation: (authorization) => {
+          const actual = createActionFingerprint(
+            actionDescriptor(
+              authorization.context,
+              payload.expectedRevision,
+              payload.proposalId,
+              encodeDiff(authorization.diff),
+            ),
+          );
+          if (
+            authorization.tool !== "apply" ||
+            authorization.proposalId !== payload.proposalId ||
+            actual !== input.approval.actionFingerprint
+          ) {
+            return {
+              decision: "deny",
+              code: "APPROVAL_SCOPE_MISMATCH",
+            };
+          }
+          return {
+            decision: "allow",
+            authority: "owner",
+            decisionId: input.approval.approvalId,
+          };
+        },
+      });
+    } catch (error) {
+      try {
+        await prepared?.rollback();
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "The Configuration mutation and its prepared runtime rollback both failed.",
+          { cause: rollbackError },
+        );
+      }
+      throw error;
+    }
     if (receipt.tool !== "apply") {
+      await prepared?.rollback();
       throw new Error("The approved Configuration action returned an invalid receipt.");
+    }
+    try {
+      await prepared?.commit();
+    } catch (error) {
+      const failures: unknown[] = [error];
+      try {
+        await this.#configuration.rollback({
+          changeSetId: receipt.result.commit.changeSetId,
+          expectedRevision: receipt.result.commit.revision,
+          actor: "opendelegate-runtime-compensation",
+          reason: "Restore durable configuration after its prepared runtime commit failed.",
+        });
+      } catch (rollbackError) {
+        failures.push(rollbackError);
+      }
+      try {
+        await prepared?.rollback();
+      } catch (rollbackError) {
+        failures.push(rollbackError);
+      }
+      throw new AggregateError(
+        failures,
+        "The prepared Configuration runtime commit could not be finalized.",
+        { cause: error },
+      );
     }
     return {
       revision: receipt.result.commit.revision,
@@ -221,20 +294,36 @@ class ConfigurationApprovalRequestBroker implements ConfigurationApprovalRequest
     const context = encodeContext(input.authorization.context);
     const descriptor = actionDescriptor(context, input.expectedRevision, input.proposalId, changes);
     const risk = riskFor(input.authorization);
-    const approval = await this.#service.request({
-      idempotencyKey: `configuration-approval:${input.operationId}`,
+    const targetDeviceId = approvalTargetDeviceId(input.authorization);
+    const idempotencyKey = configurationApprovalIdempotencyKey(
+      input.targetDeviceId,
+      input.proposalId,
+    );
+    const expectedApproval = {
+      descriptor,
+      principalId: input.principalId,
+      proposalId: input.proposalId,
+      targetDeviceId,
+    } as const;
+    const existing =
+      selectMatchingConfigurationApproval(await this.#service.list(), expectedApproval) ??
+      (await this.#service.findByRequestIdempotencyKey(idempotencyKey));
+    if (existing !== undefined) {
+      assertMatchingConfigurationApproval(existing, expectedApproval);
+      return { approvalId: existing.approvalId };
+    }
+    const request = {
+      idempotencyKey,
       requestedBy: input.principalId,
       actionCategory: categoryFor(input.authorization),
       actionType: "configuration.apply",
-      ...(input.authorization.context.deviceId === undefined
-        ? {}
-        : { targetDeviceId: input.authorization.context.deviceId }),
+      ...(targetDeviceId === undefined ? {} : { targetDeviceId }),
       resource: `configuration-proposal:${input.proposalId}`,
       descriptor,
       presentation: {
         reason: input.authorization.reason,
         target:
-          input.authorization.context.deviceId ??
+          targetDeviceId ??
           input.authorization.context.mainId ??
           input.authorization.context.instanceId,
         risk,
@@ -253,8 +342,79 @@ class ConfigurationApprovalRequestBroker implements ConfigurationApprovalRequest
         } as unknown as ActionTargetValue,
       },
       expiresAtMs: this.#clock.now() + this.#expirationMs,
-    });
+    } satisfies Parameters<ApprovalService["request"]>[0];
+    let approval: ApprovalRequest;
+    try {
+      approval = await this.#service.request(request);
+    } catch (error) {
+      if (
+        !(error instanceof ApprovalServiceError) ||
+        error.code !== "APPROVAL_IDEMPOTENCY_CONFLICT"
+      ) {
+        throw error;
+      }
+      const raced = await this.#service.findByRequestIdempotencyKey(idempotencyKey);
+      if (raced === undefined) {
+        throw error;
+      }
+      assertMatchingConfigurationApproval(raced, {
+        descriptor,
+        principalId: input.principalId,
+        proposalId: input.proposalId,
+        targetDeviceId,
+      });
+      approval = raced;
+    }
     return { approvalId: approval.approvalId };
+  }
+}
+
+function selectMatchingConfigurationApproval(
+  approvals: readonly ApprovalRequest[],
+  expected: Parameters<typeof assertMatchingConfigurationApproval>[1],
+): ApprovalRequest | undefined {
+  const matches = approvals.filter((approval) => {
+    try {
+      assertMatchingConfigurationApproval(approval, expected);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return (
+    matches.find(
+      (approval) => approval.state === "approved" && approval.executionStatus === "succeeded",
+    ) ?? matches[0]
+  );
+}
+
+function configurationApprovalIdempotencyKey(targetDeviceId: string, proposalId: string): string {
+  const identity = createHash("sha256")
+    .update(`${targetDeviceId}\u0000${proposalId}`, "utf8")
+    .digest("hex");
+  return `configuration-approval:${identity}`;
+}
+
+function assertMatchingConfigurationApproval(
+  approval: ApprovalRequest,
+  expected: {
+    readonly descriptor: ActionTargetDescriptor;
+    readonly principalId: string;
+    readonly proposalId: string;
+    readonly targetDeviceId: string | undefined;
+  },
+): void {
+  if (
+    approval.requestedBy !== expected.principalId ||
+    approval.actionType !== "configuration.apply" ||
+    approval.resource !== `configuration-proposal:${expected.proposalId}` ||
+    approval.targetDeviceId !== expected.targetDeviceId ||
+    approval.actionFingerprint !== createActionFingerprint(expected.descriptor)
+  ) {
+    throw new ApprovalServiceError(
+      "APPROVAL_IDEMPOTENCY_CONFLICT",
+      "The Configuration Approval identity already belongs to a different action.",
+    );
   }
 }
 
@@ -381,6 +541,19 @@ function encodeConfigurationValue(value: unknown): EncodedConfigurationValue {
         present: true,
         value: structuredClone(value) as ActionTargetValue,
       };
+}
+
+function decodeDiff(changes: readonly EncodedConfigurationChange[]): readonly ConfigurationDiff[] {
+  return changes.map((change) => ({
+    key: change.key,
+    scope: { ...change.scope },
+    before: decodeConfigurationValue(change.before),
+    after: decodeConfigurationValue(change.after),
+  }));
+}
+
+function decodeConfigurationValue(value: EncodedConfigurationValue): unknown {
+  return value.present ? structuredClone(value.value) : undefined;
 }
 
 function decodeConfigurationExecution(request: ApprovalRequest): ConfigurationExecutionPayload {
@@ -590,11 +763,29 @@ function riskFor(input: ConfigurationMutationAuthorizationInput): ApprovalRisk {
     (change) =>
       change.key.startsWith("policy.") ||
       change.key.startsWith("transport.") ||
+      change.key === "discord.binding" ||
       change.key === "artifact.exposure" ||
       change.key === "artifact.interactive-html",
   )
     ? "high"
     : "medium";
+}
+
+function approvalTargetDeviceId(
+  input: ConfigurationMutationAuthorizationInput,
+): string | undefined {
+  const discordChanges = input.diff.filter((change) => change.key === "discord.binding");
+  if (discordChanges.length === 0) {
+    return input.context.deviceId;
+  }
+  if (
+    discordChanges.length !== 1 ||
+    discordChanges[0]?.scope.kind !== "main" ||
+    discordChanges[0].scope.id !== input.context.mainId
+  ) {
+    throw new TypeError("A Discord binding Approval must target the current Main Device.");
+  }
+  return discordChanges[0].scope.id;
 }
 
 function mapApprovalError(error: unknown): ApprovalPortError {

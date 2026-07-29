@@ -121,6 +121,11 @@ export {
   type WindowsWorkerComputerUseHelperBinding,
 } from "./windows-computer-use.ts";
 export {
+  SystemWakeOnLanProbe,
+  type SystemWakeOnLanProbeOptions,
+  type WakeOnLanCommandRunner,
+} from "./wake-on-lan-probe.ts";
+export {
   SqliteWorkerDesktopLeaseAuthority,
   WorkerDesktopLeaseAuthorityError,
   type SqliteWorkerDesktopLeaseAuthorityOptions,

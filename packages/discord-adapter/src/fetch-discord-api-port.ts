@@ -54,6 +54,7 @@ export interface DiscordGatewayDiscovery {
 
 export interface FetchDiscordApiPortOptions {
   readonly applicationId: string;
+  readonly guildId?: string;
   readonly productVersion: string;
   readonly credentialProvider: DiscordBotCredentialProvider;
   readonly interactionTokenVault: DiscordInteractionTokenVault;
@@ -63,7 +64,7 @@ export interface FetchDiscordApiPortOptions {
 }
 
 interface DiscordRequest {
-  readonly method: "GET" | "PATCH" | "POST";
+  readonly method: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
   readonly path: string;
   readonly body?: unknown;
   readonly authenticated: boolean;
@@ -71,6 +72,7 @@ interface DiscordRequest {
 
 export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscovery {
   readonly #applicationId: string;
+  readonly #guildId: string | undefined;
   readonly #credentialProvider: DiscordBotCredentialProvider;
   readonly #interactionTokenVault: DiscordInteractionTokenVault;
   readonly #fetch: DiscordFetch;
@@ -80,6 +82,9 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
 
   public constructor(options: FetchDiscordApiPortOptions) {
     assertSnowflake(options.applicationId, "Discord Application ID");
+    if (options.guildId !== undefined) {
+      assertSnowflake(options.guildId, "Discord Guild ID");
+    }
     assertProductVersion(options.productVersion);
     assertBoundedInteger(
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
@@ -94,6 +99,7 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       "Discord maximum response size",
     );
     this.#applicationId = options.applicationId;
+    this.#guildId = options.guildId;
     this.#credentialProvider = options.credentialProvider;
     this.#interactionTokenVault = options.interactionTokenVault;
     this.#fetch = options.fetch ?? fetch;
@@ -116,23 +122,22 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       );
     }
 
-    const [applicationValue, botValue, guildValue, memberValue, rolesValue, ...forumValues] =
-      await Promise.all([
-        this.#botJson("GET", "/oauth2/applications/@me"),
-        this.#botJson("GET", "/users/@me"),
-        this.#botJson("GET", `/guilds/${input.guildId}`),
-        this.#botJson("GET", `/guilds/${input.guildId}/members/@me`),
-        this.#botJson("GET", `/guilds/${input.guildId}/roles`),
-        ...input.forumChannelIds.map((channelId) => this.#botJson("GET", `/channels/${channelId}`)),
-      ]);
+    const [applicationValue, botValue, guildValue, rolesValue, ...forumValues] = await Promise.all([
+      this.#botJson("GET", "/oauth2/applications/@me"),
+      this.#botJson("GET", "/users/@me"),
+      this.#botJson("GET", `/guilds/${input.guildId}`),
+      this.#botJson("GET", `/guilds/${input.guildId}/roles`),
+      ...input.forumChannelIds.map((channelId) => this.#botJson("GET", `/channels/${channelId}`)),
+    ]);
 
     const application = requireRecord(applicationValue, "Application");
     const bot = requireRecord(botValue, "bot user");
     const guild = requireRecord(guildValue, "guild");
+    const botUserId = requireSnowflake(bot, "id");
+    const memberValue = await this.#botJson("GET", `/guilds/${input.guildId}/members/${botUserId}`);
     const member = requireRecord(memberValue, "guild member");
     const roles = parseRoles(rolesValue);
     const applicationId = requireSnowflake(application, "id");
-    const botUserId = requireSnowflake(bot, "id");
     const guildId = requireSnowflake(guild, "id");
     if (applicationId !== input.applicationId || guildId !== input.guildId) {
       throw invalidResponse("Discord returned a different installation than requested.");
@@ -240,6 +245,7 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     assertSnowflake(messageId, "Discord message ID");
     return mapDiscordMessage(
       await this.#botJson("GET", `/channels/${threadId}/messages/${messageId}`),
+      this.#guildId,
     );
   }
 
@@ -326,7 +332,9 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       "message page",
       MESSAGE_PAGE_LIMIT,
     );
-    const messages = rawMessages.map(mapDiscordMessage).sort(compareSnowflakeMessage);
+    const messages = rawMessages
+      .map((message) => mapDiscordMessage(message, this.#guildId))
+      .sort(compareSnowflakeMessage);
     const nextAfter = messages.at(-1)?.id;
     if (rawMessages.length === MESSAGE_PAGE_LIMIT && nextAfter === undefined) {
       throw invalidResponse("Discord message pagination did not provide a cursor.");
@@ -335,6 +343,41 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       messages: Object.freeze(messages),
       hasMore: rawMessages.length === MESSAGE_PAGE_LIMIT,
       ...(nextAfter === undefined ? {} : { nextAfter }),
+    });
+  }
+
+  public async createForumPost(input: {
+    forumChannelId: string;
+    requestKey: string;
+    name: string;
+    content: string;
+    appliedTagIds: readonly string[];
+  }): Promise<{
+    readonly thread: DiscordThread;
+    readonly starterMessage: DiscordMessage;
+  }> {
+    assertSnowflake(input.forumChannelId, "Discord Forum channel ID");
+    assertRequestKey(input.requestKey);
+    assertBoundedForumText(input.name, "Discord Forum post name", 1, 100);
+    assertBoundedForumText(input.content, "Discord Forum starter content", 1, 2_000);
+    assertDistinctSnowflakes(input.appliedTagIds, "Discord Forum applied tags", 5);
+    const response = requireRecord(
+      await this.#botJson("POST", `/channels/${input.forumChannelId}/threads`, {
+        name: input.name,
+        message: {
+          content: input.content,
+          allowed_mentions: { parse: [] },
+        },
+        applied_tags: [...input.appliedTagIds],
+      }),
+      "created Forum thread",
+    );
+    return Object.freeze({
+      thread: mapDiscordThread(response),
+      starterMessage: mapDiscordMessage(
+        requireRecord(response["message"], "created Forum starter message"),
+        this.#guildId,
+      ),
     });
   }
 
@@ -386,6 +429,73 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       input.requestKey,
       validateMessagePayload(input.payload),
     );
+  }
+
+  public async editMessage(input: {
+    threadId: string;
+    messageId: string;
+    payload: DiscordMessagePayload;
+  }): Promise<void> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    assertSnowflake(input.messageId, "Discord message ID");
+    const response = requireRecord(
+      await this.#botJson(
+        "PATCH",
+        `/channels/${input.threadId}/messages/${input.messageId}`,
+        validateMessagePayload(input.payload),
+      ),
+      "edited message",
+    );
+    if (requireSnowflake(response, "id") !== input.messageId) {
+      throw invalidResponse("Discord edited a different message than requested.");
+    }
+  }
+
+  public async acknowledgeMessage(input: { threadId: string; messageId: string }): Promise<{
+    readonly reactionVisible: boolean;
+    readonly typingVisible: boolean;
+  }> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    assertSnowflake(input.messageId, "Discord message ID");
+    const [reactionVisible, typingVisible] = await Promise.all([
+      this.#bestEffortAcknowledgementRequest(
+        "PUT",
+        `/channels/${input.threadId}/messages/${input.messageId}/reactions/${encodeURIComponent(
+          "👀",
+        )}/@me`,
+      ),
+      this.#bestEffortAcknowledgementRequest("POST", `/channels/${input.threadId}/typing`),
+    ]);
+    return Object.freeze({ reactionVisible, typingVisible });
+  }
+
+  public async refreshTyping(input: { threadId: string }): Promise<boolean> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    return this.#bestEffortAcknowledgementRequest("POST", `/channels/${input.threadId}/typing`);
+  }
+
+  public async completeMessageAcknowledgement(input: {
+    threadId: string;
+    messageId: string;
+    outcome: "success" | "failure";
+  }): Promise<{
+    readonly acknowledgementRemoved: boolean;
+    readonly outcomeVisible: boolean;
+  }> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    assertSnowflake(input.messageId, "Discord message ID");
+    const messagePath = `/channels/${input.threadId}/messages/${input.messageId}/reactions`;
+    const [acknowledgementRemoved, outcomeVisible] = await Promise.all([
+      this.#bestEffortAcknowledgementRequest(
+        "DELETE",
+        `${messagePath}/${encodeURIComponent("👀")}/@me`,
+      ),
+      this.#bestEffortAcknowledgementRequest(
+        "PUT",
+        `${messagePath}/${encodeURIComponent(input.outcome === "success" ? "✅" : "❌")}/@me`,
+      ),
+    ]);
+    return Object.freeze({ acknowledgementRemoved, outcomeVisible });
   }
 
   public async deferInteraction(input: {
@@ -487,6 +597,24 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
         throw error;
       }
       throw new DiscordApiError("OFFLINE", "The Discord bot credential provider is unavailable.");
+    }
+  }
+
+  async #bestEffortAcknowledgementRequest(
+    method: "DELETE" | "POST" | "PUT",
+    path: string,
+  ): Promise<boolean> {
+    try {
+      await this.#botJson(method, path);
+      return true;
+    } catch (error) {
+      if (
+        error instanceof DiscordApiError &&
+        (error.code === "FORBIDDEN" || error.code === "NOT_FOUND")
+      ) {
+        return false;
+      }
+      throw error;
     }
   }
 
@@ -815,6 +943,18 @@ function assertDistinctSnowflakes(
 function assertRequestKey(value: string): void {
   if (value.length < 1 || value.length > 512 || value.includes("\u0000")) {
     throw invalidResponse("The Discord request idempotency key is invalid.");
+  }
+}
+
+function assertBoundedForumText(
+  value: string,
+  label: string,
+  minimum: number,
+  maximum: number,
+): void {
+  const length = Array.from(value).length;
+  if (length < minimum || length > maximum || value.includes("\u0000") || value.includes("\r")) {
+    throw invalidResponse(`${label} is invalid.`);
   }
 }
 

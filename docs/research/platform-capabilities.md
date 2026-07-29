@@ -22,6 +22,13 @@ This report verifies the external platform behavior that OpenDelegate's planning
 - Thread events and messages inside threads require API v9 or newer; current integrations should target the current API version and handle `THREAD_CREATE`, `THREAD_UPDATE`, `THREAD_DELETE`, and `MESSAGE_CREATE`. [Discord Threads](https://docs.discord.com/developers/topics/threads)
 - The bot needs `VIEW_CHANNEL`, `READ_MESSAGE_HISTORY`, `SEND_MESSAGES`, and `SEND_MESSAGES_IN_THREADS` for normal operation, plus `ATTACH_FILES` for rich results. `MANAGE_THREADS` is needed if OpenDelegate must reliably change tags, archive, lock, or reopen owner-created posts; `MANAGE_CHANNELS` is needed only when onboarding creates or configures the Forum itself. [Discord Permissions](https://docs.discord.com/developers/topics/permissions) [Discord Threads](https://docs.discord.com/developers/topics/threads)
 - Discord's HTTP API is appropriate for creating/updating posts and messages, while the Gateway is the event stream. OpenDelegate should consume both: Gateway events for low-latency operation and periodic HTTP reconciliation after disconnects. [Discord Gateway](https://docs.discord.com/developers/events/gateway)
+- The Forum-create endpoint accepts a post name, one starter message, and applied
+  tags, and returns the new public thread with its nested starter message. It does
+  not expose a dedicated idempotency-key field, so a bot-originated Task must write
+  a deterministic Task marker, reconcile active and archived posts after an
+  uncertain response, and bind the recovered thread before retrying creation. This
+  is an OpenDelegate inference from the documented request contract. [Discord
+  Channel resource](https://docs.discord.com/developers/resources/channel)
 
 ### Archive and lock behavior
 
@@ -54,7 +61,7 @@ This report verifies the external platform behavior that OpenDelegate's planning
 - `thread/resume` appends later turns to the recorded thread. `thread/fork` creates a distinct thread with copied history. Threads can also be read without resuming, archived, unarchived, compacted, or permanently deleted. [Codex App Server](https://developers.openai.com/codex/app-server/)
 - When Codex settings require approval, App Server sends a server-initiated request carrying `threadId` and `turnId`. The client can accept once, accept for the session, decline, or cancel; command approvals can also accept a proposed execution-policy amendment. Completion still arrives as the terminal item event. [Codex App Server approvals](https://developers.openai.com/codex/app-server/#approvals)
 - App Server can generate TypeScript or JSON schemas that are specific to the installed Codex version. Some methods and fields require explicit `experimentalApi` opt-in, while omitting that capability keeps the client on the stable surface. [Codex App Server](https://developers.openai.com/codex/app-server/)
-- The generated `0.145.0` schema exposes separate server requests for command execution, file changes, and permission-profile elevation. OpenDelegate therefore does not need to infer protected actions from streamed prose, but it must bind every response to the exact thread, turn, item, callback identifier, current Run, and current Policy decision. The generated schema is version evidence, not a stable cross-version API guarantee.
+- The generated `0.146.0` schema exposes separate server requests for command execution, file changes, and permission-profile elevation. OpenDelegate therefore does not need to infer protected actions from streamed prose, but it must bind every response to the exact thread, turn, item, callback identifier, current Run, and current Policy decision. The generated schema is version evidence, not a stable cross-version API guarantee.
 
 ### Stability and locality caveats
 
@@ -99,6 +106,31 @@ This report verifies the external platform behavior that OpenDelegate's planning
 - Tailscale Grants can restrict which identities may reach which devices, ports, and protocols. OpenDelegate's setup assistant should recommend grants scoped to its own endpoints instead of assuming tailnet membership itself is least privilege. [Tailscale Grants](https://tailscale.com/docs/features/access-control/grants)
 - Headscale describes itself as a self-hosted implementation of the Tailscale control server with a deliberately narrow, single-tailnet scope aimed at personal use and small organizations. It is a plausible user-selected control-plane option, not a transport OpenDelegate needs to embed. [Headscale documentation](https://headscale.net/)
 - Headscale's documented feature matrix currently lists Tailscale Serve and Funnel as unsupported. Artifact exposure must therefore use OpenDelegate's own gateway or another configured exposure adapter rather than depend on those Tailscale-specific features. [Headscale feature matrix](https://headscale.net/stable/about/features/)
+
+### Wake-on-LAN
+
+- Windows exposes `WakeOnMagicPacket` as an explicit network-adapter power-management
+  setting. A read-only `Get-NetAdapterPowerManagement` observation can distinguish
+  enabled, disabled, and unsupported adapters without changing the setting.
+  [Microsoft Get-NetAdapterPowerManagement](https://learn.microsoft.com/en-us/powershell/module/netadapter/get-netadapterpowermanagement?view=windowsserver2025-ps)
+  [Microsoft Set-NetAdapterPowerManagement](https://learn.microsoft.com/en-us/powershell/module/netadapter/set-netadapterpowermanagement?view=windowsserver2025-ps)
+- Apple documents “Wake for network access” as the Mac setting that permits network
+  access to wake a sleeping computer. The platform `man pmset` reference maps that
+  behavior to the persistent 0/1 `womp` setting, so a platform-lab-verified
+  `pmset -g custom` probe can observe it without performing the separate privileged
+  mutation. The linked online `pmset` manual is a secondary mirror, not the primary
+  product source.
+  [Apple: Share your Mac resources when it’s in sleep](https://support.apple.com/guide/mac-help/share-your-mac-resources-when-its-in-sleep-mh27905/mac)
+  [Secondary `pmset` manual mirror](https://keith.github.io/xcode-man-pages/pmset.1.html)
+- Linux exposes supported and enabled Wake-on-LAN modes through ethtool. The netlink
+  query may require `CAP_NET_ADMIN` because the response can include a SecureOn
+  password, so OpenDelegate must reduce the result to magic-packet enabled,
+  disabled, unsupported, or unknown and never export the raw response.
+  [Linux ethtool netlink](https://www.kernel.org/doc/html/latest/networking/ethtool-netlink.html#wol-get)
+- Tailscale documents that it cannot carry Layer-2 Wake-on-LAN packets, even when
+  subnet routing makes the remote LAN otherwise reachable. A practical design keeps
+  an always-on relay inside the destination LAN and asks it to emit the magic packet.
+  [Tailscale Wake-on-LAN](https://tailscale.com/blog/wake-on-lan-tailscale-upsnap)
 
 ### Cloudflare Tunnel
 
