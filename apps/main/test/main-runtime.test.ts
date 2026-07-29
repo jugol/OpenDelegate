@@ -333,6 +333,43 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
   assert.equal(await readFile(resumed.paths.sqliteFile).then(Boolean), true);
 });
 
+test("an existing Main activates current bundle Admin assets without rewriting restore metadata", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-main-admin-upgrade-"));
+  const home = join(root, "runtime");
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const previousAdminRoot = await createAdminFixture(join(root, "release-previous"));
+  const currentAdminRoot = await createAdminFixture(join(root, "release-current"));
+  const mainSecrets = createMainTestSecretContext(home);
+
+  await initializeMainHome({
+    home,
+    adminRoot: previousAdminRoot,
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+  });
+  await rm(previousAdminRoot, { force: true, recursive: true });
+
+  const resumed = await initializeMainHome({
+    home,
+    adminRoot: currentAdminRoot,
+    activeAdminRoot: currentAdminRoot,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+  });
+
+  assert.equal(resumed.created, false);
+  assert.equal(resumed.configuration.adminRoot, currentAdminRoot);
+  assert.equal(
+    (
+      JSON.parse(await readFile(resumed.paths.configurationFile, "utf8")) as {
+        readonly adminRoot: string;
+      }
+    ).adminRoot,
+    previousAdminRoot,
+  );
+});
+
 test("a pre-dynamic Configuration database migrates Discord to explicit disabled state", async (t) => {
   const home = await mkdtemp(join(tmpdir(), "opendelegate-main-discord-migration-"));
   const cleanup: { runtime?: Awaited<ReturnType<typeof createMainRuntime>> } = {};

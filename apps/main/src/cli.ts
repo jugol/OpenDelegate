@@ -576,6 +576,9 @@ async function runInit(options: ParsedArguments, identity: RuntimeIdentity): Pro
     initialized = await initializeMainHome({
       ...(options.home === undefined ? {} : { home: options.home }),
       adminRoot: options.adminRoot ?? defaultAdminRoot,
+      ...(bundledRelease && options.adminRoot === undefined
+        ? { activeAdminRoot: defaultAdminRoot }
+        : {}),
       ...(options.adminRoot === undefined ? {} : { expectedAdminRoot: options.adminRoot }),
       ...(options.database === undefined ? {} : { database: options.database }),
       ...(secretBackend === undefined ? {} : { secretBackend }),
@@ -679,7 +682,10 @@ async function runServe(options: ParsedArguments, identity: RuntimeIdentity): Pr
     ...(options.home === undefined ? {} : { home: options.home }),
     sourceCheckout: installationRoot,
   });
-  const configuration = await loadMainConfiguration(paths.configurationFile);
+  const persistedConfiguration = await loadMainConfiguration(paths.configurationFile);
+  const configuration = bundledRelease
+    ? { ...persistedConfiguration, adminRoot: defaultAdminRoot }
+    : persistedConfiguration;
   const runtime = await createAndListen(configuration, paths.home, identity);
   await reportMainServiceReadiness(runtime, identity);
   if (options.open) {
