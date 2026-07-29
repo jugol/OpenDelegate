@@ -73,7 +73,10 @@ import type { TaskService } from "@opendelegate/task-service";
 import type { ApprovalPort } from "./approval-port.ts";
 import type { ArtifactAdminPort } from "./artifact-admin-port.ts";
 import type { AuditAdminPort } from "./audit-admin-port.ts";
-import type { ConfigurationAgentPort } from "./configuration-agent-port.ts";
+import type {
+  ConfigurationAgentPort,
+  ConfigurationAgentResponseLocale,
+} from "./configuration-agent-port.ts";
 import type { DeviceEnrollmentAdminPort } from "./device-enrollment-admin-port.ts";
 import { createIngressSecurity, isLoopbackAddress, PublicHttpError } from "./http-security.ts";
 import { installProblemHandlers } from "./problem-details.ts";
@@ -635,6 +638,7 @@ function registerConfigurationAgentRoutes(
         principalId: session.ownerId,
         idempotencyKey: requireIdempotencyKey(request),
         message: request.body.message,
+        responseLocale: configurationAgentResponseLocale(request.headers["accept-language"]),
         ...(device.lastObservation === undefined
           ? {}
           : {
@@ -664,6 +668,72 @@ function registerConfigurationAgentRoutes(
             }),
       });
     },
+  );
+}
+
+const CONFIGURATION_AGENT_RESPONSE_LOCALES = [
+  "en",
+  "es",
+  "fr",
+  "ja",
+  "ko",
+  "zh-CN",
+] as const satisfies readonly ConfigurationAgentResponseLocale[];
+
+function configurationAgentResponseLocale(
+  header: string | readonly string[] | undefined,
+): ConfigurationAgentResponseLocale {
+  const value = typeof header === "string" ? header : header?.join(",");
+  if (value === undefined) {
+    return "en";
+  }
+  const candidates = value
+    .split(",")
+    .map((part, index) => {
+      const [rawTag = "", ...parameters] = part.trim().split(";");
+      const qualityParameter = parameters.find((parameter) =>
+        parameter.trim().toLowerCase().startsWith("q="),
+      );
+      const quality =
+        qualityParameter === undefined
+          ? 1
+          : Number.parseFloat(qualityParameter.trim().slice("q=".length));
+      return {
+        index,
+        locale: normalizeConfigurationAgentResponseLocale(rawTag),
+        quality: Number.isFinite(quality) ? quality : 0,
+      };
+    })
+    .filter(
+      (
+        candidate,
+      ): candidate is {
+        readonly index: number;
+        readonly locale: ConfigurationAgentResponseLocale;
+        readonly quality: number;
+      } => candidate.locale !== undefined && candidate.quality > 0,
+    )
+    .sort((left, right) => right.quality - left.quality || left.index - right.index);
+  return candidates[0]?.locale ?? "en";
+}
+
+function normalizeConfigurationAgentResponseLocale(
+  value: string,
+): ConfigurationAgentResponseLocale | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "zh" ||
+    normalized === "zh-cn" ||
+    normalized === "zh-hans" ||
+    normalized === "zh-sg" ||
+    normalized.startsWith("zh-cn-") ||
+    normalized.startsWith("zh-hans-")
+  ) {
+    return "zh-CN";
+  }
+  const primary = normalized.split("-")[0];
+  return CONFIGURATION_AGENT_RESPONSE_LOCALES.find(
+    (locale) => locale !== "zh-CN" && locale === primary,
   );
 }
 

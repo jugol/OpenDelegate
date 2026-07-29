@@ -96,6 +96,32 @@ test("Configuration Agent resumes one native session per target Device", async (
   assert.equal(adapter.resumes[0]?.session.nativeSessionId, "native-configuration-session");
 });
 
+test("Configuration Agent binds the response locale to durable idempotency", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new FakeConfigurationAdapter();
+  const agent = await createAgent(adapter, eventStore);
+  const request = {
+    ...message("request_locale_identity", "Inspect this Device."),
+    responseLocale: "ko" as const,
+  };
+
+  await agent.sendMessage(request);
+
+  const restarted = await createAgent(adapter, eventStore);
+  await assert.rejects(
+    restarted.sendMessage({
+      ...request,
+      responseLocale: "ja",
+    }),
+    (error: unknown) => {
+      assert.equal((error as { readonly code?: unknown }).code, "IDEMPOTENCY_CONFLICT");
+      return true;
+    },
+  );
+  assert.equal(adapter.starts.length, 1);
+  assert.equal(adapter.resumes.length, 0);
+});
+
 test("Configuration Agent creates a fresh continuation when the initial native resume fails", async () => {
   const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
   const adapter = new InitialResumeFailureAdapter();
@@ -235,7 +261,7 @@ test("Configuration Agent keeps legacy inspect-first interruption records fail-c
   const operationKey = testDigest(
     `${interrupted.principalId}\u0000${interrupted.deviceId}\u0000${interrupted.idempotencyKey}`,
   );
-  const requestDigest = testDigest(interrupted.message);
+  const requestDigest = testDigest(`${interrupted.message}\u0000response-locale:en`);
   await eventStore.append({
     streamId: `configuration-tool-attempt:${operationKey.slice("sha256:".length)}`,
     expectedVersion: 0,
@@ -512,6 +538,54 @@ test("Configuration Agent executes bounded typed tool turns and exposes only ver
     deviceId: "device_worker",
   });
   assert.equal(effective["artifact.exposure"]?.value, "authenticated");
+});
+
+test("Configuration Agent carries the selected response locale and completes a proposed change through Approval creation", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new ProposalStoppingConfigurationAdapter();
+  const service = configurationService();
+  const broker = new ConfigurationServiceAgentToolBroker({
+    service,
+    contextForDevice: (deviceId) => ({
+      instanceId: "instance_personal",
+      mainId: "device_main",
+      deviceId,
+    }),
+    authorizeMutation: () => ({
+      decision: "require-approval",
+      code: "OWNER_APPROVAL_REQUIRED",
+    }),
+    approvalRequester: {
+      async request() {
+        return { approvalId: "approval_profile_change" };
+      },
+    },
+  });
+  const agent = await createAgent(adapter, eventStore, broker);
+
+  const response = await agent.sendMessage({
+    ...message("request_proposal_approval", "Change this Device profile."),
+    responseLocale: "ko",
+  });
+
+  assert.equal(response.pendingApprovalId, "approval_profile_change");
+  assert.equal(adapter.resumes.length, 4);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /Respond to the owner in Korean \(ko\).*even when the owner message is in another language/isu,
+  );
+  assert.match(adapter.resumes[2]?.prompt ?? "", /configuration-2.*apply.*Approval/isu);
+  assert.match(adapter.resumes[3]?.prompt ?? "", /approval_profile_change/u);
+  const history = await agent.listMessages({
+    deviceId: "device_worker",
+    principalId: "owner_personal",
+  });
+  const restoredResponse = history.messages.at(-1);
+  assert.equal(restoredResponse?.role, "agent");
+  assert.equal(
+    restoredResponse?.role === "agent" ? restoredResponse.pendingApprovalId : undefined,
+    "approval_profile_change",
+  );
 });
 
 test("Configuration Chat discovers and changes Main Admin auto-open through typed durable tools", async () => {
@@ -981,6 +1055,93 @@ class ToolUsingConfigurationAdapter implements AgentAdapter {
         type: "final",
         content: "The Device now requires authenticated Artifact access.",
         claimReceiptIds: ["configuration-7"],
+      }),
+    );
+  }
+}
+
+class ProposalStoppingConfigurationAdapter implements AgentAdapter {
+  readonly adapterId = "fixture-configuration-agent";
+  readonly provider = "generic" as const;
+  readonly starts: AgentStartRequest[] = [];
+  readonly resumes: AgentResumeRequest[] = [];
+
+  async probe() {
+    return new FakeConfigurationAdapter().probe();
+  }
+
+  async start(input: AgentStartRequest): Promise<AgentRunHandle> {
+    this.starts.push(structuredClone(input));
+    return handle(
+      session(input),
+      JSON.stringify({
+        schemaVersion: 1,
+        type: "tool",
+        toolCallId: "inspect_profile",
+        request: { tool: "inspect" },
+      }),
+    );
+  }
+
+  async resume(input: AgentResumeRequest): Promise<AgentRunHandle> {
+    this.resumes.push(structuredClone(input));
+    const turn = this.resumes.length;
+    if (turn === 1) {
+      return handle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "tool",
+          toolCallId: "propose_profile",
+          request: {
+            tool: "propose",
+            expectedRevision: 0,
+            reason: "Change the Device Worker profile.",
+            changes: [
+              {
+                operation: "set",
+                key: "agent.worker-profile",
+                scope: { kind: "device", id: "device_worker" },
+                value: { schemaVersion: 1, mode: "auto" },
+              },
+            ],
+          },
+        }),
+      );
+    }
+    if (turn === 2) {
+      return handle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "final",
+          content: "Review and approve proposal configuration-2.",
+          claimReceiptIds: [],
+        }),
+      );
+    }
+    if (turn === 3) {
+      return handle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "tool",
+          toolCallId: "apply_profile",
+          request: {
+            tool: "apply",
+            proposalId: "configuration-2",
+            expectedRevision: 0,
+          },
+        }),
+      );
+    }
+    return handle(
+      input.session,
+      JSON.stringify({
+        schemaVersion: 1,
+        type: "final",
+        content: "승인 요청을 준비했습니다.",
+        claimReceiptIds: [],
       }),
     );
   }

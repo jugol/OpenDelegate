@@ -67,6 +67,7 @@ type ChatMessage = {
   readonly id: string;
   readonly author: "agent" | "owner";
   readonly suggestedActions?: readonly ConfigurationAgentSuggestedAction[];
+  readonly pendingApprovalId?: string;
 } & (
   | {
       readonly content: string;
@@ -114,6 +115,7 @@ interface ConfigurationChatProps {
   ) => Promise<SecureSecretIngestReceipt>;
   readonly onUnreadAgentMessage?: () => void;
   readonly onLoadMessages?: () => Promise<readonly ConfigurationAgentConversationMessage[]>;
+  readonly onReviewApproval?: (approvalId: string) => void;
   readonly onSendMessage?: (message: string) => Promise<ConfigurationAgentReply>;
   readonly onToggleExpanded: () => void;
   readonly open: boolean;
@@ -131,6 +133,7 @@ export function ConfigurationChat({
   onClose,
   onIngestSecret,
   onLoadMessages,
+  onReviewApproval,
   onUnreadAgentMessage,
   onSendMessage,
   onToggleExpanded,
@@ -167,6 +170,7 @@ export function ConfigurationChat({
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openRef = useRef(open);
+  const previousOpenRef = useRef(open);
   const previousMessageCountRef = useRef(conversationMessages.length);
   const discordOnboardingAttemptedForOpenRef = useRef(false);
   const consumedDraftRequestIdRef = useRef<number | undefined>(undefined);
@@ -195,6 +199,9 @@ export function ConfigurationChat({
           ...(message.suggestedActions.length === 0
             ? {}
             : { suggestedActions: message.suggestedActions }),
+          ...(message.pendingApprovalId === undefined
+            ? {}
+            : { pendingApprovalId: message.pendingApprovalId }),
         };
         return message.role === "owner" && message.responseStatus === "interrupted"
           ? [
@@ -248,6 +255,9 @@ export function ConfigurationChat({
           author: "agent",
           content: response.content,
           suggestedActions: response.suggestedActions,
+          ...(response.pendingApprovalId === undefined
+            ? {}
+            : { pendingApprovalId: response.pendingApprovalId }),
         });
         return true;
       } catch (error) {
@@ -386,13 +396,15 @@ export function ConfigurationChat({
 
   useLayoutEffect(() => {
     const scrollRegion = scrollRegionRef.current;
+    const justOpened = open && !previousOpenRef.current;
     if (
       open &&
       scrollRegion !== null &&
-      conversationMessages.length > previousMessageCountRef.current
+      (justOpened || conversationMessages.length > previousMessageCountRef.current)
     ) {
       scrollRegion.scrollTop = scrollRegion.scrollHeight;
     }
+    previousOpenRef.current = open;
     previousMessageCountRef.current = conversationMessages.length;
   }, [conversationMessages, open]);
 
@@ -515,6 +527,9 @@ export function ConfigurationChat({
           author: "agent",
           content: response.content,
           suggestedActions: response.suggestedActions,
+          ...(response.pendingApprovalId === undefined
+            ? {}
+            : { pendingApprovalId: response.pendingApprovalId }),
         });
       } catch (error) {
         appendAgentMessage(
@@ -669,6 +684,26 @@ export function ConfigurationChat({
                           </button>
                         );
                       })}
+                    </div>
+                  ) : null}
+                  {message.author === "agent" &&
+                  message.pendingApprovalId !== undefined &&
+                  onReviewApproval !== undefined ? (
+                    <div className="guided-setup-options chat-message-actions">
+                      <button
+                        aria-label={copy.approval.ownerReview}
+                        className="guided-setup-option configuration-approval-option"
+                        onClick={() => onReviewApproval(message.pendingApprovalId!)}
+                        type="button"
+                      >
+                        <span aria-hidden="true">
+                          <ShieldCheck />
+                        </span>
+                        <span>
+                          <strong>{copy.approval.ownerReview}</strong>
+                          <small>{copy.approval.intro}</small>
+                        </span>
+                      </button>
                     </div>
                   ) : null}
                   {message.author === "agent" &&

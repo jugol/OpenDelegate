@@ -58,6 +58,7 @@ export const ConfigurationAgentMessageResponseSchema = Type.Object(
         uniqueItems: true,
       }),
     ),
+    pendingApprovalId: Type.Optional(OpaqueIdSchema),
     occurredAt: Rfc3339InstantSchema,
   },
   {
@@ -105,6 +106,7 @@ export const ConfigurationAgentConversationMessageSchema = Type.Union(
             uniqueItems: true,
           }),
         ),
+        pendingApprovalId: Type.Optional(OpaqueIdSchema),
         occurredAt: Rfc3339InstantSchema,
       },
       { additionalProperties: false },

@@ -74,6 +74,7 @@ export function App({
   const [chatExpanded, setChatExpanded] = useState(false);
   const [chatFocusRequestId, setChatFocusRequestId] = useState(0);
   const [unreadChatMessages, setUnreadChatMessages] = useState(0);
+  const [focusedApprovalId, setFocusedApprovalId] = useState<string>();
   const [chatDraftRequest, setChatDraftRequest] = useState<{
     readonly deviceId: string;
     readonly requestId: number;
@@ -172,6 +173,9 @@ export function App({
   }
 
   function selectSection(section: AdminSection): void {
+    if (section === "approvals") {
+      setFocusedApprovalId(undefined);
+    }
     setActiveSection(section);
     if (section !== "devices") {
       setChatOpen(false);
@@ -185,6 +189,13 @@ export function App({
     }
     setSelectedDeviceId(deviceId);
     setActiveSection("devices");
+  }
+
+  function reviewApproval(approvalId: string): void {
+    setFocusedApprovalId(approvalId);
+    setChatOpen(false);
+    setChatExpanded(false);
+    setActiveSection("approvals");
   }
 
   return (
@@ -229,7 +240,10 @@ export function App({
             executionAvailable={executionAvailable}
           />
         ) : activeSection === "approvals" && api !== undefined ? (
-          <ApprovalSurface api={api} />
+          <ApprovalSurface
+            api={api}
+            {...(focusedApprovalId === undefined ? {} : { initialApprovalId: focusedApprovalId })}
+          />
         ) : activeSection === "artifacts" && api !== undefined ? (
           <ArtifactSurface
             api={api}
@@ -269,6 +283,7 @@ export function App({
         mainDevice={device.role === "main"}
         modal={chatModal}
         onClose={closeChat}
+        {...(api === undefined ? {} : { onReviewApproval: reviewApproval })}
         onUnreadAgentMessage={recordUnreadAgentMessage}
         {...(onLoadConfigurationMessages === undefined
           ? {}

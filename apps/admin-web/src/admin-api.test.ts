@@ -123,6 +123,7 @@ describe("BrowserAdminApi JSON responses", () => {
           sessionId: "configuration_session_device_main",
           content: "The Device-scoped proposal is ready for review.",
           suggestedActions: ["guide-discord"],
+          pendingApprovalId: "approval_configuration_001",
           occurredAt: "2026-07-24T01:02:00.000Z",
         }),
       );
@@ -135,6 +136,7 @@ describe("BrowserAdminApi JSON responses", () => {
     ).resolves.toEqual({
       content: "The Device-scoped proposal is ready for review.",
       suggestedActions: ["guide-discord"],
+      pendingApprovalId: "approval_configuration_001",
     });
 
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
@@ -171,6 +173,7 @@ describe("BrowserAdminApi JSON responses", () => {
               role: "agent",
               content: "The conversation is durable.",
               suggestedActions: ["guide-discord"],
+              pendingApprovalId: "approval_configuration_001",
               occurredAt: "2026-07-24T01:02:00.000Z",
             },
           ],
@@ -194,6 +197,7 @@ describe("BrowserAdminApi JSON responses", () => {
         role: "agent",
         content: "The conversation is durable.",
         suggestedActions: ["guide-discord"],
+        pendingApprovalId: "approval_configuration_001",
         occurredAt: "2026-07-24T01:02:00.000Z",
       },
     ]);

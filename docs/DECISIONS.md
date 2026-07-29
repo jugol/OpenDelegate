@@ -1292,3 +1292,38 @@ apply eligible for unsafe replay.
 **Consequence:** Transient provider loss after inspection no longer strands ordinary
 configuration guidance. Durable proposals and configuration changes retain the
 existing fail-closed boundary and cannot be duplicated by automatic recovery.
+
+## D-072 — Configuration change turns finish the Approval handoff deterministically
+
+See [ADR-0032](adr/0032-configuration-chat-locale-and-approval-handoff.md).
+
+**Decision:** The Admin-selected presentation locale is bounded request metadata for
+each new Configuration Agent turn and is authoritative for newly generated
+owner-visible prose. It does not translate canonical identifiers, provider-native
+model IDs, configuration values, or stored conversation history. The normalized
+locale is part of the durable request idempotency identity; changing it while
+reusing the same key is a conflict rather than a different continuation of the turn.
+
+Configuration Chat treats a successful `propose` tool call as entry into the normal
+change flow. Main does not accept a terminal Agent response until that same turn has
+attempted `apply` for the proposal. Policy may apply an unprotected proposal
+immediately or return a broker-issued Approval ID for a protected proposal. That ID
+is authoritative typed response metadata; Admin Web renders a localized action in
+the originating message and opens the exact Approval. Explicit draft-only work uses
+`validate` and does not create a durable proposal.
+
+Configuration Chat may hydrate its durable history while closed. Each closed-to-open
+transition positions the viewport at the newest restored message while retaining all
+older messages above it.
+
+**Rationale:** A live Agent created a proposal and told the owner to approve it even
+though it had never called `apply`, so no Approval existed and no setting could
+change. The same turn answered in English because an English UI-generated
+instruction outweighed the Korean Admin locale, and background hydration left the
+closed transcript at its oldest message. These are deterministic product boundaries,
+not facts that should be inferred from Agent prose.
+
+**Consequence:** An owner who requests a change receives either a verified apply
+receipt or a real, directly reachable Approval—not an orphan proposal. Newly
+generated Configuration responses follow the chosen Admin language, and reopening
+the chat starts at the current end of the durable conversation.

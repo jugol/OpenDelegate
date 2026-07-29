@@ -222,6 +222,8 @@ export const koreanMessages = {
     noVerifiedModels:
       "준비되고 검증된 모델 카탈로그가 없습니다. 정확한 모델을 고르기 전에 이 Device를 평가하세요.",
     configureAgentProfile: "Configuration Chat에서 변경 요청",
+    agentProfileConfigurationRequest:
+      "Device {deviceId}의 현재 설정을 확인하세요. {scope} 범위에서 {key}만 정확히 {profile}(으)로 변경하세요. 선택한 모든 어댑터와 공급자 고유 모델 ID를 이 Device의 최신 테스트 완료 모델 카탈로그와 대조하고, 다른 공급자·어댑터·모델로 바꾸지 마세요. 이 변경은 새 네이티브 세션에만 적용된다고 설명하세요. 변경안을 만들고 diff를 검토한 뒤 apply를 정확히 한 번 호출하여 일반 소유자 승인 항목을 생성하거나 검증된 적용 영수증을 받으세요. 변경안만 만든 채 끝내지 마세요.",
     modelCatalog: "검증된 모델 {count}개",
     defaultModel: "기본값",
     moreModels: "외 {count}개",

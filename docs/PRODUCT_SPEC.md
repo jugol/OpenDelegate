@@ -957,6 +957,24 @@ may request a transition but cannot manufacture a state outside the transition r
     request identity is derived from that immutable pair, while each chat tool
     execution retains its own replay boundary. After the owner reports approval, the
     Agent inspects current durable configuration instead of blindly applying again.
+29. The selected Admin presentation locale is attached to each newly accepted
+    Configuration Agent turn as bounded request metadata. It controls newly generated
+    owner-visible prose even when a deterministic UI action supplied an English
+    configuration instruction. Identifiers, provider-native model IDs, commands,
+    configuration keys, raw values, and previously stored conversation content remain
+    unchanged.
+30. Configuration Chat may hydrate while closed, but each transition from closed to
+    open positions the transcript at its newest restored message. Older messages
+    remain available by scrolling upward; opening the chat does not replay, truncate,
+    translate, or rewrite them.
+31. Creating a durable proposal is not an Approval request. Once a turn invokes
+    `propose`, Main rejects a terminal response until the same turn has attempted
+    `apply` for that proposal. A protected apply result creates the durable Approval
+    and returns its exact ID as authoritative response metadata. Admin Web renders a
+    localized action in the originating Agent message and opens that exact Approval.
+    An explicitly requested draft or preview uses `validate` without creating a
+    proposal. No setting changes until either an unprotected apply succeeds or the
+    owner approves the protected action.
 
 ### FR-16 — Policy and approvals
 

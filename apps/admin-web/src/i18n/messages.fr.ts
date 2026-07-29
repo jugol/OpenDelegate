@@ -230,6 +230,8 @@ export const frenchMessages = {
     noVerifiedModels:
       "Aucun catalogue de modèles prêt et testé n’est disponible. Évaluez ce Device avant de choisir un modèle exact.",
     configureAgentProfile: "Demander la modification dans Configuration Chat",
+    agentProfileConfigurationRequest:
+      "Inspectez la configuration actuelle du Device {deviceId}. Modifiez uniquement {key} dans la portée {scope}, exactement avec la valeur {profile}. Vérifiez chaque adaptateur et identifiant de modèle natif du fournisseur dans le dernier catalogue testé de ce Device, sans remplacer le fournisseur, l’adaptateur ou le modèle. Précisez que la modification ne concerne que les nouvelles sessions natives. Créez la proposition, examinez son diff, puis appelez apply exactement une fois afin de créer l’Approval normale du propriétaire ou d’obtenir un reçu d’application vérifié. Ne terminez pas après avoir seulement créé la proposition.",
     modelCatalog: "{count} modèles vérifiés",
     defaultModel: "Par défaut",
     moreModels: "+{count} autres",

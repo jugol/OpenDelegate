@@ -42,6 +42,7 @@ test("Configuration Agent messages are bounded and never carry raw configuration
     sessionId: "configuration_session_device_main",
     content: "I can inspect the Device and prepare a reviewable proposal.",
     suggestedActions: ["guide-discord", "guide-external-postgresql"],
+    pendingApprovalId: "approval_configuration_001",
     occurredAt: NOW,
   };
   assert.equal(Value.Check(ConfigurationAgentMessageResponseSchema, response), true);

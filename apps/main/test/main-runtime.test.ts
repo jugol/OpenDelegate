@@ -1151,6 +1151,7 @@ test("an injected Configuration Agent is exposed only through the authenticated 
       principalId: owner.ownerId,
       idempotencyKey: "main-configuration-message-1",
       message: "Inspect the Main Device configuration.",
+      responseLocale: "en",
     },
   ]);
 });

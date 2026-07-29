@@ -495,7 +495,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     const operationKey = digest(
       `${request.principalId}\u0000${request.deviceId}\u0000${request.idempotencyKey}`,
     );
-    const requestDigest = digest(request.message);
+    const requestDigest = digest(
+      `${request.message}\u0000response-locale:${request.responseLocale ?? "en"}`,
+    );
     const active = this.#activeRequests.get(operationKey);
     if (active !== undefined) {
       if (active.requestDigest !== requestDigest) {
@@ -578,6 +580,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
                   ...(turn.response.suggestedActions === undefined
                     ? {}
                     : { suggestedActions: [...turn.response.suggestedActions] }),
+                  ...(turn.response.pendingApprovalId === undefined
+                    ? {}
+                    : { pendingApprovalId: turn.response.pendingApprovalId }),
                   occurredAt: turn.response.occurredAt,
                 },
               ]),
@@ -636,6 +641,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     let replayUnsafeToolAttempted = false;
     let continuationStarted = false;
     const receipts = new Map<string, ConfigurationToolReceipt>();
+    const proposedProposalIds = new Set<string>();
+    const applyAttemptedProposalIds = new Set<string>();
+    let proposalCompletionCorrectionIssued = false;
+    let pendingApprovalId: string | undefined;
 
     try {
       for (let turnIndex = 0; turnIndex <= this.#maximumToolTurns; turnIndex += 1) {
@@ -691,6 +700,19 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         session = turn.session;
         const parsed = parseConfigurationTurnResult(turn.finalText);
         if (parsed.type === "final") {
+          const incompleteProposalIds = [...proposedProposalIds].filter(
+            (proposalId) => !applyAttemptedProposalIds.has(proposalId),
+          );
+          if (incompleteProposalIds.length > 0) {
+            if (proposalCompletionCorrectionIssued) {
+              throw unavailable(
+                "The Configuration Agent stopped before creating the required owner Approval.",
+              );
+            }
+            proposalCompletionCorrectionIssued = true;
+            prompt = buildProposalCompletionPrompt(incompleteProposalIds, this.#maximumPromptBytes);
+            continue;
+          }
           const content = finalizeOwnerResponse(parsed, [...receipts.values()]);
           const occurredAt = this.#clock.now();
           if (!isRfc3339Instant(occurredAt)) {
@@ -705,6 +727,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
             ...(parsed.suggestedActions.length === 0
               ? {}
               : { suggestedActions: [...parsed.suggestedActions] }),
+            ...(pendingApprovalId === undefined ? {} : { pendingApprovalId }),
             occurredAt,
           } satisfies ConfigurationAgentMessageResponse;
           await this.#recordConversationExchange({
@@ -721,6 +744,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
           throw unavailable("The Configuration Agent exceeded its typed tool-turn budget.");
         }
         toolCallCount += 1;
+        if (parsed.request.tool === "apply") {
+          applyAttemptedProposalIds.add(parsed.request.proposalId);
+        }
         const toolOperationId = configurationToolOperationId(operationKey, parsed.toolCallId);
         await this.#recordToolAttempt({
           operationKey,
@@ -741,6 +767,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
             throw unavailable("The Configuration Agent tool broker returned an invalid receipt.");
           }
           receipts.set(receipt.receiptId, receipt);
+          if (receipt.tool === "propose") {
+            proposedProposalIds.add(receipt.result.proposal.id);
+          }
           toolResult = {
             schemaVersion: 1,
             type: "tool-result",
@@ -755,6 +784,12 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
           }
           if (!(error instanceof ConfigurationAgentToolBrokerError)) {
             throw unavailable("The Configuration Agent tool broker failed unexpectedly.");
+          }
+          if (
+            error.code === "CONFIGURATION_TOOL_APPROVAL_REQUIRED" &&
+            error.approvalId !== undefined
+          ) {
+            pendingApprovalId = error.approvalId;
           }
           toolResult = {
             schemaVersion: 1,
@@ -1299,11 +1334,13 @@ function buildConfigurationPrompt(
   const prompt = [
     "You are the OpenDelegate Configuration Agent for one target Device.",
     "Keep this Device conversation isolated from Tasks and every other Device.",
+    configurationResponseLocaleInstruction(input.responseLocale),
     "OpenDelegate provides exactly six deterministic typed tools: inspect, validate, propose, diff, apply, and rollback.",
     'A tool turn is one exact JSON object: {"schemaVersion":1,"type":"tool","toolCallId":"stable call ID","request":{...typed request...}}.',
     'Inspect has {"tool":"inspect"}. Validate has tool, expectedRevision, and changes. Propose also has reason. Diff and apply have tool, proposalId, and expectedRevision. Rollback has tool, changeSetId, expectedRevision, and reason.',
     'A change is exactly either {"operation":"set","key":"setting.key","scope":{"kind":"scope-kind","id":"scope-id"},"value":...} or the same shape without value and operation unset.',
     "Inspect before changing configuration. Use the returned revision in every later typed request. Never invent proposal, change-set, revision, or receipt identifiers.",
+    "When the owner asks to change Configuration, complete inspect, validate when useful, propose, diff, and one apply attempt in the same turn. A protected apply result with an approvalId means the owner Approval was created successfully; report that exact Approval and stop. Never stop immediately after propose or tell the owner to approve a proposal that has no approvalId. If the owner explicitly asks for a draft or preview only, use validate without creating a proposal.",
     "The Main-scoped boolean admin.open-on-login controls whether the owner-session helper opens the canonical Admin origin once per login session. It is discoverable through inspect and changeable through the normal propose/apply flow.",
     "After applying or rolling back admin.open-on-login, explain that the installed helper still needs the separately elevated service reconfigure flow. Configuration Chat never elevates or restarts native services.",
     "autonomy.profile sets the broad proactive default: reactive, assisted, or autonomous. Each proactive category can independently inherit that profile or be disabled, proposed, or executed through autonomy.incident-recovery, autonomy.maintenance, autonomy.capability-expansion, autonomy.cleanup, autonomy.cost-incurring-work, and autonomy.general-improvement.",
@@ -1407,6 +1444,39 @@ function buildToolResultPrompt(
     throw unavailable("The Configuration Agent tool result exceeds its prompt budget.");
   }
   return prompt;
+}
+
+function buildProposalCompletionPrompt(
+  proposalIds: readonly string[],
+  maximumBytes: number,
+): string {
+  const prompt = [
+    "OpenDelegate rejected the premature final response because a durable Configuration proposal was created without entering its execution or Approval flow.",
+    `Pending proposal IDs: ${proposalIds.join(", ")}`,
+    "Continue with typed tools. Preview the exact proposal with diff, then call apply exactly once with its recorded proposal ID and revision. If policy returns CONFIGURATION_TOOL_APPROVAL_REQUIRED with an approvalId, that is the expected successful handoff to owner review. Return a final response only after that apply result. Never invent a replacement proposal or identifier.",
+  ].join("\n");
+  if (Buffer.byteLength(prompt, "utf8") > maximumBytes) {
+    throw unavailable("The Configuration Agent proposal completion prompt exceeds its budget.");
+  }
+  return prompt;
+}
+
+function configurationResponseLocaleInstruction(
+  locale: ConfigurationAgentMessageInput["responseLocale"],
+): string {
+  const language =
+    locale === "ko"
+      ? "Korean"
+      : locale === "ja"
+        ? "Japanese"
+        : locale === "fr"
+          ? "French"
+          : locale === "es"
+            ? "Spanish"
+            : locale === "zh-CN"
+              ? "Simplified Chinese"
+              : "English";
+  return `Respond to the owner in ${language} (${locale ?? "en"}) even when the owner message is in another language. This controls only newly generated owner-visible prose. Preserve exact identifiers, provider-native model IDs, commands, code, configuration keys, and raw values; never translate or rewrite durable conversation history.`;
 }
 
 function parseConfigurationTurnResult(value: string | undefined): ConfigurationAgentTurnResult {
@@ -1712,6 +1782,21 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
         "content",
         "suggestedActions",
         "occurredAt",
+      ]) &&
+      !hasExactKeys(value["response"], [
+        "messageId",
+        "sessionId",
+        "content",
+        "pendingApprovalId",
+        "occurredAt",
+      ]) &&
+      !hasExactKeys(value["response"], [
+        "messageId",
+        "sessionId",
+        "content",
+        "suggestedActions",
+        "pendingApprovalId",
+        "occurredAt",
       ]))
   ) {
     throw unavailable("The Configuration Agent response state is corrupt.");
@@ -1722,6 +1807,9 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
   assertIdentifier(response["content"], "Configuration Agent response", 32_768);
   if (response["suggestedActions"] !== undefined) {
     parseSuggestedActions(response["suggestedActions"]);
+  }
+  if (response["pendingApprovalId"] !== undefined) {
+    assertIdentifier(response["pendingApprovalId"], "Approval ID", 160);
   }
   if (typeof response["occurredAt"] !== "string" || !isRfc3339Instant(response["occurredAt"])) {
     throw unavailable("The Configuration Agent response state is corrupt.");
@@ -1947,6 +2035,17 @@ function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgen
   assertIdentifier(input.principalId, "Principal ID", 160);
   assertIdentifier(input.idempotencyKey, "Idempotency key", 160);
   assertIdentifier(input.message, "Owner message", 8_192);
+  if (
+    input.responseLocale !== undefined &&
+    input.responseLocale !== "en" &&
+    input.responseLocale !== "es" &&
+    input.responseLocale !== "fr" &&
+    input.responseLocale !== "ja" &&
+    input.responseLocale !== "ko" &&
+    input.responseLocale !== "zh-CN"
+  ) {
+    throw unavailable("The Configuration Agent response locale is invalid.");
+  }
   const deviceObservation =
     input.deviceObservation === undefined
       ? undefined
@@ -1956,6 +2055,7 @@ function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgen
     principalId: input.principalId,
     idempotencyKey: input.idempotencyKey,
     message: input.message,
+    ...(input.responseLocale === undefined ? {} : { responseLocale: input.responseLocale }),
     ...(deviceObservation === undefined ? {} : { deviceObservation }),
   };
 }
