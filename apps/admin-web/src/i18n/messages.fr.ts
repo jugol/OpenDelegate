@@ -76,6 +76,8 @@ export const frenchMessages = {
       "Le Main indique que l’évaluation de l’appareil ou la messagerie de l’agent de configuration est indisponible. Les informations visibles sur l’appareil proviennent uniquement du rapport déterministe de son environnement d’exécution.",
     failedMessage:
       "L’agent de configuration local était indisponible ou a été interrompu. OpenDelegate n’a pas relancé une opération de résultat incertain. Les modifications terminées restent durables ; vérifiez la configuration actuelle, puis réessayez.",
+    diagnosticCode: "Code de diagnostic : {code}",
+    correlationId: "ID de corrélation : {id}",
     discordOnboardingMessage:
       "Discord n’est pas encore connecté. Je vérifie la liaison actuelle et prépare les instructions de configuration.",
     secureStoreFailed:

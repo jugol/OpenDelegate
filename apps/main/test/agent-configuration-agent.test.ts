@@ -170,6 +170,40 @@ test("Configuration Agent never auto-continues or replays after a durable tool a
   assert.equal(broker.calls.length, 1);
 });
 
+test("Configuration Agent exposes the terminal adapter diagnostic code at its public failure seam", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const agent = await createAgent(new TerminalFailureConfigurationAdapter(), eventStore);
+
+  await assert.rejects(
+    agent.sendMessage(message("request_terminal_failure", "Inspect the current profile.")),
+    (error: unknown) => {
+      assert.equal((error as { readonly code?: unknown }).code, "CONFIGURATION_AGENT_UNAVAILABLE");
+      assert.match(
+        (error as { readonly message?: string }).message ?? "",
+        /Diagnostic code: PROVIDER_CONNECTION_CLOSED\./u,
+      );
+      return true;
+    },
+  );
+
+  const invalidCodeAgent = await createAgent(
+    new TerminalFailureConfigurationAdapter("provider failure!"),
+    new InMemoryEventStore({ clock: { now: () => NOW } }),
+  );
+  await assert.rejects(
+    invalidCodeAgent.sendMessage(
+      message("request_invalid_terminal_code", "Inspect the current profile again."),
+    ),
+    (error: unknown) => {
+      assert.match(
+        (error as { readonly message?: string }).message ?? "",
+        /Diagnostic code: CONFIGURATION_AGENT_TURN_FAILED\./u,
+      );
+      return true;
+    },
+  );
+});
+
 test("Configuration Agent rejects raw Secret material before adapter, session, or event access", async () => {
   const sentinels = [
     "Use postgresql://owner:correct-horse@example.test/opendelegate for the database.",
@@ -584,6 +618,20 @@ class FakeConfigurationAdapter implements AgentAdapter {
         claimReceiptIds: [],
       }),
     );
+  }
+}
+
+class TerminalFailureConfigurationAdapter extends FakeConfigurationAdapter {
+  readonly #failureCode: string;
+
+  constructor(failureCode = "PROVIDER_CONNECTION_CLOSED") {
+    super();
+    this.#failureCode = failureCode;
+  }
+
+  override async start(input: AgentStartRequest): Promise<AgentRunHandle> {
+    this.starts.push(structuredClone(input));
+    return failedHandle(session(input), this.#failureCode);
   }
 }
 
@@ -1018,7 +1066,10 @@ function handle(reference: NativeSessionReference, finalText: string): AgentRunH
   };
 }
 
-function failedHandle(reference: NativeSessionReference): AgentRunHandle {
+function failedHandle(
+  reference: NativeSessionReference,
+  code = "NATIVE_SESSION_UNAVAILABLE",
+): AgentRunHandle {
   const events: readonly NormalizedAgentEvent[] = [
     {
       sequence: 1,
@@ -1037,7 +1088,7 @@ function failedHandle(reference: NativeSessionReference): AgentRunHandle {
       status: "failed" as const,
       session: reference,
       error: {
-        code: "NATIVE_SESSION_UNAVAILABLE",
+        code,
         message: "The native session cannot accept another turn.",
         retryable: false,
       },

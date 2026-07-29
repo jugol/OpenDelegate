@@ -202,6 +202,174 @@ test("Codex App Server fails before launch without the exact action authorizatio
   }
 });
 
+test("Codex App Server reconciles a persisted completed turn when the terminal notification is lost", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
+  try {
+    const cwd = await realpath(process.cwd());
+    const adapter = new CodexAppServerAdapter({
+      codexHome: join(root, "codex-home"),
+      executable: process.execPath,
+      prefixArgs: [fixturePath, "codex-app-server"],
+    });
+    const handle = await adapter.start({
+      operation: "start",
+      requestId: "request-lost-terminal",
+      runId: "run-lost-terminal",
+      taskId: "task-lost-terminal",
+      workstreamId: "configuration",
+      sessionKey: "task-lost-terminal/configuration",
+      deviceId: "device-main",
+      prompt: "Inspect configuration without changing it.",
+      workspace: {
+        workspaceId: "workspace-app-server",
+        cwd,
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: {
+        mode: "allow-listed",
+        allowedTools: ["shell"],
+        actionAuthorization: {
+          authorizeAndConsume: async () => ({
+            decision: "allow",
+            reasonCode: "POLICY_TEST",
+          }),
+        },
+      },
+      environment: {
+        FIXTURE_CODEX_CLOSE_BEFORE_TURN_COMPLETED: "1",
+      },
+      limits,
+    });
+    const events: NormalizedAgentEvent[] = [];
+    for await (const event of handle.events) {
+      events.push(event);
+    }
+    const result = await handle.result;
+
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.finalText, "Finished through App Server");
+    assert.ok(
+      events.some((event) => event.type === "diagnostic" && event.code === "CODEX_TURN_RECONCILED"),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex App Server fails closed when persisted state cannot prove terminal completion", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
+  try {
+    const cwd = await realpath(process.cwd());
+    const adapter = new CodexAppServerAdapter({
+      codexHome: join(root, "codex-home"),
+      executable: process.execPath,
+      prefixArgs: [fixturePath, "codex-app-server"],
+    });
+    const handle = await adapter.start({
+      operation: "start",
+      requestId: "request-unknown-terminal",
+      runId: "run-unknown-terminal",
+      taskId: "task-unknown-terminal",
+      workstreamId: "configuration",
+      sessionKey: "task-unknown-terminal/configuration",
+      deviceId: "device-main",
+      prompt: "Inspect configuration without changing it.",
+      workspace: {
+        workspaceId: "workspace-app-server",
+        cwd,
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: {
+        mode: "allow-listed",
+        allowedTools: ["shell"],
+        actionAuthorization: {
+          authorizeAndConsume: async () => ({
+            decision: "allow",
+            reasonCode: "POLICY_TEST",
+          }),
+        },
+      },
+      environment: {
+        FIXTURE_CODEX_CLOSE_BEFORE_TURN_COMPLETED: "1",
+        FIXTURE_CODEX_RECONCILED_TURN_STATUS: "inProgress",
+      },
+      limits,
+    });
+    const events: NormalizedAgentEvent[] = [];
+    for await (const event of handle.events) {
+      events.push(event);
+    }
+    const result = await handle.result;
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.error?.code, "PROVIDER_CONNECTION_CLOSED");
+    assert.equal(
+      events.some((event) => event.type === "diagnostic" && event.code === "CODEX_TURN_RECONCILED"),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex App Server never masks a protocol violation with persisted turn reconciliation", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
+  try {
+    const cwd = await realpath(process.cwd());
+    const adapter = new CodexAppServerAdapter({
+      codexHome: join(root, "codex-home"),
+      executable: process.execPath,
+      prefixArgs: [fixturePath, "codex-app-server"],
+    });
+    const handle = await adapter.start({
+      operation: "start",
+      requestId: "request-protocol-violation",
+      runId: "run-protocol-violation",
+      taskId: "task-protocol-violation",
+      workstreamId: "configuration",
+      sessionKey: "task-protocol-violation/configuration",
+      deviceId: "device-main",
+      prompt: "Inspect configuration without changing it.",
+      workspace: {
+        workspaceId: "workspace-app-server",
+        cwd,
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: {
+        mode: "allow-listed",
+        allowedTools: ["shell"],
+        actionAuthorization: {
+          authorizeAndConsume: async () => ({
+            decision: "allow",
+            reasonCode: "POLICY_TEST",
+          }),
+        },
+      },
+      environment: {
+        FIXTURE_CODEX_EMIT_UNSUPPORTED_AFTER_TURN_STARTED: "1",
+      },
+      limits,
+    });
+    const events: NormalizedAgentEvent[] = [];
+    for await (const event of handle.events) {
+      events.push(event);
+    }
+    const result = await handle.result;
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.error?.code, "UNKNOWN_PROVIDER_MESSAGE");
+    assert.equal(
+      events.some((event) => event.type === "diagnostic" && event.code === "CODEX_TURN_RECONCILED"),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Codex App Server steers only the exact active Run and idempotently binds expectedTurnId", async () => {
   const root = await realpath(
     await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-steer-")),

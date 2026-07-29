@@ -41,10 +41,12 @@ export type ConfigurationAgentPortErrorCode =
 
 export class ConfigurationAgentPortError extends Error {
   readonly code: ConfigurationAgentPortErrorCode;
+  readonly diagnosticCode: string | undefined;
 
-  constructor(code: ConfigurationAgentPortErrorCode, message: string) {
+  constructor(code: ConfigurationAgentPortErrorCode, message: string, diagnosticCode?: string) {
     super(message);
     this.name = "ConfigurationAgentPortError";
     this.code = code;
+    this.diagnosticCode = diagnosticCode;
   }
 }

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { DeviceSurface } from "../DeviceSurface";
 import { App } from "../App";
+import { AdminApiError } from "../admin-api";
 import { LanguageSelector } from "../LanguageSelector";
 import { firstRunDevice, type DeviceOverviewViewModel } from "../view-model";
 import {
@@ -263,7 +264,13 @@ describe("Admin language selection", () => {
           deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
           initialChatOpen
           onConfigurationMessage={async () => {
-            throw new Error("fixture failure");
+            throw new AdminApiError(
+              503,
+              "CONFIGURATION_AGENT_UNAVAILABLE",
+              "Provider detail must not become deterministic UI copy.",
+              "correlation-locale-test",
+              "PROVIDER_CONNECTION_CLOSED",
+            );
           }}
         />
       </AdminI18nProvider>,
@@ -275,9 +282,14 @@ describe("Admin language selection", () => {
     );
     await user.click(screen.getByRole("button", { name: englishMessages.chat.send }));
     expect(await screen.findByText(englishMessages.chat.failedMessage)).toBeTruthy();
+    expect(screen.getByText("Diagnostic code: PROVIDER_CONNECTION_CLOSED")).toBeTruthy();
+    expect(screen.getByText("Correlation ID: correlation-locale-test")).toBeTruthy();
 
     await user.selectOptions(screen.getByLabelText(englishMessages.common.language), "ko");
     expect(await screen.findByText(koreanMessages.chat.failedMessage)).toBeTruthy();
+    expect(screen.getByText("진단 코드: PROVIDER_CONNECTION_CLOSED")).toBeTruthy();
+    expect(screen.getByText("상관관계 ID: correlation-locale-test")).toBeTruthy();
+    expect(screen.queryByText("Provider detail must not become deterministic UI copy.")).toBeNull();
     expect(screen.getByText("Keep this owner text")).toBeTruthy();
     expect(screen.getByText(firstRunDevice.configurationSession.assistantMessage)).toBeTruthy();
   });

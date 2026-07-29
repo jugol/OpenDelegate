@@ -21,6 +21,7 @@ import type {
 import { TaskService } from "@opendelegate/task-service";
 
 import {
+  ConfigurationAgentPortError,
   createLocalClaimApp,
   createMainControlPlaneApp,
   OWNER_SESSION_COOKIE_NAME,
@@ -847,6 +848,13 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
       },
       async sendMessage(input) {
         calls.push(input);
+        if (input.message === "Trigger an interrupted provider turn.") {
+          throw new ConfigurationAgentPortError(
+            "CONFIGURATION_AGENT_UNAVAILABLE",
+            "The Configuration Agent did not complete its turn. Diagnostic code: PROVIDER_CONNECTION_CLOSED.",
+            "PROVIDER_CONNECTION_CLOSED",
+          );
+        }
         return {
           messageId: "configuration_message_001",
           sessionId: "configuration_session_device_main",
@@ -885,6 +893,24 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
       },
     ]);
 
+    const interrupted = await app.inject({
+      method: "POST",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "configuration-message-interrupted",
+      },
+      payload: { message: "Trigger an interrupted provider turn." },
+    });
+    assert.equal(interrupted.statusCode, 503);
+    assert.equal(interrupted.json().code, "CONFIGURATION_AGENT_UNAVAILABLE");
+    assert.equal(
+      interrupted.json().detail,
+      "The Configuration Agent did not complete its turn. Diagnostic code: PROVIDER_CONNECTION_CLOSED.",
+    );
+    assert.equal(interrupted.json().diagnosticCode, "PROVIDER_CONNECTION_CLOSED");
+    assert.equal(typeof interrupted.json().correlationId, "string");
+
     const history = await app.inject({
       method: "GET",
       url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
@@ -921,7 +947,7 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
     });
     assert.equal(unknownDevice.statusCode, 404);
     assert.equal(unknownDevice.json().code, "DEVICE_NOT_FOUND");
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
 
     const secretShapedField = await app.inject({
       method: "POST",
@@ -937,7 +963,7 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
     });
     assert.equal(secretShapedField.statusCode, 400);
     assert.doesNotMatch(secretShapedField.body, /must-not-cross|secretValue/i);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
   } finally {
     await app.close();
   }

@@ -831,7 +831,14 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       await this.#sessionRepository.save(terminal.session);
     }
     if (terminal.status !== "succeeded") {
-      throw unavailable("The Configuration Agent did not complete its turn.");
+      const failureCode = safeDiagnosticCode(
+        terminal.error?.code,
+        "CONFIGURATION_AGENT_TURN_FAILED",
+      );
+      throw unavailable(
+        `The Configuration Agent did not complete its turn. Diagnostic code: ${failureCode}.`,
+        failureCode,
+      );
     }
     if (terminal.session === undefined) {
       throw unavailable("The Configuration Agent completed without a durable native session.");
@@ -2067,11 +2074,24 @@ function mapAdapterFailure(error: unknown, message: string): ConfigurationAgentP
     error instanceof AgentAdapterError && error.retryable
       ? `${message} The Agent Adapter reported a retryable failure.`
       : message;
-  return unavailable(detail);
+  return unavailable(
+    detail,
+    error instanceof AgentAdapterError
+      ? safeDiagnosticCode(error.code, "CONFIGURATION_AGENT_ADAPTER_FAILED")
+      : undefined,
+  );
 }
 
-function unavailable(message: string): ConfigurationAgentPortError {
-  return new ConfigurationAgentPortError("CONFIGURATION_AGENT_UNAVAILABLE", message);
+function safeDiagnosticCode(value: unknown, fallback: string): string {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,127}$/u.test(value) ? value : fallback;
+}
+
+function unavailable(message: string, diagnosticCode?: string): ConfigurationAgentPortError {
+  return new ConfigurationAgentPortError(
+    "CONFIGURATION_AGENT_UNAVAILABLE",
+    message,
+    diagnosticCode,
+  );
 }
 
 function idempotencyConflict(): ConfigurationAgentPortError {

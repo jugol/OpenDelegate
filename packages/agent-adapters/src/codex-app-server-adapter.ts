@@ -107,6 +107,12 @@ const BENIGN_NOTIFICATION_METHODS = new Set([
   "warning",
 ]);
 
+interface CodexTurnResult {
+  readonly status: "completed" | "failed" | "interrupted" | "inProgress";
+  readonly error?: string;
+  readonly finalText?: string;
+}
+
 export interface CodexAppServerAdapterOptions {
   readonly codexHome: string;
   readonly executable?: string;
@@ -437,12 +443,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
     let finalText: string | undefined;
     let usage: AgentUsage | undefined;
     const privateKnowledgeItemIds = new Set<string>();
-    let turnResult:
-      | {
-          readonly status: string;
-          readonly error?: string;
-        }
-      | undefined;
+    let turnResult: CodexTurnResult | undefined;
     connection.onServerMessage = async (message) => {
       if (isServerRequest(message)) {
         await handleCodexApprovalRequest({
@@ -592,7 +593,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
         }
         steering.complete();
         turnResult = {
-          status: readStringField(turn, "status"),
+          status: parseCodexTurnStatus(turn["status"]),
           ...(isRecord(turn["error"]) && typeof turn["error"]["message"] === "string"
             ? { error: turn["error"]["message"] }
             : {}),
@@ -607,6 +608,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
       connection.stopAfterGrace();
     };
     signal.addEventListener("abort", onAbort, { once: true });
+    let protocolFailure: unknown;
     try {
       await connection.start();
       await connection.request("initialize", {
@@ -645,28 +647,136 @@ export class CodexAppServerAdapter implements AgentAdapter {
       while (turnResult === undefined) {
         await connection.nextMessage();
       }
-      if (turnResult.status === "completed") {
-        return {
-          status: "succeeded",
-          nativeSessionId: threadId,
-          ...(finalText === undefined ? {} : { finalText }),
-          ...(usage === undefined ? {} : { usage }),
-        };
+    } catch (error) {
+      protocolFailure = error;
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      await connection.close();
+    }
+
+    if (
+      isRecoverableTerminalNotificationLoss(protocolFailure) &&
+      !signal.aborted &&
+      turnResult === undefined &&
+      threadId !== undefined &&
+      turnId !== undefined
+    ) {
+      try {
+        const reconciled = await this.#readPersistedTurn(
+          request,
+          cwd,
+          adapterVersion,
+          threadId,
+          turnId,
+        );
+        if (reconciled !== undefined && reconciled.status !== "inProgress") {
+          turnResult = reconciled;
+          if (finalText === undefined && reconciled.finalText !== undefined) {
+            finalText = reconciled.finalText;
+            await emit({ kind: "public_message", text: finalText });
+          }
+          await emit({
+            kind: "diagnostic",
+            level: "warning",
+            code: "CODEX_TURN_RECONCILED",
+            message:
+              "Codex turn completion was verified from persisted App Server state after its terminal notification was interrupted.",
+          });
+          protocolFailure = undefined;
+        }
+      } catch {
+        // Preserve the primary protocol failure when deterministic reconciliation
+        // cannot prove the exact persisted turn outcome.
       }
+    }
+
+    if (protocolFailure !== undefined) {
+      throw protocolFailure;
+    }
+    if (threadId === undefined || turnResult === undefined) {
+      throw new AgentAdapterError(
+        "CODEX_TURN_OUTCOME_UNKNOWN",
+        "Codex App Server did not expose a verifiable terminal turn outcome.",
+        true,
+      );
+    }
+    if (turnResult.status === "completed") {
       return {
-        status: "failed",
+        status: "succeeded",
         nativeSessionId: threadId,
         ...(finalText === undefined ? {} : { finalText }),
         ...(usage === undefined ? {} : { usage }),
-        error: {
-          code:
-            turnResult.status === "interrupted" ? "CODEX_TURN_INTERRUPTED" : "CODEX_TURN_FAILED",
-          message: turnResult.error ?? "Codex App Server did not complete the turn.",
-          retryable: turnResult.status === "interrupted",
-        },
       };
+    }
+    return {
+      status: "failed",
+      nativeSessionId: threadId,
+      ...(finalText === undefined ? {} : { finalText }),
+      ...(usage === undefined ? {} : { usage }),
+      error: {
+        code: turnResult.status === "interrupted" ? "CODEX_TURN_INTERRUPTED" : "CODEX_TURN_FAILED",
+        message: turnResult.error ?? "Codex App Server did not complete the turn.",
+        retryable: turnResult.status === "interrupted",
+      },
+    };
+  }
+
+  async #readPersistedTurn(
+    request: AgentStartRequest | AgentResumeRequest,
+    cwd: string,
+    adapterVersion: string,
+    threadId: string,
+    turnId: string,
+  ): Promise<CodexTurnResult | undefined> {
+    const child = spawnCommand(
+      this.#command(
+        [
+          ...this.#prefixArgs,
+          "app-server",
+          "--stdio",
+          "--strict-config",
+          ...CODEX_APP_SERVER_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+        ],
+        cwd,
+        request.environment,
+        request.secretEnvironment,
+      ),
+    );
+    const connection = new CodexJsonlConnection({
+      child,
+      maxLineBytes: request.limits.maxLineBytes,
+      maxDiagnosticBytes: request.limits.maxDiagnosticBytes,
+      cancellationGraceMs: request.limits.cancellationGraceMs,
+    });
+    connection.onServerMessage = async (message) => {
+      if (!isNotification(message) || !BENIGN_NOTIFICATION_METHODS.has(message.method)) {
+        throw new AgentAdapterError(
+          "UNKNOWN_PROVIDER_MESSAGE",
+          "Codex App Server emitted an unsupported message while reconciling a turn.",
+        );
+      }
+    };
+    try {
+      await connection.start();
+      await connection.request("initialize", {
+        clientInfo: {
+          name: "opendelegate",
+          title: "OpenDelegate",
+          version: adapterVersion,
+        },
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+          mcpServerOpenaiFormElicitation: false,
+        },
+      });
+      connection.notify("initialized", {});
+      const response = await connection.request("thread/read", {
+        threadId,
+        includeTurns: true,
+      });
+      return parsePersistedCodexTurn(response, threadId, turnId);
     } finally {
-      signal.removeEventListener("abort", onAbort);
       await connection.close();
     }
   }
@@ -1203,6 +1313,87 @@ function parseCodexUsage(params: unknown): AgentUsage | undefined {
     ...(outputTokens === undefined ? {} : { outputTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
   };
+}
+
+function parsePersistedCodexTurn(
+  response: unknown,
+  expectedThreadId: string,
+  expectedTurnId: string,
+): CodexTurnResult | undefined {
+  const thread = readRecordField(response, "thread");
+  if (readStringField(thread, "id") !== expectedThreadId) {
+    throw new AgentAdapterError(
+      "NATIVE_SESSION_ID_CHANGED",
+      "Codex App Server reconciled a different native thread.",
+    );
+  }
+  const turns = thread["turns"];
+  if (!Array.isArray(turns)) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server omitted persisted turns during reconciliation.",
+    );
+  }
+  const matchingTurns = turns.filter(
+    (turn): turn is Readonly<Record<string, unknown>> =>
+      isRecord(turn) && turn["id"] === expectedTurnId,
+  );
+  if (matchingTurns.length === 0) {
+    return undefined;
+  }
+  if (matchingTurns.length !== 1) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server returned duplicate persisted turn identities.",
+    );
+  }
+  const turn = matchingTurns[0]!;
+  const status = parseCodexTurnStatus(turn["status"]);
+  const items = turn["items"];
+  if (!Array.isArray(items)) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server omitted persisted turn items during reconciliation.",
+    );
+  }
+  let finalText: string | undefined;
+  for (const item of items) {
+    if (isRecord(item) && item["type"] === "agentMessage" && typeof item["text"] === "string") {
+      finalText = item["text"];
+    }
+  }
+  const error =
+    isRecord(turn["error"]) && typeof turn["error"]["message"] === "string"
+      ? turn["error"]["message"]
+      : undefined;
+  return {
+    status,
+    ...(error === undefined ? {} : { error }),
+    ...(finalText === undefined ? {} : { finalText }),
+  };
+}
+
+function parseCodexTurnStatus(value: unknown): CodexTurnResult["status"] {
+  if (
+    value !== "completed" &&
+    value !== "failed" &&
+    value !== "interrupted" &&
+    value !== "inProgress"
+  ) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server returned an unsupported turn status.",
+    );
+  }
+  return value;
+}
+
+function isRecoverableTerminalNotificationLoss(error: unknown): error is AgentAdapterError {
+  return (
+    error instanceof AgentAdapterError &&
+    error.code === "PROVIDER_CONNECTION_CLOSED" &&
+    error.retryable
+  );
 }
 
 function presentationMessage(params: unknown): string {

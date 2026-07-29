@@ -69,6 +69,8 @@ export const englishMessages = {
       "Main reports that Device assessment or Configuration Agent messaging is unavailable. The visible Device facts come only from Main's deterministic runtime report.",
     failedMessage:
       "The local Configuration Agent was unavailable or interrupted. OpenDelegate did not replay an uncertain setup action. Completed changes remain durable; inspect the current settings, then try again.",
+    diagnosticCode: "Diagnostic code: {code}",
+    correlationId: "Correlation ID: {id}",
     discordOnboardingMessage:
       "Discord is not connected yet. I’m checking the current binding and preparing setup guidance.",
     secureStoreFailed:

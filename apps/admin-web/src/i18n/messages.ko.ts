@@ -72,6 +72,8 @@ export const koreanMessages = {
       "메인에서 장치 평가 또는 설정 에이전트 메시지 기능을 사용할 수 없다고 보고했습니다. 화면에 표시되는 장치 정보는 메인의 결정론적 런타임 보고서에서만 가져옵니다.",
     failedMessage:
       "로컬 설정 에이전트가 준비되지 않았거나 응답 중 중단되었습니다. OpenDelegate는 결과가 불확실한 설정 작업을 자동으로 다시 실행하지 않았습니다. 이미 완료된 변경은 유지되므로 현재 설정을 확인한 뒤 다시 요청해 주세요.",
+    diagnosticCode: "진단 코드: {code}",
+    correlationId: "상관관계 ID: {id}",
     discordOnboardingMessage:
       "Discord가 아직 연결되지 않았습니다. 현재 바인딩을 확인하고 설정 안내를 준비하고 있습니다.",
     secureStoreFailed:

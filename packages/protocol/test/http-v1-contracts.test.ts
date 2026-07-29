@@ -594,8 +594,16 @@ test("health and problem contracts remain detail-bounded", () => {
     status: 409,
     code: "IDEMPOTENCY_CONFLICT",
     correlationId: "correlation_001",
+    diagnosticCode: "PROVIDER_CONNECTION_CLOSED",
   };
   assert.equal(Value.Check(ProblemDetailsSchema, problem), true);
+  assert.equal(
+    Value.Check(ProblemDetailsSchema, {
+      ...problem,
+      diagnosticCode: "provider connection closed",
+    }),
+    false,
+  );
   assert.equal(
     Value.Check(ProblemDetailsSchema, {
       ...problem,
