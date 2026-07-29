@@ -654,6 +654,7 @@ test("Device configuration remains isolated from Task conversations", async ({ p
   await expect(dialog.getByRole("region", { name: "Proposed change" })).toHaveCount(0);
   await expect(dialog.getByLabel("Discord bot token")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Set up or review Discord" }).click();
+  await dialog.getByRole("button", { name: "Store the Discord token securely" }).click();
   await expect(dialog.getByLabel("Discord bot token")).toHaveAttribute("type", "password");
   await expect(
     dialog.getByPlaceholder("Bot token from the Discord Developer Portal"),
