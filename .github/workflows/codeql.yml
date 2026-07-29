@@ -73,8 +73,8 @@ jobs:
             runner: windows-2025
           - target: linux
             runner: ubuntu-24.04
-          - target: macos
-            runner: macos-26
+          # Linux analyzes the shared POSIX service launcher. macOS-specific native
+          # sources are Swift and are analyzed once by analyze-swift below.
 
     steps:
       - name: Check out repository
