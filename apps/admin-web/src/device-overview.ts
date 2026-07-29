@@ -114,6 +114,24 @@ export function mapDeviceOverview(device: DeviceSummary): DeviceOverviewViewMode
             device.coordinatorAgentExecutionProfile,
           ),
         }),
+    ...(main
+      ? {}
+      : {
+          wakeOnLan: Object.freeze(
+            device.wakeOnLan === undefined
+              ? {
+                  targetState: "unknown" as const,
+                  automaticWakeState: "unknown" as const,
+                  historical: false,
+                }
+              : {
+                  targetState: device.wakeOnLan.targetState,
+                  automaticWakeState: device.wakeOnLan.automaticWakeState,
+                  observedAtMs: device.wakeOnLan.observedAtMs,
+                  historical: !connectionOnline,
+                },
+          ),
+        }),
     routes: mapRoutes(device.routes, main),
     resourceLocks: Object.freeze(
       [...(device.resourceLocks ?? [])]

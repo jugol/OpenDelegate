@@ -1203,3 +1203,33 @@ dependency automation can surface an SDK candidate without silently upgrading an
 owner's fleet. Owners continue to update installed release bundles explicitly.
 Runtime automatic provider upgrades are unavailable until the durable verification,
 rollback, and audit lifecycle is implemented.
+
+## D-069 — Wake target readiness and automatic wake readiness are separate
+
+See [ADR-0029](adr/0029-wake-on-lan-readiness-evidence.md).
+
+**Decision:** Every Worker may publish one bounded read-only Wake-on-LAN target
+observation: `enabled`, `disabled`, `unsupported`, or `unknown`, plus its source and
+observation time. The observation contains no interface name, MAC address, SecureOn
+value, raw probe output, or other local network identifier. Main retains the latest
+authenticated observation in the existing durable Device observation store so it
+remains visible after the Worker is offline.
+
+An enabled target is not an automatic-wake claim. Automatic wake becomes `ready`
+only after a separate wake-path adapter proves an online Main-local or Worker relay
+on the target broadcast domain, keeps the exact wake target outside Agent context,
+emits a bounded and rate-limited magic packet under Policy and audit, and observes
+the authenticated Worker return. Until that lifecycle exists, Main and Admin report
+`relay-required`. Ordinary routed connectivity, Omada or Tailscale membership, and
+subnet routing do not satisfy this proof.
+
+**Rationale:** The powered-down target cannot report current state or run its own
+Tailscale client, and IP reachability does not transport the Layer-2 wake packet.
+Treating an OS setting as end-to-end readiness would make the UI promise a recovery
+path that may not exist. Persisting the last authenticated target observation still
+gives the owner useful setup evidence without exporting a hardware address.
+
+**Consequence:** Device details can truthfully show that Windows, macOS, or Linux was
+armed for magic-packet wake before it went offline and can separately show why
+automatic wake is not yet ready. The compact Main Device directory may include these
+two bounded states, but it never includes the wake target or raw probe evidence.

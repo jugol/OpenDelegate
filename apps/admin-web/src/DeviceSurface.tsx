@@ -13,6 +13,7 @@ import {
   MessagesSquare,
   Monitor,
   Network,
+  Power,
   RefreshCw,
   Server,
   Settings,
@@ -430,6 +431,7 @@ function DeviceTabPanel({
   readonly onConfigureAgentProfile: DeviceSurfaceProps["onConfigureAgentProfile"];
 }): React.JSX.Element {
   const { messages } = useAdminI18n();
+  const wakeOnLan = wakeOnLanForDevice(device);
   switch (activeTab) {
     case "overview":
       return <DeviceOverview device={device} onConfigureAgentProfile={onConfigureAgentProfile} />;
@@ -454,10 +456,19 @@ function DeviceTabPanel({
       );
     case "routes":
       return (
-        <div className="focused-detail">
+        <div
+          className={`focused-detail${
+            wakeOnLan === undefined ? "" : " focused-detail--split wake-on-lan-detail"
+          }`}
+        >
           <DetailSection area="routes" title={messages.device.transportRoutes}>
             <RouteList routes={device.routes} />
           </DetailSection>
+          {wakeOnLan === undefined ? null : (
+            <DetailSection area="wake-on-lan" title={messages.device.wakeOnLan}>
+              <WakeOnLanPanel wakeOnLan={wakeOnLan} />
+            </DetailSection>
+          )}
         </div>
       );
     case "authority":
@@ -499,6 +510,7 @@ function DeviceOverview({
   readonly onConfigureAgentProfile: DeviceSurfaceProps["onConfigureAgentProfile"];
 }): React.JSX.Element {
   const { locale, messages } = useAdminI18n();
+  const wakeOnLan = wakeOnLanForDevice(device);
 
   return (
     <div className="overview-grid">
@@ -575,6 +587,12 @@ function DeviceOverview({
       <DetailSection area="routes" title={messages.device.transportRoutes}>
         <RouteList routes={device.routes} />
       </DetailSection>
+
+      {wakeOnLan === undefined ? null : (
+        <DetailSection area="wake-on-lan" title={messages.device.wakeOnLan}>
+          <WakeOnLanPanel wakeOnLan={wakeOnLan} />
+        </DetailSection>
+      )}
 
       <DetailSection area="capabilities" title={messages.device.capabilities}>
         <CapabilityList capabilities={device.capabilities} />
@@ -696,6 +714,90 @@ function RouteList({
         </li>
       ))}
     </ol>
+  );
+}
+
+function WakeOnLanPanel({
+  wakeOnLan,
+}: {
+  readonly wakeOnLan: NonNullable<DeviceOverviewViewModel["wakeOnLan"]>;
+}): React.JSX.Element {
+  const { locale, messages } = useAdminI18n();
+  const target =
+    wakeOnLan.targetState === "enabled"
+      ? { label: messages.device.wakeTargetEnabled, tone: "success" as const }
+      : wakeOnLan.targetState === "disabled"
+        ? { label: messages.device.wakeTargetDisabled, tone: "muted" as const }
+        : wakeOnLan.targetState === "unsupported"
+          ? { label: messages.device.wakeTargetUnsupported, tone: "muted" as const }
+          : { label: messages.device.wakeTargetUnknown, tone: "warning" as const };
+  const automatic =
+    wakeOnLan.automaticWakeState === "relay-required"
+      ? {
+          label: messages.device.automaticWakeRelayRequired,
+          tone: "warning" as const,
+          description: messages.device.wakeRelayRequiredDescription,
+        }
+      : wakeOnLan.automaticWakeState === "unavailable"
+        ? {
+            label: messages.device.automaticWakeUnavailable,
+            tone: "muted" as const,
+            description: messages.device.wakeUnavailableDescription,
+          }
+        : {
+            label: messages.device.automaticWakeUnknown,
+            tone: "warning" as const,
+            description: messages.device.wakeUnknownDescription,
+          };
+
+  return (
+    <div className="wake-on-lan-panel">
+      <div className={`wake-on-lan-icon status-${automatic.tone}`}>
+        <Power aria-hidden="true" />
+      </div>
+      <dl className="key-value-list">
+        <div className="key-value-row">
+          <dt>{messages.device.wakeTargetSetting}</dt>
+          <dd className={`status-${target.tone}`}>
+            <StatusDot tone={target.tone} />
+            {target.label}
+          </dd>
+        </div>
+        <div className="key-value-row">
+          <dt>{messages.device.automaticWake}</dt>
+          <dd className={`status-${automatic.tone}`}>
+            <StatusDot tone={automatic.tone} />
+            {automatic.label}
+          </dd>
+        </div>
+      </dl>
+      <p>{automatic.description}</p>
+      <small>
+        {wakeOnLan.observedAtMs === undefined
+          ? messages.device.wakeNeverObserved
+          : formatMessage(
+              wakeOnLan.historical
+                ? messages.device.wakeLastObserved
+                : messages.device.wakeObserved,
+              {
+                time: formatAdminDate(new Date(wakeOnLan.observedAtMs).toISOString(), locale),
+              },
+            )}
+      </small>
+    </div>
+  );
+}
+
+function wakeOnLanForDevice(device: DeviceOverviewViewModel): DeviceOverviewViewModel["wakeOnLan"] {
+  if (device.role === "main") {
+    return undefined;
+  }
+  return (
+    device.wakeOnLan ?? {
+      targetState: "unknown",
+      automaticWakeState: "unknown",
+      historical: false,
+    }
   );
 }
 

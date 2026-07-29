@@ -582,6 +582,12 @@ test("Main planning exposes only verified capabilities and never Device instruct
             { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
             { name: "DEGRADED_CAPABILITY_SENTINEL", verification: "degraded" },
           ],
+          wakeOnLan: {
+            targetState: "enabled",
+            automaticWakeState: "relay-required",
+            source: "windows-netadapter-power",
+            observedAtMs: 9_900,
+          },
           knowledgeHealth: "healthy",
         },
       ],
@@ -598,6 +604,11 @@ test("Main planning exposes only verified capabilities and never Device instruct
   assert.equal(planned.state, "ready");
   const prompt = adapter.starts[0]?.prompt ?? "";
   assert.match(prompt, /"capabilities":\["codex"\]/u);
+  assert.match(
+    prompt,
+    /"wakeOnLan":\{"targetState":"enabled","automaticWakeState":"relay-required","observedAtMs":9900\}/u,
+  );
+  assert.match(prompt, /must not claim that it can wake the Device/u);
   assert.doesNotMatch(prompt, /UNVERIFIED_CAPABILITY_SENTINEL/u);
   assert.doesNotMatch(prompt, /DEGRADED_CAPABILITY_SENTINEL/u);
   assert.doesNotMatch(prompt, /PRIVATE_DEVICE_INSTRUCTION_SENTINEL/u);

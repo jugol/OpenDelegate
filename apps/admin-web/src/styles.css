@@ -700,12 +700,17 @@ textarea:focus-visible,
   gap: 56px;
 }
 
+.wake-on-lan-detail > .detail-section {
+  grid-area: auto;
+}
+
 .overview-grid {
   max-width: 930px;
   display: grid;
   grid-template-areas:
     "facts roles"
     "runtime routes"
+    "wake-on-lan wake-on-lan"
     "capabilities adapters"
     "agent-profile agent-profile"
     "policies locks"
@@ -735,6 +740,10 @@ textarea:focus-visible,
 
 .detail-section--routes {
   grid-area: routes;
+}
+
+.detail-section--wake-on-lan {
+  grid-area: wake-on-lan;
 }
 
 .detail-section--capabilities {
@@ -1259,6 +1268,55 @@ textarea:focus-visible,
 .knowledge-health > :last-child {
   font-size: 12px;
   white-space: nowrap;
+}
+
+.wake-on-lan-panel {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  column-gap: 16px;
+}
+
+.wake-on-lan-icon {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  grid-row: 1 / span 3;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-rail);
+}
+
+.wake-on-lan-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.8px;
+}
+
+.wake-on-lan-panel .key-value-list,
+.wake-on-lan-panel > p,
+.wake-on-lan-panel > small {
+  grid-column: 2;
+}
+
+.wake-on-lan-panel .key-value-row dd {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wake-on-lan-panel > p {
+  margin: 14px 0 0;
+  color: var(--color-body);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.wake-on-lan-panel > small {
+  margin-top: 8px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .configuration-chat-layer {
@@ -3970,6 +4028,7 @@ textarea:focus-visible,
       "locks"
       "roles"
       "routes"
+      "wake-on-lan"
       "knowledge"
       "work";
     grid-template-columns: minmax(0, 1fr);
@@ -4309,6 +4368,15 @@ textarea:focus-visible,
   .authority-detail .detail-section--agent-profile,
   .authority-detail .detail-section--locks {
     grid-column: auto;
+  }
+
+  .wake-on-lan-icon {
+    grid-row: 1;
+  }
+
+  .wake-on-lan-panel > p,
+  .wake-on-lan-panel > small {
+    grid-column: 1 / -1;
   }
 }
 

@@ -354,6 +354,9 @@ through a secure handoff and resumes the same Task afterward.
 100. As an owner, I want a secure, temporary handoff when login, MFA, CAPTCHA, legal
      confirmation, or OS permission requires me, so that I can act and let the same
      Task continue without sending credentials through chat.
+101. As an owner, I want an offline Worker Device to show whether magic-packet wake
+     is enabled and whether OpenDelegate has a usable wake path, so that I can tell
+     whether the Device can be brought back without physically visiting it.
 
 ## Functional Requirements
 
@@ -432,6 +435,21 @@ through a secure handoff and resumes the same Task afterward.
 12. Owner aliases and display names are resolved against the target Device's current
     verified catalog. Durable configuration stores the exact provider-native model
     ID, never an unresolved alias.
+13. Windows, macOS, and Linux Workers run a bounded read-only Wake-on-LAN target
+    probe. It reports `enabled`, `disabled`, `unsupported`, or `unknown`, its source,
+    and observation time without exporting an interface name, MAC address, SecureOn
+    value, raw command output, or another local network identifier.
+14. Main retains the last authenticated Wake-on-LAN target observation when a Worker
+    goes offline and marks it as historical rather than treating an absent heartbeat
+    as proof that the setting changed.
+15. Wake target readiness and orchestration readiness are separate. An enabled target
+    still requires an online Main-local or Worker relay on the target broadcast
+    domain plus a securely stored exact wake target. Routed IP reachability,
+    Tailscale membership, or a subnet route alone does not prove that path.
+16. Until the relay, target-secret boundary, magic-packet delivery, boot observation,
+    throttling, Policy, and audit lifecycle is implemented and verified, Admin Web
+    reports `relay required` instead of claiming that OpenDelegate can wake the
+    Device.
 
 ### FR-4 — Connectivity and transport profiles
 
@@ -821,7 +839,10 @@ may request a transition but cannot manufacture a state outside the transition r
    as more Devices enroll.
 6. Device detail includes name, OS, health, Facts, Capabilities, Roles, Instructions,
    Policies, connections, Agent Adapters, their verified model catalogs, the effective
-   Worker Agent Execution Profile, locks, load, and current Runs.
+   Worker Agent Execution Profile, Wake-on-LAN target and orchestration readiness for
+   Worker Devices, locks, load, and current Runs. A Worker with no authenticated
+   Wake-on-LAN observation shows an explicit `not assessed`/`unknown` state instead
+   of omitting the section.
 7. Knowledge content is never proxied to Admin Web. At most, local service health is
    shown.
 8. Task inspection shows the Task state, event timeline, Coordinator Session lineage,
@@ -1346,9 +1367,11 @@ The milestone is accepted only when all of the following are demonstrated:
 5. The owner enrolls macOS, Windows, and Linux Devices through single-use grants.
 6. Every OS service survives process restart and expected host restart behavior.
 7. Device facts, verified Capabilities, Roles, Instructions, Policies, routes, health,
-   and current Runs appear correctly.
+   current Runs, and Worker Wake-on-LAN target and automatic-path readiness appear
+   correctly, including the last authenticated target observation while offline.
 8. Different Devices use different configured connection methods without exposing
-   route mechanics to the Main Agent prompt.
+   route mechanics to the Main Agent prompt, and routed or Tailscale reachability is
+   never presented as a verified Wake-on-LAN path.
 9. A Forum post creates exactly one Task and a reply resumes it.
 10. A different Forum post creates a context-isolated Task.
 11. A clear Task starts automatically and an ambiguous Task asks one useful question.

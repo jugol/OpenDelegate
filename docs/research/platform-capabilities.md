@@ -107,6 +107,31 @@ This report verifies the external platform behavior that OpenDelegate's planning
 - Headscale describes itself as a self-hosted implementation of the Tailscale control server with a deliberately narrow, single-tailnet scope aimed at personal use and small organizations. It is a plausible user-selected control-plane option, not a transport OpenDelegate needs to embed. [Headscale documentation](https://headscale.net/)
 - Headscale's documented feature matrix currently lists Tailscale Serve and Funnel as unsupported. Artifact exposure must therefore use OpenDelegate's own gateway or another configured exposure adapter rather than depend on those Tailscale-specific features. [Headscale feature matrix](https://headscale.net/stable/about/features/)
 
+### Wake-on-LAN
+
+- Windows exposes `WakeOnMagicPacket` as an explicit network-adapter power-management
+  setting. A read-only `Get-NetAdapterPowerManagement` observation can distinguish
+  enabled, disabled, and unsupported adapters without changing the setting.
+  [Microsoft Get-NetAdapterPowerManagement](https://learn.microsoft.com/en-us/powershell/module/netadapter/get-netadapterpowermanagement?view=windowsserver2025-ps)
+  [Microsoft Set-NetAdapterPowerManagement](https://learn.microsoft.com/en-us/powershell/module/netadapter/set-netadapterpowermanagement?view=windowsserver2025-ps)
+- Apple documents “Wake for network access” as the Mac setting that permits network
+  access to wake a sleeping computer. The platform `man pmset` reference maps that
+  behavior to the persistent 0/1 `womp` setting, so a platform-lab-verified
+  `pmset -g custom` probe can observe it without performing the separate privileged
+  mutation. The linked online `pmset` manual is a secondary mirror, not the primary
+  product source.
+  [Apple: Share your Mac resources when it’s in sleep](https://support.apple.com/guide/mac-help/share-your-mac-resources-when-its-in-sleep-mh27905/mac)
+  [Secondary `pmset` manual mirror](https://keith.github.io/xcode-man-pages/pmset.1.html)
+- Linux exposes supported and enabled Wake-on-LAN modes through ethtool. The netlink
+  query may require `CAP_NET_ADMIN` because the response can include a SecureOn
+  password, so OpenDelegate must reduce the result to magic-packet enabled,
+  disabled, unsupported, or unknown and never export the raw response.
+  [Linux ethtool netlink](https://www.kernel.org/doc/html/latest/networking/ethtool-netlink.html#wol-get)
+- Tailscale documents that it cannot carry Layer-2 Wake-on-LAN packets, even when
+  subnet routing makes the remote LAN otherwise reachable. A practical design keeps
+  an always-on relay inside the destination LAN and asks it to emit the magic packet.
+  [Tailscale Wake-on-LAN](https://tailscale.com/blog/wake-on-lan-tailscale-upsnap)
+
 ### Cloudflare Tunnel
 
 - `cloudflared` initiates outbound-only connections from the origin to Cloudflare, allowing bidirectional traffic over the established tunnel without a publicly routable origin IP or an inbound firewall opening. [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/)

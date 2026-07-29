@@ -462,6 +462,13 @@ export class WorkerRuntime {
 
   public async heartbeat(): Promise<WorkerHeartbeatV1> {
     this.assertOpen();
+    const inventory =
+      this.inventoryProvider === undefined
+        ? undefined
+        : validateSchedulingInventory(await this.inventoryProvider.snapshot());
+    // Optional platform probes may take seconds. Stamp the enclosing heartbeat
+    // after they finish so valid evidence observed during the probe cannot appear
+    // to come from the future.
     const now = this.readNow();
     const state = await this.repository.read();
     assertClockNotRegressed(state, now);
@@ -471,10 +478,6 @@ export class WorkerRuntime {
       state.operationalState === "active" &&
       activeRuns < this.maximumConcurrentRuns &&
       state.outbox.length + activeRuns + 2 <= this.configuration.maxOutboxEntries;
-    const inventory =
-      this.inventoryProvider === undefined
-        ? undefined
-        : validateSchedulingInventory(await this.inventoryProvider.snapshot());
     if (
       inventory?.hardware !== undefined &&
       [
@@ -486,6 +489,12 @@ export class WorkerRuntime {
       throw new WorkerRuntimeError(
         "INVALID_CONFIGURATION",
         "Worker hardware evidence cannot be newer than its enclosing heartbeat.",
+      );
+    }
+    if (inventory?.wakeOnLan !== undefined && inventory.wakeOnLan.observedAtMs > now) {
+      throw new WorkerRuntimeError(
+        "INVALID_CONFIGURATION",
+        "Worker Wake-on-LAN evidence cannot be newer than its enclosing heartbeat.",
       );
     }
     const profileRevision = transportProfileRevision(this.configuration.transportProfile);
@@ -1649,7 +1658,7 @@ function validateSchedulingInventory(value: unknown): WorkerSchedulingInventoryV
       "workspaceIds",
       "availableSecretRefs",
     ],
-    ["knowledgeHealth", "hardware", "agentAdapters", "resourceLocks"],
+    ["knowledgeHealth", "hardware", "wakeOnLan", "agentAdapters", "resourceLocks"],
   );
   const osFamily = value["osFamily"];
   const serviceMode = value["serviceMode"];
@@ -1675,6 +1684,20 @@ function validateSchedulingInventory(value: unknown): WorkerSchedulingInventoryV
   const capabilities = readCapabilities(value["capabilities"]);
   const hardware =
     value["hardware"] === undefined ? undefined : readHardwareFacts(value["hardware"]);
+  const wakeOnLan =
+    value["wakeOnLan"] === undefined ? undefined : readWakeOnLanObservation(value["wakeOnLan"]);
+  if (
+    wakeOnLan !== undefined &&
+    wakeOnLan.source !== "probe-unavailable" &&
+    ((osFamily === "windows" && wakeOnLan.source !== "windows-netadapter-power") ||
+      (osFamily === "macos" && wakeOnLan.source !== "macos-pmset") ||
+      (osFamily === "linux" && wakeOnLan.source !== "linux-ethtool"))
+  ) {
+    throw new WorkerRuntimeError(
+      "INVALID_CONFIGURATION",
+      "Worker Wake-on-LAN evidence does not match the Device OS.",
+    );
+  }
   const agentAdapters =
     value["agentAdapters"] === undefined ? undefined : readAgentAdapters(value["agentAdapters"]);
   const resourceLocks =
@@ -1693,12 +1716,53 @@ function validateSchedulingInventory(value: unknown): WorkerSchedulingInventoryV
     serviceMode,
     ...(knowledgeHealth === undefined ? {} : { knowledgeHealth }),
     ...(hardware === undefined ? {} : { hardware }),
+    ...(wakeOnLan === undefined ? {} : { wakeOnLan }),
     maximumConcurrentRuns: Number(value["maximumConcurrentRuns"]),
     capabilities,
     ...(agentAdapters === undefined ? {} : { agentAdapters }),
     ...(resourceLocks === undefined ? {} : { resourceLocks }),
     workspaceIds,
     availableSecretRefs,
+  });
+}
+
+function readWakeOnLanObservation(
+  value: unknown,
+): NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]> {
+  if (!isPlainRecord(value)) {
+    throw new WorkerRuntimeError(
+      "INVALID_CONFIGURATION",
+      "Worker Wake-on-LAN observation is invalid.",
+    );
+  }
+  requireExactInventoryKeys(value, ["state", "source", "observedAtMs"]);
+  const state = value["state"];
+  const source = value["source"];
+  if (
+    (state !== "enabled" &&
+      state !== "disabled" &&
+      state !== "unsupported" &&
+      state !== "unknown") ||
+    (source !== "windows-netadapter-power" &&
+      source !== "macos-pmset" &&
+      source !== "linux-ethtool" &&
+      source !== "probe-unavailable")
+  ) {
+    throw new WorkerRuntimeError(
+      "INVALID_CONFIGURATION",
+      "Worker Wake-on-LAN observation is invalid.",
+    );
+  }
+  if (source === "probe-unavailable" && state !== "unknown") {
+    throw new WorkerRuntimeError(
+      "INVALID_CONFIGURATION",
+      "Unavailable Wake-on-LAN evidence must remain unknown.",
+    );
+  }
+  return Object.freeze({
+    state,
+    source,
+    observedAtMs: readInventoryTimestamp(value["observedAtMs"], "Wake-on-LAN observation time"),
   });
 }
 

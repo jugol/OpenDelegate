@@ -30,6 +30,8 @@ import {
   type WorkerRouteIncidentV1,
   type WorkerRunLeaseAuthority,
   type WorkerRunSteeringCommandV1,
+  type WorkerWakeOnLanProbeSourceV1,
+  type WorkerWakeOnLanTargetStateV1,
 } from "../src/index.ts";
 
 const WORK_ORDER: WorkOrderV1 = {
@@ -931,72 +933,83 @@ test("heartbeat publishes only bounded scheduling-safe Device inventory", async 
   });
   let cpuModel = "Example CPU";
   let cpuObservedAtMs = 900;
+  let now = 1_000;
+  let wakeOnLanState: WorkerWakeOnLanTargetStateV1 = "enabled";
+  let wakeOnLanSource: WorkerWakeOnLanProbeSourceV1 = "windows-netadapter-power";
   const runtime = await WorkerRuntime.create({
     configuration: configuration(),
     repository,
     processFactory: { start: () => Promise.resolve(new DeferredRunProcess()) },
-    clock: { now: () => 1_000 },
+    clock: { now: () => now },
     delay: { wait: () => Promise.resolve() },
     inventoryProvider: {
-      snapshot: async () => ({
-        deviceName: "Build workstation",
-        osFamily: "windows",
-        platformRelease: "11",
-        architecture: "x64",
-        serviceMode: "foreground",
-        knowledgeHealth: "healthy",
-        hardware: {
-          cpu: {
-            model: cpuModel,
-            logicalCoreCount: 16,
-            observedAtMs: cpuObservedAtMs,
-            source: "node-os",
-            verification: "observed",
+      snapshot: async () => {
+        now = 1_001;
+        return {
+          deviceName: "Build workstation",
+          osFamily: "windows",
+          platformRelease: "11",
+          architecture: "x64",
+          serviceMode: "foreground",
+          knowledgeHealth: "healthy",
+          hardware: {
+            cpu: {
+              model: cpuModel,
+              logicalCoreCount: 16,
+              observedAtMs: cpuObservedAtMs,
+              source: "node-os",
+              verification: "observed",
+            },
+            memory: {
+              totalBytes: 68_719_476_736,
+              observedAtMs: 900,
+              source: "node-os",
+              verification: "observed",
+            },
+            gpu: {
+              devices: [],
+              observedAtMs: 900,
+              source: "node-os",
+              verification: "not-observed",
+            },
           },
-          memory: {
-            totalBytes: 68_719_476_736,
-            observedAtMs: 900,
-            source: "node-os",
-            verification: "observed",
+          maximumConcurrentRuns: 4,
+          capabilities: [
+            {
+              name: "codex",
+              verification: "verified",
+              observedAtMs: 900,
+              evidenceSource: "agent-adapter",
+              version: "1.2.3",
+            },
+            { name: "computer-use", verification: "degraded" },
+          ],
+          agentAdapters: [
+            {
+              provider: "codex",
+              adapterId: "codex-cli",
+              readiness: "ready",
+              compatibility: "tested",
+              version: "1.2.3",
+              observedAtMs: 900,
+            },
+          ],
+          wakeOnLan: {
+            state: wakeOnLanState,
+            source: wakeOnLanSource,
+            observedAtMs: 1_001,
           },
-          gpu: {
-            devices: [],
-            observedAtMs: 900,
-            source: "node-os",
-            verification: "not-observed",
-          },
-        },
-        maximumConcurrentRuns: 4,
-        capabilities: [
-          {
-            name: "codex",
-            verification: "verified",
-            observedAtMs: 900,
-            evidenceSource: "agent-adapter",
-            version: "1.2.3",
-          },
-          { name: "computer-use", verification: "degraded" },
-        ],
-        agentAdapters: [
-          {
-            provider: "codex",
-            adapterId: "codex-cli",
-            readiness: "ready",
-            compatibility: "tested",
-            version: "1.2.3",
-            observedAtMs: 900,
-          },
-        ],
-        resourceLocks: [
-          {
-            resourceName: "desktop-session",
-            capacity: 1,
-            holders: [],
-          },
-        ],
-        workspaceIds: ["workspace-product"],
-        availableSecretRefs: ["package-registry"],
-      }),
+          resourceLocks: [
+            {
+              resourceName: "desktop-session",
+              capacity: 1,
+              holders: [],
+            },
+          ],
+          workspaceIds: ["workspace-product"],
+          availableSecretRefs: ["package-registry"],
+        };
+      },
     },
   });
 
@@ -1051,6 +1064,11 @@ test("heartbeat publishes only bounded scheduling-safe Device inventory", async 
           observedAtMs: 900,
         },
       ],
+      wakeOnLan: {
+        state: "enabled",
+        source: "windows-netadapter-power",
+        observedAtMs: 1_001,
+      },
       resourceLocks: [
         {
           resourceName: "desktop-session",
@@ -1085,11 +1103,16 @@ test("heartbeat publishes only bounded scheduling-safe Device inventory", async 
     await assert.rejects(() => runtime.heartbeat(), /prohibited local or credential data/u);
 
     cpuModel = "Example CPU";
-    cpuObservedAtMs = 1_001;
+    cpuObservedAtMs = 1_002;
     await assert.rejects(
       () => runtime.heartbeat(),
       /cannot be newer than its enclosing heartbeat/u,
     );
+
+    cpuObservedAtMs = 900;
+    wakeOnLanState = "enabled";
+    wakeOnLanSource = "probe-unavailable";
+    await assert.rejects(() => runtime.heartbeat(), /must remain unknown/u);
   } finally {
     await runtime.close();
     await rm(directory, { recursive: true, force: true });

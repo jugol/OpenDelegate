@@ -239,6 +239,12 @@ const linuxWorker: DeviceSummary = {
       health: "degraded",
     },
   ],
+  wakeOnLan: {
+    targetState: "enabled",
+    automaticWakeState: "relay-required",
+    source: "linux-ethtool",
+    observedAtMs: Date.parse("2026-07-29T03:00:00.000Z"),
+  },
   capacity: {
     activeRuns: 2,
     maximumConcurrentRuns: 4,
@@ -833,6 +839,9 @@ describe("Admin authentication and Task control", () => {
     expect(screen.getByText("Configured (user service)")).toBeTruthy();
     expect(screen.queryByText("Main Coordinator")).toBeNull();
     expect(screen.queryByText("Loopback")).toBeNull();
+    const wakeOnLan = screen.getByRole("region", { name: "Wake-on-LAN" });
+    expect(within(wakeOnLan).getAllByText("Not verified")).toHaveLength(2);
+    expect(within(wakeOnLan).getByText("No authenticated observation yet.")).toBeTruthy();
     expect(macosButton.getAttribute("aria-current")).toBe("page");
 
     await user.selectOptions(screen.getByLabelText("Language"), "ko");
@@ -872,6 +881,8 @@ describe("Admin authentication and Task control", () => {
     await user.click(screen.getByRole("tab", { name: "Routes" }));
     expect(screen.getByText("Omada VPN")).toBeTruthy();
     expect(screen.getByText("Degraded · Priority 1")).toBeTruthy();
+    expect(screen.getByText("Relay required")).toBeTruthy();
+    expect(screen.getByText(/Tailscale or routed IP access alone/)).toBeTruthy();
   });
 
   it.each([

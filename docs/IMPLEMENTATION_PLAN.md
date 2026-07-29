@@ -394,6 +394,9 @@ Move execution onto authenticated remote Devices without adding real LLM provide
 - Add LAN and generic HTTPS/WSS transports; treat Omada and Tailscale as configured
   network paths rather than embedded dependencies.
 - Add optional deterministic Tailscale diagnostic probes when the CLI is present.
+- Add bounded read-only Windows, macOS, and Linux Wake-on-LAN target probes. Persist
+  their last authenticated non-secret observation for offline Device inspection and
+  keep target readiness separate from the future relay execution path.
 - Implement sanitized diagnostic bundles and Agent escalation only after route
   exhaustion.
 - Implement Device drain, disable, revoke, and offline behavior.
@@ -405,6 +408,8 @@ Move execution onto authenticated remote Devices without adding real LLM provide
   profile.
 - Main never initiates SSH and Workers never receive database credentials.
 - Route failover, disconnect buffering, replay, revocation, and Main restart pass.
+- An offline Worker retains its last authenticated Wake-on-LAN target observation;
+  no routed or Tailscale endpoint is mislabeled as a verified wake relay.
 
 ## Phase 4 — Cross-platform service and user-session runtime
 
@@ -878,6 +883,9 @@ Prove the complete product on real target systems and publish it responsibly.
 - Run headless Linux NAS tests.
 - Test Omada-like routed private networking and Tailscale paths separately and
   together through configured Transport Profiles.
+- Verify Wake-on-LAN target detection on all three OS families and prove that any
+  future automatic wake path uses an online relay on the target broadcast domain,
+  rate limiting, Policy, audit, and observed boot completion.
 - Test private and externally exposed Artifact policies.
 - Perform threat-model review and security regression.
 - Perform upgrade from the earliest internal persisted schema and service bundle.

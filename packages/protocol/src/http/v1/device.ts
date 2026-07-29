@@ -233,6 +233,42 @@ const DeviceCurrentRunSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const DeviceWakeOnLanPlatformSourceSchema = Type.Union([
+  Type.Literal("windows-netadapter-power"),
+  Type.Literal("macos-pmset"),
+  Type.Literal("linux-ethtool"),
+]);
+
+const DeviceWakeOnLanSchema = Type.Union([
+  Type.Object(
+    {
+      targetState: Type.Literal("enabled"),
+      automaticWakeState: Type.Literal("relay-required"),
+      source: DeviceWakeOnLanPlatformSourceSchema,
+      observedAtMs: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      targetState: Type.Union([Type.Literal("disabled"), Type.Literal("unsupported")]),
+      automaticWakeState: Type.Literal("unavailable"),
+      source: DeviceWakeOnLanPlatformSourceSchema,
+      observedAtMs: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      targetState: Type.Literal("unknown"),
+      automaticWakeState: Type.Literal("unknown"),
+      source: Type.Union([DeviceWakeOnLanPlatformSourceSchema, Type.Literal("probe-unavailable")]),
+      observedAtMs: Type.Integer({ minimum: 0 }),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
 export const DeviceSummarySchema = Type.Object(
   {
     deviceId: OpaqueIdSchema,
@@ -302,6 +338,7 @@ export const DeviceSummarySchema = Type.Object(
     ),
     agentExecutionProfile: Type.Optional(DeviceAgentExecutionProfileSchema),
     coordinatorAgentExecutionProfile: Type.Optional(DeviceAgentExecutionProfileSchema),
+    wakeOnLan: Type.Optional(DeviceWakeOnLanSchema),
     routes: Type.Optional(
       Type.Array(DeviceRouteSchema, {
         maxItems: 64,

@@ -1094,6 +1094,11 @@ interface PlanningDeviceObservation {
     readonly adapterId: string;
   }[];
   readonly workerAgentProfile?: DeviceSummaryV1["agentExecutionProfile"];
+  readonly wakeOnLan?: {
+    readonly targetState: NonNullable<DeviceSummaryV1["wakeOnLan"]>["targetState"];
+    readonly automaticWakeState: NonNullable<DeviceSummaryV1["wakeOnLan"]>["automaticWakeState"];
+    readonly observedAtMs: number;
+  };
   readonly routes: readonly {
     readonly label: string;
     readonly health: string;
@@ -1160,6 +1165,15 @@ function projectPlanningDeviceContext(
       ...(device.agentExecutionProfile === undefined
         ? {}
         : { workerAgentProfile: structuredClone(device.agentExecutionProfile) }),
+      ...(device.role !== "worker" || device.wakeOnLan === undefined
+        ? {}
+        : {
+            wakeOnLan: Object.freeze({
+              targetState: device.wakeOnLan.targetState,
+              automaticWakeState: device.wakeOnLan.automaticWakeState,
+              observedAtMs: device.wakeOnLan.observedAtMs,
+            }),
+          }),
       routes: Object.freeze(
         (device.routes ?? []).map((route: NonNullable<DeviceSummaryV1["routes"]>[number]) =>
           Object.freeze({ label: route.label, health: route.health }),
@@ -1184,6 +1198,7 @@ function planningContextInstructions(
   }
   return Object.freeze([
     "The following JSON is a current, bounded, Main-owned, owner-safe Device snapshot for planning target preferences. Only verified capability names are included:",
+    "For an offline Worker, wakeOnLan is its last authenticated target observation. relay-required means the target reported magic-packet wake enabled, but OpenDelegate has no verified online relay and must not claim that it can wake the Device.",
     JSON.stringify({ schemaVersion: 1, devices }),
   ]);
 }

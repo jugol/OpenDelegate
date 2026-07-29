@@ -41,6 +41,7 @@ const intentionalCanonicalEnglishKeys: Readonly<
     "budget.metricTokens",
     "device.roles",
     "device.runIdentity",
+    "device.wakeOnLan",
     "known.computerUse",
   ],
   fr: [
@@ -51,6 +52,7 @@ const intentionalCanonicalEnglishKeys: Readonly<
     "device.instructions",
     "device.routes",
     "device.runIdentity",
+    "device.wakeOnLan",
     "join.fifteenMinutes",
     "join.fiveMinutes",
     "join.thirtyMinutes",
@@ -61,9 +63,15 @@ const intentionalCanonicalEnglishKeys: Readonly<
     "task.conversation",
     "task.mode",
   ],
-  ja: ["artifact.checksum", "budget.workOrderReference", "device.runIdentity", "known.computerUse"],
-  ko: ["approval.fingerprint", "artifact.checksum", "known.computerUse"],
-  "zh-CN": ["artifact.checksum", "device.runIdentity", "known.computerUse"],
+  ja: [
+    "artifact.checksum",
+    "budget.workOrderReference",
+    "device.runIdentity",
+    "device.wakeOnLan",
+    "known.computerUse",
+  ],
+  ko: ["approval.fingerprint", "artifact.checksum", "device.wakeOnLan", "known.computerUse"],
+  "zh-CN": ["artifact.checksum", "device.runIdentity", "device.wakeOnLan", "known.computerUse"],
 };
 
 afterEach(() => {

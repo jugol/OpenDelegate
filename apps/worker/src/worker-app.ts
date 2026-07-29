@@ -121,6 +121,7 @@ import {
 import { createWorkerPlatformMutationSafetyBoundary } from "./platform-mutation-safety-boundary.ts";
 import { createPinnedWindowsNpmProcessRunner } from "./windows-npm-process-runner.ts";
 import { createConfiguredSystemPackageVerifier } from "./configured-system-package-verifier.ts";
+import { SystemWakeOnLanProbe } from "./wake-on-lan-probe.ts";
 
 const CONFIG_SCHEMA_VERSION = 1;
 const CONFIG_FILE_NAME = "worker.json";
@@ -820,6 +821,7 @@ export async function createWorkerRuntime(
     inventoryProvider: createWorkerSchedulingInventoryProvider({
       adapters,
       ...(computerUse === undefined ? {} : { computerUseProbe: computerUse.probe }),
+      wakeOnLanProbe: new SystemWakeOnLanProbe(),
       ...(computerUse === undefined
         ? {}
         : { resourceLockProjection: computerUse.resourceLockProjection }),
@@ -2062,9 +2064,16 @@ export function createWorkerAgentAdapters(
   ]);
 }
 
+interface WorkerWakeOnLanCapabilityProbe {
+  probe():
+    | NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]>
+    | Promise<NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]>>;
+}
+
 export function createWorkerSchedulingInventoryProvider(input: {
   readonly adapters: readonly AgentAdapter[];
   readonly computerUseProbe?: WorkerComputerUseCapabilityProbe;
+  readonly wakeOnLanProbe?: WorkerWakeOnLanCapabilityProbe;
   readonly hardwareFactsProvider?: {
     snapshot(
       observedAtMs: number,
@@ -2090,6 +2099,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
         readonly probes: readonly AgentAdapterProbe[];
         readonly modelCatalogs: ReadonlyMap<string, AgentModelCatalog>;
         readonly failedAdapters: readonly Pick<AgentAdapter, "adapterId" | "provider">[];
+        readonly wakeOnLan?: NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]>;
       }
     | undefined;
 
@@ -2140,12 +2150,14 @@ export function createWorkerSchedulingInventoryProvider(input: {
             );
           }
         });
+        const wakeOnLan = await probeWakeOnLanCapability(input.wakeOnLanProbe, now);
         cached = Object.freeze({
           expiresAt: now + probeCacheMs,
           observedAtMs: now,
           probes: Object.freeze(probes),
           modelCatalogs,
           failedAdapters: Object.freeze(failedAdapters),
+          ...(wakeOnLan === undefined ? {} : { wakeOnLan: Object.freeze({ ...wakeOnLan }) }),
         });
       }
       const workspaces = (await input.workspaceRegistry.listSchedulingMetadata()).filter(
@@ -2255,6 +2267,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
         architecture: arch(),
         serviceMode: workerServiceMode(input.environment),
         hardware,
+        ...(cached.wakeOnLan === undefined ? {} : { wakeOnLan: cached.wakeOnLan }),
         // The provider is only composed after LocalKnowledgeService.rebuild()
         // succeeds. No Knowledge graph metadata leaves this Device.
         knowledgeHealth: "healthy",
@@ -2269,6 +2282,39 @@ export function createWorkerSchedulingInventoryProvider(input: {
       });
     },
   });
+}
+
+async function probeWakeOnLanCapability(
+  probe: WorkerWakeOnLanCapabilityProbe | undefined,
+  observedAtMs: number,
+): Promise<NonNullable<WorkerSchedulingInventoryV1["wakeOnLan"]> | undefined> {
+  if (probe === undefined) {
+    return undefined;
+  }
+  try {
+    const observation = await probe.probe();
+    if (
+      !["enabled", "disabled", "unsupported", "unknown"].includes(observation.state) ||
+      !["windows-netadapter-power", "macos-pmset", "linux-ethtool", "probe-unavailable"].includes(
+        observation.source,
+      ) ||
+      (observation.source === "probe-unavailable" && observation.state !== "unknown") ||
+      !Number.isSafeInteger(observation.observedAtMs) ||
+      observation.observedAtMs < 0 ||
+      observation.observedAtMs > 8_640_000_000_000_000
+    ) {
+      throw new TypeError("Wake-on-LAN probe returned invalid evidence.");
+    }
+    return Object.freeze({ ...observation });
+  } catch {
+    // Optional inventory evidence must never prevent an otherwise healthy
+    // Worker heartbeat from reaching Main.
+    return Object.freeze({
+      state: "unknown",
+      source: "probe-unavailable",
+      observedAtMs,
+    });
+  }
 }
 
 function localHardwareFacts(

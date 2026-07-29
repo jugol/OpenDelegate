@@ -295,6 +295,9 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
             agentExecutionProfile: projectAgentExecutionProfile(
               profile?.agentExecutionProfile ?? DEFAULT_AGENT_EXECUTION_PROFILE,
             ),
+            ...(inventory?.wakeOnLan === undefined
+              ? {}
+              : { wakeOnLan: projectWakeOnLanReadiness(inventory.wakeOnLan) }),
             routes:
               heartbeat?.routes === undefined
                 ? [
@@ -536,6 +539,36 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
     }
     return now;
   }
+}
+
+function projectWakeOnLanReadiness(
+  observation: NonNullable<NonNullable<WorkerHeartbeatV1["inventory"]>["wakeOnLan"]>,
+): NonNullable<DeviceSummaryV1["wakeOnLan"]> {
+  if (observation.state === "unknown") {
+    return Object.freeze({
+      targetState: "unknown",
+      automaticWakeState: "unknown",
+      source: observation.source,
+      observedAtMs: observation.observedAtMs,
+    });
+  }
+  if (observation.source === "probe-unavailable") {
+    throw new Error("Unavailable Wake-on-LAN evidence cannot project a known target state.");
+  }
+  if (observation.state === "enabled") {
+    return Object.freeze({
+      targetState: "enabled",
+      automaticWakeState: "relay-required",
+      source: observation.source,
+      observedAtMs: observation.observedAtMs,
+    });
+  }
+  return Object.freeze({
+    targetState: observation.state,
+    automaticWakeState: "unavailable",
+    source: observation.source,
+    observedAtMs: observation.observedAtMs,
+  });
 }
 
 function validateAgentExecutionProfile(value: unknown, label: string): AgentExecutionProfile {

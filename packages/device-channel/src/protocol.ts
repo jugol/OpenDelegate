@@ -652,6 +652,12 @@ function parseWorkerHeartbeat(input: unknown): WorkerHeartbeatV1 {
       "Hardware evidence cannot be newer than its enclosing heartbeat.",
     );
   }
+  if (inventory?.wakeOnLan !== undefined && inventory.wakeOnLan.observedAtMs > observedAtMs) {
+    throw protocolError(
+      "FRAME_INVALID",
+      "Wake-on-LAN evidence cannot be newer than its enclosing heartbeat.",
+    );
+  }
   return {
     protocolVersion: PROTOCOL_VERSION,
     deviceId: readIdentifier(record["deviceId"], "Device ID"),
@@ -708,7 +714,7 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
       "workspaceIds",
       "availableSecretRefs",
     ],
-    ["knowledgeHealth", "hardware", "agentAdapters", "resourceLocks"],
+    ["knowledgeHealth", "hardware", "wakeOnLan", "agentAdapters", "resourceLocks"],
   );
   const capabilityValues = readArray(record["capabilities"], "Worker capabilities");
   if (capabilityValues.length > 256) {
@@ -766,9 +772,28 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
       : parseWorkerResourceLocks(record["resourceLocks"]);
   const hardware =
     record["hardware"] === undefined ? undefined : parseWorkerHardware(record["hardware"]);
+  const wakeOnLan =
+    record["wakeOnLan"] === undefined ? undefined : parseWorkerWakeOnLan(record["wakeOnLan"]);
+  const osFamily = readEnum(
+    record["osFamily"],
+    ["linux", "macos", "windows"] as const,
+    "OS family",
+  );
+  if (
+    wakeOnLan !== undefined &&
+    wakeOnLan.source !== "probe-unavailable" &&
+    ((osFamily === "windows" && wakeOnLan.source !== "windows-netadapter-power") ||
+      (osFamily === "macos" && wakeOnLan.source !== "macos-pmset") ||
+      (osFamily === "linux" && wakeOnLan.source !== "linux-ethtool"))
+  ) {
+    throw protocolError(
+      "FRAME_INVALID",
+      "Worker Wake-on-LAN evidence does not match the Device OS.",
+    );
+  }
   return {
     deviceName: readIdentifier(record["deviceName"], "Device name"),
-    osFamily: readEnum(record["osFamily"], ["linux", "macos", "windows"] as const, "OS family"),
+    osFamily,
     platformRelease: readIdentifier(record["platformRelease"], "platform release"),
     architecture: readIdentifier(record["architecture"], "architecture"),
     serviceMode: readEnum(
@@ -786,6 +811,7 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
           ),
         }),
     ...(hardware === undefined ? {} : { hardware }),
+    ...(wakeOnLan === undefined ? {} : { wakeOnLan }),
     maximumConcurrentRuns: readBoundedPositiveInteger(
       record["maximumConcurrentRuns"],
       "maximum concurrent Runs",
@@ -800,6 +826,31 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
       "Secret reference",
       256,
     ),
+  };
+}
+
+function parseWorkerWakeOnLan(
+  input: unknown,
+): NonNullable<NonNullable<WorkerHeartbeatV1["inventory"]>["wakeOnLan"]> {
+  const record = readRecord(input, "Worker Wake-on-LAN observation");
+  assertExactKeys(record, ["state", "source", "observedAtMs"]);
+  const state = readEnum(
+    record["state"],
+    ["enabled", "disabled", "unsupported", "unknown"] as const,
+    "Wake-on-LAN target state",
+  );
+  const source = readEnum(
+    record["source"],
+    ["windows-netadapter-power", "macos-pmset", "linux-ethtool", "probe-unavailable"] as const,
+    "Wake-on-LAN probe source",
+  );
+  if (source === "probe-unavailable" && state !== "unknown") {
+    throw protocolError("FRAME_INVALID", "Unavailable Wake-on-LAN evidence must remain unknown.");
+  }
+  return {
+    state,
+    source,
+    observedAtMs: readTimestampInteger(record["observedAtMs"], "Wake-on-LAN observation time"),
   };
 }
 

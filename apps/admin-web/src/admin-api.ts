@@ -106,6 +106,13 @@ export interface DeviceSummary {
   }[];
   readonly agentExecutionProfile?: AgentExecutionProfileSummary;
   readonly coordinatorAgentExecutionProfile?: AgentExecutionProfileSummary;
+  readonly wakeOnLan?: {
+    readonly targetState: "enabled" | "disabled" | "unsupported" | "unknown";
+    readonly automaticWakeState: "relay-required" | "unavailable" | "unknown";
+    readonly source:
+      "windows-netadapter-power" | "macos-pmset" | "linux-ethtool" | "probe-unavailable";
+    readonly observedAtMs: number;
+  };
   readonly routes?: readonly {
     readonly routeId: string;
     readonly label: string;

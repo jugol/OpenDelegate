@@ -109,6 +109,12 @@ Knowledge files used only as selective context for agents running on that Device
     not a supported release; applicable live Agent and platform gates remain required
     before release promotion. Device-side automatic upgrades are not exposed until a
     durable rollback-capable maintenance runtime exists.
+29. **Wake-on-LAN readiness is evidence, not an inference.** A Worker may report a
+    bounded, non-secret observation that a local network adapter is enabled for magic
+    packet wake. Main retains the last authenticated observation while that Worker is
+    offline. OpenDelegate reports automatic wake as ready only when a separately
+    verified, online wake relay can reach the target broadcast domain; a Tailscale or
+    ordinary routed endpoint alone is not a wake path.
 
 ## Core domain terms
 

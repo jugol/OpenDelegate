@@ -135,22 +135,29 @@
     },
     {
       "id": 7,
-      "title": "Device specification, routes, health, locks, and Runs are accurate",
+      "title": "Device specification, Wake-on-LAN, routes, health, locks, and Runs are accurate",
       "implementationStatus": "partial",
       "liveProofStatus": "not-run",
       "evidence": [
         "packages/device-discovery/test/device-discovery-service.test.ts",
         "packages/worker-runtime/test/worker-runtime.test.ts",
+        "packages/device-channel/src/protocol.ts",
+        "packages/device-channel/test/protocol.test.ts",
+        "docs/adr/0029-wake-on-lan-readiness-evidence.md",
         "packages/platform-services/test/readiness.test.ts",
         "packages/storage-sql/src/sql-device-observation-repository.ts",
         "packages/storage-sql/test/sql-device-observation-repository.contract.test.ts",
         "apps/admin-web/src/device-overview.ts",
         "apps/admin-web/src/DeviceSurface.tsx",
         "apps/admin-web/src/App.test.tsx",
+        "apps/worker/src/wake-on-lan-probe.ts",
+        "apps/worker/test/wake-on-lan-probe.test.ts",
+        "apps/main/src/worker-fleet-projection.ts",
+        "apps/main/test/worker-fleet-projection.test.ts",
         "apps/main/test/main-runtime.test.ts",
         "apps/admin-web/src/AdminApplication.test.tsx"
       ],
-      "nextGate": "Run the packaged Main and enrolled macOS, Windows, and Linux Workers, then compare the durable observation and Admin projections with each host's real Facts, Capabilities, Roles, Instructions, Policies, route health, named Resource Locks, load, outbox depth, and current Runs across reconnect and restart."
+      "nextGate": "Run the packaged Main and enrolled macOS, Windows, and Linux Workers, then compare the durable observation and Admin projections with each host's real Facts, Capabilities, Roles, Instructions, Policies, route health, named Resource Locks, load, outbox depth, current Runs, and Wake-on-LAN target setting across reconnect, shutdown, and restart; prove an enabled target remains distinct from relay-required automatic wake."
     },
     {
       "id": 8,
@@ -166,7 +173,7 @@
         "packages/device-channel/test/mtls-device-channel.test.ts",
         "apps/worker/src/worker-app.ts"
       ],
-      "nextGate": "Using the composed Main Device channel and Worker transport resolver, run enrolled Devices over distinct real Tailscale, Omada, and direct WSS profiles; force preferred-route failure and record deterministic fallback, redacted attempt traces, and proof that route mechanics never enter Main Agent prompts."
+      "nextGate": "Using the composed Main Device channel and Worker transport resolver, run enrolled Devices over distinct real Tailscale, Omada, and direct WSS profiles; force preferred-route failure and record deterministic fallback, redacted attempt traces, proof that route mechanics never enter Main Agent prompts, and proof that routed or Tailscale reachability is never reported as a verified Wake-on-LAN path."
     },
     {
       "id": 9,

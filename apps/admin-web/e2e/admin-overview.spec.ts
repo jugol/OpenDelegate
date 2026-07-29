@@ -112,6 +112,12 @@ const workerDevices = [
     connection: "offline",
     runtime: "unavailable",
     serviceMode: "system-service",
+    wakeOnLan: {
+      targetState: "enabled",
+      automaticWakeState: "relay-required",
+      source: "windows-netadapter-power",
+      observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+    },
   },
   {
     deviceId: "device_linux_worker",
@@ -123,6 +129,12 @@ const workerDevices = [
     connection: "online",
     runtime: "degraded",
     serviceMode: "system-service",
+    wakeOnLan: {
+      targetState: "enabled",
+      automaticWakeState: "relay-required",
+      source: "linux-ethtool",
+      observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+    },
   },
 ] as const;
 
@@ -452,7 +464,7 @@ test("all Admin locales update loaded chrome while preserving owner content", as
   }
 
   await page.locator(".language-selector select").selectOption("ko");
-  await page.getByRole("button", { name: koreanMessages.navigation.tasks }).click();
+  await page.getByRole("button", { name: koreanMessages.navigation.tasks, exact: true }).click();
   await expect(
     page.getByRole("button", { name: runningTask.objective, exact: true }),
   ).toBeVisible();
@@ -689,6 +701,7 @@ test("Device navigation keeps one Main and selects macOS, Windows, and Linux Wor
     await expect(deviceList.getByRole("button", { name: accessibleName })).toBeVisible();
   }
   await expect(deviceList.getByRole("button").first()).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("region", { name: "Wake-on-LAN" })).toHaveCount(0);
 
   const selections = [
     {
@@ -721,6 +734,17 @@ test("Device navigation keeps one Main and selects macOS, Windows, and Linux Wor
       page.getByRole("region", { name: "Device facts" }).getByText(selection.operatingSystem),
     ).toBeVisible();
     await expect(button).toHaveAttribute("aria-current", "page");
+    if (selection.heading === "Design Mac — owner label") {
+      const wakeOnLan = page.getByRole("region", { name: "Wake-on-LAN" });
+      await expect(wakeOnLan.getByText("Not verified", { exact: true })).toHaveCount(2);
+      await expect(wakeOnLan.getByText("No authenticated observation yet.")).toBeVisible();
+    } else if (selection.heading === "Windows Build Rig") {
+      const wakeOnLan = page.getByRole("region", { name: "Wake-on-LAN" });
+      await expect(wakeOnLan.getByText("Enabled", { exact: true })).toBeVisible();
+      await expect(wakeOnLan.getByText("Relay required", { exact: true })).toBeVisible();
+      await expect(wakeOnLan.getByText(/Tailscale or routed IP access alone/)).toBeVisible();
+      await expect(wakeOnLan.getByText(/Last observed before offline/)).toBeVisible();
+    }
     await expectNoHorizontalOverflow(page);
   }
 
@@ -731,6 +755,17 @@ test("Device navigation keeps one Main and selects macOS, Windows, and Linux Wor
       name: `NAS 工作站, ${koreanMessages.known.worker}, ${koreanMessages.known.online}`,
     }),
   ).toHaveAttribute("aria-current", "page");
+  const koreanWakeOnLan = page.getByRole("region", {
+    name: koreanMessages.device.wakeOnLan,
+  });
+  await expect(
+    koreanWakeOnLan.getByText(koreanMessages.device.wakeTargetEnabled, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    koreanWakeOnLan.getByText(koreanMessages.device.automaticWakeRelayRequired, { exact: true }),
+  ).toBeVisible();
+  await expect(koreanWakeOnLan.getByText(/장치에서 확인/)).toBeVisible();
+  await koreanWakeOnLan.scrollIntoViewIfNeeded();
 
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
@@ -750,6 +785,7 @@ async function installApi(
   let authenticated = signedIn;
   let task: TaskDetail = runningTask;
   let approval: ApprovalDetail = pendingApproval;
+  let configurationMessageCount = 0;
 
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -799,7 +835,7 @@ async function installApi(
     }
 
     if (
-      path === `/api/v1/devices/${mainDevice.deviceId}/configuration/messages` &&
+      /^\/api\/v1\/devices\/[^/]+\/configuration\/messages$/u.test(path) &&
       request.method() === "GET"
     ) {
       await route.fulfill({ json: { messages: [] } });
@@ -807,15 +843,27 @@ async function installApi(
     }
 
     if (
-      path === `/api/v1/devices/${mainDevice.deviceId}/configuration/messages` &&
+      /^\/api\/v1\/devices\/[^/]+\/configuration\/messages$/u.test(path) &&
       request.method() === "POST"
     ) {
+      configurationMessageCount += 1;
+      const discordGuidance = configurationMessageCount === 1;
+      const discordCredential = configurationMessageCount === 2;
       await route.fulfill({
         json: {
           messageId: "message_configuration_browser",
           sessionId: "configuration_browser",
-          content: "I reviewed the deterministic Device facts.",
+          content: discordGuidance
+            ? "Discord setup guidance is ready."
+            : discordCredential
+              ? "The Discord bot token is the next missing value."
+              : "I reviewed the deterministic Device facts.",
           occurredAt: "2026-07-24T01:34:00.000Z",
+          suggestedActions: discordGuidance
+            ? ["guide-discord"]
+            : discordCredential
+              ? ["ingest-discord-bot-token"]
+              : [],
         },
       });
       return;

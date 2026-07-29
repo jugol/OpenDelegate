@@ -117,6 +117,12 @@ const windowsWorker = {
   policies: [],
   agentAdapters: [],
   agentExecutionProfile: { schemaVersion: 1, mode: "auto" },
+  wakeOnLan: {
+    targetState: "enabled",
+    automaticWakeState: "relay-required",
+    observedAtMs: Date.parse("2026-07-29T03:00:00.000Z"),
+    historical: true,
+  },
   capabilities: [
     {
       capabilityId: "claude-code",
@@ -197,6 +203,11 @@ describe("first-run Device overview", () => {
     expect(screen.getByText("x86-64")).toBeTruthy();
     expect(screen.getByText("Build automation")).toBeTruthy();
     expect(screen.getByText("Omada VPN")).toBeTruthy();
+    const wakeOnLan = screen.getByRole("region", { name: "Wake-on-LAN" });
+    expect(within(wakeOnLan).getByText("Enabled")).toBeTruthy();
+    expect(within(wakeOnLan).getByText("Relay required")).toBeTruthy();
+    expect(within(wakeOnLan).getByText(/Tailscale or routed IP access alone/)).toBeTruthy();
+    expect(within(wakeOnLan).getByText(/Last observed before offline/)).toBeTruthy();
     expect(screen.queryByText("macOS")).toBeNull();
     expect(screen.queryByText("Main Coordinator")).toBeNull();
   });

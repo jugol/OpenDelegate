@@ -45,6 +45,13 @@ export interface RouteView {
   readonly detail?: string;
 }
 
+export interface WakeOnLanView {
+  readonly targetState: "enabled" | "disabled" | "unsupported" | "unknown";
+  readonly automaticWakeState: "relay-required" | "unavailable" | "unknown";
+  readonly observedAtMs?: number;
+  readonly historical: boolean;
+}
+
 export interface DevicePolicyView {
   readonly policyId: string;
   readonly actionCategory: string;
@@ -152,6 +159,7 @@ export interface DeviceOverviewViewModel {
   readonly agentAdapters: readonly AgentAdapterView[];
   readonly agentExecutionProfile: AgentExecutionProfileView;
   readonly coordinatorAgentExecutionProfile?: AgentExecutionProfileView;
+  readonly wakeOnLan?: WakeOnLanView;
   readonly routes: readonly RouteView[];
   readonly resourceLocks: readonly ResourceLockView[];
   readonly currentRuns: readonly CurrentRunView[];
