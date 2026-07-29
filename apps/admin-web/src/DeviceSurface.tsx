@@ -1145,7 +1145,7 @@ function AgentProfileEditor({
           </div>
         )}
         <button
-          className="secondary-button agent-profile-review"
+          className="primary-button agent-profile-review"
           disabled={proposedProfile === undefined}
           onClick={(event) => {
             if (proposedProfile !== undefined) {

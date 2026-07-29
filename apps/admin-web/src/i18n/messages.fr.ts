@@ -229,7 +229,7 @@ export const frenchMessages = {
     noFallback: "Aucun repli",
     noVerifiedModels:
       "Aucun catalogue de modèles prêt et testé n’est disponible. Évaluez ce Device avant de choisir un modèle exact.",
-    configureAgentProfile: "Vérifier dans Configuration Chat",
+    configureAgentProfile: "Demander la modification dans Configuration Chat",
     modelCatalog: "{count} modèles vérifiés",
     defaultModel: "Par défaut",
     moreModels: "+{count} autres",

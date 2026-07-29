@@ -203,7 +203,7 @@ export const simplifiedChineseMessages = {
     fallbackBinding: "备用绑定",
     noFallback: "无备用绑定",
     noVerifiedModels: "暂无已就绪且经过测试的模型目录。选择精确模型前，请先评估此 Device。",
-    configureAgentProfile: "在 Configuration Chat 中审核变更",
+    configureAgentProfile: "在 Configuration Chat 中请求更改",
     modelCatalog: "{count} 个已验证模型",
     defaultModel: "默认",
     moreModels: "另有 {count} 个",

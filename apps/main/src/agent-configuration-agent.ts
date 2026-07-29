@@ -46,11 +46,26 @@ interface ConfigurationResponseEventPayload {
   readonly response: ConfigurationAgentMessageResponse;
 }
 
-interface ConfigurationToolAttemptEventPayload {
+interface LegacyConfigurationToolAttemptEventPayload {
   readonly schemaVersion: 1;
   readonly requestDigest: string;
   readonly toolOperationId: string;
   readonly tool: ConfigurationToolRequest["tool"];
+}
+
+interface ConfigurationToolAttemptEventPayload {
+  readonly schemaVersion: 2;
+  readonly requestDigest: string;
+  readonly toolOperationId: string;
+  readonly tool: ConfigurationToolRequest["tool"];
+}
+
+type StoredConfigurationToolAttemptEventPayload =
+  LegacyConfigurationToolAttemptEventPayload | ConfigurationToolAttemptEventPayload;
+
+interface ConfigurationContinuationReservationEventPayload {
+  readonly schemaVersion: 1;
+  readonly requestDigest: string;
 }
 
 interface ConfigurationConversationExchangeEventPayload {
@@ -388,6 +403,7 @@ const DEFAULT_MAXIMUM_PROMPT_BYTES = 64 * 1024;
 const DEFAULT_MAXIMUM_TOOL_TURNS = 8;
 const CONFIGURATION_RESPONSE_EVENT = "configuration-agent.response-recorded";
 const CONFIGURATION_TOOL_ATTEMPT_EVENT = "configuration-agent.tool-attempted";
+const CONFIGURATION_CONTINUATION_RESERVATION_EVENT = "configuration-agent.continuation-reserved";
 const CONFIGURATION_CONVERSATION_OWNER_MESSAGE_EVENT =
   "configuration-agent.conversation-owner-message-recorded";
 const CONFIGURATION_CONVERSATION_EXCHANGE_EVENT =
@@ -592,7 +608,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     requestDigest: string,
     ownerMessage: ConfigurationAgentConversationMessageV1,
   ): Promise<ConfigurationAgentMessageResponse> {
-    await this.#assertNoInterruptedToolAttempt(operationKey, requestDigest);
+    await this.#assertInterruptedAttemptIsRecoverable(operationKey, requestDigest);
     const sessionKey = configurationSessionKey(input.deviceId, this.#adapter.adapterId);
     let session: NativeSessionReference | undefined;
     try {
@@ -614,9 +630,11 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     }
 
     const baseRunId = `configuration_${operationKey.slice("sha256:".length)}`;
-    let prompt = buildConfigurationPrompt(input, this.#maximumPromptBytes);
+    const currentRequestPrompt = buildConfigurationPrompt(input, this.#maximumPromptBytes);
+    let prompt = currentRequestPrompt;
     let toolCallCount = 0;
-    let toolAttemptRecorded = false;
+    let replayUnsafeToolAttempted = false;
+    let continuationStarted = false;
     const receipts = new Map<string, ConfigurationToolReceipt>();
 
     try {
@@ -636,7 +654,8 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
           });
         } catch (error) {
           if (
-            turnIndex !== 0 ||
+            continuationStarted ||
+            replayUnsafeToolAttempted ||
             session === undefined ||
             !(error instanceof ConfigurationAgentPortError) ||
             error.code !== "CONFIGURATION_AGENT_UNAVAILABLE"
@@ -647,11 +666,13 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
             deviceId: input.deviceId,
             principalId: input.principalId,
           });
+          await this.#recordContinuationReservation(operationKey, requestDigest);
+          continuationStarted = true;
           turn = await this.#runTurn({
             baseRunId: `${baseRunId}_continuation`,
             turnIndex,
             prompt: buildConfigurationContinuationPrompt(
-              prompt,
+              currentRequestPrompt,
               conversation.messages.filter(
                 (message) => message.role !== "owner" || message.responseStatus !== "pending",
               ),
@@ -660,7 +681,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
             session: undefined,
             continuationOf: session,
             continuationReason:
-              "Initial Configuration Agent native resume was unavailable before tool execution.",
+              turnIndex === 0
+                ? "Initial Configuration Agent native resume was unavailable before tool execution."
+                : "Configuration Agent native session became unavailable after read-only inspection and before mutation-capable tool execution.",
             targetDeviceId: input.deviceId,
             sessionKey,
           });
@@ -699,15 +722,13 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         }
         toolCallCount += 1;
         const toolOperationId = configurationToolOperationId(operationKey, parsed.toolCallId);
-        if (!toolAttemptRecorded) {
-          await this.#recordToolAttempt({
-            operationKey,
-            requestDigest,
-            toolOperationId,
-            tool: parsed.request.tool,
-          });
-          toolAttemptRecorded = true;
-        }
+        await this.#recordToolAttempt({
+          operationKey,
+          requestDigest,
+          toolOperationId,
+          tool: parsed.request.tool,
+        });
+        replayUnsafeToolAttempted ||= isReplayUnsafeConfigurationTool(parsed.request.tool);
         let toolResult: ConfigurationAgentToolTurnResult;
         try {
           const receipt = await this.#toolBroker.execute({
@@ -814,10 +835,13 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     const eventCompletion = this.#consumeEvents(handle, input.targetDeviceId, input.sessionKey);
     const [eventResult, runResult] = await Promise.allSettled([eventCompletion, handle.result]);
     if (eventResult.status === "rejected") {
-      throw unavailable("The Configuration Agent event stream failed.");
+      throw mapAdapterFailure(eventResult.reason, "The Configuration Agent event stream failed.");
     }
     if (runResult.status === "rejected") {
-      throw unavailable("The Configuration Agent returned no terminal result.");
+      throw mapAdapterFailure(
+        runResult.reason,
+        "The Configuration Agent returned no terminal result.",
+      );
     }
     const terminal = runResult.value;
     if (terminal.session !== undefined) {
@@ -1037,37 +1061,26 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     return structuredClone(existing.response);
   }
 
-  async #assertNoInterruptedToolAttempt(
+  async #assertInterruptedAttemptIsRecoverable(
     operationKey: string,
     requestDigest: string,
   ): Promise<void> {
-    let events: readonly {
-      readonly streamVersion: number;
-      readonly type: string;
-      readonly payload: unknown;
-    }[];
-    try {
-      events = await this.#eventStore.readStream(toolAttemptStreamId(operationKey));
-    } catch {
-      throw unavailable("The Configuration Agent tool-attempt state could not be read.");
+    const attempts = await this.#loadToolAttempts(operationKey, requestDigest);
+    if (attempts.some((attempt) => attempt.schemaVersion === 1)) {
+      throw unavailable(
+        "A previous Configuration Agent attempt used a legacy tool-attempt boundary whose later mutation state is unknown. OpenDelegate did not replay it.",
+      );
     }
-    if (events.length === 0) {
-      return;
+    if (attempts.some((attempt) => isReplayUnsafeConfigurationTool(attempt.tool))) {
+      throw unavailable(
+        "A previous Configuration Agent attempt reached a mutation-capable tool without recording a final response. OpenDelegate did not replay it.",
+      );
     }
-    if (
-      events.length !== 1 ||
-      events[0]?.streamVersion !== 1 ||
-      events[0].type !== CONFIGURATION_TOOL_ATTEMPT_EVENT
-    ) {
-      throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+    if ((await this.#loadContinuationReservation(operationKey, requestDigest)) !== undefined) {
+      throw unavailable(
+        "A previous Configuration Agent attempt already reserved its one native continuation without recording a final response. OpenDelegate did not start another continuation.",
+      );
     }
-    const payload = validateToolAttemptEventPayload(events[0].payload);
-    if (payload.requestDigest !== requestDigest) {
-      throw idempotencyConflict();
-    }
-    throw unavailable(
-      "A previous Configuration Agent attempt reached a deterministic tool without recording a final response. OpenDelegate did not replay it.",
-    );
   }
 
   async #recordToolAttempt(input: {
@@ -1078,30 +1091,143 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
   }): Promise<void> {
     const streamId = toolAttemptStreamId(input.operationKey);
     const payload = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       requestDigest: input.requestDigest,
       toolOperationId: input.toolOperationId,
       tool: input.tool,
     } satisfies ConfigurationToolAttemptEventPayload;
+    for (let appendAttempt = 0; appendAttempt < 2; appendAttempt += 1) {
+      const attempts = await this.#loadToolAttempts(input.operationKey, input.requestDigest);
+      if (attempts.some((attempt) => attempt.schemaVersion === 1)) {
+        throw unavailable(
+          "The Configuration Agent cannot extend a legacy tool-attempt boundary safely.",
+        );
+      }
+      const existing = attempts.find(
+        (attempt) => attempt.toolOperationId === input.toolOperationId,
+      );
+      if (existing !== undefined) {
+        if (existing.tool !== input.tool) {
+          throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+        }
+        return;
+      }
+      if (
+        attempts.some((attempt) => isReplayUnsafeConfigurationTool(attempt.tool)) ||
+        (attempts.length > 0 && !isReplayUnsafeConfigurationTool(input.tool))
+      ) {
+        return;
+      }
+      try {
+        await this.#eventStore.append({
+          streamId,
+          expectedVersion: attempts.length,
+          events: [
+            {
+              eventId: `event_${digest(
+                `${streamId}\u0000${input.requestDigest}\u0000${input.toolOperationId}`,
+              )
+                .slice("sha256:".length)
+                .slice(0, 64)}`,
+              type: CONFIGURATION_TOOL_ATTEMPT_EVENT,
+              payload,
+            },
+          ],
+        });
+        return;
+      } catch {
+        // Re-read once to distinguish an idempotent concurrent append from storage failure.
+      }
+    }
+    throw unavailable("The Configuration Agent tool-attempt boundary could not be stored durably.");
+  }
+
+  async #loadToolAttempts(
+    operationKey: string,
+    requestDigest: string,
+  ): Promise<readonly StoredConfigurationToolAttemptEventPayload[]> {
+    let events: readonly {
+      readonly streamVersion: number;
+      readonly type: string;
+      readonly payload: unknown;
+    }[];
+    try {
+      events = await this.#eventStore.readStream(toolAttemptStreamId(operationKey));
+    } catch {
+      throw unavailable("The Configuration Agent tool-attempt state could not be read.");
+    }
+    return events.map((event, index) => {
+      if (event.streamVersion !== index + 1 || event.type !== CONFIGURATION_TOOL_ATTEMPT_EVENT) {
+        throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+      }
+      const payload = validateToolAttemptEventPayload(event.payload);
+      if (payload.requestDigest !== requestDigest) {
+        throw idempotencyConflict();
+      }
+      return payload;
+    });
+  }
+
+  async #recordContinuationReservation(operationKey: string, requestDigest: string): Promise<void> {
+    if ((await this.#loadContinuationReservation(operationKey, requestDigest)) !== undefined) {
+      throw unavailable(
+        "The Configuration Agent already reserved its one native continuation for this request.",
+      );
+    }
+    const streamId = continuationReservationStreamId(operationKey);
     try {
       await this.#eventStore.append({
         streamId,
         expectedVersion: 0,
         events: [
           {
-            eventId: `event_${digest(`${streamId}\u0000${input.requestDigest}`)
+            eventId: `event_${digest(`${streamId}\u0000${requestDigest}`)
               .slice("sha256:".length)
               .slice(0, 64)}`,
-            type: CONFIGURATION_TOOL_ATTEMPT_EVENT,
-            payload,
+            type: CONFIGURATION_CONTINUATION_RESERVATION_EVENT,
+            payload: {
+              schemaVersion: 1,
+              requestDigest,
+            } satisfies ConfigurationContinuationReservationEventPayload,
           },
         ],
       });
     } catch {
       throw unavailable(
-        "The Configuration Agent tool-attempt boundary could not be stored durably.",
+        "The Configuration Agent continuation boundary could not be stored durably.",
       );
     }
+  }
+
+  async #loadContinuationReservation(
+    operationKey: string,
+    requestDigest: string,
+  ): Promise<ConfigurationContinuationReservationEventPayload | undefined> {
+    let events: readonly {
+      readonly streamVersion: number;
+      readonly type: string;
+      readonly payload: unknown;
+    }[];
+    try {
+      events = await this.#eventStore.readStream(continuationReservationStreamId(operationKey));
+    } catch {
+      throw unavailable("The Configuration Agent continuation boundary could not be read.");
+    }
+    if (events.length === 0) {
+      return undefined;
+    }
+    if (
+      events.length !== 1 ||
+      events[0]?.streamVersion !== 1 ||
+      events[0].type !== CONFIGURATION_CONTINUATION_RESERVATION_EVENT
+    ) {
+      throw unavailable("The Configuration Agent continuation boundary is corrupt.");
+    }
+    const payload = validateContinuationReservationEventPayload(events[0].payload);
+    if (payload.requestDigest !== requestDigest) {
+      throw idempotencyConflict();
+    }
+    return payload;
   }
 
   async #loadStoredResponse(
@@ -1766,11 +1892,13 @@ function findConversationOwnerMessage(
   return projectConversationTurns(events).find((turn) => turn.operationKey === operationKey);
 }
 
-function validateToolAttemptEventPayload(value: unknown): ConfigurationToolAttemptEventPayload {
+function validateToolAttemptEventPayload(
+  value: unknown,
+): StoredConfigurationToolAttemptEventPayload {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["schemaVersion", "requestDigest", "toolOperationId", "tool"]) ||
-    value["schemaVersion"] !== 1 ||
+    (value["schemaVersion"] !== 1 && value["schemaVersion"] !== 2) ||
     typeof value["requestDigest"] !== "string" ||
     !/^sha256:[a-f0-9]{64}$/.test(value["requestDigest"])
   ) {
@@ -1787,7 +1915,28 @@ function validateToolAttemptEventPayload(value: unknown): ConfigurationToolAttem
   ) {
     throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
   }
-  return structuredClone(value) as unknown as ConfigurationToolAttemptEventPayload;
+  return structuredClone(value) as unknown as StoredConfigurationToolAttemptEventPayload;
+}
+
+function validateContinuationReservationEventPayload(
+  value: unknown,
+): ConfigurationContinuationReservationEventPayload {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["schemaVersion", "requestDigest"]) ||
+    value["schemaVersion"] !== 1 ||
+    typeof value["requestDigest"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(value["requestDigest"])
+  ) {
+    throw unavailable("The Configuration Agent continuation boundary is corrupt.");
+  }
+  return structuredClone(value) as unknown as ConfigurationContinuationReservationEventPayload;
+}
+
+function isReplayUnsafeConfigurationTool(
+  tool: ConfigurationToolRequest["tool"],
+): tool is "propose" | "apply" | "rollback" {
+  return tool === "propose" || tool === "apply" || tool === "rollback";
 }
 
 function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgentMessageInput {
@@ -2179,6 +2328,10 @@ function responseStreamId(operationKey: string): string {
 
 function toolAttemptStreamId(operationKey: string): string {
   return `configuration-tool-attempt:${operationKey.slice("sha256:".length)}`;
+}
+
+function continuationReservationStreamId(operationKey: string): string {
+  return `configuration-continuation:${operationKey.slice("sha256:".length)}`;
 }
 
 function configurationToolOperationId(operationKey: string, toolCallId: string): string {

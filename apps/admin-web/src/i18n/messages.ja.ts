@@ -223,7 +223,7 @@ export const japaneseMessages = {
     noFallback: "フォールバックなし",
     noVerifiedModels:
       "準備済みで検証済みのモデルカタログがありません。正確なモデルを選ぶ前にこの Device を評価してください。",
-    configureAgentProfile: "Configuration Chat で変更を確認",
+    configureAgentProfile: "Configuration Chat で変更を依頼",
     modelCatalog: "検証済みモデル {count} 件",
     defaultModel: "デフォルト",
     moreModels: "ほか {count} 件",

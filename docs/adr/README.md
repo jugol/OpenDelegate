@@ -48,6 +48,7 @@ approved product specification.
 25. [`0028-main-owned-read-only-task-answers.md`](0028-main-owned-read-only-task-answers.md)
 26. [`0029-wake-on-lan-readiness-evidence.md`](0029-wake-on-lan-readiness-evidence.md)
 27. [`0030-tiered-repository-validation.md`](0030-tiered-repository-validation.md)
+28. [`0031-configuration-read-only-turn-recovery.md`](0031-configuration-read-only-turn-recovery.md)
 
 ## Proposed ADRs
 
