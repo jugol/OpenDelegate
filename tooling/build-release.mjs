@@ -323,8 +323,6 @@ const bundleReadmeLanguages = Object.freeze([
   Object.freeze({ filename: "README.zh-CN.md", label: "简体中文", locale: "zh-CN" }),
 ]);
 
-const bundleInitAgentPrompt =
-  "Read `skills/opendelegate-init/SKILL.md` and initialize this computer as my fixed OpenDelegate Main Device. Guide me through every owner decision, keep runtime state outside this bundle, and stop if a required safety check fails.";
 const bundleJoinAgentPrompt =
   "Read `skills/opendelegate-join/SKILL.md` and join this computer to my fixed OpenDelegate Main using the unopened grant file at `ABSOLUTE_GRANT_FILE`. Detect its capabilities, keep all Knowledge local, and ask before any network or privileged change.";
 
@@ -356,6 +354,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "Continue with `docs/GETTING_STARTED.md` for the complete owner journey and\n`docs/DISCORD_SETUP.md` for Discord App, bot, Forum, intent, permission, and first-Task setup.",
     implementationLabel: "Implementation",
+    initAgentPrompt:
+      "Set up OpenDelegate on this computer as my fixed, always-on Main Device. Follow this bundle's own Main installation instructions and do everything you safely can. Ask me only when you need a decision or a secure owner-only action. Never ask me to paste credentials, tokens, or other secrets into chat; guide me through provider-native authentication or OpenDelegate's secure intake instead. Continue until Admin Web opens and setup is ready to finish there.",
     integrity:
       "Verify `SHA256SUMS` against a digest obtained through a trusted publication channel\nbefore relying on the payload. The enclosed manifest proves only internal\nconsistency, not publisher identity.",
     integrityStep:
@@ -370,7 +370,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "Read `INTERNAL_PREVIEW.md`. This bundle is unsupported and must not be published under a release tag.",
     candidateTitle: "unpublished release candidate",
-    startHeading: "Quick Start",
+    startHeading: "Recommended installation: ask your Agent",
     stateStep:
       "Keep runtime state, databases, credentials, logs, and generated Artifacts outside\n   this bundle.",
     supportStatusLabel: "Support status",
@@ -402,6 +402,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "전체 Owner 여정은 `docs/GETTING_STARTED.md`, Discord App, Bot, Forum, Intent,\nPermission 및 첫 Task 설정은 `docs/DISCORD_SETUP.md`를 참고하세요.",
     implementationLabel: "구현",
+    initAgentPrompt:
+      "이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 Bundle에 포함된 Main 설치 지침을 직접 찾아 따르고, 안전하게 할 수 있는 일은 모두 처리해 줘. 내 결정이나 Owner 전용 보안 작업이 필요할 때만 질문해 줘. 인증 정보, Token 등 비밀값을 채팅에 붙여 넣으라고 하지 말고 Provider의 기본 인증 절차나 OpenDelegate 보안 입력 화면으로 안내해 줘. Admin Web이 열려서 나머지 설정을 마칠 수 있을 때까지 계속 진행해 줘.",
     integrity:
       "이 payload를 신뢰하기 전에 신뢰할 수 있는 배포 채널에서 얻은 digest와\n`SHA256SUMS`를 대조하세요. 포함된 manifest는 내부 일관성만 증명하며 게시자 신원은\n증명하지 않습니다.",
     integrityStep:
@@ -416,7 +418,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "`INTERNAL_PREVIEW.md`를 먼저 읽으세요. 이 번들은 지원되지 않으며 릴리스 태그로 게시해서는 안 됩니다.",
     candidateTitle: "게시되지 않은 릴리스 후보",
-    startHeading: "빠른 시작",
+    startHeading: "권장 설치: Agent에게 맡기세요",
     stateStep:
       "runtime 상태, 데이터베이스, 자격 증명, 로그 및 생성된 Artifact는 이 번들 밖에\n   보관하세요.",
     supportStatusLabel: "지원 상태",
@@ -448,6 +450,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "Owner の全手順は `docs/GETTING_STARTED.md`、Discord App、Bot、Forum、Intent、\nPermission、最初の Task の設定は `docs/DISCORD_SETUP.md` を参照してください。",
     implementationLabel: "実装",
+    initAgentPrompt:
+      "このコンピューターを、固定された常時稼働の OpenDelegate Main Device としてセットアップしてください。この Bundle に含まれる Main インストール手順を自分で見つけて従い、安全に実行できる作業はすべて進めてください。私の判断または Owner 専用の安全な操作が必要なときだけ質問してください。認証情報、Token、その他の Secret をチャットに貼り付けるよう求めず、Provider 本来の認証手順または OpenDelegate の安全な入力画面へ案内してください。Admin Web が開いて残りの設定を完了できる状態になるまで続けてください。",
     integrity:
       "この payload を信頼する前に、信頼できる公開チャネルから取得した digest と\n`SHA256SUMS` を照合してください。同梱の manifest が証明するのは内部整合性のみで、\n公開者の身元ではありません。",
     integrityStep:
@@ -463,7 +467,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "`INTERNAL_PREVIEW.md` を先に読んでください。このバンドルはサポート対象外であり、リリースタグで公開してはいけません。",
     candidateTitle: "未公開のリリース候補",
-    startHeading: "クイックスタート",
+    startHeading: "推奨インストール：Agent に任せる",
     stateStep:
       "runtime 状態、データベース、認証情報、ログ、生成された Artifact はこのバンドルの\n   外に保存してください。",
     supportStatusLabel: "サポート状況",
@@ -496,6 +500,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "Poursuivez avec `docs/GETTING_STARTED.md` pour le parcours complet de l’Owner et\n`docs/DISCORD_SETUP.md` pour configurer l’App, le Bot, le Forum, les Intents, les Permissions et la première Task.",
     implementationLabel: "Implémentation",
+    initAgentPrompt:
+      "Configure OpenDelegate sur cet ordinateur comme mon Main Device fixe et toujours actif. Trouve et suis les instructions d’installation Main incluses dans ce bundle, puis réalise tout ce que tu peux faire en sécurité. Ne me sollicite que lorsqu’une décision ou une action sécurisée réservée à l’Owner est nécessaire. Ne me demande jamais de coller des identifiants, jetons ou autres secrets dans le chat ; oriente-moi vers l’authentification native du Provider ou la saisie sécurisée d’OpenDelegate. Continue jusqu’à l’ouverture d’Admin Web afin que nous puissions y terminer la configuration.",
     integrity:
       "Avant d’utiliser ce payload, comparez `SHA256SUMS` à un digest obtenu par un canal\nde publication fiable. Le manifest inclus prouve uniquement la cohérence interne,\npas l’identité de l’éditeur.",
     integrityStep:
@@ -511,7 +517,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "Lisez d’abord `INTERNAL_PREVIEW.md`. Ce bundle n’est pas pris en charge et ne doit pas être publié sous un tag de release.",
     candidateTitle: "candidat de version non publié",
-    startHeading: "Démarrage rapide",
+    startHeading: "Installation recommandée : confiez-la à votre Agent",
     stateStep:
       "Conservez l’état du runtime, les bases de données, les identifiants, les logs et les\n   Artifacts générés en dehors de ce bundle.",
     supportStatusLabel: "Statut de prise en charge",
@@ -544,6 +550,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "Continúa con `docs/GETTING_STARTED.md` para el recorrido completo del Owner y con\n`docs/DISCORD_SETUP.md` para configurar la App, el Bot, el Forum, los Intents, los Permissions y la primera Task.",
     implementationLabel: "Implementación",
+    initAgentPrompt:
+      "Configura OpenDelegate en este ordenador como mi Main Device fijo y siempre encendido. Busca y sigue las instrucciones de instalación Main incluidas en este bundle y realiza todo lo que puedas hacer de forma segura. Pregúntame solo cuando haga falta una decisión o una acción segura reservada al Owner. No me pidas nunca que pegue credenciales, tokens u otros secretos en el chat; guíame a la autenticación nativa del Provider o a la entrada segura de OpenDelegate. Continúa hasta que se abra Admin Web y podamos terminar allí el resto de la configuración.",
     integrity:
       "Antes de confiar en este payload, compara `SHA256SUMS` con un digest obtenido por\nun canal de publicación fiable. El manifest incluido solo demuestra la coherencia\ninterna, no la identidad de quien lo publica.",
     integrityStep:
@@ -559,7 +567,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "Lee primero `INTERNAL_PREVIEW.md`. Este bundle no tiene soporte y no debe publicarse bajo una etiqueta de release.",
     candidateTitle: "candidato de versión no publicado",
-    startHeading: "Inicio rápido",
+    startHeading: "Instalación recomendada: pídeselo a tu Agent",
     stateStep:
       "Mantén el estado del runtime, las bases de datos, las credenciales, los logs y los\n   Artifacts generados fuera de este bundle.",
     supportStatusLabel: "Estado de soporte",
@@ -590,6 +598,8 @@ const bundleReadmeCopy = Object.freeze({
     guides:
       "完整 Owner 流程请参阅 `docs/GETTING_STARTED.md`；Discord App、Bot、Forum、Intent、\nPermission 和首个 Task 的配置请参阅 `docs/DISCORD_SETUP.md`。",
     implementationLabel: "实现",
+    initAgentPrompt:
+      "请把这台电脑设置为我固定且始终在线的 OpenDelegate Main Device。自行查找并遵循此 Bundle 中包含的 Main 安装说明，安全范围内能完成的工作都直接完成。只有在需要我做决定或执行仅限 Owner 的安全操作时才提问。切勿让我把凭据、令牌或其他秘密粘贴到聊天中；请引导我使用 Provider 原生认证或 OpenDelegate 的安全输入界面。请持续进行，直到 Admin Web 打开并可以在那里完成其余设置。",
     integrity:
       "在信任此 payload 之前，请使用从可信发布渠道获得的 digest 校验 `SHA256SUMS`。\n随附的 manifest 只能证明内部一致性，不能证明发布者身份。",
     integrityStep: "运行任何内容之前，请使用可信发布渠道提供的 digest 验证 `SHA256SUMS`。",
@@ -603,7 +613,7 @@ const bundleReadmeCopy = Object.freeze({
     previewWarning:
       "请先阅读 `INTERNAL_PREVIEW.md`。此捆绑包不受支持，且不得在 Release tag 下发布。",
     candidateTitle: "未发布的候选版本",
-    startHeading: "快速开始",
+    startHeading: "推荐安装：交给你的 Agent",
     stateStep: "请将 runtime 状态、数据库、凭据、日志和生成的 Artifact 保存在此捆绑包之外。",
     supportStatusLabel: "支持状态",
   }),
@@ -652,7 +662,7 @@ ${copy.supportStatusLabel}: \`${supportStatus}\`.
 3. ${copy.stateStep}
 4. ${copy.agentStep}
 
-   > ${bundleInitAgentPrompt}
+   > ${copy.initAgentPrompt}
 
 5. ${preview ? copy.discordStep : copy.claimStep}
 6. ${preview ? copy.claimStep : copy.candidateConfigurationStep}

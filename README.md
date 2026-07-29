@@ -7,11 +7,50 @@ Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](
 phone or laptop may disconnect while a fixed always-on Main coordinates macOS, Windows, and Linux.
 
 > [!TIP]
-> **Start here:** [Quick Start](#quick-start) ·
+> **Start here:** [Recommended installation](#recommended-installation-ask-your-agent) ·
+> [Detailed setup](#detailed-setup) ·
 > [Complete setup guide](docs/GETTING_STARTED.md) ·
 > [Discord Forum setup](docs/DISCORD_SETUP.md)
 
-## Quick Start
+## Recommended installation: ask your Agent
+
+**This is the shortest and recommended path. You do not need to learn OpenDelegate commands
+first.**
+
+1. Go to the computer you want to keep as your fixed, always-on **Main Device**.
+2. Open a capable local Agent such as Codex or Claude and give it this repository URL.
+3. Send this:
+
+   > Set up OpenDelegate on this computer as my fixed, always-on Main Device. Follow the
+   > repository's own Main installation instructions and do everything you safely can. Ask me only
+   > when you need a decision or a secure owner-only action. Never ask me to paste credentials,
+   > tokens, or other secrets into chat; guide me through provider-native authentication or
+   > OpenDelegate's secure intake instead. Continue until Admin Web opens and setup is ready to
+   > finish there.
+
+4. Follow the Agent's questions. It will discover the repository's init skill, distinguish source
+   from a release bundle, verify the support status, keep runtime data outside the checkout, and
+   bring up Admin Web without making you translate this README into shell commands.
+
+When Admin Web opens, continue in the **Configuration Chat** on the right. Ask the Agent to inspect
+what is already configured and guide you through the rest in natural language: Device assessment,
+embedded SQLite or external PostgreSQL, Codex and Claude, Discord Forum, connection routes, Agent
+models, Artifact exposure, service startup, and additional Devices. OpenDelegate shows reviewable
+structured changes in the conversation instead of expecting you to find every settings screen.
+
+![OpenDelegate Admin Web with Device assessment and Configuration Chat](docs/design/admin-configuration-chat-implemented.png)
+
+_Current Admin Web captured from deterministic browser fixtures. Start with **Assess device**, then
+use Configuration Chat for the remaining setup. The banner accurately marks this source build as
+unsupported; the image is not live-platform or release evidence._
+
+SQLite is already the zero-configuration local default, so it does not need a database URI.
+Provider credentials and Discord tokens never belong in chat: when one is genuinely needed,
+Configuration Chat explains why and exposes the dedicated secure intake form. After Main is ready,
+use **Add Device** and give each additional computer's Agent its single-use grant; that Agent will
+discover the Worker join instructions.
+
+## Detailed setup
 
 > [!WARNING]
 > This repository currently builds an **unsupported internal preview**, not a supported OpenDelegate
@@ -21,16 +60,14 @@ phone or laptop may disconnect while a fixed always-on Main coordinates macOS, W
 
 OpenDelegate is installed with an Agent; there is no `npm run start` owner workflow.
 
-1. Give this repository URL to Codex or Claude. If you already have a supported platform bundle,
+1. Give this repository URL to Codex or Claude on the intended Main computer. If you already have a
+   supported platform bundle,
    open its extracted directory instead. The Agent will identify the source or bundle, inspect
    `supportStatus`, and verify `SHA256SUMS`; the current source can produce only the marked
    [internal preview described below](#build-an-internal-preview).
-2. Send: _“Install OpenDelegate from this repository. Discover and follow its Main installation
-   instructions. Initialize this computer as my fixed, always-on Main Device. Guide me through every
-   owner decision, keep runtime state outside the checkout or bundle, and stop if a required safety
-   check fails. Do not ask me to choose a Device, OS, route, or Agent for future Tasks.”_ The Agent
-   will discover the repository contract and `skills/opendelegate-init/SKILL.md`; you do not need to
-   know its internal file layout.
+2. Send the prompt from [Recommended installation](#recommended-installation-ask-your-agent). The
+   Agent discovers the repository contract and `skills/opendelegate-init/SKILL.md`; you do not need
+   to know its internal file layout.
 3. Discord is optional during first initialization. You can add, replace, extend, or disable its
    Forum binding later through the owner-authenticated Configuration Chat; use the
    [Discord Forum setup guide](docs/DISCORD_SETUP.md) for the required App, Forum, tags, and
@@ -201,7 +238,8 @@ claim/login, session-cookie round-trip, and clean shutdown.
 
 The destination name must contain `internal-preview`. Generated `INTERNAL_PREVIEW.md` and
 `release-metadata.json` record that the bundle is unsupported and preserve the exact release
-evidence state. Initialize the assembled bundle only through the Agent-first [Quick Start](#quick-start)
+evidence state. Initialize the assembled bundle only through the Agent-first
+[recommended installation](#recommended-installation-ask-your-agent)
 above so Discord and every other owner choice are resolved before the durable Main configuration is
 created. The internal preview runs in the foreground, does not install a persistent OS service, and
 must not be published under a release tag.

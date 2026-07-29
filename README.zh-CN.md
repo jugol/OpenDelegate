@@ -7,27 +7,58 @@
 会协调 macOS、Windows 和 Linux；发出指令的手机或电脑随后可以断开连接。
 
 > [!TIP]
-> **从这里开始：** [快速开始](#快速开始) · [完整设置指南（英文）](docs/GETTING_STARTED.md) ·
+> **从这里开始：** [交给 Agent 的推荐安装方式](#推荐安装交给你的-agent) ·
+> [详细设置](#详细设置) · [完整设置指南（英文）](docs/GETTING_STARTED.md) ·
 > [Discord Forum 设置](docs/DISCORD_SETUP.md)
 
-## 快速开始
+## 推荐安装：交给你的 Agent
+
+**这是最简短、最推荐的方式。你不需要先学习 OpenDelegate 命令。**
+
+1. 前往你准备作为固定、始终在线 **Main Device** 的电脑。
+2. 在这台电脑上打开 Codex 或 Claude 等可靠的本地 Agent，并把此仓库 URL 交给它。
+3. 发送：
+
+   > 请把这台电脑设置为我固定且始终在线的 OpenDelegate Main Device。自行查找并遵循此仓库中的
+   > Main 安装说明，安全范围内能完成的工作都直接完成。只有在需要我做决定或执行仅限 Owner 的安全
+   > 操作时才提问。切勿让我把凭据、令牌或其他秘密粘贴到聊天中；请引导我使用 Provider
+   > 原生认证或 OpenDelegate 的安全输入界面。请持续进行，直到 Admin Web
+   > 打开并可以在那里完成其余设置。
+
+4. 回答 Agent 的问题。它会自行发现 init skill、区分源代码和 release bundle、验证 support
+   status、把 Runtime 数据保存在 checkout 之外，并在不要求你把 README 改写成 shell 命令的
+   情况下打开 Admin Web。
+
+Admin Web 打开后，请在右侧的 **Configuration Chat** 中继续。让 Agent 先检查已有配置，再用自然
+语言引导你完成 Device 评估、内置 SQLite 或外部 PostgreSQL、Codex 与 Claude、Discord Forum、
+连接 Route、Agent Model、Artifact 公开方式、Service 启动方式以及添加 Device。OpenDelegate
+会在对话中展示可审核的结构化变更，而不是要求你逐个寻找设置页面。
+
+![显示 Device 评估与 Configuration Chat 的 OpenDelegate Admin Web](docs/design/admin-configuration-chat-implemented.png)
+
+_这是使用确定性 Browser Fixture 截取的当前 Admin Web。请先运行**评估设备**，再通过
+Configuration Chat 完成其余设置。顶部 banner 会如实标记此 source build 不受支持；该图片不是
+真实 Platform 或 Release 证据。_
+
+SQLite 是无需 URI 的本地默认选项。不要在聊天中粘贴 Provider 凭据或 Discord Token：只有确实
+需要时，Configuration Chat 才会说明原因并显示专用安全输入表单。Main 准备完成后，使用**添加
+Device**签发一次性 Grant，并交给新增电脑上的 Agent；它会自行发现 Worker 加入说明。
+
+## 详细设置
 
 > [!WARNING]
 > 此仓库构建的是**不受支持的内部预览版**，而不是受支持的 Release。平台、Provider、Discord、网络、权限和打包所需的真实环境证据仍不完整。请勿将其描述为已发布产品，也不要将其用作无人值守的生产控制平面。详情请参阅[当前源代码状态](#当前源代码状态)。
 
 OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run start`。
 
-1. 把此仓库 URL 交给 Codex 或 Claude。如果已有受支持的平台 bundle，也可以打开解压后的目录。
-   Agent 会区分源代码和 bundle、检查 `supportStatus` 并核验 `SHA256SUMS`。当前源代码只能生成标记明确的
-   [内部预览版](#构建内部预览版)。
-2. 首次初始化 Main 时可以暂不配置 Discord。之后可在经过 Owner 身份验证的 Configuration Chat
+1. 在准备作为 Main 的电脑上，把此仓库 URL 交给 Codex 或 Claude。如果已有受支持的平台 bundle，
+   也可以打开解压后的目录。Agent 会区分源代码和 bundle、检查 `supportStatus` 并核验
+   `SHA256SUMS`。当前源代码只能生成标记明确的[内部预览版](#构建内部预览版)。
+2. 发送[交给 Agent 的推荐安装方式](#推荐安装交给你的-agent)中的请求。Agent 会自行找到
+   `AGENTS.md` 和 `skills/opendelegate-init/SKILL.md`，Owner 不需要了解内部文件结构。
+3. 首次初始化 Main 时可以暂不配置 Discord。之后可在经过 Owner 身份验证的 Configuration Chat
    中添加、替换、扩展或禁用 Forum Binding。所需的 App、Forum、Tag 和 Permission 请参阅
    [Discord Forum 设置指南](docs/DISCORD_SETUP.md)。
-3. 发送： _“Install OpenDelegate from this repository. Discover and follow its Main installation
-   instructions. Initialize this computer as my fixed, always-on Main Device. Guide me through every
-   owner decision, keep runtime state outside the checkout or bundle, and stop if a required safety
-   check fails. Do not ask me to choose a Device, OS, route, or Agent for future Tasks.”_ Agent
-   会自行找到 `AGENTS.md` 和 `skills/opendelegate-init/SKILL.md`，Owner 不需要了解内部文件结构。
 4. 按照 Agent 的引导完成 Owner Claim，并妥善保存全部十个一次性恢复代码。
 5. 先在 Admin Web 中运行 **评估设备**，查看 Codex、Claude、浏览器自动化、Computer Use 和
    Knowledge 的确定性结果，再通过右下角的 Configuration Chat 完成 Device、Agent、Route、
@@ -168,7 +199,7 @@ cookie 往返和正常关闭的有限 smoke evidence。
 
 目标名称必须包含 `internal-preview`。生成的 `INTERNAL_PREVIEW.md` 和 `release-metadata.json`
 会记录该 bundle 不受支持，并保留准确的 Release evidence 状态。请仅通过上方 Agent-first
-[快速开始](#快速开始)初始化已组装的 bundle，以便在创建持久 Main 配置之前确定 Discord 和其他所有 Owner 选择。内部预览版以前台方式运行，不会安装持久化的操作系统服务，也不得以 Release
+[推荐安装](#推荐安装交给你的-agent)初始化已组装的 bundle，以便在创建持久 Main 配置之前确定 Discord 和其他所有 Owner 选择。内部预览版以前台方式运行，不会安装持久化的操作系统服务，也不得以 Release
 tag 发布。
 
 只要有任何验收标准尚未完成，生产构建就会按设计失败：

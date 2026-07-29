@@ -23,7 +23,7 @@ function githubHeadingAnchor(heading) {
     .replace(/\s+/gu, "-");
 }
 
-test("README leads owners into one complete agent-first setup journey", async () => {
+test("README leads with one simple Agent-first setup and keeps the detailed journey", async () => {
   const [readme, guide, initSkill, supportMatrix] = await Promise.all([
     readRepositoryFile("README.md"),
     readRepositoryFile("docs/GETTING_STARTED.md"),
@@ -31,7 +31,9 @@ test("README leads owners into one complete agent-first setup journey", async ()
     readRepositoryFile("docs/release/SUPPORT_MATRIX.md"),
   ]);
 
-  const readmeLead = readme.slice(0, readme.indexOf("## Quick Start"));
+  const recommendedHeading = "## Recommended installation: ask your Agent";
+  const detailedHeading = "## Detailed setup";
+  const readmeLead = readme.slice(0, readme.indexOf(recommendedHeading));
   assert.match(
     readmeLead,
     /Tell OpenDelegate the outcome you want in Discord[\s\S]*decides where and how to run it/u,
@@ -39,40 +41,50 @@ test("README leads owners into one complete agent-first setup journey", async ()
   assert.match(readmeLead, /> \[!TIP\]\r?\n> \*\*Start here:/u);
   assert.match(readmeLead, /\[Complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
   assert.match(readmeLead, /\[Discord Forum setup\]\(docs\/DISCORD_SETUP\.md\)/u);
-  assert.equal(readmeLead.includes(`(#${githubHeadingAnchor("## Quick Start")})`), true);
-  assertAppearsBefore(readme, "**Start here:**", "## Quick Start");
-  assertAppearsBefore(readme, "## Quick Start", "## Why OpenDelegate");
+  assert.equal(readmeLead.includes(`(#${githubHeadingAnchor(recommendedHeading)})`), true);
+  assertAppearsBefore(readme, "**Start here:**", recommendedHeading);
+  assertAppearsBefore(readme, recommendedHeading, detailedHeading);
+  assertAppearsBefore(readme, detailedHeading, "## Why OpenDelegate");
   assert.equal(
-    readme.slice(0, readme.indexOf("## Quick Start")).split(/\r?\n/u).length <= 15,
+    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 15,
     true,
-    "Quick Start must be visible within the first 15 README lines",
+    "The recommended installation must be visible within the first 15 README lines",
   );
-  const quickStart = readme.slice(
-    readme.indexOf("## Quick Start"),
+  const setupJourney = readme.slice(
+    readme.indexOf(recommendedHeading),
     readme.indexOf("## Why OpenDelegate"),
   );
-  assert.match(quickStart, /> \[!WARNING\]\r?\n>/u);
-  assertAppearsBefore(quickStart, "> [!WARNING]", "OpenDelegate is installed with an Agent");
+  assert.match(setupJourney, /> \[!WARNING\]\r?\n>/u);
+  assertAppearsBefore(setupJourney, "This is the shortest and recommended path", "> [!WARNING]");
+  assertAppearsBefore(setupJourney, "> [!WARNING]", "OpenDelegate is installed with an Agent");
   assert.equal(readme.includes("## Current source state"), true);
-  assert.equal(quickStart.includes(`(#${githubHeadingAnchor("## Current source state")})`), true);
-  assert.match(quickStart, /\[complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
-  assert.match(quickStart, /\(docs\/DISCORD_SETUP\.md\)/u);
-  assert.match(quickStart, /skills\/opendelegate-init\/SKILL\.md/u);
-  assert.match(quickStart, /skills\/opendelegate-join\/SKILL\.md/u);
-  assert.match(quickStart, /Guide me through every\s+owner decision/u);
-  assert.match(quickStart, /Give this repository URL to Codex or Claude/u);
-  assert.match(quickStart, /Do not ask me to choose a Device, OS, route, or Agent/u);
-  const ownerPrompt = quickStart.match(/2\. Send: _“([\s\S]*?)”_/u)?.[1];
-  assert.notEqual(ownerPrompt, undefined, "Quick Start must include one copyable owner prompt");
+  assert.equal(setupJourney.includes(`(#${githubHeadingAnchor("## Current source state")})`), true);
+  assert.match(setupJourney, /\[complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
+  assert.match(setupJourney, /\(docs\/DISCORD_SETUP\.md\)/u);
+  assert.match(setupJourney, /skills\/opendelegate-init\/SKILL\.md/u);
+  assert.match(setupJourney, /skills\/opendelegate-join\/SKILL\.md/u);
+  assert.match(setupJourney, /Give this repository URL to Codex or Claude/u);
+  const ownerPrompt = setupJourney.match(/> Set up OpenDelegate[\s\S]*?> finish there\./u)?.[0];
+  assert.notEqual(
+    ownerPrompt,
+    undefined,
+    "Recommended installation must include one copyable prompt",
+  );
   assert.doesNotMatch(ownerPrompt, /AGENTS\.md|SKILL\.md/u);
-  assert.match(ownerPrompt, /Discover and follow its Main installation\s+instructions/u);
-  assert.match(quickStart, /SHA256SUMS/u);
-  assert.match(quickStart, /Admin Web/u);
-  assert.match(quickStart, /Discord Forum post/u);
-  assert.match(quickStart, /Tasks → New task/u);
-  assert.match(quickStart, /Task/u);
-  assert.match(quickStart, /Discord is optional during first initialization/u);
-  assertAppearsBefore(quickStart, "skills/opendelegate-join/SKILL.md", "Discord Forum post");
+  assert.match(ownerPrompt, /repository's own Main installation instructions/u);
+  assert.match(ownerPrompt, /Never ask me to paste credentials,\s*> tokens, or other secrets/u);
+  assert.doesNotMatch(ownerPrompt, /when you need a choice or credential/u);
+  assert.match(setupJourney, /docs\/design\/admin-configuration-chat-implemented\.png/u);
+  assert.match(setupJourney, /SQLite is already the zero-configuration local default/u);
+  assert.match(setupJourney, /Provider credentials and Discord tokens never belong in chat/u);
+  assertAppearsBefore(setupJourney, "Configuration Chat", detailedHeading);
+  assert.match(setupJourney, /SHA256SUMS/u);
+  assert.match(setupJourney, /Admin Web/u);
+  assert.match(setupJourney, /Discord Forum post/u);
+  assert.match(setupJourney, /Tasks → New task/u);
+  assert.match(setupJourney, /Task/u);
+  assert.match(setupJourney, /Discord is optional during first initialization/u);
+  assertAppearsBefore(setupJourney, "skills/opendelegate-join/SKILL.md", "Discord Forum post");
   assert.equal(readme.includes(".\\opendelegate.cmd init --open"), false);
   assert.equal(readme.includes("./opendelegate init --open"), false);
 
@@ -199,11 +211,12 @@ test("README leads owners into one complete agent-first setup journey", async ()
   assert.match(supportMatrix, /persists only the provider selection/u);
 });
 
-test("every localized README exposes the same launcher-free Quick Start", async () => {
+test("every localized README exposes the same simple Agent-first installation", async () => {
   const locales = [
     {
       filename: "README.ko.md",
-      heading: "## 빠른 시작",
+      heading: "## 권장 설치: Agent에게 맡기세요",
+      detailedHeading: "## 상세 설정",
       nextHeading: "## OpenDelegate를 만드는 이유",
       startHere: "**여기서 시작하세요:**",
       ownerIntroduction: "OpenDelegate는 Agent와 함께 설치합니다.",
@@ -211,10 +224,13 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       deferredDiscordPattern: /추가·교체·확장·비활성화/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*새 작업/u,
       promisePattern: /Discord에서 원하는 결과만 말하세요.*실행 위치와 방법은 OpenDelegate가 결정/u,
+      securePromptPattern: /비밀값을 채팅에 붙여 넣으라고 하지\s*> 말고/u,
+      unsafePromptPattern: /인증 정보를 제공해야 할 때만 질문/u,
     },
     {
       filename: "README.ja.md",
-      heading: "## クイックスタート",
+      heading: "## 推奨インストール：Agent に任せる",
+      detailedHeading: "## 詳細セットアップ",
       nextHeading: "## OpenDelegate が必要な理由",
       startHere: "**ここから始めてください:**",
       ownerIntroduction: "OpenDelegate は Agent とともにインストールします。",
@@ -223,10 +239,13 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*新しいタスク/u,
       promisePattern:
         /Discord で望む成果を伝えてください.*実行場所と方法は OpenDelegate が決めます/u,
+      securePromptPattern: /チャットに貼り付けるよう求めず/u,
+      unsafePromptPattern: /私の判断や認証情報が必要なときだけ質問/u,
     },
     {
       filename: "README.fr.md",
-      heading: "## Démarrage rapide",
+      heading: "## Installation recommandée : confiez-la à votre Agent",
+      detailedHeading: "## Configuration détaillée",
       nextHeading: "## Pourquoi OpenDelegate",
       startHere: "**Commencez ici :**",
       ownerIntroduction: "OpenDelegate s’installe avec un Agent",
@@ -235,10 +254,13 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*Nouvelle\s+tâche/u,
       promisePattern:
         /Décrivez le résultat voulu dans Discord.*OpenDelegate décide où et comment l’exécuter/u,
+      securePromptPattern: /secrets dans le chat/u,
+      unsafePromptPattern: /un choix ou un identifiant est nécessaire/u,
     },
     {
       filename: "README.es.md",
-      heading: "## Inicio rápido",
+      heading: "## Instalación recomendada: pídeselo a tu Agent",
+      detailedHeading: "## Configuración detallada",
       nextHeading: "## Por qué OpenDelegate",
       startHere: "**Empieza aquí:**",
       ownerIntroduction: "OpenDelegate se instala con un Agent",
@@ -247,10 +269,13 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*Nueva\s+tarea/u,
       promisePattern:
         /Dile a OpenDelegate qué resultado quieres en Discord.*decide dónde y cómo ejecutarlo/u,
+      securePromptPattern: /secretos en el\s*> chat/u,
+      unsafePromptPattern: /decisión o credencial/u,
     },
     {
       filename: "README.zh-CN.md",
-      heading: "## 快速开始",
+      heading: "## 推荐安装：交给你的 Agent",
+      detailedHeading: "## 详细设置",
       nextHeading: "## 为什么选择 OpenDelegate",
       startHere: "**从这里开始：**",
       ownerIntroduction: "OpenDelegate 由 Agent 协助安装",
@@ -258,6 +283,8 @@ test("every localized README exposes the same launcher-free Quick Start", async 
       deferredDiscordPattern: /添加、替换、扩展或禁用/u,
       adminTaskPattern: /Admin\s+Web\s*→\s*Tasks\s*→\s*新建任务/u,
       promisePattern: /只需在 Discord 中告诉 OpenDelegate 你想要的结果.*执行位置和方式由它决定/u,
+      securePromptPattern: /秘密粘贴到聊天中/u,
+      unsafePromptPattern: /做决定或提供凭据时才提问/u,
     },
   ];
 
@@ -271,19 +298,25 @@ test("every localized README exposes the same launcher-free Quick Start", async 
     assert.equal(
       readmeLead.includes(`(#${githubHeadingAnchor(locale.heading)})`),
       true,
-      `${locale.filename} start panel must link to its Quick Start heading`,
+      `${locale.filename} start panel must link to its recommended installation heading`,
     );
     assertAppearsBefore(content, locale.startHere, locale.heading);
+    assertAppearsBefore(content, locale.heading, locale.detailedHeading);
+    assertAppearsBefore(content, locale.detailedHeading, locale.nextHeading);
     assertAppearsBefore(content, locale.heading, locale.nextHeading);
     assert.equal(
       content.slice(0, content.indexOf(locale.heading)).split(/\r?\n/u).length <= 15,
       true,
-      `${locale.filename} Quick Start must be visible within the first 15 lines`,
+      `${locale.filename} recommended installation must be visible within the first 15 lines`,
     );
     const quickStart = content.slice(
       content.indexOf(locale.heading),
       content.indexOf(locale.nextHeading),
     );
+    const copyablePrompt = quickStart.match(/3\.[\s\S]*?\r?\n\r?\n4\./u)?.[0];
+    assert.notEqual(copyablePrompt, undefined, `${locale.filename} must include a copyable prompt`);
+    assert.match(copyablePrompt, locale.securePromptPattern);
+    assert.doesNotMatch(copyablePrompt, locale.unsafePromptPattern);
 
     assert.match(quickStart, /> \[!WARNING\]\r?\n>/u);
     assertAppearsBefore(quickStart, "> [!WARNING]", locale.ownerIntroduction);
@@ -297,6 +330,8 @@ test("every localized README exposes the same launcher-free Quick Start", async 
     assert.match(quickStart, /\(docs\/DISCORD_SETUP\.md\)/u);
     assert.match(quickStart, /skills\/opendelegate-init\/SKILL\.md/u);
     assert.match(quickStart, /skills\/opendelegate-join\/SKILL\.md/u);
+    assert.match(quickStart, /docs\/design\/admin-configuration-chat-implemented\.png/u);
+    assert.match(quickStart, /Configuration Chat/u);
     assert.match(quickStart, /Discord Forum/u);
     assert.match(quickStart, /Task/u);
     assert.match(quickStart, locale.deferredDiscordPattern);

@@ -74,8 +74,9 @@ Knowledge, and generated Artifacts outside it. The init Agent verifies the bundl
 
 The current source checkout has no supported download. From a clean checkout, use **Build an
 internal preview** in the [repository README](../README.md). If this guide is already inside an
-assembled bundle, return to that README and continue the Quick Start for the exact `supportStatus`
-instead of building again. Do not publish an internal-preview directory under a release tag.
+assembled bundle, return to that README and continue its recommended Agent-first installation for
+the exact `supportStatus` instead of building again. Do not publish an internal-preview directory
+under a release tag.
 
 ## 2. Initialize the fixed Main Device
 

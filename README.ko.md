@@ -7,10 +7,46 @@
 노트북이 꺼져도 고정된 상시 가동 Main이 macOS, Windows, Linux 작업을 조율합니다.
 
 > [!TIP]
-> **여기서 시작하세요:** [빠른 시작](#빠른-시작) ·
+> **여기서 시작하세요:** [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요) ·
+> [상세 설정](#상세-설정) ·
 > [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
 
-## 빠른 시작
+## 권장 설치: Agent에게 맡기세요
+
+**가장 짧고 권장되는 방법입니다. OpenDelegate 명령어부터 배울 필요가 없습니다.**
+
+1. 고정된 상시 가동 **Main Device**로 사용할 컴퓨터로 갑니다.
+2. 그 컴퓨터에서 Codex나 Claude 같은 유능한 로컬 Agent를 열고 이 저장소 URL을 줍니다.
+3. 다음과 같이 말합니다.
+
+   > 이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 저장소의
+   > Main 설치 지침을 직접 찾아 따르고, 안전하게 할 수 있는 일은 모두 처리해 줘. 내 결정이나 Owner
+   > 전용 보안 작업이 필요할 때만 질문해 줘. 인증 정보, Token 등 비밀값을 채팅에 붙여 넣으라고 하지
+   > 말고 Provider의 기본 인증 절차나 OpenDelegate 보안 입력 화면으로 안내해 줘. Admin Web이 열려서
+   > 나머지 설정을 마칠 수 있을 때까지 계속 진행해 줘.
+
+4. Agent가 묻는 내용에 답합니다. Agent는 저장소의 init skill을 스스로 찾고, 소스와 Release
+   Bundle을 구분하고, 지원 상태를 확인하고, Runtime 데이터를 Checkout 밖에 보관하며, 사용자가 이
+   README를 Shell 명령으로 옮겨 적지 않아도 Admin Web을 실행합니다.
+
+Admin Web이 열리면 우측 **Configuration Chat**에서 계속 설정하세요. 이미 설정된 내용을 먼저
+확인해 달라고 한 뒤, Device 평가, 내장 SQLite 또는 외부 PostgreSQL, Codex와 Claude, Discord
+Forum, 연결 Route, Agent Model, Artifact 공개 방식, Service 시작 방식, 추가 Device까지 자연어로
+안내해 달라고 하면 됩니다. OpenDelegate는 사용자가 모든 설정 화면을 직접 찾아다니게 하지 않고,
+대화 안에서 검토 가능한 구조화된 변경안을 보여 줍니다.
+
+![Device 평가와 Configuration Chat이 열린 OpenDelegate Admin Web](docs/design/admin-configuration-chat-implemented.png)
+
+_결정론적 Browser Fixture에서 캡처한 현재 Admin Web입니다. 먼저 **장치 평가**를 실행한 뒤 나머지
+설정은 Configuration Chat에서 진행하세요. 상단 배너는 이 Source Build가 지원되지 않는다는 사실을
+정확히 표시하며, 이 이미지는 실제 Platform 또는 Release 증거가 아닙니다._
+
+SQLite는 별도 URI가 필요 없는 기본 로컬 Database입니다. Provider 인증 정보나 Discord Token은
+채팅에 입력하지 마세요. 실제로 필요할 때 Configuration Chat이 이유를 설명하고 전용 보안 입력
+Form을 띄웁니다. Main 설정이 끝나면 **Device 추가**에서 일회용 Grant를 발급하고, 추가 컴퓨터의
+Agent에게 전달하세요. 그 Agent가 Worker Join 지침을 스스로 찾아 진행합니다.
+
+## 상세 설정
 
 > [!WARNING]
 > 이 저장소는 지원되는 릴리스가 아니라 **지원되지 않는 내부 프리뷰**를 빌드합니다. 실제
@@ -20,18 +56,16 @@
 
 OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run start`는 없습니다.
 
-1. 이 저장소 URL을 Codex 또는 Claude에게 주십시오. 이미 지원되는 플랫폼 bundle이 있다면 압축을 푼
-   디렉터리를 대신 여십시오. Agent가 소스와 bundle을 구분하고 `supportStatus`와 `SHA256SUMS`를
-   확인합니다. 현재 소스는 표시된 [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
-2. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
+1. Main으로 사용할 컴퓨터에서 이 저장소 URL을 Codex 또는 Claude에게 주십시오. 이미 지원되는 플랫폼
+   bundle이 있다면 압축을 푼 디렉터리를 대신 여십시오. Agent가 소스와 bundle을 구분하고
+   `supportStatus`와 `SHA256SUMS`를 확인합니다. 현재 소스는 표시된
+   [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
+2. [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요)의 문장을 보냅니다. Agent가
+   `AGENTS.md`와 `skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가 내부 파일 구조를
+   알 필요가 없습니다.
+3. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
    Forum Binding을 추가·교체·확장·비활성화할 수 있습니다. 필요한 App, Forum, Tag, Permission은
    [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따르세요.
-3. 다음 문장을 보냅니다: _“Install OpenDelegate from this repository. Discover and follow its Main
-   installation instructions. Initialize this computer as my fixed, always-on Main Device. Guide me
-   through every owner decision, keep runtime state outside the checkout or bundle, and stop if a
-   required safety check fails. Do not ask me to choose a Device, OS, route, or Agent for future
-   Tasks.”_ Agent가 `AGENTS.md`와 `skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가
-   내부 파일 구조를 알 필요가 없습니다.
 4. Agent의 안내에 따라 Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
 5. Admin Web에서 **장치 평가**를 먼저 실행하고 Codex, Claude, 브라우저 자동화, Computer Use,
    Knowledge의 결정론적 결과를 확인한 뒤 우측 하단 Configuration Chat에서 Device, Agent, Route,
@@ -189,7 +223,7 @@ Claim/Login, Session-cookie Round-trip 및 정상 종료에 대한 제한된 Smo
 Destination 이름에는 `internal-preview`가 포함되어야 합니다. 생성된 `INTERNAL_PREVIEW.md`와
 `release-metadata.json`에는 Bundle이 지원되지 않는다는 사실과 정확한 Release Evidence 상태가
 기록됩니다. Discord와 기타 Owner 선택이 지속성 있는 Main 설정 생성 전에 모두 확정되도록, 조립된
-Bundle은 위의 Agent-first [빠른 시작](#빠른-시작)을 통해서만 초기화하십시오. 내부 프리뷰는
+Bundle은 위의 Agent-first [권장 설치](#권장-설치-agent에게-맡기세요)를 통해서만 초기화하십시오. 내부 프리뷰는
 Foreground에서 실행되고 지속성 있는 OS 서비스를 설치하지 않으며 Release Tag로 게시해서는 안 됩니다.
 
 인수 기준이 하나라도 미완료이면 프로덕션 빌드는 의도적으로 실패합니다.

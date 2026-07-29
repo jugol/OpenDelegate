@@ -7,11 +7,52 @@ Idiomas: [English](README.md) · [한국어](README.ko.md) · [日本語](README
 fijo y siempre activo coordina macOS, Windows y Linux; tu teléfono u ordenador puede desconectarse.
 
 > [!TIP]
-> **Empieza aquí:** [Inicio rápido](#inicio-rápido) ·
+> **Empieza aquí:** [Instalación recomendada con tu Agent](#instalación-recomendada-pídeselo-a-tu-agent) ·
+> [Configuración detallada](#configuración-detallada) ·
 > [Guía de configuración completa (inglés)](docs/GETTING_STARTED.md) ·
 > [Configuración de Discord Forum](docs/DISCORD_SETUP.md)
 
-## Inicio rápido
+## Instalación recomendada: pídeselo a tu Agent
+
+**Esta es la ruta más corta y recomendada. No necesitas aprender primero los comandos de
+OpenDelegate.**
+
+1. Ve al ordenador que quieras usar como **Main Device** fijo y siempre encendido.
+2. Abre en él un Agent local capaz, como Codex o Claude, y entrégale la URL de este repositorio.
+3. Envíale esto:
+
+   > Configura OpenDelegate en este ordenador como mi Main Device fijo y siempre encendido. Busca y
+   > sigue las instrucciones de instalación Main de este repositorio y realiza todo lo que puedas
+   > hacer de forma segura. Pregúntame solo cuando haga falta una decisión o una acción segura
+   > reservada al Owner. No me pidas nunca que pegue credenciales, tokens u otros secretos en el
+   > chat; guíame a la autenticación nativa del Provider o a la entrada segura de OpenDelegate.
+   > Continúa hasta que se abra Admin Web y podamos terminar allí el resto de la configuración.
+
+4. Responde a las preguntas del Agent. Descubrirá por sí mismo el skill de inicialización,
+   distinguirá el código fuente de un release bundle, verificará el support status, mantendrá los
+   datos Runtime fuera del checkout y abrirá Admin Web sin obligarte a convertir este README en
+   comandos shell.
+
+Cuando se abra Admin Web, continúa en **Configuration Chat**, a la derecha. Pide al Agent que
+inspeccione lo que ya está configurado y que te guíe en lenguaje natural por la evaluación del
+Device, SQLite integrado o PostgreSQL externo, Codex y Claude, Discord Forum, Routes de conexión,
+modelos Agent, exposición de Artifacts, inicio del Service y Devices adicionales. OpenDelegate
+muestra cambios estructurados y revisables dentro de la conversación en vez de obligarte a buscar
+cada pantalla de ajustes.
+
+![Admin Web de OpenDelegate con evaluación del Device y Configuration Chat](docs/design/admin-configuration-chat-implemented.png)
+
+_Admin Web actual capturado con Browser Fixtures deterministas. Empieza por **Evaluar dispositivo**
+y completa el resto en Configuration Chat. El banner indica correctamente que este source build no
+tiene soporte; la imagen no es una prueba de Platform ni de Release real._
+
+SQLite es la opción local predeterminada y no necesita URI. No pegues credenciales del Provider ni
+el Token de Discord en el chat: cuando sean realmente necesarios, Configuration Chat explicará el
+motivo y mostrará el formulario seguro correspondiente. Cuando Main esté listo, usa **Añadir
+Device**, crea un Grant de un solo uso y entrégaselo al Agent del ordenador adicional; este
+descubrirá por sí mismo las instrucciones para unirse como Worker.
+
+## Configuración detallada
 
 > [!WARNING]
 > Este repositorio genera una **vista previa interna sin soporte**, no una release con
@@ -22,20 +63,19 @@ fijo y siempre activo coordina macOS, Windows y Linux; tu teléfono u ordenador 
 OpenDelegate se instala con un Agent; el recorrido de instalación del Owner no utiliza
 `npm run start`.
 
-1. Entrega la URL de este repositorio a Codex o Claude. Si ya tienes un bundle compatible con la
-   plataforma, abre en su lugar el directorio extraído. El Agent distingue el código fuente del
-   bundle, consulta `supportStatus` y verifica `SHA256SUMS`. El código actual solo produce la
-   [vista previa interna](#compilar-una-vista-previa-interna) indicada.
-2. Puedes omitir Discord durante la primera inicialización del Main. Después podrás añadir,
+1. En el ordenador destinado a Main, entrega la URL de este repositorio a Codex o Claude. Si ya
+   tienes un bundle compatible con la plataforma, abre en su lugar el directorio extraído. El Agent
+   distingue el código fuente del bundle, consulta `supportStatus` y verifica `SHA256SUMS`. El
+   código actual solo produce la [vista previa interna](#compilar-una-vista-previa-interna)
+   indicada.
+2. Envía la solicitud de la
+   [instalación recomendada](#instalación-recomendada-pídeselo-a-tu-agent). El Agent descubre por sí
+   mismo `AGENTS.md` y `skills/opendelegate-init/SKILL.md`; el Owner no necesita conocer la
+   estructura interna.
+3. Puedes omitir Discord durante la primera inicialización del Main. Después podrás añadir,
    sustituir, ampliar o desactivar el Binding de Forum desde Configuration Chat con autenticación
    del Owner. Sigue la [guía de configuración de Discord Forum](docs/DISCORD_SETUP.md) para la App,
    el Forum, los Tags y los Permissions necesarios.
-3. Envía: _“Install OpenDelegate from this repository. Discover and follow its Main installation
-   instructions. Initialize this computer as my fixed, always-on Main Device. Guide me through every
-   owner decision, keep runtime state outside the checkout or bundle, and stop if a required safety
-   check fails. Do not ask me to choose a Device, OS, route, or Agent for future Tasks.”_ El Agent
-   descubre por sí mismo `AGENTS.md` y `skills/opendelegate-init/SKILL.md`; el Owner no necesita
-   conocer la estructura interna.
 4. Sigue al Agent para reclamar el acceso del Owner y guarda de forma segura los diez códigos de
    recuperación de un solo uso.
 5. En Admin Web, ejecuta primero **Evaluar dispositivo** y revisa el resultado determinista de
@@ -210,7 +250,7 @@ limpio.
 El nombre del destino debe contener `internal-preview`. Los archivos generados `INTERNAL_PREVIEW.md`
 y `release-metadata.json` indican que el bundle no tiene soporte y conservan el estado exacto de la
 evidencia de release. Inicializa el bundle ensamblado únicamente mediante el
-[Inicio rápido](#inicio-rápido) Agent-first anterior, para que Discord y todas las decisiones del
+[instalación recomendada](#instalación-recomendada-pídeselo-a-tu-agent) Agent-first anterior, para que Discord y todas las decisiones del
 Owner queden resueltos antes de crear la configuración duradera del Main. La vista previa interna se
 ejecuta en primer plano, no instala un servicio persistente del SO y no debe publicarse bajo un tag
 de release.

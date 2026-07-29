@@ -1703,7 +1703,7 @@ test("isolated bundle assembly preserves live dependency state on success and fa
   await assert.rejects(readFile(failedSnapshot, "utf8"), { code: "ENOENT" });
 });
 
-test("bundle guidance is launcher-first and never presents source-checkout commands", () => {
+test("bundle guidance is Agent-first and never presents source-checkout commands", () => {
   const readme = renderBundleReadme(
     "internal-preview-blocked",
     {
@@ -1719,7 +1719,10 @@ test("bundle guidance is launcher-first and never presents source-checkout comma
   assert.match(readme, /win32\/arm64/u);
   assert.match(readme, /\.\\opendelegate\.cmd help/u);
   assert.doesNotMatch(readme, /\.\\opendelegate\.cmd init(?:\s|$)/u);
-  assert.match(readme, /skills\/opendelegate-init\/SKILL\.md/u);
+  assert.match(readme, /Set up OpenDelegate on this computer as my fixed, always-on Main Device/u);
+  assert.match(readme, /Never ask me to paste credentials, tokens, or other secrets into chat/u);
+  assert.doesNotMatch(readme, /ask me only when you need a choice or credential/u);
+  assert.doesNotMatch(readme, /Read `skills\/opendelegate-init\/SKILL\.md`/u);
   assert.match(readme, /Discord may be deferred/u);
   assert.match(readme, /add or replace the approved binding/u);
   assert.match(readme, /Implementation: partial=36/u);
@@ -1746,6 +1749,8 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "Live proof",
       locale: "en",
       supportStatusLabel: "Support status",
+      initPrompt:
+        /Set up OpenDelegate.*Never ask me to paste credentials, tokens, or other secrets into chat/u,
       adminTask: /Admin Web → Tasks → New task/u,
       previewRestriction:
         /Discord may be deferred.*secure credential panel.*add or replace the approved binding/u,
@@ -1766,6 +1771,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "실제 증거",
       locale: "ko",
       supportStatusLabel: "지원 상태",
+      initPrompt: /이 컴퓨터가.*비밀값을 채팅에 붙여 넣으라고 하지 말고/u,
       adminTask: /Admin Web → Tasks → 새 작업/u,
       previewRestriction:
         /Discord 설정은 나중으로 미뤄도 됩니다.*승인된 Binding을 추가하거나 교체하세요/u,
@@ -1784,6 +1790,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "実環境の証拠",
       locale: "ja",
       supportStatusLabel: "サポート状況",
+      initPrompt: /このコンピューターを.*チャットに貼り付けるよう求めず/u,
       adminTask: /Admin Web → Tasks → 新しいタスク/u,
       previewRestriction:
         /Discord 設定は後回しにできます.*承認済み Binding を追加または置換します/u,
@@ -1804,6 +1811,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "Preuves réelles",
       locale: "fr",
       supportStatusLabel: "Statut de prise en charge",
+      initPrompt: /Configure OpenDelegate.*secrets dans le chat/u,
       adminTask: /Admin Web → Tasks → Nouvelle tâche/u,
       previewRestriction:
         /Discord peut être configuré plus tard.*ajoutez ou remplacez le Binding approuvé/u,
@@ -1824,6 +1832,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "Evidencia real",
       locale: "es",
       supportStatusLabel: "Estado de soporte",
+      initPrompt: /Configura OpenDelegate.*secretos en el chat/u,
       adminTask: /Admin Web → Tasks → Nueva tarea/u,
       previewRestriction:
         /Puedes configurar Discord más adelante.*añade o sustituye el Binding aprobado/u,
@@ -1844,6 +1853,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
       liveProofLabel: "真实证据",
       locale: "zh-CN",
       supportStatusLabel: "支持状态",
+      initPrompt: /请把这台电脑设置为.*秘密粘贴到聊天中/u,
       adminTask: /Admin Web → Tasks → 新建任务/u,
       previewRestriction: /Discord 可以稍后配置.*添加或替换获批的 Binding/u,
       unsupported: /此捆绑包不受支持，且不得在 Release tag 下发布/u,
@@ -1886,7 +1896,9 @@ test("assembled bundle documentation includes complete localized launcher guidan
     );
     assert.match(content, /\.\\opendelegate\.cmd help/u);
     assert.doesNotMatch(content, /\.\\opendelegate\.cmd init(?:\s|$)/u);
-    assert.match(content, /skills\/opendelegate-init\/SKILL\.md/u);
+    assert.match(content, readme.initPrompt);
+    assert.doesNotMatch(content, /ask me only when you need a choice or credential/u);
+    assert.doesNotMatch(content, /Read `skills\/opendelegate-init\/SKILL\.md`/u);
     assert.match(content, /skills\/opendelegate-join\/SKILL\.md/u);
     assert.match(content, /docs\/GETTING_STARTED\.md/u);
     assert.match(content, /docs\/DISCORD_SETUP\.md/u);
@@ -1904,6 +1916,10 @@ test("assembled bundle documentation includes complete localized launcher guidan
       true,
     );
     if (readme.locale !== "en") {
+      assert.doesNotMatch(
+        content,
+        /Set up OpenDelegate on this computer as my fixed, always-on Main Device/u,
+      );
       assert.doesNotMatch(content, /^Support status:/mu);
       assert.doesNotMatch(content, /^- Implementation:/mu);
       assert.doesNotMatch(content, /^- Live proof:/mu);
@@ -1941,7 +1957,7 @@ test("assembled bundle documentation includes complete localized launcher guidan
     assert.match(candidate, /\.\/opendelegate device grant/u);
     assert.match(candidate, readme.adminTask);
     assert.doesNotMatch(candidate, /INTERNAL_PREVIEW\.md/u);
-    const agentOffset = candidate.indexOf("Read `skills/opendelegate-init/SKILL.md`");
+    const agentOffset = readme.initPrompt.exec(candidate)?.index ?? -1;
     const claimOffset = readme.claimStep.exec(candidate)?.index ?? -1;
     const discordOffset = readme.candidateDiscordPath.exec(candidate)?.index ?? -1;
     assert.notEqual(agentOffset, -1);

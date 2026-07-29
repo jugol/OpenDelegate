@@ -7,11 +7,49 @@
 Main が macOS、Windows、Linux を連携し、指示に使った端末は切断できます。
 
 > [!TIP]
-> **ここから始めてください:** [クイックスタート](#クイックスタート) ·
+> **ここから始めてください:** [Agent に任せる推奨インストール](#推奨インストールagent-に任せる) ·
+> [詳細セットアップ](#詳細セットアップ) ·
 > [完全セットアップガイド（英語）](docs/GETTING_STARTED.md) ·
 > [Discord Forum セットアップ](docs/DISCORD_SETUP.md)
 
-## クイックスタート
+## 推奨インストール：Agent に任せる
+
+**これが最短の推奨手順です。最初に OpenDelegate のコマンドを覚える必要はありません。**
+
+1. 固定された常時稼働の **Main Device** として使うコンピューターへ移動します。
+2. そのコンピューターで Codex や Claude などの有能なローカル Agent を開き、このリポジトリの
+   URL を渡します。
+3. 次のように依頼します。
+
+   > このコンピューターを、固定された常時稼働の OpenDelegate Main Device としてセットアップして
+   > ください。このリポジトリ内の Main インストール手順を自分で見つけて従い、安全に実行できる
+   > 作業はすべて進めてください。私の判断または Owner 専用の安全な操作が必要なときだけ質問して
+   > ください。認証情報、Token、その他の Secret をチャットに貼り付けるよう求めず、Provider
+   > 本来の認証手順または OpenDelegate の安全な入力画面へ案内してください。Admin Web が開いて
+   > 残りの設定を完了できる状態になるまで続けてください。
+
+4. Agent の質問に答えます。Agent は init skill を自分で見つけ、source と release bundle を
+   区別し、support status を検証し、Runtime データを checkout の外に保持して、README を
+   shell コマンドへ書き換える作業なしで Admin Web を起動します。
+
+Admin Web が開いたら、右側の **Configuration Chat** で続けます。現在の設定を確認してから、
+Device Assessment、内蔵 SQLite または外部 PostgreSQL、Codex と Claude、Discord Forum、
+接続 Route、Agent Model、Artifact の公開方法、Service の起動、追加 Device を自然言語で案内する
+よう依頼してください。OpenDelegate は設定画面を一つずつ探させるのではなく、会話の中にレビュー
+可能な構造化変更を表示します。
+
+![Device Assessment と Configuration Chat を表示した OpenDelegate Admin Web](docs/design/admin-configuration-chat-implemented.png)
+
+_決定論的な Browser Fixture から取得した現在の Admin Web です。まず **デバイスを評価** を実行し、
+残りの設定は Configuration Chat で進めてください。上部の banner はこの source build が
+未サポートであることを正確に示しており、この画像は実 Platform や Release の証拠ではありません。_
+
+SQLite は URI 不要のローカル既定値です。Provider の認証情報や Discord Token をチャットへ
+貼り付けないでください。実際に必要な場合だけ、Configuration Chat が理由を説明して専用の安全な
+入力フォームを表示します。Main の準備後は **Device を追加** で one-time Grant を発行し、追加
+コンピューターの Agent に渡してください。その Agent が Worker join 手順を自分で見つけます。
+
+## 詳細セットアップ
 
 > [!WARNING]
 > このリポジトリがビルドするのは、**サポート対象外の内部プレビュー**です。実環境の Platform、Provider、Discord、Network、Permission、Packaging の証拠は未完成です。リリース済みと表示したり、無人の本番 Control
@@ -20,16 +58,16 @@ Main が macOS、Windows、Linux を連携し、指示に使った端末は切�
 OpenDelegate は Agent とともにインストールします。Owner 向けの導入手順に `npm run start`
 はありません。
 
-1. このリポジトリ URL を Codex または Claude に渡してください。対応済みの platform bundle がある場合は、
-   展開したディレクトリを代わりに開きます。Agent が source と bundle を判定し、`supportStatus` と
-   `SHA256SUMS` を確認します。現在の source が生成できるのは表示済みの[内部プレビュー](#内部プレビューのビルド)だけです。
-2. 最初の Main 初期化では Discord を省略できます。後から Owner 認証済みの Configuration Chat で Forum Binding を追加、置換、拡張、無効化できます。必要な App、Forum、Tag、Permission は [Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従ってください。
-3. 次の文を送信します: _“Install OpenDelegate from this repository. Discover and follow its Main
-   installation instructions. Initialize this computer as my fixed, always-on Main Device. Guide me
-   through every owner decision, keep runtime state outside the checkout or bundle, and stop if a
-   required safety check fails. Do not ask me to choose a Device, OS, route, or Agent for future
-   Tasks.”_ Agent が `AGENTS.md` と `skills/opendelegate-init/SKILL.md` を自分で見つけるため、Owner が
+1. Main にするコンピューターで、このリポジトリ URL を Codex または Claude に渡してください。
+   対応済みの platform bundle がある場合は、展開したディレクトリを代わりに開きます。Agent が
+   source と bundle を判定し、`supportStatus` と `SHA256SUMS` を確認します。現在の source が
+   生成できるのは表示済みの[内部プレビュー](#内部プレビューのビルド)だけです。
+2. [Agent に任せる推奨インストール](#推奨インストールagent-に任せる)の依頼文を送信します。
+   Agent が `AGENTS.md` と `skills/opendelegate-init/SKILL.md` を自分で見つけるため、Owner が
    内部のファイル構成を知る必要はありません。
+3. 最初の Main 初期化では Discord を省略できます。後から Owner 認証済みの Configuration Chat
+   で Forum Binding を追加、置換、拡張、無効化できます。必要な App、Forum、Tag、Permission は
+   [Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従ってください。
 4. Agent の案内に従って Owner Claim を完了し、10 個の one-time Recovery
    Code をすべて安全に保存します。
 5. Admin Web で先に **デバイスを評価** を実行し、Codex、Claude、ブラウザー自動化、Computer Use、
@@ -189,7 +227,8 @@ Round-trip、Clean Shutdown の限定的な Smoke Evidence が含まれます。
 Destination 名には `internal-preview` を含める必要があります。生成される `INTERNAL_PREVIEW.md` と
 `release-metadata.json` は、Bundle がサポート対象外であることと、正確な Release Evidence
 State を記録します。Discord とその他の Owner の選択を永続的な Main 設定の作成前に確定できるよう、組み立て済み Bundle は上記の Agent-first
-[クイックスタート](#クイックスタート)からのみ初期化してください。内部プレビューは Foreground で動作し、永続的な OS
+[推奨インストール](#推奨インストールagent-に任せる)からのみ初期化してください。内部プレビューは Foreground
+で動作し、永続的な OS
 Service をインストールせず、Release Tag として公開してはいけません。
 
 Acceptance Criterion が 1 つでも未完了の場合、Production Build は意図的に失敗します。
