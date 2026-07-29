@@ -432,6 +432,11 @@ export class MainRuntimeError extends Error {
 export interface InitializeMainHomeOptions {
   readonly home?: string;
   readonly adminRoot: string;
+  /**
+   * Uses the current verified bundle's Admin assets without rewriting the
+   * restore-oriented durable path stored in Main configuration.
+   */
+  readonly activeAdminRoot?: string;
   readonly expectedAdminRoot?: string;
   readonly sourceCheckout: string;
   readonly database?: MainDatabaseConfiguration;
@@ -599,8 +604,15 @@ async function initializeMainHomeInternal(
   await ensureRuntimeDirectories(paths, options.sourceCheckout);
 
   if (await exists(paths.configurationFile)) {
-    const configuration = await loadMainConfiguration(paths.configurationFile);
-    assertExistingConfigurationMatches(configuration, options);
+    const persistedConfiguration = await loadMainConfiguration(paths.configurationFile);
+    assertExistingConfigurationMatches(persistedConfiguration, options);
+    const configuration =
+      options.activeAdminRoot === undefined
+        ? persistedConfiguration
+        : validateMainConfiguration({
+            ...persistedConfiguration,
+            adminRoot: resolve(options.activeAdminRoot),
+          });
     await validateAdminRoot(configuration.adminRoot);
     const managedSecretStore = resolveMainManagedSecretStore({
       configuration,

@@ -773,6 +773,65 @@ test("Device navigation keeps one Main and selects macOS, Windows, and Linux Wor
   expect(consoleErrors).toEqual([]);
 });
 
+test("Permissions and resources stays legible at the compact desktop boundary", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 859, height: 750 });
+  await installApi(page, {
+    devices: [mainDevice],
+    signedIn: true,
+  });
+  await page.goto("/");
+  await page.locator(".language-selector select").selectOption("ko");
+  await page.getByRole("tab", { name: koreanMessages.device.authority }).click();
+
+  const agentExecution = page.getByRole("region", {
+    name: koreanMessages.device.agentExecution,
+  });
+  const policies = page.getByRole("region", {
+    name: koreanMessages.device.policies,
+  });
+  const adapters = page.getByRole("region", {
+    name: koreanMessages.device.agentAdapters,
+  });
+  const locks = page.getByRole("region", {
+    name: koreanMessages.device.resourceLocks,
+  });
+
+  await expect(agentExecution).toBeVisible();
+  await expect(policies).toBeVisible();
+  await expect(adapters).toBeVisible();
+  await expect(locks).toBeVisible();
+
+  const [agentExecutionBox, policiesBox, adaptersBox, locksBox] = await Promise.all([
+    agentExecution.boundingBox(),
+    policies.boundingBox(),
+    adapters.boundingBox(),
+    locks.boundingBox(),
+  ]);
+  expect(agentExecutionBox).not.toBeNull();
+  expect(policiesBox).not.toBeNull();
+  expect(adaptersBox).not.toBeNull();
+  expect(locksBox).not.toBeNull();
+  if (
+    agentExecutionBox === null ||
+    policiesBox === null ||
+    adaptersBox === null ||
+    locksBox === null
+  ) {
+    return;
+  }
+
+  expect(agentExecutionBox.y + agentExecutionBox.height).toBeLessThanOrEqual(
+    Math.min(policiesBox.y, adaptersBox.y),
+  );
+  expect(policiesBox.x + policiesBox.width).toBeLessThanOrEqual(adaptersBox.x);
+  expect(
+    Math.max(policiesBox.y + policiesBox.height, adaptersBox.y + adaptersBox.height),
+  ).toBeLessThanOrEqual(locksBox.y);
+  await expectNoHorizontalOverflow(page);
+});
+
 async function installApi(
   page: Page,
   {

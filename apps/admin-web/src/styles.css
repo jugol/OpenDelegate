@@ -699,6 +699,10 @@ textarea:focus-visible,
   padding-top: 24px;
 }
 
+.focused-detail > .detail-section {
+  grid-area: auto;
+}
+
 .focused-detail--split {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4373,10 +4377,6 @@ textarea:focus-visible,
   .authority-detail .detail-section--agent-profile,
   .authority-detail .detail-section--locks {
     grid-column: auto;
-  }
-
-  .authority-detail > .detail-section {
-    grid-area: auto;
   }
 
   .wake-on-lan-icon {
