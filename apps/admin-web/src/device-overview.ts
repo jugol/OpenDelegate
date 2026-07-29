@@ -76,12 +76,44 @@ export function mapDeviceOverview(device: DeviceSummary): DeviceOverviewViewMode
       ),
     ),
     agentAdapters: Object.freeze(
-      [...(device.agentAdapters ?? [])].sort(
-        (left, right) =>
-          left.provider.localeCompare(right.provider, "en") ||
-          left.adapterId.localeCompare(right.adapterId, "en"),
-      ),
+      [...(device.agentAdapters ?? [])]
+        .sort(
+          (left, right) =>
+            left.provider.localeCompare(right.provider, "en") ||
+            left.adapterId.localeCompare(right.adapterId, "en"),
+        )
+        .map((adapter) =>
+          Object.freeze({
+            provider: adapter.provider,
+            adapterId: adapter.adapterId,
+            ...(adapter.version === undefined ? {} : { version: adapter.version }),
+            readiness: adapter.readiness,
+            compatibility: adapter.compatibility,
+            observedAtMs: adapter.observedAtMs,
+            ...(adapter.modelCatalogObservedAtMs === undefined
+              ? {}
+              : { modelCatalogObservedAtMs: adapter.modelCatalogObservedAtMs }),
+            models: Object.freeze(
+              (adapter.models ?? []).map((model) =>
+                Object.freeze({
+                  modelId: model.modelId,
+                  displayName: model.displayName,
+                  isDefault: model.isDefault === true,
+                  supportedEfforts: Object.freeze([...(model.supportedEfforts ?? [])]),
+                }),
+              ),
+            ),
+          }),
+        ),
     ),
+    agentExecutionProfile: cloneAgentExecutionProfile(device.agentExecutionProfile),
+    ...(device.coordinatorAgentExecutionProfile === undefined
+      ? {}
+      : {
+          coordinatorAgentExecutionProfile: cloneAgentExecutionProfile(
+            device.coordinatorAgentExecutionProfile,
+          ),
+        }),
     routes: mapRoutes(device.routes, main),
     resourceLocks: Object.freeze(
       [...(device.resourceLocks ?? [])]
@@ -140,6 +172,23 @@ export function mapDeviceOverview(device: DeviceSummary): DeviceOverviewViewMode
       proposal: null,
     },
   };
+}
+
+function cloneAgentExecutionProfile(
+  profile: DeviceSummary["agentExecutionProfile"],
+): DeviceOverviewViewModel["agentExecutionProfile"] {
+  if (profile === undefined || profile.mode === "auto") {
+    return { schemaVersion: 1, mode: "auto" };
+  }
+  const primary = { ...profile.primary };
+  return profile.mode === "pinned"
+    ? { schemaVersion: 1, mode: "pinned", primary }
+    : {
+        schemaVersion: 1,
+        mode: "prefer",
+        primary,
+        fallbacks: profile.fallbacks.map((binding) => ({ ...binding })),
+      };
 }
 
 function mapFacts(

@@ -136,9 +136,65 @@ const DeviceAgentAdapterSchema = Type.Object(
     ]),
     version: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
     observedAtMs: Type.Integer({ minimum: 0 }),
+    modelCatalogObservedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    models: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            modelId: Type.String({ minLength: 1, maxLength: 256 }),
+            displayName: Type.String({ minLength: 1, maxLength: 256 }),
+            isDefault: Type.Optional(Type.Boolean()),
+            supportedEfforts: Type.Optional(
+              Type.Array(Type.String({ minLength: 1, maxLength: 160 }), {
+                maxItems: 32,
+                uniqueItems: true,
+              }),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 128 },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
+
+const DeviceAgentBindingSchema = Type.Object(
+  {
+    provider: Type.Union([Type.Literal("codex"), Type.Literal("claude"), Type.Literal("generic")]),
+    adapterId: Type.String({ minLength: 1, maxLength: 160 }),
+    modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  },
+  { additionalProperties: false },
+);
+
+const DeviceAgentExecutionProfileSchema = Type.Union([
+  Type.Object(
+    {
+      schemaVersion: Type.Literal(1),
+      mode: Type.Literal("auto"),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      schemaVersion: Type.Literal(1),
+      mode: Type.Literal("prefer"),
+      primary: DeviceAgentBindingSchema,
+      fallbacks: Type.Array(DeviceAgentBindingSchema, { maxItems: 7 }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      schemaVersion: Type.Literal(1),
+      mode: Type.Literal("pinned"),
+      primary: DeviceAgentBindingSchema,
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 const DeviceResourceLockHolderSchema = Type.Object(
   {
@@ -244,6 +300,8 @@ export const DeviceSummarySchema = Type.Object(
         uniqueItems: true,
       }),
     ),
+    agentExecutionProfile: Type.Optional(DeviceAgentExecutionProfileSchema),
+    coordinatorAgentExecutionProfile: Type.Optional(DeviceAgentExecutionProfileSchema),
     routes: Type.Optional(
       Type.Array(DeviceRouteSchema, {
         maxItems: 64,

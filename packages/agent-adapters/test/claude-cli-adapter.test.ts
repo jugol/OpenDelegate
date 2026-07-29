@@ -87,7 +87,7 @@ test("Claude CLI starts, streams public/tool events, and resumes the exact nativ
   assert.equal(first.status, "succeeded");
   assert.equal(first.session?.nativeSessionId, "11111111-1111-4111-8111-111111111111");
   assert.equal(first.session?.provider, "claude");
-  assert.equal(first.session?.adapterVersion, "2.1.205");
+  assert.equal(first.session?.adapterVersion, "2.1.220");
   assert.equal(first.session?.lineage.lineageId, "lineage-claude");
   assert.ok(events.some((event) => event.type === "message_delta"));
   assert.ok(events.some((event) => event.type === "tool_request" && event.toolName === "Read"));
@@ -133,7 +133,7 @@ test("Claude CLI reports version/auth compatibility without a provider turn", as
   });
 
   assert.equal(probe.installed, true);
-  assert.equal(probe.version, "2.1.205");
+  assert.equal(probe.version, "2.1.220");
   assert.equal(probe.compatibility, "tested");
   assert.equal(probe.auth.state, "ready");
   assert.equal(probe.capabilities.approvalBridge, false);
@@ -149,6 +149,51 @@ test("Claude CLI reports version/auth compatibility without a provider turn", as
       message: "Claude CLI authentication is not ready.",
     },
   ]);
+});
+
+test("Claude CLI reuses the Agent SDK model catalog from the same controlled home", async () => {
+  const claudeHome = await createClaudeHome();
+  let closed = false;
+  const adapter = new ClaudeCliAdapter({
+    claudeHome,
+    executable: process.execPath,
+    prefixArgs: [fixturePath, "claude"],
+    modelCatalogSdk: {
+      query: () => ({
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => ({ done: true, value: undefined }),
+          };
+        },
+        async supportedModels() {
+          return [
+            {
+              value: "claude-opus-5",
+              displayName: "Claude Opus 5",
+              description: "Fixture model",
+            },
+          ];
+        },
+        close() {
+          closed = true;
+        },
+      }),
+    },
+  });
+
+  const catalog = await adapter.listModels({
+    environment: {
+      FIXTURE_EXPECT_CLAUDE_HOME: claudeHome,
+    },
+  });
+
+  assert.deepEqual(catalog.models, [
+    {
+      modelId: "claude-opus-5",
+      displayName: "Claude Opus 5",
+    },
+  ]);
+  assert.equal(closed, true);
 });
 
 test("Claude exposes only the Run-scoped Knowledge server and redacts local tool data", async () => {

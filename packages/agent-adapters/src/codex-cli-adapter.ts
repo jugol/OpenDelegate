@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path";
 
 import {
   type AgentAdapter,
+  type AgentModelCatalog,
   type AgentAdapterProbe,
   type AgentAdapterProbeInput,
   type AgentResumeRequest,
@@ -11,6 +12,7 @@ import {
   type AgentStartRequest,
   type AgentToolServer,
 } from "./contracts.ts";
+import { CodexAppServerAdapter } from "./codex-app-server-adapter.ts";
 import {
   assertProviderHomeNotInSecretEnvironment,
   prepareControlledProviderHome,
@@ -31,7 +33,7 @@ import {
 } from "./session-reference.ts";
 import { startSubprocessTurn, type ProviderSignal } from "./subprocess-turn.ts";
 
-export const CODEX_CLI_TESTED_VERSIONS = ["0.145.0"] as const;
+export const CODEX_CLI_TESTED_VERSIONS = ["0.146.0"] as const;
 
 const CODEX_DETERMINISTIC_EXECUTION_ARGS = [
   "--ignore-user-config",
@@ -165,6 +167,18 @@ export class CodexCliAdapter implements AgentAdapter {
     return await this.#launch(request);
   }
 
+  async listModels(input: AgentAdapterProbeInput = {}): Promise<AgentModelCatalog> {
+    return await new CodexAppServerAdapter({
+      codexHome: this.#codexHome,
+      executable: this.#executable,
+      prefixArgs: this.#prefixArgs,
+      testedVersions: this.#testedVersions,
+      allowUntestedVersion: this.#allowUntestedVersion,
+      leaseStore: this.#leaseStore,
+      now: this.#now,
+    }).listModels(input);
+  }
+
   async resume(request: AgentResumeRequest): Promise<AgentRunHandle> {
     return await this.#launch(request);
   }
@@ -244,6 +258,7 @@ export class CodexCliAdapter implements AgentAdapter {
     const common = [
       "--json",
       ...CODEX_DETERMINISTIC_EXECUTION_ARGS,
+      ...(request.modelId === undefined ? [] : ["--model", request.modelId]),
       ...codexToolServerArguments(request.toolServers),
       "-c",
       `sandbox_mode="${request.sandbox === "provider-default" ? "read-only" : request.sandbox}"`,

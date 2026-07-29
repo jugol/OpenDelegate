@@ -90,6 +90,10 @@ type ChatMessageBlock =
 interface ConfigurationChatProps {
   readonly deviceId: string;
   readonly discordSetupRecommended: boolean;
+  readonly draftRequest?: {
+    readonly requestId: number;
+    readonly message: string;
+  };
   readonly expanded: boolean;
   readonly focusRequestId: number;
   readonly mainDevice: boolean;
@@ -110,6 +114,7 @@ interface ConfigurationChatProps {
 export function ConfigurationChat({
   deviceId,
   discordSetupRecommended,
+  draftRequest,
   expanded,
   focusRequestId,
   mainDevice,
@@ -155,6 +160,7 @@ export function ConfigurationChat({
   const openRef = useRef(open);
   const previousMessageCountRef = useRef(conversationMessages.length);
   const discordOnboardingAttemptedForOpenRef = useRef(false);
+  const consumedDraftRequestIdRef = useRef<number | undefined>(undefined);
 
   const notifyIfUnread = useCallback(() => {
     if (!openRef.current || document.visibilityState !== "visible") {
@@ -340,6 +346,20 @@ export function ConfigurationChat({
       (onSendMessage === undefined ? closeButtonRef.current : composerRef.current)?.focus();
     }
   }, [focusRequestId, onSendMessage, open]);
+
+  useEffect(() => {
+    if (
+      draftRequest === undefined ||
+      consumedDraftRequestIdRef.current === draftRequest.requestId
+    ) {
+      return;
+    }
+    consumedDraftRequestIdRef.current = draftRequest.requestId;
+    setDraft(draftRequest.message);
+    if (open && onSendMessage !== undefined) {
+      composerRef.current?.focus();
+    }
+  }, [draftRequest, onSendMessage, open]);
 
   useEffect(() => {
     if (!open) {

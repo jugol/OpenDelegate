@@ -51,6 +51,13 @@ OpenDelegate se instala con un Agent; el recorrido de instalación del Owner no 
    un Context limpio. Si Discord está desactivado o no está disponible, abre **Admin Web → Tasks →
    Nueva tarea**.
 
+Cada Device usa **Ejecución del Agent → Automático** de forma predeterminada. Puedes elegir
+**Preferir** o **Fijado** en su página, o decir en el Configuration Chat de ese Device:
+_«Usa Claude Opus en este NAS»_. Repite el proceso en la página del Mac Studio con el modelo GPT
+que prefieras. OpenDelegate resuelve cada solicitud en el catálogo de modelos probado del Device de
+destino, muestra el identificador Provider-native exacto para revisión y aplica el cambio solo a
+sesiones nativas nuevas.
+
 Consulta la [guía de configuración completa (en inglés)](docs/GETTING_STARTED.md), que incluye la
 recuperación del Owner, Devices adicionales, la primera Task y la resolución de problemas.
 

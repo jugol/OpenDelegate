@@ -1,4 +1,8 @@
 import type { ConfigurationDefinition } from "./index.ts";
+import {
+  DEFAULT_AGENT_EXECUTION_PROFILE,
+  isAgentExecutionProfile,
+} from "./agent-execution-profile.ts";
 import { isNullableCanonicalMainSecretReferenceValue } from "./secret-reference.ts";
 
 const isOneOf =
@@ -84,6 +88,18 @@ export const STANDARD_CONFIGURATION_DEFINITIONS = [
     defaultValue: [],
     scopes: ["device"],
     validate: isInstructionList,
+  },
+  {
+    key: "agent.worker-profile",
+    defaultValue: DEFAULT_AGENT_EXECUTION_PROFILE,
+    scopes: ["device"],
+    validate: isAgentExecutionProfile,
+  },
+  {
+    key: "agent.coordinator-profile",
+    defaultValue: DEFAULT_AGENT_EXECUTION_PROFILE,
+    scopes: ["main"],
+    validate: isAgentExecutionProfile,
   },
   {
     key: "database.adapter",

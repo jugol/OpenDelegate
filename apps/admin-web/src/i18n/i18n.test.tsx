@@ -161,6 +161,7 @@ describe("Admin language selection", () => {
           readiness: "ready",
           compatibility: "tested",
           observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+          models: [],
         },
       ],
       currentRuns: [
@@ -182,6 +183,7 @@ describe("Admin language selection", () => {
           chatOpen={false}
           device={deviceWithOperationalStates}
           onConfigure={() => undefined}
+          onConfigureAgentProfile={() => undefined}
         />
       </AdminI18nProvider>,
     );
@@ -228,7 +230,12 @@ describe("Admin language selection", () => {
 
     render(
       <AdminI18nProvider initialLocale="ko">
-        <DeviceSurface chatOpen={false} device={ownerDevice} onConfigure={() => undefined} />
+        <DeviceSurface
+          chatOpen={false}
+          device={ownerDevice}
+          onConfigure={() => undefined}
+          onConfigureAgentProfile={() => undefined}
+        />
       </AdminI18nProvider>,
     );
 

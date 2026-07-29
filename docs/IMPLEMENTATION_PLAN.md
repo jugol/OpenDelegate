@@ -490,6 +490,12 @@ Replace fake agents with resumable, observable first-class providers.
 - Implement generic command adapter with explicit lifecycle and output schema.
 - Add adapter version pinning, compatibility probes, capability degradation, and
   diagnostics.
+- Add bounded model-catalog discovery for ready Codex and Claude adapters and carry
+  exact provider-native model IDs through requirements, assignments, requests,
+  observations, and native-session lineage.
+- Implement typed Worker and Coordinator Agent Execution Profiles with Auto, Prefer,
+  and Pinned modes. Resolve owner aliases only against the target Device catalog,
+  intersect profiles with Work Order hard requirements, and fail closed on conflict.
 - Add an optional Work Order Agent requirement and copy it into each immutable Run
   assignment. Require the named provider, optionally require one exact adapter and
   allowed compatibility set, and use Device Auto only when the assignment omits the
@@ -512,8 +518,11 @@ Replace fake agents with resumable, observable first-class providers.
 - Two unrelated Tasks never share a native session.
 - Related Worker follow-up resumes the correct native session.
 - Coordinator provider remains pinned while another provider participates as Worker.
-- Provider-bound Worker Runs fail closed when the required binding is unavailable;
-  exact retry and restart replay cannot widen or substitute that binding.
+- Provider-bound Worker Runs fail closed when the required binding, including an
+  exact required model, is unavailable; exact retry and restart replay cannot widen
+  or substitute that binding.
+- Profile changes affect new Task or workstream sessions. A checkpoint continuation
+  retains the binding recorded for the existing session it replaces.
 - Main replay preserves the actual safe provider, adapter, native-session, and
   lineage observation reported by the Worker.
 - Simulated session deletion continues from checkpoint with an explicit lineage
@@ -605,6 +614,9 @@ Deliver the required visual setup, Device specification, and operational surface
 - Implement first-run shell with one current Device and left-side Device navigation.
 - Implement Device Facts, Capabilities, Roles, Instructions, Policies, routes, Agent
   Adapters, locks, health, load, and Runs.
+- Show target-local verified adapter/model catalogs and the effective Worker profile
+  on every Device. On Main, separately show the Coordinator and co-located Worker
+  profiles.
 - Add an authenticated on-demand Main Device assessment that probes local Codex and
   Claude adapters, browser automation, Computer Use readiness, and local Knowledge
   health, stores only the bounded observation in Main metadata, and exposes it to the
@@ -620,6 +632,11 @@ Deliver the required visual setup, Device specification, and operational surface
 - Implement bottom-right Configuration Chat in a separate native Agent Session.
 - Give the Configuration Agent typed inspect, propose, validate, diff, apply, and
   rollback tools.
+- Add typed `agent.worker-profile` and `agent.coordinator-profile` definitions.
+  Support exact natural-language profile changes and explicit Admin selection through
+  the same configuration source of truth. Coordinator model changes apply on the
+  active Main Agent Adapter; provider/adapter replacement continues through the
+  separately authenticated Main Agent reconfiguration and service restart.
 - Add secure Discord-token intake and non-secret `discord.binding` proposals to
   Configuration Chat without exposing the raw token to chat, SQL, or Agent context.
 - Let Configuration Agent final responses attach only bounded, typed setup
@@ -829,6 +846,10 @@ Make the system useful over time, not only during a happy-path demo.
 - Implement diagnostics escalation packages and guided configuration repair.
 - Add retention and cleanup jobs with dry-run and audit.
 - Add provider usage and cost metrics where available.
+- Implement the deterministic Codex and Claude release monitor and typed
+  `disabled`, `propose`, and `verified-auto` maintenance policy. A candidate can
+  become active only after adapter contract and applicable platform smoke gates pass;
+  preserve the last verified version for rollback.
 - Implement owner export of a redacted support bundle.
 - Add upgrade compatibility windows and rolling Worker upgrade behavior.
 - Add rate limiting, circuit breakers, overload handling, and resource ceilings.

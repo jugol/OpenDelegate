@@ -74,6 +74,11 @@ export function App({
   const [chatExpanded, setChatExpanded] = useState(false);
   const [chatFocusRequestId, setChatFocusRequestId] = useState(0);
   const [unreadChatMessages, setUnreadChatMessages] = useState(0);
+  const [chatDraftRequest, setChatDraftRequest] = useState<{
+    readonly deviceId: string;
+    readonly requestId: number;
+    readonly message: string;
+  }>();
   const chatWasOpenRef = useRef(chatOpen);
   const launcherRef = useRef<HTMLButtonElement | null>(null);
   const lastChatTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -150,6 +155,15 @@ export function App({
     setChatOpen(true);
     setChatFocusRequestId((current) => current + 1);
     setUnreadChatMessages(0);
+  }
+
+  function configureAgentProfile(message: string, trigger: HTMLButtonElement): void {
+    setChatDraftRequest((current) => ({
+      deviceId: device.deviceId,
+      requestId: (current?.requestId ?? 0) + 1,
+      message,
+    }));
+    openChat(trigger);
   }
 
   function closeChat(): void {
@@ -230,6 +244,7 @@ export function App({
             chatOpen={chatOpen}
             device={device}
             onConfigure={openChat}
+            onConfigureAgentProfile={configureAgentProfile}
             {...(device.role === "main" && onAssessDevice !== undefined
               ? { onAssess: () => onAssessDevice(device.deviceId) }
               : {})}
@@ -240,6 +255,14 @@ export function App({
       <ConfigurationChat
         deviceId={device.deviceId}
         discordSetupRecommended={discordSetupRecommended}
+        {...(chatDraftRequest?.deviceId === device.deviceId
+          ? {
+              draftRequest: {
+                requestId: chatDraftRequest.requestId,
+                message: chatDraftRequest.message,
+              },
+            }
+          : {})}
         expanded={chatExpanded}
         focusRequestId={chatFocusRequestId}
         key={device.deviceId}

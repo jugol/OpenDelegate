@@ -45,6 +45,12 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
    동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
    Discord를 사용하지 않거나 사용할 수 없으면 **Admin Web → Tasks → 새 작업**에서 만듭니다.
 
+각 Device의 기본값은 **Agent 실행 → 자동**입니다. Device 화면에서 **우선** 또는 **고정**을
+선택하거나 해당 Device의 Configuration Chat에 _“이 NAS에서는 Claude Opus를 사용해 줘”_라고
+말할 수 있습니다. Mac Studio 화면에서는 원하는 GPT 모델을 같은 방식으로 설정합니다.
+OpenDelegate는 각 요청을 해당 Device의 검증된 모델 카탈로그와 대조해 정확한 Provider-native
+모델 ID를 검토용으로 보여 주며, 변경은 새 native Session부터 적용합니다.
+
 Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
 [전체 설정 가이드(영문)](docs/GETTING_STARTED.md)를 참고하십시오.
 

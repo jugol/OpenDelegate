@@ -124,6 +124,7 @@ export interface NativeSessionReference {
   readonly provider: AgentProvider;
   readonly adapterId: string;
   readonly adapterVersion: string;
+  readonly modelId?: string;
   readonly nativeSessionId: string;
   readonly sessionKey: string;
   readonly taskId: string;
@@ -143,6 +144,7 @@ interface AgentRunRequestFields {
   readonly workstreamId: string;
   readonly sessionKey: string;
   readonly deviceId: string;
+  readonly modelId?: string;
   readonly prompt: string;
   readonly workspace: WorkspaceBinding;
   readonly sandbox: AgentSandbox;
@@ -309,6 +311,18 @@ export interface AgentRunHandle {
 export type AdapterCompatibility = "tested" | "compatible" | "untested" | "incompatible";
 export type AdapterAuthState = "ready" | "not_ready" | "not_required" | "unknown";
 
+export interface AgentModelDescriptor {
+  readonly modelId: string;
+  readonly displayName: string;
+  readonly isDefault?: boolean;
+  readonly supportedEfforts?: readonly string[];
+}
+
+export interface AgentModelCatalog {
+  readonly observedAt: string;
+  readonly models: readonly AgentModelDescriptor[];
+}
+
 export interface AgentAdapterProbe {
   readonly contractVersion: 1;
   readonly adapterId: string;
@@ -333,6 +347,7 @@ export interface AgentAdapterProbe {
     readonly code: string;
     readonly message: string;
   }[];
+  readonly modelCatalog?: AgentModelCatalog;
 }
 
 export interface AgentAdapterProbeInput {
@@ -344,6 +359,7 @@ export interface AgentAdapter {
   readonly adapterId: string;
   readonly provider: AgentProvider;
   probe(input?: AgentAdapterProbeInput): Promise<AgentAdapterProbe>;
+  listModels?(input?: AgentAdapterProbeInput): Promise<AgentModelCatalog>;
   start(request: AgentStartRequest): Promise<AgentRunHandle>;
   resume(request: AgentResumeRequest): Promise<AgentRunHandle>;
 }

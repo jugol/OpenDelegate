@@ -150,6 +150,12 @@ export interface AgentBackedTaskExecutorOptions {
   readonly deviceDirectory?: {
     list(): Promise<readonly DeviceSummaryV1[]>;
   };
+  /**
+   * Resolves the exact provider-native model for a newly created Coordinator
+   * session. Existing sessions and checkpoint continuations retain their
+   * recorded model and do not call this resolver.
+   */
+  readonly resolveNewSessionModelId?: () => Promise<string | undefined>;
   readonly maximumPromptBytes?: number;
 }
 
@@ -177,6 +183,7 @@ export class AgentBackedTaskExecutor
   readonly #permissions: AgentPermissionInput;
   readonly #limits: AgentRunLimits;
   readonly #deviceDirectory: AgentBackedTaskExecutorOptions["deviceDirectory"];
+  readonly #resolveNewSessionModelId: AgentBackedTaskExecutorOptions["resolveNewSessionModelId"];
   readonly #maximumPromptBytes: number;
   readonly #active = new Map<string, AgentRunHandle>();
   readonly #taskTails = new Map<string, Promise<void>>();
@@ -200,6 +207,12 @@ export class AgentBackedTaskExecutor
     ) {
       throw new TypeError("The Main Agent Device directory is invalid.");
     }
+    if (
+      options.resolveNewSessionModelId !== undefined &&
+      typeof options.resolveNewSessionModelId !== "function"
+    ) {
+      throw new TypeError("The Coordinator model resolver is invalid.");
+    }
     const maximumPromptBytes = options.maximumPromptBytes ?? DEFAULT_MAXIMUM_PROMPT_BYTES;
     if (!Number.isSafeInteger(maximumPromptBytes) || maximumPromptBytes < 4_096) {
       throw new TypeError("maximumPromptBytes must be a safe integer of at least 4096.");
@@ -213,6 +226,7 @@ export class AgentBackedTaskExecutor
     this.#permissions = structuredClone(options.permissions);
     this.#limits = { ...options.limits };
     this.#deviceDirectory = options.deviceDirectory;
+    this.#resolveNewSessionModelId = options.resolveNewSessionModelId;
     this.#maximumPromptBytes = maximumPromptBytes;
   }
 
@@ -352,6 +366,7 @@ export class AgentBackedTaskExecutor
           taskId: input.task.taskId,
           workspace: this.#workspace,
           sessionKey,
+          modelId: session.modelId,
         });
       }
     } catch (error) {
@@ -368,6 +383,8 @@ export class AgentBackedTaskExecutor
       session === undefined
         ? ({ kind: "start" } as const)
         : await resolveNativeSessionAction(this.#adapter, session);
+    const modelId =
+      session === undefined ? await this.#resolveModelForNewSession() : session.modelId;
     let checkpoint: TaskContinuationCheckpointV1 | undefined;
     if (sessionAction.kind === "continuation") {
       try {
@@ -398,6 +415,7 @@ export class AgentBackedTaskExecutor
       sandbox: this.#sandbox,
       permissions: structuredClone(this.#permissions),
       limits: { ...this.#limits },
+      ...(modelId === undefined ? {} : { modelId }),
     } as const;
 
     let handle: AgentRunHandle;
@@ -439,7 +457,7 @@ export class AgentBackedTaskExecutor
     }
 
     try {
-      const eventCompletion = this.#consumeEvents(handle, input.task.taskId, sessionKey);
+      const eventCompletion = this.#consumeEvents(handle, input.task.taskId, sessionKey, modelId);
       const [eventResult, result] = await Promise.allSettled([eventCompletion, handle.result]);
       if (input.signal.aborted) {
         throw new TaskExecutorError(
@@ -468,6 +486,7 @@ export class AgentBackedTaskExecutor
           taskId: input.task.taskId,
           workspace: this.#workspace,
           sessionKey,
+          modelId,
         });
         await this.#sessionRepository.save(result.value.session);
       }
@@ -498,6 +517,41 @@ export class AgentBackedTaskExecutor
       input.signal.removeEventListener("abort", abort);
       this.#active.delete(input.turnId);
     }
+  }
+
+  async #resolveModelForNewSession(): Promise<string | undefined> {
+    if (this.#resolveNewSessionModelId === undefined) {
+      return undefined;
+    }
+    let modelId: string | undefined;
+    try {
+      modelId = await this.#resolveNewSessionModelId();
+    } catch (error) {
+      if (error instanceof TaskExecutorError) {
+        throw error;
+      }
+      throw new TaskExecutorError(
+        "MAIN_AGENT_PROFILE_UNAVAILABLE",
+        "The configured Coordinator Agent model is unavailable.",
+        true,
+      );
+    }
+    if (
+      modelId !== undefined &&
+      (modelId.length === 0 ||
+        modelId.length > 256 ||
+        modelId !== modelId.trim() ||
+        [...modelId].some((character) => {
+          const point = character.codePointAt(0);
+          return point !== undefined && (point <= 31 || point === 127);
+        }))
+    ) {
+      throw new TaskExecutorError(
+        "MAIN_AGENT_PROFILE_INVALID",
+        "The configured Coordinator Agent model ID is invalid.",
+      );
+    }
+    return modelId;
   }
 
   #enqueueTaskTurn<TResult>(
@@ -540,7 +594,12 @@ export class AgentBackedTaskExecutor
     }
   }
 
-  async #consumeEvents(handle: AgentRunHandle, taskId: string, sessionKey: string): Promise<void> {
+  async #consumeEvents(
+    handle: AgentRunHandle,
+    taskId: string,
+    sessionKey: string,
+    modelId: string | undefined,
+  ): Promise<void> {
     for await (const event of handle.events) {
       if (event.type !== "session_started") {
         continue;
@@ -551,6 +610,7 @@ export class AgentBackedTaskExecutor
         taskId,
         workspace: this.#workspace,
         sessionKey,
+        modelId,
       });
       await this.#sessionRepository.save(event.session);
     }
@@ -563,6 +623,7 @@ interface ExpectedSessionBinding {
   readonly taskId: string;
   readonly workspace: WorkspaceBinding;
   readonly sessionKey: string;
+  readonly modelId: string | undefined;
 }
 
 function assertSessionBinding(
@@ -579,7 +640,8 @@ function assertSessionBinding(
     canonical.sessionKey !== expected.sessionKey ||
     canonical.workspaceId !== expected.workspace.workspaceId ||
     canonical.cwd !== expected.workspace.cwd ||
-    canonical.worktreePath !== expected.workspace.worktreePath
+    canonical.worktreePath !== expected.workspace.worktreePath ||
+    canonical.modelId !== expected.modelId
   ) {
     throw new TaskExecutorError(
       "NATIVE_SESSION_BINDING_MISMATCH",
@@ -698,7 +760,7 @@ function buildPlanningPrompt(
         ...planningContextInstructions(deviceContext),
         "Return one exact JSON object and no Markdown fence.",
         'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
-        'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":[],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}.',
+        'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":[],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}.',
         "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
         "A continuation checkpoint never carries Secret references. If a Work Order needs one, return waiting_user so deterministic configuration can bind it without exposing a credential.",
         "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -714,7 +776,7 @@ function buildPlanningPrompt(
     ...planningContextInstructions(deviceContext),
     "Return one exact JSON object and no Markdown fence.",
     'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
-    'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":["..."],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}. Omit requiredAgent when any ready provider may perform the Work Order; when present, tested-only is the default if allowedCompatibilities is omitted.',
+    'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":["..."],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}. Omit requiredAgent when the Device profile may choose any ready binding; when present, use only an outcome-relevant hard requirement and tested-only is the default if allowedCompatibilities is omitted.',
     "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
     "Use stable Task-scoped Work Order IDs and explicit completion criteria. Keep independent work parallel by leaving dependsOn empty; add dependencies only when evidence must flow between Work Orders.",
     "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -1027,6 +1089,11 @@ interface PlanningDeviceObservation {
   readonly runtime: DeviceSummaryV1["runtime"];
   readonly roles: readonly string[];
   readonly capabilities: readonly string[];
+  readonly readyAgentAdapters: readonly {
+    readonly provider: string;
+    readonly adapterId: string;
+  }[];
+  readonly workerAgentProfile?: DeviceSummaryV1["agentExecutionProfile"];
   readonly routes: readonly {
     readonly label: string;
     readonly health: string;
@@ -1077,6 +1144,22 @@ function projectPlanningDeviceContext(
             (capability: NonNullable<DeviceSummaryV1["capabilities"]>[number]) => capability.name,
           ),
       ),
+      readyAgentAdapters: Object.freeze(
+        (device.agentAdapters ?? [])
+          .filter(
+            (adapter: NonNullable<DeviceSummaryV1["agentAdapters"]>[number]) =>
+              adapter.readiness === "ready",
+          )
+          .map((adapter: NonNullable<DeviceSummaryV1["agentAdapters"]>[number]) =>
+            Object.freeze({
+              provider: adapter.provider,
+              adapterId: adapter.adapterId,
+            }),
+          ),
+      ),
+      ...(device.agentExecutionProfile === undefined
+        ? {}
+        : { workerAgentProfile: structuredClone(device.agentExecutionProfile) }),
       routes: Object.freeze(
         (device.routes ?? []).map((route: NonNullable<DeviceSummaryV1["routes"]>[number]) =>
           Object.freeze({ label: route.label, health: route.health }),
@@ -1427,6 +1510,9 @@ function validateReference(value: unknown): NativeSessionReference {
       throw sessionStateCorrupt();
     }
   }
+  if (value["modelId"] !== undefined) {
+    assertReferenceIdentifier(value["modelId"]);
+  }
   const lineage = value["lineage"];
   if (
     !isRecord(lineage) ||
@@ -1459,6 +1545,7 @@ function assertValidReplacement(
   for (const key of [
     "provider",
     "adapterId",
+    "modelId",
     "sessionKey",
     "taskId",
     "workstreamId",
@@ -1620,8 +1707,10 @@ function hasExactOrOptionalReferenceKeys(value: Record<string, unknown>): boolea
     "createdAt",
   ];
   return (
-    Object.keys(value).every((key) => [...keys, "worktreePath"].includes(key)) &&
-    keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+    Object.keys(value).every((key) => [...keys, "modelId", "worktreePath"].includes(key)) &&
+    keys
+      .filter((key) => key !== "modelId")
+      .every((key) => Object.prototype.hasOwnProperty.call(value, key))
   );
 }
 

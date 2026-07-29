@@ -60,6 +60,18 @@ export function validateAgentRequest(request: AgentStartRequest | AgentResumeReq
   if (required.some((value) => value.length === 0)) {
     throw new AgentAdapterError("INVALID_REQUEST", "Agent request identifiers are required.");
   }
+  if (
+    request.modelId !== undefined &&
+    (request.modelId.length === 0 ||
+      request.modelId.length > 256 ||
+      request.modelId !== request.modelId.trim() ||
+      hasControlCharacter(request.modelId))
+  ) {
+    throw new AgentAdapterError(
+      "INVALID_REQUEST",
+      "Agent model ID must be a bounded provider-native identifier.",
+    );
+  }
   for (const [name, value] of Object.entries(request.limits)) {
     if (!Number.isSafeInteger(value) || value < 1) {
       throw new AgentAdapterError("INVALID_LIMIT", `${name} must be a positive integer.`);
@@ -174,6 +186,7 @@ export function validateResumeReference(
     session.schemaVersion !== 1 ||
     session.provider !== provider ||
     session.adapterId !== adapterId ||
+    session.modelId !== request.modelId ||
     session.sessionKey !== request.sessionKey ||
     session.taskId !== request.taskId ||
     session.workstreamId !== request.workstreamId ||
@@ -185,7 +198,7 @@ export function validateResumeReference(
   ) {
     throw new AgentAdapterError(
       "NATIVE_SESSION_BINDING_MISMATCH",
-      "Native session does not match this Task, Device, Workspace, worktree, and working directory.",
+      "Native session does not match this model, Task, Device, Workspace, worktree, and working directory.",
     );
   }
 }
@@ -218,6 +231,7 @@ export function createNativeSessionReference(options: {
     provider: options.provider,
     adapterId: options.adapterId,
     adapterVersion: options.adapterVersion,
+    ...(request.modelId === undefined ? {} : { modelId: request.modelId }),
     nativeSessionId: options.nativeSessionId,
     sessionKey: request.sessionKey,
     taskId: request.taskId,

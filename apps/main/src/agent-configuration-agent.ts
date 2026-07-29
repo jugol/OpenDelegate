@@ -17,6 +17,7 @@ import {
 } from "@opendelegate/control-plane";
 import {
   ConfigurationError,
+  isAgentExecutionProfile,
   type ConfigurationChange,
   type ConfigurationContext,
   type ConfigurationMutationAuthorizer,
@@ -1174,6 +1175,11 @@ function buildConfigurationPrompt(
     "After applying or rolling back admin.open-on-login, explain that the installed helper still needs the separately elevated service reconfigure flow. Configuration Chat never elevates or restarts native services.",
     "autonomy.profile sets the broad proactive default: reactive, assisted, or autonomous. Each proactive category can independently inherit that profile or be disabled, proposed, or executed through autonomy.incident-recovery, autonomy.maintenance, autonomy.capability-expansion, autonomy.cleanup, autonomy.cost-incurring-work, and autonomy.general-improvement.",
     "Explain proactive authority in outcome terms. A deterministic monitor may originate an ordinary auditable Task and Discord Forum post without continuously running an LLM. proposed creates a manual review Task; executed creates an auto Task, but Action Policy, approvals, budgets, resource locks, and Secret boundaries still apply. Never imply that autonomous mode bypasses them.",
+    'The Device-scoped agent.worker-profile is exactly {"schemaVersion":1,"mode":"auto"}, {"schemaVersion":1,"mode":"pinned","primary":{"provider":"codex|claude|generic","adapterId":"exact ID","modelId":"exact provider-native ID when the provider exposes models"}}, or {"schemaVersion":1,"mode":"prefer","primary":BINDING,"fallbacks":[BINDING,...]}. Prefer has no implicit fallback. Pinned fails closed.',
+    "The Main-scoped agent.coordinator-profile uses the same shape and controls Main planning only. Main's agent.worker-profile separately controls ordinary Work Orders executed by its co-located Worker. If the owner says Main Agent or Coordinator, change coordinator only; if they say work on Main, change the Worker profile; if they clearly say every Agent on Main, propose both changes in one diff.",
+    "A Coordinator model change on the active Main Agent Adapter applies to new Task sessions through configuration alone. A Coordinator provider or adapter change also requires the authenticated Main Agent reconfiguration flow and service restart; do not claim that changing agent.coordinator-profile by itself replaced the running Coordinator.",
+    "Resolve friendly model names only against the target Device's authoritative ready adapter model catalog below. Persist the exact modelId and adapterId; never invent, shorten, or transfer a model ID from another Device. If no exact unambiguous match exists, explain the available choices and ask one focused question.",
+    "Changing an Agent profile affects only new Task or workstream sessions. Existing native sessions and any checkpoint continuation created from them retain their recorded provider, adapter, and model binding. Explain this when it matters.",
     'The Main-scoped discord.binding controls the live Discord Forum connection. Its value is null when disabled, or exactly {"schemaVersion":1,"enabled":true,"botTokenAlias":"opaque managed-store alias","forum":{"applicationId":"17-20 digit ID","botUserId":"17-20 digit ID","guildId":"17-20 digit ID","forumBindings":[{"channelId":"17-20 digit ID","workflowTagIds":{"done":"ID","failed":"ID","intake":"ID","review":"ID","running":"ID","waiting":"ID"}}],"ownerUserIds":["ID"],"allowedRoleIds":["ID"]}}.',
     "Disable Discord by setting discord.binding to explicit null. Never unset this key; null is the durable disabled-state marker.",
     "Adding another Forum means preserving the existing object and adding a distinct forumBindings entry. Replacing the bot, guild, or Forum means proposing the complete replacement object. Disabling means setting discord.binding to null. Durable Tasks and native Agent sessions remain in Main; Discord thread identities are not silently migrated.",
@@ -1821,6 +1827,14 @@ function validateDeviceObservation(
     sanitizeObservedCapability(capability),
   );
   const agentAdapters = value.agentAdapters.map((adapter) => sanitizeObservedAgentAdapter(adapter));
+  if (
+    (value.agentExecutionProfile !== undefined &&
+      !isAgentExecutionProfile(value.agentExecutionProfile)) ||
+    (value.coordinatorAgentExecutionProfile !== undefined &&
+      !isAgentExecutionProfile(value.coordinatorAgentExecutionProfile))
+  ) {
+    throw unavailable("The Device Agent Execution Profile observation is invalid.");
+  }
   const sanitized: NonNullable<ConfigurationAgentMessageInput["deviceObservation"]> = {
     name: value.name,
     osFamily: value.osFamily,
@@ -1830,6 +1844,14 @@ function validateDeviceObservation(
     ...(observedAtMs === undefined ? {} : { observedAtMs }),
     capabilities,
     agentAdapters,
+    ...(value.agentExecutionProfile === undefined
+      ? {}
+      : { agentExecutionProfile: structuredClone(value.agentExecutionProfile) }),
+    ...(value.coordinatorAgentExecutionProfile === undefined
+      ? {}
+      : {
+          coordinatorAgentExecutionProfile: structuredClone(value.coordinatorAgentExecutionProfile),
+        }),
     knowledgeHealth: value.knowledgeHealth,
   };
   if (Buffer.byteLength(JSON.stringify(sanitized), "utf8") > 64 * 1024) {
@@ -1894,6 +1916,11 @@ function sanitizeObservedAgentAdapter(
   if (value.version !== undefined) {
     assertIdentifier(value.version, "Observed Agent Adapter version", 256);
   }
+  const modelCatalogObservedAtMs = optionalObservationTime(value.modelCatalogObservedAtMs);
+  const models = value.models === undefined ? undefined : sanitizeObservedAgentModels(value.models);
+  if ((modelCatalogObservedAtMs === undefined) !== (models === undefined)) {
+    throw unavailable("The Device Agent model catalog observation is incomplete.");
+  }
   return {
     provider: value.provider,
     adapterId: value.adapterId,
@@ -1901,7 +1928,61 @@ function sanitizeObservedAgentAdapter(
     compatibility: value.compatibility,
     ...(value.version === undefined ? {} : { version: value.version }),
     observedAtMs: value.observedAtMs,
+    ...(modelCatalogObservedAtMs === undefined
+      ? {}
+      : { modelCatalogObservedAtMs, models: models! }),
   };
+}
+
+function sanitizeObservedAgentModels(
+  value: unknown,
+): NonNullable<
+  NonNullable<
+    ConfigurationAgentMessageInput["deviceObservation"]
+  >["agentAdapters"][number]["models"]
+> {
+  if (!Array.isArray(value) || value.length > 128) {
+    throw unavailable("The Device Agent model catalog is invalid.");
+  }
+  const seen = new Set<string>();
+  return value.map((model) => {
+    if (!isRecord(model)) {
+      throw unavailable("The Device Agent model catalog is invalid.");
+    }
+    assertIdentifier(model.modelId, "Observed Agent model ID", 256);
+    assertIdentifier(model.displayName, "Observed Agent model display name", 256);
+    if (seen.has(model.modelId)) {
+      throw unavailable("The Device Agent model catalog contains duplicate IDs.");
+    }
+    seen.add(model.modelId);
+    if (model.isDefault !== undefined && typeof model.isDefault !== "boolean") {
+      throw unavailable("The Device Agent model default marker is invalid.");
+    }
+    const supportedEfforts =
+      model.supportedEfforts === undefined
+        ? undefined
+        : sanitizeObservedEfforts(model.supportedEfforts);
+    return {
+      modelId: model.modelId,
+      displayName: model.displayName,
+      ...(model.isDefault === undefined ? {} : { isDefault: model.isDefault }),
+      ...(supportedEfforts === undefined ? {} : { supportedEfforts }),
+    };
+  });
+}
+
+function sanitizeObservedEfforts(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 32) {
+    throw unavailable("The Device Agent model effort catalog is invalid.");
+  }
+  const efforts = value.map((effort) => {
+    assertIdentifier(effort, "Observed Agent model effort", 160);
+    return effort;
+  });
+  if (new Set(efforts).size !== efforts.length) {
+    throw unavailable("The Device Agent model effort catalog contains duplicates.");
+  }
+  return efforts;
 }
 
 function optionalObservationTime(value: unknown): number | undefined {

@@ -190,10 +190,10 @@ test("README leads owners into one complete agent-first setup journey", async ()
   );
   assert.doesNotMatch(initSkill, /stop before owner claim/u);
 
-  assert.match(supportMatrix, /\| Codex App Server and CLI \| 0\.145\.0 \|/u);
+  assert.match(supportMatrix, /\| Codex App Server and CLI \| 0\.146\.0 \|/u);
   assert.match(
     supportMatrix,
-    /\| Claude Agent SDK and authentication CLI \| SDK 0\.3\.205; Claude Code 2\.1\.205 \|/u,
+    /\| Claude Agent SDK and authentication CLI \| SDK 0\.3\.220; Claude Code 2\.1\.220 \|/u,
   );
   assert.match(supportMatrix, /Provider command identity release blocker/u);
   assert.match(supportMatrix, /persists only the provider selection/u);

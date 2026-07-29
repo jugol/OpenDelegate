@@ -647,6 +647,18 @@ function registerConfigurationAgentRoutes(
                 observedAtMs: device.lastObservation.observedAtMs,
                 capabilities: structuredClone(device.capabilities ?? []),
                 agentAdapters: structuredClone(device.agentAdapters ?? []),
+                ...(device.agentExecutionProfile === undefined
+                  ? {}
+                  : {
+                      agentExecutionProfile: structuredClone(device.agentExecutionProfile),
+                    }),
+                ...(device.coordinatorAgentExecutionProfile === undefined
+                  ? {}
+                  : {
+                      coordinatorAgentExecutionProfile: structuredClone(
+                        device.coordinatorAgentExecutionProfile,
+                      ),
+                    }),
                 knowledgeHealth: device.knowledgeHealth ?? "unknown",
               },
             }),

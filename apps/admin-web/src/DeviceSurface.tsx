@@ -36,6 +36,8 @@ import {
 } from "./i18n";
 import { LanguageSelector } from "./LanguageSelector";
 import {
+  type AgentBindingView,
+  type AgentExecutionProfileView,
   type CapabilityView,
   type DeviceOverviewViewModel,
   presentationTextFallback,
@@ -59,6 +61,7 @@ interface DeviceSurfaceProps {
   readonly device: DeviceOverviewViewModel;
   readonly onAssess?: () => Promise<void>;
   readonly onConfigure: (trigger: HTMLButtonElement) => void;
+  readonly onConfigureAgentProfile: (message: string, trigger: HTMLButtonElement) => void;
 }
 
 export function DeviceSurface({
@@ -66,6 +69,7 @@ export function DeviceSurface({
   device,
   onAssess,
   onConfigure,
+  onConfigureAgentProfile,
 }: DeviceSurfaceProps): React.JSX.Element {
   const { messages } = useAdminI18n();
   const [activeTab, setActiveTab] = useState<DeviceTabKey>("overview");
@@ -164,7 +168,11 @@ export function DeviceSurface({
         role="tabpanel"
         tabIndex={0}
       >
-        <DeviceTabPanel activeTab={activeTab} device={device} />
+        <DeviceTabPanel
+          activeTab={activeTab}
+          device={device}
+          onConfigureAgentProfile={onConfigureAgentProfile}
+        />
       </section>
     </main>
   );
@@ -375,7 +383,11 @@ function LocalAgentSetup({
   );
 }
 
-function DeviceHeader({ chatOpen, device, onConfigure }: DeviceSurfaceProps): React.JSX.Element {
+function DeviceHeader({
+  chatOpen,
+  device,
+  onConfigure,
+}: Pick<DeviceSurfaceProps, "chatOpen" | "device" | "onConfigure">): React.JSX.Element {
   const { messages } = useAdminI18n();
   const deviceTypeLabel = localizePresentationText(device.deviceTypeLabel, messages);
   const connectionLabel = localizePresentationText(device.connection.label, messages);
@@ -411,14 +423,16 @@ function DeviceHeader({ chatOpen, device, onConfigure }: DeviceSurfaceProps): Re
 function DeviceTabPanel({
   activeTab,
   device,
+  onConfigureAgentProfile,
 }: {
   readonly activeTab: DeviceTabKey;
   readonly device: DeviceOverviewViewModel;
+  readonly onConfigureAgentProfile: DeviceSurfaceProps["onConfigureAgentProfile"];
 }): React.JSX.Element {
   const { messages } = useAdminI18n();
   switch (activeTab) {
     case "overview":
-      return <DeviceOverview device={device} />;
+      return <DeviceOverview device={device} onConfigureAgentProfile={onConfigureAgentProfile} />;
     case "capabilities":
       return (
         <div className="focused-detail">
@@ -449,6 +463,12 @@ function DeviceTabPanel({
     case "authority":
       return (
         <div className="focused-detail authority-detail">
+          <DetailSection area="agent-profile" title={messages.device.agentExecution}>
+            <AgentExecutionProfilePanel
+              device={device}
+              onConfigureAgentProfile={onConfigureAgentProfile}
+            />
+          </DetailSection>
           <DetailSection area="policies" title={messages.device.policies}>
             <PolicyList policies={device.policies} />
           </DetailSection>
@@ -473,8 +493,10 @@ function DeviceTabPanel({
 
 function DeviceOverview({
   device,
+  onConfigureAgentProfile,
 }: {
   readonly device: DeviceOverviewViewModel;
+  readonly onConfigureAgentProfile: DeviceSurfaceProps["onConfigureAgentProfile"];
 }): React.JSX.Element {
   const { locale, messages } = useAdminI18n();
 
@@ -560,6 +582,13 @@ function DeviceOverview({
 
       <DetailSection area="adapters" title={messages.device.agentAdapters}>
         <AgentAdapterList adapters={device.agentAdapters} />
+      </DetailSection>
+
+      <DetailSection area="agent-profile" title={messages.device.agentExecution}>
+        <AgentExecutionProfilePanel
+          device={device}
+          onConfigureAgentProfile={onConfigureAgentProfile}
+        />
       </DetailSection>
 
       <DetailSection area="policies" title={messages.device.policies}>
@@ -789,12 +818,36 @@ function AgentAdapterList({
       {adapters.map((adapter) => (
         <li key={adapter.adapterId}>
           <Bot aria-hidden="true" />
-          <span>
+          <span className="adapter-copy">
             <strong>{adapter.provider}</strong>
             <small>
               {adapter.adapterId}
               {adapter.version === undefined ? "" : ` · ${adapter.version}`}
             </small>
+            {adapter.models.length === 0 ? null : (
+              <span className="adapter-model-list">
+                <small>
+                  {formatMessage(messages.device.modelCatalog, {
+                    count: adapter.models.length,
+                  })}
+                </small>
+                {adapter.models.slice(0, 4).map((model) => (
+                  <small className="adapter-model" key={model.modelId}>
+                    {model.displayName} <code>{model.modelId}</code>
+                    {model.isDefault ? (
+                      <span className="adapter-model__default">{messages.device.defaultModel}</span>
+                    ) : null}
+                  </small>
+                ))}
+                {adapter.models.length > 4 ? (
+                  <small>
+                    {formatMessage(messages.device.moreModels, {
+                      count: adapter.models.length - 4,
+                    })}
+                  </small>
+                ) : null}
+              </span>
+            )}
           </span>
           <span
             className={`status-${
@@ -813,6 +866,283 @@ function AgentAdapterList({
       ))}
     </ul>
   );
+}
+
+type AgentProfileTarget = "worker" | "coordinator";
+
+interface SelectableAgentBinding {
+  readonly binding: AgentBindingView;
+  readonly key: string;
+  readonly label: string;
+}
+
+function AgentExecutionProfilePanel({
+  device,
+  onConfigureAgentProfile,
+}: {
+  readonly device: DeviceOverviewViewModel;
+  readonly onConfigureAgentProfile: DeviceSurfaceProps["onConfigureAgentProfile"];
+}): React.JSX.Element {
+  const { messages } = useAdminI18n();
+  const [selectedTarget, setTarget] = useState<AgentProfileTarget>("worker");
+  const target = device.role === "main" ? selectedTarget : "worker";
+  const profile =
+    target === "coordinator"
+      ? (device.coordinatorAgentExecutionProfile ?? device.agentExecutionProfile)
+      : device.agentExecutionProfile;
+
+  return (
+    <div className="agent-profile-panel">
+      {device.role === "main" ? (
+        <div
+          aria-label={messages.device.agentProfileTarget}
+          className="agent-profile-target"
+          role="group"
+        >
+          <button
+            aria-pressed={target === "worker"}
+            className={target === "worker" ? "agent-profile-target--active" : undefined}
+            onClick={() => setTarget("worker")}
+            type="button"
+          >
+            {messages.device.workerAgent}
+          </button>
+          <button
+            aria-pressed={target === "coordinator"}
+            className={target === "coordinator" ? "agent-profile-target--active" : undefined}
+            onClick={() => setTarget("coordinator")}
+            type="button"
+          >
+            {messages.device.coordinatorAgent}
+          </button>
+        </div>
+      ) : null}
+      <AgentProfileEditor
+        device={device}
+        key={`${device.deviceId}:${target}`}
+        onConfigureAgentProfile={onConfigureAgentProfile}
+        profile={profile}
+        target={target}
+      />
+    </div>
+  );
+}
+
+function AgentProfileEditor({
+  device,
+  onConfigureAgentProfile,
+  profile,
+  target,
+}: {
+  readonly device: DeviceOverviewViewModel;
+  readonly onConfigureAgentProfile: DeviceSurfaceProps["onConfigureAgentProfile"];
+  readonly profile: AgentExecutionProfileView;
+  readonly target: AgentProfileTarget;
+}): React.JSX.Element {
+  const { messages } = useAdminI18n();
+  const options = selectableAgentBindings(device);
+  const currentPrimaryKey = profile.mode === "auto" ? undefined : bindingKey(profile.primary);
+  const currentFallbackKey =
+    profile.mode === "prefer" ? bindingKey(profile.fallbacks[0] ?? profile.primary) : undefined;
+  const [mode, setMode] = useState<AgentExecutionProfileView["mode"]>(profile.mode);
+  const [primaryKey, setPrimaryKey] = useState(
+    options.some((option) => option.key === currentPrimaryKey)
+      ? (currentPrimaryKey ?? "")
+      : (options[0]?.key ?? ""),
+  );
+  const [fallbackKey, setFallbackKey] = useState(
+    options.some((option) => option.key === currentFallbackKey && option.key !== primaryKey)
+      ? (currentFallbackKey ?? "")
+      : "",
+  );
+  const primary = options.find((option) => option.key === primaryKey)?.binding;
+  const fallback =
+    fallbackKey === "" || fallbackKey === primaryKey
+      ? undefined
+      : options.find((option) => option.key === fallbackKey)?.binding;
+  const proposedProfile: AgentExecutionProfileView | undefined =
+    mode === "auto"
+      ? { schemaVersion: 1, mode: "auto" }
+      : primary === undefined
+        ? undefined
+        : mode === "pinned"
+          ? { schemaVersion: 1, mode: "pinned", primary }
+          : {
+              schemaVersion: 1,
+              mode: "prefer",
+              primary,
+              fallbacks: fallback === undefined ? [] : [fallback],
+            };
+  const modeDescription =
+    mode === "auto"
+      ? messages.device.profileAutoDescription
+      : mode === "prefer"
+        ? messages.device.profilePreferDescription
+        : messages.device.profilePinnedDescription;
+
+  return (
+    <>
+      <div className="agent-profile-current">
+        <span>{messages.device.currentBinding}</span>
+        <strong>{profileModeLabel(profile.mode, messages.device)}</strong>
+        <small>{formatProfileBinding(profile, messages.device.automaticSelection)}</small>
+      </div>
+      <p className="agent-profile-hint">{messages.device.agentProfileHint}</p>
+      <div className="agent-profile-editor">
+        <label>
+          <span>{messages.device.profileMode}</span>
+          <select
+            onChange={(event) =>
+              setMode(event.currentTarget.value as AgentExecutionProfileView["mode"])
+            }
+            value={mode}
+          >
+            <option value="auto">{messages.device.profileAuto}</option>
+            <option value="prefer">{messages.device.profilePrefer}</option>
+            <option value="pinned">{messages.device.profilePinned}</option>
+          </select>
+        </label>
+        <p>{modeDescription}</p>
+        {mode === "auto" ? null : options.length === 0 ? (
+          <div className="agent-profile-empty" role="status">
+            {messages.device.noVerifiedModels}
+          </div>
+        ) : (
+          <div className="agent-profile-bindings">
+            <label>
+              <span>{messages.device.primaryBinding}</span>
+              <select
+                onChange={(event) => setPrimaryKey(event.currentTarget.value)}
+                value={primaryKey}
+              >
+                {options.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {mode === "prefer" ? (
+              <label>
+                <span>{messages.device.fallbackBinding}</span>
+                <select
+                  onChange={(event) => setFallbackKey(event.currentTarget.value)}
+                  value={fallbackKey}
+                >
+                  <option value="">{messages.device.noFallback}</option>
+                  {options
+                    .filter((option) => option.key !== primaryKey)
+                    .map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
+        )}
+        <button
+          className="secondary-button agent-profile-review"
+          disabled={proposedProfile === undefined}
+          onClick={(event) => {
+            if (proposedProfile !== undefined) {
+              onConfigureAgentProfile(
+                buildAgentProfileConfigurationRequest(device, target, proposedProfile),
+                event.currentTarget,
+              );
+            }
+          }}
+          type="button"
+        >
+          <MessagesSquare aria-hidden="true" />
+          {messages.device.configureAgentProfile}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function selectableAgentBindings(
+  device: DeviceOverviewViewModel,
+): readonly SelectableAgentBinding[] {
+  return device.agentAdapters
+    .filter(
+      (adapter) =>
+        adapter.readiness === "ready" &&
+        adapter.compatibility === "tested" &&
+        adapter.models.length > 0,
+    )
+    .flatMap((adapter) =>
+      [...adapter.models]
+        .sort(
+          (left, right) =>
+            Number(right.isDefault) - Number(left.isDefault) ||
+            left.displayName.localeCompare(right.displayName, "en"),
+        )
+        .map((model) => {
+          const binding: AgentBindingView = {
+            provider: adapter.provider === "generic-command" ? "generic" : adapter.provider,
+            adapterId: adapter.adapterId,
+            modelId: model.modelId,
+          };
+          return Object.freeze({
+            binding,
+            key: bindingKey(binding),
+            label: `${adapter.provider} · ${model.displayName} (${model.modelId}) · ${adapter.adapterId}`,
+          });
+        }),
+    );
+}
+
+function bindingKey(binding: AgentBindingView): string {
+  return JSON.stringify([binding.provider, binding.adapterId, binding.modelId ?? null]);
+}
+
+function formatProfileBinding(
+  profile: AgentExecutionProfileView,
+  automaticSelection: string,
+): string {
+  if (profile.mode === "auto") {
+    return automaticSelection;
+  }
+  const primary = `${profile.primary.provider} · ${profile.primary.modelId ?? profile.primary.adapterId}`;
+  if (profile.mode === "pinned" || profile.fallbacks.length === 0) {
+    return primary;
+  }
+  return `${primary} → ${profile.fallbacks
+    .map((binding) => `${binding.provider} · ${binding.modelId ?? binding.adapterId}`)
+    .join(" → ")}`;
+}
+
+function profileModeLabel(
+  mode: AgentExecutionProfileView["mode"],
+  messages: {
+    readonly profileAuto: string;
+    readonly profilePrefer: string;
+    readonly profilePinned: string;
+  },
+): string {
+  return mode === "auto"
+    ? messages.profileAuto
+    : mode === "prefer"
+      ? messages.profilePrefer
+      : messages.profilePinned;
+}
+
+function buildAgentProfileConfigurationRequest(
+  device: DeviceOverviewViewModel,
+  target: AgentProfileTarget,
+  profile: AgentExecutionProfileView,
+): string {
+  const key = target === "coordinator" ? "agent.coordinator-profile" : "agent.worker-profile";
+  const scope = target === "coordinator" ? "Main" : "Device";
+  return [
+    `Inspect the current configuration for Device ${JSON.stringify(device.deviceId)}.`,
+    `Propose changing only ${JSON.stringify(key)} at ${scope} scope to exactly ${JSON.stringify(profile)}.`,
+    "Verify every selected adapter and provider-native model ID against this target Device's latest tested model catalog.",
+    "Do not substitute another provider, adapter, or model. Explain whether the change affects new native sessions only, then prepare the normal review and approval flow.",
+  ].join(" ");
 }
 
 function ResourceLockList({

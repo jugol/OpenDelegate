@@ -179,6 +179,33 @@ export const japaneseMessages = {
     noPolicies: "表示できる実行ポリシーがありません。",
     agentAdapters: "Agent アダプター",
     noAgentAdapters: "Agent アダプターの観測情報がありません。",
+    agentExecution: "Agent の実行",
+    agentProfileTarget: "Agent プロファイルの対象",
+    workerAgent: "ワーカー Agent",
+    coordinatorAgent: "コーディネーター Agent",
+    currentBinding: "現在のバインディング",
+    automaticSelection: "新しいセッションごとに、検証済みのバインディングを選択します。",
+    agentProfileHint:
+      "プロファイルの変更は新しいネイティブセッションから適用されます。既存の Task セッションは元のバインディングを維持します。",
+    profileMode: "選択モード",
+    profileAuto: "自動",
+    profilePrefer: "優先",
+    profilePinned: "固定",
+    profileAutoDescription:
+      "新しいセッションごとに、準備済みで検証済みのアダプターとモデルを決定的に選択します。",
+    profilePreferDescription:
+      "プライマリを優先し、必要な場合にのみ明示したフォールバックを使用します。",
+    profilePinnedDescription:
+      "このバインディングだけを使用します。利用できない場合、別のモデルに置き換えず停止します。",
+    primaryBinding: "プライマリバインディング",
+    fallbackBinding: "フォールバックバインディング",
+    noFallback: "フォールバックなし",
+    noVerifiedModels:
+      "準備済みで検証済みのモデルカタログがありません。正確なモデルを選ぶ前にこの Device を評価してください。",
+    configureAgentProfile: "Configuration Chat で変更を確認",
+    modelCatalog: "検証済みモデル {count} 件",
+    defaultModel: "デフォルト",
+    moreModels: "ほか {count} 件",
     resourceLocks: "リソースロック",
     noResourceLocks: "有効な名前付きリソースロックはありません。",
     verifiedEvidence: "検証済み · {source} · {time}",

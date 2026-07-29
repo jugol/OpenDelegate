@@ -176,6 +176,33 @@ export const englishMessages = {
     noPolicies: "No executable Policy projection is available.",
     agentAdapters: "Agent adapters",
     noAgentAdapters: "No Agent Adapter observation is available.",
+    agentExecution: "Agent execution",
+    agentProfileTarget: "Agent profile target",
+    workerAgent: "Worker Agent",
+    coordinatorAgent: "Coordinator Agent",
+    currentBinding: "Current binding",
+    automaticSelection: "OpenDelegate selects a tested binding for each new session.",
+    agentProfileHint:
+      "Profiles apply to new native sessions. Existing Task sessions keep their original binding.",
+    profileMode: "Selection mode",
+    profileAuto: "Auto",
+    profilePrefer: "Prefer",
+    profilePinned: "Pinned",
+    profileAutoDescription:
+      "Choose a tested, ready adapter and model deterministically for each new session.",
+    profilePreferDescription:
+      "Use the primary binding first, then only the explicit fallback when needed.",
+    profilePinnedDescription:
+      "Use exactly this binding. If it is unavailable, stop instead of substituting another model.",
+    primaryBinding: "Primary binding",
+    fallbackBinding: "Fallback binding",
+    noFallback: "No fallback",
+    noVerifiedModels:
+      "No tested, ready model catalog is available. Assess this Device before selecting an exact model.",
+    configureAgentProfile: "Review change in Configuration Chat",
+    modelCatalog: "{count} verified models",
+    defaultModel: "Default",
+    moreModels: "+{count} more",
     resourceLocks: "Resource locks",
     noResourceLocks: "No named resource lock is active.",
     verifiedEvidence: "Verified · {source} · {time}",

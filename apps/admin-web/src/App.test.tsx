@@ -116,6 +116,7 @@ const windowsWorker = {
   instructions: ["Use the registered build workspace only."],
   policies: [],
   agentAdapters: [],
+  agentExecutionProfile: { schemaVersion: 1, mode: "auto" },
   capabilities: [
     {
       capabilityId: "claude-code",
@@ -292,6 +293,7 @@ describe("first-run Device overview", () => {
           readiness: "ready",
           compatibility: "tested",
           observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+          models: [],
         },
       ],
       resourceLocks: [
@@ -342,6 +344,48 @@ describe("first-run Device overview", () => {
     expect(screen.getByText(/^Running · lease until/u)).toBeTruthy();
     expect(screen.getByText("1 of 4 Run slots active")).toBeTruthy();
     expect(screen.getByText("2 of 10000 buffered events")).toBeTruthy();
+  });
+
+  it("prefills an exact tested Device model change in Configuration Chat", async () => {
+    const user = userEvent.setup();
+    const device = {
+      ...firstRunDevice,
+      agentAdapters: [
+        {
+          provider: "claude",
+          adapterId: "claude-agent-sdk",
+          version: "0.3.220",
+          readiness: "ready",
+          compatibility: "tested",
+          observedAtMs: Date.parse("2026-07-29T00:00:00.000Z"),
+          modelCatalogObservedAtMs: Date.parse("2026-07-29T00:00:00.000Z"),
+          models: [
+            {
+              modelId: "claude-opus-5",
+              displayName: "Claude Opus 5",
+              isDefault: true,
+              supportedEfforts: [],
+            },
+          ],
+        },
+      ],
+    } satisfies DeviceOverviewViewModel;
+
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [device], mainDeviceId: device.deviceId }}
+        onConfigurationMessage={async () => ({ content: "Ready.", suggestedActions: [] })}
+      />,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Selection mode" }), "pinned");
+    await user.click(screen.getByRole("button", { name: "Review change in Configuration Chat" }));
+
+    const composer = screen.getByRole("textbox", { name: "Message Configuration Chat" });
+    expect((composer as HTMLTextAreaElement).value).toContain('"modelId":"claude-opus-5"');
+    expect((composer as HTMLTextAreaElement).value).toContain('"agent.worker-profile"');
+    expect(screen.getByRole("dialog", { name: "Configuration Chat" })).toBeTruthy();
   });
 
   it("opens and closes Configuration Chat with an explicit accessible focus lifecycle", async () => {

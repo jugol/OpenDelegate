@@ -20,6 +20,29 @@ export interface OwnerSession {
   readonly absoluteExpiresAt: string;
 }
 
+export interface AgentBindingSummary {
+  readonly provider: "codex" | "claude" | "generic";
+  readonly adapterId: string;
+  readonly modelId?: string;
+}
+
+export type AgentExecutionProfileSummary =
+  | {
+      readonly schemaVersion: 1;
+      readonly mode: "auto";
+    }
+  | {
+      readonly schemaVersion: 1;
+      readonly mode: "prefer";
+      readonly primary: AgentBindingSummary;
+      readonly fallbacks: readonly AgentBindingSummary[];
+    }
+  | {
+      readonly schemaVersion: 1;
+      readonly mode: "pinned";
+      readonly primary: AgentBindingSummary;
+    };
+
 export interface DeviceSummary {
   readonly deviceId: string;
   readonly name: string;
@@ -73,7 +96,16 @@ export interface DeviceSummary {
     readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
     readonly version?: string;
     readonly observedAtMs: number;
+    readonly modelCatalogObservedAtMs?: number;
+    readonly models?: readonly {
+      readonly modelId: string;
+      readonly displayName: string;
+      readonly isDefault?: boolean;
+      readonly supportedEfforts?: readonly string[];
+    }[];
   }[];
+  readonly agentExecutionProfile?: AgentExecutionProfileSummary;
+  readonly coordinatorAgentExecutionProfile?: AgentExecutionProfileSummary;
   readonly routes?: readonly {
     readonly routeId: string;
     readonly label: string;

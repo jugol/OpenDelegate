@@ -3,9 +3,13 @@ import { isDeepStrictEqual } from "node:util";
 import type { WorkerHeartbeatV1 } from "@opendelegate/device-channel";
 import type { PersistedDeviceIdentity } from "@opendelegate/device-identity";
 import type { DeviceSummaryV1 } from "@opendelegate/protocol";
-import type { DeviceCandidate } from "@opendelegate/scheduler";
+import {
+  DEFAULT_AGENT_EXECUTION_PROFILE,
+  isAgentExecutionProfile,
+  type AgentExecutionProfile,
+} from "@opendelegate/configuration";
 
-import type { WorkerCandidateSource } from "./worker-target-resolver.ts";
+import type { AgentAwareWorkerCandidate, WorkerCandidateSource } from "./worker-target-resolver.ts";
 
 const DEFAULT_OFFLINE_AFTER_MS = 45_000;
 const MAXIMUM_FUTURE_CLOCK_SKEW_MS = 30_000;
@@ -23,6 +27,8 @@ export interface MainOwnedDeviceProfile {
   readonly displayName?: string;
   readonly roles?: readonly string[];
   readonly instructions?: readonly string[];
+  readonly agentExecutionProfile?: AgentExecutionProfile;
+  readonly coordinatorAgentExecutionProfile?: AgentExecutionProfile;
   readonly policies?: readonly {
     readonly policyId: string;
     readonly actionCategory: string;
@@ -190,7 +196,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
     );
   }
 
-  public async list(): Promise<readonly DeviceCandidate[]> {
+  public async list(): Promise<readonly AgentAwareWorkerCandidate[]> {
     const identities = await this.#readIdentities();
     const now = this.#readNow();
     return Object.freeze(
@@ -261,7 +267,34 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
             policies: [...(profile?.policies ?? [])],
             ...(inventory?.agentAdapters === undefined
               ? {}
-              : { agentAdapters: [...inventory.agentAdapters] }),
+              : {
+                  agentAdapters: inventory.agentAdapters.map((adapter) => ({
+                    provider: adapter.provider,
+                    adapterId: adapter.adapterId,
+                    readiness: adapter.readiness,
+                    compatibility: adapter.compatibility,
+                    ...(adapter.version === undefined ? {} : { version: adapter.version }),
+                    observedAtMs: adapter.observedAtMs,
+                    ...(adapter.modelCatalogObservedAtMs === undefined
+                      ? {}
+                      : {
+                          modelCatalogObservedAtMs: adapter.modelCatalogObservedAtMs,
+                          models: (adapter.models ?? []).map((model) => ({
+                            modelId: model.modelId,
+                            displayName: model.displayName,
+                            ...(model.isDefault === undefined
+                              ? {}
+                              : { isDefault: model.isDefault }),
+                            ...(model.supportedEfforts === undefined
+                              ? {}
+                              : { supportedEfforts: [...model.supportedEfforts] }),
+                          })),
+                        }),
+                  })),
+                }),
+            agentExecutionProfile: projectAgentExecutionProfile(
+              profile?.agentExecutionProfile ?? DEFAULT_AGENT_EXECUTION_PROFILE,
+            ),
             routes:
               heartbeat?.routes === undefined
                 ? [
@@ -313,7 +346,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
     identity: PersistedDeviceIdentity,
     now: number,
     profile: MainOwnedDeviceProfile | undefined,
-  ): DeviceCandidate {
+  ): AgentAwareWorkerCandidate {
     const heartbeat = this.#currentHeartbeat(identity.deviceId, now);
     const inventory = heartbeat?.inventory;
     const online =
@@ -388,6 +421,25 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
           ? Object.freeze({ outcome: "allow" as const, code: "PERSONAL_INSTANCE_DEFAULT" })
           : Object.freeze({ outcome: "deny" as const, code: "DEVICE_DISABLED" }),
       availableSecretRefs: Object.freeze([...(inventory?.availableSecretRefs ?? [])]),
+      agentExecutionProfile: profile?.agentExecutionProfile ?? DEFAULT_AGENT_EXECUTION_PROFILE,
+      agentAdapters: Object.freeze(
+        (inventory?.agentAdapters ?? []).map((adapter) =>
+          Object.freeze({
+            provider: adapter.provider === "generic-command" ? "generic" : adapter.provider,
+            adapterId: adapter.adapterId,
+            readiness: adapter.readiness,
+            compatibility: adapter.compatibility,
+            models: Object.freeze(
+              (adapter.models ?? []).map((model) =>
+                Object.freeze({
+                  modelId: model.modelId,
+                  isDefault: model.isDefault === true,
+                }),
+              ),
+            ),
+          }),
+        ),
+      ),
     });
   }
 
@@ -436,6 +488,22 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
         : {
             instructions: validateProfileList(profile.instructions, "instruction", 128, 4_096),
           }),
+      ...(profile.agentExecutionProfile === undefined
+        ? {}
+        : {
+            agentExecutionProfile: validateAgentExecutionProfile(
+              profile.agentExecutionProfile,
+              "Worker Agent Execution Profile",
+            ),
+          }),
+      ...(profile.coordinatorAgentExecutionProfile === undefined
+        ? {}
+        : {
+            coordinatorAgentExecutionProfile: validateAgentExecutionProfile(
+              profile.coordinatorAgentExecutionProfile,
+              "Coordinator Agent Execution Profile",
+            ),
+          }),
       ...(profile.policies === undefined
         ? {}
         : {
@@ -468,6 +536,30 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
     }
     return now;
   }
+}
+
+function validateAgentExecutionProfile(value: unknown, label: string): AgentExecutionProfile {
+  if (!isAgentExecutionProfile(value)) {
+    throw new Error(`The Main-owned ${label} is invalid.`);
+  }
+  return structuredClone(value);
+}
+
+function projectAgentExecutionProfile(
+  value: AgentExecutionProfile,
+): NonNullable<DeviceSummaryV1["agentExecutionProfile"]> {
+  if (value.mode === "auto") {
+    return { schemaVersion: 1, mode: "auto" };
+  }
+  const primary = { ...value.primary };
+  return value.mode === "pinned"
+    ? { schemaVersion: 1, mode: "pinned", primary }
+    : {
+        schemaVersion: 1,
+        mode: "prefer",
+        primary,
+        fallbacks: value.fallbacks.map((binding) => ({ ...binding })),
+      };
 }
 
 function projectDeviceFacts(

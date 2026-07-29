@@ -417,6 +417,21 @@ through a secure handoff and resumes the same Task afterward.
 7. Main may automatically apply Role and Instruction changes and records old and new
    values for rollback.
 8. A Worker or Main Agent cannot automatically relax executable Policy.
+9. Every ready first-class Agent Adapter reports a bounded verified catalog of
+   provider-native model IDs and display metadata. Catalog discovery is deterministic
+   operational state and is not injected wholesale into normal Task context.
+10. Every Worker-capable Device has a typed Worker Agent Execution Profile. Main has
+    a separate Coordinator profile so its planning runner and co-located Worker can
+    use different bindings. A Coordinator model on the active authenticated adapter
+    is a normal profile change; replacing the composed Coordinator provider or
+    adapter remains an explicit authenticated Main Agent reconfiguration and service
+    restart rather than an in-process profile mutation.
+11. Agent Execution Profile modes are `Auto`, `Prefer`, and `Pinned`. Prefer uses
+    only an explicit fallback chain. Pinned fails closed when its exact adapter or
+    model is unavailable.
+12. Owner aliases and display names are resolved against the target Device's current
+    verified catalog. Durable configuration stores the exact provider-native model
+    ID, never an unresolved alias.
 
 ### FR-4 — Connectivity and transport profiles
 
@@ -541,8 +556,8 @@ may request a transition but cannot manufacture a state outside the transition r
 
 1. Each Work Order has a stable ID, explicit brief, completion criteria, constraints,
    selected inputs, required Capabilities, scheduling hints, and an optional Agent
-   requirement naming a provider plus an optional exact adapter and allowed
-   compatibility set.
+   requirement naming a provider plus an optional exact adapter, exact model, and
+   allowed compatibility set.
 2. A deterministic eligibility stage filters Devices by health, connection, Policy,
    Capability, Secret availability, resource capacity, and hard Task constraints.
 3. A deterministic score may rank workload, route cost, artifact locality, session
@@ -569,8 +584,13 @@ may request a transition but cannot manufacture a state outside the transition r
     is still live at the authoritative, monotonically non-decreasing journal
     acceptance instant; an expired or replaced Run cannot be credited with
     completion. Replay preserves and revalidates that original event instant.
-14. Main copies any Work Order Agent requirement into the immutable Run assignment.
-    Retry and restart replay preserve that exact requirement; they do not widen it.
+14. The immutable Run assignment retains the original Work Order, including any hard
+    Agent requirement, unchanged. Its separate effective Agent binding is resolved
+    from the selected Device's profile and current verified catalog. With no hard
+    requirement the profile decides the binding; with one, the binding must refine
+    and satisfy it without widening provider, adapter, model, or allowed
+    compatibility. Retry and restart replay preserve both the original requirement
+    and that exact effective binding.
 15. A terminal Worker event may return the actual provider, adapter ID and version,
     native session ID, Workspace ID, workstream ID, and session lineage. This safe
     observation excludes Device-local paths, worktree paths, and session keys and is
@@ -588,6 +608,9 @@ may request a transition but cannot manufacture a state outside the transition r
     or reject a question lexically. Placement questions remain valid when privacy,
     data locality, cost, physical or interactive access, licensed software, result
     location, compatibility, legal, Policy, or another owner-visible outcome changes.
+20. Scheduling intersects Task hard requirements with the Device Agent Execution
+    Profile. A conflict excludes the Device with an owner-visible reason instead of
+    silently widening either requirement.
 
 ### FR-8 — Concurrency and resource locks
 
@@ -628,7 +651,8 @@ may request a transition but cannot manufacture a state outside the transition r
 
 1. The common Agent Adapter contract supports detection, version inspection, auth
    readiness, start, resume, steer when supported, cancel, event streaming, final
-   result, diagnostics, and session cleanup.
+   result, diagnostics, session cleanup, and bounded model-catalog discovery for
+   first-class providers.
 2. Codex and Claude are first-class adapters through their supported programmatic
    interfaces.
 3. CLI non-interactive execution and resume provide fallback paths where an SDK
@@ -655,12 +679,14 @@ may request a transition but cannot manufacture a state outside the transition r
     summary, decisions, pending Work Orders, selected Artifact index, relevant current
     messages, and explicit constraints.
 14. A Worker uses Device-level automatic adapter selection only when its Run has no
-    Agent requirement. When a requirement exists, the provider is mandatory, the
-    exact adapter and compatibility set are enforced when present, and an
-    unavailable binding fails closed without silently substituting another
-    provider. Omitting the compatibility set means tested-only.
+    Agent requirement or resolved Device profile binding. When a requirement exists,
+    the provider is mandatory, the exact adapter, exact model, and compatibility set
+    are enforced when present, and an unavailable binding fails closed without
+    silently substituting another provider or model. Omitting the compatibility set
+    means tested-only.
 15. A successful provider-bound Run reports a safe native-session observation whose
-    provider and exact adapter, when required, match the durable assignment.
+    provider, exact adapter, and exact model, when required, match the durable
+    assignment.
 
 ### FR-10 — Context isolation and compaction
 
@@ -671,7 +697,8 @@ may request a transition but cannot manufacture a state outside the transition r
    lost merely because chat was compacted.
 4. Artifact contents are referenced and opened only when required.
 5. Worker prompts receive a Work Order package, not the entire Coordinator
-   conversation.
+   conversation. The package includes the exact immutable Agent Binding selected for
+   the Run.
 6. Cross-Task retrieval is disabled by default.
 7. An explicit owner link or Main-created dependency names exactly which external
    information becomes input.
@@ -793,7 +820,8 @@ may request a transition but cannot manufacture a state outside the transition r
 5. Initial navigation shows the current Device and expands to a left-side Device list
    as more Devices enroll.
 6. Device detail includes name, OS, health, Facts, Capabilities, Roles, Instructions,
-   Policies, connections, Agent Adapters, locks, load, and current Runs.
+   Policies, connections, Agent Adapters, their verified model catalogs, the effective
+   Worker Agent Execution Profile, locks, load, and current Runs.
 7. Knowledge content is never proxied to Admin Web. At most, local service health is
    shown.
 8. Task inspection shows the Task state, event timeline, Coordinator Session lineage,
@@ -817,7 +845,13 @@ may request a transition but cannot manufacture a state outside the transition r
     configuration homes by absolute path; assessment and execution use those same
     homes without copying or discovering credentials.
 15. Protected configuration changes use the same Policy and approval mechanisms as
-    Task work.
+    Task work. Admin Web can select `Auto`, `Prefer`, or `Pinned` from target-local
+    verified adapters and model IDs. Configuration Chat can propose the same typed
+    change in natural language, including distinct Coordinator and co-located Worker
+    profiles for Main. Both surfaces read and write the same profile source of truth.
+    They explain that selecting a Coordinator binding on a different provider or
+    adapter does not replace the running Main Agent; the authenticated Main Agent
+    reconfiguration and restart must complete first.
 16. Admin Web does not attempt to reproduce the complete Discord Task chat in the
     first release.
 17. English is the canonical fallback and the initial locale when no explicit owner
@@ -972,7 +1006,8 @@ may request a transition but cannot manufacture a state outside the transition r
 3. Main is the only database client.
 4. Durable concepts include Instance, owner bindings, Devices, profiles, transport
    metadata, Agent Adapter metadata, Tasks, Task events, Work Orders, Runs, session
-   references, approvals, policies, locks, Artifacts, audit events, and settings.
+   references, exact Agent Bindings, model-catalog observations, approvals, policies,
+   locks, Artifacts, audit events, and settings.
 5. Knowledge and Secret values are explicitly excluded.
 6. Artifact bytes are stored separately from relational metadata.
 7. Database migrations are transactional where supported, restart-safe, and tested
@@ -994,6 +1029,13 @@ may request a transition but cannot manufacture a state outside the transition r
 5. An owner-facing incident bundle is exportable without Secret values.
 6. Token, cost, duration, and retry metrics are tracked when the provider exposes
    them.
+7. Deterministic release tooling compares the exact Codex and Claude source targets
+   with registry candidates without editing source or an installed Device. Scheduled
+   repository dependency automation may propose a candidate. A future Device
+   maintenance monitor may expose `disabled`, `propose`, and rollback-capable
+   verified automation only after Phase 12 implements its durable lifecycle.
+   Discovery never proves a supported release or bypasses applicable Agent and
+   platform gates.
 
 ### FR-21 — Failure and recovery
 
@@ -1173,6 +1215,9 @@ selection call is required.
 - Applying a patch validates schema, runs Policy, commits atomically, and emits audit.
 - Network and Agent diagnostics may include detailed configuration only when needed;
   routine Task context does not carry it.
+- `agent.worker-profile` is Device-scoped and `agent.coordinator-profile` is
+  Main-scoped. Profile values use exact provider-native IDs resolved from verified
+  catalogs.
 
 ### Artifact security model
 
@@ -1193,6 +1238,8 @@ selection call is required.
 | Recovery summary and session lineage | Main database |
 | Device facts and runtime probes | Worker observation, accepted by Main |
 | Roles and Instructions | Main Device Profile |
+| Worker and Coordinator Agent Execution Profiles | Main typed configuration |
+| Installed and verified adapter/model catalogs | Worker observation accepted by Main |
 | Executable Policy | Main policy configuration enforced again by Worker |
 | Secret values | Relevant Device Secret Store |
 | Knowledge Markdown and index | Relevant Worker Device |
@@ -1313,10 +1360,14 @@ The milestone is accepted only when all of the following are demonstrated:
 14. Codex and Claude start through programmatic adapters, return observable events,
     and resume native sessions by Task or workstream.
 15. Coordinator provider pinning and Worker provider participation behave as
-    specified: Main preserves an immutable per-Run provider requirement, Worker
-    never silently substitutes it, Device Auto applies only without a requirement,
-    and safe actual provider/adapter/native-session lineage survives Main and Worker
-    restart replay.
+    specified: Main preserves each Work Order's hard requirement unchanged, records
+    one exact effective binding that satisfies it, and Worker never silently
+    substitutes either. Safe actual provider/adapter/model/native-session lineage
+    survives Main and Worker restart replay. Every Worker-capable Device, including
+    Main, exposes target-local verified adapter/model choices; Auto, Prefer, and
+    Pinned produce the specified immutable Run binding, a pinned unavailable model
+    fails closed, and changing a profile does not rewrite an existing native
+    session's binding.
 16. A forced native-session loss continues from a durable checkpoint.
 17. A Worker uses relevant local Markdown Knowledge without uploading Knowledge
     content or index data to Main.

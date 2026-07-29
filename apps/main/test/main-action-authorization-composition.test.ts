@@ -377,6 +377,16 @@ function heartbeat(): WorkerHeartbeatV1 {
       knowledgeHealth: "healthy",
       maximumConcurrentRuns: 1,
       capabilities: [{ name: "computer-use", verification: "verified" }],
+      agentAdapters: [
+        {
+          provider: "codex",
+          adapterId: "codex-cli",
+          readiness: "ready",
+          compatibility: "tested",
+          version: "0.146.0",
+          observedAtMs: Date.now(),
+        },
+      ],
       workspaceIds: [],
       availableSecretRefs: [],
     },

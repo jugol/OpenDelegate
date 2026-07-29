@@ -13,6 +13,8 @@ export interface ConfigurationDeviceObservation {
   readonly observedAtMs?: number;
   readonly capabilities: NonNullable<DeviceSummaryV1["capabilities"]>;
   readonly agentAdapters: NonNullable<DeviceSummaryV1["agentAdapters"]>;
+  readonly agentExecutionProfile?: DeviceSummaryV1["agentExecutionProfile"];
+  readonly coordinatorAgentExecutionProfile?: DeviceSummaryV1["coordinatorAgentExecutionProfile"];
   readonly knowledgeHealth: NonNullable<DeviceSummaryV1["knowledgeHealth"]>;
 }
 

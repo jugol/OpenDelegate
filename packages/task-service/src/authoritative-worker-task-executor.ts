@@ -101,6 +101,7 @@ export interface WorkerDispatchTarget {
   readonly deviceId: string;
   readonly workerId: string;
   readonly routeId: string;
+  readonly agentRequirement?: WorkerRunAssignmentV1["agentRequirement"];
 }
 
 export interface WorkerDispatchTargetResolver {
@@ -1203,14 +1204,25 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       }
     }
     assertNotAborted(signal);
+    const agentRequirement = target.agentRequirement ?? workOrder.requiredAgent;
+    if (
+      workOrder.requiredAgent !== undefined &&
+      (agentRequirement === undefined ||
+        !agentRequirementSatisfies(agentRequirement, workOrder.requiredAgent))
+    ) {
+      throw new TaskExecutorError(
+        "WORKER_SELECTION_INVALID",
+        "The Worker target widened or contradicted the Work Order Agent requirement.",
+      );
+    }
     const assignment: WorkerRunAssignmentV1 = deepFreeze({
       taskId: request.task.taskId,
       workOrder,
       ...(continuationCheckpoint === undefined ? {} : { continuationCheckpoint }),
-      ...(workOrder.requiredAgent === undefined
-        ? {}
-        : { agentRequirement: workOrder.requiredAgent }),
-      ...target,
+      ...(agentRequirement === undefined ? {} : { agentRequirement }),
+      deviceId: target.deviceId,
+      workerId: target.workerId,
+      routeId: target.routeId,
       runId,
       leaseId,
       fencingToken:
@@ -2416,7 +2428,7 @@ function normalizeAssignment(
   if (
     workOrder.requiredAgent !== undefined &&
     (agentRequirement === undefined ||
-      !isDeepStrictEqual(agentRequirement, workOrder.requiredAgent))
+      !agentRequirementSatisfies(agentRequirement, workOrder.requiredAgent))
   ) {
     throw corruptState();
   }
@@ -2487,7 +2499,8 @@ function assertAgentSessionMatchesAssignment(
   const requirement = assignment.agentRequirement;
   if (
     session.provider !== requirement.provider ||
-    (requirement.adapterId !== undefined && session.adapterId !== requirement.adapterId)
+    (requirement.adapterId !== undefined && session.adapterId !== requirement.adapterId) ||
+    (requirement.modelId !== undefined && session.modelId !== requirement.modelId)
   ) {
     throw replay ? corruptState() : invalidWorkerEvent();
   }
@@ -2571,7 +2584,14 @@ function validateVerifierResult(
 }
 
 function validateTarget(value: WorkerDispatchTarget): WorkerDispatchTarget {
-  if (!isRecord(value) || !hasExactKeys(value, ["deviceId", "workerId", "routeId"])) {
+  if (
+    !isRecord(value) ||
+    !hasAllowedAndRequiredKeys(
+      value,
+      ["deviceId", "workerId", "routeId", "agentRequirement"],
+      ["deviceId", "workerId", "routeId"],
+    )
+  ) {
     throw new TaskExecutorError(
       "WORKER_SELECTION_INVALID",
       "The Worker target resolver returned an invalid selection.",
@@ -2581,13 +2601,40 @@ function validateTarget(value: WorkerDispatchTarget): WorkerDispatchTarget {
     assertIdentifier(value.deviceId, "Device ID");
     assertIdentifier(value.workerId, "Worker ID");
     assertIdentifier(value.routeId, "route ID");
+    if (value.agentRequirement !== undefined) {
+      parseWorkerAgentRequirement(value.agentRequirement);
+    }
   } catch {
     throw new TaskExecutorError(
       "WORKER_SELECTION_INVALID",
       "The Worker target resolver returned an invalid selection.",
     );
   }
-  return Object.freeze({ ...value });
+  return Object.freeze({
+    deviceId: value.deviceId,
+    workerId: value.workerId,
+    routeId: value.routeId,
+    ...(value.agentRequirement === undefined
+      ? {}
+      : { agentRequirement: parseWorkerAgentRequirement(value.agentRequirement) }),
+  });
+}
+
+function agentRequirementSatisfies(
+  candidate: NonNullable<WorkerRunAssignmentV1["agentRequirement"]>,
+  required: NonNullable<WorkOrderV1["requiredAgent"]>,
+): boolean {
+  if (
+    candidate.provider !== required.provider ||
+    (required.adapterId !== undefined && candidate.adapterId !== required.adapterId) ||
+    (required.modelId !== undefined && candidate.modelId !== required.modelId)
+  ) {
+    return false;
+  }
+  const allowed = new Set(required.allowedCompatibilities ?? (["tested"] as const));
+  return (candidate.allowedCompatibilities ?? (["tested"] as const)).every((compatibility) =>
+    allowed.has(compatibility),
+  );
 }
 
 function validatePublicMessage(value: string): string {

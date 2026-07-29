@@ -157,6 +157,10 @@ test("authenticated heartbeat becomes scheduling and Admin metadata without loca
         observedAtMs: 9_900,
       },
     ],
+    agentExecutionProfile: {
+      schemaVersion: 1,
+      mode: "auto",
+    },
     routes: [
       {
         routeId,

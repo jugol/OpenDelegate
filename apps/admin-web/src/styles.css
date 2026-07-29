@@ -707,6 +707,7 @@ textarea:focus-visible,
     "facts roles"
     "runtime routes"
     "capabilities adapters"
+    "agent-profile agent-profile"
     "policies locks"
     "knowledge work";
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -742,6 +743,10 @@ textarea:focus-visible,
 
 .detail-section--adapters {
   grid-area: adapters;
+}
+
+.detail-section--agent-profile {
+  grid-area: agent-profile;
 }
 
 .detail-section--policies {
@@ -946,6 +951,7 @@ textarea:focus-visible,
   gap: 0 56px;
 }
 
+.authority-detail .detail-section--agent-profile,
 .authority-detail .detail-section--locks {
   grid-column: 1 / -1;
 }
@@ -996,6 +1002,153 @@ textarea:focus-visible,
   max-width: 192px;
   font-weight: 550;
   text-align: right;
+}
+
+.adapter-copy {
+  min-width: 0;
+}
+
+.adapter-model-list {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+}
+
+.adapter-model-list .adapter-model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--color-body);
+}
+
+.adapter-model code {
+  color: var(--color-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.adapter-model__default {
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #0b50c8;
+  background: var(--color-accent-soft);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.agent-profile-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-profile-target {
+  width: fit-content;
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-rail);
+}
+
+.agent-profile-target button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--color-muted);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agent-profile-target button.agent-profile-target--active {
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-control);
+}
+
+.agent-profile-current {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.35fr) minmax(80px, 0.25fr) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  padding: 13px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-rail);
+  font-size: 14px;
+}
+
+.agent-profile-current > span,
+.agent-profile-current > small {
+  color: var(--color-muted);
+}
+
+.agent-profile-current > small {
+  overflow-wrap: anywhere;
+}
+
+.agent-profile-hint,
+.agent-profile-editor > p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.agent-profile-editor {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.46fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 12px 20px;
+}
+
+.agent-profile-editor label,
+.agent-profile-bindings label {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  color: var(--color-body);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agent-profile-editor select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 36px 0 12px;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-control);
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  cursor: pointer;
+}
+
+.agent-profile-bindings {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.agent-profile-empty {
+  grid-column: 1 / -1;
+  padding: 12px 14px;
+  border: 1px solid #e5b96f;
+  border-radius: var(--radius-control);
+  color: var(--color-warning);
+  background: #fffbeb;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.agent-profile-review {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-height: 42px;
 }
 
 .lock-list {
@@ -3812,6 +3965,7 @@ textarea:focus-visible,
       "runtime"
       "capabilities"
       "adapters"
+      "agent-profile"
       "policies"
       "locks"
       "roles"
@@ -4152,12 +4306,23 @@ textarea:focus-visible,
     gap: 0;
   }
 
+  .authority-detail .detail-section--agent-profile,
   .authority-detail .detail-section--locks {
     grid-column: auto;
   }
 }
 
 @media (max-width: 480px) {
+  .agent-profile-current,
+  .agent-profile-editor,
+  .agent-profile-bindings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-profile-review {
+    width: 100%;
+  }
+
   .local-agent-setup {
     grid-template-columns: 1fr;
   }

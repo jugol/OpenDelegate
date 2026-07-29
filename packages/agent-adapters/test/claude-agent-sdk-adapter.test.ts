@@ -273,6 +273,7 @@ test("Claude Agent SDK uses isolated settings, fail-closed sandbox, exact author
     workstreamId: "implementation",
     sessionKey: "task-claude-sdk/implementation",
     deviceId: "device-linux",
+    modelId: "claude-opus-5",
     prompt: "Implement the task.",
     workspace: {
       workspaceId: "workspace-claude-sdk",
@@ -369,7 +370,8 @@ test("Claude Agent SDK uses isolated settings, fail-closed sandbox, exact author
 
   assert.equal(first.status, "succeeded");
   assert.equal(first.session?.nativeSessionId, sessionId);
-  assert.equal(first.session?.adapterVersion, "0.3.205");
+  assert.equal(first.session?.adapterVersion, "0.3.220");
+  assert.equal(first.session?.modelId, "claude-opus-5");
   assert.equal(first.finalText, "Finished with SDK");
   assert.equal(first.usage?.cachedInputTokens, 3);
   assert.equal(authorizations.length, 3);
@@ -383,6 +385,7 @@ test("Claude Agent SDK uses isolated settings, fail-closed sandbox, exact author
     "mcp__opendelegate-computer-use__computer_use_click_lookalike",
   );
   assert.deepEqual(capturedOptions[0]?.["settingSources"], []);
+  assert.equal(capturedOptions[0]?.["model"], "claude-opus-5");
   assert.equal(capturedOptions[0]?.["strictMcpConfig"], true);
   const providerEnvironment = capturedOptions[0]?.["env"] as Readonly<Record<string, unknown>>;
   assert.equal(providerEnvironment["CLAUDE_CONFIG_DIR"], claudeHome);

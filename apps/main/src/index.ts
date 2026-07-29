@@ -11,10 +11,13 @@ import {
 import type { AgentAdapterProbe } from "@opendelegate/agent-adapters";
 import {
   ConfigurationService,
+  DEFAULT_AGENT_EXECUTION_PROFILE,
   STANDARD_CONFIGURATION_DEFINITIONS,
+  isAgentExecutionProfile,
   type ConfigurationChange,
   type ConfigurationSecretReferenceAvailabilityInput,
   type EffectiveConfigurationValue,
+  type AgentExecutionProfile,
 } from "@opendelegate/configuration";
 import {
   Argon2idPasswordHasher,
@@ -115,6 +118,7 @@ import { closeAfterPrimaryFailure, closeMainResources } from "./shutdown.ts";
 import { readStableRegularFile, StableFileError } from "./stable-file.ts";
 import { createMainTaskBudgetAdmin } from "./task-budget-admin.ts";
 import { authorizeMainConfigurationMutation } from "./configuration-policy.ts";
+import { resolveCoordinatorModelId } from "./coordinator-agent-profile.ts";
 import {
   MAIN_OWNER_TASK_DEFAULT_SCOPE_ID,
   MainConfigurationRuntimePolicy,
@@ -1006,6 +1010,12 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
           roles: [...(mainProfile?.roles ?? ["main-coordinator"])],
           instructions: [...(mainProfile?.instructions ?? [])],
           policies: [...(mainProfile?.policies ?? [])],
+          agentExecutionProfile: mutableAgentExecutionProfile(
+            mainProfile?.agentExecutionProfile ?? DEFAULT_AGENT_EXECUTION_PROFILE,
+          ),
+          coordinatorAgentExecutionProfile: mutableAgentExecutionProfile(
+            mainProfile?.coordinatorAgentExecutionProfile ?? DEFAULT_AGENT_EXECUTION_PROFILE,
+          ),
           routes: [
             {
               routeId: `main-local:${configuration.deviceId}`,
@@ -1080,6 +1090,18 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             permissions: options.agentExecution.permissions,
             limits: options.agentExecution.limits,
             deviceDirectory: { list: listMainOwnedDeviceDirectory },
+            resolveNewSessionModelId: async () =>
+              resolveCoordinatorModelId(
+                effectiveAgentExecutionProfile(
+                  await configurationService.inspect({
+                    instanceId: configuration.instanceId,
+                    mainId: configuration.deviceId,
+                    deviceId: configuration.deviceId,
+                  }),
+                  "agent.coordinator-profile",
+                ),
+                options.agentExecution!.adapter,
+              ),
             ...(options.agentExecution.maximumPromptBytes === undefined
               ? {}
               : { maximumPromptBytes: options.agentExecution.maximumPromptBytes }),
@@ -1736,6 +1758,11 @@ export function projectMainOwnedDeviceProfile(
   const displayName = explicitConfigurationValue(values, "device.display-name");
   const roles = explicitConfigurationValue(values, "device.roles");
   const instructions = explicitConfigurationValue(values, "device.instructions");
+  const agentExecutionProfile = effectiveAgentExecutionProfile(values, "agent.worker-profile");
+  const coordinatorAgentExecutionProfile = effectiveAgentExecutionProfile(
+    values,
+    "agent.coordinator-profile",
+  );
   const policies: NonNullable<MainOwnedDeviceProfile["policies"]> = Object.freeze([
     effectiveDevicePolicy(
       values,
@@ -1776,8 +1803,36 @@ export function projectMainOwnedDeviceProfile(
       : {
           instructions: requireProfileStringList(instructions, "Device instructions"),
         }),
+    agentExecutionProfile,
+    coordinatorAgentExecutionProfile,
     policies,
   });
+}
+
+function effectiveAgentExecutionProfile(
+  values: Readonly<Record<string, EffectiveConfigurationValue>>,
+  key: string,
+): AgentExecutionProfile {
+  const value = values[key]?.value ?? DEFAULT_AGENT_EXECUTION_PROFILE;
+  if (!isAgentExecutionProfile(value)) {
+    throw new MainRuntimeError("CONFIG_INVALID", `${key} is invalid.`);
+  }
+  return structuredClone(value);
+}
+
+function mutableAgentExecutionProfile(value: AgentExecutionProfile) {
+  if (value.mode === "auto") {
+    return { schemaVersion: 1 as const, mode: "auto" as const };
+  }
+  const primary = { ...value.primary };
+  return value.mode === "pinned"
+    ? { schemaVersion: 1 as const, mode: "pinned" as const, primary }
+    : {
+        schemaVersion: 1 as const,
+        mode: "prefer" as const,
+        primary,
+        fallbacks: value.fallbacks.map((binding) => ({ ...binding })),
+      };
 }
 
 function effectiveDevicePolicy(

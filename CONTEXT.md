@@ -92,6 +92,23 @@ Knowledge files used only as selective context for agents running on that Device
     authenticated or explicitly exposed, time-bounded, revocable, and audited. Raw
     Worker desktop endpoints and credentials are never placed in Discord or Agent
     context by default.
+26. **Agent selection is durable configuration.** Main stores a typed Agent
+    Execution Profile for every Worker-capable Device, including its own co-located
+    Worker, and a separate Coordinator profile for Main. Profiles select an Agent
+    Adapter and an exact provider-native model; ordinary Task context does not carry
+    the complete model catalog. The Coordinator profile selects within the
+    authenticated Main Agent runtime composed at startup; changing that runtime's
+    provider or adapter remains an explicit Main Agent reconfiguration and restart.
+27. **Exact Agent bindings fail closed.** A pinned adapter or model is never silently
+    substituted. Prefer-mode fallback is used only when it is explicitly configured,
+    and the exact effective binding is copied into the immutable Run assignment and
+    native-session lineage.
+28. **Provider updates are release-gated maintenance.** Registry comparison and
+    dependency automation may discover or propose Codex and Claude versions, but
+    discovery never mutates an installed Device. A source compatibility target is
+    not a supported release; applicable live Agent and platform gates remain required
+    before release promotion. Device-side automatic upgrades are not exposed until a
+    durable rollback-capable maintenance runtime exists.
 
 ## Core domain terms
 
@@ -127,6 +144,8 @@ sections:
 - **Instructions** — persistent guidance for agents working on the Device.
 - **Policies** — machine-enforced action permissions.
 - **Runtime Status** — health, load, active Runs, locks, and connection state.
+- **Agent Execution Profile** — Auto, Prefer, or Pinned selection for the Device's
+  Worker Agent Adapter and exact model, including only explicit fallbacks.
 
 Workers may update observations and propose Role or Instruction changes. Main may
 accept and persist those changes autonomously with an audit record. Workers cannot
@@ -182,8 +201,23 @@ Worker Session.
 ### Agent Adapter
 
 The integration boundary for detecting, starting, resuming, steering, cancelling,
-and observing an agent runner. First-class adapters target Codex and Claude; a
-generic command adapter supports extension.
+observing, and listing supported models for an agent runner. First-class adapters
+target Codex and Claude; a generic command adapter supports extension.
+
+### Agent Binding
+
+The exact Agent Adapter provider, adapter identity, provider-native model ID, and
+optional provider tuning selected for one Run or native session. Display labels and
+owner aliases are resolved against the target Device's verified catalog and are not
+stored as substitutes for the provider-native model ID.
+
+### Agent Execution Profile
+
+Durable typed configuration controlling Agent Binding selection. `Auto` lets
+deterministic eligibility choose among ready adapters. `Prefer` tries a primary
+binding followed only by configured fallbacks. `Pinned` requires its exact binding
+and fails closed when unavailable. Main has separate Coordinator and co-located
+Worker profiles.
 
 ### Resource Lock
 

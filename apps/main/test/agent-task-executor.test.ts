@@ -17,11 +17,13 @@ import {
   type TaskContinuationCheckpointV1,
 } from "@opendelegate/protocol";
 import type { TaskExecutionRequest } from "@opendelegate/task-service";
+import type { AgentExecutionProfile } from "@opendelegate/configuration";
 
 import {
   AgentBackedTaskExecutor,
   EventStoreMainNativeSessionRepository,
 } from "../src/agent-task-executor.ts";
+import { resolveCoordinatorModelId } from "../src/coordinator-agent-profile.ts";
 
 const NOW = "2026-07-25T12:00:00.000Z";
 const limits = {
@@ -79,6 +81,75 @@ test("Main Agent starts once per Task, resumes its exact native session, and par
     adapter.resumes[0]?.prompt ?? "",
     /Worker Run reports are the only authority for execution side effects/,
   );
+});
+
+test("Coordinator profile pins an exact model for a new Task while its existing session retains that model", async () => {
+  const adapter = new FakeAgentAdapter();
+  let profile: AgentExecutionProfile = {
+    schemaVersion: 1,
+    mode: "pinned",
+    primary: {
+      provider: "generic",
+      adapterId: "fixture-main-agent",
+      modelId: "fixture-opus",
+    },
+  };
+  let resolutions = 0;
+  const executor = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+    resolveNewSessionModelId: async () => {
+      resolutions += 1;
+      return resolveCoordinatorModelId(profile, adapter);
+    },
+  });
+
+  await executor.execute(request(1));
+  profile = {
+    schemaVersion: 1,
+    mode: "pinned",
+    primary: {
+      provider: "generic",
+      adapterId: "fixture-main-agent",
+      modelId: "fixture-sonnet",
+    },
+  };
+  await executor.execute(request(2, "Continue the existing Task."));
+
+  assert.equal(resolutions, 1);
+  assert.equal(adapter.starts[0]?.modelId, "fixture-opus");
+  assert.equal(adapter.resumes[0]?.modelId, "fixture-opus");
+  assert.equal(adapter.resumes[0]?.session.modelId, "fixture-opus");
+});
+
+test("Coordinator profile fails closed when it selects a different active adapter", async () => {
+  const adapter = new FakeAgentAdapter();
+  const profile: AgentExecutionProfile = {
+    schemaVersion: 1,
+    mode: "pinned",
+    primary: {
+      provider: "codex",
+      adapterId: "codex-app-server",
+      modelId: "gpt-5.6-sol",
+    },
+  };
+
+  await assert.rejects(resolveCoordinatorModelId(profile, adapter), {
+    code: "MAIN_AGENT_PROFILE_UNAVAILABLE",
+    retryable: false,
+  });
 });
 
 test("Main Agent cannot self-authorize Task completion and preserves Task isolation", async () => {
@@ -799,6 +870,16 @@ class FakeAgentAdapter implements AgentAdapter {
     };
   }
 
+  async listModels() {
+    return {
+      observedAt: NOW,
+      models: [
+        { modelId: "fixture-opus", displayName: "Fixture Opus", isDefault: true },
+        { modelId: "fixture-sonnet", displayName: "Fixture Sonnet" },
+      ],
+    };
+  }
+
   async start(input: AgentStartRequest): Promise<AgentRunHandle> {
     this.starts.push(structuredClone(input));
     if (this.#mode === "outcome-continuation") {
@@ -931,6 +1012,7 @@ function session(input: AgentStartRequest): NativeSessionReference {
     taskId: input.taskId,
     workstreamId: input.workstreamId,
     deviceId: input.deviceId,
+    ...(input.modelId === undefined ? {} : { modelId: input.modelId }),
     workspaceId: input.workspace.workspaceId,
     cwd: input.workspace.cwd,
     lineage:

@@ -25,9 +25,9 @@ if (
 if (args.includes("--version") || args.includes("-v")) {
   process.stdout.write(
     provider === "codex" || provider === "codex-app-server"
-      ? "codex-cli 0.145.0\n"
+      ? "codex-cli 0.146.0\n"
       : provider === "claude"
-        ? "2.1.205 (Claude Code)\n"
+        ? "2.1.220 (Claude Code)\n"
         : "generic-runner 3.4.5\n",
   );
   process.exit(0);
@@ -46,7 +46,7 @@ if (
   process.exit(0);
 }
 
-if (provider === "codex-app-server") {
+if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app-server")) {
   const protocol = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
   let threadId = "019abcdef-app-server-thread";
@@ -76,7 +76,38 @@ if (provider === "codex-app-server") {
       }
       continue;
     }
+    if (message.method === "model/list") {
+      send({
+        id: message.id,
+        result: {
+          data: [
+            {
+              id: "gpt-5.6-sol",
+              model: "gpt-5.6-sol",
+              displayName: "GPT-5.6 Sol",
+              description: "Fixture model",
+              hidden: false,
+              isDefault: true,
+              defaultReasoningEffort: "high",
+              supportedReasoningEfforts: [
+                { reasoningEffort: "high", description: "High" },
+                { reasoningEffort: "xhigh", description: "Extra high" },
+              ],
+            },
+          ],
+          nextCursor: process.env.FIXTURE_REPEAT_MODEL_CURSOR === "1" ? "repeat" : null,
+        },
+      });
+      continue;
+    }
     if (message.method === "thread/start" || message.method === "thread/resume") {
+      if (
+        process.env.FIXTURE_EXPECT_MODEL &&
+        message.params.model !== process.env.FIXTURE_EXPECT_MODEL
+      ) {
+        send({ id: message.id, error: { code: -32602, message: "model mismatch" } });
+        continue;
+      }
       if (message.method === "thread/resume") {
         threadId = message.params.threadId;
       }
@@ -101,6 +132,13 @@ if (provider === "codex-app-server") {
       continue;
     }
     if (message.method === "turn/start") {
+      if (
+        process.env.FIXTURE_EXPECT_MODEL &&
+        message.params.model !== process.env.FIXTURE_EXPECT_MODEL
+      ) {
+        send({ id: message.id, error: { code: -32602, message: "model mismatch" } });
+        continue;
+      }
       send({
         id: message.id,
         result: {

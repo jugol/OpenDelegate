@@ -15,11 +15,11 @@ memory to enter a Task.
 
 ## Decision
 
-1. Codex uses the tested `0.145.0` App Server JSONL protocol as its first-class
+1. Codex uses the tested `0.146.0` App Server JSONL protocol as its first-class
    adapter. It runs with an absolute OpenDelegate-controlled `CODEX_HOME`, strict
    configuration, an explicit MCP set, and unrelated dynamic integrations disabled.
-2. Claude uses exact-pinned `@anthropic-ai/claude-agent-sdk` `0.3.205`, which embeds
-   Claude Code `2.1.205`. It ignores ambient settings, skills, and plugins, requires
+2. Claude uses exact-pinned `@anthropic-ai/claude-agent-sdk` `0.3.220`, which embeds
+   Claude Code `2.1.220`. It ignores ambient settings, skills, and plugins, requires
    strict MCP configuration, and starts a fail-closed filesystem and network
    sandbox.
 3. Native Windows Claude SDK execution is unavailable until its required sandbox

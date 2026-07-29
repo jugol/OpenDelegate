@@ -184,6 +184,33 @@ export const spanishMessages = {
     noPolicies: "No hay una proyección de políticas ejecutables disponible.",
     agentAdapters: "Adaptadores de Agent",
     noAgentAdapters: "No hay observaciones de adaptadores de Agent.",
+    agentExecution: "Ejecución del Agent",
+    agentProfileTarget: "Destino del perfil de Agent",
+    workerAgent: "Agent ejecutor",
+    coordinatorAgent: "Agent coordinador",
+    currentBinding: "Vinculación actual",
+    automaticSelection: "OpenDelegate elige una vinculación probada para cada sesión nueva.",
+    agentProfileHint:
+      "Los perfiles se aplican a sesiones nativas nuevas. Las sesiones Task existentes conservan su vinculación original.",
+    profileMode: "Modo de selección",
+    profileAuto: "Automático",
+    profilePrefer: "Preferir",
+    profilePinned: "Fijado",
+    profileAutoDescription:
+      "Elige de forma determinista un adaptador y modelo listos y probados para cada sesión nueva.",
+    profilePreferDescription:
+      "Usa primero la vinculación principal y solo el respaldo explícito cuando sea necesario.",
+    profilePinnedDescription:
+      "Usa exactamente esta vinculación. Si no está disponible, se detiene sin sustituir otro modelo.",
+    primaryBinding: "Vinculación principal",
+    fallbackBinding: "Vinculación de respaldo",
+    noFallback: "Sin respaldo",
+    noVerifiedModels:
+      "No hay un catálogo de modelos listo y probado. Evalúa este Device antes de elegir un modelo exacto.",
+    configureAgentProfile: "Revisar en Configuration Chat",
+    modelCatalog: "{count} modelos verificados",
+    defaultModel: "Predeterminado",
+    moreModels: "+{count} más",
     resourceLocks: "Bloqueos de recursos",
     noResourceLocks: "No hay ningún bloqueo de recurso con nombre activo.",
     verifiedEvidence: "Verificado · {source} · {time}",

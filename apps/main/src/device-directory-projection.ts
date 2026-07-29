@@ -55,6 +55,16 @@ export function mergeMainDeviceSummary(
       : {
           agentAdapters: coLocatedWorker.agentAdapters.map((adapter) => ({
             ...adapter,
+            ...(adapter.models === undefined
+              ? {}
+              : {
+                  models: adapter.models.map((model) => ({
+                    ...model,
+                    ...(model.supportedEfforts === undefined
+                      ? {}
+                      : { supportedEfforts: [...model.supportedEfforts] }),
+                  })),
+                }),
           })),
         }),
     routes: mergeRoutes(main.routes ?? [], coLocatedWorker.routes ?? []),

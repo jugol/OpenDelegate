@@ -185,6 +185,33 @@ export const frenchMessages = {
     noPolicies: "Aucune projection de politique exécutable n’est disponible.",
     agentAdapters: "Adaptateurs Agent",
     noAgentAdapters: "Aucune observation d’adaptateur Agent n’est disponible.",
+    agentExecution: "Exécution de l’Agent",
+    agentProfileTarget: "Cible du profil Agent",
+    workerAgent: "Agent d’exécution",
+    coordinatorAgent: "Agent coordinateur",
+    currentBinding: "Liaison actuelle",
+    automaticSelection: "OpenDelegate choisit une liaison testée pour chaque nouvelle session.",
+    agentProfileHint:
+      "Les profils s’appliquent aux nouvelles sessions natives. Les sessions Task existantes conservent leur liaison d’origine.",
+    profileMode: "Mode de sélection",
+    profileAuto: "Automatique",
+    profilePrefer: "Préféré",
+    profilePinned: "Épinglé",
+    profileAutoDescription:
+      "Choisit de façon déterministe un adaptateur et un modèle prêts et testés pour chaque nouvelle session.",
+    profilePreferDescription:
+      "Utilise d’abord la liaison principale, puis uniquement le repli explicite si nécessaire.",
+    profilePinnedDescription:
+      "Utilise exactement cette liaison. Si elle est indisponible, s’arrête sans substituer un autre modèle.",
+    primaryBinding: "Liaison principale",
+    fallbackBinding: "Liaison de repli",
+    noFallback: "Aucun repli",
+    noVerifiedModels:
+      "Aucun catalogue de modèles prêt et testé n’est disponible. Évaluez ce Device avant de choisir un modèle exact.",
+    configureAgentProfile: "Vérifier dans Configuration Chat",
+    modelCatalog: "{count} modèles vérifiés",
+    defaultModel: "Par défaut",
+    moreModels: "+{count} autres",
     resourceLocks: "Verrous de ressources",
     noResourceLocks: "Aucun verrou de ressource nommé n’est actif.",
     verifiedEvidence: "Vérifié · {source} · {time}",

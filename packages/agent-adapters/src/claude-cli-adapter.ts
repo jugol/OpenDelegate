@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   type AgentAdapter,
+  type AgentModelCatalog,
   type AgentAdapterProbe,
   type AgentAdapterProbeInput,
   type AgentResumeRequest,
@@ -10,6 +11,7 @@ import {
   type AgentToolServer,
   type AgentUsage,
 } from "./contracts.ts";
+import { ClaudeAgentSdkAdapter, type ClaudeAgentSdkPort } from "./claude-agent-sdk-adapter.ts";
 import {
   assertProviderHomeNotInSecretEnvironment,
   prepareControlledProviderHome,
@@ -30,7 +32,7 @@ import {
 } from "./session-reference.ts";
 import { startSubprocessTurn, type ProviderSignal } from "./subprocess-turn.ts";
 
-export const CLAUDE_CLI_TESTED_VERSIONS = ["2.1.205"] as const;
+export const CLAUDE_CLI_TESTED_VERSIONS = ["2.1.220"] as const;
 
 export interface ClaudeCliAdapterOptions {
   readonly claudeHome: string;
@@ -39,6 +41,7 @@ export interface ClaudeCliAdapterOptions {
   readonly testedVersions?: readonly string[];
   readonly allowUntestedVersion?: boolean;
   readonly leaseStore?: SessionLeaseStore;
+  readonly modelCatalogSdk?: ClaudeAgentSdkPort;
   readonly now?: () => number;
   readonly lineageId?: () => string;
 }
@@ -52,6 +55,7 @@ export class ClaudeCliAdapter implements AgentAdapter {
   readonly #testedVersions: readonly string[];
   readonly #allowUntestedVersion: boolean;
   readonly #leaseStore: SessionLeaseStore;
+  readonly #modelCatalogSdk: ClaudeAgentSdkPort | undefined;
   readonly #now: () => number;
   readonly #lineageId: () => string;
 
@@ -62,6 +66,7 @@ export class ClaudeCliAdapter implements AgentAdapter {
     this.#testedVersions = options.testedVersions ?? CLAUDE_CLI_TESTED_VERSIONS;
     this.#allowUntestedVersion = options.allowUntestedVersion ?? false;
     this.#leaseStore = options.leaseStore ?? processSessionLeaseStore;
+    this.#modelCatalogSdk = options.modelCatalogSdk;
     this.#now = options.now ?? Date.now;
     this.#lineageId = options.lineageId ?? randomUUID;
   }
@@ -109,6 +114,17 @@ export class ClaudeCliAdapter implements AgentAdapter {
 
   async start(request: AgentStartRequest): Promise<AgentRunHandle> {
     return await this.#launch(request);
+  }
+
+  async listModels(input: AgentAdapterProbeInput = {}): Promise<AgentModelCatalog> {
+    return await new ClaudeAgentSdkAdapter({
+      claudeHome: this.#claudeHome,
+      authExecutable: this.#executable,
+      authPrefixArgs: this.#prefixArgs,
+      ...(this.#modelCatalogSdk === undefined ? {} : { sdk: this.#modelCatalogSdk }),
+      leaseStore: this.#leaseStore,
+      now: this.#now,
+    }).listModels(input);
   }
 
   async resume(request: AgentResumeRequest): Promise<AgentRunHandle> {
@@ -196,6 +212,7 @@ export class ClaudeCliAdapter implements AgentAdapter {
       "stream-json",
       "--include-partial-messages",
       "--verbose",
+      ...(request.modelId === undefined ? [] : ["--model", request.modelId]),
     ];
     const toolServerTools = claudeToolServerTools(request.toolServers);
     if (request.toolServers !== undefined) {

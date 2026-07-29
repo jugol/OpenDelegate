@@ -316,6 +316,7 @@ test("a standalone Work Order parses through its public contract", () => {
     requiredAgent: {
       provider: "claude",
       adapterId: "claude-agent-sdk",
+      modelId: "claude-opus-5",
       allowedCompatibilities: ["tested", "compatible"],
     },
     requiredOsFamily: "linux",
@@ -340,6 +341,7 @@ test("a standalone Work Order parses through its public contract", () => {
     requiredAgent: {
       provider: "claude",
       adapterId: "claude-agent-sdk",
+      modelId: "claude-opus-5",
       allowedCompatibilities: ["tested", "compatible"],
     },
     requiredOsFamily: "linux",

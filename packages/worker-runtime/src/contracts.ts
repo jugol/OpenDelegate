@@ -137,6 +137,13 @@ export interface WorkerSchedulingAgentAdapterV1 {
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
   readonly version?: string;
   readonly observedAtMs: number;
+  readonly modelCatalogObservedAtMs?: number;
+  readonly models?: readonly {
+    readonly modelId: string;
+    readonly displayName: string;
+    readonly isDefault?: boolean;
+    readonly supportedEfforts?: readonly string[];
+  }[];
 }
 
 export interface WorkerSchedulingResourceLockV1 {

@@ -135,8 +135,8 @@ service readiness.
 | --- | --- |
 | Bundled Node.js | 24.18.0, verified against the repository-pinned official archive digest |
 | pnpm | 11.15.1 |
-| Codex App Server and CLI | 0.145.0 |
-| Claude Agent SDK and authentication CLI | SDK 0.3.205; Claude Code 2.1.205 |
+| Codex App Server and CLI | 0.146.0 |
+| Claude Agent SDK and authentication CLI | SDK 0.3.220; Claude Code 2.1.220 |
 | Discord API | v10 |
 | Graphical Linux reference | Ubuntu 24.04.4 LTS, GNOME, Wayland |
 

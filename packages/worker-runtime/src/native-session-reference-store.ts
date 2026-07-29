@@ -88,6 +88,7 @@ const SESSION_REFERENCE_KEYS = new Set([
   "provider",
   "adapterId",
   "adapterVersion",
+  "modelId",
   "nativeSessionId",
   "sessionKey",
   "taskId",
@@ -673,6 +674,7 @@ function validateNativeSessionReference(input: unknown): NativeSessionReference 
   const provider = input["provider"];
   const adapterId = readIdentifier(input, "adapterId");
   const adapterVersion = readIdentifier(input, "adapterVersion");
+  const modelId = readOptionalIdentifier(input, "modelId");
   const nativeSessionId = readIdentifier(input, "nativeSessionId");
   const sessionKey = readIdentifier(input, "sessionKey");
   const taskId = readIdentifier(input, "taskId");
@@ -710,6 +712,7 @@ function validateNativeSessionReference(input: unknown): NativeSessionReference 
     provider,
     adapterId,
     adapterVersion,
+    ...(modelId === undefined ? {} : { modelId }),
     nativeSessionId,
     sessionKey,
     taskId,
@@ -738,6 +741,7 @@ function assertValidReplacement(
     current.deviceId !== replacement.deviceId ||
     current.provider !== replacement.provider ||
     current.adapterId !== replacement.adapterId ||
+    current.modelId !== replacement.modelId ||
     current.workspaceId !== replacement.workspaceId ||
     current.cwd !== replacement.cwd ||
     current.worktreePath !== replacement.worktreePath

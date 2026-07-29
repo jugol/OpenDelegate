@@ -60,7 +60,34 @@ export interface AgentAdapterView {
   readonly readiness: "ready" | "degraded" | "unavailable";
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
   readonly observedAtMs: number;
+  readonly modelCatalogObservedAtMs?: number;
+  readonly models: readonly {
+    readonly modelId: string;
+    readonly displayName: string;
+    readonly isDefault: boolean;
+    readonly supportedEfforts: readonly string[];
+  }[];
 }
+
+export interface AgentBindingView {
+  readonly provider: "codex" | "claude" | "generic";
+  readonly adapterId: string;
+  readonly modelId?: string;
+}
+
+export type AgentExecutionProfileView =
+  | { readonly schemaVersion: 1; readonly mode: "auto" }
+  | {
+      readonly schemaVersion: 1;
+      readonly mode: "prefer";
+      readonly primary: AgentBindingView;
+      readonly fallbacks: readonly AgentBindingView[];
+    }
+  | {
+      readonly schemaVersion: 1;
+      readonly mode: "pinned";
+      readonly primary: AgentBindingView;
+    };
 
 export interface ResourceLockView {
   readonly resourceName: string;
@@ -123,6 +150,8 @@ export interface DeviceOverviewViewModel {
   readonly capabilities: readonly CapabilityView[];
   readonly policies: readonly DevicePolicyView[];
   readonly agentAdapters: readonly AgentAdapterView[];
+  readonly agentExecutionProfile: AgentExecutionProfileView;
+  readonly coordinatorAgentExecutionProfile?: AgentExecutionProfileView;
   readonly routes: readonly RouteView[];
   readonly resourceLocks: readonly ResourceLockView[];
   readonly currentRuns: readonly CurrentRunView[];
@@ -182,6 +211,8 @@ export const firstRunDevice = deepFreeze({
   instructions: [],
   policies: [],
   agentAdapters: [],
+  agentExecutionProfile: { schemaVersion: 1, mode: "auto" },
+  coordinatorAgentExecutionProfile: { schemaVersion: 1, mode: "auto" },
   capabilities: [
     {
       capabilityId: "codex",

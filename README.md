@@ -49,6 +49,12 @@ OpenDelegate is installed with an Agent; there is no `npm run start` owner workf
    continue its native Agent session, while a new post starts a clean context. If Discord is
    unavailable or disabled, use **Admin Web → Tasks → New task** to create a minimal Task.
 
+Each Device defaults to **Agent execution → Auto**. You can choose **Prefer** or **Pinned** from its
+Device page, or tell that Device’s Configuration Chat, for example, _“Use Claude Opus on this
+NAS.”_ Repeat on the Mac Studio with the GPT model you want. OpenDelegate resolves each request
+against that target Device’s tested model catalog, shows the exact provider-native model ID for
+review, and applies it only to new native sessions.
+
 Read the [complete setup guide](docs/GETTING_STARTED.md), including owner recovery, additional
 Devices, the first Task, and troubleshooting.
 

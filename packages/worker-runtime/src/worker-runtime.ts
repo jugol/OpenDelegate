@@ -37,6 +37,7 @@ import {
   type WorkerRouteIncidentV1,
   type WorkerRuntimeHealthProvider,
   type WorkerRuntimeReadiness,
+  type WorkerSchedulingAgentAdapterV1,
   type WorkerSchedulingInventoryProvider,
   type WorkerSchedulingInventoryV1,
 } from "./contracts.ts";
@@ -1907,7 +1908,7 @@ function readAgentAdapters(
       requireExactInventoryKeys(
         entry,
         ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-        ["version"],
+        ["version", "modelCatalogObservedAtMs", "models"],
       );
       const provider = entry["provider"];
       const readiness = entry["readiness"];
@@ -1935,6 +1936,20 @@ function readAgentAdapters(
         entry["version"] === undefined
           ? undefined
           : readInventoryText(entry["version"], "Agent adapter version", 256);
+      const modelCatalogObservedAtMs =
+        entry["modelCatalogObservedAtMs"] === undefined
+          ? undefined
+          : readInventoryTimestamp(
+              entry["modelCatalogObservedAtMs"],
+              "Agent model catalog observation time",
+            );
+      const models = entry["models"] === undefined ? undefined : readAgentModels(entry["models"]);
+      if ((modelCatalogObservedAtMs === undefined) !== (models === undefined)) {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "Worker Agent model catalog metadata is incomplete.",
+        );
+      }
       return Object.freeze({
         provider,
         adapterId,
@@ -1945,6 +1960,57 @@ function readAgentAdapters(
           entry["observedAtMs"],
           "Agent adapter observation time",
         ),
+        ...(modelCatalogObservedAtMs === undefined
+          ? {}
+          : { modelCatalogObservedAtMs, models: models! }),
+      });
+    }),
+  );
+}
+
+function readAgentModels(value: unknown): NonNullable<WorkerSchedulingAgentAdapterV1["models"]> {
+  if (!Array.isArray(value) || value.length > 128) {
+    throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker Agent model catalog is invalid.");
+  }
+  const seen = new Set<string>();
+  return Object.freeze(
+    value.map((entry) => {
+      if (!isPlainRecord(entry)) {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "Worker Agent model catalog is invalid.",
+        );
+      }
+      requireExactInventoryKeys(
+        entry,
+        ["modelId", "displayName"],
+        ["isDefault", "supportedEfforts"],
+      );
+      const modelId = readInventoryText(entry["modelId"], "Agent model ID", 256);
+      if (seen.has(modelId)) {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "Worker Agent model IDs must be unique.",
+        );
+      }
+      seen.add(modelId);
+      const displayName = readInventoryText(entry["displayName"], "Agent model display name", 256);
+      const isDefault = entry["isDefault"];
+      if (isDefault !== undefined && typeof isDefault !== "boolean") {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "Worker Agent model default marker is invalid.",
+        );
+      }
+      const supportedEfforts =
+        entry["supportedEfforts"] === undefined
+          ? undefined
+          : readInventoryIdentifiers(entry["supportedEfforts"], "Agent model effort", 32);
+      return Object.freeze({
+        modelId,
+        displayName,
+        ...(isDefault === undefined ? {} : { isDefault }),
+        ...(supportedEfforts === undefined ? {} : { supportedEfforts }),
       });
     }),
   );

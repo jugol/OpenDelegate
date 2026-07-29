@@ -56,10 +56,21 @@ const mainDevice = {
       adapterId: "codex-app-server",
       readiness: "ready",
       compatibility: "tested",
-      version: "0.145.0",
+      version: "0.146.0",
       observedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+      modelCatalogObservedAtMs: Date.parse("2026-07-25T00:00:00.000Z"),
+      models: [
+        {
+          modelId: "gpt-5.6-sol",
+          displayName: "GPT-5.6 Sol",
+          isDefault: true,
+          supportedEfforts: ["medium", "high"],
+        },
+      ],
     },
   ],
+  agentExecutionProfile: { schemaVersion: 1, mode: "auto" },
+  coordinatorAgentExecutionProfile: { schemaVersion: 1, mode: "auto" },
   currentRuns: [
     {
       taskId: "task_prepare_release",
@@ -462,6 +473,37 @@ test("all Admin locales update loaded chrome while preserving owner content", as
   }
 });
 
+test("owner selects an exact tested Device model through Configuration Chat review", async ({
+  page,
+}, testInfo) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await installApi(page, { signedIn: true });
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("heading", { name: englishMessages.device.agentExecution }),
+  ).toBeVisible();
+  await expect(page.getByText("gpt-5.6-sol")).toBeVisible();
+  await page
+    .getByRole("combobox", { name: englishMessages.device.profileMode })
+    .selectOption("pinned");
+  await expect(page.getByText(englishMessages.device.profilePinnedDescription)).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  if (process.env["OPENDELEGATE_CAPTURE_AGENT_PROFILE"] === "1") {
+    await page.screenshot({
+      fullPage: true,
+      path: testInfo.outputPath("admin-agent-profile.png"),
+    });
+  }
+
+  await page.getByRole("button", { name: englishMessages.device.configureAgentProfile }).click();
+  const composer = page.getByRole("textbox", { name: englishMessages.chat.messageLabel });
+  await expect(composer).toHaveValue(/"modelId":"gpt-5\.6-sol"/u);
+  await expect(composer).toHaveValue(/"agent\.worker-profile"/u);
+  expect(consoleErrors).toEqual([]);
+});
+
 test("authenticated Admin lists and controls canonical Tasks without Discord", async ({ page }) => {
   const consoleErrors = collectConsoleErrors(page);
   await installApi(page, { signedIn: true });
@@ -753,6 +795,14 @@ async function installApi(
           discord: { status: "unavailable", code: "DISCORD_NOT_CONFIGURED" },
         },
       });
+      return;
+    }
+
+    if (
+      path === `/api/v1/devices/${mainDevice.deviceId}/configuration/messages` &&
+      request.method() === "GET"
+    ) {
+      await route.fulfill({ json: { messages: [] } });
       return;
     }
 

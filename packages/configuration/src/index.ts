@@ -1630,6 +1630,13 @@ function diffToInverseChange(diff: ConfigurationDiff): ConfigurationChange {
 
 export { STANDARD_CONFIGURATION_DEFINITIONS } from "./standard-definitions.ts";
 export {
+  DEFAULT_AGENT_EXECUTION_PROFILE,
+  isAgentExecutionProfile,
+  type AgentBinding,
+  type AgentExecutionProfile,
+  type AgentExecutionProvider,
+} from "./agent-execution-profile.ts";
+export {
   isCanonicalMainSecretReference,
   isNullableCanonicalMainSecretReferenceValue,
   type CanonicalMainSecretReferenceValue,

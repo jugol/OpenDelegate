@@ -206,7 +206,9 @@ Work through these items with the Configuration Agent:
 1. review detected Main Device Facts and capabilities;
 2. approve the proposed Device name, Roles, and Instructions;
 3. confirm the bootstrapped Main Agent Adapter is ready, then configure any additional Worker or
-   custom Agent Adapters;
+   custom Agent Adapters; leave each Worker Agent Execution Profile on `Auto`, choose an exact
+   `Prefer` or `Pinned` binding in **Device → Agent execution**, or describe the per-Device choices
+   in Configuration Chat;
 4. inspect the current `discord.binding`: if first init already seeded the intended binding, do not
    upload the token again or submit a no-op proposal—confirm its IDs and require
    `ready / DISCORD_READY`; for deferred, new, or changed Discord setup, use the secure credential
@@ -223,6 +225,15 @@ Codex and Claude adapters use managed provider homes by default and the same nor
 owner-interactive login rule. Explicit external Codex and Claude homes remain shared by reference;
 never copy a global credential directory. If either Adapter is degraded only because authentication
 is not ready, authenticate the exact configured home and run **Assess device** again.
+
+An Agent Binding contains the provider, exact adapter, and exact provider-native model ID. The
+selection list comes only from the target Device's latest tested model catalog. Configuration Chat
+is intentionally Device-scoped: on the NAS page, say _“Use Claude Opus on this Device”_; on the Mac
+Studio page, repeat with the exact GPT model you want. Each conversation resolves only its own
+target-local ID, shows the typed profile diff, and uses the ordinary approval path. `Auto` is the
+default. `Prefer` uses only the fallbacks you explicitly list. `Pinned` stops when its exact binding
+is unavailable. A change affects new native sessions; an existing Task continues with the binding
+recorded in its own session.
 
 If Configuration Chat nevertheless reports that its Agent is unavailable, use its read-only
 checklist and return to the init Agent's provider-readiness flow. Do not attempt the missing login

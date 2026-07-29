@@ -6,6 +6,9 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 10
     groups:
+      agent-provider-sdks:
+        patterns:
+          - "@anthropic-ai/claude-agent-sdk"
       development-tooling:
         dependency-type: "development"
         update-types:

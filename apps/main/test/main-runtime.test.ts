@@ -581,6 +581,14 @@ test("runtime serves Admin and a durable authenticated Task API across restart",
         serviceMode: "foreground",
         roles: ["main-coordinator"],
         instructions: [],
+        agentExecutionProfile: {
+          schemaVersion: 1,
+          mode: "auto",
+        },
+        coordinatorAgentExecutionProfile: {
+          schemaVersion: 1,
+          mode: "auto",
+        },
         policies: [
           {
             policyId: "policy.official-package-install",

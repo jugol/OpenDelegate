@@ -289,6 +289,19 @@ function agentAdapterObservation(
     compatibility: probe.compatibility,
     ...(probe.version === undefined ? {} : { version: probe.version }),
     observedAtMs,
+    ...(probe.modelCatalog === undefined
+      ? {}
+      : {
+          modelCatalogObservedAtMs: Date.parse(probe.modelCatalog.observedAt),
+          models: probe.modelCatalog.models.map((model) => ({
+            modelId: model.modelId,
+            displayName: model.displayName,
+            ...(model.isDefault === undefined ? {} : { isDefault: model.isDefault }),
+            ...(model.supportedEfforts === undefined
+              ? {}
+              : { supportedEfforts: [...model.supportedEfforts] }),
+          })),
+        }),
   };
 }
 

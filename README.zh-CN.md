@@ -40,6 +40,11 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
    Agent Session；新帖子则从干净的 Context 开始。如果 Discord 已禁用或不可用，请选择 **Admin Web →
    Tasks → 新建任务**。
 
+每台 Device 默认使用 **Agent 执行 → 自动**。你可以在 Device 页面选择**优先**或**固定**，也可以
+在该 Device 的 Configuration Chat 中说：_“这台 NAS 使用 Claude Opus。”_ 然后在 Mac Studio
+页面用同样的方法选择所需的 GPT 模型。OpenDelegate 会将每个请求与对应 Device 已测试的模型目录
+核对，展示精确的 Provider-native 模型 ID 供你审核，并且只对新的原生 Session 应用更改。
+
 请阅读[完整设置指南（英文）](docs/GETTING_STARTED.md)，其中包括 Owner 恢复、添加 Device、创建首个 Task 和故障排查。
 
 ## 为什么选择 OpenDelegate

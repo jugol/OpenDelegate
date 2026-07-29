@@ -355,7 +355,18 @@ export async function probeMainAgentAdapters(
             leaseStore,
             providerHome(provider, options.paths, providerHomes),
           );
-        return structuredClone(await adapter.probe());
+        const probe = await adapter.probe();
+        if (adapter.listModels === undefined || !isReadyProbe(probe)) {
+          return structuredClone(probe);
+        }
+        try {
+          return structuredClone({
+            ...probe,
+            modelCatalog: await adapter.listModels(),
+          });
+        } catch {
+          return structuredClone(probe);
+        }
       }),
     ),
   );

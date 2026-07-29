@@ -524,6 +524,12 @@ compatible or untested versions is explicit in the assignment and remains subjec
 to stricter Device policy. A successful provider-bound Run without a matching safe
 session observation is invalid.
 
+**Amendment (2026-07-29):** D-067 refines the assignment shape without mutating the
+Work Order. Main preserves the Work Order's original hard Agent requirement inside
+the assignment and records a separate exact effective binding that satisfies and may
+narrow it. Device-level `Auto` applies only when that original requirement is absent;
+retry and restart preserve both values.
+
 ## D-047 — Immutable candidates and externally trusted release promotion
 
 **Decision:** Platform-native code signing occurs before candidate integrity
@@ -1132,3 +1138,68 @@ turn nor a Worker Run. Main coordinator turns remain tool-denied under D-042.
 Side-effect authority, Worker leases, Policy, and evidence requirements are
 unchanged, and custom planners cannot forge the read-only exception by echoing a
 schema or completion criteria.
+
+## D-067 — Agent Adapter and exact model selection are typed Device profiles
+
+**Decision:** OpenDelegate represents an execution choice as an Agent Binding:
+provider, exact adapter identity when required, exact provider-native model ID, and
+optional provider tuning. Every Worker-capable Device, including Main's co-located
+Worker, owns a Worker Agent Execution Profile. Main separately owns a Coordinator
+profile. Profiles support `Auto`, `Prefer`, and `Pinned`. `Prefer` may use only its
+explicit fallback chain; `Pinned` fails closed.
+
+The Coordinator profile resolves exact models only against the authenticated Main
+Agent Adapter composed for the running service. A profile that names another provider
+or adapter fails closed. Provider/adapter replacement remains the existing explicit,
+authenticated Main Agent reconfiguration and service-restart lifecycle; a profile
+write alone never claims to hot-swap that runtime.
+
+The Worker reports a bounded verified model catalog from each ready first-class
+adapter. Human-friendly names in Configuration Chat and Admin Web are resolved
+against that target Device's catalog and the exact native ID is persisted. Main
+copies the effective binding into the immutable Run assignment. Native sessions
+retain their original binding; profile changes affect new Task or workstream
+sessions. A checkpoint continuation created for an existing session retains that
+session's recorded binding rather than re-resolving the current profile.
+
+Main's planning prompt receives a compact Device directory containing ready adapter
+identities and the effective Worker profile, not every model in every catalog.
+Workers receive the exact effective binding in their immutable assignment and prompt,
+plus the assigned Work Order and selective local Knowledge; they do not need the
+fleet profile or catalog. This keeps placement semantics available without spending
+routine context on transport or provider catalogs.
+
+**Rationale:** A Device's role describes what work fits there; it does not prove
+which local runner and model will execute it. Provider-only selection still allows
+silent model drift, while fleet-wide catalog injection wastes context. Separating
+typed durable selection from compact planning context makes execution reproducible
+and owner-visible.
+
+**Consequence:** On each target Device page, an owner can request “use Opus on this
+NAS” or “use GPT on this Mac Studio” through its Device-scoped Configuration Chat,
+or make the same exact choice in Admin Web. Only verified target-local choices are
+applied. Task-specific hard requirements are intersected with the Device profile and
+fail closed on conflict.
+
+## D-068 — Codex and Claude updates start with non-mutating release discovery
+
+**Decision:** OpenDelegate source provides a deterministic, discovery-only comparison
+for its first-class provider package and CLI targets. Dependency automation may
+propose an exact SDK change, but neither mechanism edits an installed Device or
+changes a running provider. A target may enter an explicitly unsupported internal
+preview after provider schema and adapter conformance checks; this `tested` adapter
+compatibility label is not a supported-platform claim. Authentication-safe live
+start/resume/cancel checks and applicable platform release gates remain mandatory
+before supported release promotion. A rollback-capable Device maintenance monitor
+and its `disabled`, `propose`, or verified-automation policy remain Phase 12 work and
+are not exposed as inert configuration today.
+
+**Rationale:** Provider CLIs and SDKs change independently and can break session or
+tool semantics even when installation succeeds. Blind latest-version upgrades would
+violate deterministic execution and make an always-on personal system fragile.
+
+**Consequence:** Maintainers can run `corepack pnpm providers:check`, and weekly
+dependency automation can surface an SDK candidate without silently upgrading an
+owner's fleet. Owners continue to update installed release bundles explicitly.
+Runtime automatic provider upgrades are unavailable until the durable verification,
+rollback, and audit lifecycle is implemented.

@@ -94,7 +94,7 @@ test("Codex CLI starts through JSONL, streams public output, and returns a durab
   assert.equal(result.session?.cwd, cwd);
   assert.equal(result.session?.taskId, "task-1");
   assert.equal(result.session?.workstreamId, "coordinator");
-  assert.equal(result.session?.adapterVersion, "0.145.0");
+  assert.equal(result.session?.adapterVersion, "0.146.0");
   assert.ok(events.some((event) => event.type === "public_message"));
   assert.deepEqual(result.usage, {
     inputTokens: 12,
@@ -119,11 +119,31 @@ test("Codex CLI probes installed version and authentication without running a mo
   });
 
   assert.equal(probe.installed, true);
-  assert.equal(probe.version, "0.145.0");
+  assert.equal(probe.version, "0.146.0");
   assert.equal(probe.compatibility, "tested");
   assert.equal(probe.auth.state, "ready");
   assert.equal(probe.capabilities.approvalBridge, false);
   assert.equal(probe.capabilities.steering, false);
+});
+
+test("Codex CLI reuses the App Server model catalog from the same controlled home", async () => {
+  const codexHome = await createCodexHome();
+  const adapter = new CodexCliAdapter({
+    codexHome,
+    executable: process.execPath,
+    prefixArgs: [fixturePath, "codex"],
+  });
+
+  const catalog = await adapter.listModels({
+    environment: {
+      FIXTURE_EXPECT_CODEX_HOME: codexHome,
+    },
+  });
+
+  assert.deepEqual(
+    catalog.models.map((model) => model.modelId),
+    ["gpt-5.6-sol"],
+  );
 });
 
 test("Codex exposes only the Run-scoped Knowledge server and never normalizes local payloads", async () => {
