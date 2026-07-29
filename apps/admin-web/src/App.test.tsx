@@ -392,7 +392,11 @@ describe("first-run Device overview", () => {
     );
 
     await user.selectOptions(screen.getByRole("combobox", { name: "Selection mode" }), "pinned");
-    await user.click(screen.getByRole("button", { name: "Review change in Configuration Chat" }));
+    const requestChange = screen.getByRole("button", {
+      name: "Request change in Configuration Chat",
+    });
+    expect(requestChange.classList.contains("primary-button")).toBe(true);
+    await user.click(requestChange);
 
     const composer = screen.getByRole("textbox", { name: "Message Configuration Chat" });
     expect((composer as HTMLTextAreaElement).value).toContain('"modelId":"claude-opus-5"');

@@ -228,7 +228,7 @@ export const spanishMessages = {
     noFallback: "Sin respaldo",
     noVerifiedModels:
       "No hay un catálogo de modelos listo y probado. Evalúa este Device antes de elegir un modelo exacto.",
-    configureAgentProfile: "Revisar en Configuration Chat",
+    configureAgentProfile: "Solicitar el cambio en Configuration Chat",
     modelCatalog: "{count} modelos verificados",
     defaultModel: "Predeterminado",
     moreModels: "+{count} más",

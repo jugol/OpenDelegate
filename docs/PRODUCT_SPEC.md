@@ -925,18 +925,24 @@ may request a transition but cannot manufacture a state outside the transition r
     While an Agent turn is in flight, the transcript itself shows a localized
     Agent-authored-position activity message; a disabled composer placeholder is not
     the only progress indication.
-26. If the first native resume attempt for a Configuration Agent request fails before
-    any typed configuration tool for that request has executed, Main starts a fresh
-    native continuation with the complete current prompt and records the new lineage.
-    It does not automatically restart after a tool has executed, because replay could
-    duplicate a mutation or misrepresent its receipt. The continuation tells the owner
+26. If a Configuration Agent native session becomes unavailable before any
+    mutation-capable tool for that request has executed, Main starts one fresh native
+    continuation with the complete current prompt and records the new lineage. Main
+    durably reserves that one continuation before invoking it, so Main restart or an
+    ambiguous start failure cannot produce a second continuation. This
+    recovery may follow only read-only `inspect`, `validate`, or `diff` calls; the
+    continuation re-inspects durable configuration rather than treating their prior
+    results as mutation receipts. It does not automatically restart after `propose`,
+    `apply`, or `rollback`, because replay could duplicate durable proposal state,
+    duplicate a mutation, or misrepresent a receipt. The continuation tells the owner
     that provider-private or interrupted in-flight context may be unavailable,
     receives a bounded excerpt of completed Device-scoped Configuration Chat
-    exchanges, re-inspects durable configuration, and re-confirms any required value
-    or choice that is absent from the excerpt before proposing a change. Main durably
-    records the first typed-tool attempt for each owner request before execution; an
-    interrupted request with that boundary and no final response fails closed across
-    restart instead of replaying.
+    exchanges, and re-confirms any required value or choice that is absent from the
+    excerpt before proposing a change. Main durably records the first tool attempt and
+    upgrades that request-bound boundary before the first mutation-capable tool.
+    Legacy boundaries that did not record later tools remain fail-closed. An
+    interrupted request with a mutation-capable boundary and no final response fails
+    closed across restart instead of replaying.
 27. Main durably records an accepted owner Configuration Chat message before starting
     or resuming its Agent turn. Admin Web restores that message immediately after
     reload, shows whether its response is still pending or was interrupted, and

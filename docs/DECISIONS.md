@@ -860,6 +860,9 @@ history is durable Main state and is independent from the transient unread count
 
 ## D-058 — Configuration continuation before tool execution
 
+**Partially superseded by D-071:** the fail-closed boundary now distinguishes
+read-only tools from mutation-capable tools.
+
 **Decision:** If the initial native resume for one Configuration Agent request fails
 with the public unavailable condition before any typed configuration tool for that
 request has executed, Main retries that same complete current prompt by starting a
@@ -1259,3 +1262,33 @@ belongs to platform-sensitive or release work.
 and `Dependency review`. A green ordinary pull request is engineering evidence, not
 a supported-release claim. Maintainers explicitly invoke the full matrix whenever
 the affected platform boundary or release candidate requires it.
+
+## D-071 — Read-only Configuration turns recover once
+
+See [ADR-0031](adr/0031-configuration-read-only-turn-recovery.md).
+
+**Decision:** A Configuration Agent request may start one fresh native continuation
+when its provider session becomes unavailable after only `inspect`, `validate`, or
+`diff`. Those tools are read-only and their results are not mutation receipts. The
+continuation receives the complete current owner request plus the bounded durable
+visible conversation, discloses the native-session recovery, and re-inspects current
+configuration.
+
+`propose`, `apply`, and `rollback` are mutation-capable for replay safety. Main
+durably records the first tool attempt under the version 2 recovery protocol and
+appends a request-bound mutation boundary before the first of those tools executes.
+Legacy version 1 records remain fail-closed because they cannot prove whether a later
+mutation ran. Before starting a recovery session, Main durably reserves the request's
+sole continuation. Once a mutation boundary or continuation reservation exists, an
+interrupted request never starts another continuation or replays, including after
+restart.
+
+**Rationale:** A real Configuration turn inspected the current Device successfully,
+then lost its Codex session before returning the result. Treating the read-only
+inspection as an unknown mutation produced a generic failure even though repeating
+inspection is safe. Removing the boundary entirely would make a later proposal or
+apply eligible for unsafe replay.
+
+**Consequence:** Transient provider loss after inspection no longer strands ordinary
+configuration guidance. Durable proposals and configuration changes retain the
+existing fail-closed boundary and cannot be duplicated by automatic recovery.

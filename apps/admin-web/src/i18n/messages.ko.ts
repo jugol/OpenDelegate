@@ -221,7 +221,7 @@ export const koreanMessages = {
     noFallback: "대체 바인딩 없음",
     noVerifiedModels:
       "준비되고 검증된 모델 카탈로그가 없습니다. 정확한 모델을 고르기 전에 이 Device를 평가하세요.",
-    configureAgentProfile: "Configuration Chat에서 변경 검토",
+    configureAgentProfile: "Configuration Chat에서 변경 요청",
     modelCatalog: "검증된 모델 {count}개",
     defaultModel: "기본값",
     moreModels: "외 {count}개",

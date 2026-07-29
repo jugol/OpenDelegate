@@ -220,7 +220,7 @@ export const englishMessages = {
     noFallback: "No fallback",
     noVerifiedModels:
       "No tested, ready model catalog is available. Assess this Device before selecting an exact model.",
-    configureAgentProfile: "Review change in Configuration Chat",
+    configureAgentProfile: "Request change in Configuration Chat",
     modelCatalog: "{count} verified models",
     defaultModel: "Default",
     moreModels: "+{count} more",

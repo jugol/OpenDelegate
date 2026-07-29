@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import test from "node:test";
 
@@ -127,7 +128,7 @@ test("Configuration Agent creates a fresh continuation when the initial native r
   assert.match(stored?.lineage.continuationReason ?? "", /resume was unavailable/iu);
 });
 
-test("Configuration Agent never auto-continues or replays after a durable tool attempt", async () => {
+test("Configuration Agent safely continues after an inspect-only turn is interrupted", async () => {
   const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
   const adapter = new ToolThenResumeFailureAdapter();
   const broker = new RecordingToolBroker();
@@ -138,12 +139,20 @@ test("Configuration Agent never auto-continues or replays after a durable tool a
   );
 
   await agent.sendMessage(message("request_seed", "Inspect this Device."));
-  await assert.rejects(agent.sendMessage(interrupted), {
-    code: "CONFIGURATION_AGENT_UNAVAILABLE",
-  });
-  assert.equal(adapter.starts.length, 1);
+  const recovered = await agent.sendMessage(interrupted);
+
+  assert.equal(recovered.content, "I inspected the available configuration context.");
+  assert.equal(adapter.starts.length, 2);
   assert.equal(adapter.resumes.length, 2);
   assert.equal(broker.calls.length, 1);
+  assert.match(
+    adapter.starts[1]?.prompt ?? "",
+    /Inspect configuration and continue Discord setup\./u,
+  );
+  assert.match(
+    adapter.starts[1]?.prompt ?? "",
+    /prior provider-native Configuration Agent session is unavailable/iu,
+  );
   const interruptedHistory = await agent.listMessages({
     deviceId: "device_worker",
     principalId: "owner_personal",
@@ -156,18 +165,103 @@ test("Configuration Agent never auto-continues or replays after a durable tool a
       { content: "Inspect this Device.", responseStatus: "completed" },
       {
         content: "Inspect configuration and continue Discord setup.",
-        responseStatus: "interrupted",
+        responseStatus: "completed",
       },
     ],
   );
 
   const restarted = await createAgent(adapter, eventStore, broker);
+  const replayed = await restarted.sendMessage(interrupted);
+  assert.equal(replayed.content, recovered.content);
+  assert.equal(adapter.starts.length, 2);
+  assert.equal(adapter.resumes.length, 2);
+  assert.equal(broker.calls.length, 1);
+});
+
+test("Configuration Agent never auto-continues after a mutation-capable tool attempt", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new ProposalThenResumeFailureAdapter();
+  const agent = await createAgent(adapter, eventStore);
+  const interrupted = message(
+    "request_proposal_then_loss",
+    "Propose authenticated Artifact access.",
+  );
+
+  await agent.sendMessage(message("request_seed", "Inspect this Device."));
+  await assert.rejects(agent.sendMessage(interrupted), {
+    code: "CONFIGURATION_AGENT_UNAVAILABLE",
+  });
+  assert.equal(adapter.starts.length, 1);
+  assert.equal(adapter.resumes.length, 3);
+
+  const restarted = await createAgent(adapter, eventStore);
   await assert.rejects(restarted.sendMessage(interrupted), {
     code: "CONFIGURATION_AGENT_UNAVAILABLE",
   });
   assert.equal(adapter.starts.length, 1);
+  assert.equal(adapter.resumes.length, 3);
+});
+
+test("Configuration Agent persists its one continuation reservation across restart", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new ContinuationStartFailureAdapter();
+  const agent = await createAgent(adapter, eventStore);
+  const interrupted = message(
+    "request_continuation_then_loss",
+    "Inspect configuration and continue Discord setup.",
+  );
+
+  await agent.sendMessage(message("request_seed", "Inspect this Device."));
+  await assert.rejects(agent.sendMessage(interrupted), {
+    code: "CONFIGURATION_AGENT_UNAVAILABLE",
+  });
+  assert.equal(adapter.starts.length, 2);
   assert.equal(adapter.resumes.length, 2);
-  assert.equal(broker.calls.length, 1);
+
+  const restarted = await createAgent(adapter, eventStore);
+  await assert.rejects(restarted.sendMessage(interrupted), {
+    code: "CONFIGURATION_AGENT_UNAVAILABLE",
+  });
+  assert.equal(adapter.starts.length, 2);
+  assert.equal(adapter.resumes.length, 2);
+});
+
+test("Configuration Agent keeps legacy inspect-first interruption records fail-closed", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const interrupted = message(
+    "request_legacy_inspect_boundary",
+    "Inspect configuration and continue Discord setup.",
+  );
+  const operationKey = testDigest(
+    `${interrupted.principalId}\u0000${interrupted.deviceId}\u0000${interrupted.idempotencyKey}`,
+  );
+  const requestDigest = testDigest(interrupted.message);
+  await eventStore.append({
+    streamId: `configuration-tool-attempt:${operationKey.slice("sha256:".length)}`,
+    expectedVersion: 0,
+    events: [
+      {
+        eventId: "event_legacy_inspect_boundary",
+        type: "configuration-agent.tool-attempted",
+        payload: {
+          schemaVersion: 1,
+          requestDigest,
+          toolOperationId: "configuration-tool:legacy-inspect",
+          tool: "inspect",
+        },
+      },
+    ],
+  });
+  const adapter = new FakeConfigurationAdapter();
+  const agent = await createAgent(adapter, eventStore);
+
+  await assert.rejects(agent.sendMessage(interrupted), (error: unknown) => {
+    assert.equal((error as { readonly code?: unknown }).code, "CONFIGURATION_AGENT_UNAVAILABLE");
+    assert.match((error as { readonly message?: string }).message ?? "", /legacy/iu);
+    return true;
+  });
+  assert.equal(adapter.starts.length, 0);
+  assert.equal(adapter.resumes.length, 0);
 });
 
 test("Configuration Agent exposes the terminal adapter diagnostic code at its public failure seam", async () => {
@@ -750,6 +844,57 @@ class ToolThenResumeFailureAdapter extends FakeConfigurationAdapter {
   }
 }
 
+class ContinuationStartFailureAdapter extends ToolThenResumeFailureAdapter {
+  override async start(input: AgentStartRequest): Promise<AgentRunHandle> {
+    if (this.starts.length === 0) {
+      return super.start(input);
+    }
+    this.starts.push(structuredClone(input));
+    return failedHandle(session(input));
+  }
+}
+
+class ProposalThenResumeFailureAdapter extends FakeConfigurationAdapter {
+  override async resume(input: AgentResumeRequest): Promise<AgentRunHandle> {
+    this.resumes.push(structuredClone(input));
+    if (this.resumes.length === 1) {
+      return handle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "tool",
+          toolCallId: "inspect_before_proposal",
+          request: { tool: "inspect" },
+        }),
+      );
+    }
+    if (this.resumes.length === 2) {
+      return handle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "tool",
+          toolCallId: "proposal_before_loss",
+          request: {
+            tool: "propose",
+            expectedRevision: 0,
+            reason: "Require authenticated Artifact access on this Device.",
+            changes: [
+              {
+                operation: "set",
+                key: "artifact.exposure",
+                scope: { kind: "device", id: "device_worker" },
+                value: "authenticated",
+              },
+            ],
+          },
+        }),
+      );
+    }
+    return failedHandle(input.session);
+  }
+}
+
 class ToolUsingConfigurationAdapter implements AgentAdapter {
   readonly adapterId = "fixture-configuration-agent";
   readonly provider = "generic" as const;
@@ -1097,4 +1242,8 @@ function failedHandle(
       return undefined;
     },
   };
+}
+
+function testDigest(value: string): string {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }

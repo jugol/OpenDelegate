@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-28
 - Refines: D-057, D-058, D-061, FR-15, FR-16, ADR-0005, ADR-0007
+- Replay-boundary refinement: ADR-0031
 
 ## Context
 
@@ -13,9 +14,10 @@ Protected Configuration apply attempts also used chat-request operation identity
 requesting Approval. A follow-up such as “approval complete” therefore produced a new
 Approval even when it referred to the same immutable proposal.
 
-The fix must preserve the fail-closed tool boundary: an interrupted in-flight tool
-turn cannot be reconstructed or replayed safely. Raw Secrets and provider-hidden
-reasoning must never enter the visible history.
+The fix must preserve the fail-closed mutation boundary: an interrupted
+mutation-capable tool turn cannot be reconstructed or replayed safely. Read-only
+inspection may be repeated only under ADR-0031's durable one-continuation rule. Raw
+Secrets and provider-hidden reasoning must never enter the visible history.
 
 ## Decision
 
@@ -25,9 +27,11 @@ reasoning must never enter the visible history.
 2. The authenticated history GET is a durable read and remains available when native
    Agent messaging is degraded. Admin hydrates it before enabling send or automatic
    Discord onboarding, then renders it independently of provider readiness.
-3. A fresh pre-tool native continuation receives a bounded recent excerpt of completed
-   visible exchanges. Provider-private and interrupted unfinished context remains
-   unavailable. Post-tool interruption still fails closed.
+3. A fresh native continuation before any mutation-capable tool receives a bounded
+   recent excerpt of completed visible exchanges. It may follow read-only inspection
+   only after durably reserving the request's sole continuation. Provider-private and
+   interrupted unfinished context remains unavailable. Interruption after `propose`,
+   `apply`, or `rollback` still fails closed.
 4. A protected apply Approval is correlated by target Device plus immutable proposal
    ID and exact action fingerprint. Existing legacy Approval records are matched by
    that exact action before a new semantic idempotency record is created. Approval
@@ -54,9 +58,10 @@ product state.
 
 ## Consequences
 
-Completed exchanges survive Main and browser restart, but an interrupted unfinished
-owner turn is not automatically replayed. History is isolated per Device and Adapter.
-One exact proposal action reuses one Approval even across pre-upgrade request-key
+Completed exchanges survive Main and browser restart. An interrupted unfinished owner
+turn may receive only the read-only continuation defined by ADR-0031; mutation-capable
+turns are not replayed. History is isolated per Device and Adapter. One exact proposal
+action reuses one Approval even across pre-upgrade request-key
 formats. Existing duplicate legacy Approvals remain auditable; the succeeded exact
 match takes precedence and no additional duplicate is created.
 
@@ -74,4 +79,3 @@ match takes precedence and no additional duplicate is created.
 - `docs/PRODUCT_SPEC.md` FR-15 and FR-16
 - `docs/DECISIONS.md` D-057, D-058, and D-061
 - `docs/THREAT_MODEL.md`
-
