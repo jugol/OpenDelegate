@@ -152,7 +152,9 @@ describe("owner operations surfaces", () => {
     expect(await screen.findByRole("heading", { name: "Grant ready to download" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Download grant file" })).toBeTruthy();
     expect(screen.getByText(/opendelegate worker join --grant-file/u)).toBeTruthy();
-    expect(screen.getByText(/github\.com\/jugol\/OpenDelegate/u)).toBeTruthy();
+    expect(
+      screen.getByText((content) => content.includes("https://github.com/jugol/OpenDelegate")),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy Agent prompt" })).toBeTruthy();
     expect(screen.getByText(/appears in the left list/iu)).toBeTruthy();
     expect(document.body.textContent).not.toContain(issued.document.token);
