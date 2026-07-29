@@ -495,7 +495,9 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     const operationKey = digest(
       `${request.principalId}\u0000${request.deviceId}\u0000${request.idempotencyKey}`,
     );
-    const requestDigest = digest(request.message);
+    const requestDigest = digest(
+      `${request.message}\u0000response-locale:${request.responseLocale ?? "en"}`,
+    );
     const active = this.#activeRequests.get(operationKey);
     if (active !== undefined) {
       if (active.requestDigest !== requestDigest) {

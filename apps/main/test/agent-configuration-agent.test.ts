@@ -96,6 +96,32 @@ test("Configuration Agent resumes one native session per target Device", async (
   assert.equal(adapter.resumes[0]?.session.nativeSessionId, "native-configuration-session");
 });
 
+test("Configuration Agent binds the response locale to durable idempotency", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new FakeConfigurationAdapter();
+  const agent = await createAgent(adapter, eventStore);
+  const request = {
+    ...message("request_locale_identity", "Inspect this Device."),
+    responseLocale: "ko" as const,
+  };
+
+  await agent.sendMessage(request);
+
+  const restarted = await createAgent(adapter, eventStore);
+  await assert.rejects(
+    restarted.sendMessage({
+      ...request,
+      responseLocale: "ja",
+    }),
+    (error: unknown) => {
+      assert.equal((error as { readonly code?: unknown }).code, "IDEMPOTENCY_CONFLICT");
+      return true;
+    },
+  );
+  assert.equal(adapter.starts.length, 1);
+  assert.equal(adapter.resumes.length, 0);
+});
+
 test("Configuration Agent creates a fresh continuation when the initial native resume fails", async () => {
   const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
   const adapter = new InitialResumeFailureAdapter();
@@ -235,7 +261,7 @@ test("Configuration Agent keeps legacy inspect-first interruption records fail-c
   const operationKey = testDigest(
     `${interrupted.principalId}\u0000${interrupted.deviceId}\u0000${interrupted.idempotencyKey}`,
   );
-  const requestDigest = testDigest(interrupted.message);
+  const requestDigest = testDigest(`${interrupted.message}\u0000response-locale:en`);
   await eventStore.append({
     streamId: `configuration-tool-attempt:${operationKey.slice("sha256:".length)}`,
     expectedVersion: 0,

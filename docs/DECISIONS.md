@@ -1300,7 +1300,9 @@ See [ADR-0032](adr/0032-configuration-chat-locale-and-approval-handoff.md).
 **Decision:** The Admin-selected presentation locale is bounded request metadata for
 each new Configuration Agent turn and is authoritative for newly generated
 owner-visible prose. It does not translate canonical identifiers, provider-native
-model IDs, configuration values, or stored conversation history.
+model IDs, configuration values, or stored conversation history. The normalized
+locale is part of the durable request idempotency identity; changing it while
+reusing the same key is a conflict rather than a different continuation of the turn.
 
 Configuration Chat treats a successful `propose` tool call as entry into the normal
 change flow. Main does not accept a terminal Agent response until that same turn has

@@ -28,7 +28,9 @@ supported presentation locales and passes it as bounded Configuration Agent requ
 metadata. The prompt requires newly generated owner-visible prose in that locale,
 including when the owner message or deterministic UI instruction uses another
 language. Canonical IDs, model IDs, commands, keys, values, and stored history are
-never translated.
+never translated. The normalized response locale is part of the request's durable
+idempotency identity, so an interrupted request cannot be resumed under the same
+idempotency key with different presentation semantics.
 
 Within one Configuration Agent request:
 
@@ -85,6 +87,8 @@ Approvals remain directly reachable after restart.
 
 - A Korean `Accept-Language` request produces a Korean response instruction even for
   an English configuration message.
+- Reusing one durable request idempotency key with a different response locale is
+  rejected after restart.
 - An Agent that tries to finish after `propose` receives a bounded correction and
   must attempt `apply`.
 - A protected apply returns its broker-issued Approval ID in the response and restored
