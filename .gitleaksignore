@@ -4,6 +4,7 @@
 # test-only private keys. New commits, locations, rules, or line numbers remain
 # unignored and fail the full-history scan.
 f87d7c93ec2e7acbb3a938220e6a9f41632d1171:packages/task-service/test/authoritative-worker-task-executor.test.ts:generic-api-key:493
+7a5ad34e1faa223e243fa1fe1f08148b091a0dbd:packages/task-service/test/authoritative-worker-task-executor.test.ts:generic-api-key:563
 a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:964
 a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:973
 a5ba2c415d8444471c6a554384e2af5f852b31fa:apps/control-plane/test/control-plane-http.test.ts:generic-api-key:993
