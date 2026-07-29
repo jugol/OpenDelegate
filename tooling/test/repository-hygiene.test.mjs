@@ -79,12 +79,16 @@ test("hosted CI uses named OS images that match the declared compatibility matri
   }
 });
 
-test("Main integration tests retain bounded hosted-runner concurrency and wall time", async () => {
+test("pull requests stay lean while release validation retains the bounded platform matrix", async () => {
   const manifest = JSON.parse(
     await readFile(new URL("../../apps/main/package.json", import.meta.url), "utf8"),
   );
-  const workflow = await readFile(
+  const pullRequestWorkflow = await readFile(
     new URL("../../.github/workflows/ci.yml", import.meta.url),
+    "utf8",
+  );
+  const releaseWorkflow = await readFile(
+    new URL("../../.github/workflows/release-validation.yml", import.meta.url),
     "utf8",
   );
 
@@ -96,8 +100,23 @@ test("Main integration tests retain bounded hosted-runner concurrency and wall t
     manifest.scripts?.["test:serial"],
     "node --experimental-strip-types --test --test-concurrency=1",
   );
+  assert.match(pullRequestWorkflow, /^name:\s*Pull request\s*$/mu);
+  assert.match(pullRequestWorkflow, /^\s+pull_request:\s*$/mu);
+  assert.doesNotMatch(pullRequestWorkflow, /^\s+push:\s*$/mu);
+  assert.doesNotMatch(pullRequestWorkflow, /^\s+workflow_dispatch:\s*$/mu);
+  assert.match(pullRequestWorkflow, /^\s+name:\s*Validate pull request\s*$/mu);
+  assert.match(pullRequestWorkflow, /^\s+runs-on:\s*ubuntu-24\.04\s*$/mu);
+  assert.match(pullRequestWorkflow, /^\s+timeout-minutes:\s*15\s*$/mu);
+  assert.match(pullRequestWorkflow, /^\s+run:\s*pnpm check\s*$/mu);
+  assert.doesNotMatch(pullRequestWorkflow, /^\s+matrix:\s*$/mu);
+  assert.doesNotMatch(pullRequestWorkflow, /release:build/u);
+
+  assert.match(releaseWorkflow, /^name:\s*Release validation\s*$/mu);
+  assert.match(releaseWorkflow, /^\s+workflow_dispatch:\s*$/mu);
+  assert.doesNotMatch(releaseWorkflow, /^\s+pull_request:\s*$/mu);
+  assert.doesNotMatch(releaseWorkflow, /^\s+push:\s*$/mu);
   assert.match(
-    workflow,
+    releaseWorkflow,
     /jobs:\s*\n\s*verify:[\s\S]*?\n\s+timeout-minutes:\s*\$\{\{\s*matrix\.timeout_minutes\s*\}\}\s*$/mu,
   );
   for (const [os, timeout] of [
@@ -106,7 +125,7 @@ test("Main integration tests retain bounded hosted-runner concurrency and wall t
     ["macos-26", 30],
   ]) {
     assert.match(
-      workflow,
+      releaseWorkflow,
       new RegExp(`- os: ${os.replaceAll(".", "\\.")}\\s+timeout_minutes: ${timeout}`, "u"),
     );
   }

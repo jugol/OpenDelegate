@@ -66,7 +66,7 @@
         "packages/storage-sql/src/sql-device-observation-repository.ts",
         "packages/storage-sql/test/sql-device-observation-repository.contract.test.ts",
         "apps/main/test/main-runtime.test.ts",
-        ".github/workflows/ci.yml"
+        ".github/workflows/release-validation.yml"
       ],
       "nextGate": "Capture immutable final-commit SQLite and PostgreSQL contract results for every composed repository, including configuration, Artifact metadata, Device observations, owner authentication, action authorization, Discord state, and Device channels. Then run the packaged backup, verify, and fresh-target restore CLI on clean hosts and prove migration integrity, exact Worker-action once-consumption, channel replay, and post-restore reconciliation for both deployment choices."
     },
@@ -346,7 +346,7 @@
         "docs/adr/0013-windows-computer-use-backend.md",
         "docs/adr/0014-macos-computer-use-backend.md",
         "docs/adr/0015-ubuntu-gnome-wayland-computer-use-backend.md",
-        ".github/workflows/ci.yml",
+        ".github/workflows/release-validation.yml",
         "packages/computer-use-os/test/computer-use-os.test.ts",
         "packages/computer-use-os/test/conformance-lab.test.ts",
         "packages/computer-use-os/src/macos-native-driver.ts",
@@ -587,6 +587,7 @@
       "liveProofStatus": "blocked-external",
       "evidence": [
         ".github/workflows/ci.yml",
+        ".github/workflows/release-validation.yml",
         "apps/admin-web/src/i18n/i18n.test.tsx",
         "apps/admin-web/e2e/admin-overview.spec.ts",
         "docs/adr/0010-reproducible-platform-bundles-and-provenance.md",

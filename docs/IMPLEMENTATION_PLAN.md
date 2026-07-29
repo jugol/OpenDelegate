@@ -932,17 +932,25 @@ chain without rewriting any candidate payload, archive, metadata, or ledger.
 
 ## Test infrastructure
 
-### Continuous integration
+### Tiered repository validation
 
-Run on hosted macOS, Windows, and Linux runners:
+Routine pull requests run one required Ubuntu validation job. It checks canonical
+documents and release evidence, architecture boundaries, formatting, lint, types,
+the deterministic unit and acceptance harness, application builds, and the Admin
+Web browser harness. Fast secret scanning and dependency review remain separate
+required checks.
 
-- format, lint, type, dependency, and schema checks;
-- domain, protocol, policy, and scheduler tests;
-- SQLite and PostgreSQL integration tests;
-- fake-adapter canonical journey;
-- Admin Web browser tests;
-- build and packaging smoke tests; and
-- adapter fixture and compatibility tests.
+The repository does not repeat that complete suite on macOS and Windows for every
+pull request or rerun the same commit automatically after merge. Cross-platform
+Node, native helper, SQLite/PostgreSQL, packaging, and browser validation remains
+available through the manually dispatched Release validation workflow. Maintainers
+run it for release candidates and changes whose platform impact warrants the full
+matrix.
+
+CodeQL and the dependency audit run on a weekly schedule and on explicit manual
+request. They are security maintenance evidence, not routine pull-request merge
+gates. Hosted validation never replaces the self-hosted platform-lab and live proof
+required for supported release promotion.
 
 ### Self-hosted platform lab
 

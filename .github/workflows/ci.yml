@@ -1,34 +1,20 @@
-name: CI
+name: Pull request
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: "ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}"
+  group: "pull-request-${{ github.event.pull_request.number }}"
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Verify Node 24 (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.timeout_minutes }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            timeout_minutes: 30
-          - os: windows-2025
-            timeout_minutes: 50
-          - os: macos-26
-            timeout_minutes: 30
+  validate:
+    name: Validate pull request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -51,86 +37,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify live Windows DPAPI Secret Store
-        if: runner.os == 'Windows'
-        run: >-
-          pnpm --filter @opendelegate/secrets exec node --experimental-strip-types --test
-          --test-name-pattern "Windows DPAPI protects and restores"
-          test/managed-secret-store.test.ts
-
-      - name: Compile and test the native macOS Computer Use helper
-        if: runner.os == 'macOS'
-        run: |
-          swift test \
-            --package-path packages/computer-use-os/native/macos \
-            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-tests"
-          swift build \
-            --configuration release \
-            --package-path packages/computer-use-os/native/macos \
-            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-release" \
-            --product opendelegate-macos-computer-use
-          swift build \
-            --configuration release \
-            --package-path packages/computer-use-os/native/macos \
-            --scratch-path "${{ runner.temp }}/opendelegate-swift-macos-release" \
-            --product opendelegate-computer-use-fixture
-
-      - name: Compile and self-test the native Windows Computer Use helper
-        if: runner.os == 'Windows'
-        run: pnpm --filter @opendelegate/computer-use-os native:windows:build
-
-      - name: Verify canonical planning-document links
-        run: pnpm docs:check
-
-      - name: Verify release evidence and architecture boundaries
-        run: pnpm release:status && pnpm architecture:check
-
-      - name: Check formatting
-        run: pnpm format:check
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Run acceptance and unit harness
-        run: pnpm test
-        env:
-          OPENDELEGATE_TEST_SKIP_LIVE_DPAPI: ${{ runner.os == 'Windows' && '1' || '0' }}
+      - name: Check repository
+        run: pnpm check
 
       - name: Build applications
         run: pnpm build
-
-      - name: Smoke an explicitly unsupported platform bundle
-        run: >-
-          pnpm release:build --destination "${{ runner.temp }}/opendelegate-internal-preview"
-          --internal-preview
-
-      - name: Archive manually requested internal preview on macOS or Linux
-        if: github.event_name == 'workflow_dispatch' && runner.os != 'Windows'
-        run: >-
-          tar -C "${{ runner.temp }}" -czf "${{ runner.temp }}/opendelegate-internal-preview-${{
-          runner.os }}-${{ runner.arch }}.tar.gz" opendelegate-internal-preview
-
-      - name: Archive manually requested internal preview on Windows
-        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
-        shell: pwsh
-        run: >-
-          Compress-Archive -LiteralPath '${{ runner.temp }}/opendelegate-internal-preview'
-          -DestinationPath '${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{
-          runner.arch }}.zip'
-
-      - name: Upload manually requested internal preview
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}
-          path: |
-            ${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}.tar.gz
-            ${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}.zip
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Install browser runner
         run: pnpm --filter @opendelegate/admin-web exec playwright install --with-deps chromium
@@ -142,86 +53,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: admin-web-playwright-${{ matrix.os }}
+          name: admin-web-playwright
           path: ${{ runner.temp }}/opendelegate-playwright-results
           if-no-files-found: ignore
           retention-days: 7
-
-  node-22-compatibility:
-    name: Verify temporary Node 22 floor
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        with:
-          version: 11.15.1
-          run_install: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.14.0
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify compatibility floor
-        run: pnpm check
-
-      - name: Build applications
-        run: pnpm build
-
-  postgres-integration:
-    name: Verify PostgreSQL persistence
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-
-    services:
-      postgres:
-        image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
-        env:
-          POSTGRES_DB: opendelegate_test
-          POSTGRES_PASSWORD: opendelegate_test
-          POSTGRES_USER: opendelegate_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U opendelegate_test -d opendelegate_test" --health-interval 5s
-          --health-timeout 5s --health-retries 12
-
-    env:
-      OPENDELEGATE_TEST_POSTGRES_URI: postgresql://opendelegate_test:opendelegate_test@127.0.0.1:5432/opendelegate_test
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-        with:
-          version: 11.15.1
-          run_install: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.18.0
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run SQLite and PostgreSQL acceptance contracts
-        run: >-
-          pnpm --filter @opendelegate/storage-sql test && pnpm --filter @opendelegate/acceptance
-          test && pnpm --filter @opendelegate/main test
