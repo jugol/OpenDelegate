@@ -29,6 +29,7 @@ import {
   useAdminI18n,
 } from "./i18n";
 import {
+  AdminApiError,
   type ConfigurationAgentReply,
   type ConfigurationAgentConversationMessage,
   type ConfigurationAgentSuggestedAction,
@@ -74,6 +75,14 @@ type ChatMessage = {
   | {
       readonly content?: never;
       readonly systemMessageKey: SystemChatMessageKey;
+    }
+  | {
+      readonly configurationFailure: {
+        readonly correlationId?: string;
+        readonly diagnosticCode?: string;
+      };
+      readonly content?: never;
+      readonly systemMessageKey?: never;
     }
 );
 
@@ -241,12 +250,8 @@ export function ConfigurationChat({
           suggestedActions: response.suggestedActions,
         });
         return true;
-      } catch {
-        appendAgentMessage({
-          id: `message-agent-${sequence + 1}`,
-          author: "agent",
-          systemMessageKey: "failedMessage",
-        });
+      } catch (error) {
+        appendAgentMessage(configurationFailureMessage(`message-agent-${sequence + 1}`, error));
         return false;
       } finally {
         setAgentResponding(false);
@@ -511,12 +516,10 @@ export function ConfigurationChat({
           content: response.content,
           suggestedActions: response.suggestedActions,
         });
-      } catch {
-        appendAgentMessage({
-          id: `message-agent-secure-reference-${sequence + 1}`,
-          author: "agent",
-          systemMessageKey: "failedMessage",
-        });
+      } catch (error) {
+        appendAgentMessage(
+          configurationFailureMessage(`message-agent-secure-reference-${sequence + 1}`, error),
+        );
       }
     } catch {
       appendAgentMessage({
@@ -629,13 +632,7 @@ export function ConfigurationChat({
                   </span>
                 ) : null}
                 <div className="chat-message-body">
-                  <ChatMessageCopy
-                    content={
-                      message.systemMessageKey === undefined
-                        ? message.content
-                        : copy.chat[message.systemMessageKey]
-                    }
-                  />
+                  <ChatMessageCopy content={chatMessageContent(message, copy)} />
                   {message.author === "agent" &&
                   mainDevice &&
                   onIngestSecret !== undefined &&
@@ -894,6 +891,50 @@ export function ConfigurationChat({
       </div>
     </div>
   );
+}
+
+function configurationFailureMessage(id: string, error: unknown): ChatMessage {
+  if (error instanceof AdminApiError && error.code === "CONFIGURATION_AGENT_UNAVAILABLE") {
+    return {
+      id,
+      author: "agent",
+      configurationFailure: {
+        ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
+        ...(error.diagnosticCode === undefined ? {} : { diagnosticCode: error.diagnosticCode }),
+      },
+    };
+  }
+  return {
+    id,
+    author: "agent",
+    systemMessageKey: "failedMessage",
+  };
+}
+
+function chatMessageContent(message: ChatMessage, copy: Messages): string {
+  if (message.systemMessageKey !== undefined) {
+    return copy.chat[message.systemMessageKey];
+  }
+  if ("configurationFailure" in message) {
+    return [
+      copy.chat.failedMessage,
+      ...(message.configurationFailure.diagnosticCode === undefined
+        ? []
+        : [
+            formatMessage(copy.chat.diagnosticCode, {
+              code: message.configurationFailure.diagnosticCode,
+            }),
+          ]),
+      ...(message.configurationFailure.correlationId === undefined
+        ? []
+        : [
+            formatMessage(copy.chat.correlationId, {
+              id: message.configurationFailure.correlationId,
+            }),
+          ]),
+    ].join("\n\n");
+  }
+  return message.content;
 }
 
 function ChatMessageCopy({ content }: { readonly content: string }): React.JSX.Element {

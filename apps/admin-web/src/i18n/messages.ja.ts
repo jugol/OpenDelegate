@@ -74,6 +74,8 @@ export const japaneseMessages = {
       "Main から、デバイス評価または設定エージェントのメッセージ機能を利用できないと報告されています。表示されるデバイス情報は、Main の決定論的なランタイムレポートだけを基にしています。",
     failedMessage:
       "ローカル設定エージェントが利用できないか、応答中に中断されました。OpenDelegate は結果が不明な設定操作を自動再実行していません。完了済みの変更は保持されるため、現在の設定を確認してから再度依頼してください。",
+    diagnosticCode: "診断コード: {code}",
+    correlationId: "相関 ID: {id}",
     discordOnboardingMessage:
       "Discord はまだ接続されていません。現在のバインディングを確認し、セットアップ手順を準備しています。",
     secureStoreFailed: "認証情報を安全に保存できませんでした。設定チャットには送信されていません。",

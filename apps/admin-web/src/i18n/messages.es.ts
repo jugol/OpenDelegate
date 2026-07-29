@@ -76,6 +76,8 @@ export const spanishMessages = {
       "El Main indica que la evaluación del dispositivo o la mensajería del agente de configuración no están disponibles. Los datos visibles del dispositivo proceden únicamente del informe determinista del entorno de ejecución del Main.",
     failedMessage:
       "El agente de configuración local no estaba disponible o fue interrumpido. OpenDelegate no repitió una operación de resultado incierto. Los cambios completados se conservan; revisa la configuración actual y vuelve a intentarlo.",
+    diagnosticCode: "Código de diagnóstico: {code}",
+    correlationId: "ID de correlación: {id}",
     discordOnboardingMessage:
       "Discord todavía no está conectado. Estoy comprobando la vinculación actual y preparando la guía de configuración.",
     secureStoreFailed:

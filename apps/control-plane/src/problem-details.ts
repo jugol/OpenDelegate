@@ -15,6 +15,8 @@ const PROBLEM_BASE = "https://opendelegate.dev/problems/";
 
 interface MappedProblem {
   readonly code: string;
+  readonly detail?: string;
+  readonly diagnosticCode?: string;
   readonly status: number;
   readonly title: string;
 }
@@ -44,6 +46,8 @@ function sendProblem(reply: FastifyReply, correlationId: string, mapped: MappedP
     status: mapped.status,
     code: mapped.code,
     correlationId,
+    ...(mapped.detail === undefined ? {} : { detail: mapped.detail }),
+    ...(mapped.diagnosticCode === undefined ? {} : { diagnosticCode: mapped.diagnosticCode }),
   };
 
   void reply.status(mapped.status).type("application/problem+json").send(body);
@@ -67,7 +71,7 @@ function mapError(error: unknown): MappedProblem {
       case "IDEMPOTENCY_CONFLICT":
         return publicProblem(409, error.code);
       case "CONFIGURATION_AGENT_UNAVAILABLE":
-        return publicProblem(503, error.code);
+        return publicProblem(503, error.code, error.message, error.diagnosticCode);
     }
   }
   if (error instanceof SecureSecretIngestPortError) {
@@ -187,12 +191,23 @@ function mapOwnerAuthError(error: OwnerAuthError): MappedProblem {
   }
 }
 
-function publicProblem(status: number, code: string): MappedProblem {
+function publicProblem(
+  status: number,
+  code: string,
+  detail?: string,
+  diagnosticCode?: string,
+): MappedProblem {
   return {
     status,
     code,
     title: titleFor(code),
+    ...(detail === undefined ? {} : { detail: detail.slice(0, 512) }),
+    ...(isPublicDiagnosticCode(diagnosticCode) ? { diagnosticCode } : {}),
   };
+}
+
+function isPublicDiagnosticCode(value: string | undefined): value is string {
+  return value !== undefined && /^[A-Z][A-Z0-9_]{1,127}$/u.test(value);
 }
 
 function titleFor(code: string): string {

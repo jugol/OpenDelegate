@@ -456,6 +456,7 @@ describe("BrowserAdminApi JSON responses", () => {
           {
             code: "AUTHENTICATION_FAILED",
             detail: "The owner credential is no longer valid.",
+            diagnosticCode: "AUTH_SESSION_EXPIRED",
             title: "Owner authentication failed.",
           },
           {
@@ -472,6 +473,7 @@ describe("BrowserAdminApi JSON responses", () => {
     await api.login("correct horse battery staple");
     await expect(api.commandTask(task.taskId, "pause")).rejects.toMatchObject({
       code: "AUTHENTICATION_FAILED",
+      diagnosticCode: "AUTH_SESSION_EXPIRED",
       message: "The owner credential is no longer valid.",
       status: 401,
     });

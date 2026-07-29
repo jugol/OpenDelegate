@@ -66,6 +66,8 @@ export const simplifiedChineseMessages = {
       "主设备报告设备评估或配置智能体消息功能不可用。当前显示的设备信息仅来自主设备的确定性运行环境报告。",
     failedMessage:
       "本地配置智能体尚未就绪或在响应过程中中断。OpenDelegate 没有自动重放结果不确定的配置操作。已完成的更改会保留；请先检查当前设置，然后重试。",
+    diagnosticCode: "诊断代码：{code}",
+    correlationId: "关联 ID：{id}",
     discordOnboardingMessage: "Discord 尚未连接。我正在检查当前绑定并准备设置指南。",
     secureStoreFailed: "无法安全存储该凭据。它未发送到配置对话。",
     guidedSetupTitle: "引导式设置",

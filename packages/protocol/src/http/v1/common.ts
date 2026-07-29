@@ -30,6 +30,13 @@ export const ProblemDetailsSchema = Type.Object(
     }),
     correlationId: CorrelationIdSchema,
     detail: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+    diagnosticCode: Type.Optional(
+      Type.String({
+        minLength: 2,
+        maxLength: 128,
+        pattern: "^[A-Z][A-Z0-9_]*$",
+      }),
+    ),
   },
   {
     additionalProperties: false,

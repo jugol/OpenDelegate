@@ -131,6 +131,29 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
       }
       continue;
     }
+    if (message.method === "thread/read") {
+      const reconciledTurnStatus = process.env.FIXTURE_CODEX_RECONCILED_TURN_STATUS ?? "completed";
+      send({
+        id: message.id,
+        result: {
+          thread: {
+            id: message.params.threadId,
+            turns: [
+              {
+                id: turnId,
+                status: reconciledTurnStatus,
+                items: [],
+                error:
+                  reconciledTurnStatus === "failed"
+                    ? { message: "persisted fixture failure" }
+                    : null,
+              },
+            ],
+          },
+        },
+      });
+      continue;
+    }
     if (message.method === "turn/start") {
       if (
         process.env.FIXTURE_EXPECT_MODEL &&
@@ -152,6 +175,13 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
           turn: { id: turnId, status: "inProgress", items: [], error: null },
         },
       });
+      if (process.env.FIXTURE_CODEX_EMIT_UNSUPPORTED_AFTER_TURN_STARTED === "1") {
+        send({
+          method: "fixture/unsupported",
+          params: { threadId, turnId },
+        });
+        continue;
+      }
       send({
         method: "item/agentMessage/delta",
         params: { threadId, turnId, itemId: "message-1", delta: "Working" },
@@ -248,6 +278,9 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
           },
         },
       });
+      if (process.env.FIXTURE_CODEX_CLOSE_BEFORE_TURN_COMPLETED === "1") {
+        process.exit(0);
+      }
       send({
         method: "turn/completed",
         params: {

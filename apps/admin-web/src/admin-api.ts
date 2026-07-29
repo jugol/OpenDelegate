@@ -662,12 +662,22 @@ export interface AdminApi {
 
 export class AdminApiError extends Error {
   readonly code: string;
+  readonly correlationId: string | undefined;
+  readonly diagnosticCode: string | undefined;
   readonly status: number;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    correlationId?: string,
+    diagnosticCode?: string,
+  ) {
     super(message);
     this.name = "AdminApiError";
     this.code = code;
+    this.correlationId = correlationId;
+    this.diagnosticCode = diagnosticCode;
     this.status = status;
   }
 }
@@ -976,6 +986,8 @@ export class BrowserAdminApi implements AdminApi {
         response.status,
         problem.code,
         problem.detail ?? problem.title ?? "OpenDelegate could not complete this request.",
+        problem.correlationId,
+        problem.diagnosticCode,
       );
     }
     return payload as TValue;
@@ -1149,20 +1161,30 @@ function isJsonMediaType(contentType: string): boolean {
 
 function asProblem(value: unknown): {
   readonly code: string;
+  readonly correlationId?: string;
   readonly detail?: string;
+  readonly diagnosticCode?: string;
   readonly title?: string;
 } {
   if (typeof value !== "object" || value === null) {
     return { code: "REQUEST_FAILED" };
   }
   const record = value as Record<string, unknown>;
+  const correlationId = asNonBlankString(record["correlationId"]);
   const detail = asNonBlankString(record["detail"]);
+  const diagnosticCode = asDiagnosticCode(record["diagnosticCode"]);
   const title = asNonBlankString(record["title"]);
   return {
     code: typeof record["code"] === "string" ? record["code"] : "REQUEST_FAILED",
+    ...(correlationId === undefined ? {} : { correlationId }),
     ...(detail === undefined ? {} : { detail }),
+    ...(diagnosticCode === undefined ? {} : { diagnosticCode }),
     ...(title === undefined ? {} : { title }),
   };
+}
+
+function asDiagnosticCode(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,127}$/u.test(value) ? value : undefined;
 }
 
 function asNonBlankString(value: unknown): string | undefined {

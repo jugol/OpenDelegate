@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
+import { AdminApiError } from "./admin-api";
 import { App } from "./App";
 import {
   firstRunDevice,
@@ -566,6 +567,33 @@ describe("first-run Device overview", () => {
     expect(within(log).getAllByRole("article", { name: "OpenDelegate" })).toHaveLength(3);
     expect((composer as HTMLInputElement).value).toBe("");
     expect(document.activeElement).toBe(composer);
+  });
+
+  it("shows a safe Configuration Agent diagnostic and correlation ID when a turn fails", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        initialChatOpen
+        onConfigurationMessage={async () => {
+          throw new AdminApiError(
+            503,
+            "CONFIGURATION_AGENT_UNAVAILABLE",
+            "The Configuration Agent did not complete its turn. Diagnostic code: PROVIDER_CONNECTION_CLOSED.",
+            "correlation-config-agent-001",
+            "PROVIDER_CONNECTION_CLOSED",
+          );
+        }}
+      />,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Message Configuration Chat" });
+    await user.type(composer, "Inspect the current profile.");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(await screen.findByText(/Diagnostic code: PROVIDER_CONNECTION_CLOSED/u)).toBeTruthy();
+    expect(screen.getByText(/Correlation ID: correlation-config-agent-001/u)).toBeTruthy();
   });
 
   it("restores the durable Device conversation when Configuration Chat mounts", async () => {
