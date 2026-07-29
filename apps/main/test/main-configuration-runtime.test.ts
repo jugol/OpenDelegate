@@ -296,6 +296,7 @@ test("production Main secure ingest makes an exact Main-scoped database referenc
   assert.equal(adapter.proposalStatus, "succeeded", JSON.stringify(adapter.proposalError));
   assert.equal(proposed.json().content, "The secure database reference proposal is ready.");
   assert.match(adapter.proposalId ?? "", /^configuration_/u);
+  assert.equal(proposed.json().pendingApprovalId, adapter.approvalId);
   assert.equal(storeValues.size, 1);
 });
 
@@ -368,6 +369,8 @@ class DatabaseReferenceConfigurationAdapter implements AgentAdapter {
   public readonly provider = "generic" as const;
   public secretRef: string | undefined;
   public proposalId: string | undefined;
+  public approvalId: string | undefined;
+  public proposalRevision: number | undefined;
   public proposalStatus: "failed" | "succeeded" | undefined;
   public proposalError: unknown;
 
@@ -411,11 +414,15 @@ class DatabaseReferenceConfigurationAdapter implements AgentAdapter {
     assert.ok(line);
     const toolResult = JSON.parse(line) as {
       readonly status: "failed" | "succeeded";
-      readonly tool: "inspect" | "propose";
+      readonly tool: "inspect" | "propose" | "diff" | "apply";
+      readonly error?: {
+        readonly code?: string;
+        readonly approvalId?: string;
+      };
       readonly receipt?: {
         readonly result?: {
           readonly revision?: number;
-          readonly proposal?: { readonly id: string };
+          readonly proposal?: { readonly id: string; readonly baseRevision: number };
         };
       };
     };
@@ -448,21 +455,61 @@ class DatabaseReferenceConfigurationAdapter implements AgentAdapter {
         }),
       );
     }
-    this.proposalStatus = toolResult.status;
-    this.proposalError = (toolResult as { readonly error?: unknown }).error;
-    if (toolResult.status === "failed") {
+    if (toolResult.tool === "propose") {
+      this.proposalStatus = toolResult.status;
+      this.proposalError = toolResult.error;
+      if (toolResult.status === "failed") {
+        return handle(
+          input.session,
+          JSON.stringify({
+            schemaVersion: 1,
+            type: "final",
+            content: "The secure database reference proposal failed.",
+            claimReceiptIds: [],
+          }),
+        );
+      }
+      this.proposalId = toolResult.receipt?.result?.proposal?.id;
+      this.proposalRevision = toolResult.receipt?.result?.proposal?.baseRevision;
+      assert.ok(this.proposalId);
+      assert.equal(typeof this.proposalRevision, "number");
       return handle(
         input.session,
         JSON.stringify({
           schemaVersion: 1,
-          type: "final",
-          content: "The secure database reference proposal failed.",
-          claimReceiptIds: [],
+          type: "tool",
+          toolCallId: "diff-database-reference",
+          request: {
+            tool: "diff",
+            proposalId: this.proposalId,
+            expectedRevision: this.proposalRevision,
+          },
         }),
       );
     }
-    this.proposalId = toolResult.receipt?.result?.proposal?.id;
-    assert.ok(this.proposalId);
+    if (toolResult.tool === "diff") {
+      assert.equal(toolResult.status, "succeeded");
+      assert.ok(this.proposalId);
+      assert.equal(typeof this.proposalRevision, "number");
+      return handle(
+        input.session,
+        JSON.stringify({
+          schemaVersion: 1,
+          type: "tool",
+          toolCallId: "apply-database-reference",
+          request: {
+            tool: "apply",
+            proposalId: this.proposalId,
+            expectedRevision: this.proposalRevision,
+          },
+        }),
+      );
+    }
+    assert.equal(toolResult.tool, "apply");
+    assert.equal(toolResult.status, "failed");
+    assert.equal(toolResult.error?.code, "CONFIGURATION_TOOL_APPROVAL_REQUIRED");
+    this.approvalId = toolResult.error?.approvalId;
+    assert.ok(this.approvalId);
     return handle(
       input.session,
       JSON.stringify({
