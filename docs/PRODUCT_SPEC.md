@@ -513,9 +513,11 @@ through a secure handoff and resumes the same Task afterward.
     system, network, browser, or other external side effect; execution still
     requires authoritative Worker evidence.
 12. Deterministic retries within one owner-input cycle reuse the first durable
-    semantic plan. A retry never asks the Main Agent to reinterpret the same owner
-    turn merely because Worker selection, dispatch, or another deterministic
-    resource stage failed.
+    semantic plan. The trusted Main-owned direct-query fast path is checked first so
+    an upgraded deterministic classifier may replace a stale artificial Work Order
+    without an LLM turn. Otherwise, a retry never asks the Main Agent to reinterpret
+    the same owner turn merely because Worker selection, dispatch, or another
+    deterministic resource stage failed.
 
 #### Canonical Task states
 

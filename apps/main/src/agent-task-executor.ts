@@ -1135,6 +1135,7 @@ const DEVICE_DIRECTORY_QUERY_PATTERNS: Readonly<
 });
 
 const VAGUE_TASK_OBJECTIVE_PATTERNS = Object.freeze([
+  /^(?:(?:test|testing|테스트)\s*(?:(?:를\s*위한|용|for)\s*)?(?:task|일감|작업)|(?:task|일감|작업)\s*(?:(?:를\s*위한|용|for)\s*)?(?:test|testing|테스트))[?!.~]*$/iu,
   /^(?:test task|task for testing|new task|untitled task)[?!.]*$/iu,
   /^(?:테스트(?:를 위한)? 일감|테스트(?:용)? 작업|새 작업)[?!.~]*$/u,
   /^(?:テスト用タスク|テストタスク|新しいタスク)[？?！!.]*$/u,

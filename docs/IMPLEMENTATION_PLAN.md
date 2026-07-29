@@ -581,7 +581,10 @@ Make Discord the complete primary Task interface.
   plan across Main restart.
 - A narrowly recognized read-only Device availability question is answered
   deterministically from bounded Main-owned state without an LLM turn or artificial
-  Worker Run; untrusted planner completion and unverified capabilities fail closed.
+  Worker Run. Generic supported-locale test placeholders, including Korean-English
+  code switching, may be clarified by one exact owner query. The trusted direct
+  answer precedes a stale cached semantic plan on Retry, while untrusted planner
+  completion and unverified capabilities fail closed.
 - Unauthorized messages never reach an Agent.
 - An outcome-only Task does not require a Device, OS, route, provider, or
   multi-Device-placement answer when durable configuration and eligibility can

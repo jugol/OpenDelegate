@@ -1115,6 +1115,13 @@ input, external lookup, file or system change, browser operation, or claim of
 execution must still become one or more Work Orders and can complete only from
 authoritative Worker evidence.
 
+The bounded generic-objective allowlist supports accepted locale code switching,
+including Korean-English test placeholders, before applying an exact latest owner
+query. A trusted deterministic answer is evaluated before a cached semantic plan so
+an upgraded classifier can recover a previously misplanned read-only Task through
+Retry. When the deterministic path does not mint an answer, the cached owner-cycle
+plan remains unchanged and retry-stable.
+
 **Rationale:** Asking which Devices are currently reachable is a query against state
 Main already owns. Dispatching an invented `device_inventory_read` Work Order to an
 offline Worker both wastes a Run and can fail to answer the very availability

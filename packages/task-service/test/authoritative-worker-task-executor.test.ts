@@ -186,6 +186,76 @@ test("a Main-owned read-only planning answer completes without inventing a Worke
   assert.equal(dispatch.records.length, 0);
 });
 
+test("an upgraded deterministic read-only answer supersedes a stale semantic plan on retry", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const firstRequest = request("device-query-attempt-1", 1);
+  const stalePlanner = new AuthoritativeWorkerTaskExecutor({
+    clock: mutableClock(NOW_MS),
+    eventStore,
+    idSource: sequentialIds(),
+    planner: fixedPlanner(),
+    targetResolver: {
+      async resolve() {
+        throw new TaskExecutorError(
+          "WORKER_OFFLINE",
+          "No eligible Worker is online for this Work Order.",
+          true,
+        );
+      },
+    },
+    dispatch: new RecordingDispatchPort(),
+    verifier: fixedVerifier(),
+  });
+  await assert.rejects(stalePlanner.execute(firstRequest), { code: "WORKER_OFFLINE" });
+
+  const authorizedDecisions = new WeakSet<object>();
+  let semanticPlanningCalls = 0;
+  let targetResolutionCalls = 0;
+  const upgraded = new AuthoritativeWorkerTaskExecutor({
+    clock: mutableClock(NOW_MS),
+    eventStore,
+    idSource: sequentialIds(),
+    planner: {
+      async planDeterministically(input) {
+        const decision = {
+          state: "completed",
+          publicMessage: "NAS Main is online. Mac Studio is currently offline.",
+          verifiedCompletionCriteria: [...input.task.completionCriteria],
+        } as const;
+        authorizedDecisions.add(decision);
+        return decision;
+      },
+      async plan() {
+        semanticPlanningCalls += 1;
+        throw new Error("Semantic planning must not run for the upgraded direct query.");
+      },
+    },
+    directCompletionAuthorizer: {
+      authorize: ({ decision }) => authorizedDecisions.has(decision),
+    },
+    targetResolver: {
+      async resolve() {
+        targetResolutionCalls += 1;
+        throw new Error("A direct read-only answer must not select a Worker.");
+      },
+    },
+    dispatch: new RecordingDispatchPort(),
+    verifier: fixedVerifier(),
+  });
+  const retryRequest = {
+    ...request("device-query-attempt-2", 2),
+    planningKey: firstRequest.planningKey,
+  };
+
+  assert.deepEqual(await upgraded.execute(retryRequest), {
+    state: "completed",
+    publicMessage: "NAS Main is online. Mac Studio is currently offline.",
+    verifiedCompletionCriteria: ["The requested result is proven."],
+  });
+  assert.equal(semanticPlanningCalls, 0);
+  assert.equal(targetResolutionCalls, 0);
+});
+
 test("an untrusted planner cannot complete side-effect work without Worker evidence", async () => {
   const executor = new AuthoritativeWorkerTaskExecutor({
     clock: mutableClock(NOW_MS),

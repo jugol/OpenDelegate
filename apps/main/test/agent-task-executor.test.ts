@@ -434,7 +434,7 @@ test("Main Agent answers read-only Device questions from the bounded Main-owned 
   const baseTask = request(1).task;
   const task = {
     ...baseTask,
-    objective: "테스트를 위한 일감",
+    objective: "test 를 위한 task",
     completionCriteria: ["The current Device availability is reported."],
     constraints: [],
     messages: [

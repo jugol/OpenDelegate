@@ -824,10 +824,6 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     request: TaskExecutionRequest,
     signal: AbortSignal,
   ): Promise<TaskWorkPlanDecision> {
-    const existing = await this.#loadPlan(request.planningKey, request.task.taskId);
-    if (existing !== undefined) {
-      return { state: "ready", plan: existing };
-    }
     assertNotAborted(signal);
     const deterministic = await this.#planner.planDeterministically?.({
       task: request.task,
@@ -838,6 +834,10 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     if (deterministic !== undefined) {
       assertNotAborted(signal);
       return this.#validateDirectPlanningCompletion(request, deterministic);
+    }
+    const existing = await this.#loadPlan(request.planningKey, request.task.taskId);
+    if (existing !== undefined) {
+      return { state: "ready", plan: existing };
     }
     await this.#budget?.beginNativeTurn({
       taskId: request.task.taskId,

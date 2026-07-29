@@ -34,6 +34,14 @@ selected external inputs, compound side-effect objectives, or language outside t
 narrow recognized query grammar proceed through ordinary semantic planning and
 Worker evidence instead.
 
+A strict allowlist also recognizes bounded generic test or untitled objectives,
+including supported Korean-English code switching such as `test 를 위한 task`, so a
+later exact owner query can clarify an otherwise content-free Forum starter. The
+deterministic path runs before loading a cached semantic plan. This lets a safe
+classifier improvement recover a previously misplanned query on Retry without
+reinvoking an LLM; if no direct answer is minted, the original retry-stable semantic
+plan remains authoritative.
+
 ## Consequences
 
 Supported Device availability questions can be answered without an artificial
@@ -46,6 +54,10 @@ error rather than silently answering from stale model memory. Custom/injected
 planners cannot use direct completion merely by returning the same shape;
 composition must explicitly provide a trusted deterministic authorizer.
 
+An existing failed Task whose exact query was previously converted into an
+artificial Work Order can recover through its ordinary Retry control after upgrade.
+It does not require another owner message merely to invalidate that stale plan.
+
 ## Verification
 
 - Ordinary planning context includes online/offline Device facts and verified
@@ -54,6 +66,9 @@ composition must explicitly provide a trusted deterministic authorizer.
   creates no Agent turn, Worker target resolution, dispatch, or verification call.
 - A forged `completed` planner decision and a compound side-effect request fail
   closed without Worker evidence.
+- A code-switched generic test objective plus one exact Device question completes
+  directly, and the same trusted decision supersedes a stale cached Work Order on
+  Retry without semantic replanning or Worker selection.
 - Directory outage and pre-query cancellation fail closed without answering from
   model memory.
 
