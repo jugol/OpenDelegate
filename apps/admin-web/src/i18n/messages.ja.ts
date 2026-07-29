@@ -224,6 +224,8 @@ export const japaneseMessages = {
     noVerifiedModels:
       "準備済みで検証済みのモデルカタログがありません。正確なモデルを選ぶ前にこの Device を評価してください。",
     configureAgentProfile: "Configuration Chat で変更を依頼",
+    agentProfileConfigurationRequest:
+      "Device {deviceId} の現在の設定を確認してください。{scope} スコープの {key} だけを正確に {profile} へ変更してください。選択したすべてのアダプターとプロバイダー固有モデル ID を、この Device の最新のテスト済みモデルカタログで検証し、別のプロバイダー、アダプター、モデルに置き換えないでください。この変更が新しいネイティブセッションだけに適用されることを説明してください。提案を作成して diff を確認した後、apply を正確に一度呼び出し、通常の所有者 Approval を作成するか、検証済みの適用レシートを取得してください。提案を作成しただけで終了しないでください。",
     modelCatalog: "検証済みモデル {count} 件",
     defaultModel: "デフォルト",
     moreModels: "ほか {count} 件",

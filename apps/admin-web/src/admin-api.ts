@@ -587,6 +587,7 @@ export type ConfigurationAgentSuggestedAction =
 export interface ConfigurationAgentReply {
   readonly content: string;
   readonly suggestedActions: readonly ConfigurationAgentSuggestedAction[];
+  readonly pendingApprovalId?: string;
 }
 
 export interface ConfigurationAgentConversationMessage {
@@ -594,6 +595,7 @@ export interface ConfigurationAgentConversationMessage {
   readonly role: "owner" | "agent";
   readonly content: string;
   readonly suggestedActions: readonly ConfigurationAgentSuggestedAction[];
+  readonly pendingApprovalId?: string;
   readonly responseStatus?: "completed" | "interrupted" | "pending";
   readonly occurredAt: string;
 }
@@ -1049,8 +1051,17 @@ function asConfigurationAgentReply(value: unknown): ConfigurationAgentReply {
   }
   const record = value as Record<string, unknown>;
   const content = asNonBlankString(record["content"]);
+  const pendingApprovalId =
+    record["pendingApprovalId"] === undefined
+      ? undefined
+      : asNonBlankString(record["pendingApprovalId"]);
   const rawActions = record["suggestedActions"] ?? [];
-  if (content === undefined || !Array.isArray(rawActions) || rawActions.length > 4) {
+  if (
+    content === undefined ||
+    (record["pendingApprovalId"] !== undefined && pendingApprovalId === undefined) ||
+    !Array.isArray(rawActions) ||
+    rawActions.length > 4
+  ) {
     throw unexpectedResponse(502);
   }
   const suggestedActions = rawActions.map((action): ConfigurationAgentSuggestedAction => {
@@ -1070,6 +1081,7 @@ function asConfigurationAgentReply(value: unknown): ConfigurationAgentReply {
   return {
     content,
     suggestedActions,
+    ...(pendingApprovalId === undefined ? {} : { pendingApprovalId }),
   };
 }
 
@@ -1093,6 +1105,10 @@ function asConfigurationAgentConversation(
     const occurredAt = asNonBlankString(record["occurredAt"]);
     const role = record["role"];
     const responseStatus = record["responseStatus"];
+    const pendingApprovalId =
+      record["pendingApprovalId"] === undefined
+        ? undefined
+        : asNonBlankString(record["pendingApprovalId"]);
     const rawActions = record["suggestedActions"] ?? [];
     if (
       messageId === undefined ||
@@ -1104,6 +1120,8 @@ function asConfigurationAgentConversation(
         responseStatus !== "interrupted" &&
         responseStatus !== "pending") ||
       (role === "agent" && responseStatus !== undefined) ||
+      (record["pendingApprovalId"] !== undefined && pendingApprovalId === undefined) ||
+      (role === "owner" && pendingApprovalId !== undefined) ||
       !Array.isArray(rawActions) ||
       rawActions.length > 4
     ) {
@@ -1125,6 +1143,7 @@ function asConfigurationAgentConversation(
       role,
       content,
       suggestedActions,
+      ...(pendingApprovalId === undefined ? {} : { pendingApprovalId }),
       ...(responseStatus === undefined ? {} : { responseStatus }),
       occurredAt,
     };

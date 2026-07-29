@@ -871,6 +871,7 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
       url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
       headers: {
         ...authenticatedMutationHeaders(authenticated),
+        "accept-language": "ko-KR, en;q=0.8",
         "idempotency-key": "configuration-message-1",
       },
       payload: {
@@ -890,6 +891,7 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
         principalId: owner.ownerId,
         idempotencyKey: "configuration-message-1",
         message: "Inspect this Device and recommend a safe setup.",
+        responseLocale: "ko",
       },
     ]);
 

@@ -32,7 +32,13 @@ export type ApprovalSurfaceApi = Pick<AdminApi, "listApprovals" | "getApproval" 
 
 type ApprovalFilter = "pending" | "all";
 
-export function ApprovalSurface({ api }: { readonly api: ApprovalSurfaceApi }): React.JSX.Element {
+export function ApprovalSurface({
+  api,
+  initialApprovalId,
+}: {
+  readonly api: ApprovalSurfaceApi;
+  readonly initialApprovalId?: string;
+}): React.JSX.Element {
   const { locale, messages } = useAdminI18n();
   const [approvals, setApprovals] = useState<readonly ApprovalDetail[]>([]);
   const [selected, setSelected] = useState<ApprovalDetail | null>(null);
@@ -66,7 +72,10 @@ export function ApprovalSurface({ api }: { readonly api: ApprovalSurfaceApi }): 
         }
         const next = sortApprovals(nextApprovals);
         setApprovals(next);
-        setSelected(firstVisible(next, "pending"));
+        setSelected(
+          next.find((approval) => approval.approvalId === initialApprovalId) ??
+            firstVisible(next, "pending"),
+        );
       })
       .catch(() => {
         if (active) {
@@ -81,7 +90,7 @@ export function ApprovalSurface({ api }: { readonly api: ApprovalSurfaceApi }): 
     return () => {
       active = false;
     };
-  }, [api]);
+  }, [api, initialApprovalId]);
 
   const visibleApprovals = useMemo(
     () =>

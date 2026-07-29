@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { AdminApiError } from "./admin-api";
+import { AdminApiError, type AdminApi } from "./admin-api";
 import { App } from "./App";
 import {
   firstRunDevice,
@@ -635,6 +635,50 @@ describe("first-run Device overview", () => {
     expect(screen.queryByText(firstRunDevice.configurationSession.assistantMessage)).toBeNull();
   });
 
+  it("opens a preloaded Configuration Chat at the latest message", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        executionAvailable
+        onConfigurationMessage={async () => ({
+          content: "Current reply.",
+          suggestedActions: [],
+        })}
+        onLoadConfigurationMessages={async () => [
+          {
+            messageId: "owner-history-top",
+            role: "owner",
+            content: "Oldest restored message.",
+            suggestedActions: [],
+            occurredAt: "2026-07-24T01:00:00.000Z",
+          },
+          {
+            messageId: "agent-history-bottom",
+            role: "agent",
+            content: "Newest restored message.",
+            suggestedActions: [],
+            occurredAt: "2026-07-24T01:00:01.000Z",
+          },
+        ]}
+      />,
+    );
+
+    expect(await screen.findByText("Newest restored message.")).toBeTruthy();
+    const scrollRegion = document.querySelector<HTMLElement>(".chat-scroll-region");
+    expect(scrollRegion).not.toBeNull();
+    Object.defineProperty(scrollRegion!, "scrollHeight", {
+      configurable: true,
+      value: 720,
+    });
+    scrollRegion!.scrollTop = 0;
+
+    await user.click(screen.getByRole("button", { name: "Open Configuration Chat" }));
+
+    expect(scrollRegion!.scrollTop).toBe(720);
+  });
+
   it("keeps an accepted message visible and reconciles its response after reload", async () => {
     let historyReads = 0;
     render(
@@ -870,6 +914,38 @@ describe("first-run Device overview", () => {
         name: "Waiting for Configuration Agent…",
       }),
     ).toBeNull();
+  });
+
+  it("opens the exact owner Approval flow from a Configuration Agent response", async () => {
+    const user = userEvent.setup();
+    const api = {
+      async listApprovals() {
+        return [];
+      },
+    } as unknown as AdminApi;
+    render(
+      <App
+        api={api}
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        executionAvailable
+        initialChatOpen
+        onConfigurationMessage={async () => ({
+          content: "The protected change is ready for owner review.",
+          suggestedActions: [],
+          pendingApprovalId: "approval_profile_change",
+        })}
+      />,
+    );
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Configuration Chat" }),
+      "Change the Worker profile.",
+    );
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.click(await screen.findByRole("button", { name: "Owner review" }));
+
+    expect(screen.getByRole("heading", { name: "Approvals" })).toBeTruthy();
   });
 
   it("renders Agent paragraphs and numbered steps as readable message structure", async () => {

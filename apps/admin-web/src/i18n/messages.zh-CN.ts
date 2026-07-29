@@ -204,6 +204,8 @@ export const simplifiedChineseMessages = {
     noFallback: "无备用绑定",
     noVerifiedModels: "暂无已就绪且经过测试的模型目录。选择精确模型前，请先评估此 Device。",
     configureAgentProfile: "在 Configuration Chat 中请求更改",
+    agentProfileConfigurationRequest:
+      "检查 Device {deviceId} 的当前配置。仅将 {scope} 作用域中的 {key} 精确更改为 {profile}。根据此 Device 最新的已测试模型目录验证每个所选适配器和提供商原生模型 ID，不得替换提供商、适配器或模型。说明该更改只影响新的原生会话。创建提案并检查其 diff，然后准确调用一次 apply，以创建常规所有者 Approval 或取得经过验证的应用回执。不要只创建提案就结束。",
     modelCatalog: "{count} 个已验证模型",
     defaultModel: "默认",
     moreModels: "另有 {count} 个",

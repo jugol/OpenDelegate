@@ -49,6 +49,7 @@ approved product specification.
 26. [`0029-wake-on-lan-readiness-evidence.md`](0029-wake-on-lan-readiness-evidence.md)
 27. [`0030-tiered-repository-validation.md`](0030-tiered-repository-validation.md)
 28. [`0031-configuration-read-only-turn-recovery.md`](0031-configuration-read-only-turn-recovery.md)
+29. [`0032-configuration-chat-locale-and-approval-handoff.md`](0032-configuration-chat-locale-and-approval-handoff.md)
 
 ## Proposed ADRs
 

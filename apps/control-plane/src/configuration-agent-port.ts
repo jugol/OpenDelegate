@@ -18,11 +18,14 @@ export interface ConfigurationDeviceObservation {
   readonly knowledgeHealth: NonNullable<DeviceSummaryV1["knowledgeHealth"]>;
 }
 
+export type ConfigurationAgentResponseLocale = "en" | "es" | "fr" | "ja" | "ko" | "zh-CN";
+
 export interface ConfigurationAgentMessageInput {
   readonly deviceId: string;
   readonly principalId: string;
   readonly idempotencyKey: string;
   readonly message: string;
+  readonly responseLocale?: ConfigurationAgentResponseLocale;
   readonly deviceObservation?: ConfigurationDeviceObservation;
 }
 

@@ -37,6 +37,28 @@ const pendingApproval: ApprovalDetail = {
 };
 
 describe("ApprovalSurface", () => {
+  it("focuses the exact Approval linked from Configuration Chat", async () => {
+    const linkedApproval: ApprovalDetail = {
+      ...pendingApproval,
+      approvalId: "approval_configuration_linked",
+      reason: "Apply the linked Worker profile.",
+      configuration: {
+        ...pendingApproval.configuration!,
+        proposalId: "proposal_linked",
+      },
+    };
+    const api = approvalApi({
+      listApprovals: vi.fn().mockResolvedValue([pendingApproval, linkedApproval]),
+    });
+
+    render(<ApprovalSurface api={api} initialApprovalId={linkedApproval.approvalId} />);
+
+    const inspector = await screen.findByRole("complementary", {
+      name: "Approval details: configuration.apply",
+    });
+    expect(within(inspector).getByText("Apply the linked Worker profile.")).toBeTruthy();
+  });
+
   it("shows exact review evidence and approves once by default", async () => {
     const user = userEvent.setup();
     const decidedApproval: ApprovalDetail = {

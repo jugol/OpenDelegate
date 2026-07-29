@@ -33,6 +33,7 @@ import {
   localizeCurrentRunState,
   localizePolicyScope,
   localizePresentationText,
+  type Messages,
   useAdminI18n,
 } from "./i18n";
 import { LanguageSelector } from "./LanguageSelector";
@@ -1150,7 +1151,12 @@ function AgentProfileEditor({
           onClick={(event) => {
             if (proposedProfile !== undefined) {
               onConfigureAgentProfile(
-                buildAgentProfileConfigurationRequest(device, target, proposedProfile),
+                buildAgentProfileConfigurationRequest(
+                  device,
+                  target,
+                  proposedProfile,
+                  messages.device,
+                ),
                 event.currentTarget,
               );
             }
@@ -1236,15 +1242,16 @@ function buildAgentProfileConfigurationRequest(
   device: DeviceOverviewViewModel,
   target: AgentProfileTarget,
   profile: AgentExecutionProfileView,
+  messages: Messages["device"],
 ): string {
   const key = target === "coordinator" ? "agent.coordinator-profile" : "agent.worker-profile";
   const scope = target === "coordinator" ? "Main" : "Device";
-  return [
-    `Inspect the current configuration for Device ${JSON.stringify(device.deviceId)}.`,
-    `Propose changing only ${JSON.stringify(key)} at ${scope} scope to exactly ${JSON.stringify(profile)}.`,
-    "Verify every selected adapter and provider-native model ID against this target Device's latest tested model catalog.",
-    "Do not substitute another provider, adapter, or model. Explain whether the change affects new native sessions only, then prepare the normal review and approval flow.",
-  ].join(" ");
+  return formatMessage(messages.agentProfileConfigurationRequest, {
+    deviceId: JSON.stringify(device.deviceId),
+    key: JSON.stringify(key),
+    profile: JSON.stringify(profile),
+    scope,
+  });
 }
 
 function ResourceLockList({

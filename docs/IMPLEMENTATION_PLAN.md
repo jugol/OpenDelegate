@@ -687,6 +687,15 @@ Deliver the required visual setup, Device specification, and operational surface
   Approval executes the protected operation immediately; a later “approval complete”
   message inspects durable configuration and cannot create a duplicate Approval for
   the same proposal or misread a compensated historical receipt as current state.
+- Treat `propose` as entry into the normal change flow, not as proof that an Approval
+  exists. Reject a premature terminal response until the Agent attempts `apply`;
+  preserve an explicit preview-only path through `validate`. Return a broker-issued
+  pending Approval ID as typed response metadata and render an in-message action that
+  opens that exact Approval.
+- Carry the bounded Admin presentation locale into every new Configuration Agent
+  prompt while preserving canonical identifiers and stored conversation text.
+- When Configuration Chat opens after background history hydration, position it at
+  the newest restored message without removing access to older history.
 - Use a multiline Configuration Chat composer where Enter sends and Shift+Enter adds
   a newline.
 - Implement onboarding guidance for database, Discord, Agent Adapters, service

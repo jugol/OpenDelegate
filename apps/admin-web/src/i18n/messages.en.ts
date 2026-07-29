@@ -221,6 +221,8 @@ export const englishMessages = {
     noVerifiedModels:
       "No tested, ready model catalog is available. Assess this Device before selecting an exact model.",
     configureAgentProfile: "Request change in Configuration Chat",
+    agentProfileConfigurationRequest:
+      "Inspect the current configuration for Device {deviceId}. Change only {key} at {scope} scope to exactly {profile}. Verify every selected adapter and provider-native model ID against this Device's latest tested model catalog; do not substitute another provider, adapter, or model. Explain that the change affects new native sessions only. Create the proposal, review its diff, then call apply exactly once to create the normal owner Approval or obtain a verified apply receipt. Do not finish after creating only the proposal.",
     modelCatalog: "{count} verified models",
     defaultModel: "Default",
     moreModels: "+{count} more",

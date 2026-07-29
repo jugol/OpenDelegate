@@ -22,6 +22,7 @@ export {
   type ConfigurationAgentMessageInput,
   type ConfigurationAgentPort,
   type ConfigurationAgentPortErrorCode,
+  type ConfigurationAgentResponseLocale,
 } from "./configuration-agent-port.ts";
 export {
   type DeviceEnrollmentAdminPort,

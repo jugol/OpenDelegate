@@ -229,6 +229,8 @@ export const spanishMessages = {
     noVerifiedModels:
       "No hay un catálogo de modelos listo y probado. Evalúa este Device antes de elegir un modelo exacto.",
     configureAgentProfile: "Solicitar el cambio en Configuration Chat",
+    agentProfileConfigurationRequest:
+      "Inspecciona la configuración actual del Device {deviceId}. Cambia únicamente {key} en el ámbito {scope} exactamente a {profile}. Verifica cada adaptador e ID de modelo nativo del proveedor en el catálogo probado más reciente de este Device, sin sustituir el proveedor, el adaptador ni el modelo. Explica que el cambio solo afecta a las sesiones nativas nuevas. Crea la propuesta, revisa su diff y llama a apply exactamente una vez para crear la Approval normal del propietario u obtener un recibo de aplicación verificado. No termines después de crear únicamente la propuesta.",
     modelCatalog: "{count} modelos verificados",
     defaultModel: "Predeterminado",
     moreModels: "+{count} más",
