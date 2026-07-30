@@ -219,6 +219,10 @@ export const englishMessages = {
     fallbackBinding: "Fallback binding",
     noFallback: "No fallback",
     helpHint: "What is this?",
+    reasoningEffort: "Reasoning effort",
+    providerDefaultEffort: "Provider default",
+    reasoningEffortHelp:
+      "How much reasoning the provider spends on each turn of this binding. The choices come from what this exact model advertises, so a model that exposes none shows no control. Leave it on the provider default unless you have a reason: higher effort costs more time and tokens, lower effort is faster and cheaper. It is pinned per binding, so a fallback may run at a different effort than the primary.",
     workerAgentHelp:
       "The Agent that carries out the actual work assigned to this Device — editing files, running commands, producing artifacts. Every Work Order this Device executes starts a session with this binding. Main also has a Worker Agent, because Main can execute work like any other Device.",
     coordinatorAgentHelp:

@@ -2500,7 +2500,8 @@ function assertAgentSessionMatchesAssignment(
   if (
     session.provider !== requirement.provider ||
     (requirement.adapterId !== undefined && session.adapterId !== requirement.adapterId) ||
-    (requirement.modelId !== undefined && session.modelId !== requirement.modelId)
+    (requirement.modelId !== undefined && session.modelId !== requirement.modelId) ||
+    (requirement.effort !== undefined && session.effort !== requirement.effort)
   ) {
     throw replay ? corruptState() : invalidWorkerEvent();
   }
@@ -2627,7 +2628,8 @@ function agentRequirementSatisfies(
   if (
     candidate.provider !== required.provider ||
     (required.adapterId !== undefined && candidate.adapterId !== required.adapterId) ||
-    (required.modelId !== undefined && candidate.modelId !== required.modelId)
+    (required.modelId !== undefined && candidate.modelId !== required.modelId) ||
+    (required.effort !== undefined && candidate.effort !== required.effort)
   ) {
     return false;
   }

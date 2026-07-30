@@ -203,6 +203,10 @@ export const simplifiedChineseMessages = {
     fallbackBinding: "备用绑定",
     noFallback: "无备用绑定",
     helpHint: "这是什么？",
+    reasoningEffort: "推理强度",
+    providerDefaultEffort: "提供商默认值",
+    reasoningEffortHelp:
+      "决定该绑定的每一轮中提供商投入多少推理。选项来自该模型自身公布的值，因此不公布的模型不会显示此控件。没有特别理由时请保持提供商默认值：强度越高越耗时且消耗更多 token，越低则更快更省。它按绑定分别固定，因此备用绑定可以使用与主绑定不同的强度。",
     workerAgentHelp:
       "执行分配给此 Device 的实际工作的 Agent：编辑文件、运行命令、生成成果。此 Device 执行的每个 Work Order 都使用该绑定开启会话。Main 也能像其他 Device 一样执行工作，因此 Main 同样有执行 Agent。",
     coordinatorAgentHelp:

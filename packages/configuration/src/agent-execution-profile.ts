@@ -8,6 +8,12 @@ export interface AgentBinding {
    * Generic command adapters do not necessarily expose a model catalog.
    */
   readonly modelId?: string;
+  /**
+   * Optional provider tuning for the selected model. The value comes from the
+   * model's own advertised effort catalog, so it is not a fixed enumeration and
+   * a model advertising no efforts simply carries none.
+   */
+  readonly effort?: string;
 }
 
 export type AgentExecutionProfile =
@@ -61,7 +67,7 @@ export function isAgentExecutionProfile(value: unknown): value is AgentExecution
 }
 
 function isAgentBinding(value: unknown): value is AgentBinding {
-  if (!isRecord(value) || !hasExactKeys(value, ["provider", "adapterId"], ["modelId"])) {
+  if (!isRecord(value) || !hasExactKeys(value, ["provider", "adapterId"], ["modelId", "effort"])) {
     return false;
   }
   const provider = value["provider"];
@@ -71,14 +77,24 @@ function isAgentBinding(value: unknown): value is AgentBinding {
   if (!isBoundedIdentifier(value["adapterId"], 160)) {
     return false;
   }
+  // Effort values come from a provider's advertised catalog, so this bounds the
+  // shape only. The exact value is checked against the target Device's catalog
+  // where that catalog is available.
+  if (value["effort"] !== undefined && !isBoundedIdentifier(value["effort"], 64)) {
+    return false;
+  }
   if (provider === "generic") {
     return value["modelId"] === undefined || isBoundedIdentifier(value["modelId"], 256);
   }
   return isBoundedIdentifier(value["modelId"], 256);
 }
 
+/**
+ * Two bindings that differ only by effort are distinct, so a Prefer chain may
+ * fall back from one effort of a model to another.
+ */
 function bindingIdentity(binding: AgentBinding): string {
-  return `${binding.provider}\0${binding.adapterId}\0${binding.modelId ?? ""}`;
+  return `${binding.provider}\0${binding.adapterId}\0${binding.modelId ?? ""}\0${binding.effort ?? ""}`;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

@@ -47,6 +47,8 @@ export interface WorkerAgentExecutionPlan {
   readonly provider: AgentProvider;
   readonly adapterId: string;
   readonly modelId?: string;
+  /** Provider tuning pinned by the Run assignment, when the provider exposes it. */
+  readonly effort?: string;
   readonly workstreamId: string;
   readonly prompt: string;
   readonly sandbox: AgentSandbox;
@@ -376,6 +378,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       sessionKey: prepared.sessionKey,
       deviceId: context.assignment.deviceId,
       ...(prepared.plan.modelId === undefined ? {} : { modelId: prepared.plan.modelId }),
+      ...(prepared.plan.effort === undefined ? {} : { effort: prepared.plan.effort }),
       prompt,
       workspace: cloneWorkspace(prepared.workspace),
       sandbox: prepared.plan.sandbox,

@@ -220,6 +220,10 @@ export const koreanMessages = {
     fallbackBinding: "대체 바인딩",
     noFallback: "대체 바인딩 없음",
     helpHint: "이게 무엇인가요?",
+    reasoningEffort: "추론 강도",
+    providerDefaultEffort: "공급자 기본값",
+    reasoningEffortHelp:
+      "이 바인딩의 각 턴에서 공급자가 추론에 얼마나 힘을 쓸지 정합니다. 선택지는 해당 모델이 스스로 알리는 값에서 나오므로, 이를 제공하지 않는 모델에서는 이 선택기가 표시되지 않습니다. 특별한 이유가 없다면 공급자 기본값으로 두세요. 강도가 높으면 시간과 토큰을 더 쓰고, 낮으면 더 빠르고 저렴합니다. 바인딩마다 따로 고정되므로 대체 바인딩을 기본 바인딩과 다른 강도로 둘 수 있습니다.",
     workerAgentHelp:
       "이 Device에 배정된 실제 작업을 수행하는 Agent입니다. 파일을 수정하고 명령을 실행하고 결과물을 만듭니다. 이 Device가 실행하는 모든 Work Order가 이 바인딩으로 세션을 시작합니다. Main도 다른 Device처럼 작업을 실행할 수 있으므로 Main 역시 작업 Agent를 갖습니다.",
     coordinatorAgentHelp:

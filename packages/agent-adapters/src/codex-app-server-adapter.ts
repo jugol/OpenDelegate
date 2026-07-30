@@ -641,6 +641,9 @@ export class CodexAppServerAdapter implements AgentAdapter {
         input: [{ type: "text", text: request.prompt, text_elements: [] }],
         cwd,
         ...(request.modelId === undefined ? {} : { model: request.modelId }),
+        // Reasoning effort is a turn-level override; thread/start and
+        // thread/resume do not accept it.
+        ...(request.effort === undefined ? {} : { effort: request.effort }),
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
       });

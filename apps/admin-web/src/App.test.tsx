@@ -462,6 +462,83 @@ describe("first-run Device overview", () => {
     ).toBe(true);
   });
 
+  it("pins a reasoning effort per binding and omits it for a model that advertises none", async () => {
+    const user = userEvent.setup();
+    const device = {
+      ...firstRunDevice,
+      agentAdapters: [
+        {
+          provider: "codex" as const,
+          adapterId: "codex-app-server",
+          version: "0.146.0",
+          readiness: "ready" as const,
+          compatibility: "tested" as const,
+          observedAtMs: Date.parse("2026-07-30T00:00:00.000Z"),
+          modelCatalogObservedAtMs: Date.parse("2026-07-30T00:00:00.000Z"),
+          models: [
+            {
+              modelId: "gpt-5.6-sol",
+              displayName: "GPT-5.6-Sol",
+              isDefault: true,
+              supportedEfforts: ["low", "high", "xhigh"],
+            },
+          ],
+        },
+        {
+          provider: "claude" as const,
+          adapterId: "claude-agent-sdk",
+          version: "0.3.220",
+          readiness: "ready" as const,
+          compatibility: "tested" as const,
+          observedAtMs: Date.parse("2026-07-30T00:00:00.000Z"),
+          modelCatalogObservedAtMs: Date.parse("2026-07-30T00:00:00.000Z"),
+          models: [
+            {
+              modelId: "opus[1m]",
+              displayName: "Opus (1M context)",
+              isDefault: false,
+              supportedEfforts: [],
+            },
+          ],
+        },
+      ],
+    } satisfies DeviceOverviewViewModel;
+
+    render(
+      <App
+        configurationAgentAvailable
+        deviceFleet={{ devices: [device], mainDeviceId: device.deviceId }}
+        onConfigurationMessage={async () => ({ content: "Ready.", suggestedActions: [] })}
+      />,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Selection mode" }), "prefer");
+
+    // The Codex model advertises efforts, so the control is offered.
+    const effortSelects = screen.getAllByRole("combobox", { name: "Reasoning effort" });
+    expect(effortSelects.length).toBe(1);
+    await user.selectOptions(effortSelects[0]!, "xhigh");
+
+    // The Claude model advertises none, so selecting it removes the control.
+    const bindings = screen.getAllByRole("combobox");
+    const fallback = screen.getByDisplayValue("No fallback");
+    await user.selectOptions(
+      fallback,
+      within(fallback).getByRole("option", { name: /Opus \(1M context\)/u }) as HTMLOptionElement,
+    );
+    expect(bindings.length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("combobox", { name: "Reasoning effort" }).length).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "Request change in Configuration Chat" }));
+    const composer = screen.getByRole("textbox", { name: "Message Configuration Chat" });
+    const request = (composer as HTMLTextAreaElement).value;
+    expect(request).toContain('"modelId":"gpt-5.6-sol"');
+    expect(request).toContain('"effort":"xhigh"');
+    // The fallback carries no effort because its model advertises none.
+    expect(request).toContain('"modelId":"opus[1m]"');
+    expect(request.slice(request.indexOf('"fallbacks"'))).not.toContain('"effort"');
+  });
+
   it("opens and closes Configuration Chat with an explicit accessible focus lifecycle", async () => {
     const user = renderApp();
 

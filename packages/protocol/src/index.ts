@@ -85,6 +85,8 @@ export interface WorkerAgentRequirementV1 {
   readonly provider: WorkerAgentProviderV1;
   readonly adapterId?: string;
   readonly modelId?: string;
+  /** Provider tuning pinned alongside the model, when the provider exposes it. */
+  readonly effort?: string;
   readonly allowedCompatibilities?: readonly WorkerAgentCompatibilityV1[];
 }
 
@@ -125,6 +127,8 @@ export interface WorkerAgentSessionObservationV1 {
   readonly adapterId: string;
   readonly adapterVersion: string;
   readonly modelId?: string;
+  /** The effective provider tuning the session actually ran with. */
+  readonly effort?: string;
   readonly nativeSessionId: string;
   readonly workstreamId: string;
   readonly workspaceId: string;
@@ -476,7 +480,7 @@ function parseWorkerAgentRequirementAt(input: unknown, prefix: string): WorkerAg
   const value = requireExactObjectKeys(
     input,
     ["provider"],
-    ["adapterId", "modelId", "allowedCompatibilities"],
+    ["adapterId", "modelId", "effort", "allowedCompatibilities"],
     prefix,
   );
   const rawCompatibilities = value["allowedCompatibilities"];
@@ -514,6 +518,11 @@ function parseWorkerAgentRequirementAt(input: unknown, prefix: string): WorkerAg
       : {
           modelId: parseBoundedIdentifier(value["modelId"], fieldPath(prefix, "modelId")),
         }),
+    ...(value["effort"] === undefined
+      ? {}
+      : {
+          effort: parseBoundedIdentifier(value["effort"], fieldPath(prefix, "effort")),
+        }),
     ...(allowedCompatibilities === undefined ? {} : { allowedCompatibilities }),
   });
 }
@@ -533,7 +542,7 @@ function parseWorkerAgentSessionObservationAt(
       "workspaceId",
       "lineage",
     ],
-    ["modelId"],
+    ["modelId", "effort"],
     prefix,
   );
   const lineagePath = fieldPath(prefix, "lineage");
@@ -554,6 +563,11 @@ function parseWorkerAgentSessionObservationAt(
       ? {}
       : {
           modelId: parseBoundedIdentifier(value["modelId"], fieldPath(prefix, "modelId")),
+        }),
+    ...(value["effort"] === undefined
+      ? {}
+      : {
+          effort: parseBoundedIdentifier(value["effort"], fieldPath(prefix, "effort")),
         }),
     nativeSessionId: parseBoundedIdentifier(
       value["nativeSessionId"],

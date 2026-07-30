@@ -222,6 +222,10 @@ export const japaneseMessages = {
     fallbackBinding: "フォールバックバインディング",
     noFallback: "フォールバックなし",
     helpHint: "これは何ですか？",
+    reasoningEffort: "推論の強度",
+    providerDefaultEffort: "プロバイダの既定値",
+    reasoningEffortHelp:
+      "このバインディングの各ターンでプロバイダがどれだけ推論に時間を使うかを決めます。選択肢はそのモデルが公開している値から作られるため、公開していないモデルではこの選択欄は表示されません。理由がなければプロバイダの既定値のままにしてください。強度が高いほど時間とトークンを多く使い、低いほど速く安価です。バインディングごとに固定されるので、フォールバックをプライマリと違う強度にできます。",
     workerAgentHelp:
       "この Device に割り当てられた実際の作業を行う Agent です。ファイルを編集し、コマンドを実行し、成果物を作成します。この Device が実行するすべての Work Order は、このバインディングでセッションを開始します。Main も他の Device と同様に作業を実行できるため、Main にも実行 Agent があります。",
     coordinatorAgentHelp:

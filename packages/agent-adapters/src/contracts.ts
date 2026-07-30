@@ -125,6 +125,8 @@ export interface NativeSessionReference {
   readonly adapterId: string;
   readonly adapterVersion: string;
   readonly modelId?: string;
+  /** The effective provider tuning, recorded so the lineage names what ran. */
+  readonly effort?: string;
   readonly nativeSessionId: string;
   readonly sessionKey: string;
   readonly taskId: string;
@@ -145,6 +147,12 @@ interface AgentRunRequestFields {
   readonly sessionKey: string;
   readonly deviceId: string;
   readonly modelId?: string;
+  /**
+   * Provider tuning for the selected model, taken from the model's advertised
+   * catalog rather than a fixed list. Providers that expose no effort catalog
+   * ignore it.
+   */
+  readonly effort?: string;
   readonly prompt: string;
   readonly workspace: WorkspaceBinding;
   readonly sandbox: AgentSandbox;

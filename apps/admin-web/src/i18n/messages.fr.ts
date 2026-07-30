@@ -228,6 +228,10 @@ export const frenchMessages = {
     fallbackBinding: "Liaison de repli",
     noFallback: "Aucun repli",
     helpHint: "Qu’est-ce que c’est ?",
+    reasoningEffort: "Effort de raisonnement",
+    providerDefaultEffort: "Valeur par défaut du fournisseur",
+    reasoningEffortHelp:
+      "La quantité de raisonnement que le fournisseur consacre à chaque tour de cette liaison. Les choix proviennent de ce que ce modèle précis annonce ; un modèle qui n’en expose aucun n’affiche donc pas ce contrôle. Laissez la valeur par défaut sauf raison particulière : un effort élevé coûte plus de temps et de jetons, un effort faible est plus rapide et moins cher. Il est fixé par liaison, la liaison de repli peut donc utiliser un effort différent de la principale.",
     workerAgentHelp:
       "L’Agent qui effectue le travail confié à ce Device : modifier des fichiers, exécuter des commandes, produire des artefacts. Chaque Work Order exécuté par ce Device ouvre une session avec cette liaison. Main peut aussi exécuter du travail comme tout autre Device, il possède donc également un Agent d’exécution.",
     coordinatorAgentHelp:

@@ -978,6 +978,8 @@ interface SelectableAgentBinding {
   readonly binding: AgentBindingView;
   readonly key: string;
   readonly label: string;
+  /** Efforts this exact model advertises; empty when it exposes none. */
+  readonly supportedEfforts: readonly string[];
 }
 
 /**
@@ -1106,11 +1108,20 @@ function AgentProfileEditor({
       ? (currentFallbackKey ?? "")
       : "",
   );
-  const primary = options.find((option) => option.key === primaryKey)?.binding;
-  const fallback =
+  // Effort belongs to the selected model, so changing the model clears it.
+  const [primaryEffort, setPrimaryEffort] = useState(
+    profile.mode === "auto" ? "" : (profile.primary.effort ?? ""),
+  );
+  const [fallbackEffort, setFallbackEffort] = useState(
+    profile.mode === "prefer" ? (profile.fallbacks[0]?.effort ?? "") : "",
+  );
+  const primaryOption = options.find((option) => option.key === primaryKey);
+  const fallbackOption =
     fallbackKey === "" || fallbackKey === primaryKey
       ? undefined
-      : options.find((option) => option.key === fallbackKey)?.binding;
+      : options.find((option) => option.key === fallbackKey);
+  const primary = withEffort(primaryOption, primaryEffort);
+  const fallback = withEffort(fallbackOption, fallbackEffort);
   const proposedProfile: AgentExecutionProfileView | undefined =
     mode === "auto"
       ? { schemaVersion: 1, mode: "auto" }
@@ -1166,7 +1177,10 @@ function AgentProfileEditor({
                 <HelpHint text={messages.device.primaryBindingHelp} />
               </span>
               <select
-                onChange={(event) => setPrimaryKey(event.currentTarget.value)}
+                onChange={(event) => {
+                  setPrimaryKey(event.currentTarget.value);
+                  setPrimaryEffort("");
+                }}
                 value={primaryKey}
               >
                 {options.map((option) => (
@@ -1175,6 +1189,11 @@ function AgentProfileEditor({
                   </option>
                 ))}
               </select>
+              <EffortSelect
+                efforts={primaryOption?.supportedEfforts ?? []}
+                onChange={setPrimaryEffort}
+                value={primaryEffort}
+              />
             </label>
             {mode === "prefer" ? (
               <label>
@@ -1183,7 +1202,10 @@ function AgentProfileEditor({
                   <HelpHint text={messages.device.fallbackBindingHelp} />
                 </span>
                 <select
-                  onChange={(event) => setFallbackKey(event.currentTarget.value)}
+                  onChange={(event) => {
+                    setFallbackKey(event.currentTarget.value);
+                    setFallbackEffort("");
+                  }}
                   value={fallbackKey}
                 >
                   <option value="">{messages.device.noFallback}</option>
@@ -1195,6 +1217,11 @@ function AgentProfileEditor({
                       </option>
                     ))}
                 </select>
+                <EffortSelect
+                  efforts={fallbackOption?.supportedEfforts ?? []}
+                  onChange={setFallbackEffort}
+                  value={fallbackEffort}
+                />
               </label>
             ) : null}
           </div>
@@ -1252,6 +1279,7 @@ function selectableAgentBindings(
             binding,
             key: bindingKey(binding),
             label: `${adapter.provider} · ${model.displayName} (${model.modelId}) · ${adapter.adapterId}`,
+            supportedEfforts: Object.freeze([...model.supportedEfforts]),
           });
         }),
     );
@@ -1261,6 +1289,64 @@ function bindingKey(binding: AgentBindingView): string {
   return JSON.stringify([binding.provider, binding.adapterId, binding.modelId ?? null]);
 }
 
+/**
+ * Reasoning effort for one binding. Rendered only when the selected model
+ * advertises an effort catalog, so a provider that exposes none shows nothing
+ * rather than an empty control.
+ */
+function EffortSelect({
+  efforts,
+  onChange,
+  value,
+}: {
+  readonly efforts: readonly string[];
+  readonly onChange: (effort: string) => void;
+  readonly value: string;
+}): React.JSX.Element | null {
+  const { messages } = useAdminI18n();
+  if (efforts.length === 0) {
+    return null;
+  }
+  return (
+    <span className="agent-profile-effort">
+      <span>
+        {messages.device.reasoningEffort}
+        <HelpHint text={messages.device.reasoningEffortHelp} />
+      </span>
+      <select
+        aria-label={messages.device.reasoningEffort}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        value={value}
+      >
+        <option value="">{messages.device.providerDefaultEffort}</option>
+        {efforts.map((effort) => (
+          <option key={effort} value={effort}>
+            {effort}
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+/**
+ * Attaches provider tuning to a selected binding. An effort the model no longer
+ * advertises is dropped rather than proposed, so the request always names a
+ * value the target Device can actually honour.
+ */
+function withEffort(
+  option: SelectableAgentBinding | undefined,
+  effort: string,
+): AgentBindingView | undefined {
+  if (option === undefined) {
+    return undefined;
+  }
+  if (effort === "" || !option.supportedEfforts.includes(effort)) {
+    return option.binding;
+  }
+  return { ...option.binding, effort };
+}
+
 function formatProfileBinding(
   profile: AgentExecutionProfileView,
   automaticSelection: string,
@@ -1268,13 +1354,16 @@ function formatProfileBinding(
   if (profile.mode === "auto") {
     return automaticSelection;
   }
-  const primary = `${profile.primary.provider} · ${profile.primary.modelId ?? profile.primary.adapterId}`;
+  const primary = describeBinding(profile.primary);
   if (profile.mode === "pinned" || profile.fallbacks.length === 0) {
     return primary;
   }
-  return `${primary} → ${profile.fallbacks
-    .map((binding) => `${binding.provider} · ${binding.modelId ?? binding.adapterId}`)
-    .join(" → ")}`;
+  return `${primary} → ${profile.fallbacks.map(describeBinding).join(" → ")}`;
+}
+
+function describeBinding(binding: AgentBindingView): string {
+  const model = `${binding.provider} · ${binding.modelId ?? binding.adapterId}`;
+  return binding.effort === undefined ? model : `${model} · ${binding.effort}`;
 }
 
 function profileModeLabel(

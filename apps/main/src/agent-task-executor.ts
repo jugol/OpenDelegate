@@ -151,11 +151,14 @@ export interface AgentBackedTaskExecutorOptions {
     list(): Promise<readonly DeviceSummaryV1[]>;
   };
   /**
-   * Resolves the exact provider-native model for a newly created Coordinator
-   * session. Existing sessions and checkpoint continuations retain their
-   * recorded model and do not call this resolver.
+   * Resolves the exact provider-native model and optional provider tuning for a
+   * newly created Coordinator session. Existing sessions and checkpoint
+   * continuations retain their recorded binding and do not call this resolver.
    */
-  readonly resolveNewSessionModelId?: () => Promise<string | undefined>;
+  readonly resolveNewSessionBinding?: () => Promise<{
+    readonly modelId?: string;
+    readonly effort?: string;
+  }>;
   readonly maximumPromptBytes?: number;
 }
 
@@ -183,7 +186,7 @@ export class AgentBackedTaskExecutor
   readonly #permissions: AgentPermissionInput;
   readonly #limits: AgentRunLimits;
   readonly #deviceDirectory: AgentBackedTaskExecutorOptions["deviceDirectory"];
-  readonly #resolveNewSessionModelId: AgentBackedTaskExecutorOptions["resolveNewSessionModelId"];
+  readonly #resolveNewSessionBinding: AgentBackedTaskExecutorOptions["resolveNewSessionBinding"];
   readonly #maximumPromptBytes: number;
   readonly #active = new Map<string, AgentRunHandle>();
   readonly #taskTails = new Map<string, Promise<void>>();
@@ -208,10 +211,10 @@ export class AgentBackedTaskExecutor
       throw new TypeError("The Main Agent Device directory is invalid.");
     }
     if (
-      options.resolveNewSessionModelId !== undefined &&
-      typeof options.resolveNewSessionModelId !== "function"
+      options.resolveNewSessionBinding !== undefined &&
+      typeof options.resolveNewSessionBinding !== "function"
     ) {
-      throw new TypeError("The Coordinator model resolver is invalid.");
+      throw new TypeError("The Coordinator binding resolver is invalid.");
     }
     const maximumPromptBytes = options.maximumPromptBytes ?? DEFAULT_MAXIMUM_PROMPT_BYTES;
     if (!Number.isSafeInteger(maximumPromptBytes) || maximumPromptBytes < 4_096) {
@@ -226,7 +229,7 @@ export class AgentBackedTaskExecutor
     this.#permissions = structuredClone(options.permissions);
     this.#limits = { ...options.limits };
     this.#deviceDirectory = options.deviceDirectory;
-    this.#resolveNewSessionModelId = options.resolveNewSessionModelId;
+    this.#resolveNewSessionBinding = options.resolveNewSessionBinding;
     this.#maximumPromptBytes = maximumPromptBytes;
   }
 
@@ -383,8 +386,14 @@ export class AgentBackedTaskExecutor
       session === undefined
         ? ({ kind: "start" } as const)
         : await resolveNativeSessionAction(this.#adapter, session);
-    const modelId =
-      session === undefined ? await this.#resolveModelForNewSession() : session.modelId;
+    const binding =
+      session === undefined
+        ? await this.#resolveBindingForNewSession()
+        : {
+            ...(session.modelId === undefined ? {} : { modelId: session.modelId }),
+            ...(session.effort === undefined ? {} : { effort: session.effort }),
+          };
+    const modelId = binding.modelId;
     let checkpoint: TaskContinuationCheckpointV1 | undefined;
     if (sessionAction.kind === "continuation") {
       try {
@@ -416,6 +425,7 @@ export class AgentBackedTaskExecutor
       permissions: structuredClone(this.#permissions),
       limits: { ...this.#limits },
       ...(modelId === undefined ? {} : { modelId }),
+      ...(binding.effort === undefined ? {} : { effort: binding.effort }),
     } as const;
 
     let handle: AgentRunHandle;
@@ -519,13 +529,16 @@ export class AgentBackedTaskExecutor
     }
   }
 
-  async #resolveModelForNewSession(): Promise<string | undefined> {
-    if (this.#resolveNewSessionModelId === undefined) {
-      return undefined;
+  async #resolveBindingForNewSession(): Promise<{
+    readonly modelId?: string;
+    readonly effort?: string;
+  }> {
+    if (this.#resolveNewSessionBinding === undefined) {
+      return {};
     }
-    let modelId: string | undefined;
+    let binding: { readonly modelId?: string; readonly effort?: string };
     try {
-      modelId = await this.#resolveNewSessionModelId();
+      binding = await this.#resolveNewSessionBinding();
     } catch (error) {
       if (error instanceof TaskExecutorError) {
         throw error;
@@ -536,22 +549,19 @@ export class AgentBackedTaskExecutor
         true,
       );
     }
-    if (
-      modelId !== undefined &&
-      (modelId.length === 0 ||
-        modelId.length > 256 ||
-        modelId !== modelId.trim() ||
-        [...modelId].some((character) => {
-          const point = character.codePointAt(0);
-          return point !== undefined && (point <= 31 || point === 127);
-        }))
-    ) {
+    if (binding.modelId !== undefined && !isBoundedProfileValue(binding.modelId, 256)) {
       throw new TaskExecutorError(
         "MAIN_AGENT_PROFILE_INVALID",
         "The configured Coordinator Agent model ID is invalid.",
       );
     }
-    return modelId;
+    if (binding.effort !== undefined && !isBoundedProfileValue(binding.effort, 64)) {
+      throw new TaskExecutorError(
+        "MAIN_AGENT_PROFILE_INVALID",
+        "The configured Coordinator Agent reasoning effort is invalid.",
+      );
+    }
+    return binding;
   }
 
   #enqueueTaskTurn<TResult>(
@@ -1641,6 +1651,19 @@ function assertExecutionOptions(
   ) {
     throw new TypeError("Agent execution policy and limits are invalid.");
   }
+}
+
+/** Bounded, trimmed, control-character-free profile text. */
+function isBoundedProfileValue(value: string, maximumLength: number): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= maximumLength &&
+    value === value.trim() &&
+    ![...value].some((character) => {
+      const point = character.codePointAt(0);
+      return point !== undefined && (point <= 31 || point === 127);
+    })
+  );
 }
 
 function mapAdapterFailure(error: unknown, message: string): TaskExecutorError {

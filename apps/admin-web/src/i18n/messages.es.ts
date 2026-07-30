@@ -227,6 +227,10 @@ export const spanishMessages = {
     fallbackBinding: "Vinculación de respaldo",
     noFallback: "Sin respaldo",
     helpHint: "¿Qué es esto?",
+    reasoningEffort: "Esfuerzo de razonamiento",
+    providerDefaultEffort: "Valor predeterminado del proveedor",
+    reasoningEffortHelp:
+      "Cuánto razonamiento dedica el proveedor a cada turno de esta vinculación. Las opciones provienen de lo que anuncia ese modelo exacto, así que un modelo que no expone ninguna no muestra el control. Déjalo en el valor predeterminado salvo que tengas un motivo: más esfuerzo cuesta más tiempo y tokens, menos esfuerzo es más rápido y barato. Se fija por vinculación, así que el respaldo puede usar un esfuerzo distinto al principal.",
     workerAgentHelp:
       "El Agent que realiza el trabajo asignado a este Device: edita archivos, ejecuta comandos y produce artefactos. Cada Work Order que ejecuta este Device abre una sesión con esta vinculación. Main también puede ejecutar trabajo como cualquier otro Device, por lo que Main también tiene un Agent de ejecución.",
     coordinatorAgentHelp:
