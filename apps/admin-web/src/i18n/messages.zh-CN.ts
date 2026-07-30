@@ -497,7 +497,7 @@ export const simplifiedChineseMessages = {
     recommended: "推荐",
     agentAssistedTitle: "让新设备的 Agent 完成安装",
     agentAssistedDetail:
-      "在新设备上打开 Codex 或 Claude。下载注册文件后，只把本地路径和下方提示交给 Agent，不要提供文件内容。",
+      "在新设备上打开 Codex 或 Claude。在下方生成注册文件时会同时给出可直接使用的提示；把该提示和已下载文件的本地路径交给 Agent，切勿提供文件内容。",
     agentPromptLabel: "交给新设备上 Codex 或 Claude 的提示",
     agentPrompt:
       "请从 https://github.com/jugol/OpenDelegate 在此设备上安装 OpenDelegate Worker。遵循 README 和 skills/opendelegate-join/SKILL.md，使用未打开的注册文件 <absolute-path-to/{filename}> 加入 Main。绝不要显示、粘贴或记录注册文件内容。配置此操作系统的原生服务，验证 Main 连接，并在设备出现在 Admin Web 后报告。",

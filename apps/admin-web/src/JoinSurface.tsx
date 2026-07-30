@@ -206,29 +206,33 @@ export function JoinSurface({
               <span>{messages.join.recommended}</span>
             </div>
             <form className="join-form" onSubmit={(event) => void issue(event)}>
-              <label htmlFor="join-device-id">{messages.join.deviceId}</label>
-              <input
-                aria-describedby="join-device-id-hint"
-                autoComplete="off"
-                id="join-device-id"
-                maxLength={160}
-                onChange={(event) => setDeviceId(event.target.value)}
-                pattern="[A-Za-z0-9](?:[A-Za-z0-9._]|-)*"
-                required
-                spellCheck="false"
-                value={deviceId}
-              />
-              <small id="join-device-id-hint">{messages.join.deviceIdHint}</small>
-              <label htmlFor="join-expiry">{messages.join.expiry}</label>
-              <select
-                id="join-expiry"
-                onChange={(event) => setExpiresInSeconds(Number(event.target.value))}
-                value={expiresInSeconds}
-              >
-                <option value={300}>{messages.join.fiveMinutes}</option>
-                <option value={900}>{messages.join.fifteenMinutes}</option>
-                <option value={1800}>{messages.join.thirtyMinutes}</option>
-              </select>
+              <div className="join-field">
+                <label htmlFor="join-device-id">{messages.join.deviceId}</label>
+                <input
+                  aria-describedby="join-device-id-hint"
+                  autoComplete="off"
+                  id="join-device-id"
+                  maxLength={160}
+                  onChange={(event) => setDeviceId(event.target.value)}
+                  pattern="[A-Za-z0-9](?:[A-Za-z0-9._]|-)*"
+                  required
+                  spellCheck="false"
+                  value={deviceId}
+                />
+                <small id="join-device-id-hint">{messages.join.deviceIdHint}</small>
+              </div>
+              <div className="join-field">
+                <label htmlFor="join-expiry">{messages.join.expiry}</label>
+                <select
+                  id="join-expiry"
+                  onChange={(event) => setExpiresInSeconds(Number(event.target.value))}
+                  value={expiresInSeconds}
+                >
+                  <option value={300}>{messages.join.fiveMinutes}</option>
+                  <option value={900}>{messages.join.fifteenMinutes}</option>
+                  <option value={1800}>{messages.join.thirtyMinutes}</option>
+                </select>
+              </div>
               {issuanceFailed ? (
                 <p className="form-error" role="alert">
                   {messages.join.issuanceFailed}

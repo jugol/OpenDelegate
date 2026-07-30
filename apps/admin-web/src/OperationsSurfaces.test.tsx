@@ -166,6 +166,35 @@ describe("owner operations surfaces", () => {
     expect(screen.getByText(/downloaded file is a credential/iu)).toBeTruthy();
   });
 
+  it("keeps each enrollment field with its own label and hint", async () => {
+    const api = {
+      deviceEnrollment: vi.fn().mockResolvedValue(enrollment),
+      issueEnrollmentGrant: vi.fn().mockResolvedValue(issued),
+    } satisfies Pick<AdminApi, "deviceEnrollment" | "issueEnrollmentGrant">;
+
+    render(<JoinSurface api={api} />);
+
+    // Both controls resolve through their own label, and the hint describes the
+    // Device ID rather than drifting into the expiry field's cell.
+    const deviceId = await screen.findByLabelText("Device ID");
+    const expiry = screen.getByLabelText("Grant lifetime");
+    expect(deviceId.tagName).toBe("INPUT");
+    expect(expiry.tagName).toBe("SELECT");
+
+    const hintId = deviceId.getAttribute("aria-describedby");
+    expect(hintId).toBe("join-device-id-hint");
+    expect(document.getElementById(hintId ?? "")?.textContent).toContain("stable ID");
+
+    // Each field is one wrapper, so a label cannot be separated from its control.
+    expect(deviceId.closest(".join-field")).not.toBeNull();
+    expect(expiry.closest(".join-field")).not.toBeNull();
+    expect(deviceId.closest(".join-field")).not.toBe(expiry.closest(".join-field"));
+    expect(
+      deviceId.closest(".join-field")?.querySelector("label[for='join-device-id']"),
+    ).not.toBeNull();
+    expect(expiry.closest(".join-field")?.querySelector("label[for='join-expiry']")).not.toBeNull();
+  });
+
   it("inspects Artifact metadata and requests isolated-origin access without rendering HTML", async () => {
     const user = userEvent.setup();
     const api = {

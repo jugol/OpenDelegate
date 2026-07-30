@@ -546,7 +546,7 @@ export const frenchMessages = {
     recommended: "Recommandé",
     agentAssistedTitle: "Confier l’installation à l’Agent du nouvel appareil",
     agentAssistedDetail:
-      "Ouvrez Codex ou Claude sur le nouvel appareil. Après le téléchargement, donnez à l’Agent le chemin local du fichier, jamais son contenu, avec l’invite ci-dessous.",
+      "Ouvrez Codex ou Claude sur le nouvel appareil. La génération du fichier ci-dessous produit aussi une invite prête à l’emploi ; donnez cette invite et le chemin local du fichier téléchargé, jamais son contenu, à cet Agent.",
     agentPromptLabel: "Invite pour Codex ou Claude sur le nouvel appareil",
     agentPrompt:
       "Installe OpenDelegate Worker sur cet appareil depuis https://github.com/jugol/OpenDelegate. Suis le README et skills/opendelegate-join/SKILL.md. Rejoins Main avec le fichier d’inscription non ouvert <absolute-path-to/{filename}>. N’affiche, ne colle et ne journalise jamais son contenu. Configure le service natif de cet OS, vérifie la connexion à Main et signale quand l’appareil apparaît dans Admin Web.",

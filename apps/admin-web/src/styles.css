@@ -5049,6 +5049,19 @@ textarea:focus-visible,
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(132px, 0.38fr);
   gap: 8px 12px;
+  align-items: start;
+}
+
+/*
+ * Each field is one grid cell so its label, control, and hint travel together.
+ * Placing them directly in the form let auto-flow split a label from its own
+ * control and pair it with the neighbouring field's.
+ */
+.join-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  align-content: start;
 }
 
 .join-form label {
@@ -5070,7 +5083,6 @@ textarea:focus-visible,
 }
 
 .join-form small {
-  grid-column: 1;
   color: var(--color-muted);
   font-size: 11px;
   line-height: 1.45;
@@ -5771,7 +5783,6 @@ textarea:focus-visible,
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .join-form small,
   .join-form .form-error,
   .join-form .primary-button,
   .metadata-grid--wide {

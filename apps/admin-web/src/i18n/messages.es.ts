@@ -541,7 +541,7 @@ export const spanishMessages = {
     recommended: "Recomendado",
     agentAssistedTitle: "Deja que el Agent del dispositivo nuevo lo instale",
     agentAssistedDetail:
-      "Abre Codex o Claude en el dispositivo nuevo. Tras descargar el archivo, entrega al Agent su ruta local —no su contenido— junto con el texto siguiente.",
+      "Abre Codex o Claude en el dispositivo nuevo. Al generar el archivo abajo también aparece un texto listo para usar; entrega ese texto y la ruta local del archivo descargado —nunca su contenido— a ese Agent.",
     agentPromptLabel: "Texto para Codex o Claude en el dispositivo nuevo",
     agentPrompt:
       "Instala OpenDelegate Worker en este dispositivo desde https://github.com/jugol/OpenDelegate. Sigue el README y skills/opendelegate-join/SKILL.md. Únelo usando el archivo de inscripción sin abrir <absolute-path-to/{filename}>. Nunca muestres, pegues ni registres su contenido. Configura el servicio nativo de este sistema operativo, verifica la conexión con Main e informa cuando el dispositivo aparezca en Admin Web.",
