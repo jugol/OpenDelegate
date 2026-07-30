@@ -23,7 +23,7 @@ import {
   AgentBackedTaskExecutor,
   EventStoreMainNativeSessionRepository,
 } from "../src/agent-task-executor.ts";
-import { resolveCoordinatorModelId } from "../src/coordinator-agent-profile.ts";
+import { resolveCoordinatorSessionBinding } from "../src/coordinator-agent-profile.ts";
 
 const NOW = "2026-07-25T12:00:00.000Z";
 const limits = {
@@ -110,9 +110,9 @@ test("Coordinator profile pins an exact model for a new Task while its existing 
     sandbox: "read-only",
     permissions: { mode: "deny" },
     limits,
-    resolveNewSessionModelId: async () => {
+    resolveNewSessionBinding: async () => {
       resolutions += 1;
-      return resolveCoordinatorModelId(profile, adapter);
+      return resolveCoordinatorSessionBinding(profile, adapter);
     },
   });
 
@@ -146,7 +146,7 @@ test("Coordinator profile fails closed when it selects a different active adapte
     },
   };
 
-  await assert.rejects(resolveCoordinatorModelId(profile, adapter), {
+  await assert.rejects(resolveCoordinatorSessionBinding(profile, adapter), {
     code: "MAIN_AGENT_PROFILE_UNAVAILABLE",
     retryable: false,
   });
@@ -885,7 +885,12 @@ class FakeAgentAdapter implements AgentAdapter {
     return {
       observedAt: NOW,
       models: [
-        { modelId: "fixture-opus", displayName: "Fixture Opus", isDefault: true },
+        {
+          modelId: "fixture-opus",
+          displayName: "Fixture Opus",
+          isDefault: true,
+          supportedEfforts: ["medium", "high"],
+        },
         { modelId: "fixture-sonnet", displayName: "Fixture Sonnet" },
       ],
     };
@@ -1063,3 +1068,72 @@ function handle(reference: NativeSessionReference, result: object): AgentRunHand
     },
   };
 }
+
+test("Coordinator profile resolves an advertised effort and fails closed on one that is not", async () => {
+  const adapter = new FakeAgentAdapter();
+
+  const pinnedWithEffort = await resolveCoordinatorSessionBinding(
+    {
+      schemaVersion: 1,
+      mode: "pinned",
+      primary: {
+        provider: "generic",
+        adapterId: "fixture-main-agent",
+        modelId: "fixture-opus",
+        effort: "high",
+      },
+    },
+    adapter,
+  );
+  assert.deepEqual(pinnedWithEffort, { modelId: "fixture-opus", effort: "high" });
+
+  // Auto leaves tuning to the provider rather than inventing one.
+  assert.deepEqual(
+    await resolveCoordinatorSessionBinding({ schemaVersion: 1, mode: "auto" }, adapter),
+    {
+      modelId: "fixture-opus",
+    },
+  );
+
+  // Prefer skips a binding whose effort the model does not advertise.
+  const preferred = await resolveCoordinatorSessionBinding(
+    {
+      schemaVersion: 1,
+      mode: "prefer",
+      primary: {
+        provider: "generic",
+        adapterId: "fixture-main-agent",
+        modelId: "fixture-opus",
+        effort: "ultra",
+      },
+      fallbacks: [
+        {
+          provider: "generic",
+          adapterId: "fixture-main-agent",
+          modelId: "fixture-opus",
+          effort: "medium",
+        },
+      ],
+    },
+    adapter,
+  );
+  assert.deepEqual(preferred, { modelId: "fixture-opus", effort: "medium" });
+
+  // Pinned to an unadvertised effort stops instead of dropping the tuning.
+  await assert.rejects(
+    resolveCoordinatorSessionBinding(
+      {
+        schemaVersion: 1,
+        mode: "pinned",
+        primary: {
+          provider: "generic",
+          adapterId: "fixture-main-agent",
+          modelId: "fixture-opus",
+          effort: "ultra",
+        },
+      },
+      adapter,
+    ),
+    { code: "MAIN_AGENT_PROFILE_UNAVAILABLE" },
+  );
+});

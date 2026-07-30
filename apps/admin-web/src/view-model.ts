@@ -80,6 +80,8 @@ export interface AgentBindingView {
   readonly provider: "codex" | "claude" | "generic";
   readonly adapterId: string;
   readonly modelId?: string;
+  /** Present only when the selected model advertises an effort catalog. */
+  readonly effort?: string;
 }
 
 export type AgentExecutionProfileView =

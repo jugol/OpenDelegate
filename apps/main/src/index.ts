@@ -119,7 +119,7 @@ import { closeAfterPrimaryFailure, closeMainResources } from "./shutdown.ts";
 import { readStableRegularFile, StableFileError } from "./stable-file.ts";
 import { createMainTaskBudgetAdmin } from "./task-budget-admin.ts";
 import { authorizeMainConfigurationMutation } from "./configuration-policy.ts";
-import { resolveCoordinatorModelId } from "./coordinator-agent-profile.ts";
+import { resolveCoordinatorSessionBinding } from "./coordinator-agent-profile.ts";
 import {
   MAIN_OWNER_TASK_DEFAULT_SCOPE_ID,
   MainConfigurationRuntimePolicy,
@@ -1103,8 +1103,8 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             permissions: options.agentExecution.permissions,
             limits: options.agentExecution.limits,
             deviceDirectory: { list: listMainOwnedDeviceDirectory },
-            resolveNewSessionModelId: async () =>
-              resolveCoordinatorModelId(
+            resolveNewSessionBinding: async () =>
+              resolveCoordinatorSessionBinding(
                 effectiveAgentExecutionProfile(
                   await configurationService.inspect({
                     instanceId: configuration.instanceId,

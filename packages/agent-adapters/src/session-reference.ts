@@ -232,6 +232,7 @@ export function createNativeSessionReference(options: {
     adapterId: options.adapterId,
     adapterVersion: options.adapterVersion,
     ...(request.modelId === undefined ? {} : { modelId: request.modelId }),
+    ...(request.effort === undefined ? {} : { effort: request.effort }),
     nativeSessionId: options.nativeSessionId,
     sessionKey: request.sessionKey,
     taskId: request.taskId,

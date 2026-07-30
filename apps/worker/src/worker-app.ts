@@ -771,6 +771,9 @@ export async function createWorkerRuntime(
           ...(assignment.agentRequirement?.modelId === undefined
             ? {}
             : { modelId: assignment.agentRequirement.modelId }),
+          ...(assignment.agentRequirement?.effort === undefined
+            ? {}
+            : { effort: assignment.agentRequirement.effort }),
           workstreamId: assignment.workOrder.workOrderId,
           prompt: renderWorkOrderPrompt(assignment),
           sandbox: resolveWorkerAgentSandbox({

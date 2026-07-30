@@ -162,6 +162,17 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         send({ id: message.id, error: { code: -32602, message: "model mismatch" } });
         continue;
       }
+      if (
+        process.env.FIXTURE_EXPECT_EFFORT &&
+        message.params.effort !== process.env.FIXTURE_EXPECT_EFFORT
+      ) {
+        send({ id: message.id, error: { code: -32602, message: "effort mismatch" } });
+        continue;
+      }
+      if (process.env.FIXTURE_EXPECT_NO_EFFORT && "effort" in message.params) {
+        send({ id: message.id, error: { code: -32602, message: "unexpected effort" } });
+        continue;
+      }
       send({
         id: message.id,
         result: {

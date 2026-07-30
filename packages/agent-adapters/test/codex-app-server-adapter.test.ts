@@ -489,3 +489,84 @@ test("Codex App Server steers only the exact active Run and idempotently binds e
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("Codex App Server sends reasoning effort on the turn and records it on the session", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-effort-")));
+  try {
+    const cwd = await realpath(process.cwd());
+    const adapter = new CodexAppServerAdapter({
+      codexHome: join(root, "codex-home"),
+      executable: process.execPath,
+      prefixArgs: [fixturePath, "codex-app-server"],
+      lineageId: () => "lineage-effort",
+    });
+    const base = {
+      requestId: "request-effort",
+      runId: "run-effort",
+      taskId: "task-effort",
+      workstreamId: "implementation",
+      sessionKey: "task-effort/implementation",
+      deviceId: "device-linux",
+      modelId: "gpt-5.6-sol",
+      prompt: "Summarize the change.",
+      workspace: {
+        workspaceId: "workspace-effort",
+        cwd,
+        isolation: "none" as const,
+      },
+      sandbox: "workspace-write" as const,
+      permissions: {
+        mode: "allow-listed" as const,
+        allowedTools: ["shell", "file-change"],
+        actionAuthorization: {
+          authorizeAndConsume: async () => ({
+            decision: "allow" as const,
+            reasonCode: "POLICY_TRUSTED_PACKAGE_INSTALL",
+          }),
+        },
+      },
+      limits,
+    };
+
+    // The fixture rejects the turn unless params.effort matches exactly.
+    const withEffort = await adapter.start({
+      operation: "start",
+      ...base,
+      effort: "xhigh",
+      environment: {
+        FIXTURE_EXPECT_MODEL: "gpt-5.6-sol",
+        FIXTURE_EXPECT_EFFORT: "xhigh",
+      },
+    });
+    for await (const event of withEffort.events) {
+      void event; // Drain so the run can reach its terminal result.
+    }
+    const result = await withEffort.result;
+    assert.equal(result.status, "succeeded");
+    // Invariant 27: the effective binding is copied into the session lineage.
+    assert.equal(result.session?.effort, "xhigh");
+    assert.equal(result.session?.modelId, "gpt-5.6-sol");
+
+    // Omitting effort must not invent one; the fixture rejects any effort key.
+    const withoutEffort = await adapter.start({
+      operation: "start",
+      ...base,
+      requestId: "request-no-effort",
+      runId: "run-no-effort",
+      taskId: "task-no-effort",
+      sessionKey: "task-no-effort/implementation",
+      environment: {
+        FIXTURE_EXPECT_MODEL: "gpt-5.6-sol",
+        FIXTURE_EXPECT_NO_EFFORT: "1",
+      },
+    });
+    for await (const event of withoutEffort.events) {
+      void event; // Drain so the run can reach its terminal result.
+    }
+    const plain = await withoutEffort.result;
+    assert.equal(plain.status, "succeeded");
+    assert.equal(plain.session?.effort, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

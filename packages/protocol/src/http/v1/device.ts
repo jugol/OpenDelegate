@@ -165,6 +165,7 @@ const DeviceAgentBindingSchema = Type.Object(
     provider: Type.Union([Type.Literal("codex"), Type.Literal("claude"), Type.Literal("generic")]),
     adapterId: Type.String({ minLength: 1, maxLength: 160 }),
     modelId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+    effort: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   },
   { additionalProperties: false },
 );
