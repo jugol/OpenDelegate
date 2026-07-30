@@ -32,6 +32,7 @@ export interface AppProps {
   readonly initialArtifactId?: string;
   readonly initialChatOpen?: boolean;
   readonly initialSection?: AdminSection;
+  readonly onApprovalDecided?: () => void;
   readonly onAssessDevice?: (deviceId: string) => Promise<void>;
   readonly onConfigurationMessage?: (
     deviceId: string,
@@ -57,6 +58,7 @@ export function App({
   initialArtifactId,
   initialChatOpen = false,
   initialSection = "devices",
+  onApprovalDecided,
   onAssessDevice,
   onConfigurationMessage,
   onLoadConfigurationMessages,
@@ -243,6 +245,7 @@ export function App({
           <ApprovalSurface
             api={api}
             {...(focusedApprovalId === undefined ? {} : { initialApprovalId: focusedApprovalId })}
+            {...(onApprovalDecided === undefined ? {} : { onApprovalDecided })}
           />
         ) : activeSection === "artifacts" && api !== undefined ? (
           <ArtifactSurface

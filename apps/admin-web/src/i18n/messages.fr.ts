@@ -227,6 +227,15 @@ export const frenchMessages = {
     primaryBinding: "Liaison principale",
     fallbackBinding: "Liaison de repli",
     noFallback: "Aucun repli",
+    helpHint: "Qu’est-ce que c’est ?",
+    workerAgentHelp:
+      "L’Agent qui effectue le travail confié à ce Device : modifier des fichiers, exécuter des commandes, produire des artefacts. Chaque Work Order exécuté par ce Device ouvre une session avec cette liaison. Main peut aussi exécuter du travail comme tout autre Device, il possède donc également un Agent d’exécution.",
+    coordinatorAgentHelp:
+      "L’Agent qui exécute la session de planification de Main pour une Task : il lit votre demande, décide comment répartir le travail, distribue les Work Orders aux Devices, puis transforme leurs rapports en résultat. Il n’effectue pas le travail lui-même. Seul Main en possède un, et il existe une fois par Task. Changer le modèle ici s’applique aux nouvelles sessions de Task ; changer le fournisseur ou l’adaptateur exige en plus de reconfigurer et redémarrer le runtime du Main Agent.",
+    primaryBindingHelp:
+      "L’adaptateur et le modèle exact qu’OpenDelegate essaie en premier au démarrage d’une nouvelle session. En mode épinglé, c’est la seule liaison utilisée : si le modèle est indisponible, l’exécution s’arrête au lieu de basculer silencieusement. En mode préféré, c’est le premier choix.",
+    fallbackBindingHelp:
+      "Utilisée uniquement en mode préféré, et seulement lorsque la liaison principale est indisponible. Il n’y a aucun repli implicite : laissez ce champ vide et le mode préféré se comporte comme le mode épinglé. La liaison réellement exécutée est enregistrée dans le Run, vous pouvez donc toujours voir ce qui a tourné.",
     noVerifiedModels:
       "Aucun catalogue de modèles prêt et testé n’est disponible. Évaluez ce Device avant de choisir un modèle exact.",
     configureAgentProfile: "Demander la modification dans Configuration Chat",

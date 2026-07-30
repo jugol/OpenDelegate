@@ -219,6 +219,15 @@ export const koreanMessages = {
     primaryBinding: "기본 바인딩",
     fallbackBinding: "대체 바인딩",
     noFallback: "대체 바인딩 없음",
+    helpHint: "이게 무엇인가요?",
+    workerAgentHelp:
+      "이 Device에 배정된 실제 작업을 수행하는 Agent입니다. 파일을 수정하고 명령을 실행하고 결과물을 만듭니다. 이 Device가 실행하는 모든 Work Order가 이 바인딩으로 세션을 시작합니다. Main도 다른 Device처럼 작업을 실행할 수 있으므로 Main 역시 작업 Agent를 갖습니다.",
+    coordinatorAgentHelp:
+      "Task에 대한 Main의 계획 세션을 실행하는 Agent입니다. 요청을 읽고 작업을 어떻게 나눌지 결정하고 각 Device에 Work Order를 배포한 뒤, 보고를 모아 결과로 만듭니다. 실제 작업은 직접 수행하지 않습니다. Main만 갖고 있으며 Task당 하나씩 존재합니다. 여기서 모델을 바꾸면 새 Task 세션부터 적용되고, 공급자나 어댑터를 바꾸는 것은 Main Agent 런타임의 재구성과 재시작이 함께 필요합니다.",
+    primaryBindingHelp:
+      "새 세션을 시작할 때 OpenDelegate가 가장 먼저 시도하는 어댑터와 정확한 모델입니다. 고정 모드에서는 이 바인딩만 사용하므로, 모델을 쓸 수 없으면 조용히 다른 모델로 바꾸지 않고 실행을 중단합니다. 우선 모드에서는 첫 번째 선택지가 됩니다.",
+    fallbackBindingHelp:
+      "우선 모드에서만, 그리고 기본 바인딩을 쓸 수 없을 때만 사용됩니다. 암묵적인 대체는 없습니다. 비워 두면 우선 모드가 고정 모드처럼 동작합니다. 실제로 실행된 바인딩은 Run에 기록되므로 무엇이 실행됐는지 항상 확인할 수 있습니다.",
     noVerifiedModels:
       "준비되고 검증된 모델 카탈로그가 없습니다. 정확한 모델을 고르기 전에 이 Device를 평가하세요.",
     configureAgentProfile: "Configuration Chat에서 변경 요청",

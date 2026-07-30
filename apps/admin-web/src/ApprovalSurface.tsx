@@ -35,9 +35,16 @@ type ApprovalFilter = "pending" | "all";
 export function ApprovalSurface({
   api,
   initialApprovalId,
+  onApprovalDecided,
 }: {
   readonly api: ApprovalSurfaceApi;
   readonly initialApprovalId?: string;
+  /**
+   * Called after a decision reaches a durable non-pending state. An approved
+   * Configuration proposal executes immediately, so surfaces that render
+   * configuration must re-read it instead of keeping the pre-decision snapshot.
+   */
+  readonly onApprovalDecided?: () => void;
 }): React.JSX.Element {
   const { locale, messages } = useAdminI18n();
   const [approvals, setApprovals] = useState<readonly ApprovalDetail[]>([]);
@@ -138,6 +145,7 @@ export function ApprovalSurface({
       setApprovals((current) =>
         current.map((approval) => (approval.approvalId === detail.approvalId ? detail : approval)),
       );
+      onApprovalDecided?.();
     } catch {
       setDecisionFailed(true);
       try {
@@ -149,7 +157,10 @@ export function ApprovalSurface({
           ),
         );
         if (durable.state !== "pending") {
+          // The decision landed durably even though the response was lost, so
+          // any configuration it executed is already live.
           setDecisionFailed(false);
+          onApprovalDecided?.();
         }
       } catch {
         // Keep the bounded decision error visible until the owner refreshes.

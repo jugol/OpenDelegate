@@ -221,6 +221,15 @@ export const japaneseMessages = {
     primaryBinding: "プライマリバインディング",
     fallbackBinding: "フォールバックバインディング",
     noFallback: "フォールバックなし",
+    helpHint: "これは何ですか？",
+    workerAgentHelp:
+      "この Device に割り当てられた実際の作業を行う Agent です。ファイルを編集し、コマンドを実行し、成果物を作成します。この Device が実行するすべての Work Order は、このバインディングでセッションを開始します。Main も他の Device と同様に作業を実行できるため、Main にも実行 Agent があります。",
+    coordinatorAgentHelp:
+      "Task に対する Main の計画セッションを実行する Agent です。要求を読み、作業の分割方法を決め、各 Device に Work Order を配り、報告をまとめて結果にします。作業自体は行いません。Main のみが持ち、Task ごとに 1 つ存在します。ここでモデルを変えると新しい Task セッションから適用され、プロバイダやアダプターの変更には Main Agent ランタイムの再構成と再起動も必要です。",
+    primaryBindingHelp:
+      "新しいセッションを開始するとき、OpenDelegate が最初に試すアダプターと正確なモデルです。固定モードではこのバインディングだけを使うため、モデルが利用できない場合は黙って別のモデルに置き換えず停止します。優先モードでは最初の選択肢になります。",
+    fallbackBindingHelp:
+      "優先モードのときだけ、しかもプライマリバインディングが利用できないときだけ使われます。暗黙のフォールバックはありません。空のままにすると、優先モードは固定モードと同じ動作になります。実際に実行されたバインディングは Run に記録されるため、何が実行されたかは常に確認できます。",
     noVerifiedModels:
       "準備済みで検証済みのモデルカタログがありません。正確なモデルを選ぶ前にこの Device を評価してください。",
     configureAgentProfile: "Configuration Chat で変更を依頼",

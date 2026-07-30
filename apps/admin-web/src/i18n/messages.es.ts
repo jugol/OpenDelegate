@@ -226,6 +226,15 @@ export const spanishMessages = {
     primaryBinding: "Vinculación principal",
     fallbackBinding: "Vinculación de respaldo",
     noFallback: "Sin respaldo",
+    helpHint: "¿Qué es esto?",
+    workerAgentHelp:
+      "El Agent que realiza el trabajo asignado a este Device: edita archivos, ejecuta comandos y produce artefactos. Cada Work Order que ejecuta este Device abre una sesión con esta vinculación. Main también puede ejecutar trabajo como cualquier otro Device, por lo que Main también tiene un Agent de ejecución.",
+    coordinatorAgentHelp:
+      "El Agent que ejecuta la sesión de planificación de Main para una Task: lee tu solicitud, decide cómo dividir el trabajo, reparte Work Orders a los Devices y convierte sus informes en un resultado. No realiza el trabajo por sí mismo. Solo Main lo tiene, y existe uno por Task. Cambiar el modelo aquí se aplica a nuevas sesiones de Task; cambiar el proveedor o el adaptador requiere además reconfigurar y reiniciar el runtime del Main Agent.",
+    primaryBindingHelp:
+      "El adaptador y el modelo exacto que OpenDelegate intenta primero al abrir una sesión nueva. En modo fijo es la única vinculación que usará: si el modelo no está disponible, se detiene en lugar de cambiar en silencio. En modo preferente es la primera opción.",
+    fallbackBindingHelp:
+      "Se usa solo en modo preferente y solo cuando la vinculación principal no está disponible. No hay respaldo implícito: si lo dejas vacío, el modo preferente se comporta como el fijo. La vinculación que realmente se ejecuta queda registrada en el Run, así que siempre puedes ver qué se ejecutó.",
     noVerifiedModels:
       "No hay un catálogo de modelos listo y probado. Evalúa este Device antes de elegir un modelo exacto.",
     configureAgentProfile: "Solicitar el cambio en Configuration Chat",

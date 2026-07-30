@@ -218,6 +218,15 @@ export const englishMessages = {
     primaryBinding: "Primary binding",
     fallbackBinding: "Fallback binding",
     noFallback: "No fallback",
+    helpHint: "What is this?",
+    workerAgentHelp:
+      "The Agent that carries out the actual work assigned to this Device — editing files, running commands, producing artifacts. Every Work Order this Device executes starts a session with this binding. Main also has a Worker Agent, because Main can execute work like any other Device.",
+    coordinatorAgentHelp:
+      "The Agent that runs Main's planning session for a Task: it reads your request, decides how to split the work, dispatches Work Orders to Devices, and turns their reports into a result. It does not perform the work itself. Only Main has one, and it exists once per Task. Changing the model here applies to new Task sessions; changing the provider or adapter also requires reconfiguring and restarting the Main Agent runtime.",
+    primaryBindingHelp:
+      "The adapter and exact model OpenDelegate tries first when starting a new session. In Pinned mode this is the only binding it will use — if the model is unavailable the run stops rather than quietly switching. In Prefer mode it is the first choice.",
+    fallbackBindingHelp:
+      "Used only in Prefer mode, and only when the primary binding is unavailable. There is no implicit fallback: leave this empty and Prefer behaves like Pinned. Whichever binding actually runs is recorded in the Run, so you can always see what executed.",
     noVerifiedModels:
       "No tested, ready model catalog is available. Assess this Device before selecting an exact model.",
     configureAgentProfile: "Request change in Configuration Chat",

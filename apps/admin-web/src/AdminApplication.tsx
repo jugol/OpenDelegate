@@ -119,6 +119,28 @@ export function AdminApplication({
     );
   }
 
+  /**
+   * Re-reads the durable Device projection. An approved Configuration proposal
+   * executes immediately, so the fleet snapshot taken at sign-in is stale as
+   * soon as a decision lands.
+   */
+  async function reloadDeviceFleet(): Promise<void> {
+    const devices = await browserApi.listDevices();
+    const mainDevice = devices.find((candidate) => candidate.role === "main");
+    if (mainDevice === undefined) {
+      return;
+    }
+    setDeviceFleet({
+      devices: [
+        mapDeviceOverview(mainDevice),
+        ...devices
+          .filter((candidate) => candidate.role === "worker")
+          .map((candidate) => mapDeviceOverview(candidate)),
+      ],
+      mainDeviceId: mainDevice.deviceId,
+    });
+  }
+
   async function assessDevice(deviceId: string): Promise<void> {
     const assessed = mapDeviceOverview(await browserApi.assessDevice(deviceId));
     setDeviceFleet((current) => {
@@ -149,6 +171,9 @@ export function AdminApplication({
       executionAvailable={features.taskExecution.status === "ready"}
       {...(deepLink.artifactId === undefined ? {} : { initialArtifactId: deepLink.artifactId })}
       initialSection={deepLink.section}
+      onApprovalDecided={() => {
+        void reloadDeviceFleet();
+      }}
       onAssessDevice={assessDevice}
       onConfigurationMessage={(deviceId, message) =>
         browserApi.sendConfigurationMessage(deviceId, message)
