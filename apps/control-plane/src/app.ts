@@ -79,7 +79,7 @@ import type {
 } from "./configuration-agent-port.ts";
 import type { DeviceEnrollmentAdminPort } from "./device-enrollment-admin-port.ts";
 import { createIngressSecurity, isLoopbackAddress, PublicHttpError } from "./http-security.ts";
-import { installProblemHandlers } from "./problem-details.ts";
+import { installProblemHandlers, type ServerFailureDiagnostic } from "./problem-details.ts";
 import { AcknowledgementSchema, EmptyObjectSchema } from "./schemas.ts";
 import type { SecureSecretIngestPort } from "./secure-secret-ingest-port.ts";
 import type { TaskBudgetAdminPort } from "./task-budget-admin-port.ts";
@@ -119,6 +119,11 @@ type ControlPlaneApp = FastifyInstance<
 interface SharedAppOptions {
   readonly allowedOrigins: readonly string[];
   readonly ownerAuth: OwnerAuth;
+  /**
+   * Receives every redacted 5xx problem response so a correlation ID shown to
+   * the owner can be resolved to the boundary that refused the request.
+   */
+  readonly onServerFailure?: (diagnostic: ServerFailureDiagnostic) => void;
 }
 
 export interface MainControlPlaneAppOptions extends SharedAppOptions {
@@ -171,6 +176,7 @@ export async function createMainControlPlaneApp(
   installProblemHandlers({
     app,
     correlationIdFor: ingress.correlationIdFor,
+    ...(options.onServerFailure === undefined ? {} : { onServerFailure: options.onServerFailure }),
   });
   await registerCommonPlugins(app);
 
@@ -622,11 +628,20 @@ function registerConfigurationAgentRoutes(
     async (request) => {
       const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
       const session = await options.ownerAuth.validateSession(sessionToken);
+      const configurationAgentFeature = runtimeFeaturesFor(options).configurationAgent;
       if (
-        runtimeFeaturesFor(options).configurationAgent.status !== "ready" ||
+        configurationAgentFeature.status !== "ready" ||
         options.configurationAgent === undefined
       ) {
-        throw new PublicHttpError(503, "CONFIGURATION_AGENT_UNAVAILABLE");
+        // Carry the runtime readiness code so an unconnected runtime is
+        // distinguishable from a Configuration Agent turn that failed.
+        throw new PublicHttpError(
+          503,
+          "CONFIGURATION_AGENT_UNAVAILABLE",
+          configurationAgentFeature.status === "ready"
+            ? "CONFIGURATION_AGENT_PORT_MISSING"
+            : configurationAgentFeature.code,
+        );
       }
       const devices = await currentDevices(options);
       const device = devices.find((candidate) => candidate.deviceId === request.params.deviceId);
@@ -991,6 +1006,7 @@ export async function createLocalClaimApp(options: LocalClaimAppOptions): Promis
   installProblemHandlers({
     app,
     correlationIdFor: ingress.correlationIdFor,
+    ...(options.onServerFailure === undefined ? {} : { onServerFailure: options.onServerFailure }),
   });
   await registerCommonPlugins(app);
 

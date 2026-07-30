@@ -7,12 +7,14 @@ const JSON_CONTENT_TYPE_PATTERN = /^application\/json(?:\s*;.*)?$/i;
 
 export class PublicHttpError extends Error {
   public readonly code: string;
+  public readonly diagnosticCode: string | undefined;
   public readonly statusCode: number;
 
-  public constructor(statusCode: number, code: string) {
+  public constructor(statusCode: number, code: string, diagnosticCode?: string) {
     super(code);
     this.name = "PublicHttpError";
     this.code = code;
+    this.diagnosticCode = diagnosticCode;
     this.statusCode = statusCode;
   }
 }

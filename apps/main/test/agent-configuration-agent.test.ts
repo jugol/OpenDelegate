@@ -626,6 +626,7 @@ test("Configuration Agent fails closed when a final mutation claim lacks its dur
 
   await assert.rejects(agent.sendMessage(message("request_unknown_receipt", "Apply a setting.")), {
     code: "CONFIGURATION_AGENT_UNAVAILABLE",
+    diagnosticCode: "CONFIGURATION_CLAIM_RECEIPT_MISMATCH",
   });
 });
 
@@ -637,9 +638,86 @@ test("Configuration Agent stops a runner that exceeds the typed tool-turn budget
 
   await assert.rejects(agent.sendMessage(message("request_runaway", "Keep inspecting.")), {
     code: "CONFIGURATION_AGENT_UNAVAILABLE",
+    diagnosticCode: "CONFIGURATION_TOOL_TURN_BUDGET_EXCEEDED",
   });
   assert.equal(broker.calls.length, 2);
   assert.equal(adapter.cancelCount, 0);
+});
+
+test("Configuration Agent recovers the typed object when a runner appends prose after it", async () => {
+  const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+  const adapter = new TrailingProseAdapter();
+  const broker = new RecordingToolBroker();
+  const agent = await createAgent(adapter, eventStore, broker);
+
+  const response = await agent.sendMessage(
+    message("request_trailing_prose", "Change the Worker profile."),
+  );
+
+  assert.equal(response.content, "I inspected the current Device configuration.");
+  // The typed tool request inside the object still executed, so the trailing
+  // prose changed nothing about which deterministic tool ran.
+  assert.equal(broker.calls.length, 1);
+  assert.equal(broker.calls[0]?.request.tool, "inspect");
+});
+
+test("Configuration Agent still fails closed when a response holds no single typed object", async () => {
+  for (const text of [
+    "no JSON at all, just prose",
+    '{"schemaVersion":1,"type":"tool","toolCallId":"a","request":{"tool":"inspect"}} {"second":"object"}',
+  ]) {
+    const eventStore = new InMemoryEventStore({ clock: { now: () => NOW } });
+    const agent = await createAgent(new FixedTextAdapter(text), eventStore);
+    await assert.rejects(
+      agent.sendMessage(message(`request_${digestSuffix(text)}`, "Change the Worker profile.")),
+      {
+        code: "CONFIGURATION_AGENT_UNAVAILABLE",
+        diagnosticCode: "CONFIGURATION_AGENT_RESPONSE_INVALID",
+      },
+    );
+  }
+});
+
+test("every Configuration Agent unavailability names the boundary that refused the request", async () => {
+  const cases: readonly {
+    readonly adapter: AgentAdapter;
+    readonly idempotencyKey: string;
+    readonly toolBroker?: ConfigurationAgentToolBroker;
+    readonly maximumToolTurns?: number;
+  }[] = [
+    { adapter: new FakeConfigurationAdapter("invalid"), idempotencyKey: "request_invalid_shape" },
+    { adapter: new UnknownReceiptClaimAdapter(), idempotencyKey: "request_unknown_claim" },
+    {
+      adapter: new EndlessToolAdapter(),
+      idempotencyKey: "request_endless",
+      toolBroker: new RecordingToolBroker(),
+      maximumToolTurns: 1,
+    },
+  ];
+
+  for (const entry of cases) {
+    const agent = await createAgent(
+      entry.adapter,
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+      entry.toolBroker ?? configurationBroker(configurationService()),
+      entry.maximumToolTurns ?? 8,
+    );
+    const error: unknown = await agent
+      .sendMessage(message(entry.idempotencyKey, "Change the Coordinator profile."))
+      .then(
+        () => undefined,
+        (rejection: unknown) => rejection,
+      );
+
+    assert.notEqual(error, undefined, `${entry.idempotencyKey} unexpectedly succeeded`);
+    assert.equal((error as { readonly code?: unknown }).code, "CONFIGURATION_AGENT_UNAVAILABLE");
+    const diagnosticCode = (error as { readonly diagnosticCode?: unknown }).diagnosticCode;
+    assert.equal(
+      typeof diagnosticCode === "string" && /^[A-Z][A-Z0-9_]{1,127}$/u.test(diagnosticCode),
+      true,
+      `${entry.idempotencyKey} produced no publishable diagnostic code: ${String(diagnosticCode)}`,
+    );
+  }
 });
 
 async function createAgent(
@@ -1278,6 +1356,78 @@ class EndlessToolAdapter implements AgentAdapter {
       },
     };
   }
+}
+
+/**
+ * Reproduces an observed Codex turn that returned a correct typed object with
+ * its own prose appended after the closing brace.
+ */
+class TrailingProseAdapter implements AgentAdapter {
+  readonly adapterId = "fixture-configuration-agent";
+  readonly provider = "generic" as const;
+  readonly starts: AgentStartRequest[] = [];
+  readonly resumes: AgentResumeRequest[] = [];
+
+  async probe() {
+    return new FakeConfigurationAdapter().probe();
+  }
+
+  async start(input: AgentStartRequest): Promise<AgentRunHandle> {
+    this.starts.push(structuredClone(input));
+    return handle(session(input), this.#text());
+  }
+
+  async resume(input: AgentResumeRequest): Promise<AgentRunHandle> {
+    this.resumes.push(structuredClone(input));
+    return handle(input.session, this.#text());
+  }
+
+  #text(): string {
+    const turn = this.starts.length + this.resumes.length;
+    const payload =
+      turn === 1
+        ? {
+            schemaVersion: 1,
+            type: "tool",
+            toolCallId: "inspect-worker-profile",
+            request: { tool: "inspect" },
+          }
+        : {
+            schemaVersion: 1,
+            type: "final",
+            content: "I inspected the current Device configuration.",
+            claimReceiptIds: [],
+          };
+    // The exact shape observed on the Main Device: one balanced object, then prose.
+    return `${JSON.stringify(payload)} any trailing? no. \n`;
+  }
+}
+
+/** Returns one fixed final text for every turn. */
+class FixedTextAdapter implements AgentAdapter {
+  readonly adapterId = "fixture-configuration-agent";
+  readonly provider = "generic" as const;
+  readonly #text: string;
+
+  constructor(text: string) {
+    this.#text = text;
+  }
+
+  async probe() {
+    return new FakeConfigurationAdapter().probe();
+  }
+
+  async start(input: AgentStartRequest): Promise<AgentRunHandle> {
+    return handle(session(input), this.#text);
+  }
+
+  async resume(input: AgentResumeRequest): Promise<AgentRunHandle> {
+    return handle(input.session, this.#text);
+  }
+}
+
+function digestSuffix(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
 class RecordingToolBroker implements ConfigurationAgentToolBroker {

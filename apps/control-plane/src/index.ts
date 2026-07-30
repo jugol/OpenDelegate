@@ -28,6 +28,7 @@ export {
   type DeviceEnrollmentAdminPort,
   type IssueDeviceEnrollmentGrantInput,
 } from "./device-enrollment-admin-port.ts";
+export { type ServerFailureDiagnostic } from "./problem-details.ts";
 export {
   SecureSecretIngestPortError,
   type SecureSecretIngestInput,

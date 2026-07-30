@@ -21,13 +21,30 @@ interface MappedProblem {
   readonly title: string;
 }
 
+/**
+ * A redacted server-failure record. Every field is already safe to expose in the
+ * owner-visible problem response, so a diagnostic sink may persist it verbatim.
+ */
+export interface ServerFailureDiagnostic {
+  readonly code: string;
+  readonly correlationId: string;
+  readonly detail?: string;
+  readonly diagnosticCode?: string;
+  readonly method: string;
+  readonly route: string;
+  readonly status: number;
+}
+
 export function installProblemHandlers(input: {
   readonly app: FastifyInstance;
   readonly correlationIdFor: (request: FastifyRequest) => string;
+  readonly onServerFailure?: (diagnostic: ServerFailureDiagnostic) => void;
 }): void {
   input.app.setErrorHandler((error, request, reply) => {
     const mapped = mapError(error);
-    sendProblem(reply, input.correlationIdFor(request), mapped);
+    const correlationId = input.correlationIdFor(request);
+    reportServerFailure(input.onServerFailure, correlationId, request, mapped);
+    sendProblem(reply, correlationId, mapped);
   });
 
   input.app.setNotFoundHandler((request, reply) => {
@@ -37,6 +54,34 @@ export function installProblemHandlers(input: {
       title: "Route not found",
     });
   });
+}
+
+function reportServerFailure(
+  sink: ((diagnostic: ServerFailureDiagnostic) => void) | undefined,
+  correlationId: string,
+  request: FastifyRequest,
+  mapped: MappedProblem,
+): void {
+  if (sink === undefined || mapped.status < 500) {
+    return;
+  }
+  // The route template, not request.url, so path parameters and any query
+  // string stay out of the diagnostic record.
+  const route = request.routeOptions?.url ?? "unrouted";
+  try {
+    sink({
+      code: mapped.code,
+      correlationId,
+      ...(mapped.detail === undefined ? {} : { detail: mapped.detail }),
+      ...(mapped.diagnosticCode === undefined ? {} : { diagnosticCode: mapped.diagnosticCode }),
+      method: request.method,
+      route,
+      status: mapped.status,
+    });
+  } catch {
+    // A failing diagnostic sink must never replace the owner-facing problem
+    // response with an unrelated error.
+  }
 }
 
 function sendProblem(reply: FastifyReply, correlationId: string, mapped: MappedProblem): void {
@@ -55,7 +100,7 @@ function sendProblem(reply: FastifyReply, correlationId: string, mapped: MappedP
 
 function mapError(error: unknown): MappedProblem {
   if (error instanceof PublicHttpError) {
-    return publicProblem(error.statusCode, error.code);
+    return publicProblem(error.statusCode, error.code, undefined, error.diagnosticCode);
   }
 
   if (error instanceof OwnerAuthError) {

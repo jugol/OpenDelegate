@@ -551,7 +551,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         conversationStreamId(input.deviceId, this.#adapter.adapterId),
       );
     } catch {
-      throw unavailable("The Configuration Chat history could not be read.");
+      throw unavailable(
+        "The Configuration Chat history could not be read.",
+        "CONFIGURATION_HISTORY_UNREADABLE",
+      );
     }
     const turns = projectConversationTurns(events).slice(
       -MAXIMUM_CONFIGURATION_CONVERSATION_EXCHANGES,
@@ -631,7 +634,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       if (error instanceof ConfigurationAgentPortError) {
         throw error;
       }
-      throw unavailable("The Configuration Agent session state could not be read safely.");
+      throw unavailable(
+        "The Configuration Agent session state could not be read safely.",
+        "CONFIGURATION_SESSION_STATE_UNREADABLE",
+      );
     }
 
     const baseRunId = `configuration_${operationKey.slice("sha256:".length)}`;
@@ -707,6 +713,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
             if (proposalCompletionCorrectionIssued) {
               throw unavailable(
                 "The Configuration Agent stopped before creating the required owner Approval.",
+                "CONFIGURATION_PROPOSAL_APPROVAL_NOT_CREATED",
               );
             }
             proposalCompletionCorrectionIssued = true;
@@ -716,7 +723,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
           const content = finalizeOwnerResponse(parsed, [...receipts.values()]);
           const occurredAt = this.#clock.now();
           if (!isRfc3339Instant(occurredAt)) {
-            throw unavailable("The Configuration Agent clock returned an invalid instant.");
+            throw unavailable(
+              "The Configuration Agent clock returned an invalid instant.",
+              "CONFIGURATION_CLOCK_INVALID",
+            );
           }
           const response = {
             messageId: `message_${digest(`${operationKey}\u0000${requestDigest}`)
@@ -741,7 +751,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         }
 
         if (toolCallCount >= this.#maximumToolTurns) {
-          throw unavailable("The Configuration Agent exceeded its typed tool-turn budget.");
+          throw unavailable(
+            "The Configuration Agent exceeded its typed tool-turn budget.",
+            "CONFIGURATION_TOOL_TURN_BUDGET_EXCEEDED",
+          );
         }
         toolCallCount += 1;
         if (parsed.request.tool === "apply") {
@@ -764,7 +777,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
             request: parsed.request,
           });
           if (receipt.operationId !== toolOperationId || receipt.tool !== parsed.request.tool) {
-            throw unavailable("The Configuration Agent tool broker returned an invalid receipt.");
+            throw unavailable(
+              "The Configuration Agent tool broker returned an invalid receipt.",
+              "CONFIGURATION_TOOL_RECEIPT_INVALID",
+            );
           }
           receipts.set(receipt.receiptId, receipt);
           if (receipt.tool === "propose") {
@@ -783,7 +799,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
             throw error;
           }
           if (!(error instanceof ConfigurationAgentToolBrokerError)) {
-            throw unavailable("The Configuration Agent tool broker failed unexpectedly.");
+            throw unavailable(
+              "The Configuration Agent tool broker failed unexpectedly.",
+              "CONFIGURATION_TOOL_BROKER_FAILED",
+            );
           }
           if (
             error.code === "CONFIGURATION_TOOL_APPROVAL_REQUIRED" &&
@@ -813,7 +832,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       throw mapAdapterFailure(error, "The Configuration Agent turn failed.");
     }
 
-    throw unavailable("The Configuration Agent exceeded its typed tool-turn budget.");
+    throw unavailable(
+      "The Configuration Agent exceeded its typed tool-turn budget.",
+      "CONFIGURATION_TOOL_TURN_BUDGET_EXCEEDED",
+    );
   }
 
   async #runTurn(input: {
@@ -900,7 +922,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       );
     }
     if (terminal.session === undefined) {
-      throw unavailable("The Configuration Agent completed without a durable native session.");
+      throw unavailable(
+        "The Configuration Agent completed without a durable native session.",
+        "CONFIGURATION_NATIVE_SESSION_MISSING",
+      );
     }
     return {
       session: terminal.session,
@@ -974,7 +999,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     const streamId = conversationStreamId(input.deviceId, this.#adapter.adapterId);
     const occurredAt = this.#clock.now();
     if (!isRfc3339Instant(occurredAt)) {
-      throw unavailable("The Configuration Agent clock returned an invalid instant.");
+      throw unavailable(
+        "The Configuration Agent clock returned an invalid instant.",
+        "CONFIGURATION_CLOCK_INVALID",
+      );
     }
     const ownerMessage: ConfigurationAgentConversationMessageV1 = {
       messageId: `owner_${digest(`${input.operationKey}\u0000owner`)
@@ -1021,7 +1049,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         // Re-read to distinguish a concurrent idempotent append from storage failure.
       }
     }
-    throw unavailable("The Configuration Chat owner message could not be stored durably.");
+    throw unavailable(
+      "The Configuration Chat owner message could not be stored durably.",
+      "CONFIGURATION_OWNER_MESSAGE_NOT_STORED",
+    );
   }
 
   async #recordConversationExchange(input: {
@@ -1070,7 +1101,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         // Re-read to distinguish a concurrent idempotent append from storage failure.
       }
     }
-    throw unavailable("The Configuration Chat exchange could not be stored durably.");
+    throw unavailable(
+      "The Configuration Chat exchange could not be stored durably.",
+      "CONFIGURATION_EXCHANGE_NOT_STORED",
+    );
   }
 
   async #loadStoredConversationExchange(
@@ -1084,7 +1118,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         conversationStreamId(deviceId, this.#adapter.adapterId),
       );
     } catch {
-      throw unavailable("The Configuration Chat history could not be read.");
+      throw unavailable(
+        "The Configuration Chat history could not be read.",
+        "CONFIGURATION_HISTORY_UNREADABLE",
+      );
     }
     const existing = findConversationExchange(events, operationKey);
     if (existing === undefined) {
@@ -1104,16 +1141,19 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     if (attempts.some((attempt) => attempt.schemaVersion === 1)) {
       throw unavailable(
         "A previous Configuration Agent attempt used a legacy tool-attempt boundary whose later mutation state is unknown. OpenDelegate did not replay it.",
+        "CONFIGURATION_LEGACY_TOOL_ATTEMPT_NOT_REPLAYABLE",
       );
     }
     if (attempts.some((attempt) => isReplayUnsafeConfigurationTool(attempt.tool))) {
       throw unavailable(
         "A previous Configuration Agent attempt reached a mutation-capable tool without recording a final response. OpenDelegate did not replay it.",
+        "CONFIGURATION_MUTATION_ATTEMPT_NOT_REPLAYABLE",
       );
     }
     if ((await this.#loadContinuationReservation(operationKey, requestDigest)) !== undefined) {
       throw unavailable(
         "A previous Configuration Agent attempt already reserved its one native continuation without recording a final response. OpenDelegate did not start another continuation.",
+        "CONFIGURATION_CONTINUATION_NOT_REPLAYABLE",
       );
     }
   }
@@ -1136,6 +1176,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       if (attempts.some((attempt) => attempt.schemaVersion === 1)) {
         throw unavailable(
           "The Configuration Agent cannot extend a legacy tool-attempt boundary safely.",
+          "CONFIGURATION_LEGACY_TOOL_ATTEMPT_NOT_EXTENDABLE",
         );
       }
       const existing = attempts.find(
@@ -1143,7 +1184,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       );
       if (existing !== undefined) {
         if (existing.tool !== input.tool) {
-          throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+          throw unavailable(
+            "The Configuration Agent tool-attempt state is corrupt.",
+            "CONFIGURATION_TOOL_ATTEMPT_STATE_CORRUPT",
+          );
         }
         return;
       }
@@ -1174,7 +1218,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
         // Re-read once to distinguish an idempotent concurrent append from storage failure.
       }
     }
-    throw unavailable("The Configuration Agent tool-attempt boundary could not be stored durably.");
+    throw unavailable(
+      "The Configuration Agent tool-attempt boundary could not be stored durably.",
+      "CONFIGURATION_TOOL_ATTEMPT_NOT_STORED",
+    );
   }
 
   async #loadToolAttempts(
@@ -1189,11 +1236,17 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     try {
       events = await this.#eventStore.readStream(toolAttemptStreamId(operationKey));
     } catch {
-      throw unavailable("The Configuration Agent tool-attempt state could not be read.");
+      throw unavailable(
+        "The Configuration Agent tool-attempt state could not be read.",
+        "CONFIGURATION_TOOL_ATTEMPT_STATE_UNREADABLE",
+      );
     }
     return events.map((event, index) => {
       if (event.streamVersion !== index + 1 || event.type !== CONFIGURATION_TOOL_ATTEMPT_EVENT) {
-        throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+        throw unavailable(
+          "The Configuration Agent tool-attempt state is corrupt.",
+          "CONFIGURATION_TOOL_ATTEMPT_STATE_CORRUPT",
+        );
       }
       const payload = validateToolAttemptEventPayload(event.payload);
       if (payload.requestDigest !== requestDigest) {
@@ -1207,6 +1260,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     if ((await this.#loadContinuationReservation(operationKey, requestDigest)) !== undefined) {
       throw unavailable(
         "The Configuration Agent already reserved its one native continuation for this request.",
+        "CONFIGURATION_CONTINUATION_RESERVATION_DUPLICATE",
       );
     }
     const streamId = continuationReservationStreamId(operationKey);
@@ -1230,6 +1284,7 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     } catch {
       throw unavailable(
         "The Configuration Agent continuation boundary could not be stored durably.",
+        "CONFIGURATION_CONTINUATION_NOT_STORED",
       );
     }
   }
@@ -1246,7 +1301,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     try {
       events = await this.#eventStore.readStream(continuationReservationStreamId(operationKey));
     } catch {
-      throw unavailable("The Configuration Agent continuation boundary could not be read.");
+      throw unavailable(
+        "The Configuration Agent continuation boundary could not be read.",
+        "CONFIGURATION_CONTINUATION_UNREADABLE",
+      );
     }
     if (events.length === 0) {
       return undefined;
@@ -1256,7 +1314,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       events[0]?.streamVersion !== 1 ||
       events[0].type !== CONFIGURATION_CONTINUATION_RESERVATION_EVENT
     ) {
-      throw unavailable("The Configuration Agent continuation boundary is corrupt.");
+      throw unavailable(
+        "The Configuration Agent continuation boundary is corrupt.",
+        "CONFIGURATION_CONTINUATION_CORRUPT",
+      );
     }
     const payload = validateContinuationReservationEventPayload(events[0].payload);
     if (payload.requestDigest !== requestDigest) {
@@ -1277,7 +1338,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
     try {
       events = await this.#eventStore.readStream(responseStreamId(operationKey));
     } catch {
-      throw unavailable("The Configuration Agent response state could not be read.");
+      throw unavailable(
+        "The Configuration Agent response state could not be read.",
+        "CONFIGURATION_RESPONSE_STATE_UNREADABLE",
+      );
     }
     if (events.length === 0) {
       return undefined;
@@ -1287,7 +1351,10 @@ export class AgentBackedConfigurationAgent implements ConfigurationAgentPort {
       events[0]?.streamVersion !== 1 ||
       events[0].type !== CONFIGURATION_RESPONSE_EVENT
     ) {
-      throw unavailable("The Configuration Agent response state is corrupt.");
+      throw unavailable(
+        "The Configuration Agent response state is corrupt.",
+        "CONFIGURATION_RESPONSE_STATE_CORRUPT",
+      );
     }
     const payload = validateResponseEventPayload(events[0].payload);
     if (payload.requestDigest !== requestDigest) {
@@ -1323,6 +1390,7 @@ function assertSessionBinding(
   ) {
     throw unavailable(
       "The Configuration Agent native session does not belong to this Device conversation.",
+      "CONFIGURATION_SESSION_BINDING_MISMATCH",
     );
   }
 }
@@ -1378,7 +1446,10 @@ function buildConfigurationPrompt(
     `Owner message: ${input.message}`,
   ].join("\n");
   if (Buffer.byteLength(prompt, "utf8") > maximumBytes) {
-    throw unavailable("The Configuration Agent message exceeds its prompt budget.");
+    throw unavailable(
+      "The Configuration Agent message exceeds its prompt budget.",
+      "CONFIGURATION_PROMPT_BUDGET_EXCEEDED",
+    );
   }
   return prompt;
 }
@@ -1425,7 +1496,10 @@ function buildConfigurationContinuationPrompt(
     ...suffix,
   ].join("\n");
   if (Buffer.byteLength(continuationPrompt, "utf8") > maximumBytes) {
-    throw unavailable("The Configuration Agent continuation exceeds its prompt budget.");
+    throw unavailable(
+      "The Configuration Agent continuation exceeds its prompt budget.",
+      "CONFIGURATION_CONTINUATION_PROMPT_BUDGET_EXCEEDED",
+    );
   }
   return continuationPrompt;
 }
@@ -1441,7 +1515,10 @@ function buildToolResultPrompt(
     "Continue with one typed tool JSON object, or return the exact final JSON object. Never invent or alter identifiers. The final claimReceiptIds must contain every successful apply or rollback receipt and no other receipt. suggestedActions may contain only the documented context-sensitive UI suggestions.",
   ].join("\n");
   if (Buffer.byteLength(prompt, "utf8") > maximumBytes) {
-    throw unavailable("The Configuration Agent tool result exceeds its prompt budget.");
+    throw unavailable(
+      "The Configuration Agent tool result exceeds its prompt budget.",
+      "CONFIGURATION_TOOL_RESULT_PROMPT_BUDGET_EXCEEDED",
+    );
   }
   return prompt;
 }
@@ -1456,7 +1533,10 @@ function buildProposalCompletionPrompt(
     "Continue with typed tools. Preview the exact proposal with diff, then call apply exactly once with its recorded proposal ID and revision. If policy returns CONFIGURATION_TOOL_APPROVAL_REQUIRED with an approvalId, that is the expected successful handoff to owner review. Return a final response only after that apply result. Never invent a replacement proposal or identifier.",
   ].join("\n");
   if (Buffer.byteLength(prompt, "utf8") > maximumBytes) {
-    throw unavailable("The Configuration Agent proposal completion prompt exceeds its budget.");
+    throw unavailable(
+      "The Configuration Agent proposal completion prompt exceeds its budget.",
+      "CONFIGURATION_PROPOSAL_PROMPT_BUDGET_EXCEEDED",
+    );
   }
   return prompt;
 }
@@ -1479,22 +1559,52 @@ function configurationResponseLocaleInstruction(
   return `Respond to the owner in ${language} (${locale ?? "en"}) even when the owner message is in another language. This controls only newly generated owner-visible prose. Preserve exact identifiers, provider-native model IDs, commands, code, configuration keys, and raw values; never translate or rewrite durable conversation history.`;
 }
 
+/**
+ * Reads the one typed JSON object a Configuration Agent turn must return.
+ *
+ * The prompt demands exactly that object with nothing around it, but a
+ * provider-native runner sometimes appends its own prose after it, which made a
+ * correct typed request unusable. Recovering the object from the first `{`
+ * through the last `}` keeps that turn usable. It does not relax the contract:
+ * the caller still validates every key, type, and identifier, so text outside
+ * the object cannot introduce a field or widen what the request may do. A
+ * response holding anything other than one balanced object still fails closed.
+ */
+function parseSoleJsonObject(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    // Fall through to the bounded single-object recovery below.
+  }
+  const start = value.indexOf("{");
+  const end = value.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+}
+
 function parseConfigurationTurnResult(value: string | undefined): ConfigurationAgentTurnResult {
   if (value === undefined || Buffer.byteLength(value, "utf8") > 64 * 1024) {
-    throw unavailable("The Configuration Agent returned an invalid public response.");
+    throw unavailable(
+      "The Configuration Agent returned an invalid public response.",
+      "CONFIGURATION_AGENT_RESPONSE_INVALID",
+    );
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw unavailable("The Configuration Agent returned an invalid public response.");
-  }
+  const parsed = parseSoleJsonObject(value);
   if (
     !isRecord(parsed) ||
     parsed["schemaVersion"] !== 1 ||
     (parsed["type"] !== "tool" && parsed["type"] !== "final")
   ) {
-    throw unavailable("The Configuration Agent returned an invalid public response.");
+    throw unavailable(
+      "The Configuration Agent returned an invalid public response.",
+      "CONFIGURATION_AGENT_RESPONSE_INVALID",
+    );
   }
   if (parsed["type"] === "final") {
     if (
@@ -1510,7 +1620,10 @@ function parseConfigurationTurnResult(value: string | undefined): ConfigurationA
       !Array.isArray(parsed["claimReceiptIds"]) ||
       parsed["claimReceiptIds"].length > 32
     ) {
-      throw unavailable("The Configuration Agent returned an invalid public response.");
+      throw unavailable(
+        "The Configuration Agent returned an invalid public response.",
+        "CONFIGURATION_AGENT_RESPONSE_INVALID",
+      );
     }
     assertIdentifier(parsed["content"], "Configuration Agent response", 32_768);
     const claimReceiptIds = parsed["claimReceiptIds"].map((receiptId) => {
@@ -1518,7 +1631,10 @@ function parseConfigurationTurnResult(value: string | undefined): ConfigurationA
       return receiptId;
     });
     if (new Set(claimReceiptIds).size !== claimReceiptIds.length) {
-      throw unavailable("The Configuration Agent returned duplicate mutation claims.");
+      throw unavailable(
+        "The Configuration Agent returned duplicate mutation claims.",
+        "CONFIGURATION_CLAIM_DUPLICATE",
+      );
     }
     const suggestedActions =
       parsed["suggestedActions"] === undefined
@@ -1533,7 +1649,10 @@ function parseConfigurationTurnResult(value: string | undefined): ConfigurationA
     };
   }
   if (!hasExactKeys(parsed, ["schemaVersion", "type", "toolCallId", "request"])) {
-    throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+    throw unavailable(
+      "The Configuration Agent returned an invalid typed tool request.",
+      "CONFIGURATION_TOOL_REQUEST_INVALID",
+    );
   }
   assertIdentifier(parsed["toolCallId"], "Configuration tool call ID", 160);
   return {
@@ -1546,7 +1665,10 @@ function parseConfigurationTurnResult(value: string | undefined): ConfigurationA
 
 function parseConfigurationToolRequest(value: unknown): ConfigurationToolRequest {
   if (!isRecord(value) || typeof value["tool"] !== "string") {
-    throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+    throw unavailable(
+      "The Configuration Agent returned an invalid typed tool request.",
+      "CONFIGURATION_TOOL_REQUEST_INVALID",
+    );
   }
   switch (value["tool"]) {
     case "inspect":
@@ -1610,23 +1732,35 @@ function parseConfigurationToolRequest(value: unknown): ConfigurationToolRequest
         reason: value["reason"],
       };
   }
-  throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+  throw unavailable(
+    "The Configuration Agent returned an invalid typed tool request.",
+    "CONFIGURATION_TOOL_REQUEST_INVALID",
+  );
 }
 
 function parseConfigurationChanges(value: unknown): readonly ConfigurationChange[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
-    throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+    throw unavailable(
+      "The Configuration Agent returned an invalid typed tool request.",
+      "CONFIGURATION_TOOL_REQUEST_INVALID",
+    );
   }
   return value.map((change) => {
     if (!isRecord(change) || (change["operation"] !== "set" && change["operation"] !== "unset")) {
-      throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+      throw unavailable(
+        "The Configuration Agent returned an invalid typed tool request.",
+        "CONFIGURATION_TOOL_REQUEST_INVALID",
+      );
     }
     const expectedKeys =
       change["operation"] === "set"
         ? ["operation", "key", "scope", "value"]
         : ["operation", "key", "scope"];
     if (!hasExactKeys(change, expectedKeys) || !isRecord(change["scope"])) {
-      throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+      throw unavailable(
+        "The Configuration Agent returned an invalid typed tool request.",
+        "CONFIGURATION_TOOL_REQUEST_INVALID",
+      );
     }
     assertIdentifier(change["key"], "Configuration setting key", 500);
     const scope = parseConfigurationScope(change["scope"]);
@@ -1663,7 +1797,10 @@ function parseConfigurationScope(value: Record<string, unknown>): ConfigurationS
     typeof value["kind"] !== "string" ||
     !kinds.includes(value["kind"] as (typeof kinds)[number])
   ) {
-    throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+    throw unavailable(
+      "The Configuration Agent returned an invalid typed tool request.",
+      "CONFIGURATION_TOOL_REQUEST_INVALID",
+    );
   }
   assertIdentifier(value["id"], "Configuration scope ID", 500);
   return {
@@ -1682,7 +1819,10 @@ function assertJsonValue(value: unknown, active = new WeakSet<object>()): void {
     return;
   }
   if (typeof value !== "object" || active.has(value)) {
-    throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+    throw unavailable(
+      "The Configuration Agent returned an invalid typed tool request.",
+      "CONFIGURATION_TOOL_REQUEST_INVALID",
+    );
   }
   active.add(value);
   try {
@@ -1696,7 +1836,10 @@ function assertJsonValue(value: unknown, active = new WeakSet<object>()): void {
       Object.getPrototypeOf(value) !== Object.prototype ||
       Object.getOwnPropertySymbols(value).length > 0
     ) {
-      throw unavailable("The Configuration Agent returned an invalid typed tool request.");
+      throw unavailable(
+        "The Configuration Agent returned an invalid typed tool request.",
+        "CONFIGURATION_TOOL_REQUEST_INVALID",
+      );
     }
     for (const nested of Object.values(value)) {
       assertJsonValue(nested, active);
@@ -1721,6 +1864,7 @@ function finalizeOwnerResponse(
   ) {
     throw unavailable(
       "The Configuration Agent final mutation claims do not match durable receipts.",
+      "CONFIGURATION_CLAIM_RECEIPT_MISMATCH",
     );
   }
   const attestations = mutationReceipts.map((receipt) => {
@@ -1737,14 +1881,20 @@ function finalizeOwnerResponse(
   const content =
     additions.length === 0 ? final.content : `${final.content}\n\n${additions.join("\n")}`;
   if (Buffer.byteLength(content, "utf8") > 32_768) {
-    throw unavailable("The Configuration Agent returned an invalid public response.");
+    throw unavailable(
+      "The Configuration Agent returned an invalid public response.",
+      "CONFIGURATION_AGENT_RESPONSE_INVALID",
+    );
   }
   return content;
 }
 
 function parseSuggestedActions(value: unknown): readonly ConfigurationAgentSuggestedActionV1[] {
   if (!Array.isArray(value) || value.length > 4) {
-    throw unavailable("The Configuration Agent returned invalid suggested actions.");
+    throw unavailable(
+      "The Configuration Agent returned invalid suggested actions.",
+      "CONFIGURATION_SUGGESTED_ACTION_INVALID",
+    );
   }
   const actions = value.map((action): ConfigurationAgentSuggestedActionV1 => {
     if (
@@ -1753,12 +1903,18 @@ function parseSuggestedActions(value: unknown): readonly ConfigurationAgentSugge
       action !== "ingest-discord-bot-token" &&
       action !== "ingest-database-uri"
     ) {
-      throw unavailable("The Configuration Agent returned invalid suggested actions.");
+      throw unavailable(
+        "The Configuration Agent returned invalid suggested actions.",
+        "CONFIGURATION_SUGGESTED_ACTION_INVALID",
+      );
     }
     return action;
   });
   if (new Set(actions).size !== actions.length) {
-    throw unavailable("The Configuration Agent returned duplicate suggested actions.");
+    throw unavailable(
+      "The Configuration Agent returned duplicate suggested actions.",
+      "CONFIGURATION_SUGGESTED_ACTION_DUPLICATE",
+    );
   }
   return Object.freeze(actions);
 }
@@ -1799,7 +1955,10 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
         "occurredAt",
       ]))
   ) {
-    throw unavailable("The Configuration Agent response state is corrupt.");
+    throw unavailable(
+      "The Configuration Agent response state is corrupt.",
+      "CONFIGURATION_RESPONSE_STATE_CORRUPT",
+    );
   }
   const response = value["response"];
   assertIdentifier(response["messageId"], "Message ID", 160);
@@ -1812,7 +1971,10 @@ function validateResponseEventPayload(value: unknown): ConfigurationResponseEven
     assertIdentifier(response["pendingApprovalId"], "Approval ID", 160);
   }
   if (typeof response["occurredAt"] !== "string" || !isRfc3339Instant(response["occurredAt"])) {
-    throw unavailable("The Configuration Agent response state is corrupt.");
+    throw unavailable(
+      "The Configuration Agent response state is corrupt.",
+      "CONFIGURATION_RESPONSE_STATE_CORRUPT",
+    );
   }
   return structuredClone(value) as unknown as ConfigurationResponseEventPayload;
 }
@@ -1840,19 +2002,28 @@ function validateConversationExchangeEvent(
     !isRecord(event.payload["ownerMessage"]) ||
     !hasExactKeys(event.payload["ownerMessage"], ["messageId", "role", "content", "occurredAt"])
   ) {
-    throw unavailable("The Configuration Chat history is corrupt.");
+    throw unavailable(
+      "The Configuration Chat history is corrupt.",
+      "CONFIGURATION_HISTORY_CORRUPT",
+    );
   }
   const ownerMessage = event.payload["ownerMessage"];
   assertIdentifier(ownerMessage["messageId"], "Configuration owner message ID", 160);
   if (ownerMessage["role"] !== "owner") {
-    throw unavailable("The Configuration Chat history is corrupt.");
+    throw unavailable(
+      "The Configuration Chat history is corrupt.",
+      "CONFIGURATION_HISTORY_CORRUPT",
+    );
   }
   assertIdentifier(ownerMessage["content"], "Configuration owner message", 8_192);
   if (
     typeof ownerMessage["occurredAt"] !== "string" ||
     !isRfc3339Instant(ownerMessage["occurredAt"])
   ) {
-    throw unavailable("The Configuration Chat history is corrupt.");
+    throw unavailable(
+      "The Configuration Chat history is corrupt.",
+      "CONFIGURATION_HISTORY_CORRUPT",
+    );
   }
   const response = validateResponseEventPayload({
     schemaVersion: 1,
@@ -1890,19 +2061,28 @@ function validateConversationOwnerMessageEvent(
     !isRecord(event.payload["ownerMessage"]) ||
     !hasExactKeys(event.payload["ownerMessage"], ["messageId", "role", "content", "occurredAt"])
   ) {
-    throw unavailable("The Configuration Chat history is corrupt.");
+    throw unavailable(
+      "The Configuration Chat history is corrupt.",
+      "CONFIGURATION_HISTORY_CORRUPT",
+    );
   }
   const ownerMessage = event.payload["ownerMessage"];
   assertIdentifier(ownerMessage["messageId"], "Configuration owner message ID", 160);
   if (ownerMessage["role"] !== "owner") {
-    throw unavailable("The Configuration Chat history is corrupt.");
+    throw unavailable(
+      "The Configuration Chat history is corrupt.",
+      "CONFIGURATION_HISTORY_CORRUPT",
+    );
   }
   assertIdentifier(ownerMessage["content"], "Configuration owner message", 8_192);
   if (
     typeof ownerMessage["occurredAt"] !== "string" ||
     !isRfc3339Instant(ownerMessage["occurredAt"])
   ) {
-    throw unavailable("The Configuration Chat history is corrupt.");
+    throw unavailable(
+      "The Configuration Chat history is corrupt.",
+      "CONFIGURATION_HISTORY_CORRUPT",
+    );
   }
   return {
     schemaVersion: 1,
@@ -1945,7 +2125,10 @@ function projectConversationTurns(
       !isConversationExchange(projected) ||
       existing.response !== undefined
     ) {
-      throw unavailable("The Configuration Chat history is corrupt.");
+      throw unavailable(
+        "The Configuration Chat history is corrupt.",
+        "CONFIGURATION_HISTORY_CORRUPT",
+      );
     }
     turns[existingIndex] = {
       ...existing,
@@ -1990,7 +2173,10 @@ function validateToolAttemptEventPayload(
     typeof value["requestDigest"] !== "string" ||
     !/^sha256:[a-f0-9]{64}$/.test(value["requestDigest"])
   ) {
-    throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+    throw unavailable(
+      "The Configuration Agent tool-attempt state is corrupt.",
+      "CONFIGURATION_TOOL_ATTEMPT_STATE_CORRUPT",
+    );
   }
   assertIdentifier(value["toolOperationId"], "Configuration tool operation ID", 160);
   if (
@@ -2001,7 +2187,10 @@ function validateToolAttemptEventPayload(
     value["tool"] !== "apply" &&
     value["tool"] !== "rollback"
   ) {
-    throw unavailable("The Configuration Agent tool-attempt state is corrupt.");
+    throw unavailable(
+      "The Configuration Agent tool-attempt state is corrupt.",
+      "CONFIGURATION_TOOL_ATTEMPT_STATE_CORRUPT",
+    );
   }
   return structuredClone(value) as unknown as StoredConfigurationToolAttemptEventPayload;
 }
@@ -2016,7 +2205,10 @@ function validateContinuationReservationEventPayload(
     typeof value["requestDigest"] !== "string" ||
     !/^sha256:[a-f0-9]{64}$/.test(value["requestDigest"])
   ) {
-    throw unavailable("The Configuration Agent continuation boundary is corrupt.");
+    throw unavailable(
+      "The Configuration Agent continuation boundary is corrupt.",
+      "CONFIGURATION_CONTINUATION_CORRUPT",
+    );
   }
   return structuredClone(value) as unknown as ConfigurationContinuationReservationEventPayload;
 }
@@ -2029,7 +2221,10 @@ function isReplayUnsafeConfigurationTool(
 
 function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgentMessageInput {
   if (!isRecord(input)) {
-    throw unavailable("The Configuration Agent request is invalid.");
+    throw unavailable(
+      "The Configuration Agent request is invalid.",
+      "CONFIGURATION_REQUEST_INVALID",
+    );
   }
   assertIdentifier(input.deviceId, "Target Device ID", 160);
   assertIdentifier(input.principalId, "Principal ID", 160);
@@ -2044,7 +2239,10 @@ function validateInput(input: ConfigurationAgentMessageInput): ConfigurationAgen
     input.responseLocale !== "ko" &&
     input.responseLocale !== "zh-CN"
   ) {
-    throw unavailable("The Configuration Agent response locale is invalid.");
+    throw unavailable(
+      "The Configuration Agent response locale is invalid.",
+      "CONFIGURATION_RESPONSE_LOCALE_INVALID",
+    );
   }
   const deviceObservation =
     input.deviceObservation === undefined
@@ -2073,7 +2271,10 @@ function validateDeviceObservation(
     !Array.isArray(value.capabilities) ||
     !Array.isArray(value.agentAdapters)
   ) {
-    throw unavailable("The Device observation supplied to Configuration Agent is invalid.");
+    throw unavailable(
+      "The Device observation supplied to Configuration Agent is invalid.",
+      "CONFIGURATION_OBSERVATION_INVALID",
+    );
   }
   const observedAtMs = optionalObservationTime(value.observedAtMs);
   assertIdentifier(value.name, "Observed Device name", 256);
@@ -2089,7 +2290,10 @@ function validateDeviceObservation(
     (value.coordinatorAgentExecutionProfile !== undefined &&
       !isAgentExecutionProfile(value.coordinatorAgentExecutionProfile))
   ) {
-    throw unavailable("The Device Agent Execution Profile observation is invalid.");
+    throw unavailable(
+      "The Device Agent Execution Profile observation is invalid.",
+      "CONFIGURATION_OBSERVED_PROFILE_INVALID",
+    );
   }
   const sanitized: NonNullable<ConfigurationAgentMessageInput["deviceObservation"]> = {
     name: value.name,
@@ -2111,7 +2315,10 @@ function validateDeviceObservation(
     knowledgeHealth: value.knowledgeHealth,
   };
   if (Buffer.byteLength(JSON.stringify(sanitized), "utf8") > 64 * 1024) {
-    throw unavailable("The Device observation supplied to Configuration Agent is too large.");
+    throw unavailable(
+      "The Device observation supplied to Configuration Agent is too large.",
+      "CONFIGURATION_OBSERVATION_TOO_LARGE",
+    );
   }
   return sanitized;
 }
@@ -2131,7 +2338,10 @@ function sanitizeObservedCapability(
       value.evidenceSource !== "capability-probe" &&
       value.evidenceSource !== "workspace-registry")
   ) {
-    throw unavailable("The Device capability observation is invalid.");
+    throw unavailable(
+      "The Device capability observation is invalid.",
+      "CONFIGURATION_OBSERVED_CAPABILITY_INVALID",
+    );
   }
   const observedAtMs = optionalObservationTime(value.observedAtMs);
   assertIdentifier(value.name, "Observed capability name", 256);
@@ -2166,7 +2376,10 @@ function sanitizeObservedAgentAdapter(
     !Number.isSafeInteger(value.observedAtMs) ||
     value.observedAtMs < 0
   ) {
-    throw unavailable("The Device Agent Adapter observation is invalid.");
+    throw unavailable(
+      "The Device Agent Adapter observation is invalid.",
+      "CONFIGURATION_OBSERVED_ADAPTER_INVALID",
+    );
   }
   assertIdentifier(value.adapterId, "Observed Agent Adapter ID", 160);
   if (value.version !== undefined) {
@@ -2175,7 +2388,10 @@ function sanitizeObservedAgentAdapter(
   const modelCatalogObservedAtMs = optionalObservationTime(value.modelCatalogObservedAtMs);
   const models = value.models === undefined ? undefined : sanitizeObservedAgentModels(value.models);
   if ((modelCatalogObservedAtMs === undefined) !== (models === undefined)) {
-    throw unavailable("The Device Agent model catalog observation is incomplete.");
+    throw unavailable(
+      "The Device Agent model catalog observation is incomplete.",
+      "CONFIGURATION_OBSERVED_CATALOG_INCOMPLETE",
+    );
   }
   return {
     provider: value.provider,
@@ -2198,21 +2414,33 @@ function sanitizeObservedAgentModels(
   >["agentAdapters"][number]["models"]
 > {
   if (!Array.isArray(value) || value.length > 128) {
-    throw unavailable("The Device Agent model catalog is invalid.");
+    throw unavailable(
+      "The Device Agent model catalog is invalid.",
+      "CONFIGURATION_OBSERVED_CATALOG_INVALID",
+    );
   }
   const seen = new Set<string>();
   return value.map((model) => {
     if (!isRecord(model)) {
-      throw unavailable("The Device Agent model catalog is invalid.");
+      throw unavailable(
+        "The Device Agent model catalog is invalid.",
+        "CONFIGURATION_OBSERVED_CATALOG_INVALID",
+      );
     }
     assertIdentifier(model.modelId, "Observed Agent model ID", 256);
     assertIdentifier(model.displayName, "Observed Agent model display name", 256);
     if (seen.has(model.modelId)) {
-      throw unavailable("The Device Agent model catalog contains duplicate IDs.");
+      throw unavailable(
+        "The Device Agent model catalog contains duplicate IDs.",
+        "CONFIGURATION_OBSERVED_CATALOG_DUPLICATE",
+      );
     }
     seen.add(model.modelId);
     if (model.isDefault !== undefined && typeof model.isDefault !== "boolean") {
-      throw unavailable("The Device Agent model default marker is invalid.");
+      throw unavailable(
+        "The Device Agent model default marker is invalid.",
+        "CONFIGURATION_OBSERVED_CATALOG_DEFAULT_INVALID",
+      );
     }
     const supportedEfforts =
       model.supportedEfforts === undefined
@@ -2229,14 +2457,20 @@ function sanitizeObservedAgentModels(
 
 function sanitizeObservedEfforts(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 32) {
-    throw unavailable("The Device Agent model effort catalog is invalid.");
+    throw unavailable(
+      "The Device Agent model effort catalog is invalid.",
+      "CONFIGURATION_OBSERVED_EFFORT_INVALID",
+    );
   }
   const efforts = value.map((effort) => {
     assertIdentifier(effort, "Observed Agent model effort", 160);
     return effort;
   });
   if (new Set(efforts).size !== efforts.length) {
-    throw unavailable("The Device Agent model effort catalog contains duplicates.");
+    throw unavailable(
+      "The Device Agent model effort catalog contains duplicates.",
+      "CONFIGURATION_OBSERVED_EFFORT_DUPLICATE",
+    );
   }
   return efforts;
 }
@@ -2246,7 +2480,10 @@ function optionalObservationTime(value: unknown): number | undefined {
     return undefined;
   }
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-    throw unavailable("The Device observation time is invalid.");
+    throw unavailable(
+      "The Device observation time is invalid.",
+      "CONFIGURATION_OBSERVATION_TIME_INVALID",
+    );
   }
   return value;
 }
@@ -2327,7 +2564,7 @@ function mapAdapterFailure(error: unknown, message: string): ConfigurationAgentP
     detail,
     error instanceof AgentAdapterError
       ? safeDiagnosticCode(error.code, "CONFIGURATION_AGENT_ADAPTER_FAILED")
-      : undefined,
+      : "CONFIGURATION_ADAPTER_FAILURE_UNTYPED",
   );
 }
 
@@ -2335,7 +2572,12 @@ function safeDiagnosticCode(value: unknown, fallback: string): string {
   return typeof value === "string" && /^[A-Z][A-Z0-9_]{1,127}$/u.test(value) ? value : fallback;
 }
 
-function unavailable(message: string, diagnosticCode?: string): ConfigurationAgentPortError {
+/**
+ * Every unavailability carries a stable diagnostic code. The owner-facing
+ * failure message is deliberately generic, so the code is the only durable
+ * handle on which internal boundary refused the request.
+ */
+function unavailable(message: string, diagnosticCode: string): ConfigurationAgentPortError {
   return new ConfigurationAgentPortError(
     "CONFIGURATION_AGENT_UNAVAILABLE",
     message,
@@ -2455,7 +2697,7 @@ function assertIdentifier(
     value.length > maximumLength ||
     value.includes("\u0000")
   ) {
-    throw unavailable(`${label} is invalid.`);
+    throw unavailable(`${label} is invalid.`, "CONFIGURATION_IDENTIFIER_INVALID");
   }
 }
 
