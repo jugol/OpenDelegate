@@ -2,6 +2,7 @@ import {
   BookOpen,
   Bot,
   CheckCircle2,
+  CircleHelp,
   CirclePlus,
   ClipboardCheck,
   Code2,
@@ -21,7 +22,7 @@ import {
   UserRound,
   type LucideIcon,
 } from "lucide-react";
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 
 import {
   formatAdminDate,
@@ -979,6 +980,44 @@ interface SelectableAgentBinding {
   readonly label: string;
 }
 
+/**
+ * A question-mark control that explains one term. It opens on hover and on
+ * keyboard focus, and stays open on click so a touch device can read it too.
+ */
+function HelpHint({ text }: { readonly text: string }): React.JSX.Element {
+  const { messages } = useAdminI18n();
+  const descriptionId = useId();
+  const [pinned, setPinned] = useState(false);
+
+  return (
+    <span className="help-hint">
+      <button
+        aria-describedby={descriptionId}
+        aria-expanded={pinned}
+        aria-label={messages.device.helpHint}
+        className="help-hint-trigger"
+        onBlur={() => setPinned(false)}
+        onClick={(event) => {
+          // Inside a <label> a click would otherwise activate the labelled control.
+          event.preventDefault();
+          event.stopPropagation();
+          setPinned((current) => !current);
+        }}
+        type="button"
+      >
+        <CircleHelp aria-hidden="true" />
+      </button>
+      <span
+        className={pinned ? "help-hint-text help-hint-text--pinned" : "help-hint-text"}
+        id={descriptionId}
+        role="tooltip"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
 function AgentExecutionProfilePanel({
   device,
   onConfigureAgentProfile,
@@ -997,27 +1036,36 @@ function AgentExecutionProfilePanel({
   return (
     <div className="agent-profile-panel">
       {device.role === "main" ? (
-        <div
-          aria-label={messages.device.agentProfileTarget}
-          className="agent-profile-target"
-          role="group"
-        >
-          <button
-            aria-pressed={target === "worker"}
-            className={target === "worker" ? "agent-profile-target--active" : undefined}
-            onClick={() => setTarget("worker")}
-            type="button"
+        <div className="agent-profile-target-row">
+          <div
+            aria-label={messages.device.agentProfileTarget}
+            className="agent-profile-target"
+            role="group"
           >
-            {messages.device.workerAgent}
-          </button>
-          <button
-            aria-pressed={target === "coordinator"}
-            className={target === "coordinator" ? "agent-profile-target--active" : undefined}
-            onClick={() => setTarget("coordinator")}
-            type="button"
-          >
-            {messages.device.coordinatorAgent}
-          </button>
+            <button
+              aria-pressed={target === "worker"}
+              className={target === "worker" ? "agent-profile-target--active" : undefined}
+              onClick={() => setTarget("worker")}
+              type="button"
+            >
+              {messages.device.workerAgent}
+            </button>
+            <button
+              aria-pressed={target === "coordinator"}
+              className={target === "coordinator" ? "agent-profile-target--active" : undefined}
+              onClick={() => setTarget("coordinator")}
+              type="button"
+            >
+              {messages.device.coordinatorAgent}
+            </button>
+          </div>
+          <HelpHint
+            text={
+              target === "coordinator"
+                ? messages.device.coordinatorAgentHelp
+                : messages.device.workerAgentHelp
+            }
+          />
         </div>
       ) : null}
       <AgentProfileEditor
@@ -1113,7 +1161,10 @@ function AgentProfileEditor({
         ) : (
           <div className="agent-profile-bindings">
             <label>
-              <span>{messages.device.primaryBinding}</span>
+              <span>
+                {messages.device.primaryBinding}
+                <HelpHint text={messages.device.primaryBindingHelp} />
+              </span>
               <select
                 onChange={(event) => setPrimaryKey(event.currentTarget.value)}
                 value={primaryKey}
@@ -1127,7 +1178,10 @@ function AgentProfileEditor({
             </label>
             {mode === "prefer" ? (
               <label>
-                <span>{messages.device.fallbackBinding}</span>
+                <span>
+                  {messages.device.fallbackBinding}
+                  <HelpHint text={messages.device.fallbackBindingHelp} />
+                </span>
                 <select
                   onChange={(event) => setFallbackKey(event.currentTarget.value)}
                   value={fallbackKey}

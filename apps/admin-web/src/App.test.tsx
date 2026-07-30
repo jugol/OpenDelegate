@@ -404,6 +404,64 @@ describe("first-run Device overview", () => {
     expect(screen.getByRole("dialog", { name: "Configuration Chat" })).toBeTruthy();
   });
 
+  it("explains each Agent profile term through a keyboard-reachable hint", async () => {
+    const user = userEvent.setup();
+    const device = {
+      ...firstRunDevice,
+      role: "main" as const,
+      agentAdapters: [
+        {
+          provider: "claude" as const,
+          adapterId: "claude-agent-sdk",
+          version: "0.3.220",
+          readiness: "ready" as const,
+          compatibility: "tested" as const,
+          observedAtMs: Date.parse("2026-07-29T00:00:00.000Z"),
+          modelCatalogObservedAtMs: Date.parse("2026-07-29T00:00:00.000Z"),
+          models: [
+            {
+              modelId: "opus[1m]",
+              displayName: "Opus (1M context)",
+              isDefault: true,
+              supportedEfforts: [],
+            },
+          ],
+        },
+      ],
+    } satisfies DeviceOverviewViewModel;
+
+    render(<App deviceFleet={{ devices: [device], mainDeviceId: device.deviceId }} />);
+
+    // The Worker Agent explanation is described by the trigger, so assistive
+    // technology reaches it without a pointer.
+    const hints = screen.getAllByRole("button", { name: "What is this?" });
+    const targetHint = hints[0];
+    expect(targetHint).toBeTruthy();
+    expect(
+      document.getElementById(targetHint?.getAttribute("aria-describedby") ?? "")?.textContent,
+    ).toContain("carries out the actual work assigned to this Device");
+
+    // Switching the target swaps the explanation rather than keeping a stale one.
+    await user.click(screen.getByRole("button", { name: "Coordinator Agent" }));
+    const coordinatorHint = screen.getAllByRole("button", { name: "What is this?" })[0];
+    expect(
+      document.getElementById(coordinatorHint?.getAttribute("aria-describedby") ?? "")?.textContent,
+    ).toContain("runs Main's planning session");
+
+    // Binding hints appear with the selectors they explain.
+    await user.selectOptions(screen.getByRole("combobox", { name: "Selection mode" }), "prefer");
+    const labelled = screen.getAllByRole("button", { name: "What is this?" });
+    const described = labelled.map(
+      (hint) => document.getElementById(hint.getAttribute("aria-describedby") ?? "")?.textContent,
+    );
+    expect(
+      described.some((text) => text?.includes("tries first when starting a new session")),
+    ).toBe(true);
+    expect(
+      described.some((text) => text?.includes("only when the primary binding is unavailable")),
+    ).toBe(true);
+  });
+
   it("opens and closes Configuration Chat with an explicit accessible focus lifecycle", async () => {
     const user = renderApp();
 

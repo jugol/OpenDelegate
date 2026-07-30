@@ -113,6 +113,68 @@ describe("ApprovalSurface", () => {
     expect(within(inspector).queryByRole("button", { name: "Approve once" })).toBeNull();
   });
 
+  it("reports a landed decision so configuration surfaces can re-read durable state", async () => {
+    const user = userEvent.setup();
+    const decidedApproval: ApprovalDetail = {
+      ...pendingApproval,
+      state: "approved",
+      executionStatus: "succeeded",
+      decision: {
+        decision: "approve",
+        scope: "once",
+        decidedBy: "owner_primary",
+        decidedAt: "2026-07-24T01:04:00.000Z",
+      },
+    };
+    const onApprovalDecided = vi.fn();
+    const api = approvalApi({
+      listApprovals: vi.fn().mockResolvedValue([pendingApproval]),
+      decideApproval: vi.fn().mockResolvedValue(decidedApproval),
+    });
+
+    render(<ApprovalSurface api={api} onApprovalDecided={onApprovalDecided} />);
+    const inspector = await screen.findByRole("complementary", {
+      name: "Approval details: configuration.apply",
+    });
+    expect(onApprovalDecided).not.toHaveBeenCalled();
+
+    await user.click(within(inspector).getByRole("button", { name: "Approve once" }));
+
+    await waitFor(() => {
+      expect(onApprovalDecided).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("reports a durable decision even when the decision response is lost", async () => {
+    const user = userEvent.setup();
+    const onApprovalDecided = vi.fn();
+    const api = approvalApi({
+      listApprovals: vi.fn().mockResolvedValue([pendingApproval]),
+      decideApproval: vi.fn().mockRejectedValue(new Error("response lost in transit")),
+      getApproval: vi.fn().mockResolvedValue({
+        ...pendingApproval,
+        state: "approved",
+        executionStatus: "succeeded",
+        decision: {
+          decision: "approve",
+          scope: "once",
+          decidedBy: "owner_primary",
+          decidedAt: "2026-07-24T01:04:00.000Z",
+        },
+      }),
+    });
+
+    render(<ApprovalSurface api={api} onApprovalDecided={onApprovalDecided} />);
+    const inspector = await screen.findByRole("complementary", {
+      name: "Approval details: configuration.apply",
+    });
+    await user.click(within(inspector).getByRole("button", { name: "Approve once" }));
+
+    await waitFor(() => {
+      expect(onApprovalDecided).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("requires a reason before a denial and submits it explicitly", async () => {
     const user = userEvent.setup();
     const deniedApproval: ApprovalDetail = {

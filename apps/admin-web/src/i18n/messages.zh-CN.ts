@@ -202,6 +202,15 @@ export const simplifiedChineseMessages = {
     primaryBinding: "主绑定",
     fallbackBinding: "备用绑定",
     noFallback: "无备用绑定",
+    helpHint: "这是什么？",
+    workerAgentHelp:
+      "执行分配给此 Device 的实际工作的 Agent：编辑文件、运行命令、生成成果。此 Device 执行的每个 Work Order 都使用该绑定开启会话。Main 也能像其他 Device 一样执行工作，因此 Main 同样有执行 Agent。",
+    coordinatorAgentHelp:
+      "运行 Main 针对某个 Task 的规划会话的 Agent：读取你的请求，决定如何拆分工作，向各 Device 派发 Work Order，再把它们的报告汇总成结果。它本身不执行工作。只有 Main 拥有它，且每个 Task 一个。在此更改模型将从新的 Task 会话开始生效；更改提供商或适配器还需要重新配置并重启 Main Agent 运行环境。",
+    primaryBindingHelp:
+      "OpenDelegate 开启新会话时首先尝试的适配器和精确模型。在固定模式下只使用此绑定，因此模型不可用时会停止，而不会悄悄换成其他模型。在优先模式下它是首选。",
+    fallbackBindingHelp:
+      "仅在优先模式下、且主绑定不可用时使用。没有隐式备用：留空则优先模式的行为与固定模式相同。实际运行的绑定会记录在 Run 中，因此你始终能看到执行了什么。",
     noVerifiedModels: "暂无已就绪且经过测试的模型目录。选择精确模型前，请先评估此 Device。",
     configureAgentProfile: "在 Configuration Chat 中请求更改",
     agentProfileConfigurationRequest:

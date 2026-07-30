@@ -1061,6 +1061,13 @@ textarea:focus-visible,
   gap: 16px;
 }
 
+.agent-profile-target-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .agent-profile-target {
   width: fit-content;
   display: inline-flex;
@@ -1068,6 +1075,76 @@ textarea:focus-visible,
   border: 1px solid var(--color-border);
   border-radius: 10px;
   background: var(--color-rail);
+}
+
+.help-hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
+
+.help-hint-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--color-muted);
+  background: transparent;
+  cursor: help;
+}
+
+.help-hint-trigger svg {
+  width: 15px;
+  height: 15px;
+}
+
+.help-hint-trigger:hover,
+.help-hint-trigger:focus-visible {
+  color: var(--color-ink);
+}
+
+.help-hint-text {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 48px));
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-control);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: normal;
+  text-align: left;
+  /* Hidden from pointer and sight until hover, focus, or an explicit click. */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms ease;
+}
+
+.help-hint:hover .help-hint-text,
+.help-hint-trigger:focus-visible + .help-hint-text,
+.help-hint-text--pinned {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Keep the panel inside the viewport when the hint sits near the right edge. */
+@media (max-width: 640px) {
+  .help-hint-text {
+    left: auto;
+    right: 0;
+  }
 }
 
 .agent-profile-target button {
@@ -1132,6 +1209,12 @@ textarea:focus-visible,
   color: var(--color-body);
   font-size: 13px;
   font-weight: 600;
+}
+
+.agent-profile-bindings label > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .agent-profile-editor select {
