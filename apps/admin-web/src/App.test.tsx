@@ -539,6 +539,46 @@ describe("first-run Device overview", () => {
     expect(request.slice(request.indexOf('"fallbacks"'))).not.toContain('"effort"');
   });
 
+  it("keeps Configuration Chat docked while the owner works on another surface", async () => {
+    const user = userEvent.setup();
+    const api = {
+      async deviceEnrollment() {
+        return { grants: [], devices: [] };
+      },
+      async listAuditEvents() {
+        return [];
+      },
+    } as unknown as AdminApi;
+    render(
+      <App
+        api={api}
+        configurationAgentAvailable
+        deviceFleet={{ devices: [firstRunDevice], mainDeviceId: firstRunDevice.deviceId }}
+        initialChatOpen
+        onConfigurationMessage={async () => ({ content: "Ready.", suggestedActions: [] })}
+      />,
+    );
+
+    expect(screen.getByRole("dialog", { name: "Configuration Chat" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "Mac Studio" })).toBeTruthy();
+
+    // Moving to Add Device must neither close the chat nor bounce back to Devices.
+    await user.click(screen.getByRole("button", { name: "Add Device" }));
+    expect(screen.getByRole("dialog", { name: "Configuration Chat" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { level: 1, name: "Mac Studio" })).toBeNull();
+
+    // The chat stays usable from that surface.
+    const composer = screen.getByRole("textbox", { name: "Message Configuration Chat" });
+    await user.type(composer, "Which token does the new Device need?");
+    expect((composer as HTMLTextAreaElement).value).toContain("Which token");
+
+    // Opening the chat from a surface must not navigate away from it either.
+    await user.click(screen.getByRole("button", { name: "Close Configuration Chat" }));
+    await user.click(screen.getByRole("button", { name: "Open Configuration Chat" }));
+    expect(screen.getByRole("dialog", { name: "Configuration Chat" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { level: 1, name: "Mac Studio" })).toBeNull();
+  });
+
   it("opens and closes Configuration Chat with an explicit accessible focus lifecycle", async () => {
     const user = renderApp();
 

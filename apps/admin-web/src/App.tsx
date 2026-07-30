@@ -152,9 +152,14 @@ export function App({
     setUnreadChatMessages((current) => Math.min(current + 1, 99));
   }, []);
 
+  /**
+   * Configuration Chat is rendered outside the section switch, so it stays open
+   * across sections. Opening it must not move the owner away from the surface
+   * they are working on — Join in particular offers its own way in, and sending
+   * the owner back to Devices would discard the enrollment step in progress.
+   */
   function openChat(trigger: HTMLButtonElement): void {
     lastChatTriggerRef.current = trigger;
-    setActiveSection("devices");
     setChatOpen(true);
     setChatFocusRequestId((current) => current + 1);
     setUnreadChatMessages(0);
@@ -179,10 +184,7 @@ export function App({
       setFocusedApprovalId(undefined);
     }
     setActiveSection(section);
-    if (section !== "devices") {
-      setChatOpen(false);
-      setChatExpanded(false);
-    }
+    dismissChatOverlay();
   }
 
   function selectDevice(deviceId: string): void {
@@ -195,9 +197,23 @@ export function App({
 
   function reviewApproval(approvalId: string): void {
     setFocusedApprovalId(approvalId);
-    setChatOpen(false);
-    setChatExpanded(false);
+    dismissChatOverlay();
     setActiveSection("approvals");
+  }
+
+  /**
+   * Frees the surface when the chat is covering it. Expanded chat and the
+   * compact layout both render as a modal over an inert surface, so moving to
+   * another surface has to give it back. A docked panel sits beside the surface
+   * and stays open, which is what lets the owner read the chat while working.
+   */
+  function dismissChatOverlay(): void {
+    if (chatExpanded) {
+      setChatExpanded(false);
+    }
+    if (compactChat) {
+      setChatOpen(false);
+    }
   }
 
   return (
