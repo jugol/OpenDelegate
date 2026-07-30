@@ -27,6 +27,8 @@ import {
   MainSingletonOwnershipError,
   MainRuntimeError,
   resolveRuntimePaths,
+  SERVER_FAILURE_LOG_EVENT,
+  writeServerFailureLog,
   type MainSingletonOwnership,
 } from "../src/index.ts";
 import { createMainTestSecretContext } from "../test-fixtures/main-test-secrets.ts";
@@ -1447,6 +1449,42 @@ class ControllableMainSingletonOwnership implements MainSingletonOwnership {
     }
   }
 }
+
+test("a server-failure log line carries the correlation ID, diagnostic code, and route template", () => {
+  const lines: string[] = [];
+  writeServerFailureLog(
+    "device_main_001",
+    "2026-07-30T12:55:00.000Z",
+    {
+      code: "CONFIGURATION_AGENT_UNAVAILABLE",
+      correlationId: "correlation_2466ea6e-a285-42dd-bb09-a55be518e229",
+      detail: "The Configuration Agent stopped before creating the required owner Approval.",
+      diagnosticCode: "CONFIGURATION_PROPOSAL_APPROVAL_NOT_CREATED",
+      method: "POST",
+      route: "/api/v1/devices/:deviceId/configuration/messages",
+      status: 503,
+    },
+    (line) => {
+      lines.push(line);
+    },
+  );
+
+  assert.equal(lines.length, 1);
+  const line = lines[0] ?? "";
+  assert.equal(line.endsWith("\n"), true);
+  assert.deepEqual(JSON.parse(line), {
+    event: SERVER_FAILURE_LOG_EVENT,
+    occurredAt: "2026-07-30T12:55:00.000Z",
+    deviceId: "device_main_001",
+    code: "CONFIGURATION_AGENT_UNAVAILABLE",
+    correlationId: "correlation_2466ea6e-a285-42dd-bb09-a55be518e229",
+    detail: "The Configuration Agent stopped before creating the required owner Approval.",
+    diagnosticCode: "CONFIGURATION_PROPOSAL_APPROVAL_NOT_CREATED",
+    method: "POST",
+    route: "/api/v1/devices/:deviceId/configuration/messages",
+    status: 503,
+  });
+});
 
 async function createAdminFixture(parent: string): Promise<string> {
   const root = join(parent, "admin-dist");

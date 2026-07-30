@@ -29,6 +29,7 @@ import {
 import type { ApprovalPort, SecureSecretIngestInput } from "../src/index.ts";
 import type { ArtifactAdminPort, AuditAdminPort, DeviceEnrollmentAdminPort } from "../src/index.ts";
 import type { TaskBudgetAdminPort } from "../src/index.ts";
+import type { ServerFailureDiagnostic } from "../src/index.ts";
 
 const ADMIN_ORIGIN = "https://admin.test";
 const ADMIN_HOST = "admin.test";
@@ -966,6 +967,125 @@ test("Configuration Chat is authenticated, Device-scoped, and idempotency-bound"
     assert.equal(secretShapedField.statusCode, 400);
     assert.doesNotMatch(secretShapedField.body, /must-not-cross|secretValue/i);
     assert.equal(calls.length, 2);
+  } finally {
+    await app.close();
+  }
+});
+
+test("an unconnected Configuration Agent runtime reports its readiness code as the diagnostic", async () => {
+  const { ownerAuth } = createAuthFixture();
+  await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+    devices: [MAIN_DEVICE],
+    runtimeFeatures: {
+      declaredReleaseChannel: "development",
+      releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
+      taskExecution: { status: "unavailable", code: "TEST_TASK_UNAVAILABLE" },
+      configurationAgent: {
+        status: "unavailable",
+        code: "CONFIGURATION_AGENT_NOT_CONNECTED",
+      },
+      discord: { status: "unavailable", code: "TEST_DISCORD_UNAVAILABLE" },
+    },
+  });
+
+  try {
+    const send = await app.inject({
+      method: "POST",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "configuration-message-not-connected",
+      },
+      payload: { message: "Change the Coordinator profile." },
+    });
+    assert.equal(send.statusCode, 503);
+    assert.equal(send.json().code, "CONFIGURATION_AGENT_UNAVAILABLE");
+    assert.equal(send.json().diagnosticCode, "CONFIGURATION_AGENT_NOT_CONNECTED");
+  } finally {
+    await app.close();
+  }
+});
+
+test("every 5xx problem reaches the diagnostic sink with its correlation ID and route template", async () => {
+  const { ownerAuth } = createAuthFixture();
+  await claimOwner(ownerAuth);
+  const authenticated = await login(ownerAuth);
+  const failures: ServerFailureDiagnostic[] = [];
+  const app = await createMainControlPlaneApp({
+    ownerAuth,
+    allowedOrigins: [ADMIN_ORIGIN],
+    build: {
+      version: "0.0.0-test",
+      buildId: "commit-404e432",
+    },
+    devices: [MAIN_DEVICE],
+    onServerFailure: (diagnostic) => {
+      failures.push(diagnostic);
+    },
+    runtimeFeatures: {
+      declaredReleaseChannel: "development",
+      releaseChannel: "development",
+      releaseVerification: { status: "not-applicable" },
+      taskExecution: { status: "unavailable", code: "TEST_TASK_UNAVAILABLE" },
+      configurationAgent: { status: "ready", code: "TEST_CONFIGURATION_AGENT_READY" },
+      discord: { status: "unavailable", code: "TEST_DISCORD_UNAVAILABLE" },
+    },
+    configurationAgent: {
+      async sendMessage() {
+        throw new ConfigurationAgentPortError(
+          "CONFIGURATION_AGENT_UNAVAILABLE",
+          "The Configuration Agent stopped before creating the required owner Approval.",
+          "CONFIGURATION_PROPOSAL_APPROVAL_NOT_CREATED",
+        );
+      },
+    },
+  });
+
+  try {
+    const send = await app.inject({
+      method: "POST",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: {
+        ...authenticatedMutationHeaders(authenticated),
+        "idempotency-key": "configuration-message-diagnostic-sink",
+      },
+      payload: { message: "Change the Coordinator profile." },
+    });
+    assert.equal(send.statusCode, 503);
+
+    assert.equal(failures.length, 1);
+    const failure = failures[0];
+    assert.equal(failure?.code, "CONFIGURATION_AGENT_UNAVAILABLE");
+    assert.equal(failure?.diagnosticCode, "CONFIGURATION_PROPOSAL_APPROVAL_NOT_CREATED");
+    assert.equal(failure?.status, 503);
+    assert.equal(failure?.method, "POST");
+    assert.equal(failure?.correlationId, send.json().correlationId);
+    // The route template keeps the Device ID out of the diagnostic record.
+    assert.equal(failure?.route, "/api/v1/devices/:deviceId/configuration/messages");
+    assert.doesNotMatch(failure?.route ?? "", new RegExp(MAIN_DEVICE.deviceId, "u"));
+    assert.equal(
+      failure?.detail,
+      "The Configuration Agent stopped before creating the required owner Approval.",
+    );
+
+    // A rejected 4xx request is an ordinary outcome, not a server failure.
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/v1/devices/${MAIN_DEVICE.deviceId}/configuration/messages`,
+      headers: { host: ADMIN_HOST, "idempotency-key": "configuration-message-rejected" },
+      payload: { message: "Change the Coordinator profile." },
+    });
+    assert.equal(rejected.statusCode, 403);
+    assert.equal(failures.length, 1);
   } finally {
     await app.close();
   }

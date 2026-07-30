@@ -7,6 +7,7 @@ import {
   createMainControlPlaneApp,
   type ConfigurationAgentPort,
   type MainControlPlaneAppOptions,
+  type ServerFailureDiagnostic,
 } from "@opendelegate/control-plane";
 import type { AgentAdapterProbe } from "@opendelegate/agent-adapters";
 import {
@@ -1555,6 +1556,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       allowedOrigins: [configuration.main.origin],
       build: options.build,
       runtimeFeatures,
+      onServerFailure: (diagnostic) => {
+        writeServerFailureLog(configuration.deviceId, clock.asEventClock().now(), diagnostic);
+      },
       deviceDirectory: {
         list: async () => {
           const [mergedMain, ...remoteWorkers] = await listMainOwnedDeviceDirectory();
@@ -3037,6 +3041,31 @@ function legacyDatabaseConfiguration(): MainRuntimeError {
   return new MainRuntimeError(
     "CONFIG_MIGRATION_REQUIRED",
     "This Main configuration uses the retired PostgreSQL uriEnvironment field. Provision the URI in the Device-local Secret Store and replace it with a canonical uriRef such as secret://main/database-primary.",
+  );
+}
+
+export const SERVER_FAILURE_LOG_EVENT = "control-plane.server-failure";
+
+/**
+ * Emits one structured line per 5xx problem response so the correlation ID the
+ * owner sees resolves to the boundary that refused the request. The diagnostic
+ * is already redacted by the Control Plane, so no further filtering applies.
+ */
+export function writeServerFailureLog(
+  deviceId: string,
+  occurredAt: string,
+  diagnostic: ServerFailureDiagnostic,
+  write: (line: string) => void = (line) => {
+    process.stderr.write(line);
+  },
+): void {
+  write(
+    `${JSON.stringify({
+      event: SERVER_FAILURE_LOG_EVENT,
+      occurredAt,
+      deviceId,
+      ...diagnostic,
+    })}\n`,
   );
 }
 
