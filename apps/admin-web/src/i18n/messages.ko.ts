@@ -527,7 +527,7 @@ export const koreanMessages = {
     recommended: "권장",
     agentAssistedTitle: "새 장치의 Agent에게 설치 맡기기",
     agentAssistedDetail:
-      "새 장치에서 Codex 또는 Claude를 여세요. 등록 파일을 받은 뒤 파일 내용이 아닌 로컬 경로와 아래 프롬프트를 Agent에게 전달하세요.",
+      "새 장치에서 Codex 또는 Claude를 여세요. 아래에서 등록 파일을 생성하면 전달용 프롬프트가 함께 표시됩니다. 그 프롬프트와 내려받은 파일의 로컬 경로를 Agent에게 주세요. 파일 내용은 붙여넣지 마세요.",
     agentPromptLabel: "새 장치의 Codex 또는 Claude에게 전달할 프롬프트",
     agentPrompt:
       "이 장치에 https://github.com/jugol/OpenDelegate 저장소의 OpenDelegate Worker를 설치하세요. README와 skills/opendelegate-join/SKILL.md를 따르세요. 열어보지 않은 등록 파일 <absolute-path-to/{filename}>을 사용해 이 장치를 연결하세요. 등록 파일 내용은 출력·붙여넣기·로그 기록하지 마세요. 이 OS의 네이티브 서비스를 설정하고 Main 연결을 검증한 뒤 Admin Web에 장치가 나타나면 보고하세요.",
