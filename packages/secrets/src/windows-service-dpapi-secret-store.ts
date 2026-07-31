@@ -172,12 +172,15 @@ export class WindowsServiceDpapiSecretHandoff {
 
   async #initializeOnce(): Promise<void> {
     await this.#vault.initialize();
-    const input = encodeSidAndPath(this.#serviceSid, this.#vault.rootPath());
+    const handoffPath = this.#vault.rootPath();
+    const input = encodeSidAndPath(this.#serviceSid, handoffPath);
     try {
       const result = await this.#runPowerShell(WINDOWS_HANDOFF_ACL_SCRIPT, input, 0);
       result.stdout.fill(0);
       if (result.exitCode !== 0) {
-        throw backendUnavailable();
+        throw backendUnavailable(
+          `The handoff directory ACL could not be applied at ${handoffPath} (exit ${String(result.exitCode)}). Staging rewrites that directory's access rules so only this account and the service account remain, which requires the staging account to be able to replace its DACL. A directory created directly under a drive root often refuses that even when this account owns it; a location under ProgramData or the user profile normally succeeds.`,
+        );
       }
     } finally {
       input.fill(0);
@@ -213,7 +216,9 @@ export class WindowsServiceDpapiSecretHandoff {
         (mode !== SEALING_MODE_SERVICE_ACCOUNT && mode !== SEALING_MODE_MACHINE)
       ) {
         result.stdout.fill(0);
-        throw storeAccessFailed();
+        throw storeAccessFailed(
+          `Sealing the Secret failed (exit ${String(result.exitCode)}). Neither the service-account nor the machine protection descriptor produced a usable blob.`,
+        );
       }
       const sealed = Buffer.from(result.stdout.subarray(1));
       result.stdout.fill(0);
@@ -628,17 +633,19 @@ function configurationInvalid(): SecretError {
   );
 }
 
-function backendUnavailable(): SecretError {
+function backendUnavailable(detail?: string): SecretError {
   return new SecretError(
     "SECRET_BACKEND_UNAVAILABLE",
     "The Windows service identity or its DPAPI Secret lifecycle is unavailable.",
+    detail,
   );
 }
 
-function storeAccessFailed(): SecretError {
+function storeAccessFailed(detail?: string): SecretError {
   return new SecretError(
     "SECRET_STORE_ACCESS_FAILED",
     "The Windows service Secret handoff could not complete its Device-local operation.",
+    detail,
   );
 }
 

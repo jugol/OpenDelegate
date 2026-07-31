@@ -359,6 +359,7 @@ class WindowsServiceDpapiFixtureRunner implements NativeSecretCommandRunner {
   public serviceIdentityAvailable = true;
   /** 1 seals to the service SID, 2 is the workgroup machine fallback. */
   public sealingMode = 1;
+  public handoffAclAvailable = true;
   readonly #plaintext: Uint8Array;
 
   public constructor(plaintext: Uint8Array) {
@@ -392,7 +393,10 @@ class WindowsServiceDpapiFixtureRunner implements NativeSecretCommandRunner {
       return { exitCode: 0, stdout: Buffer.from(this.#plaintext) };
     }
     if (script.includes("DirectorySecurity")) {
-      return { exitCode: 0, stdout: Buffer.alloc(0) };
+      return {
+        exitCode: this.handoffAclAvailable ? 0 : 44,
+        stdout: Buffer.alloc(0),
+      };
     }
     if (script.includes("OpenDelegate DPAPI probe")) {
       return { exitCode: 0, stdout: Buffer.from("ready") };
@@ -696,6 +700,43 @@ test("the Windows DPAPI adapter never places Secret material in argv or environm
     assert.equal(
       runner.requests.every((request) => request.timeoutMs === 60_000),
       true,
+    );
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+});
+
+test("a refused handoff ACL names the directory and what would satisfy it", async () => {
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-acl-");
+  const sourceCheckoutRoot = join(fixtureRoot, "checkout");
+  const handoffRoot = join(fixtureRoot, "service-handoff");
+  const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
+  const runner = new WindowsServiceDpapiFixtureRunner(Buffer.from("unused", "utf8"));
+  // The host refuses to rewrite the directory's DACL, which is what a path
+  // directly under a drive root does even when this account owns it.
+  runner.handoffAclAvailable = false;
+  const handoff = new WindowsServiceDpapiSecretHandoff({
+    deviceId: "device-windows-acl",
+    handoffRoot,
+    hostPlatform: "win32",
+    powershellPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    runner,
+    serviceSid,
+    sourceCheckoutRoot,
+  });
+
+  try {
+    await assert.rejects(
+      handoff.stage("identity-p256.device-key_0123456789012345678901", Buffer.from("x", "utf8")),
+      (error: unknown) => {
+        assert.ok(error instanceof SecretError);
+        assert.equal(error.code, "SECRET_BACKEND_UNAVAILABLE");
+        // The operator needs the path and a next step, not just a code.
+        assert.match(error.detail ?? "", /handoff directory ACL could not be applied/u);
+        assert.match(error.detail ?? "", /ProgramData/u);
+        assert.ok((error.detail ?? "").includes(handoffRoot));
+        return true;
+      },
     );
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });

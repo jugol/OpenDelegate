@@ -1679,9 +1679,13 @@ export async function prepareWindowsServiceSecretBackend(
     if (error instanceof WorkerAppError) {
       throw error;
     }
+    // The staging boundary is the only place that knows which step refused, so
+    // its detail travels outward instead of being replaced by a generic notice.
     throw appError(
       "SECRET_BACKEND_UNAVAILABLE",
-      "The Windows service Secret handoff did not complete.",
+      error instanceof SecretError && error.detail !== undefined
+        ? `The Windows service Secret handoff did not complete. ${error.detail}`
+        : "The Windows service Secret handoff did not complete.",
     );
   }
 }
