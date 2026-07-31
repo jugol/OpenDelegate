@@ -170,6 +170,12 @@ export const spanishMessages = {
       "Claude: usa --claude-home para reutilizar un directorio de Claude autenticado, o autentica el perfil de Claude administrado por Main en este dispositivo.",
     agentCredentialNote:
       "Las credenciales del proveedor permanecen en este dispositivo. Nunca las pegues en el chat de configuración.",
+    selfReportingTitle: "Este dispositivo informa por sí mismo",
+    selfReportingIntro:
+      "La evaluación es un sondeo local, así que solo se ejecuta en el Main. Un Worker examina sus propios adaptadores, capacidades y estado de Knowledge, y envía el resultado al Main según su propia cadencia: aquí no hay nada que debas activar. Lo que ves en esta página es ese informe.",
+    selfReportingLastObserved: "Último informe recibido el {time}",
+    selfReportingNeverObserved:
+      "Todavía no ha llegado ningún informe autenticado. Aparecerá cuando el Worker se conecte.",
     assessmentScope:
       "La evaluación comprueba Codex, Claude, la automatización del navegador, Computer Use y el Knowledge local sin pedir a un LLM que los deduzca.",
     facts: "Datos del dispositivo",

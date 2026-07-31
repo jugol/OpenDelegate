@@ -164,6 +164,12 @@ export const koreanMessages = {
       "Claude: --claude-home으로 인증된 Claude 설정 디렉터리를 재사용하거나, 이 장치의 Main 관리형 Claude 프로필을 인증하세요.",
     agentCredentialNote:
       "프로바이더 자격 증명은 이 장치에만 남습니다. 환경설정 채팅에는 절대 붙여넣지 마세요.",
+    selfReportingTitle: "이 Device는 스스로 보고합니다",
+    selfReportingIntro:
+      "평가는 로컬에서 직접 검사하는 동작이라 Main에서만 실행됩니다. Worker는 자신의 어댑터·기능·Knowledge 상태를 스스로 확인해 정해진 주기로 Main에 보냅니다. 그래서 여기에는 누를 것이 없습니다. 이 화면에 보이는 정보가 바로 그 보고 내용입니다.",
+    selfReportingLastObserved: "마지막 보고 수신 {time}",
+    selfReportingNeverObserved:
+      "아직 인증된 보고가 도착하지 않았습니다. Worker가 연결되면 표시됩니다.",
     assessmentScope:
       "평가는 LLM의 추측 없이 Codex, Claude, 브라우저 자동화, Computer Use 준비 상태와 로컬 Knowledge 상태를 확인합니다.",
     facts: "장치 정보",

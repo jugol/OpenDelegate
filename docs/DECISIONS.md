@@ -1327,3 +1327,38 @@ not facts that should be inferred from Agent prose.
 receipt or a real, directly reachable Approval—not an orphan proposal. Newly
 generated Configuration responses follow the chosen Admin language, and reopening
 the chat starts at the current end of the durable conversation.
+
+## D-073 — Windows service Secret sealing degrades to the machine on a workgroup host
+
+**Decision:** Staging a Secret for the Windows service identity seals it with a
+DPAPI-NG `SID=` protection descriptor whenever the host can, restricting decryption
+to the service account. A host without a domain KDS root key cannot create that
+descriptor, so staging falls back to a `LOCAL=machine` descriptor rather than
+failing. The handoff directory ACL is unchanged and remains the boundary in both
+cases: it breaks inheritance and admits only the staging account and the service
+account, and staging fails closed if any other allow rule survives.
+
+The descriptor actually used is reported. `stage` returns it, Windows service Secret
+preparation reports the weakest descriptor used across every staged alias, and the
+`windows-service-secret-stage` command prints it with an explicit notice when the
+machine descriptor was used. Preparation that stages nothing because the backend was
+already prepared reports no descriptor at all, because the stored blob does not
+record which one sealed it and a guess would be worse than silence.
+
+**Rationale:** `SID=` sealing needs a domain Key Distribution Service. A workgroup
+Windows PC has none, so `NCryptCreateProtectionDescriptor` returns
+`NTE_ENCRYPTION_FAILURE` and native service installation was impossible on exactly
+the hosts this product targets. Invariant 17 makes OpenDelegate personal-first,
+invariant 5 requires always-on execution without a visible Agent window, and
+invariant 19 puts Windows in the first milestone; requiring domain membership
+contradicts all three. The security loss is bounded because the descriptor was never
+the only boundary — an attacker still needs to read a directory that admits two SIDs,
+and an account able to bypass that ACL can generally impersonate the service account
+anyway.
+
+**Consequence:** A workgroup Windows host can install and run the Worker as a native
+service and survive reboot. On such a host any process that can read the handoff
+directory can decrypt the staged blob, so the owner is told which descriptor was used
+and that joining a domain restores service-account sealing. Unsealing is unchanged:
+`NCryptUnprotectSecret` resolves the descriptor recorded in the blob, so entries
+sealed either way continue to open without migration.

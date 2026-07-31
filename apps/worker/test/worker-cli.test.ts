@@ -302,7 +302,11 @@ class WindowsWorkerSecretFixtureRunner implements NativeSecretCommandRunner {
     }
     const script = request.args.at(-1) ?? "";
     if (script.includes("OpenDelegate Windows service DPAPI-NG protect v1")) {
-      return { exitCode: 0, stdout: Buffer.from("service-handoff-ciphertext") };
+      // Leading byte names the descriptor: 1 seals to the service SID.
+      return {
+        exitCode: 0,
+        stdout: Buffer.concat([Buffer.from([1]), Buffer.from("service-handoff-ciphertext")]),
+      };
     }
     if (script.includes("DirectorySecurity")) {
       return { exitCode: 0, stdout: Buffer.alloc(0) };
@@ -431,15 +435,21 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     });
     const replay = await prepareWindowsServiceSecretBackend(input);
     const exactReplay = await prepareWindowsServiceSecretBackend(input);
-    assert.deepEqual(replay, first);
-    assert.deepEqual(exactReplay, first);
-    assert.deepEqual(first, {
+    // The durable backend is idempotent across every repetition.
+    assert.deepEqual(replay.backend, first.backend);
+    assert.deepEqual(exactReplay.backend, first.backend);
+    assert.deepEqual(first.backend, {
       backend: "windows-service-dpapi",
       handoffRoot,
       serviceName: "OpenDelegate-personal",
       serviceSid,
       vaultRoot: serviceVaultRoot,
     });
+    // Sealing reports what each call observed, so a call that restaged names the
+    // descriptor and a call that staged nothing reports none.
+    assert.equal(first.sealing, "service-account");
+    assert.equal(replay.sealing, "service-account");
+    assert.equal(exactReplay.sealing, undefined);
     assert.equal((await ownerStore.availability(alias)).ready, false);
     const handoff = new WindowsServiceDpapiSecretHandoff({
       deviceId: "device-worker-service",

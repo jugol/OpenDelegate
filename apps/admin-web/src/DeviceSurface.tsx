@@ -130,7 +130,9 @@ export function DeviceSurface({
   return (
     <main className="device-main">
       <DeviceHeader chatOpen={chatOpen} device={device} onConfigure={onConfigure} />
-      {onAssess === undefined ? null : (
+      {onAssess === undefined ? (
+        <SelfReportingDeviceNote device={device} />
+      ) : (
         <LocalAgentSetup
           failed={assessmentFailed}
           onAssess={() => void assessDevice()}
@@ -340,6 +342,43 @@ function NavigationItem({
       <Icon aria-hidden="true" />
       <span>{label}</span>
     </button>
+  );
+}
+
+/**
+ * Explains why a Worker has no assess action. Assessment is a local probe and
+ * exists only for Main; a Worker examines itself and reports on its own
+ * schedule, so the absence of a button is the design rather than a gap.
+ */
+function SelfReportingDeviceNote({
+  device,
+}: {
+  readonly device: DeviceOverviewViewModel;
+}): React.JSX.Element {
+  const { locale, messages } = useAdminI18n();
+  return (
+    <section aria-labelledby="self-reporting-title" className="local-agent-setup">
+      <div className="local-agent-setup__icon">
+        <RefreshCw aria-hidden="true" />
+      </div>
+      <div className="local-agent-setup__copy">
+        <h2 id="self-reporting-title">{messages.device.selfReportingTitle}</h2>
+        <p>{messages.device.selfReportingIntro}</p>
+        <p className="local-agent-setup__note">
+          <ShieldCheck aria-hidden="true" />
+          <span>
+            {device.lastObservation === undefined
+              ? messages.device.selfReportingNeverObserved
+              : formatMessage(messages.device.selfReportingLastObserved, {
+                  time: formatAdminDate(
+                    new Date(device.lastObservation.observedAtMs).toISOString(),
+                    locale,
+                  ),
+                })}
+          </span>
+        </p>
+      </div>
+    </section>
   );
 }
 

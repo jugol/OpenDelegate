@@ -152,6 +152,11 @@ export const simplifiedChineseMessages = {
     claudeSetupGuide:
       "Claude：使用 --claude-home 复用已认证的 Claude 配置目录，或在此设备上认证由 Main 管理的 Claude 配置。",
     agentCredentialNote: "提供商凭据只保留在此设备上。切勿将其粘贴到配置聊天中。",
+    selfReportingTitle: "此设备会自行上报",
+    selfReportingIntro:
+      "评估是在本地直接探测的动作，因此只在 Main 上运行。Worker 会自行检查其适配器、能力和 Knowledge 状态，并按自己的周期发送给 Main，所以这里没有需要你触发的操作。本页显示的信息就是该报告的内容。",
+    selfReportingLastObserved: "最近一次报告接收于 {time}",
+    selfReportingNeverObserved: "尚未收到经过认证的报告。Worker 连接后即会显示。",
     assessmentScope:
       "评估会直接检查 Codex、Claude、浏览器自动化、Computer Use 就绪状态和本地 Knowledge 健康状况，无需 LLM 推测。",
     facts: "设备信息",

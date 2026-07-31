@@ -357,6 +357,8 @@ class WindowsServiceDpapiFixtureRunner implements NativeSecretCommandRunner {
   public readonly requests: NativeSecretCommandRequest[] = [];
   public serviceDpapiUnprotectAvailable = true;
   public serviceIdentityAvailable = true;
+  /** 1 seals to the service SID, 2 is the workgroup machine fallback. */
+  public sealingMode = 1;
   readonly #plaintext: Uint8Array;
 
   public constructor(plaintext: Uint8Array) {
@@ -378,7 +380,13 @@ class WindowsServiceDpapiFixtureRunner implements NativeSecretCommandRunner {
       };
     }
     if (script.includes("OpenDelegate Windows service DPAPI-NG protect v1")) {
-      return { exitCode: 0, stdout: Buffer.from("sealed-service-handoff") };
+      return {
+        exitCode: 0,
+        stdout: Buffer.concat([
+          Buffer.from([this.sealingMode]),
+          Buffer.from("sealed-service-handoff"),
+        ]),
+      };
     }
     if (script.includes("OpenDelegate Windows service DPAPI-NG unprotect v1")) {
       return { exitCode: 0, stdout: Buffer.from(this.#plaintext) };
@@ -694,6 +702,51 @@ test("the Windows DPAPI adapter never places Secret material in argv or environm
   }
 });
 
+test("a workgroup host seals to the machine and says so, and the blob still opens", async () => {
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-workgroup-");
+  const sourceCheckoutRoot = join(fixtureRoot, "checkout");
+  const handoffRoot = join(fixtureRoot, "service-handoff");
+  const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
+  const alias = "identity-p256.device-key_0123456789012345678901";
+  const secret = Buffer.from("workgroup-sealed-device-private-key", "utf8");
+  const runner = new WindowsServiceDpapiFixtureRunner(secret);
+  // No domain KDS root key, so the SID descriptor fails and the script falls
+  // back to the machine descriptor.
+  runner.sealingMode = 2;
+  const handoff = new WindowsServiceDpapiSecretHandoff({
+    deviceId: "device-windows-workgroup",
+    handoffRoot,
+    hostPlatform: "win32",
+    powershellPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    runner,
+    serviceSid,
+    sourceCheckoutRoot,
+  });
+
+  try {
+    assert.deepEqual(await handoff.stage(alias, secret), {
+      status: "staged",
+      sealing: "machine",
+    });
+
+    // The directory ACL is still applied; the descriptor is not the only boundary.
+    assert.equal(
+      runner.requests.some((request) => request.args.at(-1)?.includes("DirectorySecurity")),
+      true,
+    );
+
+    // Unsealing is descriptor-agnostic, so the entry opens without migration.
+    const opened = await handoff.consume(alias);
+    try {
+      assert.deepEqual(Buffer.from(opened), secret);
+    } finally {
+      opened.fill(0);
+    }
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+});
+
 test("a Windows service handoff moves a Secret into service-identity CurrentUser DPAPI", async () => {
   const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-dpapi-");
   const sourceCheckoutRoot = join(fixtureRoot, "checkout");
@@ -725,8 +778,14 @@ test("a Windows service handoff moves a Secret into service-identity CurrentUser
   try {
     await ownerStore.store(alias, secret);
     await ownerStore.executeWithSecretBytes(alias, async (value) => {
-      assert.deepEqual(await handoff.stage(alias, value), { status: "staged" });
-      assert.deepEqual(await handoff.stage(alias, value), { status: "restaged" });
+      assert.deepEqual(await handoff.stage(alias, value), {
+        status: "staged",
+        sealing: "service-account",
+      });
+      assert.deepEqual(await handoff.stage(alias, value), {
+        status: "restaged",
+        sealing: "service-account",
+      });
     });
     assert.equal(
       runner.requests.filter((request) =>

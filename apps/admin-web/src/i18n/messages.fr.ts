@@ -171,6 +171,12 @@ export const frenchMessages = {
       "Claude : utilisez --claude-home pour réutiliser un répertoire Claude authentifié, ou authentifiez le profil Claude géré par Main sur cet appareil.",
     agentCredentialNote:
       "Les identifiants du fournisseur restent sur cet appareil. Ne les collez jamais dans le chat de configuration.",
+    selfReportingTitle: "Cet appareil rend compte de lui-même",
+    selfReportingIntro:
+      "L’évaluation est une sonde locale : elle ne s’exécute donc que sur le Main. Un Worker examine ses propres adaptateurs, capacités et l’état de son Knowledge, puis envoie le résultat au Main à son propre rythme — il n’y a rien à déclencher ici. Ce que vous voyez sur cette page est ce rapport.",
+    selfReportingLastObserved: "Dernier rapport reçu le {time}",
+    selfReportingNeverObserved:
+      "Aucun rapport authentifié n’est encore arrivé. Il apparaîtra dès la connexion du Worker.",
     assessmentScope:
       "L’évaluation vérifie Codex, Claude, l’automatisation du navigateur, Computer Use et l’état du Knowledge local sans demander à un LLM de les déduire.",
     facts: "Informations sur l’appareil",

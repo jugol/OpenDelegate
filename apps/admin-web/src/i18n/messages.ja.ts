@@ -165,6 +165,12 @@ export const japaneseMessages = {
       "Claude: --claude-home で認証済みの Claude 設定ディレクトリを再利用するか、このデバイス上の Main 管理 Claude プロファイルを認証します。",
     agentCredentialNote:
       "プロバイダーの認証情報はこのデバイスにだけ保存されます。設定チャットには貼り付けないでください。",
+    selfReportingTitle: "この Device は自分で報告します",
+    selfReportingIntro:
+      "評価はローカルで直接調べる動作なので Main でのみ実行されます。Worker は自分のアダプター・機能・Knowledge の状態を自ら確認し、決まった間隔で Main に送ります。そのためここに操作するものはありません。この画面に表示されている情報がその報告内容です。",
+    selfReportingLastObserved: "最後の報告を受信 {time}",
+    selfReportingNeverObserved:
+      "認証済みの報告はまだ届いていません。Worker が接続すると表示されます。",
     assessmentScope:
       "評価では LLM に推測させず、Codex、Claude、ブラウザー自動化、Computer Use、ローカル Knowledge の状態を確認します。",
     facts: "デバイス情報",

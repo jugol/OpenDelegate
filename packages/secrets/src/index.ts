@@ -29,6 +29,7 @@ export type {
   WindowsServiceDpapiSecretHandoffConfig,
   WindowsServiceDpapiSecretStoreConfig,
   WindowsServiceSecretHandoffMutation,
+  WindowsServiceSecretSealing,
 } from "./contracts.ts";
 export { InMemorySecretStore } from "./in-memory-secret-store.ts";
 export { LinuxSecretServiceSecretStore } from "./linux-secret-service-secret-store.ts";

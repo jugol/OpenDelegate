@@ -551,11 +551,18 @@ async function run(arguments_: readonly string[]): Promise<void> {
     });
     writeJson({
       event: "worker.windows-service-secret.staged",
-      backend: backend.backend,
-      handoffRoot: backend.handoffRoot,
-      serviceName: backend.serviceName,
-      serviceSid: backend.serviceSid,
-      vaultRoot: backend.vaultRoot,
+      backend: backend.backend.backend,
+      handoffRoot: backend.backend.handoffRoot,
+      serviceName: backend.backend.serviceName,
+      serviceSid: backend.backend.serviceSid,
+      vaultRoot: backend.backend.vaultRoot,
+      ...(backend.sealing === undefined ? {} : { sealing: backend.sealing }),
+      ...(backend.sealing === "machine"
+        ? {
+            sealingNotice:
+              "This computer has no domain key service, so staged Secrets are sealed to the machine instead of the service account. Any process able to read the handoff directory could decrypt them; the directory ACL admits only this account and the service account. Join a domain to restore service-account sealing.",
+          }
+        : {}),
     });
     return;
   }
