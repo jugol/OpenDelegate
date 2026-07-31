@@ -510,6 +510,11 @@ export const englishMessages = {
     unavailable: "Device enrollment is not configured on this Main.",
     loadFailed: "Device enrollment status could not be loaded.",
     deviceId: "Device ID",
+    intent: "Purpose",
+    intentEnroll: "Enrol a new Device",
+    intentRecredential: "Re-credential an existing Device",
+    intentHint:
+      "Re-credentialing replaces the credentials of a Device that already exists, such as one whose certificate expired while it was switched off. It keeps the Device's identity and history and revokes its previous credentials.",
     deviceIdHint: "Use a stable ID containing letters, numbers, dots, underscores, or hyphens.",
     expiry: "Grant lifetime",
     fiveMinutes: "5 minutes",

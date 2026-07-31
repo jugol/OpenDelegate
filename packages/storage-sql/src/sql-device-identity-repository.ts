@@ -5,6 +5,7 @@ import type {
   DeviceIdentityRepository,
   DeviceIdentityRepositorySnapshot,
   DeviceIdentityTransaction,
+  EnrollmentGrantIntent,
   EnrollmentGrantStatus,
   PersistedDeviceCertificate,
   PersistedDeviceIdentity,
@@ -351,6 +352,7 @@ function encodeEnrollmentGrant(value: PersistedEnrollmentGrant): {
   readonly device_id: string;
   readonly expires_at_ms: number;
   readonly grant_id: string;
+  readonly intent: string;
   readonly issued_certificate_serial: string | null;
   readonly protocol_maximum: number;
   readonly protocol_minimum: number;
@@ -365,6 +367,7 @@ function encodeEnrollmentGrant(value: PersistedEnrollmentGrant): {
     device_id: value.deviceId,
     expires_at_ms: value.expiresAt,
     grant_id: value.grantId,
+    intent: value.intent,
     issued_certificate_serial: value.issuedCertificateSerial ?? null,
     protocol_maximum: value.protocolRange.maximum,
     protocol_minimum: value.protocolRange.minimum,
@@ -483,6 +486,7 @@ function decodeEnrollmentGrant(
     deviceId: row.device_id,
     expiresAt: parseInstant(row.expires_at_ms, "Enrollment Grant expiry"),
     grantId: row.grant_id,
+    intent: row.intent as EnrollmentGrantIntent,
     protocolRange: {
       maximum: parseProtocolVersion(row.protocol_maximum, "Protocol maximum"),
       minimum: parseProtocolVersion(row.protocol_minimum, "Protocol minimum"),
@@ -700,6 +704,7 @@ function validateAuditRecord(value: DeviceIdentityAuditRecord, source: Validatio
       "device.enrolled",
       "device.enrollment-grant-issued",
       "device.enrollment-rejected",
+      "device.recredentialed",
       "device.revoked",
       "device.rotation-confirmed",
       "device.rotation-issued",
@@ -731,7 +736,7 @@ function validateAuditRecord(value: DeviceIdentityAuditRecord, source: Validatio
     invalid(source, "Enrollment rejection audit metadata is incomplete.");
   }
   if (
-    value.event === "device.enrolled" &&
+    (value.event === "device.enrolled" || value.event === "device.recredentialed") &&
     (value.grantId === undefined ||
       value.certificateSerial === undefined ||
       value.certificateGeneration === undefined)
@@ -753,6 +758,7 @@ function validateAuditRecord(value: DeviceIdentityAuditRecord, source: Validatio
     "device.enrolled": new Set(["certificateGeneration", "certificateSerial", "grantId"]),
     "device.enrollment-grant-issued": new Set(["grantId"]),
     "device.enrollment-rejected": new Set(["grantId", "rejectionCode"]),
+    "device.recredentialed": new Set(["certificateGeneration", "certificateSerial", "grantId"]),
     "device.revoked": new Set(),
     "device.rotation-confirmed": new Set(["certificateGeneration", "certificateSerial"]),
     "device.rotation-issued": new Set(["certificateGeneration", "certificateSerial"]),

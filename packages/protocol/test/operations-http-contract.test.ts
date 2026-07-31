@@ -31,10 +31,27 @@ test("Device enrollment contracts expose a one-time grant document without accep
     }),
     false,
   );
+  assert.equal(
+    Value.Check(IssueEnrollmentGrantRequestSchema, {
+      deviceId: "device_laptop",
+      expiresInSeconds: 300,
+      intent: "recredential",
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(IssueEnrollmentGrantRequestSchema, {
+      deviceId: "device_laptop",
+      expiresInSeconds: 300,
+      intent: "replace",
+    }),
+    false,
+  );
 
   const summary = {
     grantId: "grant_001",
     deviceId: "device_laptop",
+    intent: "enroll",
     status: "active",
     allowedBootstrapRoles: ["worker"],
     createdAt: NOW,

@@ -56,6 +56,7 @@ export const EnrollmentGrantSummarySchema = Type.Object(
       maxItems: 32,
       uniqueItems: true,
     }),
+    intent: Type.Union([Type.Literal("enroll"), Type.Literal("recredential")]),
     createdAt: Rfc3339InstantSchema,
     expiresAt: Rfc3339InstantSchema,
     consumedAt: Type.Optional(Rfc3339InstantSchema),
@@ -84,6 +85,12 @@ export const IssueEnrollmentGrantRequestSchema = Type.Object(
   {
     deviceId: OpaqueIdSchema,
     expiresInSeconds: Type.Integer({ minimum: 30, maximum: 1_800 }),
+    /**
+     * `recredential` re-issues credentials for a Device that already exists. It
+     * is the only recovery for a Device whose certificate lapsed while offline,
+     * and it is never the default so it cannot be reached by omission.
+     */
+    intent: Type.Optional(Type.Union([Type.Literal("enroll"), Type.Literal("recredential")])),
   },
   {
     additionalProperties: false,

@@ -22,6 +22,7 @@ test("Admin enrollment issues one durable idempotent Worker grant without projec
       grantId: "grant_existing",
       tokenDigest: "digest-must-not-cross-admin",
       deviceId: "device_existing",
+      intent: "enroll" as const,
       allowedBootstrapRoles: ["worker"],
       protocolRange: { minimum: 1, maximum: 1 },
       status: "active" as const,
@@ -55,11 +56,13 @@ test("Admin enrollment issues one durable idempotent Worker grant without projec
           createEnrollmentGrant: async (input: {
             readonly deviceId: string;
             readonly expiresInMs: number;
+            readonly intent?: "enroll" | "recredential";
           }) => {
             issueCalls += 1;
             return {
               grantId: "grant_abcdefghijklmnopqrstuv",
               deviceId: input.deviceId,
+              intent: input.intent ?? ("enroll" as const),
               allowedBootstrapRoles: ["worker"],
               protocolRange: { minimum: 1, maximum: 1 },
               createdAt: NOW_MS,

@@ -276,9 +276,12 @@ export interface EnrollmentChannelEndpoint {
   readonly url: string;
 }
 
+export type EnrollmentGrantIntent = "enroll" | "recredential";
+
 export interface EnrollmentGrantSummary {
   readonly grantId: string;
   readonly deviceId: string;
+  readonly intent: EnrollmentGrantIntent;
   readonly status: EnrollmentGrantStatus;
   readonly allowedBootstrapRoles: readonly string[];
   readonly createdAt: string;
@@ -654,6 +657,7 @@ export interface AdminApi {
   issueEnrollmentGrant(input: {
     readonly deviceId: string;
     readonly expiresInSeconds: number;
+    readonly intent?: EnrollmentGrantIntent;
   }): Promise<IssueEnrollmentGrantResult>;
   listArtifacts(): Promise<readonly ArtifactDetail[]>;
   getArtifact(artifactId: string): Promise<ArtifactDetail>;
@@ -885,6 +889,7 @@ export class BrowserAdminApi implements AdminApi {
   async issueEnrollmentGrant(input: {
     readonly deviceId: string;
     readonly expiresInSeconds: number;
+    readonly intent?: EnrollmentGrantIntent;
   }): Promise<IssueEnrollmentGrantResult> {
     return this.#authenticatedRequest("/api/v1/device-enrollment/grants", {
       body: input,

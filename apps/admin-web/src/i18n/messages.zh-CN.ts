@@ -480,6 +480,11 @@ export const simplifiedChineseMessages = {
     unavailable: "此 Main 尚未配置设备注册。",
     loadFailed: "无法加载设备注册状态。",
     deviceId: "设备 ID",
+    intent: "用途",
+    intentEnroll: "注册新设备",
+    intentRecredential: "为现有设备重新签发凭据",
+    intentHint:
+      "重新签发会替换已存在设备的凭据，例如设备关机期间证书过期的情况。设备的身份和历史记录保持不变，之前的凭据将被吊销。",
     deviceIdHint: "请使用由字母、数字、点、下划线或连字符组成的稳定 ID。",
     expiry: "注册文件有效期",
     fiveMinutes: "5 分钟",

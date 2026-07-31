@@ -511,6 +511,11 @@ export const koreanMessages = {
     unavailable: "이 메인에는 장치 등록 기능이 설정되어 있지 않습니다.",
     loadFailed: "장치 등록 상태를 불러오지 못했습니다.",
     deviceId: "장치 ID",
+    intent: "용도",
+    intentEnroll: "새 장치 등록",
+    intentRecredential: "기존 장치 자격 재발급",
+    intentHint:
+      "재발급은 이미 등록된 장치의 자격 증명을 교체합니다. 꺼져 있는 동안 인증서가 만료된 장치에 사용하세요. 장치의 신원과 기록은 유지되고 이전 자격 증명은 폐기됩니다.",
     deviceIdHint: "문자, 숫자, 마침표, 밑줄 또는 하이픈으로 된 안정적인 ID를 사용하세요.",
     expiry: "등록 파일 유효 시간",
     fiveMinutes: "5분",

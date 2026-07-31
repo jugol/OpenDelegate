@@ -1345,6 +1345,7 @@ test("owner operations routes expose Device enrollment, Artifact metadata, and r
     summary: {
       grantId: "grant_001",
       deviceId: "device_worker",
+      intent: "enroll",
       status: "active",
       allowedBootstrapRoles: ["worker"],
       createdAt: NOW,

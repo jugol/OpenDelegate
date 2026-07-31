@@ -6,6 +6,7 @@ export type {
   DeviceIdentityRepository,
   DeviceIdentityRepositorySnapshot,
   DeviceIdentityTransaction,
+  EnrollmentGrantIntent,
   EnrollmentGrantStatus,
   PersistedDeviceCertificate,
   PersistedDeviceIdentity,

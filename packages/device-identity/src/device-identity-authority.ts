@@ -21,6 +21,7 @@ import type {
   DeviceIdentityRepository,
   DeviceIdentitySecretStore,
   DeviceDiscoveryBootstrap,
+  EnrollmentGrantIntent,
   IdentityClock,
   IdentityRandomSource,
   PersistedDeviceCertificate,
@@ -80,11 +81,14 @@ export interface CreateEnrollmentGrant {
   readonly allowedBootstrapRoles: readonly string[];
   readonly expiresInMs: number;
   readonly protocolRange: ProtocolCompatibilityRange;
+  /** Defaults to `enroll`, so re-credentialing is never reached by omission. */
+  readonly intent?: EnrollmentGrantIntent;
 }
 
 export interface IssuedEnrollmentGrant {
   readonly grantId: string;
   readonly deviceId: string;
+  readonly intent: EnrollmentGrantIntent;
   readonly allowedBootstrapRoles: readonly string[];
   readonly protocolRange: ProtocolCompatibilityRange;
   readonly createdAt: number;
@@ -378,6 +382,7 @@ export class DeviceIdentityAuthority {
     const deviceId = validateDeviceId(request.deviceId);
     const allowedBootstrapRoles = validateBootstrapRoles(request.allowedBootstrapRoles);
     const protocolRange = validateProtocolRange(request.protocolRange);
+    const intent = validateGrantIntent(request.intent);
     if (
       !Number.isSafeInteger(request.expiresInMs) ||
       request.expiresInMs < MINIMUM_GRANT_TTL_MS ||
@@ -425,11 +430,26 @@ export class DeviceIdentityAuthority {
           "The generated Enrollment Grant identifier already exists.",
         );
       }
-      if ((await transaction.getDevice(deviceId)) !== null) {
+      const existing = await transaction.getDevice(deviceId);
+      if (intent === "enroll" && existing !== null) {
         throw new DeviceIdentityError(
           "DEVICE_ALREADY_ENROLLED",
           "The intended Device identity already exists.",
         );
+      }
+      if (intent === "recredential") {
+        if (existing === null) {
+          throw new DeviceIdentityError(
+            "DEVICE_IDENTITY_NOT_FOUND",
+            "Only an existing Device identity can be re-credentialed.",
+          );
+        }
+        if (existing.status !== "active") {
+          throw new DeviceIdentityError(
+            "DEVICE_IDENTITY_NOT_FOUND",
+            "A revoked Device identity cannot be re-credentialed.",
+          );
+        }
       }
 
       const expiresAt = safeTimestampAfter(now, request.expiresInMs);
@@ -437,6 +457,7 @@ export class DeviceIdentityAuthority {
         grantId,
         tokenDigest,
         deviceId,
+        intent,
         allowedBootstrapRoles,
         protocolRange,
         status: "active" as const,
@@ -455,6 +476,7 @@ export class DeviceIdentityAuthority {
       return deepFreeze({
         grantId,
         deviceId,
+        intent,
         allowedBootstrapRoles,
         protocolRange,
         createdAt: now,
@@ -540,7 +562,8 @@ export class DeviceIdentityAuthority {
             ),
           };
         }
-        if ((await transaction.getDevice(deviceId)) !== null) {
+        const existingDevice = await transaction.getDevice(deviceId);
+        if (grant.intent === "enroll" && existingDevice !== null) {
           await transaction.appendAuditRecord({
             auditId: nextAuditId(this.random),
             event: "device.enrollment-rejected",
@@ -557,6 +580,25 @@ export class DeviceIdentityAuthority {
             ),
           };
         }
+        if (grant.intent === "recredential" && existingDevice?.status !== "active") {
+          await transaction.appendAuditRecord({
+            auditId: nextAuditId(this.random),
+            event: "device.enrollment-rejected",
+            occurredAt: now,
+            deviceId,
+            grantId,
+            rejectionCode:
+              existingDevice === null ? "device-not-enrolled" : "device-identity-revoked",
+          });
+          return {
+            ok: false as const,
+            error: new DeviceIdentityError(
+              "DEVICE_IDENTITY_NOT_FOUND",
+              "The Device identity cannot be re-credentialed.",
+            ),
+          };
+        }
+        const generation = (existingDevice?.identityGeneration ?? 0) + 1;
 
         const certificateAuthority = await transaction.getCertificateAuthority();
         if (certificateAuthority === null) {
@@ -632,7 +674,7 @@ export class DeviceIdentityAuthority {
         const certificateRecord: PersistedDeviceCertificate = deepFreeze({
           deviceId,
           serialNumber,
-          generation: 1,
+          generation,
           certificatePem: certificate.toString("pem"),
           publicKeySpkiSha256,
           status: "active" as const,
@@ -640,13 +682,28 @@ export class DeviceIdentityAuthority {
           notAfter: certificateNotAfter,
           issuedAt: now,
         });
+        // Re-credentialing replaces the credential, so every earlier generation is
+        // revoked rather than left to expire. A lost or exposed key must not keep
+        // working alongside the replacement the owner just authorized.
+        for (const superseded of existingDevice === null
+          ? []
+          : await transaction.listDeviceCertificates(deviceId)) {
+          if (superseded.status === "revoked") {
+            continue;
+          }
+          await transaction.saveCertificate({
+            ...superseded,
+            status: "revoked",
+            revokedAt: now,
+          });
+        }
         const deviceRecord: PersistedDeviceIdentity = deepFreeze({
           deviceId,
           status: "active" as const,
-          identityGeneration: 1,
+          identityGeneration: generation,
           allowedBootstrapRoles: grant.allowedBootstrapRoles,
           discovery,
-          createdAt: now,
+          createdAt: existingDevice?.createdAt ?? now,
         });
         await transaction.saveCertificate(certificateRecord);
         await transaction.saveDevice(deviceRecord);
@@ -658,12 +715,12 @@ export class DeviceIdentityAuthority {
         });
         await transaction.appendAuditRecord({
           auditId: nextAuditId(this.random),
-          event: "device.enrolled",
+          event: existingDevice === null ? "device.enrolled" : "device.recredentialed",
           occurredAt: now,
           deviceId,
           grantId,
           certificateSerial: serialNumber,
-          certificateGeneration: 1,
+          certificateGeneration: generation,
         });
 
         return {
@@ -674,7 +731,7 @@ export class DeviceIdentityAuthority {
             certificateAuthorityPem: certificateAuthority.certificatePem,
             serialNumber,
             publicKeySpkiSha256,
-            generation: 1,
+            generation,
             status: "active" as const,
             issuedAt: now,
             notBefore: certificateNotBefore,
@@ -1412,6 +1469,19 @@ function validateBootstrapRoles(values: readonly string[]): readonly string[] {
     );
   }
   return Object.freeze([...roles]);
+}
+
+function validateGrantIntent(value: EnrollmentGrantIntent | undefined): EnrollmentGrantIntent {
+  if (value === undefined || value === "enroll") {
+    return "enroll";
+  }
+  if (value === "recredential") {
+    return "recredential";
+  }
+  throw new DeviceIdentityError(
+    "IDENTITY_CONFIGURATION_INVALID",
+    "The Enrollment Grant intent must be 'enroll' or 'recredential'.",
+  );
 }
 
 function validateProtocolRange(value: ProtocolCompatibilityRange): ProtocolCompatibilityRange {

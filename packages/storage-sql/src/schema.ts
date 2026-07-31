@@ -170,6 +170,7 @@ export interface DeviceEnrollmentGrantsTable {
   readonly grant_id: string;
   readonly token_digest: string;
   readonly device_id: string;
+  readonly intent: string;
   readonly allowed_bootstrap_roles_json: string;
   readonly protocol_minimum: SqlInteger;
   readonly protocol_maximum: SqlInteger;

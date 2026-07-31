@@ -17,6 +17,7 @@ import Database from "better-sqlite3";
 import { Pool } from "pg";
 
 import { SqlOwnerAuthRepository, type SqlMigrationMode } from "../src/index.ts";
+import { REWIND_DEVICE_RECREDENTIALING_SQL } from "./rewind-device-recredentialing.ts";
 
 interface OwnerAuthFixture {
   open(mode: SqlMigrationMode): Promise<SqlOwnerAuthRepository>;
@@ -537,6 +538,7 @@ test("migration 0012 preserves existing auth audit while enabling claim-replacem
   const legacy = new Database(filename);
   try {
     legacy.exec(`
+      ${REWIND_DEVICE_RECREDENTIALING_SQL}
       DROP TRIGGER od_owner_auth_audit_no_update;
       DROP TRIGGER od_owner_auth_audit_no_delete;
       DROP INDEX od_owner_auth_audit_order;
@@ -659,6 +661,10 @@ test("migration 0002 upgrades the released event-store schema through Device cha
       DROP TABLE od_owner_auth_audit;
       DROP TABLE od_owner_credential;
       DROP TABLE od_owner_claim;
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0013_device_recredentialing';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0013_device_recredentialing';
       DELETE FROM od_migration_manifest
         WHERE migration_name = '0012_owner_claim_replacement_audit';
       DELETE FROM od_migration_manifest

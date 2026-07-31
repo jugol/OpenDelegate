@@ -516,6 +516,11 @@ export const japaneseMessages = {
     unavailable: "この Main にはデバイス登録が設定されていません。",
     loadFailed: "デバイス登録の状態を読み込めませんでした。",
     deviceId: "デバイス ID",
+    intent: "用途",
+    intentEnroll: "新しいデバイスを登録",
+    intentRecredential: "既存デバイスの資格情報を再発行",
+    intentHint:
+      "再発行は既存デバイスの資格情報を差し替えます。電源を切っている間に証明書が失効したデバイスに使います。デバイスの識別子と履歴は保持され、以前の資格情報は失効します。",
     deviceIdHint: "英数字、ピリオド、アンダースコア、ハイフンを使った安定した ID にしてください。",
     expiry: "登録ファイルの有効期間",
     fiveMinutes: "5 分",

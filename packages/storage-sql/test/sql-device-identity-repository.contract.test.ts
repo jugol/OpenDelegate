@@ -378,6 +378,10 @@ test("SQLite schema 0 applies every migration and schema 2 upgrades safely throu
         DROP TABLE od_device_identities;
         DROP TABLE od_device_certificate_authority;
         DELETE FROM od_migration_manifest
+          WHERE migration_name = '0013_device_recredentialing';
+        DELETE FROM od_kysely_migration
+          WHERE name = '0013_device_recredentialing';
+        DELETE FROM od_migration_manifest
           WHERE migration_name = '0012_owner_claim_replacement_audit';
         DELETE FROM od_migration_manifest
           WHERE migration_name = '0011_device_observations';
@@ -638,6 +642,7 @@ const ACTIVE_GRANT: PersistedEnrollmentGrant = Object.freeze({
   deviceId: DEVICE_ID,
   expiresAt: NOW + 5 * 60_000,
   grantId: "grant_AAAAAAAAAAAAAAAAAAAAAA",
+  intent: "enroll",
   protocolRange: Object.freeze({ maximum: 3, minimum: 1 }),
   status: "active",
   tokenDigest: createHash("sha256").update(RAW_ENROLLMENT_SECRET).digest("hex"),
