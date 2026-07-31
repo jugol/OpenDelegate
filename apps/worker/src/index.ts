@@ -15,6 +15,7 @@ export {
   loadWorkerConfiguration,
   loadWorkerSecretBackendConfiguration,
   prepareWindowsServiceSecretBackend,
+  restoreWindowsServiceSecretBackend,
   provisionHeadlessLinuxSecretBackend,
   provisionWorkerComputerUseCoreSecrets,
   provisionWorkerSessionHelperOwnerSigningSecret,

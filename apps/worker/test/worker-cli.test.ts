@@ -27,6 +27,7 @@ import {
   loadWorkerSecretBackendConfiguration,
   prepareWindowsServiceSecretBackend,
   provisionHeadlessLinuxSecretBackend,
+  restoreWindowsServiceSecretBackend,
   readWorkerSessionHelperOwnerKeyBinding,
   registerWorkerWorkspace,
   resolveWorkerAgentPermissions,
@@ -283,7 +284,9 @@ test("Worker CLI exposes an explicit Windows service Secret staging boundary", (
 class WindowsWorkerSecretFixtureRunner implements NativeSecretCommandRunner {
   public readonly requests: NativeSecretCommandRequest[] = [];
   readonly #protected = new Map<string, Buffer>();
+  readonly #handoffProtected = new Map<string, Buffer>();
   #protectionSequence = 0;
+  #handoffSequence = 0;
   readonly #serviceSid: string;
 
   public constructor(serviceSid: string) {
@@ -302,11 +305,21 @@ class WindowsWorkerSecretFixtureRunner implements NativeSecretCommandRunner {
     }
     const script = request.args.at(-1) ?? "";
     if (script.includes("OpenDelegate Windows service DPAPI-NG protect v1")) {
+      // stdin is [sidLength][sid][binding(32)][material].
+      const stdin = Buffer.from(request.stdin);
+      const sidLength = stdin.readUInt16LE(0);
+      const material = Buffer.from(stdin.subarray(2 + sidLength + 32));
+      const sealed = Buffer.from(`service-handoff-ciphertext-${++this.#handoffSequence}`, "utf8");
+      this.#handoffProtected.set(sealed.toString("hex"), material);
       // Leading byte names the descriptor: 1 seals to the service SID.
-      return {
-        exitCode: 0,
-        stdout: Buffer.concat([Buffer.from([1]), Buffer.from("service-handoff-ciphertext")]),
-      };
+      return { exitCode: 0, stdout: Buffer.concat([Buffer.from([1]), sealed]) };
+    }
+    if (script.includes("OpenDelegate Windows service DPAPI-NG unprotect v1")) {
+      const sealed = Buffer.from(request.stdin).subarray(32);
+      const material = this.#handoffProtected.get(sealed.toString("hex"));
+      return material === undefined
+        ? { exitCode: 43, stdout: Buffer.alloc(0) }
+        : { exitCode: 0, stdout: Buffer.from(material) };
     }
     if (script.includes("DirectorySecurity")) {
       return { exitCode: 0, stdout: Buffer.alloc(0) };
@@ -480,6 +493,34 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     assert.equal(ownerBinding.alias, WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
     assert.match(ownerBinding.keyId, /^sha256:[0-9a-f]{64}$/u);
     assert.ok(ownerBinding.publicKeySpkiBase64Url.length > 0);
+    // Staging is reversible while the handoff is machine-sealed, so an owner who
+    // cannot finish service installation is not left with an unrunnable Device.
+    const restored = await restoreWindowsServiceSecretBackend({
+      hostPlatform: "win32",
+      paths,
+      powershellPath,
+      runner,
+      vaultRoot: ownerVaultRoot,
+    });
+    assert.equal(restored.backend.backend, "windows-dpapi");
+    assert.equal(restored.backend.vaultRoot, ownerVaultRoot);
+    assert.ok(restored.restoredAliases >= 1);
+    assert.equal((await ownerStore.availability(alias)).ready, true);
+    assert.equal((await loadWorkerConfiguration(paths)).secretBackend.backend, "windows-dpapi");
+    // A Worker that was never staged is refused rather than silently rebound.
+    await assert.rejects(
+      restoreWindowsServiceSecretBackend({
+        hostPlatform: "win32",
+        paths,
+        powershellPath,
+        runner,
+        vaultRoot: ownerVaultRoot,
+      }),
+      (error: unknown) => error instanceof WorkerAppError && error.code === "CONFIG_INVALID",
+    );
+    // Put the staged binding back so the remaining assertions still apply.
+    await prepareWindowsServiceSecretBackend(input);
+
     const persisted = await readFile(paths.configFile, "utf8");
     assert.equal(persisted.includes(secret.toString("utf8")), false);
     assert.equal(

@@ -22,6 +22,7 @@ import {
   loadWorkerSecretBackendConfiguration,
   prepareWindowsServiceSecretBackend,
   provisionHeadlessLinuxSecretBackend,
+  restoreWindowsServiceSecretBackend,
   registerWorkerWorkspace,
   resolveWorkerPaths,
   runPlatformMutationMcpStdioServer,
@@ -51,6 +52,7 @@ export type WorkerCliCommand =
   | "service-host"
   | "status"
   | "version"
+  | "windows-service-secret-restore"
   | "windows-service-secret-stage"
   | "workspace-list"
   | "workspace-register";
@@ -74,6 +76,8 @@ export interface ParsedWorkerArguments {
     readonly instanceId: string;
     readonly vaultRoot: string;
   };
+  /** Foreground vault a staged Worker is returned to. */
+  readonly windowsServiceRestoreVaultRoot?: string;
   readonly workspace?: {
     readonly workspaceId: string;
     readonly alias: string;
@@ -105,6 +109,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "service-host" &&
     command !== "status" &&
     command !== "version" &&
+    command !== "windows-service-secret-restore" &&
     command !== "windows-service-secret-stage" &&
     command !== "workspace-list" &&
     command !== "workspace-register"
@@ -334,6 +339,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   }
   if (
     command !== "secret-backend-provision" &&
+    command !== "windows-service-secret-restore" &&
     command !== "windows-service-secret-stage" &&
     vaultRoot !== undefined
   ) {
@@ -366,6 +372,14 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     throw new WorkerAppError(
       "CONFIG_INVALID",
       "windows-service-secret-stage requires --instance-id, --handoff-root, and --vault-root.",
+    );
+  }
+  // Restoring reads the handoff location from the enrolled configuration, so it
+  // needs only the foreground vault to move the Secrets back into.
+  if (command === "windows-service-secret-restore" && vaultRoot === undefined) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "windows-service-secret-restore requires --vault-root.",
     );
   }
   if (
@@ -451,6 +465,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
             vaultRoot: vaultRoot!,
           },
         }),
+    ...(command !== "windows-service-secret-restore"
+      ? {}
+      : { windowsServiceRestoreVaultRoot: vaultRoot! }),
     ...(command !== "workspace-register"
       ? {}
       : {
@@ -544,6 +561,19 @@ async function run(arguments_: readonly string[]): Promise<void> {
     return;
   }
   const paths = pathsFor(parsed);
+  if (parsed.command === "windows-service-secret-restore") {
+    const restored = await restoreWindowsServiceSecretBackend({
+      paths,
+      vaultRoot: parsed.windowsServiceRestoreVaultRoot!,
+    });
+    writeJson({
+      event: "worker.windows-service-secret.restored",
+      backend: restored.backend.backend,
+      vaultRoot: restored.backend.vaultRoot,
+      restoredAliases: restored.restoredAliases,
+    });
+    return;
+  }
   if (parsed.command === "windows-service-secret-stage") {
     const backend = await prepareWindowsServiceSecretBackend({
       ...parsed.windowsServiceProvisioning!,
@@ -733,6 +763,8 @@ Usage:
     [--credential-name NAME] [--systemd-creds ABSOLUTE_PATH]
   opendelegate worker windows-service-secret-stage
     --instance-id INSTANCE_ID --handoff-root ABSOLUTE_PATH
+    --vault-root ABSOLUTE_PATH [--home <path>]
+  opendelegate worker windows-service-secret-restore
     --vault-root ABSOLUTE_PATH [--home <path>]
   opendelegate worker run [--home <path>]
   opendelegate worker service-host [--home <path>]
