@@ -1500,6 +1500,7 @@ Usage:
   opendelegate device help
   opendelegate device grant --device-id DEVICE_ID --output ABSOLUTE_PATH
     [--home PATH] [--expires-seconds 30..1800] [--role ROLE ...]
+    [--recredential]
   opendelegate init [--home PATH] [--admin-root PATH] [--open]
     [--agent auto|codex|claude|disabled]
     [--codex-home ABSOLUTE_PATH]

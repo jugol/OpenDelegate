@@ -177,6 +177,7 @@ export async function issueDeviceEnrollmentGrantFile(input: {
   readonly instanceId: string;
   readonly mainDeviceId: string;
   readonly deviceId: string;
+  readonly intent?: "enroll" | "recredential";
   readonly allowedBootstrapRoles: readonly string[];
   readonly expiresInMs: number;
   readonly outputPath: string;
@@ -234,6 +235,7 @@ export async function issueDeviceEnrollmentGrantFile(input: {
       deviceId,
       allowedBootstrapRoles: input.allowedBootstrapRoles,
       expiresInMs: input.expiresInMs,
+      ...(input.intent === undefined ? {} : { intent: input.intent }),
       protocolRange: { minimum: PROTOCOL_VERSION, maximum: PROTOCOL_VERSION },
     });
     const document: EnrollmentGrantFileDocument = {
