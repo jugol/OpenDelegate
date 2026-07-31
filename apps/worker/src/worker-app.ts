@@ -1690,6 +1690,144 @@ export async function prepareWindowsServiceSecretBackend(
   }
 }
 
+export interface RestoreWindowsServiceSecretBackendOptions {
+  readonly hostPlatform?: NodeJS.Platform;
+  readonly paths: WorkerPaths;
+  readonly powershellPath?: string;
+  readonly runner?: NativeSecretCommandRunner;
+  readonly vaultRoot: string;
+}
+
+export interface WindowsServiceSecretRestoreResult {
+  readonly backend: Extract<WorkerSecretBackendConfiguration, { backend: "windows-dpapi" }>;
+  readonly restoredAliases: number;
+}
+
+/**
+ * Returns a staged Worker to foreground operation.
+ *
+ * Staging is otherwise one-way: it clears the owner vault and rebinds the
+ * enrollment to the service identity, after which a foreground run fails
+ * because the service Secret Store expects the service account. An owner who
+ * cannot complete service installation would be left with an enrolled Device
+ * that has no way to run at all, and re-enrolling is the only escape.
+ *
+ * This is possible only when the handoff was machine-sealed. A Secret sealed to
+ * the service account cannot be opened by the staging account by design, so
+ * that case fails closed rather than pretending to recover.
+ */
+export async function restoreWindowsServiceSecretBackend(
+  options: RestoreWindowsServiceSecretBackendOptions,
+): Promise<WindowsServiceSecretRestoreResult> {
+  if ((options.hostPlatform ?? process.platform) !== "win32") {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "Windows service Secret restoration is available only on Windows.",
+    );
+  }
+  const configuration = await loadWorkerConfiguration(options.paths);
+  if (configuration.secretBackend.backend !== "windows-service-dpapi") {
+    throw appError(
+      "CONFIG_INVALID",
+      "This Worker is not bound to the Windows service Secret backend, so there is nothing to restore.",
+    );
+  }
+  const vaultRoot = requireExternalProvisioningPath(
+    options.vaultRoot,
+    options.paths.sourceCheckoutRoot,
+    "Foreground Windows DPAPI vault root",
+  );
+  const staged = configuration.secretBackend;
+  if (
+    pathsEqualForCurrentHost(vaultRoot, staged.handoffRoot) ||
+    isWithin(staged.handoffRoot, vaultRoot) ||
+    isWithin(vaultRoot, staged.handoffRoot)
+  ) {
+    throw appError(
+      "CONFIG_PATH_UNSAFE",
+      "The foreground vault must be disjoint from the service handoff.",
+    );
+  }
+
+  const ownerStore = new WindowsDpapiSecretStore({
+    deviceId: configuration.deviceId,
+    hostPlatform: "win32",
+    ...(options.powershellPath === undefined ? {} : { powershellPath: options.powershellPath }),
+    ...(options.runner === undefined ? {} : { runner: options.runner }),
+    sourceCheckoutRoot: options.paths.sourceCheckoutRoot,
+    vaultRoot,
+  });
+  const handoff = new WindowsServiceDpapiSecretHandoff({
+    deviceId: configuration.deviceId,
+    handoffRoot: staged.handoffRoot,
+    hostPlatform: "win32",
+    ...(options.powershellPath === undefined ? {} : { powershellPath: options.powershellPath }),
+    ...(options.runner === undefined ? {} : { runner: options.runner }),
+    serviceSid: staged.serviceSid,
+    sourceCheckoutRoot: options.paths.sourceCheckoutRoot,
+  });
+  const coreAliases = Object.freeze([
+    `${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`,
+    WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
+    WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
+  ]);
+
+  let restoredAliases = 0;
+  try {
+    // Copy first and rebind last, so an interrupted restore leaves the handoff
+    // intact and can simply be run again.
+    for (const alias of coreAliases) {
+      if (!(await handoff.availability(alias)).ready) {
+        continue;
+      }
+      if ((await ownerStore.availability(alias)).ready) {
+        restoredAliases += 1;
+        continue;
+      }
+      const material = await handoff.consume(alias);
+      try {
+        await ownerStore.store(alias, material);
+      } finally {
+        material.fill(0);
+      }
+      restoredAliases += 1;
+    }
+    if (restoredAliases === 0) {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The service handoff holds no restorable Secret for this Worker.",
+      );
+    }
+    const backend = validateSecretBackend({
+      backend: "windows-dpapi",
+      vaultRoot,
+    }) as Extract<WorkerSecretBackendConfiguration, { backend: "windows-dpapi" }>;
+    const updated = validateWorkerConfigurationDocument({
+      ...configuration,
+      secretBackend: backend,
+    });
+    await writeConfiguration(options.paths.configFile, updated);
+    // The handoff copies stay until the rebind is durable; removing them now
+    // keeps a later staging from resuming onto stale material.
+    for (const alias of coreAliases) {
+      if ((await handoff.availability(alias)).ready) {
+        await handoff.delete(alias);
+      }
+    }
+    return { backend, restoredAliases };
+  } catch (error) {
+    if (error instanceof WorkerAppError) {
+      throw error;
+    }
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      error instanceof SecretError && error.detail !== undefined
+        ? `The Windows service Secret restore did not complete. ${error.detail}`
+        : "The Windows service Secret restore did not complete. A handoff sealed to the service account cannot be opened by this account.",
+    );
+  }
+}
+
 export async function loadWorkerSecretBackendConfiguration(
   filenameInput: string,
   sourceCheckoutRootInput: string,
