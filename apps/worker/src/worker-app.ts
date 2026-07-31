@@ -74,6 +74,7 @@ import {
   type NativeSecretCommandRunner,
   type PlatformManagedSecretStoreConfig,
   SecretError,
+  type WindowsServiceSecretSealing,
 } from "@opendelegate/secrets";
 import { LocalRunCapabilityBroker } from "@opendelegate/run-capability-broker";
 import {
@@ -367,6 +368,20 @@ export interface PrepareWindowsServiceSecretBackendOptions {
   readonly scPath?: string;
   readonly vaultRoot: string;
 }
+
+/**
+ * The staged backend plus the descriptor that actually sealed it, so the owner
+ * learns when a host could not restrict decryption to the service account.
+ * Sealing is absent when this call staged nothing because the backend was
+ * already prepared — the descriptor used then is not recoverable from the
+ * stored blob, and reporting a guess would be worse than reporting nothing.
+ */
+export type WindowsServiceSecretBackendPreparation = Extract<
+  WorkerSecretBackendConfiguration,
+  { backend: "windows-service-dpapi" }
+> & {
+  readonly sealing?: WindowsServiceSecretSealing;
+};
 
 export interface WorkerRuntimeComposition {
   readonly configuration: WorkerConfigurationDocument;
@@ -1501,7 +1516,7 @@ export async function provisionHeadlessLinuxSecretBackend(
 
 export async function prepareWindowsServiceSecretBackend(
   options: PrepareWindowsServiceSecretBackendOptions,
-): Promise<Extract<WorkerSecretBackendConfiguration, { backend: "windows-service-dpapi" }>> {
+): Promise<WindowsServiceSecretBackendPreparation> {
   if ((options.hostPlatform ?? process.platform) !== "win32") {
     throw appError(
       "SECRET_BACKEND_UNAVAILABLE",
@@ -1610,6 +1625,9 @@ export async function prepareWindowsServiceSecretBackend(
     WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
     WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
   ]);
+  // Starts at the strongest descriptor and degrades only if the host cannot
+  // seal to the service account.
+  let sealing: WindowsServiceSecretSealing = "service-account";
   try {
     // The logged-in session helper owns this key. It intentionally remains in
     // the owner DPAPI vault and is never staged for or opened by the service.
@@ -1622,7 +1640,12 @@ export async function prepareWindowsServiceSecretBackend(
       const handoffReady = (await handoff.availability(alias)).ready;
       if (sourceReady) {
         await ownerStore.executeWithSecretBytes(alias, async (value) => {
-          await handoff.stage(alias, value);
+          const staged = await handoff.stage(alias, value);
+          // A single machine-sealed entry weakens the whole handoff, so the
+          // weakest sealing used is what the owner is told about.
+          if (staged.sealing === "machine") {
+            sealing = "machine";
+          }
         });
       } else if (!handoffReady) {
         throw appError(
@@ -1652,7 +1675,7 @@ export async function prepareWindowsServiceSecretBackend(
       secretBackend: target,
     });
     await writeConfiguration(options.paths.configFile, updated);
-    return target;
+    return { ...target, sealing };
   } catch (error) {
     if (error instanceof WorkerAppError) {
       throw error;

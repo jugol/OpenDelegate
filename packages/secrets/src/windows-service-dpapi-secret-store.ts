@@ -11,6 +11,7 @@ import type {
   WindowsServiceDpapiSecretHandoffConfig,
   WindowsServiceDpapiSecretStoreConfig,
   WindowsServiceSecretHandoffMutation,
+  WindowsServiceSecretSealing,
 } from "./contracts.ts";
 import { NodeNativeSecretCommandRunner } from "./native-secret-command.ts";
 import { SecureFileVault } from "./secure-file-vault.ts";
@@ -22,6 +23,10 @@ const DEFAULT_MAXIMUM_SECRET_BYTES = 1_048_576;
 const NATIVE_OVERHEAD_BYTES = 65_536;
 const COMMAND_TIMEOUT_MS = 60_000;
 const BINDING_BYTES = 32;
+/** Sealed by a SID descriptor, readable only by the service account. */
+const SEALING_MODE_SERVICE_ACCOUNT = 1;
+/** Sealed by a machine descriptor because no domain KDS root key exists. */
+const SEALING_MODE_MACHINE = 2;
 const ALLOWED_WINDOWS_ENVIRONMENT = new Set(["COMSPEC", "SYSTEMROOT", "WINDIR"]);
 
 export interface ResolveWindowsServiceSidOptions {
@@ -122,17 +127,17 @@ export class WindowsServiceDpapiSecretHandoff {
     const alreadyStaged = await this.#vault.has(alias);
     const material = copySecretMaterial(value, this.#maximumSecretBytes);
     try {
-      const protectedValue = await this.#protect(alias, material);
+      const { sealed, sealing } = await this.#protect(alias, material);
       try {
         if (alreadyStaged) {
-          await this.#vault.replace(alias, protectedValue);
+          await this.#vault.replace(alias, sealed);
         } else {
-          await this.#vault.create(alias, protectedValue);
+          await this.#vault.create(alias, sealed);
         }
       } finally {
-        protectedValue.fill(0);
+        sealed.fill(0);
       }
-      return Object.freeze({ status: alreadyStaged ? "restaged" : "staged" });
+      return Object.freeze({ status: alreadyStaged ? "restaged" : "staged", sealing });
     } finally {
       material.fill(0);
     }
@@ -179,7 +184,10 @@ export class WindowsServiceDpapiSecretHandoff {
     }
   }
 
-  async #protect(alias: string, material: Uint8Array): Promise<Buffer> {
+  async #protect(
+    alias: string,
+    material: Uint8Array,
+  ): Promise<{ readonly sealed: Buffer; readonly sealing: WindowsServiceSecretSealing }> {
     const serviceSid = Buffer.from(this.#serviceSid, "utf8");
     const binding = this.#binding(alias);
     const input = Buffer.allocUnsafe(
@@ -197,11 +205,22 @@ export class WindowsServiceDpapiSecretHandoff {
         input,
         this.#maximumSecretBytes + NATIVE_OVERHEAD_BYTES,
       );
-      if (result.exitCode !== 0 || result.stdout.byteLength === 0) {
+      // The first byte names the descriptor that actually sealed the blob.
+      const mode = result.stdout[0];
+      if (
+        result.exitCode !== 0 ||
+        result.stdout.byteLength <= 1 ||
+        (mode !== SEALING_MODE_SERVICE_ACCOUNT && mode !== SEALING_MODE_MACHINE)
+      ) {
         result.stdout.fill(0);
         throw storeAccessFailed();
       }
-      return result.stdout;
+      const sealed = Buffer.from(result.stdout.subarray(1));
+      result.stdout.fill(0);
+      return {
+        sealed,
+        sealing: mode === SEALING_MODE_SERVICE_ACCOUNT ? "service-account" : "machine",
+      };
     } finally {
       input.fill(0);
     }
@@ -419,9 +438,21 @@ const DPAPI_NG_PROTECT_SCRIPT = [
   "$payload=New-Object byte[] ($all.Length-2-$sidLength)",
   "[Array]::Copy($all,2+$sidLength,$payload,0,$payload.Length)",
   "$sealed=$null",
+  "$mode=0",
+  "try{",
+  // A SID descriptor needs a domain KDS root key. A workgroup host has none and
+  // fails closed with NTE_ENCRYPTION_FAILURE, so fall back to machine sealing
+  // and report which one was used. The directory ACL, not the descriptor, is
+  // what keeps other local accounts away from the staged blob.
   "try{",
   "$sealed=[OpenDelegateDpapiNg]::Protect(('SID='+$sid),$payload)",
+  "$mode=1",
+  "}catch{",
+  "$sealed=[OpenDelegateDpapiNg]::Protect('LOCAL=machine',$payload)",
+  "$mode=2",
+  "}",
   "$output=[Console]::OpenStandardOutput()",
+  "$output.Write([byte[]]@($mode),0,1)",
   "$output.Write($sealed,0,$sealed.Length)",
   "}finally{",
   "[Array]::Clear($all,0,$all.Length)",

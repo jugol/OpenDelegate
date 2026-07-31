@@ -162,6 +162,12 @@ export const englishMessages = {
       "Claude: pass --claude-home to reuse an authenticated Claude config directory, or authenticate the Main-managed Claude profile on this Device.",
     agentCredentialNote:
       "Provider credentials stay on this Device. Never paste them into Configuration Chat.",
+    selfReportingTitle: "This Device reports on itself",
+    selfReportingIntro:
+      "Assessment is a local probe, so it runs only on Main. A Worker examines its own adapters, capabilities, and Knowledge health and sends the result to Main on its own schedule — there is nothing here for you to trigger. What you see on this page is that report.",
+    selfReportingLastObserved: "Last report received {time}",
+    selfReportingNeverObserved:
+      "No authenticated report has arrived yet. It appears once the Worker connects.",
     assessmentScope:
       "Assessment checks Codex, Claude, browser automation, Computer Use readiness, and local Knowledge health without asking an LLM to infer them.",
     facts: "Device facts",

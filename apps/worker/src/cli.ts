@@ -556,6 +556,13 @@ async function run(arguments_: readonly string[]): Promise<void> {
       serviceName: backend.serviceName,
       serviceSid: backend.serviceSid,
       vaultRoot: backend.vaultRoot,
+      ...(backend.sealing === undefined ? {} : { sealing: backend.sealing }),
+      ...(backend.sealing === "machine"
+        ? {
+            sealingNotice:
+              "This computer has no domain key service, so staged Secrets are sealed to the machine instead of the service account. Any process able to read the handoff directory could decrypt them; the directory ACL admits only this account and the service account. Join a domain to restore service-account sealing.",
+          }
+        : {}),
     });
     return;
   }

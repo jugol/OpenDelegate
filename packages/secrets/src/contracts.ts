@@ -139,8 +139,20 @@ export interface WindowsServiceDpapiSecretHandoffConfig {
   readonly sourceCheckoutRoot: string;
 }
 
+/**
+ * Which DPAPI-NG protection descriptor sealed a staged Secret.
+ *
+ * `service-account` restricts decryption to the service account itself. It
+ * needs a domain KDS root key, which a workgroup host does not have, so those
+ * hosts fall back to `machine`: any process on the same computer could decrypt
+ * the blob if it could read it, leaving the handoff directory ACL as the
+ * boundary that keeps other local accounts out.
+ */
+export type WindowsServiceSecretSealing = "machine" | "service-account";
+
 export interface WindowsServiceSecretHandoffMutation {
   readonly status: "restaged" | "staged";
+  readonly sealing: WindowsServiceSecretSealing;
 }
 
 export interface MacOsKeychainSecretStoreConfig {
