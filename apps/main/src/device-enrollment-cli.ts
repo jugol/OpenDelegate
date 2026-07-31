@@ -36,6 +36,7 @@ export type ParsedDeviceEnrollmentArguments =
       readonly deviceId: string;
       readonly outputPath: string;
       readonly expiresInMs: number;
+      readonly intent: "enroll" | "recredential";
       readonly allowedBootstrapRoles: readonly string[];
     };
 
@@ -69,9 +70,19 @@ export function parseDeviceEnrollmentArguments(
   let deviceId: string | undefined;
   let outputPath: string | undefined;
   let expiresInSeconds = DEFAULT_GRANT_TTL_SECONDS;
+  let intent: "enroll" | "recredential" = "enroll";
   const roles: string[] = [];
   for (let index = 1; index < values.length; index += 1) {
     const option = values[index];
+    // A valueless flag, because re-credentialing an existing Device must be asked
+    // for outright rather than selected from a list of otherwise similar words.
+    if (option === "--recredential") {
+      if (intent === "recredential") {
+        throw argumentInvalid("--recredential may be supplied only once.");
+      }
+      intent = "recredential";
+      continue;
+    }
     if (
       option !== "--home" &&
       option !== "--device-id" &&
@@ -141,6 +152,7 @@ export function parseDeviceEnrollmentArguments(
     deviceId,
     outputPath,
     expiresInMs: expiresInSeconds * 1_000,
+    intent,
     allowedBootstrapRoles: Object.freeze([...allowedBootstrapRoles]),
   });
 }
@@ -206,6 +218,7 @@ export async function runDeviceEnrollmentCommand(
         instanceId: source.configuration.instanceId,
         mainDeviceId: source.configuration.deviceId,
         deviceId: command.deviceId,
+        intent: command.intent,
         allowedBootstrapRoles: command.allowedBootstrapRoles,
         expiresInMs: command.expiresInMs,
         outputPath: command.outputPath,
@@ -275,11 +288,17 @@ export function deviceEnrollmentHelpText(): string {
 Usage:
   opendelegate device grant --device-id DEVICE_ID --output ABSOLUTE_PATH
     [--home PATH] [--expires-seconds 30..1800] [--role ROLE ...]
+    [--recredential]
 
 The command writes one exclusive mode-0600 Enrollment Grant file outside the source
 checkout. The single-use token is generated internally and is never accepted on the
 command line or printed to stdout. The default lifetime is 300 seconds and the
 default bootstrap Role is "worker".
+
+Without --recredential the grant enrolls a Device ID that has never been used.
+--recredential re-issues credentials for a Device that already exists, which is the
+only way back for a Device whose certificate lapsed while it was offline. It keeps
+the Device's identity and history and revokes its previous certificates.
 `;
 }
 

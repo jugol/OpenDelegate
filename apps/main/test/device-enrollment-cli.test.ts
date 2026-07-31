@@ -42,8 +42,37 @@ test("CLI accepts secret-free Main Device channel setup and a bounded owner gran
     deviceId: "device-worker-nas",
     outputPath: output,
     expiresInMs: 45_000,
+    intent: "enroll",
     allowedBootstrapRoles: ["worker", "storage"],
   });
+});
+
+test("a grant re-credentials an existing Device only when the owner asks outright", () => {
+  const output = join(tmpdir(), "worker.enrollment.json");
+  const base = ["device", "grant", "--device-id", "Windows_5090", "--output", output];
+
+  const parsed = parseArguments([...base, "--recredential"]);
+  assert.deepEqual(parsed.device, {
+    command: "grant",
+    deviceId: "Windows_5090",
+    outputPath: output,
+    expiresInMs: 300_000,
+    intent: "recredential",
+    allowedBootstrapRoles: ["worker"],
+  });
+
+  // Omission cannot reach re-credentialing, and the flag takes no value that a
+  // stray argument could be swallowed into.
+  assert.equal((parseArguments(base).device as { readonly intent: string }).intent, "enroll");
+  assert.throws(() => parseArguments([...base, "--recredential", "--recredential"]), /only once/u);
+  assert.deepEqual(
+    (
+      parseArguments([...base, "--recredential", "--role", "storage"]).device as {
+        readonly allowedBootstrapRoles: readonly string[];
+      }
+    ).allowedBootstrapRoles,
+    ["storage"],
+  );
 });
 
 test("CLI rejects grant secrets, unsafe lifetimes, relative output, and serve-time source replacement", () => {
