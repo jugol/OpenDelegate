@@ -370,18 +370,17 @@ export interface PrepareWindowsServiceSecretBackendOptions {
 }
 
 /**
- * The staged backend plus the descriptor that actually sealed it, so the owner
- * learns when a host could not restrict decryption to the service account.
- * Sealing is absent when this call staged nothing because the backend was
- * already prepared — the descriptor used then is not recoverable from the
- * stored blob, and reporting a guess would be worse than reporting nothing.
+ * The durable backend, which is idempotent across repeated preparation, plus
+ * what this particular call observed while sealing.
+ *
+ * Sealing is absent when the call staged nothing because the backend was
+ * already prepared: the stored blob does not record which descriptor sealed it,
+ * and reporting a guess would be worse than reporting nothing.
  */
-export type WindowsServiceSecretBackendPreparation = Extract<
-  WorkerSecretBackendConfiguration,
-  { backend: "windows-service-dpapi" }
-> & {
+export interface WindowsServiceSecretBackendPreparation {
+  readonly backend: Extract<WorkerSecretBackendConfiguration, { backend: "windows-service-dpapi" }>;
   readonly sealing?: WindowsServiceSecretSealing;
-};
+}
 
 export interface WorkerRuntimeComposition {
   readonly configuration: WorkerConfigurationDocument;
@@ -1581,7 +1580,7 @@ export async function prepareWindowsServiceSecretBackend(
         "The enrolled Worker is already bound to a different Windows service Secret backend.",
       );
     }
-    return target;
+    return { backend: target };
   }
   if (configuration.secretBackend.backend !== "windows-dpapi") {
     throw appError(
@@ -1675,7 +1674,7 @@ export async function prepareWindowsServiceSecretBackend(
       secretBackend: target,
     });
     await writeConfiguration(options.paths.configFile, updated);
-    return { ...target, sealing };
+    return { backend: target, sealing };
   } catch (error) {
     if (error instanceof WorkerAppError) {
       throw error;

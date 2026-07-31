@@ -551,11 +551,11 @@ async function run(arguments_: readonly string[]): Promise<void> {
     });
     writeJson({
       event: "worker.windows-service-secret.staged",
-      backend: backend.backend,
-      handoffRoot: backend.handoffRoot,
-      serviceName: backend.serviceName,
-      serviceSid: backend.serviceSid,
-      vaultRoot: backend.vaultRoot,
+      backend: backend.backend.backend,
+      handoffRoot: backend.backend.handoffRoot,
+      serviceName: backend.backend.serviceName,
+      serviceSid: backend.backend.serviceSid,
+      vaultRoot: backend.backend.vaultRoot,
       ...(backend.sealing === undefined ? {} : { sealing: backend.sealing }),
       ...(backend.sealing === "machine"
         ? {
