@@ -22,10 +22,18 @@ export type SecretErrorCode =
 
 export class SecretError extends Error {
   public readonly code: SecretErrorCode;
+  /**
+   * Names the boundary that refused and what would satisfy it. The code alone
+   * cannot distinguish, say, a directory whose ACL cannot be rewritten from a
+   * native command that failed, which leaves an operator with nothing to act on.
+   * Only host-side facts belong here — never Secret material.
+   */
+  public readonly detail: string | undefined;
 
-  public constructor(code: SecretErrorCode, message: string) {
+  public constructor(code: SecretErrorCode, message: string, detail?: string) {
     super(message);
     this.name = "SecretError";
     this.code = code;
+    this.detail = detail;
   }
 }
