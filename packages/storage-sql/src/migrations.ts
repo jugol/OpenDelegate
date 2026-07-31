@@ -20,6 +20,7 @@ const MIGRATION_0009_NAME = "0009_action_authorizations";
 const MIGRATION_0010_NAME = "0010_artifact_index_state";
 const MIGRATION_0011_NAME = "0011_device_observations";
 const MIGRATION_0012_NAME = "0012_owner_claim_replacement_audit";
+const MIGRATION_0013_NAME = "0013_device_recredentialing";
 
 const MIGRATION_0001_SQL: Readonly<Record<SqlBackend, readonly string[]>> = {
   sqlite: [
@@ -1482,6 +1483,115 @@ const MIGRATION_0012_CHECKSUM = createHash("sha256")
   )
   .digest("hex");
 
+const MIGRATION_0013_SQL: Readonly<Record<SqlBackend, readonly string[]>> = {
+  sqlite: [
+    // Grants issued before re-credentialing existed could only ever create a new
+    // Device identity, so they carry the enroll intent forward unchanged.
+    `ALTER TABLE od_device_enrollment_grants
+      ADD COLUMN intent TEXT NOT NULL DEFAULT 'enroll'
+      CHECK (intent IN ('enroll', 'recredential'))`,
+    `DROP TRIGGER od_device_identity_audit_no_update`,
+    `DROP TRIGGER od_device_identity_audit_no_delete`,
+    `DROP INDEX od_device_identity_audit_order`,
+    `ALTER TABLE od_device_identity_audit
+      RENAME TO od_device_identity_audit_0013_previous`,
+    `CREATE TABLE od_device_identity_audit (
+      audit_id TEXT PRIMARY KEY
+        CHECK (length(audit_id) BETWEEN 1 AND 200 AND audit_id = trim(audit_id)),
+      event_name TEXT NOT NULL CHECK (
+        event_name IN (
+          'device.enrolled',
+          'device.enrollment-grant-issued',
+          'device.enrollment-rejected',
+          'device.recredentialed',
+          'device.revoked',
+          'device.rotation-confirmed',
+          'device.rotation-issued'
+        )
+      ),
+      occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms >= 0),
+      device_id TEXT NOT NULL
+        CHECK (length(device_id) BETWEEN 1 AND 128 AND device_id = trim(device_id)),
+      grant_id TEXT,
+      certificate_serial TEXT,
+      certificate_generation INTEGER CHECK (
+        certificate_generation IS NULL OR certificate_generation > 0
+      ),
+      rejection_code TEXT CHECK (
+        rejection_code IS NULL
+        OR (
+          length(rejection_code) BETWEEN 1 AND 128
+          AND rejection_code = trim(rejection_code)
+        )
+      )
+    ) STRICT`,
+    `INSERT INTO od_device_identity_audit (
+      audit_id,
+      event_name,
+      occurred_at_ms,
+      device_id,
+      grant_id,
+      certificate_serial,
+      certificate_generation,
+      rejection_code
+    )
+    SELECT
+      audit_id,
+      event_name,
+      occurred_at_ms,
+      device_id,
+      grant_id,
+      certificate_serial,
+      certificate_generation,
+      rejection_code
+    FROM od_device_identity_audit_0013_previous`,
+    `DROP TABLE od_device_identity_audit_0013_previous`,
+    `CREATE INDEX od_device_identity_audit_order
+      ON od_device_identity_audit (occurred_at_ms, audit_id)`,
+    `CREATE TRIGGER od_device_identity_audit_no_update
+      BEFORE UPDATE ON od_device_identity_audit
+      BEGIN
+        SELECT RAISE(ABORT, 'device identity audit is append-only');
+      END`,
+    `CREATE TRIGGER od_device_identity_audit_no_delete
+      BEFORE DELETE ON od_device_identity_audit
+      BEGIN
+        SELECT RAISE(ABORT, 'device identity audit is append-only');
+      END`,
+  ],
+  postgres: [
+    `ALTER TABLE od_device_enrollment_grants
+      ADD COLUMN intent TEXT NOT NULL DEFAULT 'enroll'`,
+    `ALTER TABLE od_device_enrollment_grants
+      ADD CONSTRAINT od_device_enrollment_grants_intent_check CHECK (
+        intent IN ('enroll', 'recredential')
+      )`,
+    `ALTER TABLE od_device_identity_audit
+      DROP CONSTRAINT od_device_identity_audit_event_name_check`,
+    `ALTER TABLE od_device_identity_audit
+      ADD CONSTRAINT od_device_identity_audit_event_name_check CHECK (
+        event_name IN (
+          'device.enrolled',
+          'device.enrollment-grant-issued',
+          'device.enrollment-rejected',
+          'device.recredentialed',
+          'device.revoked',
+          'device.rotation-confirmed',
+          'device.rotation-issued'
+        )
+      )`,
+  ],
+};
+
+const MIGRATION_0013_CHECKSUM = createHash("sha256")
+  .update(
+    JSON.stringify({
+      name: MIGRATION_0013_NAME,
+      sql: MIGRATION_0013_SQL,
+    }),
+  )
+  .digest("hex");
+
 const MIGRATION_MANIFEST = Object.freeze([
   Object.freeze({
     name: MIGRATION_0001_NAME,
@@ -1530,6 +1640,10 @@ const MIGRATION_MANIFEST = Object.freeze([
   Object.freeze({
     name: MIGRATION_0012_NAME,
     checksum: MIGRATION_0012_CHECKSUM,
+  }),
+  Object.freeze({
+    name: MIGRATION_0013_NAME,
+    checksum: MIGRATION_0013_CHECKSUM,
   }),
 ]);
 
@@ -1645,6 +1759,7 @@ function createMigrator(
       [MIGRATION_0010_NAME]: createMigration0010(backend),
       [MIGRATION_0011_NAME]: createMigration0011(backend),
       [MIGRATION_0012_NAME]: createMigration0012(backend),
+      [MIGRATION_0013_NAME]: createMigration0013(backend),
     }),
   };
 
@@ -1856,6 +1971,23 @@ function createMigration0012(backend: SqlBackend): Migration {
         .values({
           checksum_sha256: MIGRATION_0012_CHECKSUM,
           migration_name: MIGRATION_0012_NAME,
+        })
+        .execute();
+    },
+  };
+}
+
+function createMigration0013(backend: SqlBackend): Migration {
+  return {
+    up: async (database) => {
+      for (const statement of MIGRATION_0013_SQL[backend]) {
+        await sql.raw(statement).execute(database);
+      }
+      await database
+        .insertInto("od_migration_manifest")
+        .values({
+          checksum_sha256: MIGRATION_0013_CHECKSUM,
+          migration_name: MIGRATION_0013_NAME,
         })
         .execute();
     },

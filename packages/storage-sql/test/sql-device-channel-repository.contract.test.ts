@@ -16,6 +16,7 @@ import Database from "better-sqlite3";
 import { Pool } from "pg";
 
 import { SqlDeviceChannelRepository, type SqlMigrationMode } from "../src/index.ts";
+import { REWIND_DEVICE_RECREDENTIALING_SQL } from "./rewind-device-recredentialing.ts";
 
 interface ChannelRepositoryFixture {
   open(mode: SqlMigrationMode): Promise<DeviceChannelRepository>;
@@ -245,6 +246,7 @@ test("SQLite migration backfills the pre-journal Device inbox as handled", async
     const legacy = new Database(filename);
     try {
       legacy.exec(`
+        ${REWIND_DEVICE_RECREDENTIALING_SQL}
         DROP TABLE od_device_observation_latest;
         DROP TABLE od_device_observation_events;
         DROP TABLE od_artifact_index_state;

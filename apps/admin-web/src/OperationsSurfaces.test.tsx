@@ -38,6 +38,7 @@ const issued: IssueEnrollmentGrantResult = {
   summary: {
     grantId: "grant_001",
     deviceId: "device_worker",
+    intent: "enroll",
     status: "active",
     allowedBootstrapRoles: ["worker"],
     createdAt: NOW,
@@ -148,6 +149,7 @@ describe("owner operations surfaces", () => {
       expect(api.issueEnrollmentGrant).toHaveBeenCalledWith({
         deviceId: "device_worker",
         expiresInSeconds: 300,
+        intent: "enroll",
       });
     });
     expect(await screen.findByRole("heading", { name: "Grant ready to download" })).toBeTruthy();
@@ -193,6 +195,34 @@ describe("owner operations surfaces", () => {
       deviceId.closest(".join-field")?.querySelector("label[for='join-device-id']"),
     ).not.toBeNull();
     expect(expiry.closest(".join-field")?.querySelector("label[for='join-expiry']")).not.toBeNull();
+  });
+
+  it("asks for re-credentialing explicitly so an existing Device is never replaced by omission", async () => {
+    const user = userEvent.setup();
+    const api = {
+      deviceEnrollment: vi.fn().mockResolvedValue(enrollment),
+      issueEnrollmentGrant: vi.fn().mockResolvedValue(issued),
+    } satisfies Pick<AdminApi, "deviceEnrollment" | "issueEnrollmentGrant">;
+
+    render(<JoinSurface api={api} />);
+
+    const purpose = (await screen.findByLabelText("Purpose")) as HTMLSelectElement;
+    expect(purpose.value).toBe("enroll");
+    expect(screen.queryByText(/keeps the Device's identity and history/iu)).toBeNull();
+
+    await user.selectOptions(purpose, "recredential");
+    expect(screen.getByText(/keeps the Device's identity and history/iu)).toBeTruthy();
+
+    await user.type(await screen.findByLabelText("Device ID"), "Windows_5090");
+    await user.click(await screen.findByRole("button", { name: "Generate grant" }));
+
+    await waitFor(() => {
+      expect(api.issueEnrollmentGrant).toHaveBeenCalledWith({
+        deviceId: "Windows_5090",
+        expiresInSeconds: 300,
+        intent: "recredential",
+      });
+    });
   });
 
   it("inspects Artifact metadata and requests isolated-origin access without rendering HTML", async () => {

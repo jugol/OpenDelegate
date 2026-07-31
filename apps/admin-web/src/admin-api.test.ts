@@ -309,6 +309,7 @@ describe("BrowserAdminApi JSON responses", () => {
       summary: {
         grantId: "grant_001",
         deviceId: "device_worker",
+        intent: "enroll",
         status: "active" as const,
         allowedBootstrapRoles: ["worker"],
         createdAt: "2026-07-25T00:00:00.000Z",

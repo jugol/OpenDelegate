@@ -527,6 +527,11 @@ export const frenchMessages = {
     unavailable: "L’inscription d’appareils n’est pas configurée sur ce Main.",
     loadFailed: "Impossible de charger l’état de l’inscription des appareils.",
     deviceId: "ID de l’appareil",
+    intent: "Objet",
+    intentEnroll: "Enrôler un nouvel Appareil",
+    intentRecredential: "Renouveler les identifiants d'un Appareil existant",
+    intentHint:
+      "Le renouvellement remplace les identifiants d'un Appareil déjà enregistré, par exemple celui dont le certificat a expiré pendant qu'il était éteint. Il conserve l'identité et l'historique de l'Appareil et révoque ses identifiants précédents.",
     deviceIdHint:
       "Utilisez un ID stable composé de lettres, chiffres, points, traits de soulignement ou tirets.",
     expiry: "Durée de validité",

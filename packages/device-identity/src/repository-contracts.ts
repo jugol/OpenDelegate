@@ -16,10 +16,21 @@ export interface ProtocolCompatibilityRange {
 
 export type EnrollmentGrantStatus = "active" | "consumed" | "expired" | "revoked";
 
+/**
+ * `enroll` admits a Device ID that has never been used. `recredential` re-issues
+ * credentials for a Device that already exists, which is the only way back for a
+ * Device whose certificate lapsed while it was offline — rotation needs a live
+ * certificate to authorize itself, and a Device ID is never released for reuse.
+ * The intent is fixed when the owner issues the grant so neither outcome can be
+ * reached by accident.
+ */
+export type EnrollmentGrantIntent = "enroll" | "recredential";
+
 export interface PersistedEnrollmentGrant {
   readonly grantId: string;
   readonly tokenDigest: string;
   readonly deviceId: string;
+  readonly intent: EnrollmentGrantIntent;
   readonly allowedBootstrapRoles: readonly string[];
   readonly protocolRange: ProtocolCompatibilityRange;
   readonly status: EnrollmentGrantStatus;
@@ -70,6 +81,7 @@ export type DeviceIdentityAuditEventName =
   | "device.enrolled"
   | "device.enrollment-grant-issued"
   | "device.enrollment-rejected"
+  | "device.recredentialed"
   | "device.revoked"
   | "device.rotation-confirmed"
   | "device.rotation-issued";

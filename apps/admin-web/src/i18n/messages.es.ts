@@ -524,6 +524,11 @@ export const spanishMessages = {
     unavailable: "La inscripción de dispositivos no está configurada en este Main.",
     loadFailed: "No se pudo cargar el estado de inscripción de dispositivos.",
     deviceId: "ID del dispositivo",
+    intent: "Propósito",
+    intentEnroll: "Inscribir un Dispositivo nuevo",
+    intentRecredential: "Renovar las credenciales de un Dispositivo existente",
+    intentHint:
+      "La renovación sustituye las credenciales de un Dispositivo que ya existe, por ejemplo uno cuyo certificado caducó mientras estaba apagado. Conserva la identidad y el historial del Dispositivo y revoca sus credenciales anteriores.",
     deviceIdHint: "Usa un ID estable con letras, números, puntos, guiones bajos o guiones.",
     expiry: "Duración del archivo",
     fiveMinutes: "5 minutos",

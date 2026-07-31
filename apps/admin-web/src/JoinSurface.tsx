@@ -15,6 +15,7 @@ import type {
   AdminApi,
   DeviceEnrollmentOverview,
   EnrollmentGrantStatus,
+  EnrollmentGrantIntent,
   IssueEnrollmentGrantResult,
 } from "./admin-api";
 import { formatAdminDate, formatMessage, useAdminI18n } from "./i18n";
@@ -33,6 +34,7 @@ export function JoinSurface({
   const [issued, setIssued] = useState<IssueEnrollmentGrantResult | null>(null);
   const [deviceId, setDeviceId] = useState("");
   const [expiresInSeconds, setExpiresInSeconds] = useState(300);
+  const [intent, setIntent] = useState<EnrollmentGrantIntent>("enroll");
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [issuing, setIssuing] = useState(false);
@@ -89,6 +91,7 @@ export function JoinSurface({
       const next = await api.issueEnrollmentGrant({
         deviceId: normalizedDeviceId,
         expiresInSeconds,
+        intent,
       });
       setIssued(next);
       setOverview((current) =>
@@ -220,6 +223,23 @@ export function JoinSurface({
                   value={deviceId}
                 />
                 <small id="join-device-id-hint">{messages.join.deviceIdHint}</small>
+              </div>
+              <div className="join-field">
+                <label htmlFor="join-intent">{messages.join.intent}</label>
+                <select
+                  aria-describedby="join-intent-hint"
+                  id="join-intent"
+                  onChange={(event) => setIntent(event.target.value as EnrollmentGrantIntent)}
+                  value={intent}
+                >
+                  <option value="enroll">{messages.join.intentEnroll}</option>
+                  <option value="recredential">{messages.join.intentRecredential}</option>
+                </select>
+                {intent === "recredential" ? (
+                  <small id="join-intent-hint">{messages.join.intentHint}</small>
+                ) : (
+                  <small id="join-intent-hint" hidden />
+                )}
               </div>
               <div className="join-field">
                 <label htmlFor="join-expiry">{messages.join.expiry}</label>

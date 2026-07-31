@@ -56,10 +56,12 @@ interface EnrollmentGrantIssuer {
     readonly deviceId: string;
     readonly allowedBootstrapRoles: readonly string[];
     readonly expiresInMs: number;
+    readonly intent?: "enroll" | "recredential";
     readonly protocolRange: { readonly minimum: number; readonly maximum: number };
   }): Promise<{
     readonly grantId: string;
     readonly deviceId: string;
+    readonly intent: "enroll" | "recredential";
     readonly allowedBootstrapRoles: readonly string[];
     readonly protocolRange: { readonly minimum: number; readonly maximum: number };
     readonly createdAt: number;
@@ -192,6 +194,7 @@ class MainDeviceEnrollmentAdminPort implements DeviceEnrollmentAdminPort {
   public async issue(input: {
     readonly deviceId: string;
     readonly expiresInSeconds: number;
+    readonly intent?: "enroll" | "recredential";
     readonly principalId: string;
     readonly idempotencyKey: string;
   }): Promise<IssueEnrollmentGrantResponseV1> {
@@ -208,9 +211,11 @@ class MainDeviceEnrollmentAdminPort implements DeviceEnrollmentAdminPort {
         "Device enrollment is not configured on Main.",
       );
     }
+    const intent = input.intent ?? "enroll";
     const fingerprint = fingerprintOf({
       deviceId: input.deviceId,
       expiresInSeconds: input.expiresInSeconds,
+      intent,
     });
     return this.#ledger.execute(
       "device-enrollment",
@@ -226,11 +231,13 @@ class MainDeviceEnrollmentAdminPort implements DeviceEnrollmentAdminPort {
           deviceId: input.deviceId,
           allowedBootstrapRoles: ["worker"],
           expiresInMs: input.expiresInSeconds * 1_000,
+          intent,
           protocolRange: { minimum: PROTOCOL_VERSION, maximum: PROTOCOL_VERSION },
         });
         const summary: EnrollmentGrantSummaryV1 = {
           grantId: grant.grantId,
           deviceId: grant.deviceId,
+          intent: grant.intent,
           status: "active",
           allowedBootstrapRoles: [...grant.allowedBootstrapRoles],
           createdAt: instant(grant.createdAt),
@@ -594,6 +601,7 @@ function enrollmentSummary(grant: PersistedEnrollmentGrant, now: number): Enroll
   return Object.freeze({
     grantId: grant.grantId,
     deviceId: grant.deviceId,
+    intent: grant.intent,
     status: grant.status === "active" && grant.expiresAt <= now ? "expired" : grant.status,
     allowedBootstrapRoles: [...grant.allowedBootstrapRoles],
     createdAt: instant(grant.createdAt),

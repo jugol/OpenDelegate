@@ -377,6 +377,7 @@ function registerDeviceEnrollmentAdminRoutes(
       const issued = await enrollment.issue({
         deviceId: request.body.deviceId,
         expiresInSeconds: request.body.expiresInSeconds,
+        ...(request.body.intent === undefined ? {} : { intent: request.body.intent }),
         principalId: session.ownerId,
         idempotencyKey: requireIdempotencyKey(request),
       });

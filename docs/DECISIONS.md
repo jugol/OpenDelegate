@@ -1362,3 +1362,38 @@ directory can decrypt the staged blob, so the owner is told which descriptor was
 and that joining a domain restores service-account sealing. Unsealing is unchanged:
 `NCryptUnprotectSecret` resolves the descriptor recorded in the blob, so entries
 sealed either way continue to open without migration.
+
+## D-074 — An enrollment grant states whether it enrolls or re-credentials a Device
+
+**Decision:** Every Enrollment Grant carries an explicit `intent` of `enroll` or
+`recredential`, fixed when the owner issues it and persisted with the grant.
+`enroll` refuses a Device ID that already exists, as before. `recredential`
+requires an existing, non-revoked Device and issues its next certificate
+generation, keeping the Device's identity, creation time, and history while
+revoking every earlier certificate. The default is `enroll`, so re-credentialing
+is never reached by omission.
+
+**Rationale:** Device certificates live 24 hours. Rotation refuses a certificate
+that has already expired, enrollment refuses a Device ID that already exists, and
+revocation keeps the Device row, so a Device ID is never released for reuse. A
+Device that slept past its certificate was therefore unrecoverable under its own
+name: the only exit was to abandon the identity and enrol the same machine under a
+new one, losing its Knowledge association and its history. FR-2.7 requires Device
+credentials to rotate without changing Task identity, and invariant 5 requires
+always-on execution; a personal Device that is switched off overnight must be able
+to come back as itself.
+
+Intent is stored rather than inferred from whether the Device happens to exist at
+consumption time. A grant issued to enrol `Windows_5090` must not silently
+re-credential a `Windows_5090` that came into existence in between, which
+invariant 27 forbids.
+
+**Consequence:** Re-credentialing revokes the previous certificate rather than
+letting it expire, so a lost or exposed key cannot keep working next to the
+credential the owner just authorized. The Worker reconnects at a higher
+certificate generation, which the channel already treats as a reason to clear
+per-generation state. Migration 0013 adds the column and the
+`device.recredentialed` audit event; grants issued before it carry `enroll`.
+
+This is recovery, not renewal. An online Device should still rotate before its
+certificate expires; that path remains unimplemented and is tracked separately.

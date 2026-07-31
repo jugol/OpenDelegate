@@ -7,6 +7,7 @@ export type {
   DeviceIdentityRepositorySnapshot,
   DeviceIdentitySecretStore,
   DeviceIdentityTransaction,
+  EnrollmentGrantIntent,
   EnrollmentGrantStatus,
   IdentityClock,
   IdentityRandomSource,
