@@ -42,6 +42,7 @@ import {
   type NativeComputerUseDriver,
 } from "@opendelegate/computer-use-os";
 import {
+  DeviceCertificateUnusableError,
   WorkerDeviceChannelClient,
   enrollWorkerDevice,
   executeWithEnrollmentGrantFile,
@@ -97,6 +98,7 @@ import {
   type WorkerConfiguration,
   type WorkerMainConnection,
   type WorkerRunAssignmentV1,
+  type WorkerRouteIncidentCode,
   type WorkerRunLeaseAuthority,
   type WorkerRunCapabilityProvider,
   type WorkerSchedulingInventoryProvider,
@@ -303,6 +305,9 @@ export interface RunWorkerDaemonOptions {
   readonly reconnectMaximumMs?: number;
   readonly heartbeatIntervalMs?: number;
   readonly onReady?: () => void | Promise<void>;
+  readonly onConnectionDiagnostic?: (
+    diagnostic: WorkerConnectionDiagnostic,
+  ) => void | Promise<void>;
 }
 
 export interface WorkerComputerUseRuntimeBinding {
@@ -1310,6 +1315,9 @@ export async function runWorkerDaemon(options: RunWorkerDaemonOptions): Promise<
       heartbeatIntervalMs,
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.onReady === undefined ? {} : { onReady: options.onReady }),
+      ...(options.onConnectionDiagnostic === undefined
+        ? {}
+        : { onConnectionDiagnostic: options.onConnectionDiagnostic }),
     });
   } finally {
     await composition.close();
@@ -1324,18 +1332,30 @@ export async function runWorkerConnectionLoop(
     readonly heartbeatIntervalMs: number;
     readonly signal?: AbortSignal;
     readonly onReady?: () => void | Promise<void>;
+    readonly onConnectionDiagnostic?: (
+      diagnostic: WorkerConnectionDiagnostic,
+    ) => void | Promise<void>;
   },
 ): Promise<void> {
   let backoff = options.reconnectMinimumMs;
   let readyReported = false;
+  let reportedCode: WorkerRouteIncidentCode | undefined;
   while (!isAborted(options.signal)) {
     const result = await composition.runtime.connect();
     if (!result.connected) {
+      // Retrying cannot repair a lapsed credential, so the reason is reported once
+      // per distinct cause rather than buried under an endless backoff.
+      const code = blockingConnectionCode(result.diagnostics);
+      if (code !== undefined && code !== reportedCode) {
+        reportedCode = code;
+        await options.onConnectionDiagnostic?.({ code, retryable: false });
+      }
       await abortableDelay(backoff, options.signal);
       backoff = Math.min(options.reconnectMaximumMs, backoff * 2);
       continue;
     }
     backoff = options.reconnectMinimumMs;
+    reportedCode = undefined;
     if (!readyReported) {
       await options.onReady?.();
       readyReported = true;
@@ -1347,6 +1367,38 @@ export async function runWorkerConnectionLoop(
       }
     }
   }
+}
+
+export interface WorkerConnectionDiagnostic {
+  readonly code: WorkerRouteIncidentCode;
+  readonly retryable: boolean;
+}
+
+const BLOCKING_CONNECTION_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Set([
+  "CERTIFICATE_EXPIRED",
+  "PEER_IDENTITY_MISMATCH",
+]);
+
+function blockingConnectionCode(
+  diagnostics: readonly TransportAttemptTrace[] | undefined,
+): WorkerRouteIncidentCode | undefined {
+  for (const attempt of diagnostics ?? []) {
+    if (attempt.outcome !== "authentication-rejected") {
+      continue;
+    }
+    const diagnostic = attempt.diagnostic;
+    if (typeof diagnostic !== "object" || diagnostic === null || Array.isArray(diagnostic)) {
+      continue;
+    }
+    const code = (diagnostic as { readonly [key: string]: unknown })["code"];
+    if (
+      typeof code === "string" &&
+      BLOCKING_CONNECTION_CODES.has(code as WorkerRouteIncidentCode)
+    ) {
+      return code as WorkerRouteIncidentCode;
+    }
+  }
+  return undefined;
 }
 
 export async function defaultSecretBackend(input: {
@@ -2016,19 +2068,40 @@ function createWorkerTransportResolver(input: {
               },
             ]),
           };
-        } catch {
+        } catch (error) {
           attempts.push({
             endpointId: endpoint.endpointId,
             label: endpoint.label,
             kind: endpoint.kind,
             probeSource: "live",
-            outcome: "connect-failed",
-            diagnostic: { code: "TRANSPORT_BOUNDARY_ERROR" },
+            ...classifyChannelConnectFailure(error),
           });
         }
       }
       throw new TransportRoutesExhaustedError(profile.deviceId, attempts);
     },
+  };
+}
+
+/**
+ * A lapsed Device credential and an unreachable Main both surface as a failed
+ * connect, but only one of them is worth retrying. Naming the credential case
+ * keeps the owner from reading an unrecoverable identity problem as a network
+ * outage.
+ */
+function classifyChannelConnectFailure(error: unknown): {
+  readonly outcome: TransportAttemptTrace["outcome"];
+  readonly diagnostic: { readonly code: WorkerRouteIncidentCode };
+} {
+  if (error instanceof DeviceCertificateUnusableError && error.state === "expired") {
+    return {
+      outcome: "authentication-rejected",
+      diagnostic: { code: "CERTIFICATE_EXPIRED" },
+    };
+  }
+  return {
+    outcome: "connect-failed",
+    diagnostic: { code: "TRANSPORT_BOUNDARY_ERROR" },
   };
 }
 

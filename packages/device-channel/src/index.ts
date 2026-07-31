@@ -106,6 +106,7 @@ export {
   CalibratedWorkerRunLeaseAuthority,
   DEFAULT_MAXIMUM_ABSOLUTE_CLOCK_SKEW_MS,
   DEFAULT_MAXIMUM_HANDSHAKE_RTT_MS,
+  DeviceCertificateUnusableError,
   DeviceChannelClientError,
   WorkerDeviceChannelClient,
   type ConnectWorkerDeviceChannelOptions,

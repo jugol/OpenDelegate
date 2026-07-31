@@ -36,6 +36,12 @@ export {
   type RevokedDeviceIdentity,
   type ValidatePeerIdentity,
 } from "./device-identity-authority.ts";
+export {
+  deviceCertificateIsUsable,
+  readDeviceCertificateLifecycle,
+  type DeviceCertificateLifecycle,
+  type DeviceCertificateLifecycleState,
+} from "./device-certificate-lifecycle.ts";
 export { EnrollmentGrantSecret } from "./enrollment-grant-secret.ts";
 export { InMemoryDeviceIdentitySecretStore, NodeIdentityRandomSource } from "./crypto.ts";
 export { DeviceIdentityError, type DeviceIdentityErrorCode } from "./error.ts";

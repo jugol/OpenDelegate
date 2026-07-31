@@ -3,6 +3,12 @@ import { performance } from "node:perf_hooks";
 import type { TLSSocket } from "node:tls";
 import { isDeepStrictEqual } from "node:util";
 
+import {
+  deviceCertificateIsUsable,
+  readDeviceCertificateLifecycle,
+  type DeviceCertificateLifecycle,
+  type DeviceCertificateLifecycleState,
+} from "@opendelegate/device-identity";
 import { PROTOCOL_VERSION, type ArtifactUploadGrantV1 } from "@opendelegate/protocol";
 import type {
   SequencedWorkerEventV1,
@@ -184,6 +190,10 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     options: ConnectWorkerDeviceChannelOptions,
   ): Promise<WorkerDeviceChannelClient> {
     validateConnectOptions(options);
+    // Refuse before the handshake. TLS reports an expired client certificate as a
+    // bare connection reset, so a Worker that only learns from the socket retries
+    // forever without ever naming the reason it can no longer authenticate.
+    assertDeviceCertificateUsable(options);
     const connectTimeoutMs = readBoundedPositiveInteger(
       options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
       "connect timeout",
@@ -1266,6 +1276,44 @@ export class DeviceChannelClientError extends Error {
   }
 }
 
+/**
+ * Raised instead of attempting a handshake that the Device certificate can no
+ * longer authenticate. It carries the validity window so the Worker can tell the
+ * owner when the credential lapsed rather than reporting a transport failure.
+ */
+export class DeviceCertificateUnusableError extends Error {
+  public readonly code = "DEVICE_CERTIFICATE_UNUSABLE" as const;
+  public readonly deviceId: string;
+  public readonly certificateGeneration: number;
+  public readonly certificateSerial: string;
+  public readonly state: DeviceCertificateLifecycleState;
+  public readonly notBefore: number;
+  public readonly notAfter: number;
+
+  public constructor(input: {
+    readonly certificateGeneration: number;
+    readonly deviceId: string;
+    readonly lifecycle: DeviceCertificateLifecycle;
+  }) {
+    super(
+      input.lifecycle.state === "expired"
+        ? `The Device certificate for ${input.deviceId} expired at ${new Date(
+            input.lifecycle.notAfter,
+          ).toISOString()}. Issue a new enrollment grant from Admin Web and re-enrol this Device.`
+        : `The Device certificate for ${input.deviceId} does not take effect until ${new Date(
+            input.lifecycle.notBefore,
+          ).toISOString()}. Check this Device's clock.`,
+    );
+    this.name = "DeviceCertificateUnusableError";
+    this.deviceId = input.deviceId;
+    this.certificateGeneration = input.certificateGeneration;
+    this.certificateSerial = input.lifecycle.serialNumber;
+    this.state = input.lifecycle.state;
+    this.notBefore = input.lifecycle.notBefore;
+    this.notAfter = input.lifecycle.notAfter;
+  }
+}
+
 export class ArtifactPrepareRejectedError extends Error {
   public readonly artifactId: string;
   public readonly code: ArtifactPrepareRejectionCodeV1;
@@ -1521,6 +1569,24 @@ function validateConnectOptions(options: ConnectWorkerDeviceChannelOptions): voi
   ) {
     throw new DeviceChannelClientError("The Worker TLS identity is invalid.");
   }
+}
+
+function assertDeviceCertificateUsable(options: ConnectWorkerDeviceChannelOptions): void {
+  const now = options.clock?.now() ?? Date.now();
+  let lifecycle: DeviceCertificateLifecycle;
+  try {
+    lifecycle = readDeviceCertificateLifecycle(options.identity.certificatePem, now);
+  } catch {
+    throw new DeviceChannelClientError("The Worker TLS identity is invalid.");
+  }
+  if (deviceCertificateIsUsable(lifecycle)) {
+    return;
+  }
+  throw new DeviceCertificateUnusableError({
+    certificateGeneration: options.identity.certificateGeneration,
+    deviceId: options.deviceId,
+    lifecycle,
+  });
 }
 
 function validateIdentifier(value: string, label: string): void {

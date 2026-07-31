@@ -29,6 +29,7 @@ import {
   runWorkerDaemon,
   WORKER_COMPUTER_USE_TOOL_NAMES,
   type WorkerAgentConfiguration,
+  type WorkerConnectionDiagnostic,
   type WorkerPaths,
 } from "./index.ts";
 
@@ -724,12 +725,29 @@ async function runForeground(paths: WorkerPaths): Promise<void> {
   process.once("SIGTERM", stop);
   try {
     writeJson({ event: "worker.starting", home: paths.home });
-    await runWorkerDaemon({ paths, signal: controller.signal });
+    await runWorkerDaemon({
+      paths,
+      signal: controller.signal,
+      onConnectionDiagnostic: (diagnostic) => {
+        writeJson({
+          event: "worker.connection-blocked",
+          code: diagnostic.code,
+          retryable: diagnostic.retryable,
+          remedy: connectionRemedy(diagnostic.code),
+        });
+      },
+    });
     writeJson({ event: "worker.stopped" });
   } finally {
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
   }
+}
+
+function connectionRemedy(code: WorkerConnectionDiagnostic["code"]): string {
+  return code === "CERTIFICATE_EXPIRED"
+    ? "This Device certificate has expired. Issue a new enrollment grant from Admin Web and run 'opendelegate worker join --grant-file <path>' on this Device."
+    : "Main rejected this Device's credential. Inspect the Device in Admin Web before reconnecting.";
 }
 
 async function readProductVersion(): Promise<string> {
