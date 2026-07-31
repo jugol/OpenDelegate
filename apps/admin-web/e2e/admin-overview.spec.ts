@@ -591,6 +591,9 @@ test("authenticated owner can enroll a Device, inspect Artifacts, and diagnose M
   await page.getByRole("button", { name: "Add Device" }).click();
   await expect(page.getByRole("heading", { name: "Add a Device" })).toBeVisible();
   await page.getByLabel("Device ID").fill("device_browser_worker");
+  // Enrolling a new Device stays the default, so re-credentialing an existing one
+  // is never reached by leaving this control alone.
+  await expect(page.getByLabel("Purpose")).toHaveValue("enroll");
   await page.getByRole("button", { name: "Generate grant" }).click();
   await expect(page.getByRole("heading", { name: "Grant ready to download" })).toBeVisible();
   await expect(page.getByText(/opendelegate worker join --grant-file/u)).toBeVisible();
@@ -1023,7 +1026,11 @@ async function installApi(
         headers["x-opendelegate-csrf"] !== session.csrfToken ||
         !/^admin-[0-9a-f-]{36}$/u.test(headers["idempotency-key"] ?? "") ||
         JSON.stringify(body) !==
-          JSON.stringify({ deviceId: "device_browser_worker", expiresInSeconds: 300 })
+          JSON.stringify({
+            deviceId: "device_browser_worker",
+            expiresInSeconds: 300,
+            intent: "enroll",
+          })
       ) {
         await route.fulfill({
           json: {
