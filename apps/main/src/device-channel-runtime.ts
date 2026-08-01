@@ -67,7 +67,7 @@ export interface MainEnrollmentListener {
 
 export interface MainWorkerChannelListener extends Pick<
   MainDeviceChannelServer,
-  "control" | "dispatch" | "steerRun"
+  "control" | "dispatch" | "steerRun" | "upgradeProvider"
 > {
   address(): {
     readonly host: string;

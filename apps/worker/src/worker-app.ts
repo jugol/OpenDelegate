@@ -54,6 +54,7 @@ import {
   type MainControlFrameV1,
   type MainDispatchFrameV1,
   type MainRunSteerFrameV1,
+  type WorkerProviderUpgradeResultV1,
   type WorkerRunLeaseDecisionObservation,
 } from "@opendelegate/device-channel";
 import {
@@ -114,6 +115,7 @@ import {
   type WorkspaceSchedulingMetadata,
 } from "@opendelegate/worker-runtime";
 
+import { upgradeAgentProvider } from "./agent-provider-upgrade.ts";
 import { WorkerArtifactDeliveryCoordinator } from "./artifact-delivery.ts";
 import { WorkerAgentActionAuthorizer } from "./agent-action-authorizer.ts";
 import { FileManifestWorkerArtifactLifecycle } from "./artifact-promotion.ts";
@@ -842,6 +844,7 @@ export async function createWorkerRuntime(
     artifactChannel,
     actionChannel,
     identityChannel,
+    agentAdapters: adapters,
     runLeaseAuthorities,
     runtime: () => runtimeReference.current,
   });
@@ -2140,6 +2143,39 @@ export async function renewWorkerDeviceCertificate(input: {
   return { status: "renewed", generation: renewed.generation, notAfter: verified.notAfter };
 }
 
+/**
+ * Brings one adapter to the version its own pin requires. Main names the adapter;
+ * the package and the version come from that adapter's probe, so nothing
+ * installable is taken from the wire.
+ */
+export async function applyProviderUpgrade(
+  adapters: readonly AgentAdapter[],
+  adapterId: string,
+): Promise<WorkerProviderUpgradeResultV1> {
+  const adapter = adapters.find((candidate) => candidate.adapterId === adapterId);
+  if (adapter === undefined) {
+    return { adapterId, status: "failed", code: "ADAPTER_UNKNOWN" };
+  }
+  const probe = await adapter.probe();
+  if (probe.remediation === undefined) {
+    return { adapterId, status: "failed", code: "NO_UPGRADE_AVAILABLE" };
+  }
+  const outcome = await upgradeAgentProvider({
+    adapterId,
+    remediation: probe.remediation,
+    reprobe: () => adapter.probe(),
+  });
+  return outcome.status === "upgraded"
+    ? {
+        adapterId,
+        status: "upgraded",
+        packageName: outcome.packageName,
+        ...(outcome.fromVersion === undefined ? {} : { fromVersion: outcome.fromVersion }),
+        toVersion: outcome.toVersion,
+      }
+    : { adapterId, status: "failed", code: outcome.reasonCode };
+}
+
 function createWorkerTransportResolver(input: {
   readonly configuration: WorkerConfigurationDocument;
   readonly managedSecrets: ManagedSecretStore;
@@ -2153,6 +2189,7 @@ function createWorkerTransportResolver(input: {
   readonly identityChannel: {
     current?: Pick<WorkerDeviceChannelClient, "activateIdentity" | "rotateIdentity">;
   };
+  readonly agentAdapters: readonly AgentAdapter[];
   readonly runLeaseAuthorities: Map<string, CalibratedWorkerRunLeaseAuthority>;
   readonly runtime: () => WorkerRuntime | undefined;
 }): TransportResolver<WorkerMainConnection> {
@@ -2196,6 +2233,8 @@ function createWorkerTransportResolver(input: {
             onRevoked: async () => {
               await input.runtime()?.setOperationalState("revoked", "Main revoked this Device.");
             },
+            onProviderUpgrade: async (frame) =>
+              applyProviderUpgrade(input.agentAdapters, frame.payload.adapterId),
           });
           for (const [runId, authority] of input.runLeaseAuthorities) {
             if (!authority.attach(client)) {
@@ -2627,6 +2666,14 @@ export function createWorkerSchedulingInventoryProvider(input: {
             readiness: adapterReadiness(probe),
             compatibility: probe.compatibility,
             ...(probe.version === undefined ? {} : { version: probe.version }),
+            ...(probe.remediation === undefined
+              ? {}
+              : {
+                  availableUpgrade: Object.freeze({
+                    packageName: probe.remediation.packageName,
+                    targetVersion: probe.remediation.targetVersion,
+                  }),
+                }),
             observedAtMs: cached!.observedAtMs,
             ...(catalog === undefined
               ? {}

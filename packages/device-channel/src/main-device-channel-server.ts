@@ -45,6 +45,7 @@ import {
   type IdentityRotationRejectionCodeV1,
   type WorkerIdentityActivateFrameV1,
   type WorkerIdentityRotateFrameV1,
+  type WorkerProviderUpgradedFrameV1,
   type WorkerArtifactPrepareFrameV1,
   type WorkerActionAuthorizeFrameV1,
   type WorkerActionConsumeFrameV1,
@@ -84,6 +85,7 @@ export interface MainDeviceChannelCallbacks {
   onRunLeaseRenew?(input: MainRunLeaseRenewalRequest): Promise<MainRunLeaseRenewalDecision>;
   onRunSteeringReceipt?(input: MainRunSteeringReceiptObservation): Promise<void>;
   onRouteIncident?(input: MainRouteIncidentRequest): Promise<void>;
+  onProviderUpgraded?(input: MainProviderUpgradeObservation): Promise<void>;
 }
 
 export interface MainRunSteeringReceiptObservation {
@@ -91,6 +93,13 @@ export interface MainRunSteeringReceiptObservation {
   readonly receiptMessageId: string;
   readonly idempotencyKey: string;
   readonly receipt: WorkerRunSteeringReceiptV1;
+  readonly receivedAtMs: number;
+}
+
+export interface MainProviderUpgradeObservation {
+  readonly authenticatedDeviceId: string;
+  readonly receiptMessageId: string;
+  readonly receipt: WorkerProviderUpgradedFrameV1["payload"];
   readonly receivedAtMs: number;
 }
 
@@ -792,6 +801,8 @@ export class MainDeviceChannelServer {
           await this.acceptRunSteeringReceipt(connection.peer.deviceId, frame);
         } else if (frame.type === "worker.route.incident") {
           await this.acceptRouteIncident(connection.peer.deviceId, frame);
+        } else if (frame.type === "worker.provider.upgraded") {
+          await this.acceptProviderUpgrade(connection.peer.deviceId, frame);
         } else if (frame.type === "worker.pong") {
           // The durable commit and last-observed timestamp are the entire pong side effect.
         }
@@ -897,6 +908,47 @@ export class MainDeviceChannelServer {
    * by the request, which keeps a reconnecting Worker from asking the authority
    * to start a second rotation it would then refuse as already pending.
    */
+  /**
+   * Asks a connected Device to bring one Agent adapter to the version that
+   * adapter's own pin requires. The command names only the adapter; the package
+   * and version stay on the Worker, so nothing installable crosses the wire.
+   */
+  public async upgradeProvider(input: {
+    readonly deviceId: string;
+    readonly adapterId: string;
+    readonly requestId: string;
+  }): Promise<void> {
+    validateIdentifier(input.deviceId, "Device ID");
+    validateIdentifier(input.adapterId, "Agent adapter ID");
+    validateIdentifier(input.requestId, "provider upgrade request ID");
+    const connection = this.connections.get(input.deviceId);
+    if (connection === undefined || connection.closed) {
+      throw new DeviceChannelServerError("The Device is not connected.");
+    }
+    const frame = await this.options.repository.enqueueOutbound(input.deviceId, (sequence) => ({
+      ...this.envelope(sequence, input.requestId, "main.provider.upgrade"),
+      type: "main.provider.upgrade" as const,
+      payload: {
+        requestId: input.requestId,
+        deviceId: input.deviceId,
+        adapterId: input.adapterId,
+      },
+    }));
+    await this.sendFrame(connection, frame);
+  }
+
+  private async acceptProviderUpgrade(
+    deviceId: string,
+    frame: WorkerProviderUpgradedFrameV1,
+  ): Promise<void> {
+    await this.options.onProviderUpgraded?.({
+      authenticatedDeviceId: deviceId,
+      receiptMessageId: frame.messageId,
+      receipt: frame.payload,
+      receivedAtMs: this.now(),
+    });
+  }
+
   private async prepareIdentityResponse(
     connection: ActiveConnection,
     frame: WorkerIdentityFrameV1,

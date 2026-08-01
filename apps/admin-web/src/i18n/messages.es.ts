@@ -210,6 +210,11 @@ export const spanishMessages = {
     policies: "Políticas ejecutables",
     noPolicies: "No hay una proyección de políticas ejecutables disponible.",
     agentAdapters: "Adaptadores de Agent",
+    adapterUpgrade: "Actualizar a {version}",
+    adapterUpgrading: "Actualizando…",
+    adapterUpgradeRequested:
+      "Actualización solicitada. El Dispositivo informará del resultado en su próxima actualización.",
+    adapterUpgradeFailed: "No se pudo solicitar la actualización.",
     noAgentAdapters: "No hay observaciones de adaptadores de Agent.",
     agentExecution: "Ejecución del Agent",
     agentProfileTarget: "Destino del perfil de Agent",

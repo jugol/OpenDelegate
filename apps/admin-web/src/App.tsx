@@ -34,6 +34,7 @@ export interface AppProps {
   readonly initialSection?: AdminSection;
   readonly onApprovalDecided?: () => void;
   readonly onAssessDevice?: (deviceId: string) => Promise<void>;
+  readonly onUpgradeAgentProvider?: (deviceId: string, adapterId: string) => Promise<void>;
   readonly onConfigurationMessage?: (
     deviceId: string,
     message: string,
@@ -60,6 +61,7 @@ export function App({
   initialSection = "devices",
   onApprovalDecided,
   onAssessDevice,
+  onUpgradeAgentProvider,
   onConfigurationMessage,
   onLoadConfigurationMessages,
   onSecureSecretIngest,
@@ -281,6 +283,7 @@ export function App({
             {...(device.role === "main" && onAssessDevice !== undefined
               ? { onAssess: () => onAssessDevice(device.deviceId) }
               : {})}
+            {...(onUpgradeAgentProvider === undefined ? {} : { onUpgradeAgentProvider })}
           />
         )}
       </div>

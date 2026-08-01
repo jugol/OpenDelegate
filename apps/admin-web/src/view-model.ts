@@ -66,6 +66,11 @@ export interface AgentAdapterView {
   readonly version?: string;
   readonly readiness: "ready" | "degraded" | "unavailable";
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
+  /** Present when the Device can bring this adapter to its pinned version. */
+  readonly availableUpgrade?: {
+    readonly packageName: string;
+    readonly targetVersion: string;
+  };
   readonly observedAtMs: number;
   readonly modelCatalogObservedAtMs?: number;
   readonly models: readonly {

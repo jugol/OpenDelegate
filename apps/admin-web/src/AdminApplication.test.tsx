@@ -1027,6 +1027,9 @@ function createApi(overrides: Partial<AdminApi> = {}): AdminApi {
     completeRecovery: vi.fn<AdminApi["completeRecovery"]>(),
     listDevices: vi.fn<AdminApi["listDevices"]>().mockResolvedValue([windowsMain]),
     assessDevice: vi.fn<AdminApi["assessDevice"]>().mockResolvedValue(windowsMain),
+    upgradeDeviceAgentProvider: vi
+      .fn<AdminApi["upgradeDeviceAgentProvider"]>()
+      .mockResolvedValue(undefined),
     runtimeFeatures: vi.fn<AdminApi["runtimeFeatures"]>().mockResolvedValue(connectedFeatures),
     sendConfigurationMessage: vi
       .fn<AdminApi["sendConfigurationMessage"]>()

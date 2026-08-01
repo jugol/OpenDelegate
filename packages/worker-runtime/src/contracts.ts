@@ -136,6 +136,15 @@ export interface WorkerSchedulingAgentAdapterV1 {
   readonly readiness: "ready" | "degraded" | "unavailable";
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
   readonly version?: string;
+  /**
+   * The upgrade that would make this adapter usable, when the Device has one.
+   * Carrying it lets the owner act on an untested version from Admin Web instead
+   * of reading a status with no remedy attached.
+   */
+  readonly availableUpgrade?: {
+    readonly packageName: string;
+    readonly targetVersion: string;
+  };
   readonly observedAtMs: number;
   readonly modelCatalogObservedAtMs?: number;
   readonly models?: readonly {

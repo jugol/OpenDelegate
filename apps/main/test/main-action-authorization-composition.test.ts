@@ -443,6 +443,9 @@ function fakeDeviceChannelRuntime(
       async steerRun() {
         return {} as never;
       },
+      async upgradeProvider() {
+        return {} as never;
+      },
       async close() {},
     },
     async listEnrollmentGrants() {

@@ -175,6 +175,10 @@ export function AdminApplication({
         void reloadDeviceFleet();
       }}
       onAssessDevice={assessDevice}
+      onUpgradeAgentProvider={async (deviceId, adapterId) => {
+        await browserApi.upgradeDeviceAgentProvider(deviceId, adapterId);
+        void reloadDeviceFleet();
+      }}
       onConfigurationMessage={(deviceId, message) =>
         browserApi.sendConfigurationMessage(deviceId, message)
       }

@@ -202,6 +202,11 @@ export const englishMessages = {
     policies: "Executable policies",
     noPolicies: "No executable Policy projection is available.",
     agentAdapters: "Agent adapters",
+    adapterUpgrade: "Update to {version}",
+    adapterUpgrading: "Updating…",
+    adapterUpgradeRequested:
+      "Update requested. This Device reports the result on its next refresh.",
+    adapterUpgradeFailed: "The update could not be requested.",
     noAgentAdapters: "No Agent Adapter observation is available.",
     agentExecution: "Agent execution",
     agentProfileTarget: "Agent profile target",
