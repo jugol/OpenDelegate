@@ -108,6 +108,7 @@ export {
   DEFAULT_MAXIMUM_HANDSHAKE_RTT_MS,
   DeviceCertificateUnusableError,
   DeviceChannelClientError,
+  IdentityRotationRejectedError,
   WorkerDeviceChannelClient,
   type ConnectWorkerDeviceChannelOptions,
   type WorkerDeviceChannelCallbacks,

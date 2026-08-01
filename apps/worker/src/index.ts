@@ -39,6 +39,7 @@ export {
   type WorkerComputerUseRuntimeLease,
   type WorkerComputerUseRuntimePort,
   type WorkerConfigurationDocument,
+  type WorkerCertificateRenewalOutcome,
   type WorkerConnectionDiagnostic,
   type WorkerDiagnosticSnapshot,
   type WorkerPaths,

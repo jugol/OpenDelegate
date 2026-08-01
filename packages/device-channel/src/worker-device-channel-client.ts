@@ -29,8 +29,12 @@ import {
   encodeDeviceChannelFrame,
   type ArtifactPrepareManifestV1,
   type ArtifactPrepareRejectionCodeV1,
+  type IdentityRotationRejectionCodeV1,
   type MainArtifactGrantFrameV1,
   type MainArtifactRejectedFrameV1,
+  type MainIdentityPendingFrameV1,
+  type MainIdentityRejectedFrameV1,
+  type MainIdentityRenewedFrameV1,
   type MainActionAuthorizationFrameV1,
   type MainActionConsumptionFrameV1,
   type MainControlFrameV1,
@@ -42,6 +46,8 @@ import {
   type WorkerToMainFrameV1,
   type WorkerActionAuthorizationRequestV1,
   type WorkerActionConsumptionRequestV1,
+  type WorkerIdentityActivateFrameV1,
+  type WorkerIdentityRotateFrameV1,
   type WorkerRouteIncidentFrameV1,
   type WorkerRunLeaseRenewalRequestV1,
   type WorkerRunLeaseRenewFrameV1,
@@ -119,6 +125,13 @@ interface EventAckWaiter {
   readonly reject: (error: Error) => void;
 }
 
+interface IdentityRotationWaiter {
+  readonly resolve: (
+    response: MainIdentityPendingFrameV1["payload"] | MainIdentityRenewedFrameV1["payload"],
+  ) => void;
+  readonly reject: (error: Error) => void;
+}
+
 interface ArtifactPrepareWaiter {
   readonly artifactId: string;
   readonly resolve: (grant: ArtifactUploadGrantV1) => void;
@@ -162,6 +175,7 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
   private readonly socket: WebSocket;
   private readonly waiters = new Map<string, EventAckWaiter>();
   private readonly artifactWaiters = new Map<string, ArtifactPrepareWaiter>();
+  private readonly identityWaiters = new Map<string, IdentityRotationWaiter>();
   private readonly actionWaiters = new Map<string, ActionWaiter>();
   private readonly runLeaseWaiters = new Map<string, RunLeaseWaiter>();
   private readonly runLeaseSentAtMonotonicMs = new Map<string, number>();
@@ -301,6 +315,101 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
       payload: incident,
     }));
     await this.send(frame);
+  }
+
+  /**
+   * Offers a certificate request signed by a freshly generated key. The reply is
+   * a certificate that cannot authenticate anything until {@link activateIdentity}
+   * proves the Worker holds the matching private key.
+   */
+  public async rotateIdentity(
+    certificateRequestPem: string,
+  ): Promise<MainIdentityPendingFrameV1["payload"]> {
+    const response = await this.requestIdentityDecision({
+      type: "worker.identity.rotate",
+      payload: {
+        deviceId: this.options.deviceId,
+        certificateRequestPem,
+      },
+    });
+    if (!("activationChallenge" in response)) {
+      throw new DeviceChannelClientError("Main answered a rotation offer with an activation.");
+    }
+    return response;
+  }
+
+  public async activateIdentity(input: {
+    readonly certificatePem: string;
+    readonly activationChallenge: string;
+    readonly signature: string;
+  }): Promise<MainIdentityRenewedFrameV1["payload"]> {
+    const response = await this.requestIdentityDecision({
+      type: "worker.identity.activate",
+      payload: {
+        deviceId: this.options.deviceId,
+        certificatePem: input.certificatePem,
+        activationChallenge: input.activationChallenge,
+        signature: input.signature,
+      },
+    });
+    if ("activationChallenge" in response) {
+      throw new DeviceChannelClientError("Main answered an activation with a rotation offer.");
+    }
+    return response;
+  }
+
+  private async requestIdentityDecision(
+    request:
+      | {
+          readonly type: "worker.identity.rotate";
+          readonly payload: WorkerIdentityRotateFrameV1["payload"];
+        }
+      | {
+          readonly type: "worker.identity.activate";
+          readonly payload: WorkerIdentityActivateFrameV1["payload"];
+        },
+  ): Promise<MainIdentityPendingFrameV1["payload"] | MainIdentityRenewedFrameV1["payload"]> {
+    this.assertOpen();
+    const correlationId = this.nextId();
+    const frame = await this.options.state.enqueueOutbound((sequence) => {
+      const envelope = this.envelope(sequence, correlationId);
+      return request.type === "worker.identity.rotate"
+        ? { ...envelope, type: request.type, payload: request.payload }
+        : { ...envelope, type: request.type, payload: request.payload };
+    });
+    const response = new Promise<
+      MainIdentityPendingFrameV1["payload"] | MainIdentityRenewedFrameV1["payload"]
+    >((resolve, reject) => {
+      this.identityWaiters.set(frame.messageId, { resolve, reject });
+    });
+    try {
+      await this.send(frame);
+    } catch (error) {
+      this.identityWaiters.delete(frame.messageId);
+      throw error;
+    }
+    return response;
+  }
+
+  private acceptIdentityResponse(
+    frame: MainIdentityPendingFrameV1 | MainIdentityRejectedFrameV1 | MainIdentityRenewedFrameV1,
+  ): void {
+    if (
+      frame.payload.deviceId !== this.options.deviceId ||
+      frame.correlationId !== frame.payload.requestMessageId
+    ) {
+      throw new DeviceChannelClientError("The Main identity response targets another request.");
+    }
+    const waiter = this.identityWaiters.get(frame.payload.requestMessageId);
+    if (waiter === undefined) {
+      return;
+    }
+    this.identityWaiters.delete(frame.payload.requestMessageId);
+    if (frame.type === "main.identity.rejected") {
+      waiter.reject(new IdentityRotationRejectedError(frame.payload.code, frame.payload.retryable));
+      return;
+    }
+    waiter.resolve(frame.payload);
   }
 
   public async prepareArtifact(
@@ -463,6 +572,10 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
       waiter.reject(error);
     }
     this.waiters.clear();
+    for (const waiter of this.identityWaiters.values()) {
+      waiter.reject(error);
+    }
+    this.identityWaiters.clear();
     for (const waiter of this.artifactWaiters.values()) {
       waiter.reject(error);
     }
@@ -650,6 +763,12 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
             frame.correlationId,
             frame.payload.acknowledgedMessageIds,
           );
+        } else if (
+          frame.type === "main.identity.pending" ||
+          frame.type === "main.identity.renewed" ||
+          frame.type === "main.identity.rejected"
+        ) {
+          this.acceptIdentityResponse(frame);
         } else if (frame.type === "main.artifact.grant") {
           await this.acceptArtifactGrant(frame);
         } else if (frame.type === "main.artifact.rejected") {
@@ -1311,6 +1430,18 @@ export class DeviceCertificateUnusableError extends Error {
     this.state = input.lifecycle.state;
     this.notBefore = input.lifecycle.notBefore;
     this.notAfter = input.lifecycle.notAfter;
+  }
+}
+
+export class IdentityRotationRejectedError extends Error {
+  public readonly code: IdentityRotationRejectionCodeV1;
+  public readonly retryable: boolean;
+
+  public constructor(code: IdentityRotationRejectionCodeV1, retryable: boolean) {
+    super(`Main refused the Device certificate rotation (${code}).`);
+    this.name = "IdentityRotationRejectedError";
+    this.code = code;
+    this.retryable = retryable;
   }
 }
 

@@ -5,8 +5,11 @@ import type { TLSSocket } from "node:tls";
 import { isDeepStrictEqual } from "node:util";
 
 import {
+  DeviceIdentityError,
   type AuthenticatedDevicePeer,
+  type ConfirmedDeviceIdentity,
   type DeviceIdentityAuthority,
+  type IssuedPendingDeviceIdentity,
 } from "@opendelegate/device-identity";
 import { PROTOCOL_VERSION } from "@opendelegate/protocol";
 import {
@@ -31,11 +34,17 @@ import {
   type MainActionAuthorizationFrameV1,
   type MainActionConsumptionFrameV1,
   type MainDispatchFrameV1,
+  type MainIdentityPendingFrameV1,
+  type MainIdentityRejectedFrameV1,
+  type MainIdentityRenewedFrameV1,
   type MainRunLeaseFrameV1,
   type MainRunSteerFrameV1,
   type MainToWorkerFrameV1,
   type ArtifactPrepareManifestV1,
   type ArtifactPrepareRejectionCodeV1,
+  type IdentityRotationRejectionCodeV1,
+  type WorkerIdentityActivateFrameV1,
+  type WorkerIdentityRotateFrameV1,
   type WorkerArtifactPrepareFrameV1,
   type WorkerActionAuthorizeFrameV1,
   type WorkerActionConsumeFrameV1,
@@ -169,9 +178,28 @@ export type MainRunLeaseRenewalDecision =
 
 type MainActionResponseFrameV1 = MainActionAuthorizationFrameV1 | MainActionConsumptionFrameV1;
 
+type WorkerIdentityFrameV1 = WorkerIdentityActivateFrameV1 | WorkerIdentityRotateFrameV1;
+type MainIdentityResponseFrameV1 =
+  MainIdentityPendingFrameV1 | MainIdentityRejectedFrameV1 | MainIdentityRenewedFrameV1;
+
+function identityRejectionCode(error: unknown): IdentityRotationRejectionCodeV1 {
+  if (error instanceof DeviceIdentityError) {
+    if (error.code === "ROTATION_ALREADY_PENDING") {
+      return "ROTATION_ALREADY_PENDING";
+    }
+    if (error.code === "ROTATION_INVALID" || error.code === "CERTIFICATE_REQUEST_INVALID") {
+      return "ROTATION_INVALID";
+    }
+  }
+  return "SERVICE_UNAVAILABLE";
+}
+
 export interface CreateMainDeviceChannelServerOptions extends MainDeviceChannelCallbacks {
   readonly mainDeviceId: string;
-  readonly authority: Pick<DeviceIdentityAuthority, "validatePeerIdentity">;
+  readonly authority: Pick<
+    DeviceIdentityAuthority,
+    "confirmCertificateRotation" | "issueCertificateRotation" | "validatePeerIdentity"
+  >;
   readonly repository: DeviceChannelRepository;
   readonly tls: MainDeviceChannelTlsOptions;
   readonly host?: string;
@@ -728,6 +756,7 @@ export class MainDeviceChannelServer {
     let artifactResponse: MainArtifactPrepareResponseFrameV1 | undefined;
     let actionResponse: MainActionResponseFrameV1 | undefined;
     let runLeaseResponse: MainRunLeaseFrameV1 | undefined;
+    let identityResponse: MainIdentityResponseFrameV1 | undefined;
     if (claim.disposition === "claimed") {
       try {
         if (frame.type === "worker.ack") {
@@ -742,6 +771,11 @@ export class MainDeviceChannelServer {
           await this.options.onHeartbeat?.(connection.peer.deviceId, frame.payload);
         } else if (frame.type === "worker.artifact.prepare") {
           artifactResponse = await this.prepareArtifactResponse(connection.peer.deviceId, frame);
+        } else if (
+          frame.type === "worker.identity.rotate" ||
+          frame.type === "worker.identity.activate"
+        ) {
+          identityResponse = await this.prepareIdentityResponse(connection, frame);
         } else if (frame.type === "worker.action.authorize") {
           actionResponse = await this.prepareActionAuthorizationResponse(
             connection.peer.deviceId,
@@ -770,6 +804,11 @@ export class MainDeviceChannelServer {
       ).acknowledgedSequence;
     } else if (frame.type === "worker.artifact.prepare") {
       artifactResponse = await this.findArtifactResponse(connection.peer.deviceId, frame);
+    } else if (
+      frame.type === "worker.identity.rotate" ||
+      frame.type === "worker.identity.activate"
+    ) {
+      identityResponse = await this.findIdentityResponse(connection.peer.deviceId, frame);
     } else if (frame.type === "worker.action.authorize" || frame.type === "worker.action.consume") {
       actionResponse = await this.findActionResponse(connection.peer.deviceId, frame);
     } else if (frame.type === "worker.run.renew") {
@@ -780,6 +819,9 @@ export class MainDeviceChannelServer {
     }
     if (artifactResponse !== undefined) {
       await this.sendFrame(connection, artifactResponse);
+    }
+    if (identityResponse !== undefined) {
+      await this.sendFrame(connection, identityResponse);
     }
     if (actionResponse !== undefined) {
       await this.sendFrame(connection, actionResponse);
@@ -847,6 +889,128 @@ export class MainDeviceChannelServer {
       incident: frame.payload,
       receivedAtMs: this.now(),
     });
+  }
+
+  /**
+   * The authenticated connection is the proof of possession for the current key,
+   * so rotation needs no separate credential. The response is durable and keyed
+   * by the request, which keeps a reconnecting Worker from asking the authority
+   * to start a second rotation it would then refuse as already pending.
+   */
+  private async prepareIdentityResponse(
+    connection: ActiveConnection,
+    frame: WorkerIdentityFrameV1,
+  ): Promise<MainIdentityResponseFrameV1> {
+    const deviceId = connection.peer.deviceId;
+    const durable = await this.findIdentityResponse(deviceId, frame);
+    if (durable !== undefined) {
+      return durable;
+    }
+    const outcome = await this.decideIdentityRotation(connection, frame);
+    const identity = identityResponseIdentity(frame.messageId);
+    const response = await this.options.repository.enqueueOutbound(deviceId, (sequence) => {
+      const envelope = this.envelope(sequence, frame.messageId, "main.identity.rejected", {
+        messageId: identity,
+        idempotencyKey: identity,
+      });
+      if (outcome.status === "pending") {
+        return {
+          ...envelope,
+          type: "main.identity.pending",
+          payload: {
+            requestMessageId: frame.messageId,
+            deviceId,
+            certificatePem: outcome.identity.certificatePem,
+            certificateAuthorityPem: outcome.identity.certificateAuthorityPem,
+            serialNumber: outcome.identity.serialNumber,
+            generation: outcome.identity.generation,
+            activationChallenge: outcome.identity.activationChallenge,
+            activationExpiresAtMs: outcome.identity.activationExpiresAt,
+          },
+        };
+      }
+      if (outcome.status === "renewed") {
+        return {
+          ...envelope,
+          type: "main.identity.renewed",
+          payload: {
+            requestMessageId: frame.messageId,
+            deviceId,
+            serialNumber: outcome.identity.serialNumber,
+            generation: outcome.identity.generation,
+            overlapEndsAtMs: outcome.identity.overlapEndsAt,
+          },
+        };
+      }
+      return {
+        ...envelope,
+        type: "main.identity.rejected",
+        payload: {
+          requestMessageId: frame.messageId,
+          deviceId,
+          code: outcome.code,
+          retryable: outcome.retryable,
+        },
+      };
+    });
+    return assertIdentityResponseReplay(response, this.options.mainDeviceId, deviceId, frame);
+  }
+
+  private async decideIdentityRotation(
+    connection: ActiveConnection,
+    frame: WorkerIdentityFrameV1,
+  ): Promise<
+    | { readonly status: "pending"; readonly identity: IssuedPendingDeviceIdentity }
+    | { readonly status: "renewed"; readonly identity: ConfirmedDeviceIdentity }
+    | {
+        readonly status: "rejected";
+        readonly code: IdentityRotationRejectionCodeV1;
+        readonly retryable: boolean;
+      }
+  > {
+    try {
+      if (frame.type === "worker.identity.rotate") {
+        return {
+          status: "pending",
+          identity: await this.options.authority.issueCertificateRotation({
+            deviceId: connection.peer.deviceId,
+            currentCertificatePem: connection.certificatePem,
+            newCertificateRequestPem: frame.payload.certificateRequestPem,
+          }),
+        };
+      }
+      return {
+        status: "renewed",
+        identity: await this.options.authority.confirmCertificateRotation({
+          deviceId: connection.peer.deviceId,
+          certificatePem: frame.payload.certificatePem,
+          activationChallenge: frame.payload.activationChallenge,
+          signature: frame.payload.signature,
+        }),
+      };
+    } catch (error) {
+      const code = identityRejectionCode(error);
+      return {
+        status: "rejected",
+        code,
+        // Only an unavailable service is worth another attempt; an invalid
+        // rotation stays invalid however many times the Worker asks.
+        retryable: code === "SERVICE_UNAVAILABLE",
+      };
+    }
+  }
+
+  private async findIdentityResponse(
+    deviceId: string,
+    frame: WorkerIdentityFrameV1,
+  ): Promise<MainIdentityResponseFrameV1 | undefined> {
+    const durable = await this.options.repository.outboundByIdempotencyKey(
+      deviceId,
+      identityResponseIdentity(frame.messageId),
+    );
+    return durable === undefined
+      ? undefined
+      : assertIdentityResponseReplay(durable, this.options.mainDeviceId, deviceId, frame);
   }
 
   private async prepareArtifactResponse(
@@ -1294,6 +1458,36 @@ function sameRunSteeringReceiptScope(
     command.fencingToken === receipt.fencingToken &&
     isDeepStrictEqual(command.agentSession, receipt.agentSession)
   );
+}
+
+function identityResponseIdentity(requestMessageId: string): string {
+  validateIdentifier(requestMessageId, "identity rotation request message ID");
+  return `identity-response:${createHash("sha256").update(requestMessageId).digest("hex")}`;
+}
+
+function assertIdentityResponseReplay(
+  frame: MainToWorkerFrameV1,
+  mainDeviceId: string,
+  deviceId: string,
+  request: WorkerIdentityFrameV1,
+): MainIdentityResponseFrameV1 {
+  const identity = identityResponseIdentity(request.messageId);
+  if (
+    (frame.type !== "main.identity.pending" &&
+      frame.type !== "main.identity.renewed" &&
+      frame.type !== "main.identity.rejected") ||
+    frame.senderDeviceId !== mainDeviceId ||
+    frame.correlationId !== request.messageId ||
+    frame.messageId !== identity ||
+    frame.idempotencyKey !== identity ||
+    frame.payload.requestMessageId !== request.messageId ||
+    frame.payload.deviceId !== deviceId
+  ) {
+    throw new DeviceChannelServerError(
+      "The Device identity response conflicts with another durable command.",
+    );
+  }
+  return frame;
 }
 
 function artifactResponseIdentity(requestMessageId: string): string {

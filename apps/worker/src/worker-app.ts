@@ -53,7 +53,11 @@ import {
   type MainRunSteerFrameV1,
   type WorkerRunLeaseDecisionObservation,
 } from "@opendelegate/device-channel";
-import { WorkerDeviceIdentity } from "@opendelegate/device-identity";
+import {
+  WorkerDeviceIdentity,
+  readDeviceCertificateLifecycle,
+  type DeviceCertificateLifecycle,
+} from "@opendelegate/device-identity";
 import { LocalKnowledgeService } from "@opendelegate/knowledge";
 import { PROTOCOL_VERSION } from "@opendelegate/protocol";
 import {
@@ -308,6 +312,9 @@ export interface RunWorkerDaemonOptions {
   readonly onConnectionDiagnostic?: (
     diagnostic: WorkerConnectionDiagnostic,
   ) => void | Promise<void>;
+  readonly onCertificateRenewal?: (
+    outcome: WorkerCertificateRenewalOutcome,
+  ) => void | Promise<void>;
 }
 
 export interface WorkerComputerUseRuntimeBinding {
@@ -391,6 +398,7 @@ export interface WorkerRuntimeComposition {
   readonly configuration: WorkerConfigurationDocument;
   readonly runtime: WorkerRuntime;
   pulse(): Promise<boolean>;
+  renewCertificate(): Promise<WorkerCertificateRenewalOutcome>;
   close(): Promise<void>;
 }
 
@@ -706,6 +714,9 @@ export async function createWorkerRuntime(
   const actionChannel: {
     current?: Pick<WorkerDeviceChannelClient, "authorizeAction" | "consumeActionAuthorization">;
   } = {};
+  const identityChannel: {
+    current?: Pick<WorkerDeviceChannelClient, "activateIdentity" | "rotateIdentity">;
+  } = {};
   const computerUse = await createWorkerComputerUseRuntime({
     configuration,
     paths: options.paths,
@@ -822,6 +833,7 @@ export async function createWorkerRuntime(
     channelState,
     artifactChannel,
     actionChannel,
+    identityChannel,
     runLeaseAuthorities,
     runtime: () => runtimeReference.current,
   });
@@ -857,6 +869,18 @@ export async function createWorkerRuntime(
     configuration,
     runtime,
     pulse: () => runtime.pulse(),
+    async renewCertificate() {
+      const channel = identityChannel.current;
+      if (channel === undefined) {
+        return { status: "unavailable", reason: "The Device channel is not connected." };
+      }
+      return renewWorkerDeviceCertificate({
+        channel,
+        configuration,
+        managedSecrets,
+        paths: options.paths,
+      });
+    },
     async close() {
       if (closed) {
         return;
@@ -1318,6 +1342,9 @@ export async function runWorkerDaemon(options: RunWorkerDaemonOptions): Promise<
       ...(options.onConnectionDiagnostic === undefined
         ? {}
         : { onConnectionDiagnostic: options.onConnectionDiagnostic }),
+      ...(options.onCertificateRenewal === undefined
+        ? {}
+        : { onCertificateRenewal: options.onCertificateRenewal }),
     });
   } finally {
     await composition.close();
@@ -1325,7 +1352,7 @@ export async function runWorkerDaemon(options: RunWorkerDaemonOptions): Promise<
 }
 
 export async function runWorkerConnectionLoop(
-  composition: Pick<WorkerRuntimeComposition, "pulse" | "runtime">,
+  composition: Pick<WorkerRuntimeComposition, "pulse" | "renewCertificate" | "runtime">,
   options: {
     readonly reconnectMinimumMs: number;
     readonly reconnectMaximumMs: number;
@@ -1334,6 +1361,9 @@ export async function runWorkerConnectionLoop(
     readonly onReady?: () => void | Promise<void>;
     readonly onConnectionDiagnostic?: (
       diagnostic: WorkerConnectionDiagnostic,
+    ) => void | Promise<void>;
+    readonly onCertificateRenewal?: (
+      outcome: WorkerCertificateRenewalOutcome,
     ) => void | Promise<void>;
   },
 ): Promise<void> {
@@ -1360,12 +1390,37 @@ export async function runWorkerConnectionLoop(
       await options.onReady?.();
       readyReported = true;
     }
+    await renewCertificateIfDue(composition, options.onCertificateRenewal);
     while (!isAborted(options.signal)) {
       await abortableDelay(options.heartbeatIntervalMs, options.signal);
+      // The Device certificate outlives most heartbeats but not most uptimes, so
+      // the renewal deadline is checked on the same beat that proves the channel
+      // is still usable for the exchange.
+      await renewCertificateIfDue(composition, options.onCertificateRenewal);
       if (isAborted(options.signal) || !(await composition.pulse())) {
         break;
       }
     }
+  }
+}
+
+async function renewCertificateIfDue(
+  composition: Pick<WorkerRuntimeComposition, "renewCertificate">,
+  report: ((outcome: WorkerCertificateRenewalOutcome) => void | Promise<void>) | undefined,
+): Promise<void> {
+  let outcome: WorkerCertificateRenewalOutcome;
+  try {
+    outcome = await composition.renewCertificate();
+  } catch (error) {
+    // A failed renewal must not end the connection loop; the certificate is
+    // still usable and the next beat gets another attempt.
+    outcome = {
+      status: "unavailable",
+      reason: error instanceof Error ? error.message : "The certificate renewal failed.",
+    };
+  }
+  if (outcome.status !== "not-due") {
+    await report?.(outcome);
   }
 }
 
@@ -1978,6 +2033,88 @@ function sameWorkerSnapshot(left: BigIntStats, right: BigIntStats): boolean {
   );
 }
 
+export type WorkerCertificateRenewalOutcome =
+  | { readonly status: "not-due"; readonly renewAfter: number }
+  | { readonly status: "renewed"; readonly generation: number; readonly notAfter: number }
+  | { readonly status: "unavailable"; readonly reason: string };
+
+/**
+ * Replaces the Device certificate before it lapses, using the authenticated
+ * channel as the proof that this Worker still holds the current key. A fresh key
+ * is generated for every renewal so a compromised one cannot survive its own
+ * rotation, and the configuration is only rewritten once Main has confirmed the
+ * new generation.
+ */
+export async function renewWorkerDeviceCertificate(input: {
+  readonly channel: Pick<WorkerDeviceChannelClient, "activateIdentity" | "rotateIdentity">;
+  readonly configuration: WorkerConfigurationDocument;
+  readonly managedSecrets: ManagedSecretStore;
+  readonly paths: WorkerPaths;
+  readonly now?: number;
+}): Promise<WorkerCertificateRenewalOutcome> {
+  const now = input.now ?? Date.now();
+  let lifecycle: DeviceCertificateLifecycle;
+  try {
+    lifecycle = readDeviceCertificateLifecycle(input.configuration.certificatePem, now);
+  } catch {
+    return { status: "unavailable", reason: "The Device certificate could not be read." };
+  }
+  if (lifecycle.state === "valid") {
+    return { status: "not-due", renewAfter: lifecycle.renewAfter };
+  }
+  if (lifecycle.state !== "renewable") {
+    // An expired or not-yet-valid certificate cannot authorize its own
+    // replacement; only a new Enrollment Grant recovers the Device.
+    return { status: "unavailable", reason: `The Device certificate is ${lifecycle.state}.` };
+  }
+
+  const identity = new WorkerDeviceIdentity({
+    clock: { now: () => Date.now() },
+    secrets: new ManagedDeviceIdentitySecretStore(input.managedSecrets),
+  });
+  const renewal = await identity.createEnrollmentRequest({
+    deviceId: input.configuration.deviceId,
+    expectedMainSpkiSha256: input.configuration.expectedMainSpkiSha256,
+  });
+  const pending = await input.channel.rotateIdentity(renewal.certificateRequestPem);
+  const verified = await identity.verifyIssuedDeviceIdentity({
+    keyId: renewal.keyId,
+    deviceId: input.configuration.deviceId,
+    generation: pending.generation,
+    certificatePem: pending.certificatePem,
+    certificateAuthorityPem: pending.certificateAuthorityPem,
+    certificateRequestPem: renewal.certificateRequestPem,
+    expectedMainSpkiSha256: input.configuration.expectedMainSpkiSha256,
+  });
+  const renewed = await input.channel.activateIdentity({
+    certificatePem: pending.certificatePem,
+    activationChallenge: pending.activationChallenge,
+    signature: await identity.createRotationProof({
+      keyId: renewal.keyId,
+      deviceId: input.configuration.deviceId,
+      certificateSerial: verified.serialNumber,
+      activationChallenge: pending.activationChallenge,
+    }),
+  });
+
+  await writeConfiguration(
+    input.paths.configFile,
+    validateWorkerConfigurationDocument({
+      ...input.configuration,
+      keyId: renewal.keyId,
+      certificateGeneration: renewed.generation,
+      certificatePem: pending.certificatePem,
+      certificateAuthorityPem: pending.certificateAuthorityPem,
+    }),
+  );
+  // The superseded key is removed only after the replacement is durable, so a
+  // crash mid-renewal leaves a Worker that can still authenticate.
+  await input.managedSecrets
+    .delete(`${PRIVATE_KEY_ALIAS_PREFIX}${input.configuration.keyId}`)
+    .catch(() => undefined);
+  return { status: "renewed", generation: renewed.generation, notAfter: verified.notAfter };
+}
+
 function createWorkerTransportResolver(input: {
   readonly configuration: WorkerConfigurationDocument;
   readonly managedSecrets: ManagedSecretStore;
@@ -1987,6 +2124,9 @@ function createWorkerTransportResolver(input: {
   };
   readonly actionChannel: {
     current?: Pick<WorkerDeviceChannelClient, "authorizeAction" | "consumeActionAuthorization">;
+  };
+  readonly identityChannel: {
+    current?: Pick<WorkerDeviceChannelClient, "activateIdentity" | "rotateIdentity">;
   };
   readonly runLeaseAuthorities: Map<string, CalibratedWorkerRunLeaseAuthority>;
   readonly runtime: () => WorkerRuntime | undefined;
@@ -2039,6 +2179,7 @@ function createWorkerTransportResolver(input: {
           }
           input.artifactChannel.current = client;
           input.actionChannel.current = client;
+          input.identityChannel.current = client;
           const connection: WorkerMainConnection = {
             sendEvents: (events) => client.sendEvents(events),
             sendHeartbeat: (heartbeat) => client.sendHeartbeat(heartbeat),
@@ -2048,6 +2189,9 @@ function createWorkerTransportResolver(input: {
               }
               if (input.actionChannel.current === client) {
                 delete input.actionChannel.current;
+              }
+              if (input.identityChannel.current === client) {
+                delete input.identityChannel.current;
               }
               await client.close();
             },
