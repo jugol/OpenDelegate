@@ -159,6 +159,7 @@ export class CodexCliAdapter implements AgentAdapter {
         input.secretEnvironment,
       ),
       testedVersions: this.#testedVersions,
+      packageName: "@openai/codex",
       parseVersion: parseCodexVersion,
     });
   }

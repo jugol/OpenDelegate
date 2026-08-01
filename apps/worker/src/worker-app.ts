@@ -30,6 +30,7 @@ import {
   FileSessionLeaseStore,
   resolveOwnerProviderHome,
   type AgentActionAuthorizationPort,
+  type AgentAdapterRemediation,
   type AgentProviderHomeOwner,
   type AgentAdapter,
   type AgentAdapterProbe,
@@ -423,6 +424,8 @@ export interface WorkerDiagnosticSnapshot {
     readonly version?: string;
     /** The directory this adapter authenticates in, so a wrong home is visible. */
     readonly providerHome?: string;
+    /** The exact upgrade that would make an unusable adapter usable. */
+    readonly remediation?: AgentAdapterRemediation;
     readonly diagnostics: readonly { readonly code: string; readonly message: string }[];
   }[];
 }
@@ -1322,6 +1325,7 @@ export async function diagnoseWorker(input: {
         ...(adapter.provider === "claude" || adapter.provider === "codex"
           ? { providerHome: providerHomes[adapter.provider] }
           : {}),
+        ...(probe.remediation === undefined ? {} : { remediation: probe.remediation }),
         // The adapters already explain every unready state; dropping them left the
         // owner with a bare "not_ready" and nowhere to look.
         diagnostics: probe.diagnostics.map((diagnostic) => ({

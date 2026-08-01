@@ -356,6 +356,22 @@ export interface AgentAdapterProbe {
     readonly message: string;
   }[];
   readonly modelCatalog?: AgentModelCatalog;
+  /**
+   * The exact upgrade that would make this adapter usable, when one exists.
+   *
+   * Both the package and the version come from this adapter's own pin, never
+   * from the owner or the network, so an owner-facing remedy can name the
+   * target instead of leaving "untested" as a dead end.
+   */
+  readonly remediation?: AgentAdapterRemediation;
+}
+
+export interface AgentAdapterRemediation {
+  readonly kind: "upgrade-provider";
+  readonly packageManager: "npm";
+  readonly packageName: string;
+  readonly targetVersion: string;
+  readonly installedVersion?: string;
 }
 
 export interface AgentAdapterProbeInput {
