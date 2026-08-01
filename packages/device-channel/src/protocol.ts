@@ -1115,7 +1115,7 @@ function parseWorkerAgentAdapters(
     assertExactKeys(
       adapter,
       ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-      ["version", "modelCatalogObservedAtMs", "models"],
+      ["version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
     );
     const provider = readEnum(
       adapter["provider"],
@@ -1156,12 +1156,30 @@ function parseWorkerAgentAdapters(
       ...(adapter["version"] === undefined
         ? {}
         : { version: readIdentifier(adapter["version"], "Agent adapter version") }),
+      ...(adapter["availableUpgrade"] === undefined
+        ? {}
+        : { availableUpgrade: parseAgentAvailableUpgrade(adapter["availableUpgrade"]) }),
       observedAtMs: readTimestampInteger(adapter["observedAtMs"], "Agent adapter observation time"),
       ...(modelCatalogObservedAtMs === undefined
         ? {}
         : { modelCatalogObservedAtMs, models: models! }),
     };
   });
+}
+
+function parseAgentAvailableUpgrade(
+  input: unknown,
+): NonNullable<
+  NonNullable<
+    NonNullable<WorkerHeartbeatV1["inventory"]>["agentAdapters"]
+  >[number]["availableUpgrade"]
+> {
+  const record = readRecord(input, "Agent adapter upgrade");
+  assertExactKeys(record, ["packageName", "targetVersion"]);
+  return {
+    packageName: readBoundedText(record["packageName"], "Agent provider package name", 214),
+    targetVersion: readBoundedText(record["targetVersion"], "Agent provider target version", 64),
+  };
 }
 
 function parseWorkerAgentModels(
