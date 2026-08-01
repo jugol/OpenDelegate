@@ -96,6 +96,7 @@ const heartbeat = {
           readiness: "ready",
           compatibility: "tested",
           version: "1.2.3",
+          availableUpgrade: { packageName: "@openai/codex", targetVersion: "1.2.4" },
           observedAtMs: 1_753_401_599_000,
           modelCatalogObservedAtMs: 1_753_401_599_000,
           models: [

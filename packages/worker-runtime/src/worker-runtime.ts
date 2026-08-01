@@ -1972,7 +1972,7 @@ function readAgentAdapters(
       requireExactInventoryKeys(
         entry,
         ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-        ["version", "modelCatalogObservedAtMs", "models"],
+        ["version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
       );
       const provider = entry["provider"];
       const readiness = entry["readiness"];
@@ -2007,6 +2007,7 @@ function readAgentAdapters(
               entry["modelCatalogObservedAtMs"],
               "Agent model catalog observation time",
             );
+      const availableUpgrade = readAvailableUpgrade(entry["availableUpgrade"]);
       const models = entry["models"] === undefined ? undefined : readAgentModels(entry["models"]);
       if ((modelCatalogObservedAtMs === undefined) !== (models === undefined)) {
         throw new WorkerRuntimeError(
@@ -2020,6 +2021,7 @@ function readAgentAdapters(
         readiness,
         compatibility,
         ...(version === undefined ? {} : { version }),
+        ...(availableUpgrade === undefined ? {} : { availableUpgrade }),
         observedAtMs: readInventoryTimestamp(
           entry["observedAtMs"],
           "Agent adapter observation time",
@@ -2030,6 +2032,25 @@ function readAgentAdapters(
       });
     }),
   );
+}
+
+function readAvailableUpgrade(
+  value: unknown,
+): NonNullable<WorkerSchedulingAgentAdapterV1["availableUpgrade"]> | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isPlainRecord(value)) {
+    throw new WorkerRuntimeError(
+      "INVALID_CONFIGURATION",
+      "Worker Agent adapter upgrade metadata is invalid.",
+    );
+  }
+  requireExactInventoryKeys(value, ["packageName", "targetVersion"], []);
+  return Object.freeze({
+    packageName: readInventoryText(value["packageName"], "Agent provider package name", 214),
+    targetVersion: readInventoryText(value["targetVersion"], "Agent provider target version", 64),
+  });
 }
 
 function readAgentModels(value: unknown): NonNullable<WorkerSchedulingAgentAdapterV1["models"]> {
