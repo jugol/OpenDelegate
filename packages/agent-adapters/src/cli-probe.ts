@@ -1,6 +1,7 @@
 import {
   AGENT_ADAPTER_CONTRACT_VERSION,
   type AgentAdapterProbe,
+  type AgentAdapterRemediation,
   type AgentProvider,
 } from "./contracts.ts";
 import { AgentAdapterError } from "./errors.ts";
@@ -15,6 +16,8 @@ export interface CliProbeOptions {
   readonly authCommand?: SpawnCommand;
   readonly testedVersions: readonly string[];
   readonly parseVersion: (output: string) => string;
+  /** npm package this provider ships as, so an untested version names its remedy. */
+  readonly packageName?: string;
 }
 
 export async function probeCli(options: CliProbeOptions): Promise<AgentAdapterProbe> {
@@ -125,6 +128,34 @@ export async function probeCli(options: CliProbeOptions): Promise<AgentAdapterPr
     auth,
     capabilities: options.capabilities,
     diagnostics,
+    ...(compatibility === "untested"
+      ? providerUpgradeRemediation(options.packageName, options.testedVersions, version)
+      : {}),
+  };
+}
+
+/**
+ * Names the exact upgrade that would clear an untested version. Absent when the
+ * adapter declares no package or no tested version, because a remedy that cannot
+ * be stated is worse than none.
+ */
+export function providerUpgradeRemediation(
+  packageName: string | undefined,
+  testedVersions: readonly string[],
+  installedVersion: string,
+): { readonly remediation: AgentAdapterRemediation } | Record<string, never> {
+  const targetVersion = testedVersions.at(-1);
+  if (packageName === undefined || targetVersion === undefined) {
+    return {};
+  }
+  return {
+    remediation: {
+      kind: "upgrade-provider",
+      packageManager: "npm",
+      packageName,
+      targetVersion,
+      installedVersion,
+    },
   };
 }
 

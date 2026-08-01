@@ -108,6 +108,7 @@ export class ClaudeCliAdapter implements AgentAdapter {
         input.secretEnvironment,
       ),
       testedVersions: this.#testedVersions,
+      packageName: "@anthropic-ai/claude-code",
       parseVersion: parseClaudeVersion,
     });
   }
