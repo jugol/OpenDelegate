@@ -49,6 +49,12 @@ export {
   type WorkerWorkspaceConfiguration,
 } from "./worker-app.ts";
 export {
+  locateNpmCli,
+  upgradeAgentProvider,
+  type AgentProviderUpgradeOutcome,
+  type AgentProviderUpgradeReasonCode,
+} from "./agent-provider-upgrade.ts";
+export {
   WorkerAgentActionAuthorizer,
   type WorkerAgentActionAuthorizationChannelPort,
   type WorkerAgentActionAuthorizerOptions,
