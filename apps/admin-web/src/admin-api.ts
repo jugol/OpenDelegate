@@ -95,6 +95,10 @@ export interface DeviceSummary {
     readonly readiness: "ready" | "degraded" | "unavailable";
     readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
     readonly version?: string;
+    readonly availableUpgrade?: {
+      readonly packageName: string;
+      readonly targetVersion: string;
+    };
     readonly observedAtMs: number;
     readonly modelCatalogObservedAtMs?: number;
     readonly models?: readonly {
@@ -628,6 +632,7 @@ export interface AdminApi {
   completeRecovery(recoveryToken: string, newPassphrase: string): Promise<RecoveryResult>;
   listDevices(): Promise<readonly DeviceSummary[]>;
   assessDevice(deviceId: string): Promise<DeviceSummary>;
+  upgradeDeviceAgentProvider(deviceId: string, adapterId: string): Promise<void>;
   runtimeFeatures(): Promise<RuntimeFeatures>;
   sendConfigurationMessage(deviceId: string, message: string): Promise<ConfigurationAgentReply>;
   listConfigurationMessages?(
@@ -895,6 +900,13 @@ export class BrowserAdminApi implements AdminApi {
       body: input,
       method: "POST",
     });
+  }
+
+  async upgradeDeviceAgentProvider(deviceId: string, adapterId: string): Promise<void> {
+    await this.#authenticatedRequest(
+      `/api/v1/devices/${encodeURIComponent(deviceId)}/agent-provider-upgrade`,
+      { body: { adapterId }, method: "POST" },
+    );
   }
 
   async listArtifacts(): Promise<readonly ArtifactDetail[]> {

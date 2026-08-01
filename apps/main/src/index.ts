@@ -1551,6 +1551,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
               (() => probeConnectedMainWorkerCapability("computer-use")),
             clock,
           });
+    // Captured before the closure so the owner-facing upgrade route only exists
+    // when a Device channel does.
+    const workerChannelForUpgrade = deviceChannel?.workerChannel;
     app = await createMainControlPlaneApp({
       ownerAuth,
       allowedOrigins: [configuration.main.origin],
@@ -1590,6 +1593,27 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
               }) => {
                 if (deviceId !== configuration.deviceId) return;
                 await mainDeviceAssessment.assess({ principalId, idempotencyKey });
+              },
+            },
+          }),
+      ...(workerChannelForUpgrade === undefined
+        ? {}
+        : {
+            deviceProviderUpgrade: {
+              upgrade: async ({
+                deviceId,
+                adapterId,
+              }: {
+                readonly deviceId: string;
+                readonly adapterId: string;
+                readonly principalId: string;
+                readonly idempotencyKey: string;
+              }) => {
+                await workerChannelForUpgrade.upgradeProvider({
+                  deviceId,
+                  adapterId,
+                  requestId: `provider-upgrade_${randomUUID()}`,
+                });
               },
             },
           }),

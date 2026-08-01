@@ -43,6 +43,7 @@ export type WorkerToMainMessageType =
   | "worker.hello"
   | "worker.identity.activate"
   | "worker.identity.rotate"
+  | "worker.provider.upgraded"
   | "worker.route.incident"
   | "worker.run.renew"
   | "worker.run.steering"
@@ -59,6 +60,7 @@ export type MainToWorkerMessageType =
   | "main.identity.rejected"
   | "main.identity.renewed"
   | "main.ping"
+  | "main.provider.upgrade"
   | "main.revoked"
   | "main.run.lease"
   | "main.run.steer"
@@ -254,6 +256,60 @@ export type MainIdentityRejectedFrameV1 = DeviceChannelEnvelopeV1<
     readonly retryable: boolean;
   }
 >;
+/**
+ * Asks a Device to bring one Agent adapter to the version that adapter's own pin
+ * requires. Main names only the adapter: the package and the version stay on the
+ * Worker, where they are product constants rather than anything that crossed the
+ * wire.
+ */
+export type MainProviderUpgradeFrameV1 = DeviceChannelEnvelopeV1<
+  "main.provider.upgrade",
+  {
+    readonly requestId: string;
+    readonly deviceId: string;
+    readonly adapterId: string;
+  }
+>;
+export type ProviderUpgradeFailureCodeV1 =
+  | "ADAPTER_UNKNOWN"
+  | "NO_UPGRADE_AVAILABLE"
+  | "PACKAGE_MANAGER_UNAVAILABLE"
+  | "REMEDIATION_INVALID"
+  | "UPGRADE_COMMAND_FAILED"
+  | "VERSION_NOT_APPLIED";
+/** What a Worker did about one adapter, before the channel identity is added. */
+export type WorkerProviderUpgradeResultV1 =
+  | {
+      readonly adapterId: string;
+      readonly status: "upgraded";
+      readonly packageName: string;
+      readonly fromVersion?: string;
+      readonly toVersion: string;
+    }
+  | {
+      readonly adapterId: string;
+      readonly status: "failed";
+      readonly code: ProviderUpgradeFailureCodeV1;
+    };
+export type WorkerProviderUpgradedFrameV1 = DeviceChannelEnvelopeV1<
+  "worker.provider.upgraded",
+  {
+    readonly requestId: string;
+    readonly deviceId: string;
+    readonly adapterId: string;
+  } & (
+    | {
+        readonly status: "upgraded";
+        readonly packageName: string;
+        readonly fromVersion?: string;
+        readonly toVersion: string;
+      }
+    | {
+        readonly status: "failed";
+        readonly code: ProviderUpgradeFailureCodeV1;
+      }
+  )
+>;
 export type MainWelcomeFrameV1 = DeviceChannelEnvelopeV1<
   "main.welcome",
   {
@@ -377,6 +433,7 @@ export type WorkerToMainFrameV1 =
   | WorkerHelloFrameV1
   | WorkerIdentityActivateFrameV1
   | WorkerIdentityRotateFrameV1
+  | WorkerProviderUpgradedFrameV1
   | WorkerRouteIncidentFrameV1
   | WorkerRunLeaseRenewFrameV1
   | WorkerRunSteeringReceiptFrameV1
@@ -393,6 +450,7 @@ export type MainToWorkerFrameV1 =
   | MainIdentityRejectedFrameV1
   | MainIdentityRenewedFrameV1
   | MainPingFrameV1
+  | MainProviderUpgradeFrameV1
   | MainRevokedFrameV1
   | MainRunLeaseFrameV1
   | MainRunSteerFrameV1
@@ -478,6 +536,7 @@ function assertPayloadIdentity(frame: DeviceChannelFrameV1): DeviceChannelFrameV
     case "worker.action.consume":
     case "worker.identity.activate":
     case "worker.identity.rotate":
+    case "worker.provider.upgraded":
     case "worker.run.renew":
       if (frame.payload.deviceId !== frame.senderDeviceId) {
         throw protocolError(
@@ -571,6 +630,8 @@ function parsePayload(frame: DeviceChannelFrameV1): DeviceChannelFrameV1 {
       return { ...frame, payload: parseWorkerIdentityRotate(frame.payload) };
     case "worker.identity.activate":
       return { ...frame, payload: parseWorkerIdentityActivate(frame.payload) };
+    case "worker.provider.upgraded":
+      return { ...frame, payload: parseWorkerProviderUpgraded(frame.payload) };
     case "main.welcome":
       return { ...frame, payload: parseMainWelcome(frame.payload) };
     case "main.dispatch":
@@ -601,6 +662,8 @@ function parsePayload(frame: DeviceChannelFrameV1): DeviceChannelFrameV1 {
       return { ...frame, payload: parseMainIdentityRenewed(frame.payload) };
     case "main.identity.rejected":
       return { ...frame, payload: parseMainIdentityRejected(frame.payload) };
+    case "main.provider.upgrade":
+      return { ...frame, payload: parseMainProviderUpgrade(frame.payload) };
   }
 }
 
@@ -2163,6 +2226,61 @@ function readBase64Url(value: unknown, label: string, maximumLength: number): st
   return value;
 }
 
+function parseMainProviderUpgrade(input: unknown): MainProviderUpgradeFrameV1["payload"] {
+  const record = readRecord(input, "Main provider upgrade command");
+  assertExactKeys(record, ["requestId", "deviceId", "adapterId"]);
+  return {
+    requestId: readIdentifier(record["requestId"], "provider upgrade request ID"),
+    deviceId: readIdentifier(record["deviceId"], "upgrading Device ID"),
+    adapterId: readIdentifier(record["adapterId"], "Agent adapter ID"),
+  };
+}
+
+function parseWorkerProviderUpgraded(input: unknown): WorkerProviderUpgradedFrameV1["payload"] {
+  const record = readRecord(input, "Worker provider upgrade receipt");
+  const status = readEnum(record["status"], ["upgraded", "failed"] as const, "upgrade status");
+  const common = {
+    requestId: readIdentifier(record["requestId"], "provider upgrade request ID"),
+    deviceId: readIdentifier(record["deviceId"], "upgrading Device ID"),
+    adapterId: readIdentifier(record["adapterId"], "Agent adapter ID"),
+  };
+  if (status === "failed") {
+    assertExactKeys(record, ["requestId", "deviceId", "adapterId", "status", "code"]);
+    return {
+      ...common,
+      status,
+      code: readEnum(
+        record["code"],
+        [
+          "ADAPTER_UNKNOWN",
+          "NO_UPGRADE_AVAILABLE",
+          "PACKAGE_MANAGER_UNAVAILABLE",
+          "REMEDIATION_INVALID",
+          "UPGRADE_COMMAND_FAILED",
+          "VERSION_NOT_APPLIED",
+        ] as const,
+        "provider upgrade failure code",
+      ),
+    };
+  }
+  const fromVersion = record["fromVersion"];
+  assertExactKeys(
+    record,
+    fromVersion === undefined
+      ? ["requestId", "deviceId", "adapterId", "status", "packageName", "toVersion"]
+      : ["requestId", "deviceId", "adapterId", "status", "packageName", "fromVersion", "toVersion"],
+  );
+  return {
+    ...common,
+    status,
+    packageName: readBoundedText(record["packageName"], "provider package name", 214),
+    ...(fromVersion === undefined
+      ? {}
+      : { fromVersion: readBoundedText(fromVersion, "previous provider version", 64) }),
+    toVersion: readBoundedText(record["toVersion"], "installed provider version", 64),
+  };
+}
+
 function parseMainActionAuthorization(input: unknown): MainActionAuthorizationFrameV1["payload"] {
   const record = readRecord(input, "Main action authorization");
   assertExactKeys(record, [
@@ -2516,6 +2634,7 @@ const WORKER_TO_MAIN_MESSAGE_TYPES = new Set<WorkerToMainMessageType>([
   "worker.identity.activate",
   "worker.identity.rotate",
   "worker.pong",
+  "worker.provider.upgraded",
   "worker.route.incident",
   "worker.run.renew",
   "worker.run.steering",
@@ -2532,6 +2651,7 @@ const MAIN_TO_WORKER_MESSAGE_TYPES = new Set<MainToWorkerMessageType>([
   "main.identity.rejected",
   "main.identity.renewed",
   "main.ping",
+  "main.provider.upgrade",
   "main.revoked",
   "main.run.lease",
   "main.run.steer",

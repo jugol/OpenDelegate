@@ -63,6 +63,7 @@ interface DeviceSurfaceProps {
   readonly chatOpen: boolean;
   readonly device: DeviceOverviewViewModel;
   readonly onAssess?: () => Promise<void>;
+  readonly onUpgradeAgentProvider?: (deviceId: string, adapterId: string) => Promise<void>;
   readonly onConfigure: (trigger: HTMLButtonElement) => void;
   readonly onConfigureAgentProfile: (message: string, trigger: HTMLButtonElement) => void;
 }
@@ -71,6 +72,7 @@ export function DeviceSurface({
   chatOpen,
   device,
   onAssess,
+  onUpgradeAgentProvider,
   onConfigure,
   onConfigureAgentProfile,
 }: DeviceSurfaceProps): React.JSX.Element {
@@ -177,6 +179,7 @@ export function DeviceSurface({
           activeTab={activeTab}
           device={device}
           onConfigureAgentProfile={onConfigureAgentProfile}
+          {...(onUpgradeAgentProvider === undefined ? {} : { onUpgradeAgentProvider })}
         />
       </section>
     </main>
@@ -466,16 +469,24 @@ function DeviceTabPanel({
   activeTab,
   device,
   onConfigureAgentProfile,
+  onUpgradeAgentProvider,
 }: {
   readonly activeTab: DeviceTabKey;
   readonly device: DeviceOverviewViewModel;
   readonly onConfigureAgentProfile: DeviceSurfaceProps["onConfigureAgentProfile"];
+  readonly onUpgradeAgentProvider?: DeviceSurfaceProps["onUpgradeAgentProvider"];
 }): React.JSX.Element {
   const { messages } = useAdminI18n();
   const wakeOnLan = wakeOnLanForDevice(device);
   switch (activeTab) {
     case "overview":
-      return <DeviceOverview device={device} onConfigureAgentProfile={onConfigureAgentProfile} />;
+      return (
+        <DeviceOverview
+          device={device}
+          onConfigureAgentProfile={onConfigureAgentProfile}
+          {...(onUpgradeAgentProvider === undefined ? {} : { onUpgradeAgentProvider })}
+        />
+      );
     case "capabilities":
       return (
         <div className="focused-detail">
@@ -525,7 +536,13 @@ function DeviceTabPanel({
             <PolicyList policies={device.policies} />
           </DetailSection>
           <DetailSection area="adapters" title={messages.device.agentAdapters}>
-            <AgentAdapterList adapters={device.agentAdapters} />
+            <AgentAdapterList
+              adapters={device.agentAdapters}
+              deviceId={device.deviceId}
+              {...(onUpgradeAgentProvider === undefined
+                ? {}
+                : { onUpgrade: onUpgradeAgentProvider })}
+            />
           </DetailSection>
           <DetailSection area="locks" title={messages.device.resourceLocks}>
             <ResourceLockList locks={device.resourceLocks} />
@@ -546,9 +563,11 @@ function DeviceTabPanel({
 function DeviceOverview({
   device,
   onConfigureAgentProfile,
+  onUpgradeAgentProvider,
 }: {
   readonly device: DeviceOverviewViewModel;
   readonly onConfigureAgentProfile: DeviceSurfaceProps["onConfigureAgentProfile"];
+  readonly onUpgradeAgentProvider?: DeviceSurfaceProps["onUpgradeAgentProvider"];
 }): React.JSX.Element {
   const { locale, messages } = useAdminI18n();
   const wakeOnLan = wakeOnLanForDevice(device);
@@ -640,7 +659,11 @@ function DeviceOverview({
       </DetailSection>
 
       <DetailSection area="adapters" title={messages.device.agentAdapters}>
-        <AgentAdapterList adapters={device.agentAdapters} />
+        <AgentAdapterList
+          adapters={device.agentAdapters}
+          deviceId={device.deviceId}
+          {...(onUpgradeAgentProvider === undefined ? {} : { onUpgrade: onUpgradeAgentProvider })}
+        />
       </DetailSection>
 
       <DetailSection area="agent-profile" title={messages.device.agentExecution}>
@@ -949,12 +972,35 @@ function PolicyList({
 
 function AgentAdapterList({
   adapters,
+  deviceId,
+  onUpgrade,
 }: {
   readonly adapters: DeviceOverviewViewModel["agentAdapters"];
+  readonly deviceId?: string;
+  readonly onUpgrade?: (deviceId: string, adapterId: string) => Promise<void>;
 }): React.JSX.Element {
   const { locale, messages } = useAdminI18n();
+  const [pending, setPending] = useState<string | undefined>(undefined);
+  const [requested, setRequested] = useState<ReadonlySet<string>>(new Set());
+  const [failed, setFailed] = useState<ReadonlySet<string>>(new Set());
   if (adapters.length === 0) {
     return <EmptyDetail text={messages.device.noAgentAdapters} />;
+  }
+
+  async function upgrade(adapterId: string): Promise<void> {
+    if (deviceId === undefined || onUpgrade === undefined) {
+      return;
+    }
+    setPending(adapterId);
+    setFailed((current) => new Set([...current].filter((entry) => entry !== adapterId)));
+    try {
+      await onUpgrade(deviceId, adapterId);
+      setRequested((current) => new Set([...current, adapterId]));
+    } catch {
+      setFailed((current) => new Set([...current, adapterId]));
+    } finally {
+      setPending(undefined);
+    }
   }
   return (
     <ul className="adapter-list">
@@ -1005,6 +1051,32 @@ function AgentAdapterList({
             {localizeAdapterReadiness(adapter.readiness, messages)} ·{" "}
             {localizeAdapterCompatibility(adapter.compatibility, messages)}
           </span>
+          {adapter.availableUpgrade === undefined ||
+          deviceId === undefined ||
+          onUpgrade === undefined ? null : (
+            <span className="adapter-upgrade">
+              <button
+                className="secondary-button"
+                disabled={pending !== undefined || requested.has(adapter.adapterId)}
+                onClick={() => void upgrade(adapter.adapterId)}
+                type="button"
+              >
+                {pending === adapter.adapterId
+                  ? messages.device.adapterUpgrading
+                  : formatMessage(messages.device.adapterUpgrade, {
+                      version: adapter.availableUpgrade.targetVersion,
+                    })}
+              </button>
+              {requested.has(adapter.adapterId) ? (
+                <small role="status">{messages.device.adapterUpgradeRequested}</small>
+              ) : null}
+              {failed.has(adapter.adapterId) ? (
+                <small className="form-error" role="alert">
+                  {messages.device.adapterUpgradeFailed}
+                </small>
+              ) : null}
+            </span>
+          )}
         </li>
       ))}
     </ul>

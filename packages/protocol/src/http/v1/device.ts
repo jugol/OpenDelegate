@@ -134,6 +134,15 @@ const DeviceAgentAdapterSchema = Type.Object(
       Type.Literal("untested"),
       Type.Literal("incompatible"),
     ]),
+    availableUpgrade: Type.Optional(
+      Type.Object(
+        {
+          packageName: Type.String({ minLength: 1, maxLength: 214 }),
+          targetVersion: Type.String({ minLength: 1, maxLength: 64 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     version: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
     observedAtMs: Type.Integer({ minimum: 0 }),
     modelCatalogObservedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -383,6 +392,34 @@ export const DeviceSummarySchema = Type.Object(
     $id: "OpenDelegateDeviceSummaryV1",
   },
 );
+
+export const DeviceProviderUpgradeParamsSchema = Type.Object(
+  {
+    deviceId: OpaqueIdSchema,
+  },
+  { additionalProperties: false, $id: "OpenDelegateDeviceProviderUpgradeParamsV1" },
+);
+
+export const DeviceProviderUpgradeRequestSchema = Type.Object(
+  {
+    adapterId: OpaqueIdSchema,
+  },
+  { additionalProperties: false, $id: "OpenDelegateDeviceProviderUpgradeRequestV1" },
+);
+
+export const DeviceProviderUpgradeResponseSchema = Type.Object(
+  {
+    status: Type.Union([Type.Literal("requested")]),
+    deviceId: OpaqueIdSchema,
+    adapterId: OpaqueIdSchema,
+  },
+  { additionalProperties: false, $id: "OpenDelegateDeviceProviderUpgradeResponseV1" },
+);
+
+export type DeviceProviderUpgradeRequestV1 = Type.Static<typeof DeviceProviderUpgradeRequestSchema>;
+export type DeviceProviderUpgradeResponseV1 = Type.Static<
+  typeof DeviceProviderUpgradeResponseSchema
+>;
 
 export type DeviceSummaryV1 = Type.Static<typeof DeviceSummarySchema>;
 

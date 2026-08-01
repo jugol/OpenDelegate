@@ -204,6 +204,11 @@ export const koreanMessages = {
     policies: "실행 정책",
     noPolicies: "표시할 실행 정책이 없습니다.",
     agentAdapters: "Agent 어댑터",
+    adapterUpgrade: "{version}(으)로 업데이트",
+    adapterUpgrading: "업데이트 중…",
+    adapterUpgradeRequested:
+      "업데이트를 요청했습니다. 이 장치가 다음 새로고침에 결과를 알려줍니다.",
+    adapterUpgradeFailed: "업데이트를 요청하지 못했습니다.",
     noAgentAdapters: "표시할 Agent 어댑터 관측 정보가 없습니다.",
     agentExecution: "Agent 실행",
     agentProfileTarget: "Agent 프로필 대상",

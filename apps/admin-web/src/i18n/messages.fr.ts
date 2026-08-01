@@ -211,6 +211,11 @@ export const frenchMessages = {
     policies: "Politiques exécutables",
     noPolicies: "Aucune projection de politique exécutable n’est disponible.",
     agentAdapters: "Adaptateurs Agent",
+    adapterUpgrade: "Mettre à jour vers {version}",
+    adapterUpgrading: "Mise à jour…",
+    adapterUpgradeRequested:
+      "Mise à jour demandée. L'Appareil signalera le résultat lors de sa prochaine actualisation.",
+    adapterUpgradeFailed: "La mise à jour n'a pas pu être demandée.",
     noAgentAdapters: "Aucune observation d’adaptateur Agent n’est disponible.",
     agentExecution: "Exécution de l’Agent",
     agentProfileTarget: "Cible du profil Agent",

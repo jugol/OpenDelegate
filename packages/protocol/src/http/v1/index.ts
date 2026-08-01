@@ -108,6 +108,11 @@ export {
   type DeviceAssessmentRequestV1,
   type DeviceAssessmentResponseV1,
   type DeviceListResponseV1,
+  DeviceProviderUpgradeParamsSchema,
+  DeviceProviderUpgradeRequestSchema,
+  DeviceProviderUpgradeResponseSchema,
+  type DeviceProviderUpgradeRequestV1,
+  type DeviceProviderUpgradeResponseV1,
   type DeviceSummaryV1,
 } from "./device.ts";
 export {

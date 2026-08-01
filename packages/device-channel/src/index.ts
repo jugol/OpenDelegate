@@ -20,6 +20,10 @@ export {
   type MainControlFrameV1,
   type MainDispatchFrameV1,
   type MainPingFrameV1,
+  type MainProviderUpgradeFrameV1,
+  type ProviderUpgradeFailureCodeV1,
+  type WorkerProviderUpgradedFrameV1,
+  type WorkerProviderUpgradeResultV1,
   type MainRunLeaseFrameV1,
   type MainRunSteerFrameV1,
   type MainRevokedFrameV1,
@@ -99,6 +103,7 @@ export {
   type MainRunLeaseRenewalDecision,
   type MainRunLeaseRenewalRequest,
   type MainRunSteeringReceiptObservation,
+  type MainProviderUpgradeObservation,
   type MainRouteIncidentRequest,
 } from "./main-device-channel-server.ts";
 export {

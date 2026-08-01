@@ -35,6 +35,7 @@ import {
   type MainIdentityPendingFrameV1,
   type MainIdentityRejectedFrameV1,
   type MainIdentityRenewedFrameV1,
+  type MainProviderUpgradeFrameV1,
   type MainActionAuthorizationFrameV1,
   type MainActionConsumptionFrameV1,
   type MainControlFrameV1,
@@ -48,6 +49,7 @@ import {
   type WorkerActionConsumptionRequestV1,
   type WorkerIdentityActivateFrameV1,
   type WorkerIdentityRotateFrameV1,
+  type WorkerProviderUpgradeResultV1,
   type WorkerRouteIncidentFrameV1,
   type WorkerRunLeaseRenewalRequestV1,
   type WorkerRunLeaseRenewFrameV1,
@@ -84,6 +86,12 @@ export interface WorkerDeviceChannelCallbacks {
   onArtifactRejected?(frame: MainArtifactRejectedFrameV1): Promise<void>;
   onRunLeaseDecision?(observation: WorkerRunLeaseDecisionObservation): Promise<void>;
   onRevoked?(): Promise<void>;
+  /**
+   * Applies the pinned upgrade for one adapter and returns what happened. The
+   * receipt is sent for Main to record; the Worker decides the package and the
+   * version from its own adapter constants.
+   */
+  onProviderUpgrade?(frame: MainProviderUpgradeFrameV1): Promise<WorkerProviderUpgradeResultV1>;
 }
 
 export interface ConnectWorkerDeviceChannelOptions extends WorkerDeviceChannelCallbacks {
@@ -389,6 +397,33 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
       throw error;
     }
     return response;
+  }
+
+  private async acceptProviderUpgrade(frame: MainProviderUpgradeFrameV1): Promise<void> {
+    if (frame.payload.deviceId !== this.options.deviceId) {
+      throw new DeviceChannelClientError("The Main provider upgrade targets another Device.");
+    }
+    const outcome = this.options.onProviderUpgrade
+      ? await this.options.onProviderUpgrade(frame)
+      : ({
+          adapterId: frame.payload.adapterId,
+          status: "failed",
+          code: "ADAPTER_UNKNOWN",
+        } as const);
+    const receipt = await this.options.state.enqueueOutbound((sequence) => {
+      const envelope = {
+        ...this.envelope(sequence, frame.payload.requestId),
+        type: "worker.provider.upgraded" as const,
+      };
+      const identity = {
+        requestId: frame.payload.requestId,
+        deviceId: this.options.deviceId,
+      };
+      return outcome.status === "failed"
+        ? { ...envelope, payload: { ...identity, ...outcome } }
+        : { ...envelope, payload: { ...identity, ...outcome } };
+    });
+    await this.send(receipt);
   }
 
   private acceptIdentityResponse(
@@ -789,6 +824,8 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
           await this.options.onDispatch?.(frame, this);
         } else if (frame.type === "main.run.steer") {
           await this.acceptRunSteering(frame);
+        } else if (frame.type === "main.provider.upgrade") {
+          await this.acceptProviderUpgrade(frame);
         } else if (frame.type === "main.control") {
           await this.options.onControl?.(frame);
         } else if (frame.type === "main.revoked") {

@@ -1467,3 +1467,36 @@ in that home affects OpenDelegate along with every other local consumer, which i
 what sharing one home means. The resolved directory is reported by `worker diagnose`
 next to each adapter's authentication state, so the home in use is never a guess.
 Owners who want isolation pass an explicit path.
+
+## D-077 — The owner updates an Agent provider from Admin Web
+
+**Decision:** When an Agent adapter reports a version outside its pin, Admin Web
+offers an update naming the exact target, and applying it installs that version on
+the Device. Main names only the adapter; the package and the version come from
+that adapter's own constants on the Worker, so nothing installable crosses the
+wire. The Worker refuses any remedy that is not a plain package name and an exact
+semantic version, runs the install through its own Node against npm's entry script
+rather than a shell wrapper, and re-probes afterwards — a command that exits zero
+without changing the installed version is reported as a failure.
+
+The request is accepted, not awaited: the Device applies the upgrade and reports
+through its own channel, and the owner sees the result on the next Device refresh.
+
+**Rationale:** A pinned provider version is a fail-closed safety property — an
+untested adapter refuses every Run — but it was also a dead end. The adapter said
+`untested` and nothing said which package, which version, or where from. That is a
+support burden for every owner on every Device, not a property of one machine.
+
+The existing platform-mutation capability cannot serve this. It does not exist
+unless the owner has already configured absolute executable paths, which is the
+manual setup an owner-facing update exists to remove. A narrow operation whose
+package and version are both product constants is a far smaller trust surface than
+a general package install, and it is the only one that works on a Device the owner
+has not prepared.
+
+**Consequence:** The install writes to the Device's global npm prefix, so it
+affects every local consumer of that provider — the same sharing the owner already
+accepted for provider homes in [D-076](#d-076--the-owners-existing-provider-home-is-the-default).
+A Device without npm reports that rather than guessing at an installer. Adapters
+that ship no npm package, such as the Claude Agent SDK on native Windows, offer no
+update, because a remedy that cannot name its target is worse than none.

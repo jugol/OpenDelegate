@@ -38,6 +38,9 @@ import {
   DeviceAssessmentParamsSchema,
   DeviceAssessmentRequestSchema,
   DeviceAssessmentResponseSchema,
+  DeviceProviderUpgradeParamsSchema,
+  DeviceProviderUpgradeRequestSchema,
+  DeviceProviderUpgradeResponseSchema,
   DeviceListResponseSchema,
   DeviceEnrollmentOverviewSchema,
   ExtendTaskBudgetRequestSchema,
@@ -139,6 +142,14 @@ export interface MainControlPlaneAppOptions extends SharedAppOptions {
     canAssess(deviceId: string): boolean;
     assess(input: {
       readonly deviceId: string;
+      readonly principalId: string;
+      readonly idempotencyKey: string;
+    }): Promise<void>;
+  };
+  readonly deviceProviderUpgrade?: {
+    upgrade(input: {
+      readonly deviceId: string;
+      readonly adapterId: string;
       readonly principalId: string;
       readonly idempotencyKey: string;
     }): Promise<void>;
@@ -860,6 +871,50 @@ function registerDeviceRoutes(
         throw new PublicHttpError(404, "DEVICE_NOT_FOUND");
       }
       return { device };
+    },
+  );
+  app.post(
+    "/api/v1/devices/:deviceId/agent-provider-upgrade",
+    {
+      schema: {
+        params: DeviceProviderUpgradeParamsSchema,
+        body: DeviceProviderUpgradeRequestSchema,
+        response: {
+          202: DeviceProviderUpgradeResponseSchema,
+          ...ERROR_RESPONSES,
+        },
+      },
+      config: {
+        rateLimit: AUTH_RATE_LIMIT,
+      },
+      onRequest: async (request) => {
+        validatePublicMutation(request);
+      },
+    },
+    async (request, reply) => {
+      const sessionToken = await validateAuthenticatedMutation(request, options.ownerAuth);
+      const session = await options.ownerAuth.validateSession(sessionToken);
+      const devices = await currentDevices(options);
+      if (!devices.some((device) => device.deviceId === request.params.deviceId)) {
+        throw new PublicHttpError(404, "DEVICE_NOT_FOUND");
+      }
+      if (options.deviceProviderUpgrade === undefined) {
+        throw new PublicHttpError(503, "DEVICE_PROVIDER_UPGRADE_UNAVAILABLE");
+      }
+      await options.deviceProviderUpgrade.upgrade({
+        deviceId: request.params.deviceId,
+        adapterId: request.body.adapterId,
+        principalId: session.ownerId,
+        idempotencyKey: requireIdempotencyKey(request),
+      });
+      // The Device applies the upgrade and reports through its own channel; the
+      // owner sees the result on the next Device refresh rather than blocking a
+      // request on an install.
+      return reply.status(202).send({
+        status: "requested" as const,
+        deviceId: request.params.deviceId,
+        adapterId: request.body.adapterId,
+      });
     },
   );
 }

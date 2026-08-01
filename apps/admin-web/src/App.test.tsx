@@ -1243,4 +1243,55 @@ describe("first-run Device overview", () => {
     expect(appFrame?.hasAttribute("inert")).toBe(false);
     expect((composer as HTMLInputElement).value).toBe("Keep this expanded draft");
   });
+
+  it("offers the exact provider upgrade and asks the Device to apply it", async () => {
+    const user = userEvent.setup();
+    const upgrades: Array<{ readonly deviceId: string; readonly adapterId: string }> = [];
+    const device = {
+      ...firstRunDevice,
+      agentAdapters: [
+        {
+          provider: "codex" as const,
+          adapterId: "codex-cli",
+          version: "0.145.0",
+          readiness: "ready" as const,
+          compatibility: "untested" as const,
+          availableUpgrade: { packageName: "@openai/codex", targetVersion: "0.146.0" },
+          observedAtMs: Date.parse("2026-08-01T00:00:00.000Z"),
+          models: [],
+        },
+        {
+          provider: "claude" as const,
+          adapterId: "claude-cli",
+          version: "2.1.220",
+          readiness: "ready" as const,
+          compatibility: "tested" as const,
+          observedAtMs: Date.parse("2026-08-01T00:00:00.000Z"),
+          models: [],
+        },
+      ],
+    } satisfies DeviceOverviewViewModel;
+
+    render(
+      <App
+        deviceFleet={{ devices: [device], mainDeviceId: device.deviceId }}
+        onUpgradeAgentProvider={async (deviceId, adapterId) => {
+          upgrades.push({ deviceId, adapterId });
+        }}
+      />,
+    );
+
+    // Only the adapter with a remedy offers one, and it names the target version
+    // rather than leaving "untested" as a status the owner cannot act on.
+    const upgrade = screen.getByRole("button", { name: "Update to 0.146.0" });
+    expect(screen.queryAllByRole("button", { name: /^Update to/u })).toHaveLength(1);
+
+    await user.click(upgrade);
+
+    await waitFor(() => {
+      expect(upgrades).toEqual([{ deviceId: device.deviceId, adapterId: "codex-cli" }]);
+    });
+    expect(screen.getByText(/Update requested/u)).toBeTruthy();
+    expect((upgrade as HTMLButtonElement).disabled).toBe(true);
+  });
 });
