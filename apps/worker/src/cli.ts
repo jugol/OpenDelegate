@@ -29,6 +29,7 @@ import {
   runWorkerDaemon,
   WORKER_COMPUTER_USE_TOOL_NAMES,
   type WorkerAgentConfiguration,
+  type WorkerCertificateRenewalOutcome,
   type WorkerConnectionDiagnostic,
   type WorkerPaths,
 } from "./index.ts";
@@ -728,6 +729,22 @@ async function runForeground(paths: WorkerPaths): Promise<void> {
     await runWorkerDaemon({
       paths,
       signal: controller.signal,
+      onCertificateRenewal: (outcome: WorkerCertificateRenewalOutcome) => {
+        if (outcome.status === "renewed") {
+          writeJson({
+            event: "worker.certificate-renewed",
+            certificateGeneration: outcome.generation,
+            expiresAt: new Date(outcome.notAfter).toISOString(),
+          });
+          return;
+        }
+        if (outcome.status === "unavailable") {
+          writeJson({
+            event: "worker.certificate-renewal-deferred",
+            reason: outcome.reason,
+          });
+        }
+      },
       onConnectionDiagnostic: (diagnostic) => {
         writeJson({
           event: "worker.connection-blocked",

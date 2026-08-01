@@ -28,6 +28,7 @@ export const DEVICE_CHANNEL_PROTOCOL_VERSION = PROTOCOL_VERSION;
 export const MAX_DEVICE_CHANNEL_FRAME_BYTES = 1_048_576;
 const MAX_BATCH_ITEMS = 256;
 const MAX_IDENTIFIER_BYTES = 256;
+const MAX_PEM_BYTES = 32_768;
 const MAX_TEXT_BYTES = 262_144;
 const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
 
@@ -40,6 +41,8 @@ export type WorkerToMainMessageType =
   | "worker.events"
   | "worker.heartbeat"
   | "worker.hello"
+  | "worker.identity.activate"
+  | "worker.identity.rotate"
   | "worker.route.incident"
   | "worker.run.renew"
   | "worker.run.steering"
@@ -52,6 +55,9 @@ export type MainToWorkerMessageType =
   | "main.artifact.rejected"
   | "main.control"
   | "main.dispatch"
+  | "main.identity.pending"
+  | "main.identity.rejected"
+  | "main.identity.renewed"
   | "main.ping"
   | "main.revoked"
   | "main.run.lease"
@@ -191,6 +197,63 @@ export type WorkerActionConsumeFrameV1 = DeviceChannelEnvelopeV1<
   "worker.action.consume",
   WorkerActionConsumptionRequestV1
 >;
+/**
+ * Certificate renewal runs over the authenticated channel because the connection
+ * itself is the proof that the Worker still holds the current private key. The
+ * Worker offers a certificate request signed by a freshly generated key; Main
+ * issues a pending certificate that only becomes usable once the Worker proves
+ * possession of that new key.
+ */
+export type WorkerIdentityRotateFrameV1 = DeviceChannelEnvelopeV1<
+  "worker.identity.rotate",
+  {
+    readonly deviceId: string;
+    readonly certificateRequestPem: string;
+  }
+>;
+export type WorkerIdentityActivateFrameV1 = DeviceChannelEnvelopeV1<
+  "worker.identity.activate",
+  {
+    readonly deviceId: string;
+    readonly certificatePem: string;
+    readonly activationChallenge: string;
+    readonly signature: string;
+  }
+>;
+export type MainIdentityPendingFrameV1 = DeviceChannelEnvelopeV1<
+  "main.identity.pending",
+  {
+    readonly requestMessageId: string;
+    readonly deviceId: string;
+    readonly certificatePem: string;
+    readonly certificateAuthorityPem: string;
+    readonly serialNumber: string;
+    readonly generation: number;
+    readonly activationChallenge: string;
+    readonly activationExpiresAtMs: number;
+  }
+>;
+export type MainIdentityRenewedFrameV1 = DeviceChannelEnvelopeV1<
+  "main.identity.renewed",
+  {
+    readonly requestMessageId: string;
+    readonly deviceId: string;
+    readonly serialNumber: string;
+    readonly generation: number;
+    readonly overlapEndsAtMs: number;
+  }
+>;
+export type IdentityRotationRejectionCodeV1 =
+  "ROTATION_ALREADY_PENDING" | "ROTATION_INVALID" | "SERVICE_UNAVAILABLE";
+export type MainIdentityRejectedFrameV1 = DeviceChannelEnvelopeV1<
+  "main.identity.rejected",
+  {
+    readonly requestMessageId: string;
+    readonly deviceId: string;
+    readonly code: IdentityRotationRejectionCodeV1;
+    readonly retryable: boolean;
+  }
+>;
 export type MainWelcomeFrameV1 = DeviceChannelEnvelopeV1<
   "main.welcome",
   {
@@ -312,6 +375,8 @@ export type WorkerToMainFrameV1 =
   | WorkerEventsFrameV1
   | WorkerHeartbeatFrameV1
   | WorkerHelloFrameV1
+  | WorkerIdentityActivateFrameV1
+  | WorkerIdentityRotateFrameV1
   | WorkerRouteIncidentFrameV1
   | WorkerRunLeaseRenewFrameV1
   | WorkerRunSteeringReceiptFrameV1
@@ -324,6 +389,9 @@ export type MainToWorkerFrameV1 =
   | MainArtifactRejectedFrameV1
   | MainControlFrameV1
   | MainDispatchFrameV1
+  | MainIdentityPendingFrameV1
+  | MainIdentityRejectedFrameV1
+  | MainIdentityRenewedFrameV1
   | MainPingFrameV1
   | MainRevokedFrameV1
   | MainRunLeaseFrameV1
@@ -408,6 +476,8 @@ function assertPayloadIdentity(frame: DeviceChannelFrameV1): DeviceChannelFrameV
     case "worker.artifact.prepare":
     case "worker.action.authorize":
     case "worker.action.consume":
+    case "worker.identity.activate":
+    case "worker.identity.rotate":
     case "worker.run.renew":
       if (frame.payload.deviceId !== frame.senderDeviceId) {
         throw protocolError(
@@ -497,6 +567,10 @@ function parsePayload(frame: DeviceChannelFrameV1): DeviceChannelFrameV1 {
       return { ...frame, payload: parseWorkerRunSteeringReceipt(frame.payload) };
     case "worker.route.incident":
       return { ...frame, payload: parseWorkerRouteIncident(frame.payload) };
+    case "worker.identity.rotate":
+      return { ...frame, payload: parseWorkerIdentityRotate(frame.payload) };
+    case "worker.identity.activate":
+      return { ...frame, payload: parseWorkerIdentityActivate(frame.payload) };
     case "main.welcome":
       return { ...frame, payload: parseMainWelcome(frame.payload) };
     case "main.dispatch":
@@ -521,6 +595,12 @@ function parsePayload(frame: DeviceChannelFrameV1): DeviceChannelFrameV1 {
       return { ...frame, payload: parseMainActionAuthorization(frame.payload) };
     case "main.action.consumption":
       return { ...frame, payload: parseMainActionConsumption(frame.payload) };
+    case "main.identity.pending":
+      return { ...frame, payload: parseMainIdentityPending(frame.payload) };
+    case "main.identity.renewed":
+      return { ...frame, payload: parseMainIdentityRenewed(frame.payload) };
+    case "main.identity.rejected":
+      return { ...frame, payload: parseMainIdentityRejected(frame.payload) };
   }
 }
 
@@ -1944,6 +2024,145 @@ function parseMainArtifactRejected(input: unknown): MainArtifactRejectedFrameV1[
   };
 }
 
+function parseWorkerIdentityRotate(input: unknown): WorkerIdentityRotateFrameV1["payload"] {
+  const record = readRecord(input, "Worker identity rotation request");
+  assertExactKeys(record, ["deviceId", "certificateRequestPem"]);
+  return {
+    deviceId: readIdentifier(record["deviceId"], "rotating Device ID"),
+    certificateRequestPem: readPem(
+      record["certificateRequestPem"],
+      "CERTIFICATE REQUEST",
+      "Device certificate request",
+    ),
+  };
+}
+
+function parseWorkerIdentityActivate(input: unknown): WorkerIdentityActivateFrameV1["payload"] {
+  const record = readRecord(input, "Worker identity activation");
+  assertExactKeys(record, ["deviceId", "certificatePem", "activationChallenge", "signature"]);
+  return {
+    deviceId: readIdentifier(record["deviceId"], "activating Device ID"),
+    // The Worker returns the certificate Main issued, so activation carries its
+    // own subject and Main never has to reconstruct which one was meant.
+    certificatePem: readPem(
+      record["certificatePem"],
+      "CERTIFICATE",
+      "activating Device certificate",
+    ),
+    activationChallenge: readActivationChallenge(record["activationChallenge"]),
+    signature: readBase64Url(record["signature"], "identity activation signature", 256),
+  };
+}
+
+function parseMainIdentityPending(input: unknown): MainIdentityPendingFrameV1["payload"] {
+  const record = readRecord(input, "Main pending Device identity");
+  assertExactKeys(record, [
+    "requestMessageId",
+    "deviceId",
+    "certificatePem",
+    "certificateAuthorityPem",
+    "serialNumber",
+    "generation",
+    "activationChallenge",
+    "activationExpiresAtMs",
+  ]);
+  return {
+    requestMessageId: readIdentifier(record["requestMessageId"], "rotation request message ID"),
+    deviceId: readIdentifier(record["deviceId"], "rotating Device ID"),
+    certificatePem: readPem(record["certificatePem"], "CERTIFICATE", "pending Device certificate"),
+    certificateAuthorityPem: readPem(
+      record["certificateAuthorityPem"],
+      "CERTIFICATE",
+      "certificate authority",
+    ),
+    serialNumber: readCertificateSerial(record["serialNumber"]),
+    generation: readPositiveInteger(record["generation"], "pending certificate generation"),
+    activationChallenge: readActivationChallenge(record["activationChallenge"]),
+    activationExpiresAtMs: readTimestampInteger(
+      record["activationExpiresAtMs"],
+      "activation expiry",
+    ),
+  };
+}
+
+function parseMainIdentityRenewed(input: unknown): MainIdentityRenewedFrameV1["payload"] {
+  const record = readRecord(input, "Main renewed Device identity");
+  assertExactKeys(record, [
+    "requestMessageId",
+    "deviceId",
+    "serialNumber",
+    "generation",
+    "overlapEndsAtMs",
+  ]);
+  return {
+    requestMessageId: readIdentifier(record["requestMessageId"], "rotation request message ID"),
+    deviceId: readIdentifier(record["deviceId"], "renewed Device ID"),
+    serialNumber: readCertificateSerial(record["serialNumber"]),
+    generation: readPositiveInteger(record["generation"], "renewed certificate generation"),
+    overlapEndsAtMs: readTimestampInteger(record["overlapEndsAtMs"], "rotation overlap end"),
+  };
+}
+
+function parseMainIdentityRejected(input: unknown): MainIdentityRejectedFrameV1["payload"] {
+  const record = readRecord(input, "Main identity rotation rejection");
+  assertExactKeys(record, ["requestMessageId", "deviceId", "code", "retryable"]);
+  return {
+    requestMessageId: readIdentifier(record["requestMessageId"], "rotation request message ID"),
+    deviceId: readIdentifier(record["deviceId"], "rotating Device ID"),
+    code: readEnum(
+      record["code"],
+      ["ROTATION_ALREADY_PENDING", "ROTATION_INVALID", "SERVICE_UNAVAILABLE"] as const,
+      "identity rotation rejection code",
+    ),
+    retryable: readBoolean(record["retryable"], "identity rotation retryability"),
+  };
+}
+
+/**
+ * PEM is line-oriented and conventionally ends with a newline, so the ordinary
+ * single-line text reader would reject every valid document. Accept exactly the
+ * base64 alphabet and line breaks between the expected markers.
+ */
+function readPem(value: unknown, label: string, subject: string): string {
+  if (
+    typeof value !== "string" ||
+    Buffer.byteLength(value, "utf8") > MAX_PEM_BYTES ||
+    !new RegExp(
+      `^-----BEGIN ${label}-----\\n(?:[A-Za-z0-9+/=]{1,64}\\n)+-----END ${label}-----\\n?$`,
+      "u",
+    ).test(value)
+  ) {
+    throw protocolError("FRAME_INVALID", `${subject} is not a valid ${label} document.`);
+  }
+  return value;
+}
+
+function readCertificateSerial(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{32}$/u.test(value)) {
+    throw protocolError("FRAME_INVALID", "A 128-bit Device certificate serial is required.");
+  }
+  return value;
+}
+
+function readActivationChallenge(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(value)) {
+    throw protocolError("FRAME_INVALID", "A certificate activation challenge is required.");
+  }
+  return value;
+}
+
+function readBase64Url(value: unknown, label: string, maximumLength: number): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maximumLength ||
+    !/^[A-Za-z0-9_-]+$/u.test(value)
+  ) {
+    throw protocolError("FRAME_INVALID", `${label} is invalid.`);
+  }
+  return value;
+}
+
 function parseMainActionAuthorization(input: unknown): MainActionAuthorizationFrameV1["payload"] {
   const record = readRecord(input, "Main action authorization");
   assertExactKeys(record, [
@@ -2294,6 +2513,8 @@ const WORKER_TO_MAIN_MESSAGE_TYPES = new Set<WorkerToMainMessageType>([
   "worker.events",
   "worker.heartbeat",
   "worker.hello",
+  "worker.identity.activate",
+  "worker.identity.rotate",
   "worker.pong",
   "worker.route.incident",
   "worker.run.renew",
@@ -2307,6 +2528,9 @@ const MAIN_TO_WORKER_MESSAGE_TYPES = new Set<MainToWorkerMessageType>([
   "main.artifact.rejected",
   "main.control",
   "main.dispatch",
+  "main.identity.pending",
+  "main.identity.rejected",
+  "main.identity.renewed",
   "main.ping",
   "main.revoked",
   "main.run.lease",

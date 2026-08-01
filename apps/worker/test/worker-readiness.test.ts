@@ -3,6 +3,10 @@ import { describe, it, mock } from "node:test";
 
 import { runWorkerConnectionLoop } from "../src/worker-app.ts";
 
+// The certificate is not near its renewal deadline in these cases, so the loop
+// under test is exercised without the renewal exchange.
+const notDue = async () => ({ status: "not-due" as const, renewAfter: Number.MAX_SAFE_INTEGER });
+
 describe("Worker production readiness signal", () => {
   it("reports readiness once after the first authenticated connect result", async () => {
     const controller = new AbortController();
@@ -24,6 +28,7 @@ describe("Worker production readiness signal", () => {
       {
         runtime: { connect } as never,
         pulse: async () => false,
+        renewCertificate: notDue,
       },
       {
         reconnectMinimumMs: 1,
@@ -51,6 +56,7 @@ describe("Worker production readiness signal", () => {
             },
           } as never,
           pulse: async () => true,
+          renewCertificate: notDue,
         },
         {
           reconnectMinimumMs: 1,

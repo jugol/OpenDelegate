@@ -1397,3 +1397,39 @@ per-generation state. Migration 0013 adds the column and the
 
 This is recovery, not renewal. An online Device should still rotate before its
 certificate expires; that path remains unimplemented and is tracked separately.
+
+## D-075 — Device certificates renew over the authenticated channel
+
+**Decision:** A Worker renews its own Device certificate over the mutual-TLS
+Device channel. It offers a certificate request signed by a freshly generated
+key; Main issues a pending certificate that authenticates nothing until the
+Worker returns it with a signature proving possession of the new key. Only then
+does Main promote the new generation and give the old one a bounded overlap. The
+Worker rewrites its configuration after Main confirms, and deletes the superseded
+private key only once that rewrite is durable.
+
+Renewal begins halfway through the validity window. The remaining half is the
+retry budget, so a Worker that is briefly offline or unable to reach Main still
+has many attempts before it locks itself out.
+
+**Rationale:** Device certificates live 24 hours, which is only safe if something
+renews them. `DeviceIdentityAuthority` has implemented and tested the whole
+rotation exchange since Phase 4, but no wire protocol reached it, so FR-2.7 was
+unimplemented and every enrolled Device expired after a day. The channel is the
+right carrier because the connection is itself the proof that the Worker still
+holds the current key — no second credential, no new listener, and no window in
+which an unauthenticated caller could ask for a certificate.
+
+The Worker generates a new key for every renewal rather than re-certifying the
+existing one, so a compromised key cannot survive its own rotation. The response
+is durable and keyed by the request, so a Worker that reconnects mid-exchange
+replays the same answer instead of asking the authority to start a second
+rotation it would refuse as already pending.
+
+**Consequence:** An online Device no longer expires. A Device that was switched
+off past its expiry still cannot renew — an expired certificate cannot authorize
+its own replacement — and is recovered by the owner-issued re-credentialing grant
+in [D-074](#d-074--an-enrollment-grant-states-whether-it-enrolls-or-re-credentials-a-device).
+Renewal failures are reported and retried on the next heartbeat rather than
+ending the connection loop, because the current certificate remains usable until
+its deadline.

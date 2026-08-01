@@ -3,6 +3,8 @@ import { describe, it, mock } from "node:test";
 
 import { runWorkerConnectionLoop, type WorkerConnectionDiagnostic } from "../src/worker-app.ts";
 
+const notDue = async () => ({ status: "not-due" as const, renewAfter: Number.MAX_SAFE_INTEGER });
+
 function attempt(overrides: {
   readonly outcome: "authentication-rejected" | "connect-failed";
   readonly code: string;
@@ -34,7 +36,7 @@ describe("Worker connection diagnostics", () => {
     });
 
     await runWorkerConnectionLoop(
-      { runtime: { connect } as never, pulse: async () => false },
+      { runtime: { connect } as never, pulse: async () => false, renewCertificate: notDue },
       {
         reconnectMinimumMs: 1,
         reconnectMaximumMs: 1,
@@ -66,7 +68,7 @@ describe("Worker connection diagnostics", () => {
     });
 
     await runWorkerConnectionLoop(
-      { runtime: { connect } as never, pulse: async () => false },
+      { runtime: { connect } as never, pulse: async () => false, renewCertificate: notDue },
       {
         reconnectMinimumMs: 1,
         reconnectMaximumMs: 1,
@@ -99,7 +101,7 @@ describe("Worker connection diagnostics", () => {
     });
 
     await runWorkerConnectionLoop(
-      { runtime: { connect } as never, pulse: async () => false },
+      { runtime: { connect } as never, pulse: async () => false, renewCertificate: notDue },
       {
         reconnectMinimumMs: 1,
         reconnectMaximumMs: 1,
