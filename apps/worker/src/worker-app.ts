@@ -28,7 +28,9 @@ import {
   CodexAppServerAdapter,
   CodexCliAdapter,
   FileSessionLeaseStore,
+  resolveOwnerProviderHome,
   type AgentActionAuthorizationPort,
+  type AgentProviderHomeOwner,
   type AgentAdapter,
   type AgentAdapterProbe,
   type AgentModelCatalog,
@@ -419,6 +421,9 @@ export interface WorkerDiagnosticSnapshot {
     readonly authState: string;
     readonly compatibility?: string;
     readonly version?: string;
+    /** The directory this adapter authenticates in, so a wrong home is visible. */
+    readonly providerHome?: string;
+    readonly diagnostics: readonly { readonly code: string; readonly message: string }[];
   }[];
 }
 
@@ -1297,6 +1302,13 @@ export async function diagnoseWorker(input: {
     managedSecrets.health(),
     managedSecrets.availability(`${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`),
   ]);
+  const providerHomes = {
+    claude:
+      configuration.agent.claudeHome ??
+      defaultProviderHome("claude", input.paths, input.environment),
+    codex:
+      configuration.agent.codexHome ?? defaultProviderHome("codex", input.paths, input.environment),
+  };
   const agents = await Promise.all(
     createWorkerAgentAdapters(configuration.agent, input.paths).map(async (adapter) => {
       const probe = await adapter.probe();
@@ -1307,6 +1319,15 @@ export async function diagnoseWorker(input: {
         authState: probe.auth.state,
         ...(probe.compatibility === undefined ? {} : { compatibility: probe.compatibility }),
         ...(probe.version === undefined ? {} : { version: probe.version }),
+        ...(adapter.provider === "claude" || adapter.provider === "codex"
+          ? { providerHome: providerHomes[adapter.provider] }
+          : {}),
+        // The adapters already explain every unready state; dropping them left the
+        // owner with a bare "not_ready" and nowhere to look.
+        diagnostics: probe.diagnostics.map((diagnostic) => ({
+          code: diagnostic.code,
+          message: diagnostic.message,
+        })),
       };
     }),
   );
@@ -2396,7 +2417,7 @@ export function createWorkerAgentAdapters(
 ): readonly AgentAdapter[] {
   const codexHome =
     configuration.codexHome === undefined
-      ? join(paths.stateDirectory, "providers", "codex")
+      ? defaultProviderHome("codex", paths)
       : requireExternalProvisioningPath(
           configuration.codexHome,
           paths.sourceCheckoutRoot,
@@ -2404,7 +2425,7 @@ export function createWorkerAgentAdapters(
         );
   const claudeHome =
     configuration.claudeHome === undefined
-      ? join(paths.stateDirectory, "providers", "claude")
+      ? defaultProviderHome("claude", paths)
       : requireExternalProvisioningPath(
           configuration.claudeHome,
           paths.sourceCheckoutRoot,
@@ -3653,6 +3674,25 @@ function requireAbsolutePath(value: string, label: string): string {
     throw appError("CONFIG_PATH_UNSAFE", `The ${label} must be an absolute safe path.`);
   }
   return resolve(value);
+}
+
+/**
+ * Falls back to the provider home the owner already authenticated, because a home
+ * OpenDelegate invents is a home the owner has to log into again. A home inside
+ * the source checkout is refused, as is a Device with no usable home directory;
+ * both leave the Worker-managed home as the only safe answer.
+ */
+export function defaultProviderHome(
+  provider: AgentProviderHomeOwner,
+  paths: WorkerPaths,
+  environment?: Readonly<Record<string, string | undefined>>,
+): string {
+  const managed = join(paths.stateDirectory, "providers", provider);
+  const owned = resolveOwnerProviderHome(provider, environment);
+  if (owned === undefined || isWithin(paths.sourceCheckoutRoot, owned)) {
+    return managed;
+  }
+  return owned;
 }
 
 function requireExternalProvisioningPath(
