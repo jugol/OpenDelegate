@@ -428,8 +428,9 @@ unrelated Tasks or surrendering orchestration and permission enforcement to a
 vendor UI.
 
 **Consequence:** Provider compatibility is version-pinned and fail-closed.
-OpenDelegate-owned provider homes and strict settings isolation are the default;
-an explicitly selected external Codex home follows D-049.
+The owner's existing provider home is the default under D-076; an explicitly
+selected home follows D-049 and D-052, and an OpenDelegate-owned home remains
+available for owners who want provider settings isolated.
 Native Windows Claude SDK execution is not advertised until its required sandbox is
 enforceable; Codex, WSL2, or a configured container is used instead.
 
@@ -613,9 +614,9 @@ receives or persists the raw bot token.
 
 ## D-049 — Explicit shared Codex home
 
-**Decision:** Main and Worker use Device-local, OpenDelegate-managed provider homes
-by default. An owner may instead supply an existing absolute local Codex home with
-`--codex-home`. OpenDelegate persists that exact path as non-secret configuration,
+**Decision:** *Superseded in part by [D-076](#d-076--the-owners-existing-provider-home-is-the-default),
+which makes the owner's existing home the default; the mechanism below is unchanged.*
+Main and Worker accept an existing absolute local Codex home through `--codex-home`. OpenDelegate persists that exact path as non-secret configuration,
 passes it as `CODEX_HOME`, and never discovers, copies, or silently inherits a
 global home.
 
@@ -635,8 +636,7 @@ sharing must be explicit and durable.
 an owner-restricted local directory outside the source checkout. Logging out,
 rotating authentication, or changing Codex configuration affects every local
 consumer of that home. Owners who want stronger settings and session isolation keep
-the default managed home. Claude remains managed unless an existing explicit
-Worker configuration selects an external Claude home.
+the default managed home. Claude follows the same default.
 
 ## D-050 — Ten-character owner passphrase floor
 
@@ -686,7 +686,9 @@ local path enters Main metadata or Configuration Chat.
 
 ## D-052 — Explicit shared Claude home
 
-**Decision:** Main may receive an existing absolute local Claude configuration
+**Decision:** *Superseded in part by [D-076](#d-076--the-owners-existing-provider-home-is-the-default),
+which makes the owner's existing home the default; the mechanism below is unchanged.*
+Main may receive an existing absolute local Claude configuration
 directory through `--claude-home`. OpenDelegate persists only that path, supplies it
 as `CLAUDE_CONFIG_DIR`, and uses it for both the Claude Adapter and deterministic
 Device assessment. It never copies, links, discovers, or stores Claude credentials.
@@ -695,7 +697,8 @@ Agent so that both installed Adapters are assessed accurately.
 
 If `claude auth status --json` is not ready in that exact directory, setup instructs
 the Owner to run `claude auth login` with the same `CLAUDE_CONFIG_DIR` and reassess.
-The default remains the Device-local managed home when no explicit path is supplied.
+The default is the owner's existing home per D-076; the managed home remains the
+fallback when no owner home can be resolved.
 
 **Rationale:** A personal NAS may intentionally maintain one Claude authentication
 source of truth. Probing an unrelated managed home incorrectly reports a healthy
@@ -1433,3 +1436,34 @@ in [D-074](#d-074--an-enrollment-grant-states-whether-it-enrolls-or-re-credentia
 Renewal failures are reported and retried on the next heartbeat rather than
 ending the connection loop, because the current certificate remains usable until
 its deadline.
+
+## D-076 — The owner's existing provider home is the default
+
+**Decision:** When no provider home is configured, Main and Worker use the home the
+owner already authenticated on that Device: `CODEX_HOME` if set, otherwise
+`~/.codex`; `CLAUDE_CONFIG_DIR` if set, otherwise `~/.claude`. A Device that
+exposes no usable home directory, or whose resolved home would fall inside the
+source checkout, keeps the OpenDelegate-managed home. `--codex-home` and
+`--claude-home` still pin any absolute path, including a managed one, for an owner
+who wants provider state isolated.
+
+This supersedes the defaults in [D-049](#d-049--explicit-shared-codex-home) and
+[D-052](#d-052--explicit-shared-claude-home). Their mechanism is unchanged: the
+path is still persisted as non-secret configuration, still passed as the provider's
+own home variable, and credentials are still never read, copied, or stored.
+
+**Rationale:** Codex and Claude each keep authentication in one directory and expose
+no separate credential selector, so a home OpenDelegate invents is a home the owner
+must log into a second time — and nothing told them so. On this owner's Windows
+Device every adapter reported `not_ready` while `codex login status` succeeded in
+`~/.codex`, because the Worker probed an empty managed home it had created and never
+authenticated. D-049 rejected ambient inheritance as surprising, but the surprise it
+actually produced was a Device that looked broken while its provider was signed in.
+Invariant 17 makes OpenDelegate personal-first; on a personal Device one login is
+the expected number.
+
+**Consequence:** Logging out, rotating authentication, or changing provider settings
+in that home affects OpenDelegate along with every other local consumer, which is
+what sharing one home means. The resolved directory is reported by `worker diagnose`
+next to each adapter's authentication state, so the home in use is never a guess.
+Owners who want isolation pass an explicit path.

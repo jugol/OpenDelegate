@@ -79,9 +79,20 @@ test("explicit shared provider homes upgrade one selection and survive restart",
   const paths = await runtimePaths(context);
   const sharedCodexHome = await mkdtemp(join(tmpdir(), "opendelegate-codex-ssot-"));
   const sharedClaudeHome = await mkdtemp(join(tmpdir(), "opendelegate-claude-ssot-"));
+  // Per D-076 an unconfigured selection resolves the home the owner already
+  // authenticated, so the owner's home is pinned to keep this deterministic.
+  const ownerCodexHome = await mkdtemp(join(tmpdir(), "opendelegate-codex-owner-"));
+  const previousCodexHome = process.env["CODEX_HOME"];
+  process.env["CODEX_HOME"] = ownerCodexHome;
   context.after(async () => {
+    if (previousCodexHome === undefined) {
+      delete process.env["CODEX_HOME"];
+    } else {
+      process.env["CODEX_HOME"] = previousCodexHome;
+    }
     await rm(sharedCodexHome, { force: true, recursive: true });
     await rm(sharedClaudeHome, { force: true, recursive: true });
+    await rm(ownerCodexHome, { force: true, recursive: true });
   });
   const observedHomes: string[] = [];
   const createAdapter = (
@@ -117,7 +128,7 @@ test("explicit shared provider homes upgrade one selection and survive restart",
   assert.equal(upgraded.status, "ready");
   assert.equal(restarted.status, "ready");
   assert.deepEqual(observedHomes, [
-    join(paths.stateDirectory, "providers", "codex"),
+    ownerCodexHome,
     sharedCodexHome,
     sharedCodexHome,
     sharedClaudeHome,

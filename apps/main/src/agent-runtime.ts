@@ -6,6 +6,7 @@ import {
   ClaudeAgentSdkAdapter,
   CodexAppServerAdapter,
   FileSessionLeaseStore,
+  resolveOwnerProviderHome,
   type AgentAdapter,
   type AgentAdapterProbe,
   type AgentRunLimits,
@@ -445,14 +446,22 @@ function createProductionAdapter(
       });
 }
 
+/**
+ * Falls back to the provider home the owner already authenticated on this Device,
+ * so Main never asks for a second login into a home it invented. A Device with no
+ * usable home directory keeps the Main-managed home.
+ */
 function providerHome(
   provider: Exclude<SelectedMainAgentProvider, "disabled">,
   paths: MainAgentRuntimePaths,
   homes: ProviderHomes,
 ): string {
-  return provider === "codex"
-    ? (homes.codex ?? join(paths.stateDirectory, "providers", "codex"))
-    : (homes.claude ?? join(paths.stateDirectory, "providers", "claude"));
+  const configured = provider === "codex" ? homes.codex : homes.claude;
+  return (
+    configured ??
+    resolveOwnerProviderHome(provider) ??
+    join(paths.stateDirectory, "providers", provider)
+  );
 }
 
 function selectionFor(
