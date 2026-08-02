@@ -145,10 +145,14 @@ test("Claude CLI reports version/auth compatibility without a provider turn", as
   assert.equal(signedOut.auth.state, "not_ready");
   assert.equal(signedOut.diagnostics.length, 1);
   assert.equal(signedOut.diagnostics[0]?.code, "AUTH_NOT_READY");
-  // The remedy names the command and the exact home, because a provider keeps one
-  // credential per home and signing in to the wrong one changes nothing.
-  assert.match(signedOut.diagnostics[0]?.message ?? "", /Run claude with CLAUDE_CONFIG_DIR=/u);
-  assert.ok((signedOut.diagnostics[0]?.message ?? "").includes(claudeHome));
+  // This home is not the one bare `claude` would reach, so the remedy has to name it:
+  // a provider keeps one credential per home and signing in to the wrong one changes nothing.
+  const remedy = signedOut.diagnostics[0]?.message ?? "";
+  assert.match(remedy, /Run claude with CLAUDE_CONFIG_DIR=/u);
+  assert.ok(remedy.includes(claudeHome));
+  // An owner looking at a signed-in desktop app reads "not signed in" as a false
+  // report, so the remedy says which session does not count.
+  assert.match(remedy, /desktop app holds its own session/u);
 });
 
 test("Claude CLI reuses the Agent SDK model catalog from the same controlled home", async () => {

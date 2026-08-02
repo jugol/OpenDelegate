@@ -14,6 +14,7 @@ import {
 import { ClaudeAgentSdkAdapter, type ClaudeAgentSdkPort } from "./claude-agent-sdk-adapter.ts";
 import {
   assertProviderHomeNotInSecretEnvironment,
+  isDefaultProviderHome,
   prepareControlledProviderHome,
   resolveControlledProviderHome,
 } from "./controlled-provider-home.ts";
@@ -113,6 +114,9 @@ export class ClaudeCliAdapter implements AgentAdapter {
         command: "claude",
         homeVariable: "CLAUDE_CONFIG_DIR",
         home: this.#claudeHome,
+        homeIsDefault: isDefaultProviderHome("claude", this.#claudeHome),
+        separateSession:
+          "The Claude desktop app holds its own session and does not sign in this CLI.",
       },
       parseVersion: parseClaudeVersion,
     });

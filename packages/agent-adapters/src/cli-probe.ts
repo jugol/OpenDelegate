@@ -23,6 +23,10 @@ export interface CliProbeOptions {
     readonly command: string;
     readonly homeVariable: string;
     readonly home: string;
+    /** True when the bare command already reaches this home, so the remedy omits the variable. */
+    readonly homeIsDefault?: boolean;
+    /** A same-brand session that does not satisfy this probe, when the provider ships one. */
+    readonly separateSession?: string;
   };
 }
 
@@ -107,13 +111,10 @@ export async function probeCli(options: CliProbeOptions): Promise<AgentAdapterPr
       } else if (authResult.exitCode !== 0) {
         diagnostics.push({
           code: "AUTH_NOT_READY",
-          // Name the command and the directory: a provider keeps one credential
-          // per home, so signing in to the wrong one leaves this unchanged.
           message:
             options.signIn === undefined
               ? `${options.providerLabel} is not signed in.`
-              : `${options.providerLabel} is not signed in. Run ${options.signIn.command} with ` +
-                `${options.signIn.homeVariable}=${options.signIn.home} on this Device.`,
+              : signInRemedy(options.providerLabel, options.signIn),
         });
       }
     } catch {
@@ -144,6 +145,30 @@ export async function probeCli(options: CliProbeOptions): Promise<AgentAdapterPr
       ? providerUpgradeRemediation(options.packageName, options.testedVersions, version)
       : {}),
   };
+}
+
+/**
+ * States which sign-in is missing, precisely enough to act on.
+ *
+ * A provider keeps one credential per home, so the remedy names the directory
+ * whenever the bare command would not reach it. It also names any same-brand
+ * session that does not count: an owner looking at a signed-in desktop app reads
+ * "not signed in" as a false report rather than as a CLI they have yet to
+ * authenticate.
+ */
+function signInRemedy(
+  providerLabel: string,
+  signIn: NonNullable<CliProbeOptions["signIn"]>,
+): string {
+  const invocation =
+    signIn.homeIsDefault === true
+      ? signIn.command
+      : `${signIn.command} with ${signIn.homeVariable}=${signIn.home}`;
+  return (
+    `${providerLabel} is not signed in on this Device. Run ${invocation} in a terminal ` +
+    `and complete the sign-in there.` +
+    (signIn.separateSession === undefined ? "" : ` ${signIn.separateSession}`)
+  );
 }
 
 /**

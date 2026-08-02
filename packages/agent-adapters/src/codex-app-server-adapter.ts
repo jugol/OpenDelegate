@@ -5,6 +5,7 @@ import { delimiter, join } from "node:path";
 import { createProviderToolAuthorizationRequest } from "./action-authorization.ts";
 import {
   assertProviderHomeNotInSecretEnvironment,
+  isDefaultProviderHome,
   prepareControlledProviderHome,
   resolveControlledProviderHome,
 } from "./controlled-provider-home.ts";
@@ -213,6 +214,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
         command: "codex login",
         homeVariable: "CODEX_HOME",
         home: this.#codexHome,
+        homeIsDefault: isDefaultProviderHome("codex", this.#codexHome),
       },
       parseVersion: parseCodexVersion,
     });

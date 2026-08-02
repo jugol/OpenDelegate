@@ -15,6 +15,7 @@ import {
 import { CodexAppServerAdapter } from "./codex-app-server-adapter.ts";
 import {
   assertProviderHomeNotInSecretEnvironment,
+  isDefaultProviderHome,
   prepareControlledProviderHome,
   resolveControlledProviderHome,
 } from "./controlled-provider-home.ts";
@@ -164,6 +165,7 @@ export class CodexCliAdapter implements AgentAdapter {
         command: "codex login",
         homeVariable: "CODEX_HOME",
         home: this.#codexHome,
+        homeIsDefault: isDefaultProviderHome("codex", this.#codexHome),
       },
       parseVersion: parseCodexVersion,
     });
