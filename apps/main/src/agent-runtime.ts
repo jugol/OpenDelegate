@@ -7,6 +7,8 @@ import {
   CodexAppServerAdapter,
   FileSessionLeaseStore,
   resolveOwnerProviderHome,
+  upgradeAgentProvider,
+  type AgentProviderUpgradeOutcome,
   type AgentAdapter,
   type AgentAdapterProbe,
   type AgentRunLimits,
@@ -329,6 +331,65 @@ export async function resolveMainAgentComposition(
     selected.adapter,
     selected.probe,
   );
+}
+
+/**
+ * Brings one of Main's own Agent adapters to the version its pin requires.
+ *
+ * Main is not a peer on its own Device channel, so the command a Worker
+ * receives has nowhere to arrive; the same narrow upgrade runs in process
+ * instead. The package and the version still come from the adapter's own
+ * constants.
+ */
+export async function upgradeMainAgentProvider(
+  options: Pick<ResolveMainAgentCompositionOptions, "createAdapter" | "paths"> & {
+    readonly adapterId: string;
+  },
+): Promise<AgentProviderUpgradeOutcome> {
+  const existing = await readSelectedAgentConfiguration(
+    join(options.paths.configDirectory, selectionFilename),
+    options.paths.sourceCheckoutRoot,
+  );
+  const providerHomes = configuredProviderHomes(existing);
+  const leaseStore = new FileSessionLeaseStore({
+    statePath: join(options.paths.stateDirectory, "native-session-leases.json"),
+  });
+  for (const provider of providerPreference) {
+    const adapter =
+      options.createAdapter?.(
+        provider,
+        leaseStore,
+        providerHome(provider, options.paths, providerHomes),
+      ) ??
+      createProductionAdapter(
+        provider,
+        leaseStore,
+        providerHome(provider, options.paths, providerHomes),
+      );
+    if (adapter.adapterId !== options.adapterId) {
+      continue;
+    }
+    const probe = await adapter.probe();
+    if (probe.remediation === undefined) {
+      return {
+        status: "unavailable",
+        adapterId: options.adapterId,
+        reasonCode: "REMEDIATION_INVALID",
+        reason: "This adapter declares no upgrade.",
+      };
+    }
+    return upgradeAgentProvider({
+      adapterId: options.adapterId,
+      remediation: probe.remediation,
+      reprobe: () => adapter.probe(),
+    });
+  }
+  return {
+    status: "unavailable",
+    adapterId: options.adapterId,
+    reasonCode: "REMEDIATION_INVALID",
+    reason: "This Device runs no such Agent adapter.",
+  };
 }
 
 export async function probeMainAgentAdapters(

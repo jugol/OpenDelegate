@@ -533,6 +533,10 @@ export interface CreateMainRuntimeOptions {
     readonly runtimeFactory?: typeof createProductionMainDeviceChannelRuntime;
   };
   readonly mainDeviceAssessment?: {
+    readonly upgradeAgentProvider?: (adapterId: string) => Promise<{
+      readonly status: string;
+      readonly reason?: string;
+    }>;
     readonly probeAgentAdapters: () => Promise<readonly AgentAdapterProbe[]>;
     readonly probeBrowserAutomation?: () => Promise<CapabilityAssessmentProbe>;
     readonly probeComputerUse?: () => Promise<CapabilityAssessmentProbe>;
@@ -1551,6 +1555,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
               (() => probeConnectedMainWorkerCapability("computer-use")),
             clock,
           });
+    const localProviderUpgrade = options.mainDeviceAssessment?.upgradeAgentProvider;
     // Captured before the closure so the owner-facing upgrade route only exists
     // when a Device channel does.
     const workerChannelForUpgrade = deviceChannel?.workerChannel;
@@ -1600,7 +1605,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         ? {}
         : {
             deviceProviderUpgrade: {
-              canUpgrade: (deviceId: string) => workerChannelForUpgrade.isConnected(deviceId),
+              canUpgrade: (deviceId: string) =>
+                (deviceId === configuration.deviceId && localProviderUpgrade !== undefined) ||
+                workerChannelForUpgrade.isConnected(deviceId),
               upgrade: async ({
                 deviceId,
                 adapterId,
@@ -1610,6 +1617,12 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
                 readonly principalId: string;
                 readonly idempotencyKey: string;
               }) => {
+                // Main is not a peer on its own channel, so its adapters are
+                // upgraded in process rather than over the wire.
+                if (deviceId === configuration.deviceId && localProviderUpgrade !== undefined) {
+                  await localProviderUpgrade(adapterId);
+                  return;
+                }
                 await workerChannelForUpgrade.upgradeProvider({
                   deviceId,
                   adapterId,

@@ -37,6 +37,7 @@ import {
   MainAgentRuntimeError,
   probeMainAgentAdapters,
   resolveMainAgentComposition,
+  upgradeMainAgentProvider,
   type MainAgentProviderPreference,
 } from "./agent-runtime.ts";
 import {
@@ -1037,6 +1038,14 @@ async function createAndListen(
     mainDeviceAssessment: {
       probeAgentAdapters: () =>
         probeMainAgentAdapters({
+          paths: {
+            ...paths,
+            sourceCheckoutRoot: installationRoot,
+          },
+        }),
+      upgradeAgentProvider: (adapterId: string) =>
+        upgradeMainAgentProvider({
+          adapterId,
           paths: {
             ...paths,
             sourceCheckoutRoot: installationRoot,

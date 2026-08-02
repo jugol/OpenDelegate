@@ -283,9 +283,7 @@ export function App({
             {...(device.role === "main" && onAssessDevice !== undefined
               ? { onAssess: () => onAssessDevice(device.deviceId) }
               : {})}
-            {...(onUpgradeAgentProvider === undefined || device.role === "main"
-              ? {}
-              : { onUpgradeAgentProvider })}
+            {...(onUpgradeAgentProvider === undefined ? {} : { onUpgradeAgentProvider })}
           />
         )}
       </div>

@@ -5,6 +5,7 @@ export * from "./codex-cli-adapter.ts";
 export * from "./action-authorization.ts";
 export * from "./contracts.ts";
 export * from "./controlled-provider-home.ts";
+export * from "./provider-upgrade.ts";
 export * from "./errors.ts";
 export * from "./generic-command-adapter.ts";
 export * from "./programmatic-turn.ts";
