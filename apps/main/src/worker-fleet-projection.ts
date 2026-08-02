@@ -274,6 +274,9 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
                     readiness: adapter.readiness,
                     compatibility: adapter.compatibility,
                     ...(adapter.version === undefined ? {} : { version: adapter.version }),
+                    ...(adapter.availableUpgrade === undefined
+                      ? {}
+                      : { availableUpgrade: { ...adapter.availableUpgrade } }),
                     observedAtMs: adapter.observedAtMs,
                     ...(adapter.modelCatalogObservedAtMs === undefined
                       ? {}
