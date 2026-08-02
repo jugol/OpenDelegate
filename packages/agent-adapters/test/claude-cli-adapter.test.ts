@@ -143,12 +143,12 @@ test("Claude CLI reports version/auth compatibility without a provider turn", as
     environment: { FIXTURE_SIGNED_OUT: "1" },
   });
   assert.equal(signedOut.auth.state, "not_ready");
-  assert.deepEqual(signedOut.diagnostics, [
-    {
-      code: "AUTH_NOT_READY",
-      message: "Claude CLI authentication is not ready.",
-    },
-  ]);
+  assert.equal(signedOut.diagnostics.length, 1);
+  assert.equal(signedOut.diagnostics[0]?.code, "AUTH_NOT_READY");
+  // The remedy names the command and the exact home, because a provider keeps one
+  // credential per home and signing in to the wrong one changes nothing.
+  assert.match(signedOut.diagnostics[0]?.message ?? "", /Run claude with CLAUDE_CONFIG_DIR=/u);
+  assert.ok((signedOut.diagnostics[0]?.message ?? "").includes(claudeHome));
 });
 
 test("Claude CLI reuses the Agent SDK model catalog from the same controlled home", async () => {

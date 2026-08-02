@@ -209,7 +209,10 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
         if (authState !== "ready") {
           diagnostics.push({
             code: auth.timedOut ? "AUTH_PROBE_TIMEOUT" : "AUTH_NOT_READY",
-            message: "Claude authentication is not ready.",
+            message: auth.timedOut
+              ? "The Claude authentication probe timed out."
+              : `Claude is not signed in. Run claude with CLAUDE_CONFIG_DIR=${this.#claudeHome} ` +
+                "on this Device.",
           });
         }
       } catch {

@@ -160,6 +160,11 @@ export class CodexCliAdapter implements AgentAdapter {
       ),
       testedVersions: this.#testedVersions,
       packageName: "@openai/codex",
+      signIn: {
+        command: "codex login",
+        homeVariable: "CODEX_HOME",
+        home: this.#codexHome,
+      },
       parseVersion: parseCodexVersion,
     });
   }

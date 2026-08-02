@@ -18,6 +18,12 @@ export interface CliProbeOptions {
   readonly parseVersion: (output: string) => string;
   /** npm package this provider ships as, so an untested version names its remedy. */
   readonly packageName?: string;
+  /** The sign-in this provider needs, so an unauthenticated adapter is actionable. */
+  readonly signIn?: {
+    readonly command: string;
+    readonly homeVariable: string;
+    readonly home: string;
+  };
 }
 
 export async function probeCli(options: CliProbeOptions): Promise<AgentAdapterProbe> {
@@ -101,7 +107,13 @@ export async function probeCli(options: CliProbeOptions): Promise<AgentAdapterPr
       } else if (authResult.exitCode !== 0) {
         diagnostics.push({
           code: "AUTH_NOT_READY",
-          message: `${options.providerLabel} authentication is not ready.`,
+          // Name the command and the directory: a provider keeps one credential
+          // per home, so signing in to the wrong one leaves this unchanged.
+          message:
+            options.signIn === undefined
+              ? `${options.providerLabel} is not signed in.`
+              : `${options.providerLabel} is not signed in. Run ${options.signIn.command} with ` +
+                `${options.signIn.homeVariable}=${options.signIn.home} on this Device.`,
         });
       }
     } catch {
