@@ -120,6 +120,7 @@ test("production Device channel composition owns separate enrollment and mTLS li
         steerRun: async () => {
           throw new Error("Steering is not exercised by this listener composition test.");
         },
+        isConnected: () => false,
         upgradeProvider: async () => {
           throw new Error("Provider upgrade is not exercised by this listener composition test.");
         },

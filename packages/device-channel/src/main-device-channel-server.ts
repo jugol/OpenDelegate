@@ -908,6 +908,12 @@ export class MainDeviceChannelServer {
    * by the request, which keeps a reconnecting Worker from asking the authority
    * to start a second rotation it would then refuse as already pending.
    */
+  /** True while the Device holds an open authenticated channel. */
+  public isConnected(deviceId: string): boolean {
+    const connection = this.connections.get(deviceId);
+    return connection !== undefined && !connection.closed;
+  }
+
   /**
    * Asks a connected Device to bring one Agent adapter to the version that
    * adapter's own pin requires. The command names only the adapter; the package

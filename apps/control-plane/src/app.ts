@@ -147,6 +147,7 @@ export interface MainControlPlaneAppOptions extends SharedAppOptions {
     }): Promise<void>;
   };
   readonly deviceProviderUpgrade?: {
+    canUpgrade(deviceId: string): boolean;
     upgrade(input: {
       readonly deviceId: string;
       readonly adapterId: string;
@@ -898,7 +899,12 @@ function registerDeviceRoutes(
       if (!devices.some((device) => device.deviceId === request.params.deviceId)) {
         throw new PublicHttpError(404, "DEVICE_NOT_FOUND");
       }
-      if (options.deviceProviderUpgrade === undefined) {
+      if (
+        options.deviceProviderUpgrade === undefined ||
+        !options.deviceProviderUpgrade.canUpgrade(request.params.deviceId)
+      ) {
+        // A Device that is not a connected channel peer cannot be asked to
+        // upgrade anything; saying so beats a generic failure.
         throw new PublicHttpError(503, "DEVICE_PROVIDER_UPGRADE_UNAVAILABLE");
       }
       await options.deviceProviderUpgrade.upgrade({

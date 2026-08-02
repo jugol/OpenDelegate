@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { AdminApiError, type AdminApi } from "./admin-api";
 import { App } from "./App";
+import { DeviceSurface } from "./DeviceSurface";
 import {
   firstRunDevice,
   presentationTextFallback,
@@ -346,7 +347,7 @@ describe("first-run Device overview", () => {
     expect(screen.getByText("Operating system network change")).toBeTruthy();
     expect(screen.getByText("Configured · Device")).toBeTruthy();
     expect(screen.getByText("Owner approval required")).toBeTruthy();
-    expect(screen.getByText("codex-app-server · 0.145.0")).toBeTruthy();
+    expect(screen.getByText("codex · 0.145.0")).toBeTruthy();
     expect(screen.getByText("Ready · Tested")).toBeTruthy();
     expect(screen.getByText("desktop-session")).toBeTruthy();
 
@@ -1249,6 +1250,8 @@ describe("first-run Device overview", () => {
     const upgrades: Array<{ readonly deviceId: string; readonly adapterId: string }> = [];
     const device = {
       ...firstRunDevice,
+      deviceId: "Windows_5090",
+      role: "worker" as const,
       agentAdapters: [
         {
           provider: "codex" as const,
@@ -1273,23 +1276,26 @@ describe("first-run Device overview", () => {
     } satisfies DeviceOverviewViewModel;
 
     render(
-      <App
-        deviceFleet={{ devices: [device], mainDeviceId: device.deviceId }}
+      <DeviceSurface
+        chatOpen={false}
+        device={device}
+        onConfigure={() => undefined}
+        onConfigureAgentProfile={() => undefined}
         onUpgradeAgentProvider={async (deviceId, adapterId) => {
           upgrades.push({ deviceId, adapterId });
         }}
       />,
     );
 
-    // Only the adapter with a remedy offers one, and it names the target version
-    // rather than leaving "untested" as a status the owner cannot act on.
+    // Only the adapter carrying a remedy offers one, and it names the target
+    // version rather than leaving "untested" as a status nobody can act on.
     const upgrade = screen.getByRole("button", { name: "Update to 0.146.0" });
     expect(screen.queryAllByRole("button", { name: /^Update to/u })).toHaveLength(1);
 
     await user.click(upgrade);
 
     await waitFor(() => {
-      expect(upgrades).toEqual([{ deviceId: device.deviceId, adapterId: "codex-cli" }]);
+      expect(upgrades).toEqual([{ deviceId: "Windows_5090", adapterId: "codex-cli" }]);
     });
     expect(screen.getByText(/Update requested/u)).toBeTruthy();
     expect((upgrade as HTMLButtonElement).disabled).toBe(true);

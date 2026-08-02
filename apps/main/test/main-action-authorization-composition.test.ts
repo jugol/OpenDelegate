@@ -443,6 +443,9 @@ function fakeDeviceChannelRuntime(
       async steerRun() {
         return {} as never;
       },
+      isConnected() {
+        return false;
+      },
       async upgradeProvider() {
         return {} as never;
       },
