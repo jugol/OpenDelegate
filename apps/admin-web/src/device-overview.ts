@@ -299,6 +299,7 @@ function mapCapabilities(reported: DeviceSummary["capabilities"]): readonly Capa
       ...capability,
       state: report.verification,
       tone: capabilityTone(report.verification),
+      ...(report.blockedBy === undefined ? {} : { blockedBy: report.blockedBy }),
     } satisfies CapabilityView;
   });
   const additional = [...reportedByName.values()]
@@ -308,6 +309,7 @@ function mapCapabilities(reported: DeviceSummary["capabilities"]): readonly Capa
       label: capability.name,
       state: capability.verification,
       tone: capabilityTone(capability.verification),
+      ...(capability.blockedBy === undefined ? {} : { blockedBy: capability.blockedBy }),
     }));
   return Object.freeze([...baseline, ...additional]);
 }

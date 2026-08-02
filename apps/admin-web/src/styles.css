@@ -920,6 +920,18 @@ textarea:focus-visible,
   font-weight: 550;
 }
 
+/* The row is a three-column grid, so the remedy has to span from the label column
+   to the end. Left in flow it collapses into the last column one word per line. */
+.capability-remedy {
+  grid-column: 2 / -1;
+  margin: 0;
+  padding-bottom: 12px;
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+
 .capability-state svg {
   width: 17px;
   height: 17px;

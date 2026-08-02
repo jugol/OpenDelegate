@@ -209,6 +209,8 @@ export const koreanMessages = {
     adapterUpgradeRequested:
       "업데이트를 요청했습니다. 이 장치가 다음 새로고침에 결과를 알려줍니다.",
     adapterUpgradeFailed: "업데이트를 요청하지 못했습니다.",
+    capabilityBlockedSessionHelperAbsent:
+      "이 장치는 OpenDelegate를 포그라운드로 실행하고 있어 사용자 세션 헬퍼가 없고 데스크톱에 접근할 수 없습니다. 이 장치에서 작업 노드를 네이티브 서비스로 설치하면 켜집니다.",
     noAgentAdapters: "표시할 Agent 어댑터 관측 정보가 없습니다.",
     agentExecution: "Agent 실행",
     agentProfileTarget: "Agent 프로필 대상",

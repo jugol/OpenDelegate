@@ -216,6 +216,8 @@ export const frenchMessages = {
     adapterUpgradeRequested:
       "Mise à jour demandée. L'Appareil signalera le résultat lors de sa prochaine actualisation.",
     adapterUpgradeFailed: "La mise à jour n'a pas pu être demandée.",
+    capabilityBlockedSessionHelperAbsent:
+      "Cet Appareil exécute OpenDelegate au premier plan : il n'a donc pas d'assistant de session utilisateur et ne peut pas atteindre le bureau. Installez le nœud de travail comme service natif sur cet Appareil pour l'activer.",
     noAgentAdapters: "Aucune observation d’adaptateur Agent n’est disponible.",
     agentExecution: "Exécution de l’Agent",
     agentProfileTarget: "Cible du profil Agent",

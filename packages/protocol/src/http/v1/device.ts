@@ -27,6 +27,8 @@ const DeviceCapabilitySchema = Type.Object(
       ]),
     ),
     version: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+    // What the owner can do about an unusable Capability, when the Device knows.
+    blockedBy: Type.Optional(Type.Union([Type.Literal("session-helper-absent")])),
   },
   { additionalProperties: false },
 );

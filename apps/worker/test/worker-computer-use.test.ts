@@ -130,6 +130,12 @@ describe("Worker Computer Use capability composition", () => {
       assert.equal(computerUse?.name, "computer-use");
       assert.equal(computerUse?.verification, "unavailable");
       assert.equal(computerUse?.evidenceSource, "capability-probe");
+      // A Worker with no runtime composed has no helper to fail; that is a state the
+      // owner can leave, and only naming it distinguishes it from a failed probe.
+      assert.equal(
+        computerUse?.blockedBy,
+        computerUseProbe === undefined ? "session-helper-absent" : undefined,
+      );
       assert.equal(typeof computerUse?.observedAtMs, "number");
       assert.equal(typeof snapshot.hardware?.cpu.model, "string");
       assert.equal((snapshot.hardware?.cpu.logicalCoreCount ?? 0) > 0, true);

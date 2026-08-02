@@ -2658,6 +2658,13 @@ export function createWorkerSchedulingInventoryProvider(input: {
         verification: computerUseVerification,
         observedAtMs: now,
         evidenceSource: "capability-probe",
+        // Without the native service there is no user-session helper, so nothing on
+        // this Device is even attempting Computer Use. That reads identically to a
+        // platform that cannot do it, and the owner has no way to tell the two apart
+        // unless the Device says which one this is.
+        ...(input.computerUseProbe === undefined
+          ? { blockedBy: "session-helper-absent" as const }
+          : {}),
       });
       const capabilities = [...capabilityMap]
         .sort(([left], [right]) => left.localeCompare(right, "en"))

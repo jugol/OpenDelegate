@@ -209,6 +209,8 @@ export const japaneseMessages = {
     adapterUpgrading: "更新中…",
     adapterUpgradeRequested: "更新を要求しました。次回の更新時にこのデバイスが結果を報告します。",
     adapterUpgradeFailed: "更新を要求できませんでした。",
+    capabilityBlockedSessionHelperAbsent:
+      "このデバイスは OpenDelegate をフォアグラウンドで実行しているため、ユーザーセッションヘルパーがなくデスクトップに到達できません。このデバイスでワーカーをネイティブサービスとしてインストールすると有効になります。",
     noAgentAdapters: "Agent アダプターの観測情報がありません。",
     agentExecution: "Agent の実行",
     agentProfileTarget: "Agent プロファイルの対象",

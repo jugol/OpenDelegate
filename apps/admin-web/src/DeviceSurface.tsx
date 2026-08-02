@@ -1601,6 +1601,11 @@ function CapabilityRow({ capability }: { readonly capability: CapabilityView }):
         )}
         {localizeCapabilityState(capability.state, messages)}
       </span>
+      {/* An unavailable Capability the owner can switch on reads the same as one the
+          platform will never support. Only the Device knows which, so say it here. */}
+      {capability.blockedBy === undefined ? null : (
+        <p className="capability-remedy">{messages.device.capabilityBlockedSessionHelperAbsent}</p>
+      )}
     </li>
   );
 }

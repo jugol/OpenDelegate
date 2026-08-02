@@ -130,6 +130,16 @@ export type WorkerCapabilityVerification =
 export type WorkerCapabilityEvidenceSource =
   "agent-adapter" | "capability-probe" | "workspace-registry";
 
+/**
+ * A named, owner-actionable cause for a Capability being unusable.
+ *
+ * `session-helper-absent` means this Worker runs without the native service, so
+ * no user-session helper exists and nothing on the Device is even attempting the
+ * Capability. That is a state the owner can leave, and it reads identically to a
+ * permanent limitation unless it is said out loud.
+ */
+export type WorkerCapabilityBlockerV1 = "session-helper-absent";
+
 export interface WorkerSchedulingAgentAdapterV1 {
   readonly provider: "codex" | "claude" | "generic-command";
   readonly adapterId: string;
@@ -228,6 +238,12 @@ export interface WorkerSchedulingInventoryV1 {
     readonly observedAtMs?: number;
     readonly evidenceSource?: WorkerCapabilityEvidenceSource;
     readonly version?: string;
+    /**
+     * What is holding the Capability back, when this Device knows a cause the
+     * owner can act on. Absent when the Capability works, or when the cause is
+     * transient enough that naming it would only mislead.
+     */
+    readonly blockedBy?: WorkerCapabilityBlockerV1;
   }[];
   readonly agentAdapters?: readonly WorkerSchedulingAgentAdapterV1[];
   readonly resourceLocks?: readonly WorkerSchedulingResourceLockV1[];

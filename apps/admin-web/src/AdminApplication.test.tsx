@@ -228,7 +228,11 @@ const linuxWorker: DeviceSummary = {
   instructions: ["Keep owner-authored mount labels unchanged."],
   capabilities: [
     { name: "codex", verification: "verified" },
-    { name: "computer-use", verification: "unavailable" },
+    {
+      name: "computer-use",
+      verification: "unavailable" as const,
+      blockedBy: "session-helper-absent" as const,
+    },
     { name: "container-build", verification: "detected" },
   ],
   routes: [
@@ -877,6 +881,9 @@ describe("Admin authentication and Task control", () => {
     expect(screen.getByText("container-build")).toBeTruthy();
     expect(screen.getByText("Verified")).toBeTruthy();
     expect(screen.getByText("Unavailable")).toBeTruthy();
+    // "Unavailable" alone reads as a platform that cannot do it. The Device knows this
+    // one is switchable, so the panel has to say which of the two it is.
+    expect(screen.getByText(/Install the Worker as a native service/)).toBeTruthy();
 
     await user.click(screen.getByRole("tab", { name: "Routes" }));
     expect(screen.getByText("Omada VPN")).toBeTruthy();

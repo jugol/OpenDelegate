@@ -2337,7 +2337,8 @@ function sanitizeObservedCapability(
     (value.evidenceSource !== undefined &&
       value.evidenceSource !== "agent-adapter" &&
       value.evidenceSource !== "capability-probe" &&
-      value.evidenceSource !== "workspace-registry")
+      value.evidenceSource !== "workspace-registry") ||
+    (value.blockedBy !== undefined && value.blockedBy !== "session-helper-absent")
   ) {
     throw unavailable(
       "The Device capability observation is invalid.",
@@ -2355,6 +2356,7 @@ function sanitizeObservedCapability(
     ...(observedAtMs === undefined ? {} : { observedAtMs }),
     ...(value.evidenceSource === undefined ? {} : { evidenceSource: value.evidenceSource }),
     ...(value.version === undefined ? {} : { version: value.version }),
+    ...(value.blockedBy === undefined ? {} : { blockedBy: value.blockedBy }),
   };
 }
 
