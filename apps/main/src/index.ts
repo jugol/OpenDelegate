@@ -1611,6 +1611,8 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
               upgrade: async ({
                 deviceId,
                 adapterId,
+                principalId,
+                idempotencyKey,
               }: {
                 readonly deviceId: string;
                 readonly adapterId: string;
@@ -1621,6 +1623,11 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
                 // upgraded in process rather than over the wire.
                 if (deviceId === configuration.deviceId && localProviderUpgrade !== undefined) {
                   await localProviderUpgrade(adapterId);
+                  // Main reports its adapters from a stored assessment, so an
+                  // upgrade nobody re-assessed looks to the owner like nothing
+                  // happened. A Worker needs no equivalent: its heartbeat
+                  // carries a live probe.
+                  await mainDeviceAssessment?.assess({ principalId, idempotencyKey });
                   return;
                 }
                 await workerChannelForUpgrade.upgradeProvider({

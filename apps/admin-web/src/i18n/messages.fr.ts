@@ -284,7 +284,7 @@ export const frenchMessages = {
     policyScopeMain: "Appareil principal",
     policyScopeDevice: "Appareil",
     adapterReadinessReady: "Prêt",
-    adapterReadinessDegraded: "Dégradé",
+    adapterReadinessDegraded: "Non prêt",
     adapterReadinessUnavailable: "Indisponible",
     adapterCompatibilityTested: "Testé",
     adapterCompatibilityCompatible: "Compatibilité confirmée",

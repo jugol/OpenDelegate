@@ -256,7 +256,7 @@ export const simplifiedChineseMessages = {
     policyScopeMain: "主设备",
     policyScopeDevice: "设备",
     adapterReadinessReady: "已就绪",
-    adapterReadinessDegraded: "性能下降",
+    adapterReadinessDegraded: "未就绪",
     adapterReadinessUnavailable: "不可用",
     adapterCompatibilityTested: "已测试",
     adapterCompatibilityCompatible: "兼容",

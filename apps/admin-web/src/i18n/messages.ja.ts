@@ -277,7 +277,7 @@ export const japaneseMessages = {
     policyScopeMain: "メイン",
     policyScopeDevice: "デバイス",
     adapterReadinessReady: "準備完了",
-    adapterReadinessDegraded: "機能低下",
+    adapterReadinessDegraded: "準備未完了",
     adapterReadinessUnavailable: "利用不可",
     adapterCompatibilityTested: "テスト済み",
     adapterCompatibilityCompatible: "互換性あり",
