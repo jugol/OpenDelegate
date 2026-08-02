@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
 
-import { resolveOwnerProviderHome } from "../src/controlled-provider-home.ts";
+import {
+  isDefaultProviderHome,
+  resolveOwnerProviderHome,
+} from "../src/controlled-provider-home.ts";
 
 const HOME = resolve("/home/owner");
 
@@ -39,5 +42,13 @@ describe("owner provider home", () => {
   it("reports no owner home when the Device exposes none, leaving a managed fallback", () => {
     assert.equal(resolveOwnerProviderHome("codex", {}, ""), undefined);
     assert.equal(resolveOwnerProviderHome("codex", {}, "not-absolute"), undefined);
+  });
+
+  it("recognises the default home, so a remedy can drop a variable that changes nothing", () => {
+    assert.equal(isDefaultProviderHome("claude", join(HOME, ".claude"), HOME), true);
+    assert.equal(isDefaultProviderHome("codex", join(HOME, ".codex"), HOME), true);
+    assert.equal(isDefaultProviderHome("claude", resolve("/srv/claude"), HOME), false);
+    // A Device with no home directory has no default to match.
+    assert.equal(isDefaultProviderHome("claude", join(HOME, ".claude"), ""), false);
   });
 });

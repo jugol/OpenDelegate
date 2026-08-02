@@ -32,6 +32,22 @@ export function resolveOwnerProviderHome(
   return join(resolve(homeDirectory), provider === "codex" ? ".codex" : ".claude");
 }
 
+/**
+ * True when the provider's own default home is the one an adapter probes.
+ *
+ * A remedy that names an environment variable the owner does not need invites
+ * them to build a command instead of running one, so it is worth knowing when
+ * the bare sign-in command already lands in the right directory.
+ */
+export function isDefaultProviderHome(
+  provider: AgentProviderHomeOwner,
+  home: string,
+  homeDirectory: string = safeHomeDirectory(),
+): boolean {
+  const fallback = resolveOwnerProviderHome(provider, {}, homeDirectory);
+  return fallback !== undefined && sameFilesystemPath(fallback, resolve(home));
+}
+
 function safeHomeDirectory(): string {
   try {
     return homedir();

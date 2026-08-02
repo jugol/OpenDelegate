@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createProviderToolAuthorizationRequest } from "./action-authorization.ts";
 import {
   assertProviderHomeNotInSecretEnvironment,
+  isDefaultProviderHome,
   prepareControlledProviderHome,
   resolveControlledProviderHome,
 } from "./controlled-provider-home.ts";
@@ -211,8 +212,12 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
             code: auth.timedOut ? "AUTH_PROBE_TIMEOUT" : "AUTH_NOT_READY",
             message: auth.timedOut
               ? "The Claude authentication probe timed out."
-              : `Claude is not signed in. Run claude with CLAUDE_CONFIG_DIR=${this.#claudeHome} ` +
-                "on this Device.",
+              : `Claude is not signed in on this Device. Run ${
+                  isDefaultProviderHome("claude", this.#claudeHome)
+                    ? "claude"
+                    : `claude with CLAUDE_CONFIG_DIR=${this.#claudeHome}`
+                } in a terminal and complete the sign-in there. The Claude desktop app holds ` +
+                "its own session and does not sign in this CLI.",
           });
         }
       } catch {
