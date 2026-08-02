@@ -29,6 +29,7 @@ import {
   CodexCliAdapter,
   FileSessionLeaseStore,
   resolveOwnerProviderHome,
+  upgradeAgentProvider,
   type AgentActionAuthorizationPort,
   type AgentAdapterRemediation,
   type AgentProviderHomeOwner,
@@ -115,7 +116,6 @@ import {
   type WorkspaceSchedulingMetadata,
 } from "@opendelegate/worker-runtime";
 
-import { upgradeAgentProvider } from "./agent-provider-upgrade.ts";
 import { WorkerArtifactDeliveryCoordinator } from "./artifact-delivery.ts";
 import { WorkerAgentActionAuthorizer } from "./agent-action-authorizer.ts";
 import { FileManifestWorkerArtifactLifecycle } from "./artifact-promotion.ts";

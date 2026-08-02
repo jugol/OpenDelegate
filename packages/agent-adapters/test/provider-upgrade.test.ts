@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 
-import type { AgentAdapterProbe, AgentAdapterRemediation } from "@opendelegate/agent-adapters";
-
-import { upgradeAgentProvider } from "../src/agent-provider-upgrade.ts";
+import { upgradeAgentProvider } from "../src/provider-upgrade.ts";
+import type { AgentAdapterProbe, AgentAdapterRemediation } from "../src/contracts.ts";
 
 const REMEDIATION: AgentAdapterRemediation = {
   kind: "upgrade-provider",

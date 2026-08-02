@@ -1494,6 +1494,12 @@ package and version are both product constants is a far smaller trust surface th
 a general package install, and it is the only one that works on a Device the owner
 has not prepared.
 
+Main is not a peer on its own Device channel, so a command addressed to it has
+nowhere to arrive. Main runs the same narrow upgrade in process instead, through
+the adapters it already composes for its own assessment. A Device that is
+neither Main nor a connected channel peer is refused with a stated reason rather
+than a generic failure.
+
 **Consequence:** The install writes to the Device's global npm prefix, so it
 affects every local consumer of that provider — the same sharing the owner already
 accepted for provider homes in [D-076](#d-076--the-owners-existing-provider-home-is-the-default).

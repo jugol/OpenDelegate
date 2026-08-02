@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 
-import type { AgentAdapterProbe, AgentAdapterRemediation } from "@opendelegate/agent-adapters";
+import type { AgentAdapterProbe, AgentAdapterRemediation } from "./contracts.ts";
 
 const UPGRADE_TIMEOUT_MS = 10 * 60_000;
 const MAXIMUM_OUTPUT_BYTES = 64 * 1024;
