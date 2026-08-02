@@ -1016,10 +1016,25 @@ textarea:focus-visible,
 }
 
 .policy-list > li > :last-child,
-.adapter-list > li > :last-child {
+.adapter-list > li > .adapter-status {
   max-width: 192px;
   font-weight: 550;
   text-align: right;
+}
+
+/* The remedy spans the whole row: it carries a button and a sentence, neither
+   of which fits the narrow trailing status column. */
+.adapter-upgrade {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+}
+
+.adapter-upgrade small {
+  max-width: 100%;
 }
 
 .adapter-copy {

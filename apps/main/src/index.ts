@@ -1600,6 +1600,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         ? {}
         : {
             deviceProviderUpgrade: {
+              canUpgrade: (deviceId: string) => workerChannelForUpgrade.isConnected(deviceId),
               upgrade: async ({
                 deviceId,
                 adapterId,

@@ -1008,9 +1008,9 @@ function AgentAdapterList({
         <li key={adapter.adapterId}>
           <Bot aria-hidden="true" />
           <span className="adapter-copy">
-            <strong>{adapter.provider}</strong>
+            <strong>{adapter.adapterId}</strong>
             <small>
-              {adapter.adapterId}
+              {adapter.provider}
               {adapter.version === undefined ? "" : ` · ${adapter.version}`}
             </small>
             {adapter.models.length === 0 ? null : (
@@ -1039,7 +1039,7 @@ function AgentAdapterList({
             )}
           </span>
           <span
-            className={`status-${
+            className={`adapter-status status-${
               adapter.readiness === "ready"
                 ? "success"
                 : adapter.readiness === "degraded"
