@@ -276,7 +276,7 @@ export const koreanMessages = {
     policyScopeMain: "메인",
     policyScopeDevice: "장치",
     adapterReadinessReady: "준비됨",
-    adapterReadinessDegraded: "성능 저하",
+    adapterReadinessDegraded: "준비 안 됨",
     adapterReadinessUnavailable: "사용 불가",
     adapterCompatibilityTested: "테스트 완료",
     adapterCompatibilityCompatible: "호환됨",

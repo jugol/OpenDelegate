@@ -275,7 +275,7 @@ export const englishMessages = {
     policyScopeMain: "Main",
     policyScopeDevice: "Device",
     adapterReadinessReady: "Ready",
-    adapterReadinessDegraded: "Degraded",
+    adapterReadinessDegraded: "Not ready",
     adapterReadinessUnavailable: "Unavailable",
     adapterCompatibilityTested: "Tested",
     adapterCompatibilityCompatible: "Compatible",

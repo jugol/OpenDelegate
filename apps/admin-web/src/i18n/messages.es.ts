@@ -283,7 +283,7 @@ export const spanishMessages = {
     policyScopeMain: "Dispositivo principal",
     policyScopeDevice: "Dispositivo",
     adapterReadinessReady: "Listo",
-    adapterReadinessDegraded: "Degradado",
+    adapterReadinessDegraded: "No preparado",
     adapterReadinessUnavailable: "No disponible",
     adapterCompatibilityTested: "Probado",
     adapterCompatibilityCompatible: "Compatibilidad confirmada",
