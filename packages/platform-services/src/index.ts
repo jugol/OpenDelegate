@@ -1,8 +1,17 @@
 export { validateSupervisorCommands } from "./command-validation.ts";
 export {
+  composeServiceConfiguration,
+  type ComposeServiceConfigurationInput,
+} from "./compose-configuration.ts";
+export {
   createPlatformServiceDefinition,
   parsePlatformServiceConfiguration,
 } from "./configuration.ts";
+export {
+  createLocalIpcKeyMaterial,
+  createLocalIpcTrustMaterial,
+  type LocalIpcKeyMaterial,
+} from "./ipc-key-material.ts";
 export {
   createServiceDiagnostic,
   type CreateServiceDiagnosticInput,
