@@ -193,6 +193,8 @@ export const simplifiedChineseMessages = {
     adapterUpgrading: "正在更新…",
     adapterUpgradeRequested: "已请求更新。该设备将在下次刷新时报告结果。",
     adapterUpgradeFailed: "无法请求更新。",
+    capabilityBlockedSessionHelperAbsent:
+      "该设备在前台运行 OpenDelegate，因此没有用户会话助手，无法访问桌面。在该设备上将工作节点安装为原生服务即可启用。",
     noAgentAdapters: "暂无 Agent 适配器观测信息。",
     agentExecution: "Agent 执行",
     agentProfileTarget: "Agent 配置目标",

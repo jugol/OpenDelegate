@@ -35,6 +35,8 @@ export interface CapabilityView {
   readonly label: PresentationText;
   readonly state: CapabilityState;
   readonly tone: StatusTone;
+  /** What the owner can do about it, when the Device named a cause they can act on. */
+  readonly blockedBy?: "session-helper-absent";
 }
 
 export interface RouteView {

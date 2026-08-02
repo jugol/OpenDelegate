@@ -263,6 +263,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
                 ? {}
                 : { evidenceSource: capability.evidenceSource }),
               ...(capability.version === undefined ? {} : { version: capability.version }),
+              ...(capability.blockedBy === undefined ? {} : { blockedBy: capability.blockedBy }),
             })),
             policies: [...(profile?.policies ?? [])],
             ...(inventory?.agentAdapters === undefined

@@ -207,6 +207,8 @@ export const englishMessages = {
     adapterUpgradeRequested:
       "Update requested. This Device reports the result on its next refresh.",
     adapterUpgradeFailed: "The update could not be requested.",
+    capabilityBlockedSessionHelperAbsent:
+      "This Device runs OpenDelegate in the foreground, so it has no user-session helper and cannot reach the desktop. Install the Worker as a native service on this Device to enable it.",
     noAgentAdapters: "No Agent Adapter observation is available.",
     agentExecution: "Agent execution",
     agentProfileTarget: "Agent profile target",

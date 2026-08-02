@@ -882,7 +882,7 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
     assertExactKeys(
       capability,
       ["name", "verification"],
-      ["observedAtMs", "evidenceSource", "version"],
+      ["observedAtMs", "evidenceSource", "version", "blockedBy"],
     );
     const name = readIdentifier(capability["name"], "capability name");
     if (capabilityNames.has(name)) {
@@ -916,6 +916,15 @@ function parseWorkerInventory(input: unknown): NonNullable<WorkerHeartbeatV1["in
       ...(capability["version"] === undefined
         ? {}
         : { version: readIdentifier(capability["version"], "capability version") }),
+      ...(capability["blockedBy"] === undefined
+        ? {}
+        : {
+            blockedBy: readEnum(
+              capability["blockedBy"],
+              ["session-helper-absent"] as const,
+              "capability blocker",
+            ),
+          }),
     };
   });
   const agentAdapters =

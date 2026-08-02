@@ -1912,7 +1912,7 @@ function readCapabilities(value: unknown): WorkerSchedulingInventoryV1["capabili
     requireExactInventoryKeys(
       entry,
       ["name", "verification"],
-      ["observedAtMs", "evidenceSource", "version"],
+      ["observedAtMs", "evidenceSource", "version", "blockedBy"],
     );
     const name = readInventoryText(entry["name"], "capability name", 160);
     const verification = entry["verification"];
@@ -1945,6 +1945,10 @@ function readCapabilities(value: unknown): WorkerSchedulingInventoryV1["capabili
       entry["version"] === undefined
         ? undefined
         : readInventoryText(entry["version"], "capability version", 256);
+    const blockedBy = entry["blockedBy"];
+    if (blockedBy !== undefined && blockedBy !== "session-helper-absent") {
+      throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker capabilities are invalid.");
+    }
     seen.add(name);
     return Object.freeze({
       name,
@@ -1952,6 +1956,7 @@ function readCapabilities(value: unknown): WorkerSchedulingInventoryV1["capabili
       ...(observedAtMs === undefined ? {} : { observedAtMs }),
       ...(evidenceSource === undefined ? {} : { evidenceSource }),
       ...(version === undefined ? {} : { version }),
+      ...(blockedBy === undefined ? {} : { blockedBy }),
     });
   });
   return Object.freeze(capabilities);

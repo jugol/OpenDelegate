@@ -215,6 +215,8 @@ export const spanishMessages = {
     adapterUpgradeRequested:
       "Actualización solicitada. El Dispositivo informará del resultado en su próxima actualización.",
     adapterUpgradeFailed: "No se pudo solicitar la actualización.",
+    capabilityBlockedSessionHelperAbsent:
+      "Este Dispositivo ejecuta OpenDelegate en primer plano, así que no tiene asistente de sesión de usuario y no puede acceder al escritorio. Instala el nodo de trabajo como servicio nativo en este Dispositivo para habilitarlo.",
     noAgentAdapters: "No hay observaciones de adaptadores de Agent.",
     agentExecution: "Ejecución del Agent",
     agentProfileTarget: "Destino del perfil de Agent",

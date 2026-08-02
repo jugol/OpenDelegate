@@ -87,7 +87,7 @@ const heartbeat = {
           evidenceSource: "agent-adapter",
           version: "1.2.3",
         },
-        { name: "computer-use", verification: "degraded" },
+        { name: "computer-use", verification: "unavailable", blockedBy: "session-helper-absent" },
       ],
       agentAdapters: [
         {

@@ -81,6 +81,7 @@ export interface DeviceSummary {
     readonly observedAtMs?: number;
     readonly evidenceSource?: "agent-adapter" | "capability-probe" | "workspace-registry";
     readonly version?: string;
+    readonly blockedBy?: "session-helper-absent";
   }[];
   readonly policies?: readonly {
     readonly policyId: string;
