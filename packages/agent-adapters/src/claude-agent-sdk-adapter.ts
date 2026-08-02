@@ -238,6 +238,11 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
       auth: { state: authState },
       capabilities,
       diagnostics,
+      // A native Windows Worker cannot host this adapter at any version: the SDK's
+      // fail-closed sandbox needs an OS primitive Windows does not have. Signing in
+      // or upgrading changes nothing, so the adapter asks not to be advertised. A
+      // missing SDK package is deliberately excluded — installing it is a remedy.
+      ...(nativeWindows ? { unsupportedOnDevice: true } : {}),
     };
   }
 

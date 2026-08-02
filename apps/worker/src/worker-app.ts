@@ -2566,7 +2566,14 @@ export function createWorkerSchedulingInventoryProvider(input: {
             outcome.value.adapterId === adapter.adapterId &&
             outcome.value.provider === adapter.provider
           ) {
-            probes.push(outcome.value);
+            // An adapter nothing on this Device could make usable is not advertised.
+            // No Run can route to it and no owner action can change that, so listing
+            // it only puts a permanent failure on every surface that reads this
+            // inventory. `worker diagnose` still reports it, which is where a
+            // Device-local reason belongs.
+            if (outcome.value.unsupportedOnDevice !== true) {
+              probes.push(outcome.value);
+            }
           } else {
             failedAdapters.push({ adapterId: adapter.adapterId, provider: adapter.provider });
           }

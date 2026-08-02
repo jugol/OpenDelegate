@@ -504,6 +504,27 @@ test("Claude Agent SDK refuses native Windows because its required sandbox canno
       (diagnostic) => diagnostic.code === "CLAUDE_SANDBOX_UNAVAILABLE_NATIVE_WINDOWS",
     ),
   );
+  // No version and no sign-in changes this, so the adapter asks not to be advertised
+  // rather than occupy a row that can only ever read "incompatible".
+  assert.equal(probe.unsupportedOnDevice, true);
+});
+
+test("Claude Agent SDK stays advertisable off native Windows even when the package is missing", async () => {
+  // A missing package has a remedy, so hiding the adapter would hide the remedy too.
+  const claudeHome = await createClaudeHome();
+  const probe = await new ClaudeAgentSdkAdapter({
+    claudeHome,
+    hostPlatform: "linux",
+    sdk: {
+      query() {
+        throw new Error("query must not start");
+      },
+    },
+    authExecutable: process.execPath,
+    authPrefixArgs: [fixturePath, "claude"],
+  }).probe({ secretEnvironment: { ANTHROPIC_API_KEY: "fixture-api-key" } });
+
+  assert.equal(probe.unsupportedOnDevice, undefined);
 });
 
 test("Claude Agent SDK consumes priority-now steering only for the exact active Run", async () => {

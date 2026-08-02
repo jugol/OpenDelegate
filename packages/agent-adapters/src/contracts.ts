@@ -364,6 +364,16 @@ export interface AgentAdapterProbe {
    * target instead of leaving "untested" as a dead end.
    */
   readonly remediation?: AgentAdapterRemediation;
+  /**
+   * Set when nothing an owner could do on this Device would make the adapter
+   * usable, so surfaces that exist to offer remedies can leave it out instead of
+   * showing a permanent failure with no path forward.
+   *
+   * A missing install or an out-of-date version never sets this: those have
+   * remedies. Only a property of the Device itself does, and the reason belongs
+   * in `diagnostics` so a Device-local report can still explain the absence.
+   */
+  readonly unsupportedOnDevice?: boolean;
 }
 
 export interface AgentAdapterRemediation {
