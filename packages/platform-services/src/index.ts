@@ -1,5 +1,9 @@
 export { validateSupervisorCommands } from "./command-validation.ts";
 export {
+  composeServiceConfiguration,
+  type ComposeServiceConfigurationInput,
+} from "./compose-configuration.ts";
+export {
   createPlatformServiceDefinition,
   parsePlatformServiceConfiguration,
 } from "./configuration.ts";
