@@ -50,6 +50,18 @@ export interface ComposeServiceConfigurationInput {
   };
   /** Required on Linux, where owner Secrets go through the Secret Service tool. */
   readonly linuxSecretToolPath?: string;
+  /**
+   * The staged Windows handoff, when one exists. The core service runs under its
+   * own account and cannot read Secrets sealed to the owner, so an install without
+   * this binding produces a service that starts and then cannot open its own store.
+   */
+  readonly windowsServiceSecretBinding?: {
+    readonly backend: "windows-service-dpapi";
+    readonly handoffRoot: string;
+    readonly serviceName: string;
+    readonly serviceSid: string;
+    readonly vaultRoot: string;
+  };
   readonly retainPreviousVersions?: number;
   readonly healthTimeoutMs?: number;
 }
@@ -113,6 +125,9 @@ export function composeServiceConfiguration(
         backend: "windows-dpapi",
         vaultRoot: path.join(stateRoot, "owner-secrets", "dpapi"),
       },
+      ...(input.windowsServiceSecretBinding === undefined
+        ? {}
+        : { serviceSecretBinding: input.windowsServiceSecretBinding }),
     });
   }
   const serviceIdentity = required(

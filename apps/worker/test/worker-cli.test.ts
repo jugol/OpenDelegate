@@ -119,6 +119,65 @@ test("Worker CLI exposes the bounded join boundary and never accepts a raw token
   );
 });
 
+test("Worker service-document takes only what the document needs and defaults its instance", () => {
+  assert.deepEqual(
+    parseWorkerArguments([
+      "service-document",
+      "--output",
+      "service.json",
+      "--bundle",
+      "bundle",
+      "--install-root",
+      "install",
+      "--data-root",
+      "data",
+      "--health-port",
+      "43190",
+    ]),
+    {
+      command: "service-document",
+      serviceDocument: {
+        outputFile: resolve("service.json"),
+        bundleDirectory: resolve("bundle"),
+        installRoot: resolve("install"),
+        dataRoot: resolve("data"),
+        instanceId: "personal",
+        healthPort: 43_190,
+      },
+    },
+  );
+
+  // Every path the document names is required: a partial document cannot be
+  // completed later, because the install reads it as authoritative.
+  assert.throws(
+    () => parseWorkerArguments(["service-document", "--output", "service.json"]),
+    WorkerAppError,
+  );
+  for (const port of ["0", "70000", "not-a-port"]) {
+    assert.throws(
+      () =>
+        parseWorkerArguments([
+          "service-document",
+          "--output",
+          "service.json",
+          "--bundle",
+          "bundle",
+          "--install-root",
+          "install",
+          "--data-root",
+          "data",
+          "--health-port",
+          port,
+        ]),
+      WorkerAppError,
+      `expected ${port} to be rejected`,
+    );
+  }
+  // The options belong to one command, so another cannot silently accept them.
+  assert.throws(() => parseWorkerArguments(["run", "--output", "service.json"]), WorkerAppError);
+  assert.throws(() => parseWorkerArguments(["diagnose", "--health-port", "43190"]), WorkerAppError);
+});
+
 test("Worker join accepts bounded provider and Claude sandbox bootstrap settings", () => {
   const parsed = parseWorkerArguments([
     "join",

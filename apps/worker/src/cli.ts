@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +27,7 @@ import {
   resolveWorkerPaths,
   runPlatformMutationMcpStdioServer,
   runWorkerDaemon,
+  buildWorkerServiceDocument,
   WORKER_COMPUTER_USE_TOOL_NAMES,
   type WorkerAgentConfiguration,
   type WorkerCertificateRenewalOutcome,
@@ -51,6 +52,7 @@ export type WorkerCliCommand =
   | "platform-mutation-mcp-bridge"
   | "run"
   | "secret-backend-provision"
+  | "service-document"
   | "service-host"
   | "status"
   | "version"
@@ -80,6 +82,15 @@ export interface ParsedWorkerArguments {
   };
   /** Foreground vault a staged Worker is returned to. */
   readonly windowsServiceRestoreVaultRoot?: string;
+  readonly serviceDocument?: {
+    readonly outputFile: string;
+    readonly bundleDirectory: string;
+    readonly installRoot: string;
+    readonly dataRoot: string;
+    readonly instanceId: string;
+    readonly healthPort: number;
+    readonly stagedSecretBindingFile?: string;
+  };
   readonly workspace?: {
     readonly workspaceId: string;
     readonly alias: string;
@@ -108,6 +119,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "platform-mutation-mcp-bridge" &&
     command !== "run" &&
     command !== "secret-backend-provision" &&
+    command !== "service-document" &&
     command !== "service-host" &&
     command !== "status" &&
     command !== "version" &&
@@ -128,6 +140,12 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   let systemdCredsPath: string | undefined;
   let instanceId: string | undefined;
   let handoffRoot: string | undefined;
+  let outputFile: string | undefined;
+  let bundleDirectory: string | undefined;
+  let installRoot: string | undefined;
+  let dataRoot: string | undefined;
+  let healthPort: number | undefined;
+  let stagedSecretBindingFile: string | undefined;
   let workspaceId: string | undefined;
   let workspaceAlias: string | undefined;
   let workspaceType: "directory" | "git" | "mounted-storage" | undefined;
@@ -161,7 +179,13 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       option !== "--agent" &&
       option !== "--codex-home" &&
       option !== "--claude-home" &&
-      option !== "--claude-network-domain"
+      option !== "--claude-network-domain" &&
+      option !== "--output" &&
+      option !== "--bundle" &&
+      option !== "--install-root" &&
+      option !== "--data-root" &&
+      option !== "--health-port" &&
+      option !== "--staged-secret-binding"
     ) {
       throw new WorkerAppError("CONFIG_INVALID", `Unknown Worker option: ${String(option)}.`);
     }
@@ -198,6 +222,27 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
         break;
       case "--credential-name":
         credentialName = target;
+        break;
+      case "--output":
+        outputFile = resolve(target);
+        break;
+      case "--bundle":
+        bundleDirectory = resolve(target);
+        break;
+      case "--install-root":
+        installRoot = resolve(target);
+        break;
+      case "--data-root":
+        dataRoot = resolve(target);
+        break;
+      case "--staged-secret-binding":
+        stagedSecretBindingFile = resolve(target);
+        break;
+      case "--health-port":
+        healthPort = Number.parseInt(target, 10);
+        if (!Number.isSafeInteger(healthPort) || healthPort < 1 || healthPort > 65_535) {
+          throw new WorkerAppError("CONFIG_INVALID", "--health-port must be a usable TCP port.");
+        }
         break;
       case "--systemd-creds":
         systemdCredsPath = resolve(target);
@@ -332,11 +377,46 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       "Headless Secret provisioning options are accepted only by secret-backend-provision.",
     );
   }
-  const hasWindowsServiceProvisioningOption = instanceId !== undefined || handoffRoot !== undefined;
-  if (command !== "windows-service-secret-stage" && hasWindowsServiceProvisioningOption) {
+  if (command !== "windows-service-secret-stage" && handoffRoot !== undefined) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
       "Windows service Secret options are accepted only by windows-service-secret-stage.",
+    );
+  }
+  if (
+    command !== "windows-service-secret-stage" &&
+    command !== "service-document" &&
+    instanceId !== undefined
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "--instance-id is accepted only by windows-service-secret-stage and service-document.",
+    );
+  }
+  const hasServiceDocumentOption =
+    outputFile !== undefined ||
+    bundleDirectory !== undefined ||
+    installRoot !== undefined ||
+    dataRoot !== undefined ||
+    healthPort !== undefined ||
+    stagedSecretBindingFile !== undefined;
+  if (command !== "service-document" && hasServiceDocumentOption) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "Service document options are accepted only by service-document.",
+    );
+  }
+  if (
+    command === "service-document" &&
+    (outputFile === undefined ||
+      bundleDirectory === undefined ||
+      installRoot === undefined ||
+      dataRoot === undefined ||
+      healthPort === undefined)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "service-document requires --output, --bundle, --install-root, --data-root, and --health-port.",
     );
   }
   if (
@@ -470,6 +550,19 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     ...(command !== "windows-service-secret-restore"
       ? {}
       : { windowsServiceRestoreVaultRoot: vaultRoot! }),
+    ...(command !== "service-document"
+      ? {}
+      : {
+          serviceDocument: {
+            outputFile: outputFile!,
+            bundleDirectory: bundleDirectory!,
+            installRoot: installRoot!,
+            dataRoot: dataRoot!,
+            instanceId: instanceId ?? "personal",
+            healthPort: healthPort!,
+            ...(stagedSecretBindingFile === undefined ? {} : { stagedSecretBindingFile }),
+          },
+        }),
     ...(command !== "workspace-register"
       ? {}
       : {
@@ -563,6 +656,43 @@ async function run(arguments_: readonly string[]): Promise<void> {
     return;
   }
   const paths = pathsFor(parsed);
+  if (parsed.command === "service-document") {
+    const request = parsed.serviceDocument!;
+    const configuration = await buildWorkerServiceDocument({
+      paths,
+      bundleDirectory: request.bundleDirectory,
+      installRoot: request.installRoot,
+      dataRoot: request.dataRoot,
+      instanceId: request.instanceId,
+      healthPort: request.healthPort,
+      sourceCheckoutRoot: installationRoot,
+      ...(request.stagedSecretBindingFile === undefined
+        ? {}
+        : {
+            windowsServiceSecretBinding: await readStagedSecretBinding(
+              request.stagedSecretBindingFile,
+            ),
+          }),
+    });
+    // 0600: the document carries no Secret values, but it does pin the identities a
+    // privileged install trusts, and a writable copy is a way to redirect that install.
+    await writeFile(request.outputFile, `${JSON.stringify(configuration, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    writeJson({
+      event: "worker.service-document.written",
+      path: request.outputFile,
+      deviceId: configuration.deviceId,
+      instanceId: configuration.instanceId,
+      role: configuration.role,
+      bundleVersion: configuration.bundle.version,
+      bundleChecksum: configuration.bundle.checksum,
+      nextStep:
+        "Run 'opendelegate service install --config <path> --command-id <id>' from an elevated shell on this Device.",
+    });
+    return;
+  }
   if (parsed.command === "windows-service-secret-restore") {
     const restored = await restoreWindowsServiceSecretBackend({
       paths,
@@ -658,6 +788,41 @@ async function run(arguments_: readonly string[]): Promise<void> {
     return;
   }
   await runForeground(paths);
+}
+
+/**
+ * Reads the handoff `windows-service-secret-stage` emitted, taking only the five
+ * binding fields. The staging output also carries advisory notices, and the
+ * configuration reader rejects any key it does not expect.
+ */
+async function readStagedSecretBinding(path: string): Promise<{
+  readonly backend: "windows-service-dpapi";
+  readonly handoffRoot: string;
+  readonly serviceName: string;
+  readonly serviceSid: string;
+  readonly vaultRoot: string;
+}> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    throw new WorkerAppError("CONFIG_INVALID", "The staged Secret binding is unreadable.");
+  }
+  const record = (parsed ?? {}) as Record<string, unknown>;
+  const text = (key: string): string => {
+    const value = record[key];
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new WorkerAppError("CONFIG_INVALID", `The staged Secret binding is missing ${key}.`);
+    }
+    return value;
+  };
+  return {
+    backend: "windows-service-dpapi",
+    handoffRoot: text("handoffRoot"),
+    serviceName: text("serviceName"),
+    serviceSid: text("serviceSid"),
+    vaultRoot: text("vaultRoot"),
+  };
 }
 
 function pathsFor(parsed: ParsedWorkerArguments): WorkerPaths {
@@ -801,6 +966,10 @@ Usage:
     --vault-root ABSOLUTE_PATH [--home <path>]
   opendelegate worker windows-service-secret-restore
     --vault-root ABSOLUTE_PATH [--home <path>]
+  opendelegate worker service-document --output ABSOLUTE_PATH
+    --bundle ABSOLUTE_PATH --install-root ABSOLUTE_PATH --data-root ABSOLUTE_PATH
+    --health-port PORT [--instance-id INSTANCE_ID]
+    [--staged-secret-binding ABSOLUTE_PATH] [--home <path>]
   opendelegate worker run [--home <path>]
   opendelegate worker service-host [--home <path>]
   opendelegate worker status [--home <path>]
@@ -814,6 +983,12 @@ Usage:
 The one-use Enrollment Grant token is accepted only inside the protected grant
 file. It is never accepted in argv or environment variables. Worker state,
 Device-local Knowledge, and managed credentials remain outside the installation.
+
+service-document composes the native service document this Device describes,
+reading its own identity, its two existing local IPC signing pins, and the
+bundle's checksum manifest. It changes nothing on the host. Installing the
+document is a separate, elevated step:
+'opendelegate service install --config <path> --command-id <id>'.
 `);
 }
 
