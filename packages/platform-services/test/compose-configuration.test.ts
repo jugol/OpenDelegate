@@ -1,16 +1,27 @@
 import assert from "node:assert/strict";
-import { createHash, createPublicKey } from "node:crypto";
 import { describe, it } from "node:test";
 
 import {
   composeServiceConfiguration,
-  createLocalIpcTrustMaterial,
   createPlatformServiceDefinition,
   PlatformServiceError,
   type ComposeServiceConfigurationInput,
 } from "../src/index.ts";
 
-const material = createLocalIpcTrustMaterial();
+/**
+ * Both pins belong to identities the Device already owns: the core key lives in the
+ * core Secret Store and the helper key in the owner-session store. Composition
+ * carries them; it never mints them, because the session helper refuses to start
+ * when a pin does not match the key it holds.
+ */
+const CORE_PIN = Object.freeze({
+  keyId: "sha256:f9acccda515ce25409e456e45f25417bcda0c1cc0255490965f6ab59d5a81b48" as const,
+  publicKeySpkiBase64Url: "MCowBQYDK2VwAyEAjBmMzBDNPDdi86mu7kAWdhSpEsUBySgfGN0q2ganv5I",
+});
+const HELPER_PIN = Object.freeze({
+  keyId: "sha256:b0308f5b2e753b15572359e7e9cd8da8400839df95052ddc21d9711554750c2f" as const,
+  publicKeySpkiBase64Url: "MCowBQYDK2VwAyEAli20Wxft7Lox4PLDh_IcMGjN265l-fNMneRfYNWYnko",
+});
 
 function windowsInput(
   overrides: Partial<ComposeServiceConfigurationInput> = {},
@@ -33,10 +44,10 @@ function windowsInput(
       stableUserId: "S-1-5-21-1000",
       adminAutoOpen: { enabled: false },
     },
-    ipcTrust: { core: material.core.pin, helper: material.helper.pin },
+    ipcTrust: { core: CORE_PIN, helper: HELPER_PIN },
     secretReferences: {
-      coreIpcSigningKey: "secret://service/worker/core-ipc-signing-v2",
-      helperIpcSigningKey: "secret://service/worker/helper-ipc-signing-v2",
+      coreIpcSigningKey: "secret://worker/opendelegate/session-helper-core-signing/v2",
+      helperIpcSigningKey: "secret://worker/opendelegate/session-helper-owner-signing/v2",
     },
     healthPort: 43_190,
     ...overrides,
@@ -70,29 +81,31 @@ describe("native service configuration composition", () => {
     );
   });
 
-  it("mints cross-consistent signing identities, which is the part no owner can hand-write", () => {
-    for (const plane of [material.core, material.helper]) {
-      const spki = Buffer.from(plane.pin.publicKeySpkiBase64Url, "base64url");
-      // keyId must be the digest of the exact bytes the document encodes: every
-      // reader recomputes it, and a mismatch is indistinguishable from tampering.
-      assert.equal(plane.pin.keyId, `sha256:${createHash("sha256").update(spki).digest("hex")}`);
-      assert.equal(
-        createPublicKey({ key: spki, format: "der", type: "spki" }).asymmetricKeyType,
-        "ed25519",
-      );
-      assert.ok(plane.privateKeyPkcs8.length > 0);
-    }
-    // A shared key would let either plane forge the other's frames.
-    assert.notEqual(material.core.pin.keyId, material.helper.pin.keyId);
+  it("carries the Device's own signing pins through untouched", () => {
+    const configuration = composeServiceConfiguration(windowsInput());
+
+    // A substituted pin fails at the session helper's start-up check, which reports
+    // a mismatch far from whatever produced it.
+    assert.deepEqual(configuration.ipcTrust, {
+      protocolVersion: 2,
+      core: CORE_PIN,
+      helper: HELPER_PIN,
+    });
+    assert.deepEqual(configuration.secretReferences, {
+      coreIpcSigningKey: "secret://worker/opendelegate/session-helper-core-signing/v2",
+      helperIpcSigningKey: "secret://worker/opendelegate/session-helper-owner-signing/v2",
+    });
   });
 
-  it("keeps the private halves out of the document, which is written in the clear", () => {
-    const serialized = JSON.stringify(composeServiceConfiguration(windowsInput()));
-
-    for (const plane of [material.core, material.helper]) {
-      assert.equal(serialized.includes(plane.privateKeyPkcs8.toString("base64")), false);
-      assert.equal(serialized.includes(plane.privateKeyPkcs8.toString("base64url")), false);
-    }
+  it("rejects a shared signing identity across the two planes", () => {
+    // One key would let either plane forge the other's frames.
+    assert.throws(
+      () =>
+        composeServiceConfiguration(
+          windowsInput({ ipcTrust: { core: CORE_PIN, helper: CORE_PIN } }),
+        ),
+      PlatformServiceError,
+    );
   });
 
   it("refuses a host fact it was not given rather than inventing one", () => {

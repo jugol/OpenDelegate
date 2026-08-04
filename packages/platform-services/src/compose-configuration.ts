@@ -25,6 +25,12 @@ export interface ComposeServiceConfigurationInput {
   /** The one root the four runtime directories are derived from. */
   readonly dataRoot: string;
   readonly ownerSession: OwnerSessionIdentity;
+  /**
+   * Pins for identities the Device already holds, never freshly minted ones. The
+   * core key lives in the core Secret Store and the helper key in the owner-session
+   * store, and the session helper refuses to start when a pin does not match the
+   * key it holds — a mismatch surfaces far from whatever substituted it.
+   */
   readonly ipcTrust: {
     readonly core: LocalIpcPublicKeyPin;
     readonly helper: LocalIpcPublicKeyPin;

@@ -8,11 +8,6 @@ export {
   parsePlatformServiceConfiguration,
 } from "./configuration.ts";
 export {
-  createLocalIpcKeyMaterial,
-  createLocalIpcTrustMaterial,
-  type LocalIpcKeyMaterial,
-} from "./ipc-key-material.ts";
-export {
   createServiceDiagnostic,
   type CreateServiceDiagnosticInput,
   type RollbackDiagnostic,
