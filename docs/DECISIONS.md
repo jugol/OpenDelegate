@@ -1530,3 +1530,26 @@ without an owner-authorized idle extension. Replayed Discord ingress records the
 same activity operation and cannot double-apply or conflict. A genuinely exhausted
 wall-time or finite usage Budget still pauses new work through the existing approval
 flow.
+
+## D-079 — Discord outbound delivery never blocks Gateway intake
+
+**Decision:** After an authorized Discord dispatch has durably updated Task and
+cursor state, outbox delivery starts in the background and is not awaited by the
+serialized Gateway receipt loop. Every projection also requests the same single
+flight drain. A live approved `THREAD_CREATE` payload is retained and reused when
+its starter `MESSAGE_CREATE` arrives. A cache-only thread event does not advance the
+durable Resume cursor; reconciliation remains responsible for fetching a starter
+that was missed across a disconnect.
+
+**Rationale:** Discord REST calls can take tens of seconds under network delay or
+rate pressure. Awaiting reactions, tags, cards, and replies inside the Gateway
+callback caused head-of-line blocking: one old Task delayed a new Forum Post for
+more than a minute, so the owner saw neither `👀` nor typing despite a healthy Main.
+Refetching a thread immediately after Discord supplied that same thread payload
+added another avoidable request on the latency-critical path.
+
+**Consequence:** Different Forum Posts continue entering durable intake while an
+earlier outbound request is slow. One adapter still owns one ordered outbox drain,
+delivery remains idempotent and restart-safe, and the Gateway cursor advances only
+after the inbound state change is durable. Tests that need a settled external
+projection explicitly await `flushOutbox()`; live receipt does not.

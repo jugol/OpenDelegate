@@ -496,9 +496,13 @@ through a secure handoff and resumes the same Task afterward.
    not repeat the Forum title, the current owner question, or mutable Task controls.
    Each accepted owner message receives one idempotent in-place acknowledgement on
    that exact message: a best-effort `👀` reaction plus Discord's typing indicator.
-   Typing is refreshed while the turn remains active; after a durable question,
-   result, or failure is delivered, the same message transitions to `✅` or `❌`.
-   OpenDelegate does not post a second generic working card for the same input.
+    Typing is refreshed while the turn remains active; after a durable question,
+    result, or failure is delivered, the same message transitions to `✅` or `❌`.
+    OpenDelegate does not post a second generic working card for the same input.
+    Durable outbound delivery runs outside the serialized Gateway receipt path, so
+    a slow reaction or reply in one thread cannot delay intake of another Forum
+    post. A live `THREAD_CREATE` payload is reused for its starter message instead
+    of requiring a redundant channel lookup before acknowledgement.
 8. Significant decisions, questions, failures, and final results remain ordinary
    replies exactly once in chronological order, keyed by their immutable Task source
    event rather than mutable Artifact or link enrichment. The full owner question

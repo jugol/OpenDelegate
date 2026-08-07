@@ -595,6 +595,75 @@ test("starter message and thread events in either order create exactly one bound
   assert.equal((await repository.getGatewayCursor())?.sequence, 9);
 });
 
+test("a live thread-first intake uses the Gateway payload without waiting for a starter REST lookup", async () => {
+  const { adapter, api, tasks, repository } = fixture();
+  const thread = forumThread("300000000000000091");
+  const starter = ownerMessage(thread.id, thread.id, "Acknowledge this new Post immediately.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  api.getMessage = async () => {
+    throw new Error("Live intake must not refetch the starter message.");
+  };
+
+  await adapter.handleGatewayDispatch(threadDispatch(1, thread));
+  await adapter.handleGatewayDispatch(messageDispatch(2, starter));
+  await adapter.flushOutbox();
+
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "create").length, 1);
+  assert.equal((await repository.getBindingByThread(thread.id))?.taskId, "task-1");
+  assert.equal(
+    api.operations.some(
+      (operation) =>
+        operation["kind"] === "message-acknowledgement" && operation["messageId"] === starter.id,
+    ),
+    true,
+  );
+});
+
+test("slow Discord delivery never head-of-line blocks the next Forum Post", async () => {
+  const { adapter, api, tasks } = fixture();
+  const firstThread = forumThread("300000000000000092");
+  const secondThread = forumThread("300000000000000093");
+  const firstStarter = ownerMessage(firstThread.id, firstThread.id, "First Post");
+  const secondStarter = ownerMessage(secondThread.id, secondThread.id, "Second Post");
+  let releaseAcknowledgement!: () => void;
+  let acknowledgementEntered!: () => void;
+  const blockedAcknowledgement = new Promise<void>((resolve) => {
+    releaseAcknowledgement = resolve;
+  });
+  const acknowledgementStarted = new Promise<void>((resolve) => {
+    acknowledgementEntered = resolve;
+  });
+  api.acknowledgeMessage = async (input) => {
+    api.operations.push({ kind: "message-acknowledgement", ...input });
+    acknowledgementEntered();
+    await blockedAcknowledgement;
+    return { reactionVisible: true, typingVisible: true };
+  };
+
+  await adapter.handleGatewayDispatch(threadDispatch(1, firstThread));
+  let firstDispatchReturned = false;
+  const firstDispatch = adapter.handleGatewayDispatch(messageDispatch(2, firstStarter)).then(() => {
+    firstDispatchReturned = true;
+  });
+  await acknowledgementStarted;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const returnedBeforeDelivery = firstDispatchReturned;
+
+  await adapter.handleGatewayDispatch(threadDispatch(3, secondThread));
+  await adapter.handleGatewayDispatch(messageDispatch(4, secondStarter));
+  const acceptedWhileDeliveryWasBlocked = tasks.calls.filter(
+    (call) => call["kind"] === "create",
+  ).length;
+
+  releaseAcknowledgement();
+  await firstDispatch;
+  await adapter.flushOutbox();
+
+  assert.equal(returnedBeforeDelivery, true);
+  assert.equal(acceptedWhileDeliveryWasBlocked, 2);
+});
+
 test("accepted owner messages use quiet in-place acknowledgement instead of working-card spam", async () => {
   const { adapter, api, clock } = fixture();
   const thread = { ...forumThread("300000000000000002"), appliedTagIds: [] };
@@ -695,6 +764,7 @@ test("one owner answer resolves the one durable question in place and resumes on
     api.online = false;
   };
   await adapter.handleGatewayDispatch(messageDispatch(2, answer));
+  await adapter.flushOutbox();
   const restartedRepository = new InMemoryDiscordStateRepository(repository.snapshot());
   const restarted = fixture({
     repository: restartedRepository,
@@ -1118,6 +1188,7 @@ test("Discord outage leaves an idempotent durable outbox that drains after resta
   initial.api.threads.set(thread.id, thread);
   initial.api.messages.set(thread.id, [starter]);
   await initial.adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await initial.adapter.flushOutbox();
   initial.api.online = false;
   await initial.adapter.publishTaskProjection({
     taskId: "task-1",

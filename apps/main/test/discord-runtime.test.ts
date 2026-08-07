@@ -367,9 +367,7 @@ test("Main Discord runtime replays a tagless Forum post without advancing its cu
   await assert.rejects(gateway.dispatch(messageDispatch(api.starter)), {
     code: "NOT_FOUND",
   });
-  await assert.rejects(gateway.dispatch(threadDispatch(api.thread, 3)), {
-    code: "NOT_FOUND",
-  });
+  await gateway.dispatch(threadDispatch(api.thread, 3));
   assert.equal((await tasks.list()).length, 0);
   assert.equal((await repository.getGatewayCursor())?.sequence, 1);
 
