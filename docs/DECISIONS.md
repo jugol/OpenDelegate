@@ -1573,3 +1573,24 @@ route no longer kills the Worker process. Authentication rejection and exhausted
 routes keep their existing diagnostics, while ordinary unavailability follows the
 bounded reconnect backoff. The mTLS integration test exercises a refused endpoint
 before the successful channel exchange so a duplicate rejection cannot regress.
+
+## D-081 — Worker reconnect replay advances at durable acknowledgment boundaries
+
+**Decision:** After the fresh welcome is committed, a Worker replays each durable
+non-acknowledgment frame and waits for Main's cumulative acknowledgment before
+sending the next one. `worker.ack` frames remain non-recursive: they are sent without
+waiting and are covered by the next cumulative acknowledgment of an ordinary frame.
+The channel is not reported ready until this replay completes.
+
+**Rationale:** A Worker can retain many heartbeat and acknowledgment frames while
+Main is unavailable. Sending the whole durable outbox synchronously filled the
+WebSocket buffer past its 2 MiB bound, closed the connection, and started another
+replay that also added a welcome acknowledgment. The Device appeared intermittently
+online while its backlog grew instead of recovering.
+
+**Consequence:** Reconnection applies natural backpressure at the same durable seam
+that already protects idempotency. A large backlog takes bounded round trips to
+drain but cannot overwhelm the socket, and failed Main effects are retried before
+the Worker advertises readiness. Integration coverage queues 96 heartbeats before
+connection and requires every one to be durably acknowledged before `connect()`
+returns.

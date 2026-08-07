@@ -737,9 +737,7 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     await this.sendDirect(hello);
     this.observeLifecycle("hello-sent");
     await welcome;
-    for (const frame of (await this.options.state.resume()).pendingOutbound) {
-      await this.send(frame);
-    }
+    await this.replayPendingOutbound((await this.options.state.resume()).pendingOutbound);
     this.deferMainAcknowledgments = false;
     await this.flushMainAcknowledgment();
     this.observeLifecycle("ready");
@@ -1305,6 +1303,45 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     this.assertOpen();
     this.sendQueue = this.sendQueue.then(() => this.sendDirect(frame));
     return this.sendQueue;
+  }
+
+  /**
+   * Replays durable frames at Main's acknowledgment boundary instead of filling
+   * the WebSocket buffer in one synchronous burst. Main deliberately does not
+   * acknowledge `worker.ack` frames (that would create an acknowledgment loop),
+   * so those advance with the next acknowledged non-acknowledgment frame.
+   */
+  private async replayPendingOutbound(frames: readonly WorkerToMainFrameV1[]): Promise<void> {
+    for (const frame of frames) {
+      if (frame.type === "worker.ack") {
+        await this.send(frame);
+        continue;
+      }
+      const acknowledged = new Promise<WorkerOutboxAckV1>((resolve, reject) => {
+        this.waiters.set(frame.messageId, {
+          sequence: frame.sequence,
+          resolve,
+          reject,
+        });
+      });
+      let rejectChannelClosed: ((error: Error) => void) | undefined;
+      const channelClosed = new Promise<never>((_resolve, reject) => {
+        rejectChannelClosed = reject;
+      });
+      const onClose = (): void => {
+        rejectChannelClosed?.(
+          new DeviceChannelClientError("The Worker Device channel closed during replay."),
+        );
+      };
+      this.socket.once("close", onClose);
+      try {
+        await this.send(frame);
+        await Promise.race([acknowledged, channelClosed]);
+      } finally {
+        this.socket.off("close", onClose);
+        this.waiters.delete(frame.messageId);
+      }
+    }
   }
 
   private async sendDirect(frame: WorkerToMainFrameV1): Promise<void> {

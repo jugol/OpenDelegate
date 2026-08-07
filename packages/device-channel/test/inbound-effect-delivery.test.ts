@@ -90,6 +90,56 @@ test(
 );
 
 test(
+  "Worker reconnect drains durable replay through Main acknowledgments before becoming ready",
+  { timeout: 20_000 },
+  async () => {
+    const fixture = await createChannelFixture("worker-replay-window");
+    const replayCount = 96;
+    let observedHeartbeats = 0;
+    const server = await fixture.listen({
+      onHeartbeat: async () => {
+        observedHeartbeats += 1;
+      },
+    });
+    const state = await fixture.openWorkerState("worker.sqlite");
+    const observedAtBase = Date.now() - replayCount;
+    let client: WorkerDeviceChannelClient | undefined;
+
+    try {
+      for (let index = 0; index < replayCount; index += 1) {
+        const identity = `queued-heartbeat-${index.toString()}`;
+        await state.enqueueOutbound((sequence) => ({
+          protocolVersion: PROTOCOL_VERSION,
+          messageId: identity,
+          senderDeviceId: fixture.deviceId,
+          correlationId: identity,
+          createdAt: new Date(observedAtBase + index).toISOString(),
+          idempotencyKey: identity,
+          sequence,
+          type: "worker.heartbeat",
+          payload: heartbeat(observedAtBase + index),
+        }));
+      }
+
+      client = await fixture.connect(server, state);
+
+      assert.equal(observedHeartbeats, replayCount);
+      assert.equal(
+        (await state.resume()).pendingOutbound.some((frame) => frame.type === "worker.heartbeat"),
+        false,
+      );
+      assert.equal(
+        (await fixture.mainState.resume(fixture.deviceId)).acknowledgedWorkerSequence,
+        replayCount,
+      );
+    } finally {
+      await client?.close().catch(() => undefined);
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
   "a route incident replays over the authenticated sequenced outbox without repeating a completed effect",
   { timeout: 20_000 },
   async () => {
@@ -262,13 +312,12 @@ test(
 
       client = await connectEventually(() => fixture.connect(server, state, callbacks));
       await waitUntil(
-        () => steeringCallbacks === 2 && receiptCallbacks === 1,
-        "durable steering receipt with failed Main audit",
+        () => steeringCallbacks === 2 && receiptCallbacks === 2,
+        "durable steering receipt after retrying the failed Main audit",
       );
       await client.close().catch(() => undefined);
 
       client = await connectEventually(() => fixture.connect(server, state, callbacks));
-      await waitUntil(() => receiptCallbacks === 2, "replayed steering receipt audit");
       await waitUntil(
         async () =>
           (await fixture.mainState.resume(fixture.deviceId)).acknowledgedMainSequence >=
@@ -641,12 +690,12 @@ async function createChannelFixture(label: string): Promise<ChannelFixture> {
   };
 }
 
-function heartbeat(): WorkerHeartbeatV1 {
+function heartbeat(observedAtMs = Date.now()): WorkerHeartbeatV1 {
   return {
     protocolVersion: PROTOCOL_VERSION,
     deviceId: "worker-effect-1",
     workerId: "worker-runtime-1",
-    observedAtMs: Date.now(),
+    observedAtMs,
     operationalState: "active",
     connectionState: "online",
     readiness: {
