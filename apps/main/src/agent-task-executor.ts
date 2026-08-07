@@ -277,11 +277,12 @@ export class AgentBackedTaskExecutor
   async planDeterministically(
     input: Parameters<NonNullable<TaskWorkPlanner["planDeterministically"]>>[0],
   ): Promise<Extract<TaskWorkPlanDecision, { readonly state: "completed" }> | undefined> {
-    if (deviceDirectoryQueryLocaleForTask(input.task) === undefined) {
+    const question = deviceDirectoryQuestionForTask(input.task);
+    if (question === undefined) {
       return undefined;
     }
     const deviceContext = await this.#readPlanningDeviceContext(input.signal);
-    const directAnswer = answerDeviceDirectoryQuestion(input.task, deviceContext);
+    const directAnswer = answerDeviceDirectoryQuestion(input.task, deviceContext, question);
     if (directAnswer !== undefined) {
       this.#directPlanningCompletions.set(directAnswer, {
         taskId: input.task.taskId,
@@ -1097,6 +1098,8 @@ interface PlanningDeviceObservation {
   readonly role: DeviceSummaryV1["role"];
   readonly connection: DeviceSummaryV1["connection"];
   readonly runtime: DeviceSummaryV1["runtime"];
+  readonly serviceMode: DeviceSummaryV1["serviceMode"];
+  readonly lastObservation?: DeviceSummaryV1["lastObservation"];
   readonly roles: readonly string[];
   readonly capabilities: readonly string[];
   readonly readyAgentAdapters: readonly {
@@ -1148,6 +1151,10 @@ function projectPlanningDeviceContext(
       role: device.role,
       connection: device.connection,
       runtime: device.runtime,
+      serviceMode: device.serviceMode,
+      ...(device.lastObservation === undefined
+        ? {}
+        : { lastObservation: Object.freeze({ ...device.lastObservation }) }),
       roles: Object.freeze([...(device.roles ?? [])]),
       capabilities: Object.freeze(
         (device.capabilities ?? [])
@@ -1215,6 +1222,12 @@ function planningContextInstructions(
 
 type DeviceDirectoryQueryLocale = "en" | "fr" | "ja" | "ko" | "es" | "zh";
 
+interface DeviceDirectoryQuestion {
+  readonly locale: DeviceDirectoryQueryLocale;
+  readonly target?: string;
+  readonly route?: string;
+}
+
 const DEVICE_DIRECTORY_QUERY_PATTERNS: Readonly<
   Record<DeviceDirectoryQueryLocale, readonly RegExp[]>
 > = Object.freeze({
@@ -1242,6 +1255,45 @@ const DEVICE_DIRECTORY_QUERY_PATTERNS: Readonly<
   ]),
 });
 
+const NAMED_DEVICE_QUERY_PATTERNS: Readonly<Record<DeviceDirectoryQueryLocale, readonly RegExp[]>> =
+  Object.freeze({
+    en: Object.freeze([
+      /^(?:can\s+(?:i|you|opendelegate)\s+(?:reach|access|use|connect\s+to)\s+)(.{1,253}?)[?!.]*$/iu,
+      /^is\s+(.{1,253}?)\s+(?:currently\s+)?(?:reachable|online|connected|available)[?!.]*$/iu,
+    ]),
+    fr: Object.freeze([
+      /^(?:est-ce\s+que\s+)?(.{1,253}?)\s+est\s+(?:actuellement\s+)?(?:accessible|disponible|en\s+ligne|connect[eé])[ ?!.]*$/iu,
+    ]),
+    ja: Object.freeze([
+      /^(?:現在|今)?(.{1,253}?)(?:に)?(?:接続|アクセス)(?:できますか|可能ですか|できる)[？?！!.]*$/u,
+    ]),
+    ko: Object.freeze([
+      /^(?:(?:지금|현재)\s*)?(.{1,253}?)(?:에|로)?\s*(?:접속|연결|사용)(?:이|가)?\s*(?:가능(?:한가(?:요)?|해(?:요)?|한지)?|돼(?:요)?|되나(?:요)?|됩니까|할\s*수\s*있(?:어(?:요)?|나(?:요)?|습니까))[?!.~]*$/iu,
+    ]),
+    es: Object.freeze([
+      /^(?:est[aá]\s+)?(.{1,253}?)\s+(?:actualmente\s+)?(?:disponible|en\s+l[ií]nea|accesible|conectado)[ ?!.]*$/iu,
+    ]),
+    zh: Object.freeze([
+      /^(?:现在|目前)?(?:可以|能)?(?:连接|访问)(.{1,253}?)[吗么？?！!.]*$/u,
+      /^(?:现在|目前)?(.{1,253}?)(?:可以|能)(?:连接|访问)[吗么？?！!.]*$/u,
+    ]),
+  });
+
+const DEVICE_ROUTE_QUERY_PATTERNS: readonly {
+  readonly locale: DeviceDirectoryQueryLocale;
+  readonly pattern: RegExp;
+}[] = Object.freeze([
+  Object.freeze({
+    locale: "ko",
+    pattern:
+      /^(ssh)(?:로|으로)?도?\s*(?:접속|연결)(?:이|가)?\s*(?:안\s*)?(?:돼(?:요)?|되나(?:요)?|됩니까|가능(?:해(?:요)?|한가(?:요)?)?)[?!.~]*$/iu,
+  }),
+  Object.freeze({
+    locale: "en",
+    pattern: /^(ssh)(?:\s+route)?\s+(?:also\s+)?(?:work|connect|reach)[?!.]*$/iu,
+  }),
+]);
+
 const VAGUE_TASK_OBJECTIVE_PATTERNS = Object.freeze([
   /^(?:(?:test|testing|테스트)\s*(?:(?:를\s*위한|용|for)\s*)?(?:task|일감|작업)|(?:task|일감|작업)\s*(?:(?:를\s*위한|용|for)\s*)?(?:test|testing|테스트))[?!.~]*$/iu,
   /^(?:test task|task for testing|new task|untitled task)[?!.]*$/iu,
@@ -1255,48 +1307,93 @@ const VAGUE_TASK_OBJECTIVE_PATTERNS = Object.freeze([
 function answerDeviceDirectoryQuestion(
   task: TaskExecutionRequest["task"],
   devices: readonly PlanningDeviceObservation[] | undefined,
+  question: DeviceDirectoryQuestion,
 ): Extract<TaskWorkPlanDecision, { readonly state: "completed" }> | undefined {
   if (devices === undefined) {
     return undefined;
   }
-  const locale = deviceDirectoryQueryLocaleForTask(task);
-  if (locale === undefined) {
-    return undefined;
+  let publicMessage: string;
+  if (question.target === undefined) {
+    publicMessage = renderDeviceDirectoryAnswer(devices, question.locale);
+  } else {
+    const device = findNamedDevice(devices, question.target);
+    if (device === undefined) {
+      return undefined;
+    }
+    publicMessage = renderNamedDeviceAnswer(device, question);
   }
   return Object.freeze({
     state: "completed",
-    publicMessage: renderDeviceDirectoryAnswer(devices, locale),
+    publicMessage,
     verifiedCompletionCriteria: Object.freeze([...task.completionCriteria]),
   });
 }
 
-function deviceDirectoryQueryLocaleForTask(
+function deviceDirectoryQuestionForTask(
   task: TaskExecutionRequest["task"],
-): DeviceDirectoryQueryLocale | undefined {
+): DeviceDirectoryQuestion | undefined {
   if (task.selectedInputRefs.length > 0 || task.constraints.length > 0) {
     return undefined;
   }
   const ownerMessages = task.messages.filter((message) => message.role === "owner");
-  if (ownerMessages.length > 1) {
-    return undefined;
-  }
   const latestOwnerMessage = ownerMessages.at(-1)?.content;
-  const query = normalizeNaturalLanguage(latestOwnerMessage ?? task.objective);
-  const locale = deviceDirectoryQueryLocale(query);
-  if (locale === undefined) {
-    return undefined;
-  }
-  if (latestOwnerMessage === undefined) {
-    return locale;
-  }
   const objective = normalizeNaturalLanguage(task.objective);
-  if (
-    deviceDirectoryQueryLocale(objective) === undefined &&
-    !VAGUE_TASK_OBJECTIVE_PATTERNS.some((pattern) => pattern.test(objective))
-  ) {
+  const objectiveQuestion = classifyDeviceDirectoryQuestion(objective);
+  const objectiveAllowsDirectDirectoryAnswer =
+    objectiveQuestion !== undefined ||
+    VAGUE_TASK_OBJECTIVE_PATTERNS.some((pattern) => pattern.test(objective));
+  if (latestOwnerMessage === undefined) {
+    return objectiveQuestion;
+  }
+  const query = normalizeNaturalLanguage(latestOwnerMessage);
+  const selfContainedQuestion = classifyDeviceDirectoryQuestion(query);
+  if (selfContainedQuestion?.target !== undefined && objectiveAllowsDirectDirectoryAnswer) {
+    return selfContainedQuestion;
+  }
+  const routeQuestion = classifyDeviceRouteQuestion(query);
+  if (routeQuestion !== undefined && objectiveQuestion?.target !== undefined) {
+    return Object.freeze({
+      locale: routeQuestion.locale,
+      target: objectiveQuestion.target,
+      route: routeQuestion.route,
+    });
+  }
+  if (ownerMessages.length > 1 || selfContainedQuestion === undefined) {
     return undefined;
   }
-  return locale;
+  if (!objectiveAllowsDirectDirectoryAnswer) {
+    return undefined;
+  }
+  return selfContainedQuestion;
+}
+
+function classifyDeviceDirectoryQuestion(query: string): DeviceDirectoryQuestion | undefined {
+  const genericLocale = deviceDirectoryQueryLocale(query);
+  if (genericLocale !== undefined) {
+    return Object.freeze({ locale: genericLocale });
+  }
+  for (const locale of ["ko", "en", "ja", "fr", "es", "zh"] as const) {
+    for (const pattern of NAMED_DEVICE_QUERY_PATTERNS[locale]) {
+      const match = pattern.exec(query);
+      const target = match?.[1]?.trim().replace(/^["'`]+|["'`]+$/gu, "");
+      if (target !== undefined && target.length > 0) {
+        return Object.freeze({ locale, target });
+      }
+    }
+  }
+  return undefined;
+}
+
+function classifyDeviceRouteQuestion(
+  query: string,
+): { readonly locale: DeviceDirectoryQueryLocale; readonly route: string } | undefined {
+  for (const candidate of DEVICE_ROUTE_QUERY_PATTERNS) {
+    const route = candidate.pattern.exec(query)?.[1];
+    if (route !== undefined) {
+      return Object.freeze({ locale: candidate.locale, route: route.toLocaleLowerCase("en-US") });
+    }
+  }
+  return undefined;
 }
 
 function deviceDirectoryQueryLocale(query: string): DeviceDirectoryQueryLocale | undefined {
@@ -1310,6 +1407,107 @@ function deviceDirectoryQueryLocale(query: string): DeviceDirectoryQueryLocale |
 
 function normalizeNaturalLanguage(value: string): string {
   return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function findNamedDevice(
+  devices: readonly PlanningDeviceObservation[],
+  target: string,
+): PlanningDeviceObservation | undefined {
+  const targetAlias = compactDeviceAlias(target);
+  if (targetAlias.length < 2) {
+    return undefined;
+  }
+  const matches = devices.filter((device) => deviceAliases(device).has(targetAlias));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function deviceAliases(device: PlanningDeviceObservation): ReadonlySet<string> {
+  const aliases = new Set<string>([
+    compactDeviceAlias(device.name),
+    compactDeviceAlias(device.deviceId),
+  ]);
+  for (const value of [device.name, device.deviceId]) {
+    for (const numeric of value.matchAll(/\d{3,}/gu)) {
+      aliases.add(numeric[0]);
+    }
+  }
+  return aliases;
+}
+
+function compactDeviceAlias(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function renderNamedDeviceAnswer(
+  device: PlanningDeviceObservation,
+  question: DeviceDirectoryQuestion,
+): string {
+  const reachable = device.connection === "online";
+  const routes =
+    device.routes.length === 0
+      ? question.locale === "ko"
+        ? "등록된 경로 없음"
+        : "no registered route"
+      : device.routes.map((route) => `${route.label} — ${route.health}`).join(", ");
+  const observedAt =
+    device.lastObservation === undefined
+      ? question.locale === "ko"
+        ? "확인 기록 없음"
+        : "no observation recorded"
+      : new Date(device.lastObservation.observedAtMs).toISOString();
+  const header =
+    question.locale === "ko"
+      ? reachable
+        ? `${device.name}에는 현재 OpenDelegate로 접속할 수 있습니다.`
+        : `${device.name}에는 현재 OpenDelegate로 접속할 수 없습니다.`
+      : question.locale === "ja"
+        ? `${device.name}には現在OpenDelegateから${reachable ? "接続できます" : "接続できません"}。`
+        : question.locale === "fr"
+          ? `${device.name} ${reachable ? "est" : "n’est pas"} actuellement accessible via OpenDelegate.`
+          : question.locale === "es"
+            ? `${device.name} ${reachable ? "está" : "no está"} disponible actualmente mediante OpenDelegate.`
+            : question.locale === "zh"
+              ? `OpenDelegate 当前${reachable ? "可以" : "无法"}连接 ${device.name}。`
+              : `${device.name} is ${reachable ? "reachable" : "not reachable"} through OpenDelegate right now.`;
+  const lines =
+    question.locale === "ko"
+      ? [
+          `- 상태: ${device.connection} · runtime ${device.runtime}`,
+          `- 서비스 실행 방식: ${device.serviceMode}`,
+          `- 마지막 확인: ${observedAt}`,
+          `- 등록 경로: ${routes}`,
+        ]
+      : [
+          `- Status: ${device.connection} · runtime ${device.runtime}`,
+          `- Service mode: ${device.serviceMode}`,
+          `- Last observation: ${observedAt}`,
+          `- Registered routes: ${routes}`,
+        ];
+  if (question.route !== undefined) {
+    const routeRegistered = device.routes.some((route) =>
+      compactDeviceAlias(route.label).includes(compactDeviceAlias(question.route ?? "")),
+    );
+    lines.push(
+      question.locale === "ko"
+        ? routeRegistered
+          ? `- ${question.route.toUpperCase()} 경로는 등록되어 있으며 위 상태를 따릅니다.`
+          : `- OpenDelegate에 등록된 ${question.route.toUpperCase()} 실행 경로는 없습니다.`
+        : routeRegistered
+          ? `- A registered ${question.route.toUpperCase()} route is present and has the status shown above.`
+          : `- OpenDelegate has no registered ${question.route.toUpperCase()} execution route.`,
+    );
+  }
+  if (!reachable && device.serviceMode === "foreground") {
+    lines.push(
+      question.locale === "ko"
+        ? "- foreground Worker는 실행한 터미널이나 로그인 세션이 끝나면 함께 중지될 수 있습니다."
+        : "- A foreground Worker can stop when its terminal or login session ends.",
+    );
+  }
+  return [header, "", ...lines].join("\n");
 }
 
 function renderDeviceDirectoryAnswer(

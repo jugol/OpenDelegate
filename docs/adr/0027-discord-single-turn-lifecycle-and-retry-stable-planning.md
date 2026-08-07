@@ -33,7 +33,10 @@ typing while the turn remains active. After the durable question, result, or fai
 reply is delivered, the same owner message moves from `👀` to `✅` or `❌`. Missing
 optional reaction permission or a deleted message degrades the acknowledgement
 without blocking Task ingestion; transport and rate-limit failures continue through
-the durable outbox retry path.
+the durable outbox retry path. Reaction removal and terminal-reaction addition for
+one message execute sequentially because Discord assigns them to the same
+rate-limit bucket. A short, bounded `retry_after` is retried inside only the failed
+individual request; an exhausted or long rate limit returns to the durable outbox.
 
 The stable Components v2 Task panel shows the workflow state, bounded progress, and
 durable reference links. It does not repeat the Forum title or chronological
@@ -86,6 +89,9 @@ record a bounded diagnostic.
 - Reaction/typing HTTP calls are bounded and authenticated; typing refresh and
   `👀`-to-`✅`/`❌` closure are verified, and optional permission failure does not
   reject Task ingestion.
+- The terminal reaction is not requested until acknowledgement removal finishes;
+  a one-request rate limit repeats only that request instead of replaying both halves
+  of the transition.
 
 ## References
 

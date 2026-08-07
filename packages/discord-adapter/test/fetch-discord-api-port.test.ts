@@ -398,6 +398,113 @@ test("owner-message activity refreshes and closes on the same message without po
   );
 });
 
+test("completion reactions are changed sequentially within Discord's message-reaction bucket", async () => {
+  const messageId = "100000000000000092";
+  const reactionRoot = `/api/v10/channels/${THREAD_ID}/messages/${messageId}/reactions`;
+  let releaseDelete: (() => void) | undefined;
+  let markDeleteStarted: (() => void) | undefined;
+  const deleteStarted = new Promise<void>((resolve) => {
+    markDeleteStarted = resolve;
+  });
+  const deleteReleased = new Promise<void>((resolve) => {
+    releaseDelete = resolve;
+  });
+  let outcomeRequested = false;
+  const fetch: DiscordFetch = async (input, init) => {
+    const request = captureRequest(input, init);
+    if (
+      request.method === "DELETE" &&
+      request.pathname === `${reactionRoot}/${encodeURIComponent("👀")}/@me`
+    ) {
+      markDeleteStarted?.();
+      await deleteReleased;
+      return new Response(null, { status: 204 });
+    }
+    if (
+      request.method === "PUT" &&
+      request.pathname === `${reactionRoot}/${encodeURIComponent("✅")}/@me`
+    ) {
+      outcomeRequested = true;
+      return new Response(null, { status: 204 });
+    }
+    throw new Error("Unexpected test route.");
+  };
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("sequential-reaction-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:sequential-reaction",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  const completion = api.completeMessageAcknowledgement({
+    threadId: THREAD_ID,
+    messageId,
+    outcome: "success",
+  });
+  await deleteStarted;
+  const outcomeRequestedBeforeDeleteCompleted = outcomeRequested;
+  releaseDelete?.();
+
+  assert.deepEqual(await completion, {
+    acknowledgementRemoved: true,
+    outcomeVisible: true,
+  });
+  assert.equal(outcomeRequestedBeforeDeleteCompleted, false);
+  assert.equal(outcomeRequested, true);
+});
+
+test("a rate-limited outcome reaction retries only that individual request", async () => {
+  const messageId = "100000000000000093";
+  const reactionRoot = `/api/v10/channels/${THREAD_ID}/messages/${messageId}/reactions`;
+  let deleteRequests = 0;
+  let outcomeRequests = 0;
+  const fetch: DiscordFetch = async (input, init) => {
+    const request = captureRequest(input, init);
+    if (
+      request.method === "DELETE" &&
+      request.pathname === `${reactionRoot}/${encodeURIComponent("👀")}/@me`
+    ) {
+      deleteRequests += 1;
+      return new Response(null, { status: 204 });
+    }
+    if (
+      request.method === "PUT" &&
+      request.pathname === `${reactionRoot}/${encodeURIComponent("✅")}/@me`
+    ) {
+      outcomeRequests += 1;
+      return outcomeRequests === 1
+        ? json({ retry_after: 0 }, { status: 429 })
+        : new Response(null, { status: 204 });
+    }
+    throw new Error("Unexpected test route.");
+  };
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("rate-limit-reaction-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:rate-limit-reaction",
+      nowMs: () => 1_000,
+    }),
+  });
+
+  assert.deepEqual(
+    await api.completeMessageAcknowledgement({
+      threadId: THREAD_ID,
+      messageId,
+      outcome: "success",
+    }),
+    { acknowledgementRemoved: true, outcomeVisible: true },
+  );
+  assert.equal(deleteRequests, 1);
+  assert.equal(outcomeRequests, 2);
+});
+
 test("optional acknowledgement permission failures do not block Task processing", async () => {
   const messageId = "100000000000000090";
   const api = new FetchDiscordApiPort({

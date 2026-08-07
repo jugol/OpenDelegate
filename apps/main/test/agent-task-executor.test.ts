@@ -16,7 +16,7 @@ import {
   type DeviceSummaryV1,
   type TaskContinuationCheckpointV1,
 } from "@opendelegate/protocol";
-import type { TaskExecutionRequest } from "@opendelegate/task-service";
+import { TaskExecutorError, type TaskExecutionRequest } from "@opendelegate/task-service";
 import type { AgentExecutionProfile } from "@opendelegate/configuration";
 
 import {
@@ -545,6 +545,125 @@ test("Main Agent answers read-only Device questions from the bounded Main-owned 
     }),
     true,
   );
+});
+
+test("Main Agent answers a named Device reachability question without spending an Agent turn", async () => {
+  const adapter = new FakeAgentAdapter("device-directory-answer");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+    deviceDirectory: {
+      list: async () => [
+        {
+          deviceId: "Windows_5090",
+          name: "5090White",
+          osFamily: "windows",
+          platformRelease: "10.0.26100",
+          architecture: "x64",
+          role: "worker",
+          connection: "offline",
+          runtime: "unavailable",
+          serviceMode: "foreground",
+          lastObservation: {
+            observedAtMs: Date.parse("2026-08-02T21:57:21.440Z"),
+            acceptedAtMs: Date.parse("2026-08-02T21:57:21.440Z"),
+            source: "authenticated-heartbeat",
+          },
+          routes: [
+            {
+              routeId: "worker-wss:Windows_5090",
+              label: "Worker WSS",
+              priority: 0,
+              health: "unhealthy",
+            },
+          ],
+          knowledgeHealth: "unknown",
+        },
+      ],
+    },
+  });
+  const baseTask = request(1).task;
+  const task = {
+    ...baseTask,
+    objective: "지금 5090에 연결 가능한가?",
+    completionCriteria: ["The named Device reachability is reported."],
+    constraints: [],
+    messages: [],
+  };
+
+  const result = await reasoner.plan({
+    task,
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_named:attempt:1",
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(result.state, "completed");
+  if (result.state !== "completed") {
+    throw new Error("The named Device query did not complete deterministically.");
+  }
+  assert.match(result.publicMessage, /5090White에는 현재 OpenDelegate로 접속할 수 없습니다/u);
+  assert.match(result.publicMessage, /foreground/u);
+  assert.match(result.publicMessage, /2026-08-02T21:57:21.440Z/u);
+  assert.match(result.publicMessage, /Worker WSS — unhealthy/u);
+  assert.equal(adapter.starts.length, 0);
+
+  const routeResult = await reasoner.plan({
+    task: {
+      ...task,
+      messages: [
+        {
+          messageId: "message_named_device_route_question",
+          role: "owner",
+          content: "ssh로도 연결안돼?",
+          occurredAt: NOW,
+        },
+      ],
+    },
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_route:attempt:1",
+    signal: new AbortController().signal,
+  });
+  assert.equal(routeResult.state, "completed");
+  if (routeResult.state !== "completed") {
+    throw new Error("The named Device route follow-up did not complete deterministically.");
+  }
+  assert.match(routeResult.publicMessage, /등록된 SSH 실행 경로는 없습니다/u);
+  assert.equal(adapter.starts.length, 0);
+
+  await assert.rejects(
+    reasoner.plan({
+      task: {
+        ...task,
+        objective: "Delete production files after checking the Device.",
+        messages: [
+          {
+            messageId: "message_compound_named_device_question",
+            role: "owner",
+            content: "지금 5090에 연결 가능한가?",
+            occurredAt: NOW,
+          },
+        ],
+      },
+      attempt: 1,
+      executionKey: "task-execution:task_release:cycle:cycle_compound:attempt:1",
+      signal: new AbortController().signal,
+    }),
+    (error: unknown) => error instanceof TaskExecutorError && error.code === "WORK_PLAN_INVALID",
+  );
+  assert.equal(adapter.starts.length, 1);
 });
 
 test("Main planning exposes only verified capabilities and never Device instructions", async () => {

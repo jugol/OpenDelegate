@@ -30,6 +30,9 @@ const MAXIMUM_JSON_REQUEST_BYTES = 256 * 1024;
 const INTERACTION_TOKEN_LIFETIME_MS = 15 * 60_000;
 const MESSAGE_PAGE_LIMIT = 100;
 const ARCHIVED_THREAD_PAGE_LIMIT = 100;
+const ACKNOWLEDGEMENT_RATE_LIMIT_ATTEMPTS = 3;
+const MAXIMUM_ACKNOWLEDGEMENT_RATE_LIMIT_DELAY_MS = 5_000;
+const ACKNOWLEDGEMENT_RATE_LIMIT_SAFETY_MS = 50;
 const APPLICATION_MESSAGE_CONTENT = 1n << 18n;
 const APPLICATION_MESSAGE_CONTENT_LIMITED = 1n << 19n;
 const ADMINISTRATOR = 1n << 3n;
@@ -485,16 +488,16 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     assertSnowflake(input.threadId, "Discord thread ID");
     assertSnowflake(input.messageId, "Discord message ID");
     const messagePath = `/channels/${input.threadId}/messages/${input.messageId}/reactions`;
-    const [acknowledgementRemoved, outcomeVisible] = await Promise.all([
-      this.#bestEffortAcknowledgementRequest(
-        "DELETE",
-        `${messagePath}/${encodeURIComponent("👀")}/@me`,
-      ),
-      this.#bestEffortAcknowledgementRequest(
-        "PUT",
-        `${messagePath}/${encodeURIComponent(input.outcome === "success" ? "✅" : "❌")}/@me`,
-      ),
-    ]);
+    // Discord places reaction mutations for one message in the same rate-limit bucket.
+    // Finish the transition in order so a durable retry cannot repeatedly undo one half.
+    const acknowledgementRemoved = await this.#bestEffortAcknowledgementRequest(
+      "DELETE",
+      `${messagePath}/${encodeURIComponent("👀")}/@me`,
+    );
+    const outcomeVisible = await this.#bestEffortAcknowledgementRequest(
+      "PUT",
+      `${messagePath}/${encodeURIComponent(input.outcome === "success" ? "✅" : "❌")}/@me`,
+    );
     return Object.freeze({ acknowledgementRemoved, outcomeVisible });
   }
 
@@ -604,18 +607,31 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     method: "DELETE" | "POST" | "PUT",
     path: string,
   ): Promise<boolean> {
-    try {
-      await this.#botJson(method, path);
-      return true;
-    } catch (error) {
-      if (
-        error instanceof DiscordApiError &&
-        (error.code === "FORBIDDEN" || error.code === "NOT_FOUND")
-      ) {
-        return false;
+    for (let attempt = 1; attempt <= ACKNOWLEDGEMENT_RATE_LIMIT_ATTEMPTS; attempt += 1) {
+      try {
+        await this.#botJson(method, path);
+        return true;
+      } catch (error) {
+        if (
+          error instanceof DiscordApiError &&
+          (error.code === "FORBIDDEN" || error.code === "NOT_FOUND")
+        ) {
+          return false;
+        }
+        if (
+          error instanceof DiscordApiError &&
+          error.code === "RATE_LIMIT" &&
+          error.retryAfterMs !== undefined &&
+          error.retryAfterMs <= MAXIMUM_ACKNOWLEDGEMENT_RATE_LIMIT_DELAY_MS &&
+          attempt < ACKNOWLEDGEMENT_RATE_LIMIT_ATTEMPTS
+        ) {
+          await delay(error.retryAfterMs + ACKNOWLEDGEMENT_RATE_LIMIT_SAFETY_MS);
+          continue;
+        }
+        throw error;
       }
-      throw error;
     }
+    throw new Error("The bounded Discord acknowledgement retry loop was exhausted.");
   }
 
   async #json(request: DiscordRequest, botToken?: string): Promise<unknown> {
@@ -762,6 +778,10 @@ function retryAfterMs(response: Response, body: Uint8Array): number | undefined 
     return undefined;
   }
   return undefined;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function parseRoles(value: unknown): ReadonlyMap<string, bigint> {

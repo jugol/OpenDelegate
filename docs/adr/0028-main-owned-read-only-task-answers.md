@@ -23,9 +23,15 @@ narrow set of natural-language Device-directory queries. It reads a bounded
 owner-safe Device projection, formats the answer without invoking an LLM, and marks
 the exact returned decision as authorized for that one Task and planning key. The
 projection contains only identity, display name, OS, connection/runtime state, Roles,
-verified capability names, route health, and bounded capacity. It excludes Secrets,
-Instructions, Knowledge, private transcript, local paths, Policy internals, and every
-unverified capability claim.
+service supervision mode, last observation time, verified capability names, route
+health, and bounded capacity. It excludes Secrets, Instructions, Knowledge, private
+transcript, local paths, Policy internals, and every unverified capability claim.
+
+The bounded grammar includes fleet-list questions, uniquely matched named-Device
+reachability questions, and a route follow-up such as whether SSH is registered for
+the Device named by the Task objective. A target alias must resolve to exactly one
+Device; an absent or ambiguous match falls through to semantic planning rather than
+guessing.
 
 The authoritative executor rejects `completed` from a planner unless the injected
 direct-completion authorizer recognizes that exact deterministic decision. Copying
@@ -64,6 +70,8 @@ It does not require another owner message merely to invalidate that stale plan.
   capability names but excludes Device Instructions and unverified capabilities.
 - A context-backed read-only answer completes with the exact Task criteria and
   creates no Agent turn, Worker target resolution, dispatch, or verification call.
+- A named-Device answer reports current connection/runtime, service mode, last
+  observation, and registered route health without exposing Device Instructions.
 - A forged `completed` planner decision and a compound side-effect request fail
   closed without Worker evidence.
 - A code-switched generic test objective plus one exact Device question completes
