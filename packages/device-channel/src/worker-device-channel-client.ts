@@ -647,6 +647,38 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
         this.pendingRunLeaseRequestsAtConnect.set(pending.messageId, pending);
       }
     }
+    await new Promise<void>((resolve, reject) => {
+      const fail = (error?: Error): void => {
+        cleanup();
+        reject(
+          new DeviceChannelClientError(
+            `The Worker Device channel could not connect${safeErrorCode(error)}.`,
+          ),
+        );
+      };
+      const opened = (): void => {
+        cleanup();
+        const tlsSocket = this.readTlsSocket();
+        if (!tlsSocket.authorized || this.socket.protocol !== DEVICE_CHANNEL_SUBPROTOCOL) {
+          reject(new DeviceChannelClientError("The Main TLS identity was not authenticated."));
+          return;
+        }
+        resolve();
+      };
+      const cleanup = (): void => {
+        this.socket.off("error", fail);
+        this.socket.off("close", fail);
+        this.socket.off("open", opened);
+      };
+      this.socket.once("error", fail);
+      this.socket.once("close", fail);
+      this.socket.once("open", opened);
+    });
+    // Do not create the welcome waiter until the TLS socket is open. When an
+    // endpoint refuses the connection, separate pre-open and welcome promises
+    // reject from the same socket error; only the former is awaited, leaving the
+    // latter as an unhandled rejection that terminates the Worker instead of
+    // allowing its deterministic reconnect loop to continue.
     const welcome = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new DeviceChannelClientError("The Main welcome timed out."));
@@ -684,33 +716,6 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
             );
           });
       });
-    });
-    await new Promise<void>((resolve, reject) => {
-      const fail = (error?: Error): void => {
-        cleanup();
-        reject(
-          new DeviceChannelClientError(
-            `The Worker Device channel could not connect${safeErrorCode(error)}.`,
-          ),
-        );
-      };
-      const opened = (): void => {
-        cleanup();
-        const tlsSocket = this.readTlsSocket();
-        if (!tlsSocket.authorized || this.socket.protocol !== DEVICE_CHANNEL_SUBPROTOCOL) {
-          reject(new DeviceChannelClientError("The Main TLS identity was not authenticated."));
-          return;
-        }
-        resolve();
-      };
-      const cleanup = (): void => {
-        this.socket.off("error", fail);
-        this.socket.off("close", fail);
-        this.socket.off("open", opened);
-      };
-      this.socket.once("error", fail);
-      this.socket.once("close", fail);
-      this.socket.once("open", opened);
     });
     this.observeLifecycle("tls-authenticated");
     this.helloMonotonicSentAtMs = this.monotonicNow();
