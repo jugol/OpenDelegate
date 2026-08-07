@@ -1139,6 +1139,10 @@ may request a transition but cannot manufacture a state outside the transition r
 7. Autonomous proactive Tasks always have finite defaults even if requested Tasks
    have a more permissive profile.
 8. Budget changes and limit events are audited and visible in Discord and Admin Web.
+9. Idle time measures the absence of Task activity. A durable owner input records
+   activity before its resumed execution is budget-checked, so time spent waiting
+   for the owner does not make that answer reject itself. Wall-time and every
+   finite usage limit remain enforced.
 
 ## Implementation Decisions
 

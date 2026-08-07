@@ -490,6 +490,76 @@ test("a reply through the same interface resumes waiting execution exactly once"
   await coordinator.close();
 });
 
+test("an owner reply resets an expired idle Budget before resuming execution", async () => {
+  let now = Date.parse("2026-07-25T12:00:00.000Z");
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(now).toISOString() },
+  });
+  const taskService = new TaskService({
+    clock: { now: () => new Date(now).toISOString() },
+    eventStore,
+  });
+  const completeLimits = {
+    wallTimeMs: { hard: 120_000 },
+    idleTimeMs: { hard: 30_000 },
+    retries: { hard: 4 },
+    childWorkOrders: { hard: 4 },
+    concurrentRuns: { hard: 2 },
+    nativeTurns: { hard: 8 },
+    tokens: { hard: 100_000 },
+    costUsdMicros: { hard: 1_000_000 },
+  } as const;
+  const budget = new DurableTaskBudgetEnforcer({
+    eventStore,
+    clock: { now: () => now },
+    instanceLimits: completeLimits,
+    requestedTaskDefaults: completeLimits,
+    autonomousTaskDefaults: completeLimits,
+    usageProxy: {
+      tokensPerNativeTurn: 1_000,
+      costUsdMicrosPerNativeTurn: 10_000,
+    },
+  });
+  let calls = 0;
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    budget,
+    executor: {
+      async execute(request) {
+        calls += 1;
+        return calls === 1
+          ? {
+              state: "waiting_user",
+              publicMessage: "Which route should I use?",
+            }
+          : {
+              state: "completed",
+              verifiedCompletionCriteria: [...request.task.completionCriteria],
+            };
+      },
+    },
+    retryDelayMs: 0,
+  });
+  const task = await coordinator.create(taskInput("idle-owner-reply", "Idle owner reply"));
+  await coordinator.waitForIdle();
+  assert.equal((await coordinator.get(task.taskId)).state, "waiting_user");
+
+  now += 30_001;
+  await coordinator.appendInput({
+    taskId: task.taskId,
+    principalId: "owner-1",
+    idempotencyKey: "idle-owner-reply-answer",
+    message: "Use the registered route.",
+    selectedInputRefs: [],
+  });
+  await coordinator.waitForIdle();
+
+  assert.equal(calls, 2);
+  assert.equal((await coordinator.get(task.taskId)).state, "completed");
+  assert.equal((await budget.snapshot(task.taskId)).usage.idleTimeMs, 0);
+  await coordinator.close();
+});
+
 test("execution concurrency is bounded while independent Tasks still run in parallel", async () => {
   const taskService = fixture();
   let active = 0;

@@ -1115,8 +1115,11 @@ long Forum post.
 **Decision:** Before semantic planning, deterministic Main code may recognize a
 deliberately narrow Device-directory question and read an owner-safe projection of
 Main-owned Device state containing identity, display name, OS family,
-runtime/connection state, Roles, verified capability names, route health, and
-bounded capacity. It excludes Secrets, Device Instructions, Knowledge, private
+runtime/connection state, service supervision mode, last observation time, Roles,
+verified capability names, route health, and bounded capacity. The narrow grammar
+includes fleet-list questions, uniquely matched named-Device reachability questions,
+and a registered-route follow-up for that named Device. It excludes Secrets, Device
+Instructions, Knowledge, private
 transcripts, local paths, Policy internals, and unverified capability claims.
 
 The deterministic path formats the answer without an LLM and mints authority for
@@ -1506,3 +1509,24 @@ accepted for provider homes in [D-076](#d-076--the-owners-existing-provider-home
 A Device without npm reports that rather than guessing at an installer. Adapters
 that ship no npm package, such as the Claude Agent SDK on native Windows, offer no
 update, because a remedy that cannot name its target is worse than none.
+
+## D-078 — Durable owner input resets idle time before execution resumes
+
+**Decision:** Persisting an owner input through the Task coordinator records one
+idempotent Task Budget activity mutation before the resumed execution is queued. The
+mutation identity is derived from the same Task, principal, and input idempotency key
+as the durable conversation event. It may recover an already-observed idle overage;
+it does not extend wall time, turns, retries, tokens, cost, or any other hard limit.
+
+**Rationale:** `waiting_user` deliberately stops automatic execution, often because
+the owner must return hours later. Checking the old idle timestamp before recording
+that owner's answer made the answer reject itself and produced another Budget prompt
+instead of resuming the Task. Discord then appeared to ignore a perfectly durable
+message. Owner input is Task activity by definition, while wall time remains the
+bounded lifetime of the Task.
+
+**Consequence:** A late reply can continue the same Task and native conversation
+without an owner-authorized idle extension. Replayed Discord ingress records the
+same activity operation and cannot double-apply or conflict. A genuinely exhausted
+wall-time or finite usage Budget still pauses new work through the existing approval
+flow.
