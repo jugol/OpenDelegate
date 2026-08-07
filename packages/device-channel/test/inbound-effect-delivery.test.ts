@@ -39,6 +39,7 @@ import {
   SqliteWorkerChannelState,
   WorkerDeviceChannelClient,
   type MainDeviceChannelCallbacks,
+  type MainPingFrameV1,
   type WorkerDeviceChannelCallbacks,
   type WorkerRunLeaseRenewFrameV1,
 } from "../src/index.ts";
@@ -131,6 +132,53 @@ test(
       assert.equal(
         (await fixture.mainState.resume(fixture.deviceId)).acknowledgedWorkerSequence,
         replayCount,
+      );
+    } finally {
+      await client?.close().catch(() => undefined);
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "Worker hello retires its handled Main prefix before Main replays the outbox",
+  { timeout: 20_000 },
+  async () => {
+    const fixture = await createChannelFixture("worker-resume-cursor");
+    const state = await fixture.openWorkerState("worker.sqlite");
+    const safePrefixLength = 32;
+    let client: WorkerDeviceChannelClient | undefined;
+
+    try {
+      await fixture.mainState.observeConnection({
+        deviceId: fixture.deviceId,
+        certificateGeneration: fixture.certificateGeneration,
+      });
+      for (let index = 0; index < safePrefixLength; index += 1) {
+        const frame = await fixture.mainState.enqueueOutbound(fixture.deviceId, (sequence) =>
+          mainPing(sequence, `resume-ping-${index.toString()}`),
+        );
+        const claimId = `resume-claim-${index.toString()}`;
+        await state.commitInbound(frame);
+        assert.equal((await state.claimInboundEffect(frame, claimId)).disposition, "claimed");
+        await state.completeInboundEffect(frame, claimId);
+      }
+      assert.equal((await state.resume()).acknowledgedMainSequence, safePrefixLength);
+      assert.equal((await fixture.mainState.resume(fixture.deviceId)).acknowledgedMainSequence, 0);
+
+      const server = await fixture.listen({});
+      client = await fixture.connect(server, state);
+
+      const workerAcknowledgments = (await state.resume()).pendingOutbound.filter(
+        (frame) => frame.type === "worker.ack",
+      );
+      assert.equal(workerAcknowledgments.length, 1);
+      assert.equal(workerAcknowledgments[0]?.payload.acknowledgedMessageIds.length, 1);
+      await waitUntil(
+        async () =>
+          (await fixture.mainState.resume(fixture.deviceId)).acknowledgedMainSequence >=
+          safePrefixLength + 1,
+        "hello resume cursor and current welcome acknowledgment",
       );
     } finally {
       await client?.close().catch(() => undefined);
@@ -555,6 +603,7 @@ test(
 );
 
 interface ChannelFixture {
+  readonly certificateGeneration: number;
   readonly deviceId: string;
   readonly mainState: SqliteDeviceChannelRepository;
   cleanup(): Promise<void>;
@@ -628,6 +677,7 @@ async function createChannelFixture(label: string): Promise<ChannelFixture> {
   const servers: MainDeviceChannelServer[] = [];
 
   return {
+    certificateGeneration: verified.generation,
     deviceId,
     mainState,
     cleanup: async () => {
@@ -713,6 +763,24 @@ function heartbeat(observedAtMs = Date.now()): WorkerHeartbeatV1 {
       activeRuns: 0,
       maxOutboxEntries: 100,
       outboxDepth: 0,
+    },
+  };
+}
+
+function mainPing(sequence: number, pingId: string): MainPingFrameV1 {
+  const identity = `main-${pingId}`;
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    messageId: identity,
+    senderDeviceId: "main-effect-1",
+    correlationId: identity,
+    createdAt: new Date().toISOString(),
+    idempotencyKey: identity,
+    sequence,
+    type: "main.ping",
+    payload: {
+      pingId,
+      deadlineAtMs: Date.now() + 60_000,
     },
   };
 }

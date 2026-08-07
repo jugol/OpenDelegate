@@ -201,6 +201,7 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
   private helloWallSentAtMs: number | undefined;
   private helloMonotonicSentAtMs: number | undefined;
   private helloCorrelationId: string | undefined;
+  private helloAcknowledgedMainSequence: number | undefined;
   private calibration: WorkerClockCalibration | undefined;
 
   private constructor(options: ConnectWorkerDeviceChannelOptions, socket: WebSocket) {
@@ -721,6 +722,7 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     this.helloMonotonicSentAtMs = this.monotonicNow();
     this.helloWallSentAtMs = this.now();
     this.helloCorrelationId = this.nextId();
+    this.helloAcknowledgedMainSequence = resume.acknowledgedMainSequence;
     const hello: WorkerToMainFrameV1 = {
       ...this.envelope(resume.nextWorkerSequence, this.helloCorrelationId),
       type: "worker.hello",
@@ -880,6 +882,10 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
       throw new DeviceChannelClientError("The Main Run lease decision targets another request.");
     }
     if (currentWelcome) {
+      if (this.helloAcknowledgedMainSequence === undefined) {
+        throw new DeviceChannelClientError("The Worker hello resume cursor is unavailable.");
+      }
+      await this.options.state.confirmMainAcknowledgment(this.helloAcknowledgedMainSequence);
       this.observeLifecycle("welcome-committed");
     }
     this.pendingAcknowledgmentFrame = frame;
