@@ -51,6 +51,8 @@ approved product specification.
 28. [`0031-configuration-read-only-turn-recovery.md`](0031-configuration-read-only-turn-recovery.md)
 29. [`0032-configuration-chat-locale-and-approval-handoff.md`](0032-configuration-chat-locale-and-approval-handoff.md)
 30. [`0033-owner-input-idle-budget-resumption.md`](0033-owner-input-idle-budget-resumption.md)
+31. [`0034-discord-nonblocking-gateway-intake.md`](0034-discord-nonblocking-gateway-intake.md)
+32. [`0035-owner-continuation-idle-budget-resumption.md`](0035-owner-continuation-idle-budget-resumption.md)
 
 ## Proposed ADRs
 

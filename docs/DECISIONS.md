@@ -1614,3 +1614,21 @@ prevented the welcome from arriving before the connection timeout.
 handled, replays only the remaining Main suffix, and then sends the current welcome.
 An invalid or non-contiguous cursor still fails closed through the repository's
 normal acknowledgment checks.
+
+## D-083 — Explicit owner continuation resets idle time before execution
+
+**Decision:** After durably accepting an owner-authenticated Task approval, `Retry`,
+or `Resume`, the execution coordinator records one idempotent Task Budget activity
+mutation before it queues execution. The mutation identity is derived from the same
+durable owner action identity. It resets only idle time; wall time, retries, turns,
+tokens, cost, and every other finite limit remain intact.
+
+**Rationale:** A Task may remain failed or paused while its owner is away. The
+owner's explicit decision to approve or continue is current Task activity, just like
+a new answer. Checking the old idle timestamp first caused a valid Discord Retry
+button press to pause immediately behind an irrelevant Budget-extension prompt.
+
+**Consequence:** An owner can approve, retry, or resume an old Task without extending
+its idle Budget. Replayed Discord interactions repair or reuse the same activity
+mutation and remain idempotent. A genuinely exhausted cumulative Budget still uses
+the normal owner approval flow.

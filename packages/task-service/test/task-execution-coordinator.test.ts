@@ -560,6 +560,145 @@ test("an owner reply resets an expired idle Budget before resuming execution", a
   await coordinator.close();
 });
 
+test("an owner retry resets an expired idle Budget before starting a new execution cycle", async () => {
+  let now = Date.parse("2026-07-25T12:00:00.000Z");
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(now).toISOString() },
+  });
+  const taskService = new TaskService({
+    clock: { now: () => new Date(now).toISOString() },
+    eventStore,
+  });
+  const completeLimits = {
+    wallTimeMs: { hard: 120_000 },
+    idleTimeMs: { hard: 30_000 },
+    retries: { hard: 4 },
+    childWorkOrders: { hard: 4 },
+    concurrentRuns: { hard: 2 },
+    nativeTurns: { hard: 8 },
+    tokens: { hard: 100_000 },
+    costUsdMicros: { hard: 1_000_000 },
+  } as const;
+  const budget = new DurableTaskBudgetEnforcer({
+    eventStore,
+    clock: { now: () => now },
+    instanceLimits: completeLimits,
+    requestedTaskDefaults: completeLimits,
+    autonomousTaskDefaults: completeLimits,
+    usageProxy: {
+      tokensPerNativeTurn: 1_000,
+      costUsdMicrosPerNativeTurn: 10_000,
+    },
+  });
+  let calls = 0;
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    budget,
+    executor: {
+      async execute(request) {
+        calls += 1;
+        return calls === 1
+          ? {
+              state: "failed",
+              publicMessage: "The Worker was temporarily unavailable.",
+            }
+          : {
+              state: "completed",
+              verifiedCompletionCriteria: [...request.task.completionCriteria],
+            };
+      },
+    },
+    retryDelayMs: 0,
+  });
+  const task = await coordinator.create(taskInput("idle-owner-retry", "Idle owner retry"));
+  await coordinator.waitForIdle();
+  assert.equal((await coordinator.get(task.taskId)).state, "failed");
+
+  now += 30_001;
+  await coordinator.command({
+    taskId: task.taskId,
+    principalId: "owner-1",
+    idempotencyKey: "idle-owner-retry-command",
+    command: "retry",
+  });
+  await coordinator.waitForIdle();
+
+  assert.equal(calls, 2);
+  assert.equal((await coordinator.get(task.taskId)).state, "completed");
+  assert.equal((await budget.snapshot(task.taskId)).usage.idleTimeMs, 0);
+  await coordinator.close();
+});
+
+test("an owner approval resets an expired idle Budget before execution resumes", async () => {
+  let now = Date.parse("2026-07-25T12:00:00.000Z");
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(now).toISOString() },
+  });
+  const taskService = new TaskService({
+    clock: { now: () => new Date(now).toISOString() },
+    eventStore,
+  });
+  const completeLimits = {
+    wallTimeMs: { hard: 120_000 },
+    idleTimeMs: { hard: 30_000 },
+    retries: { hard: 4 },
+    childWorkOrders: { hard: 4 },
+    concurrentRuns: { hard: 2 },
+    nativeTurns: { hard: 8 },
+    tokens: { hard: 100_000 },
+    costUsdMicros: { hard: 1_000_000 },
+  } as const;
+  const budget = new DurableTaskBudgetEnforcer({
+    eventStore,
+    clock: { now: () => now },
+    instanceLimits: completeLimits,
+    requestedTaskDefaults: completeLimits,
+    autonomousTaskDefaults: completeLimits,
+    usageProxy: {
+      tokensPerNativeTurn: 1_000,
+      costUsdMicrosPerNativeTurn: 10_000,
+    },
+  });
+  let calls = 0;
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    budget,
+    executor: {
+      async execute(request) {
+        calls += 1;
+        return calls === 1
+          ? {
+              state: "waiting_user",
+              publicMessage: "Approve this action before continuing.",
+            }
+          : {
+              state: "completed",
+              verifiedCompletionCriteria: [...request.task.completionCriteria],
+            };
+      },
+    },
+    retryDelayMs: 0,
+  });
+  const task = await coordinator.create(taskInput("idle-owner-approval", "Idle owner approval"));
+  await coordinator.waitForIdle();
+  assert.equal((await coordinator.get(task.taskId)).state, "waiting_user");
+
+  now += 30_001;
+  await coordinator.resolveApproval({
+    taskId: task.taskId,
+    approvalId: "approval-after-idle",
+    principalId: "owner-1",
+    idempotencyKey: "idle-owner-approval-command",
+    decision: "approve",
+  });
+  await coordinator.waitForIdle();
+
+  assert.equal(calls, 2);
+  assert.equal((await coordinator.get(task.taskId)).state, "completed");
+  assert.equal((await budget.snapshot(task.taskId)).usage.idleTimeMs, 0);
+  await coordinator.close();
+});
+
 test("execution concurrency is bounded while independent Tasks still run in parallel", async () => {
   const taskService = fixture();
   let active = 0;
