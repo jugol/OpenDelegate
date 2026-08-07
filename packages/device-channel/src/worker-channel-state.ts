@@ -277,6 +277,31 @@ export class SqliteWorkerChannelState {
     });
   }
 
+  public async confirmMainAcknowledgment(acknowledgedMainSequence: number): Promise<void> {
+    this.assertOpen();
+    const sequence = readNonNegativeInteger(
+      acknowledgedMainSequence,
+      "confirmed Main acknowledgment",
+    );
+    this.transaction(() => {
+      const state = this.readState();
+      const handledSequence = this.readAcknowledgedMainSequence(state);
+      if (sequence < state.last_main_acknowledgment_sequence || sequence > handledSequence) {
+        throw stateError(
+          "CHANNEL_ACK_INVALID",
+          "The confirmed Main acknowledgment is outside the handled prefix.",
+        );
+      }
+      this.database
+        .prepare(
+          `UPDATE od_worker_channel_state
+           SET last_main_acknowledgment_sequence = ?
+           WHERE singleton_id = 1`,
+        )
+        .run(sequence);
+    });
+  }
+
   public async commitInbound(frameInput: MainToWorkerFrameV1): Promise<WorkerInboundCommitResult> {
     this.assertOpen();
     const frame = this.normalizeMainFrame(frameInput);

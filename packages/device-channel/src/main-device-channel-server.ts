@@ -700,6 +700,16 @@ export class MainDeviceChannelServer {
         this.connections.delete(peer.deviceId);
       }
     });
+    const priorResume = await this.options.repository.resume(peer.deviceId);
+    if (hello.payload.acknowledgedMainSequence > priorResume.acknowledgedMainSequence) {
+      await this.options.repository.acknowledgeOutbound({
+        deviceId: peer.deviceId,
+        acknowledgedMainSequence: hello.payload.acknowledgedMainSequence,
+        acknowledgedMessageIds: priorResume.pendingOutbound
+          .filter((frame) => frame.sequence <= hello.payload.acknowledgedMainSequence)
+          .map((frame) => frame.messageId),
+      });
+    }
     const resume = await this.options.repository.resume(peer.deviceId);
     const mainSentAtMs = this.now();
     if (mainSentAtMs < mainReceivedAtMs) {

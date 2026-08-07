@@ -1594,3 +1594,23 @@ drain but cannot overwhelm the socket, and failed Main effects are retried befor
 the Worker advertises readiness. Integration coverage queues 96 heartbeats before
 connection and requires every one to be durably acknowledged before `connect()`
 returns.
+
+## D-082 — Main honors the Worker hello resume cursor before replay
+
+**Decision:** After authenticating a Worker hello, Main applies its
+`acknowledgedMainSequence` to the durable Main outbox before constructing or sending
+the reconnect replay. Main derives the corresponding message IDs from its own
+contiguous outbox and subjects the cursor to the existing acknowledgment validation.
+Receipt of the fresh welcome confirms that cursor to the Worker, so the next normal
+`worker.ack` starts after the prefix already accepted by Main.
+
+**Rationale:** A Worker may durably handle Main frames immediately before a channel
+closes, without getting a chance to transmit the normal `worker.ack`. The next hello
+already carries the Worker's safe handled prefix. Ignoring that cursor caused Main to
+replay the same growing backlog before the new welcome; sufficiently large backlogs
+prevented the welcome from arriving before the connection timeout.
+
+**Consequence:** A reconnect retires work the authenticated Worker has already
+handled, replays only the remaining Main suffix, and then sends the current welcome.
+An invalid or non-contiguous cursor still fails closed through the repository's
+normal acknowledgment checks.
