@@ -1553,3 +1553,23 @@ earlier outbound request is slow. One adapter still owns one ordered outbox drai
 delivery remains idempotent and restart-safe, and the Gateway cursor advances only
 after the inbound state change is durable. Tests that need a settled external
 projection explicitly await `flushOutbox()`; live receipt does not.
+
+## D-080 — A refused Main connection remains inside the Worker reconnect loop
+
+**Decision:** The Worker Device-channel client creates its welcome waiter only after
+the TLS socket has opened. A pre-open socket error therefore has one awaited owner:
+the connection attempt. The Worker transport resolver classifies that bounded
+failure, and the daemon retries it without exiting.
+
+**Rationale:** Creating both the socket-open waiter and the welcome waiter before a
+connection existed made `ECONNREFUSED` reject both promises. The transport resolver
+correctly handled the socket-open rejection, but the unused welcome rejection was
+unhandled and Node terminated the otherwise healthy Worker. Restarting Main could
+therefore leave every Worker offline until another process supervisor happened to
+restart it.
+
+**Consequence:** A Main restart, listener startup gap, or temporarily unreachable
+route no longer kills the Worker process. Authentication rejection and exhausted
+routes keep their existing diagnostics, while ordinary unavailability follows the
+bounded reconnect backoff. The mTLS integration test exercises a refused endpoint
+before the successful channel exchange so a duplicate rejection cannot regress.

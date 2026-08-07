@@ -1101,9 +1101,11 @@ may request a transition but cannot manufacture a state outside the transition r
 7. Provider session loss creates a continuation session from an OpenDelegate
    checkpoint.
 8. Transport failure uses deterministic retry and fallback before Agent diagnosis.
-9. Exhausted repair either moves the Work Order, waits for a resource, or asks the
+9. Main unavailability does not terminate a Worker. A refused or interrupted Device
+   channel remains a bounded transport failure inside the daemon's reconnect loop.
+10. Exhausted repair either moves the Work Order, waits for a resource, or asks the
    owner with evidence.
-10. Cancellation is cooperative first and escalates according to adapter and Policy;
+11. Cancellation is cooperative first and escalates according to adapter and Policy;
     it must never imply that an already completed external side effect was reversed.
 
 ### FR-22 — Workspaces
