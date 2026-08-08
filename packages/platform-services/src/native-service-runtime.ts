@@ -1035,7 +1035,7 @@ async function applyDirectoryAccess(
       configuration.bundle.version,
     );
     const recursiveArguments = equalPath(configuration.platform, path, releaseDirectory)
-      ? ["/T", "/C"]
+      ? ["/T", "/C", "/Q"]
       : [];
     // icacls treats /setowner as a separate operation. Combining it with
     // /inheritance and /grant exits with ERROR_INVALID_PARAMETER (87) on a

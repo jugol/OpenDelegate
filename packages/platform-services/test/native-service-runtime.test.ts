@@ -491,7 +491,8 @@ test("Windows Worker install accepts the release and staging root actions after 
         request.arguments[0] === "C:\\Program Files\\OpenDelegate\\releases\\1.2.3" &&
         request.arguments.includes("/grant:r") &&
         request.arguments.includes("/T") &&
-        request.arguments.includes("/C"),
+        request.arguments.includes("/C") &&
+        request.arguments.includes("/Q"),
     ),
   );
 });
