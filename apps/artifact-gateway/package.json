@@ -11,7 +11,7 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@fastify/rate-limit": "11.1.0",
+    "@fastify/rate-limit": "11.2.0",
     "@opendelegate/artifact-store": "workspace:*",
     "fastify": "5.10.0"
   }
