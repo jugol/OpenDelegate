@@ -1034,20 +1034,13 @@ async function applyDirectoryAccess(
       "releases",
       configuration.bundle.version,
     );
-    const recursiveArguments = equalPath(configuration.platform, path, releaseDirectory)
-      ? ["/T", "/C", "/Q"]
-      : [];
+    const resetReleaseTree = equalPath(configuration.platform, path, releaseDirectory);
     // icacls treats /setowner as a separate operation. Combining it with
     // /inheritance and /grant exits with ERROR_INVALID_PARAMETER (87) on a
     // real Windows host even though mocked process boundaries accept it.
     await runRequired(boundaries.process, {
       executable: tools.icacls,
-      arguments: [
-        path,
-        "/setowner",
-        windowsPrincipal(action.owner),
-        ...recursiveArguments,
-      ],
+      arguments: [path, "/setowner", windowsPrincipal(action.owner)],
       timeoutMs: 30_000,
     });
     const arguments_: string[] = [path, "/inheritance:r"];
@@ -1057,12 +1050,18 @@ async function applyDirectoryAccess(
         `${windowsPrincipal(grant.principal)}:${windowsPermission(grant.permission)}`,
       );
     }
-    arguments_.push(...recursiveArguments);
     await runRequired(boundaries.process, {
       executable: tools.icacls,
       arguments: arguments_,
       timeoutMs: 30_000,
     });
+    if (resetReleaseTree) {
+      await runRequired(boundaries.process, {
+        executable: tools.icacls,
+        arguments: [path, "/reset", "/T", "/C", "/Q"],
+        timeoutMs: 30_000,
+      });
+    }
     return;
   }
   const serviceUid = await resolveUnixId(
