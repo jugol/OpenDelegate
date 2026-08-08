@@ -30,14 +30,30 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
   assert.equal(task.userId, "S-1-5-21-1000");
   assert.equal(artifacts.helper.manifest.encoding, "utf16le-bom");
   assert.match(task.command, /\\current\\bin\\opendelegate-session-helper\.exe$/i);
+  assert.match(
+    task.arguments,
+    /--stdout-log C:\\ProgramData\\OpenDelegate\\logs\\helper\.stdout\.log/u,
+  );
+  assert.match(
+    task.arguments,
+    /--stderr-log C:\\ProgramData\\OpenDelegate\\logs\\helper\.stderr\.log/u,
+  );
   assert.match(artifacts.helper.manifest.content, /<Interval>PT1M<\/Interval>/u);
   assert.doesNotMatch(artifacts.helper.manifest.content, /<Interval>PT15S<\/Interval>/u);
 
-  assert.ok(
-    artifacts.installCommands.some(
-      (command) =>
-        command.executable.toLowerCase() === "sc.exe" && command.arguments.includes("create"),
-    ),
+  const createService = artifacts.installCommands.find(
+    (command) =>
+      command.executable.toLowerCase() === "sc.exe" && command.arguments.includes("create"),
+  );
+  assert.ok(createService);
+  const imagePath = createService.arguments.at(createService.arguments.indexOf("binPath=") + 1);
+  assert.match(
+    imagePath ?? "",
+    /--stdout-log C:\\ProgramData\\OpenDelegate\\logs\\core\.stdout\.log/u,
+  );
+  assert.match(
+    imagePath ?? "",
+    /--stderr-log C:\\ProgramData\\OpenDelegate\\logs\\core\.stderr\.log/u,
   );
   assert.ok(
     artifacts.installCommands.some(

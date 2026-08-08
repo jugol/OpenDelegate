@@ -2,7 +2,9 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cwchar>
+#include <cwctype>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -16,13 +18,15 @@ HANDLE child_job = nullptr;
 HANDLE child_stdin_write = INVALID_HANDLE_VALUE;
 std::vector<std::wstring> original_arguments;
 
-void report_status(DWORD state, DWORD exit_code = NO_ERROR, DWORD wait_hint = 0) {
+void report_status(DWORD state, DWORD exit_code = NO_ERROR, DWORD wait_hint = 0,
+                   DWORD service_exit_code = 0) {
   if (service_status_handle == nullptr) {
     return;
   }
   service_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
   service_status.dwCurrentState = state;
   service_status.dwWin32ExitCode = exit_code;
+  service_status.dwServiceSpecificExitCode = service_exit_code;
   service_status.dwWaitHint = wait_hint;
   service_status.dwControlsAccepted =
       state == SERVICE_RUNNING ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN : 0;
@@ -89,6 +93,74 @@ bool argument_value(const wchar_t* name, std::wstring& output) {
     }
   }
   return false;
+}
+
+bool valid_launcher_arguments() {
+  if ((original_arguments.size() - 1) % 2 != 0) {
+    return false;
+  }
+  std::vector<std::wstring> names;
+  for (std::size_t index = 1; index + 1 < original_arguments.size(); index += 2) {
+    const std::wstring& name = original_arguments[index];
+    const std::wstring& value = original_arguments[index + 1];
+    if (!safe_value(name, {L"--plane", L"--role", L"--config",
+                           L"--stdout-log", L"--stderr-log"}) ||
+        value.empty() || std::find(names.begin(), names.end(), name) != names.end()) {
+      return false;
+    }
+    names.push_back(name);
+  }
+  const auto has = [&](const wchar_t* name) {
+    return std::find(names.begin(), names.end(), name) != names.end();
+  };
+  return has(L"--plane") && has(L"--role") && has(L"--config") &&
+         has(L"--stdout-log") == has(L"--stderr-log");
+}
+
+bool safe_windows_log_path(const std::wstring& value) {
+  return value.size() >= 3 && std::iswalpha(value[0]) && value[1] == L':' &&
+         (value[2] == L'\\' || value[2] == L'/');
+}
+
+DWORD open_inheritable_log(const std::wstring& path, HANDLE& output) {
+  if (!safe_windows_log_path(path)) {
+    return ERROR_INVALID_PARAMETER;
+  }
+  SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+  output = CreateFileW(path.c_str(), FILE_APPEND_DATA | SYNCHRONIZE,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       &attributes, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  return output == INVALID_HANDLE_VALUE ? GetLastError() : NO_ERROR;
+}
+
+DWORD duplicate_inheritable_or_nul(DWORD standard_handle, HANDLE& output) {
+  const HANDLE source = GetStdHandle(standard_handle);
+  if (source != nullptr && source != INVALID_HANDLE_VALUE &&
+      DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(), &output,
+                      0, TRUE, DUPLICATE_SAME_ACCESS)) {
+    return NO_ERROR;
+  }
+  SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+  output = CreateFileW(L"NUL", GENERIC_WRITE,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes,
+                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  return output == INVALID_HANDLE_VALUE ? GetLastError() : NO_ERROR;
+}
+
+void close_owned_handle(HANDLE& handle) {
+  if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
+    CloseHandle(handle);
+    handle = INVALID_HANDLE_VALUE;
+  }
+}
+
+DWORD write_marker(HANDLE handle, const char* marker) {
+  const DWORD length = static_cast<DWORD>(std::strlen(marker));
+  DWORD written = 0;
+  if (!WriteFile(handle, marker, length, &written, nullptr)) {
+    return GetLastError();
+  }
+  return written == length ? NO_ERROR : ERROR_WRITE_FAULT;
 }
 
 std::wstring installation_root() {
@@ -227,7 +299,9 @@ DWORD WINAPI service_control(DWORD control, DWORD, void*, void*) {
 int run_child(bool as_service) {
   std::wstring plane;
   std::wstring role;
-  if (!argument_value(L"--plane", plane) || !argument_value(L"--role", role) ||
+  std::wstring config;
+  if (!valid_launcher_arguments() || !argument_value(L"--plane", plane) ||
+      !argument_value(L"--role", role) || !argument_value(L"--config", config) ||
       !safe_value(plane, {L"core", L"session-helper"}) ||
       !safe_value(role, {L"main", L"worker"})) {
     std::wcerr << L"OpenDelegate service launcher requires a valid plane and role.\n";
@@ -249,10 +323,9 @@ int run_child(bool as_service) {
       root + L"\\apps\\" + role + L"\\" +
       (plane == L"core" ? L"opendelegate-service-host.mjs"
                          : L"opendelegate-session-helper.mjs");
-  std::wstring command = quote(node) + L" " + quote(script);
-  for (std::size_t index = 1; index < original_arguments.size(); ++index) {
-    command += L" " + quote(original_arguments[index]);
-  }
+  std::wstring command = quote(node) + L" " + quote(script) +
+                         L" --plane " + quote(plane) + L" --role " + quote(role) +
+                         L" --config " + quote(config);
 
   SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
   HANDLE child_stdin_read = INVALID_HANDLE_VALUE;
@@ -280,8 +353,31 @@ int run_child(bool as_service) {
   startup.cb = sizeof(startup);
   startup.dwFlags = STARTF_USESTDHANDLES;
   startup.hStdInput = child_stdin_read;
-  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  HANDLE child_stdout = INVALID_HANDLE_VALUE;
+  HANDLE child_stderr = INVALID_HANDLE_VALUE;
+  std::wstring stdout_path;
+  std::wstring stderr_path;
+  const bool redirect_logs = argument_value(L"--stdout-log", stdout_path);
+  DWORD output_error =
+      redirect_logs ? open_inheritable_log(stdout_path, child_stdout)
+                    : duplicate_inheritable_or_nul(STD_OUTPUT_HANDLE, child_stdout);
+  if (output_error == NO_ERROR) {
+    output_error =
+        redirect_logs && argument_value(L"--stderr-log", stderr_path)
+            ? open_inheritable_log(stderr_path, child_stderr)
+            : duplicate_inheritable_or_nul(STD_ERROR_HANDLE, child_stderr);
+  }
+  if (output_error != NO_ERROR) {
+    close_owned_handle(child_stdout);
+    close_owned_handle(child_stderr);
+    CloseHandle(child_stdin_read);
+    CloseHandle(child_stdin_write);
+    child_stdin_write = INVALID_HANDLE_VALUE;
+    close_containment_job();
+    return static_cast<int>(output_error);
+  }
+  startup.hStdOutput = child_stdout;
+  startup.hStdError = child_stderr;
   std::vector<wchar_t> mutable_command(command.begin(), command.end());
   mutable_command.push_back(L'\0');
   const BOOL created = CreateProcessW(
@@ -290,6 +386,8 @@ int run_child(bool as_service) {
       root.c_str(), &startup,
       &child_process);
   CloseHandle(child_stdin_read);
+  close_owned_handle(child_stdout);
+  close_owned_handle(child_stderr);
   if (!created) {
     const DWORD error = GetLastError();
     CloseHandle(child_stdin_write);
@@ -339,15 +437,24 @@ int run_child(bool as_service) {
   return static_cast<int>(exit_code);
 }
 
-void WINAPI service_main(DWORD, wchar_t**) {
+void WINAPI service_main(DWORD argument_count, wchar_t** arguments) {
+  const wchar_t* service_name =
+      argument_count > 0 && arguments != nullptr && arguments[0] != nullptr
+          ? arguments[0]
+          : L"";
   service_status_handle =
-      RegisterServiceCtrlHandlerExW(L"", service_control, nullptr);
+      RegisterServiceCtrlHandlerExW(service_name, service_control, nullptr);
   if (service_status_handle == nullptr) {
     return;
   }
   report_status(SERVICE_START_PENDING, NO_ERROR, 30000);
   const int result = run_child(true);
-  report_status(SERVICE_STOPPED, static_cast<DWORD>(result));
+  if (result == 0) {
+    report_status(SERVICE_STOPPED);
+  } else {
+    report_status(SERVICE_STOPPED, ERROR_SERVICE_SPECIFIC_ERROR, 0,
+                  static_cast<DWORD>(result));
+  }
 }
 
 }  // namespace
@@ -366,6 +473,24 @@ int wmain(int argc, wchar_t** argv) {
     }
     std::wcout << L"OpenDelegate native service launcher 1\n";
     return 0;
+  }
+  if (argc == 4 &&
+      std::wcscmp(argv[1], L"--self-test-log-redirection") == 0) {
+    HANDLE stdout_log = INVALID_HANDLE_VALUE;
+    HANDLE stderr_log = INVALID_HANDLE_VALUE;
+    DWORD error = open_inheritable_log(argv[2], stdout_log);
+    if (error == NO_ERROR) {
+      error = open_inheritable_log(argv[3], stderr_log);
+    }
+    if (error == NO_ERROR) {
+      error = write_marker(stdout_log, "OpenDelegate native stdout redirection 1\n");
+    }
+    if (error == NO_ERROR) {
+      error = write_marker(stderr_log, "OpenDelegate native stderr redirection 1\n");
+    }
+    close_owned_handle(stdout_log);
+    close_owned_handle(stderr_log);
+    return static_cast<int>(error);
   }
 
   SERVICE_TABLE_ENTRYW table[] = {
