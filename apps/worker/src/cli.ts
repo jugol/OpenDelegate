@@ -89,7 +89,6 @@ export interface ParsedWorkerArguments {
     readonly dataRoot: string;
     readonly instanceId: string;
     readonly healthPort: number;
-    readonly stagedSecretBindingFile?: string;
   };
   readonly workspace?: {
     readonly workspaceId: string;
@@ -145,7 +144,6 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   let installRoot: string | undefined;
   let dataRoot: string | undefined;
   let healthPort: number | undefined;
-  let stagedSecretBindingFile: string | undefined;
   let workspaceId: string | undefined;
   let workspaceAlias: string | undefined;
   let workspaceType: "directory" | "git" | "mounted-storage" | undefined;
@@ -184,8 +182,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       option !== "--bundle" &&
       option !== "--install-root" &&
       option !== "--data-root" &&
-      option !== "--health-port" &&
-      option !== "--staged-secret-binding"
+      option !== "--health-port"
     ) {
       throw new WorkerAppError("CONFIG_INVALID", `Unknown Worker option: ${String(option)}.`);
     }
@@ -234,9 +231,6 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
         break;
       case "--data-root":
         dataRoot = resolve(target);
-        break;
-      case "--staged-secret-binding":
-        stagedSecretBindingFile = resolve(target);
         break;
       case "--health-port":
         healthPort = Number.parseInt(target, 10);
@@ -398,8 +392,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     bundleDirectory !== undefined ||
     installRoot !== undefined ||
     dataRoot !== undefined ||
-    healthPort !== undefined ||
-    stagedSecretBindingFile !== undefined;
+    healthPort !== undefined;
   if (command !== "service-document" && hasServiceDocumentOption) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
@@ -560,7 +553,6 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
             dataRoot: dataRoot!,
             instanceId: instanceId ?? "personal",
             healthPort: healthPort!,
-            ...(stagedSecretBindingFile === undefined ? {} : { stagedSecretBindingFile }),
           },
         }),
     ...(command !== "workspace-register"
@@ -666,20 +658,24 @@ async function run(arguments_: readonly string[]): Promise<void> {
       instanceId: request.instanceId,
       healthPort: request.healthPort,
       sourceCheckoutRoot: installationRoot,
-      ...(request.stagedSecretBindingFile === undefined
-        ? {}
-        : {
-            windowsServiceSecretBinding: await readStagedSecretBinding(
-              request.stagedSecretBindingFile,
-            ),
-          }),
     });
-    // 0600: the document carries no Secret values, but it does pin the identities a
-    // privileged install trusts, and a writable copy is a way to redirect that install.
-    await writeFile(request.outputFile, `${JSON.stringify(configuration, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    // The document carries no Secret values. Create-new prevents a repeated CLI
+    // invocation from silently replacing input the owner already reviewed; the
+    // elevated installer still revalidates the bundle and service SID.
+    try {
+      await writeFile(request.outputFile, `${JSON.stringify(configuration, null, 2)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+    } catch (error) {
+      throw new WorkerAppError(
+        "CONFIG_PATH_UNSAFE",
+        (error as NodeJS.ErrnoException).code === "EEXIST"
+          ? "The service document output already exists; OpenDelegate will not overwrite privileged install input."
+          : "The service document could not be created safely.",
+      );
+    }
     writeJson({
       event: "worker.service-document.written",
       path: request.outputFile,
@@ -718,13 +714,16 @@ async function run(arguments_: readonly string[]): Promise<void> {
       serviceName: backend.backend.serviceName,
       serviceSid: backend.backend.serviceSid,
       vaultRoot: backend.backend.vaultRoot,
-      ...(backend.sealing === undefined ? {} : { sealing: backend.sealing }),
+      servicePreparation: backend.backend.servicePreparation,
+      sealing: backend.sealing,
       ...(backend.sealing === "machine"
         ? {
             sealingNotice:
               "This computer has no domain key service, so staged Secrets are sealed to the machine instead of the service account. Any process able to read the handoff directory could decrypt them; the directory ACL admits only this account and the service account. Join a domain to restore service-account sealing.",
           }
         : {}),
+      nextStep:
+        "Run 'opendelegate worker service-document ...' from the same packaged build, then review 'opendelegate service plan install --config <path>' before elevated installation.",
     });
     return;
   }
@@ -788,41 +787,6 @@ async function run(arguments_: readonly string[]): Promise<void> {
     return;
   }
   await runForeground(paths);
-}
-
-/**
- * Reads the handoff `windows-service-secret-stage` emitted, taking only the five
- * binding fields. The staging output also carries advisory notices, and the
- * configuration reader rejects any key it does not expect.
- */
-async function readStagedSecretBinding(path: string): Promise<{
-  readonly backend: "windows-service-dpapi";
-  readonly handoffRoot: string;
-  readonly serviceName: string;
-  readonly serviceSid: string;
-  readonly vaultRoot: string;
-}> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    throw new WorkerAppError("CONFIG_INVALID", "The staged Secret binding is unreadable.");
-  }
-  const record = (parsed ?? {}) as Record<string, unknown>;
-  const text = (key: string): string => {
-    const value = record[key];
-    if (typeof value !== "string" || value.trim() === "") {
-      throw new WorkerAppError("CONFIG_INVALID", `The staged Secret binding is missing ${key}.`);
-    }
-    return value;
-  };
-  return {
-    backend: "windows-service-dpapi",
-    handoffRoot: text("handoffRoot"),
-    serviceName: text("serviceName"),
-    serviceSid: text("serviceSid"),
-    vaultRoot: text("vaultRoot"),
-  };
 }
 
 function pathsFor(parsed: ParsedWorkerArguments): WorkerPaths {
@@ -968,8 +932,7 @@ Usage:
     --vault-root ABSOLUTE_PATH [--home <path>]
   opendelegate worker service-document --output ABSOLUTE_PATH
     --bundle ABSOLUTE_PATH --install-root ABSOLUTE_PATH --data-root ABSOLUTE_PATH
-    --health-port PORT [--instance-id INSTANCE_ID]
-    [--staged-secret-binding ABSOLUTE_PATH] [--home <path>]
+    --health-port PORT [--instance-id INSTANCE_ID] [--home <path>]
   opendelegate worker run [--home <path>]
   opendelegate worker service-host [--home <path>]
   opendelegate worker status [--home <path>]
@@ -984,10 +947,12 @@ The one-use Enrollment Grant token is accepted only inside the protected grant
 file. It is never accepted in argv or environment variables. Worker state,
 Device-local Knowledge, and managed credentials remain outside the installation.
 
-service-document composes the native service document this Device describes,
-reading its own identity, its two existing local IPC signing pins, and the
-bundle's checksum manifest. It changes nothing on the host. Installing the
-document is a separate, elevated step:
+service-document currently composes a staged Windows Worker's native service
+document from its durable public IPC pins, owner-helper binding, and the bundle's
+checksum manifest. It writes only a create-new document and never elevates or
+registers a service. macOS and Linux fail closed until their separate per-plane
+Secret migration is implemented. Installing the reviewed Windows document is a
+separate, elevated step:
 'opendelegate service install --config <path> --command-id <id>'.
 `);
 }

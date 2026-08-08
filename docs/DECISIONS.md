@@ -1723,3 +1723,36 @@ set while common manifests still expand to broad validation.
 **Consequence:** Ordinary changes receive materially faster feedback and consume less
 hosted-runner quota. Shared-package changes retain dependent coverage; release owners
 still run the complete local and platform validation commands before promotion.
+
+## D-088 — Windows service staging preserves a public two-plane binding
+
+Implementation detail: [ADR-0040](adr/0040-windows-worker-service-preparation-binding.md).
+
+**Decision:** Before Windows staging removes core-owned Secrets from the owner's
+DPAPI vault, it durably records only the core and owner-session helper public IPC
+pins, effective non-secret sealing strength, and existing owner-helper vault
+location in Worker configuration. The
+owner-helper vault remains outside every service-owned root. `worker
+service-document` consumes that binding after staging and writes one create-new,
+strictly validated install document; it never reopens service-account-sealed
+material, copies a helper private key, overwrites install input, elevates, or
+registers a service.
+
+The staging configuration switch is committed after the service handoff is complete
+and before owner-vault core copies are deleted. Replay with that binding finishes
+only the bounded deletion. A legacy staged Worker without the binding must use
+`windows-service-secret-restore` when the handoff is owner-restorable, or a new
+owner-approved re-credentialing Grant when service-account sealing prevents that
+restore, and then stage again. OpenDelegate does not guess lost public pins.
+
+**Rationale:** The first Worker service-document implementation attempted to read
+both plane keys from the service store after staging. That sequence cannot work:
+the core handoff may be sealed to the SCM identity, while the helper key intentionally
+never leaves the owner store. Keeping the helper vault under service-owned state
+would also collapse the ownership boundary the two-plane design is meant to protect.
+
+**Consequence:** Windows can compose deterministic service input from local durable
+facts without Secret transcription and can recover a crash around staging. macOS
+and Linux remain fail-closed in this command until they have equivalent explicit
+core-service and owner-session Secret migration; a syntactically valid document is
+not treated as a working persistent installation.

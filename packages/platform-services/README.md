@@ -62,13 +62,18 @@ so this requirement applies to both Main and Worker roles. Preflight
 derives the configured SCM service SID through fixed `sc.exe showsid` argv and
 rejects a missing or mismatched binding before the command journal is claimed.
 The Secret package owns the SID-protected DPAPI-NG handoff and final service-profile
-DPAPI import; service configuration never contains Secret material.
+DPAPI import; service configuration never contains Secret material. The logged-in
+helper's owner-DPAPI vault stays outside all service-owned roots and is referenced
+only by its non-secret absolute location. Windows service staging captures the two
+public IPC pins before moving core Secrets, so later configuration composition never
+needs to decrypt the handoff or copy the helper private key.
 
 ## Release and path contract
 
-Configuration accepts normalized absolute paths for the source checkout, bundle, installation,
-persistent state, runtime sockets, and logs. Installation, state, runtime, log, and bundle paths
-must remain outside the source checkout and must be mutually disjoint. Mutation paths must use
+Configuration accepts normalized absolute paths for the source checkout or packaged launcher,
+bundle, installation, persistent state, runtime sockets, and logs. A packaged launcher root may be
+the verified bundle source itself. Every mutable installation, state, authority, runtime, and log
+path must remain outside both immutable inputs and must be mutually disjoint. Mutation paths use
 their link-free canonical spelling (for example `/private/var/...`, not macOS's `/var` compatibility
 symlink). Plans never put runtime state, credentials, or generated service files into the
 repository.

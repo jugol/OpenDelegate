@@ -253,6 +253,12 @@ export type WorkerSecretBackendConfiguration =
       readonly serviceName: string;
       readonly serviceSid: string;
       readonly vaultRoot: string;
+      /**
+       * Public, non-secret facts captured before the core Secrets leave the
+       * owner's DPAPI vault. Native service configuration can be composed after
+       * staging without reopening service-account-sealed material.
+       */
+      readonly servicePreparation?: WorkerWindowsServicePreparation;
     }
   | {
       readonly backend: "macos-keychain";
@@ -269,6 +275,24 @@ export type WorkerSecretBackendConfiguration =
       readonly encryptedCredentialFile: string;
       readonly vaultRoot: string;
     };
+
+export interface WorkerLocalIpcPublicKeyPin {
+  readonly keyId: `sha256:${string}`;
+  readonly publicKeySpkiBase64Url: string;
+}
+
+export interface WorkerWindowsServicePreparation {
+  readonly schemaVersion: 1;
+  readonly sealing: WindowsServiceSecretSealing;
+  readonly ownerHelperSecretBinding: {
+    readonly backend: "windows-dpapi";
+    readonly vaultRoot: string;
+  };
+  readonly ipcTrust: {
+    readonly core: WorkerLocalIpcPublicKeyPin;
+    readonly helper: WorkerLocalIpcPublicKeyPin;
+  };
+}
 
 export interface WorkerAgentConfiguration {
   readonly provider: "auto" | "claude" | "codex";
@@ -401,17 +425,10 @@ export interface PrepareWindowsServiceSecretBackendOptions {
   readonly vaultRoot: string;
 }
 
-/**
- * The durable backend, which is idempotent across repeated preparation, plus
- * what this particular call observed while sealing.
- *
- * Sealing is absent when the call staged nothing because the backend was
- * already prepared: the stored blob does not record which descriptor sealed it,
- * and reporting a guess would be worse than reporting nothing.
- */
+/** The durable backend and its persisted effective handoff sealing strength. */
 export interface WindowsServiceSecretBackendPreparation {
   readonly backend: Extract<WorkerSecretBackendConfiguration, { backend: "windows-service-dpapi" }>;
-  readonly sealing?: WindowsServiceSecretSealing;
+  readonly sealing: WindowsServiceSecretSealing;
 }
 
 export interface WorkerRuntimeComposition {
@@ -430,6 +447,7 @@ export interface WorkerDiagnosticSnapshot {
   readonly certificateGeneration: number;
   readonly channelEndpointCount: number;
   readonly secretBackend: WorkerSecretBackendConfiguration["backend"];
+  readonly serviceSecretSealing?: WindowsServiceSecretSealing;
   readonly secretStoreStatus: "ready" | "unavailable";
   readonly identityKeyReady: boolean;
   readonly agents: readonly {
@@ -1469,6 +1487,10 @@ export async function diagnoseWorker(input: {
     certificateGeneration: configuration.certificateGeneration,
     channelEndpointCount: configuration.transportProfile.endpoints.length,
     secretBackend: configuration.secretBackend.backend,
+    ...(configuration.secretBackend.backend === "windows-service-dpapi" &&
+    configuration.secretBackend.servicePreparation !== undefined
+      ? { serviceSecretSealing: configuration.secretBackend.servicePreparation.sealing }
+      : {}),
     secretStoreStatus: health.status,
     identityKeyReady: keyAvailability.ready,
     agents,
@@ -1819,13 +1841,6 @@ export async function prepareWindowsServiceSecretBackend(
       "The Windows service SID could not be resolved safely.",
     );
   }
-  const target = Object.freeze({
-    backend: "windows-service-dpapi" as const,
-    handoffRoot,
-    serviceName,
-    serviceSid,
-    vaultRoot,
-  });
   if (configuration.secretBackend.backend === "windows-service-dpapi") {
     if (
       configuration.secretBackend.handoffRoot !== handoffRoot ||
@@ -1838,7 +1853,67 @@ export async function prepareWindowsServiceSecretBackend(
         "The enrolled Worker is already bound to a different Windows service Secret backend.",
       );
     }
-    return { backend: target };
+    if (configuration.secretBackend.servicePreparation === undefined) {
+      throw appError(
+        "CONFIG_INVALID",
+        "This Worker was staged by an older build that did not retain the public service-preparation binding. If the handoff is owner-restorable, run windows-service-secret-restore and stage again; otherwise use a new owner-approved re-credentialing Grant before staging again.",
+      );
+    }
+    try {
+      const ownerStore = new WindowsDpapiSecretStore({
+        deviceId: configuration.deviceId,
+        hostPlatform: "win32",
+        ...(options.powershellPath === undefined ? {} : { powershellPath: options.powershellPath }),
+        ...(options.runner === undefined ? {} : { runner: options.runner }),
+        sourceCheckoutRoot: options.paths.sourceCheckoutRoot,
+        vaultRoot:
+          configuration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot,
+      });
+      const handoff = new WindowsServiceDpapiSecretHandoff({
+        deviceId: configuration.deviceId,
+        handoffRoot,
+        hostPlatform: "win32",
+        ...(options.powershellPath === undefined ? {} : { powershellPath: options.powershellPath }),
+        ...(options.runner === undefined ? {} : { runner: options.runner }),
+        serviceSid,
+        sourceCheckoutRoot: options.paths.sourceCheckoutRoot,
+      });
+      const coreAliases = [
+        `${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`,
+        WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
+        WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
+      ] as const;
+      for (const alias of coreAliases) {
+        if (!(await handoff.availability(alias)).ready) {
+          throw appError(
+            "SECRET_BACKEND_UNAVAILABLE",
+            "The Windows service Secret handoff is incomplete.",
+          );
+        }
+      }
+      // A crash after the durable configuration switch but before owner-vault
+      // cleanup resumes here. The handoff is complete, so removing only the
+      // core-owned duplicates left in the owner vault is safe and idempotent.
+      for (const alias of coreAliases) {
+        if ((await ownerStore.availability(alias)).ready) {
+          await ownerStore.delete(alias);
+        }
+      }
+      return {
+        backend: configuration.secretBackend,
+        sealing: configuration.secretBackend.servicePreparation.sealing,
+      };
+    } catch (error) {
+      if (error instanceof WorkerAppError) {
+        throw error;
+      }
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        error instanceof SecretError && error.detail !== undefined
+          ? `The Windows service Secret cleanup did not complete. ${error.detail}`
+          : "The Windows service Secret cleanup did not complete.",
+      );
+    }
   }
   if (configuration.secretBackend.backend !== "windows-dpapi") {
     throw appError(
@@ -1888,8 +1963,8 @@ export async function prepareWindowsServiceSecretBackend(
   try {
     // The logged-in session helper owns this key. It intentionally remains in
     // the owner DPAPI vault and is never staged for or opened by the service.
-    await provisionWorkerSessionHelperOwnerSigningSecret(ownerStore);
-
+    const helperIpc = await provisionWorkerSessionHelperOwnerSigningSecret(ownerStore);
+    const coreIpc = await readWorkerComputerUseCoreKeyBinding(ownerStore);
     // Phase one is copy-only. A failure leaves every source Secret intact, so a
     // later invocation can safely resume even if some handoff entries exist.
     for (const alias of coreAliases) {
@@ -1920,18 +1995,50 @@ export async function prepareWindowsServiceSecretBackend(
       }
     }
 
-    // Phase two removes only core-owned source copies after every handoff entry
-    // is durable. The owner helper key is deliberately not in this collection.
-    for (const alias of coreAliases) {
-      if ((await ownerStore.availability(alias)).ready) {
-        await ownerStore.delete(alias);
-      }
-    }
+    const servicePreparation = Object.freeze({
+      schemaVersion: 1 as const,
+      sealing,
+      ownerHelperSecretBinding: Object.freeze({
+        backend: "windows-dpapi" as const,
+        vaultRoot: configuration.secretBackend.vaultRoot,
+      }),
+      ipcTrust: Object.freeze({
+        core: Object.freeze({
+          keyId: coreIpc.keyId,
+          publicKeySpkiBase64Url: coreIpc.publicKeySpkiBase64Url,
+        }),
+        helper: Object.freeze({
+          keyId: helperIpc.keyId,
+          publicKeySpkiBase64Url: helperIpc.publicKeySpkiBase64Url,
+        }),
+      }),
+    });
+    const target = Object.freeze({
+      backend: "windows-service-dpapi" as const,
+      handoffRoot,
+      serviceName,
+      serviceSid,
+      vaultRoot,
+      servicePreparation,
+    });
+
+    // Persist the public pins and service binding before deleting their source
+    // Secrets. A crash can then resume cleanup without reopening a service-
+    // account-sealed handoff merely to rediscover public keys.
     const updated = validateWorkerConfigurationDocument({
       ...configuration,
       secretBackend: target,
     });
     await writeConfiguration(options.paths.configFile, updated);
+
+    // Phase two removes only core-owned source copies after both the handoff and
+    // its public recovery binding are durable. The owner helper key is deliberately
+    // not in this collection.
+    for (const alias of coreAliases) {
+      if ((await ownerStore.availability(alias)).ready) {
+        await ownerStore.delete(alias);
+      }
+    }
     return { backend: target, sealing };
   } catch (error) {
     if (error instanceof WorkerAppError) {
@@ -1968,7 +2075,8 @@ export interface WindowsServiceSecretRestoreResult {
  * enrollment to the service identity, after which a foreground run fails
  * because the service Secret Store expects the service account. An owner who
  * cannot complete service installation would be left with an enrolled Device
- * that has no way to run at all, and re-enrolling is the only escape.
+ * that has no way to run at all, and owner-approved re-credentialing is the
+ * only escape.
  *
  * This is possible only when the handoff was machine-sealed. A Secret sealed to
  * the service account cannot be opened by the staging account by design, so
@@ -1996,14 +2104,27 @@ export async function restoreWindowsServiceSecretBackend(
     "Foreground Windows DPAPI vault root",
   );
   const staged = configuration.secretBackend;
+  const retainedOwnerVault = staged.servicePreparation?.ownerHelperSecretBinding.vaultRoot;
+  if (
+    retainedOwnerVault !== undefined &&
+    !pathsEqualForCurrentHost(vaultRoot, retainedOwnerVault)
+  ) {
+    throw appError(
+      "CONFIG_INVALID",
+      "The restored core Secrets must return to the retained owner-session helper vault.",
+    );
+  }
   if (
     pathsEqualForCurrentHost(vaultRoot, staged.handoffRoot) ||
+    pathsEqualForCurrentHost(vaultRoot, staged.vaultRoot) ||
     isWithin(staged.handoffRoot, vaultRoot) ||
-    isWithin(vaultRoot, staged.handoffRoot)
+    isWithin(vaultRoot, staged.handoffRoot) ||
+    isWithin(staged.vaultRoot, vaultRoot) ||
+    isWithin(vaultRoot, staged.vaultRoot)
   ) {
     throw appError(
       "CONFIG_PATH_UNSAFE",
-      "The foreground vault must be disjoint from the service handoff.",
+      "The foreground vault must be disjoint from the service handoff and service vault.",
     );
   }
 
@@ -2035,12 +2156,15 @@ export async function restoreWindowsServiceSecretBackend(
     // Copy first and rebind last, so an interrupted restore leaves the handoff
     // intact and can simply be run again.
     for (const alias of coreAliases) {
-      if (!(await handoff.availability(alias)).ready) {
-        continue;
-      }
       if ((await ownerStore.availability(alias)).ready) {
         restoredAliases += 1;
         continue;
+      }
+      if (!(await handoff.availability(alias)).ready) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "The service handoff is missing a required core Secret, so foreground restoration remains staged.",
+        );
       }
       const material = await handoff.consume(alias);
       try {
@@ -2050,10 +2174,10 @@ export async function restoreWindowsServiceSecretBackend(
       }
       restoredAliases += 1;
     }
-    if (restoredAliases === 0) {
+    if (restoredAliases !== coreAliases.length) {
       throw appError(
         "SECRET_BACKEND_UNAVAILABLE",
-        "The service handoff holds no restorable Secret for this Worker.",
+        "The service handoff did not restore every required core Secret.",
       );
     }
     const backend = validateSecretBackend({
@@ -2117,7 +2241,7 @@ export async function loadWorkerSecretBackendConfiguration(
   }
 }
 
-async function readStableWorkerFile(path: string, maximumBytes: number): Promise<Buffer> {
+export async function readStableWorkerFile(path: string, maximumBytes: number): Promise<Buffer> {
   const noFollow = fileConstants.O_NOFOLLOW ?? 0;
   const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
   const handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking);
@@ -3546,20 +3670,48 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
         vaultRoot: requireAbsolutePath(text(record["vaultRoot"]), "vault root"),
       };
     case "windows-service-dpapi":
-      assertExactKeys(record, ["backend", "handoffRoot", "serviceName", "serviceSid", "vaultRoot"]);
+      assertExactKeys(
+        record,
+        ["backend", "handoffRoot", "serviceName", "serviceSid", "vaultRoot"],
+        ["servicePreparation"],
+      );
       if (
         !/^OpenDelegate-[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(text(record["serviceName"])) ||
         !/^S-1-5-80-(?:[0-9]{1,10}-){4}[0-9]{1,10}$/u.test(text(record["serviceSid"]))
       ) {
         throw appError("CONFIG_INVALID", "Windows service Secret identity is invalid.");
       }
-      return {
-        backend: "windows-service-dpapi",
-        handoffRoot: requireAbsolutePath(text(record["handoffRoot"]), "handoff root"),
-        serviceName: text(record["serviceName"]),
-        serviceSid: text(record["serviceSid"]),
-        vaultRoot: requireAbsolutePath(text(record["vaultRoot"]), "vault root"),
-      };
+      {
+        const handoffRoot = requireAbsolutePath(text(record["handoffRoot"]), "handoff root");
+        const vaultRoot = requireAbsolutePath(text(record["vaultRoot"]), "vault root");
+        const servicePreparation =
+          record["servicePreparation"] === undefined
+            ? undefined
+            : validateWindowsServicePreparation(record["servicePreparation"]);
+        const ownerVaultRoot = servicePreparation?.ownerHelperSecretBinding.vaultRoot;
+        if (
+          ownerVaultRoot !== undefined &&
+          (pathsEqualForCurrentHost(ownerVaultRoot, handoffRoot) ||
+            pathsEqualForCurrentHost(ownerVaultRoot, vaultRoot) ||
+            isWithin(ownerVaultRoot, handoffRoot) ||
+            isWithin(ownerVaultRoot, vaultRoot) ||
+            isWithin(handoffRoot, ownerVaultRoot) ||
+            isWithin(vaultRoot, ownerVaultRoot))
+        ) {
+          throw appError(
+            "CONFIG_PATH_UNSAFE",
+            "Owner-session, handoff, and service Secret vaults must be disjoint.",
+          );
+        }
+        return {
+          backend: "windows-service-dpapi",
+          handoffRoot,
+          serviceName: text(record["serviceName"]),
+          serviceSid: text(record["serviceSid"]),
+          vaultRoot,
+          ...(servicePreparation === undefined ? {} : { servicePreparation }),
+        };
+      }
     case "macos-keychain":
       assertExactKeys(record, ["backend", "helperPath", "expectedHelperSha256"]);
       if (!/^sha256:[0-9a-f]{64}$/u.test(text(record["expectedHelperSha256"]))) {
@@ -3595,6 +3747,73 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
     default:
       throw appError("CONFIG_INVALID", "Worker Secret Store configuration is invalid.");
   }
+}
+
+function validateWindowsServicePreparation(value: unknown): WorkerWindowsServicePreparation {
+  const record = readRecord(value);
+  assertExactKeys(record, ["schemaVersion", "sealing", "ownerHelperSecretBinding", "ipcTrust"]);
+  if (record["schemaVersion"] !== 1) {
+    throw appError("CONFIG_INVALID", "Windows service preparation version is unsupported.");
+  }
+  if (record["sealing"] !== "service-account" && record["sealing"] !== "machine") {
+    throw appError("CONFIG_INVALID", "Windows service Secret sealing is invalid.");
+  }
+  const ownerHelper = readRecord(record["ownerHelperSecretBinding"]);
+  assertExactKeys(ownerHelper, ["backend", "vaultRoot"]);
+  if (ownerHelper["backend"] !== "windows-dpapi") {
+    throw appError("CONFIG_INVALID", "Windows owner-session Secret binding is invalid.");
+  }
+  const ipcTrust = readRecord(record["ipcTrust"]);
+  assertExactKeys(ipcTrust, ["core", "helper"]);
+  const core = validateWorkerLocalIpcPublicKeyPin(ipcTrust["core"]);
+  const helper = validateWorkerLocalIpcPublicKeyPin(ipcTrust["helper"]);
+  if (core.keyId === helper.keyId) {
+    throw appError("CONFIG_INVALID", "Core and owner-session helper must use distinct keys.");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    sealing: record["sealing"],
+    ownerHelperSecretBinding: Object.freeze({
+      backend: "windows-dpapi",
+      vaultRoot: requireAbsolutePath(
+        text(ownerHelper["vaultRoot"]),
+        "owner-session helper vault root",
+      ),
+    }),
+    ipcTrust: Object.freeze({ core, helper }),
+  });
+}
+
+function validateWorkerLocalIpcPublicKeyPin(value: unknown): WorkerLocalIpcPublicKeyPin {
+  const record = readRecord(value);
+  assertExactKeys(record, ["keyId", "publicKeySpkiBase64Url"]);
+  const keyId = text(record["keyId"]);
+  const publicKeySpkiBase64Url = text(record["publicKeySpkiBase64Url"]);
+  if (!/^sha256:[a-f0-9]{64}$/u.test(keyId) || !/^[A-Za-z0-9_-]+$/u.test(publicKeySpkiBase64Url)) {
+    throw appError("CONFIG_INVALID", "The local IPC public-key pin is invalid.");
+  }
+  const bytes = Buffer.from(publicKeySpkiBase64Url, "base64url");
+  try {
+    const key = createPublicKey({ key: bytes, format: "der", type: "spki" });
+    const expected = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    if (
+      bytes.length === 0 ||
+      bytes.length > 256 ||
+      bytes.toString("base64url") !== publicKeySpkiBase64Url ||
+      key.asymmetricKeyType !== "ed25519" ||
+      expected !== keyId
+    ) {
+      throw new Error("binding");
+    }
+  } catch {
+    throw appError("CONFIG_INVALID", "The local IPC public-key pin is invalid.");
+  } finally {
+    bytes.fill(0);
+  }
+  return Object.freeze({
+    keyId: keyId as `sha256:${string}`,
+    publicKeySpkiBase64Url,
+  });
 }
 
 function validateAgentConfiguration(value: unknown): WorkerAgentConfiguration {

@@ -71,6 +71,9 @@ describe("native two-plane JavaScript host", () => {
         }),
       /Admin auto-open/u,
     );
+    const logOverlap = validConfiguration();
+    logOverlap.helperSecretBinding.vaultRoot = "C:\\ProgramData\\OpenDelegate\\logs";
+    assert.throws(() => parseServiceHostConfiguration(logOverlap), /helper Secret binding/u);
   });
 
   it("refuses linked, oversized, and unstable configuration files", async () => {
@@ -111,7 +114,7 @@ function validConfiguration() {
     },
     helperSecretBinding: {
       backend: "windows-dpapi",
-      vaultRoot: "C:\\ProgramData\\OpenDelegate\\state\\owner-secrets\\dpapi",
+      vaultRoot: "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
     },
     logs: {
       core: {

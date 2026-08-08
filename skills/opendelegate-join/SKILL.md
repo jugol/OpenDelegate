@@ -189,10 +189,32 @@ opendelegate worker windows-service-secret-stage \
 ```
 
 Use the emitted non-secret backend, service name, SID, handoff root, and vault root as the native
-service configuration's `serviceSecretBinding`. Never transcribe or request private-key bytes. The
-installer independently verifies the SID before mutation; the service imports the SID-protected
-handoff into its own CurrentUser DPAPI profile. Do not claim persistent Windows support until
-clean-host SCM, restart, reboot, ACL, and DPAPI-NG evidence is recorded.
+service configuration's `serviceSecretBinding`. The command also persists the public core/helper IPC
+pins and the original owner-helper vault before deleting core-owned source copies. Never transcribe
+or request private-key bytes.
+
+Generate the install input from the staged Device rather than writing JSON by hand:
+
+```text
+opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
+  --bundle ABSOLUTE_VERIFIED_BUNDLE --install-root ABSOLUTE_INSTALL_ROOT \
+  --data-root ABSOLUTE_DATA_ROOT --health-port PORT --instance-id INSTANCE_ID \
+  --home ABSOLUTE_WORKER_HOME
+opendelegate service plan install --config ABSOLUTE_NEW_PATH
+```
+
+The output is create-new and contains no Secret values. Review the plan, then run the separately
+elevated `service install` with a caller-stable command ID. The installer independently verifies the
+SID before mutation; the service imports the SID-protected handoff into its own CurrentUser DPAPI
+profile. A pre-existing staged Worker without the durable public preparation binding must use
+`windows-service-secret-restore` when its handoff is owner-restorable, or a new owner-approved
+re-credentialing Grant when service-account sealing prevents that restore, and then stage again. Do
+not guess the missing pins.
+
+The current `service-document` path intentionally refuses macOS and Linux until their core-service
+and owner-session Secret stores have an equally explicit migration. Do not hand-author a document or
+weaken the two-plane identity boundary to bypass that blocker. Do not claim persistent Windows
+support until clean-host SCM, restart, reboot, ACL, and DPAPI-NG evidence is recorded.
 
 Network, firewall, driver, kernel, new package-source, and remote-installer changes still require
 owner approval. Installing packages from already configured official sources may use the accepted

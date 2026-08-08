@@ -433,6 +433,11 @@ Make Main and Worker roles truly persistent on all target operating systems.
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
+- Implement a Device-local service-preparation boundary on every OS that migrates
+  core-owned Secrets to the native service identity, leaves the owner-session key
+  in its separate store, and durably exports only the two public IPC pins into a
+  create-new install document. Windows is implemented by D-088; macOS and Linux
+  remain required and must fail closed until their equivalent migration exists.
 - Build release bundles and smoke them on clean hosts using isolated temporary state
   and dynamically selected adjacent loopback listeners.
 - Keep bundle assembly independent from service activation. Installed systems switch

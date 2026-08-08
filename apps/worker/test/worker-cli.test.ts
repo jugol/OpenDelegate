@@ -670,35 +670,40 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
       vaultRoot: serviceVaultRoot,
     };
     const first = await prepareWindowsServiceSecretBackend(input);
-    const interruptedConfiguration = JSON.parse(await readFile(paths.configFile, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    interruptedConfiguration["secretBackend"] = {
-      backend: "windows-dpapi",
-      vaultRoot: ownerVaultRoot,
-    };
-    await writeFile(paths.configFile, `${JSON.stringify(interruptedConfiguration)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
+    // Simulate a crash after the durable service binding was written but before
+    // the owner-vault duplicates were deleted. Replay must finish that cleanup
+    // without reopening the service-account-sealed handoff for public-key data.
+    await ownerStore.store(alias, secret);
+    await ownerStore.store(WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS, Buffer.alloc(32, 0xa5));
+    await ownerStore.store(WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS, Buffer.alloc(48, 0x5a));
     const replay = await prepareWindowsServiceSecretBackend(input);
     const exactReplay = await prepareWindowsServiceSecretBackend(input);
     // The durable backend is idempotent across every repetition.
     assert.deepEqual(replay.backend, first.backend);
     assert.deepEqual(exactReplay.backend, first.backend);
-    assert.deepEqual(first.backend, {
-      backend: "windows-service-dpapi",
-      handoffRoot,
-      serviceName: "OpenDelegate-personal",
-      serviceSid,
-      vaultRoot: serviceVaultRoot,
-    });
-    // Sealing reports what each call observed, so a call that restaged names the
-    // descriptor and a call that staged nothing reports none.
+    assert.equal(first.backend.backend, "windows-service-dpapi");
+    assert.equal(first.backend.handoffRoot, handoffRoot);
+    assert.equal(first.backend.serviceName, "OpenDelegate-personal");
+    assert.equal(first.backend.serviceSid, serviceSid);
+    assert.equal(first.backend.vaultRoot, serviceVaultRoot);
+    assert.equal(
+      first.backend.servicePreparation?.ownerHelperSecretBinding.vaultRoot,
+      ownerVaultRoot,
+    );
+    assert.equal(first.backend.servicePreparation?.sealing, "service-account");
+    assert.match(
+      first.backend.servicePreparation?.ipcTrust.core.keyId ?? "",
+      /^sha256:[0-9a-f]{64}$/u,
+    );
+    assert.match(
+      first.backend.servicePreparation?.ipcTrust.helper.keyId ?? "",
+      /^sha256:[0-9a-f]{64}$/u,
+    );
+    // Sealing is a durable non-secret observation, so interrupted replay cannot
+    // lose a weaker machine-sealing warning.
     assert.equal(first.sealing, "service-account");
     assert.equal(replay.sealing, "service-account");
-    assert.equal(exactReplay.sealing, undefined);
+    assert.equal(exactReplay.sealing, "service-account");
     assert.equal((await ownerStore.availability(alias)).ready, false);
     const handoff = new WindowsServiceDpapiSecretHandoff({
       deviceId: "device-worker-service",
@@ -729,8 +734,38 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     assert.equal(ownerBinding.alias, WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
     assert.match(ownerBinding.keyId, /^sha256:[0-9a-f]{64}$/u);
     assert.ok(ownerBinding.publicKeySpkiBase64Url.length > 0);
-    // Staging is reversible while the handoff is machine-sealed, so an owner who
-    // cannot finish service installation is not left with an unrunnable Device.
+    // A partial handoff cannot rebind the Worker to foreground operation.
+    await handoff.delete(alias);
+    await assert.rejects(
+      restoreWindowsServiceSecretBackend({
+        hostPlatform: "win32",
+        paths,
+        powershellPath,
+        runner,
+        vaultRoot: ownerVaultRoot,
+      }),
+      (error: unknown) =>
+        error instanceof WorkerAppError && error.code === "SECRET_BACKEND_UNAVAILABLE",
+    );
+    assert.equal(
+      (await loadWorkerConfiguration(paths)).secretBackend.backend,
+      "windows-service-dpapi",
+    );
+    await handoff.stage(alias, secret);
+    // Core Secrets must return to the vault that retained the owner-session key;
+    // accepting another vault would produce an incomplete foreground Worker.
+    await assert.rejects(
+      restoreWindowsServiceSecretBackend({
+        hostPlatform: "win32",
+        paths,
+        powershellPath,
+        runner,
+        vaultRoot: join(fixtureRoot, "different-owner-vault"),
+      }),
+      (error: unknown) => error instanceof WorkerAppError && error.code === "CONFIG_INVALID",
+    );
+    // This fixture makes the handoff owner-restorable, so an owner who cannot
+    // finish service installation is not left with an unrunnable Device.
     const restored = await restoreWindowsServiceSecretBackend({
       hostPlatform: "win32",
       paths,
@@ -740,7 +775,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     });
     assert.equal(restored.backend.backend, "windows-dpapi");
     assert.equal(restored.backend.vaultRoot, ownerVaultRoot);
-    assert.ok(restored.restoredAliases >= 1);
+    assert.equal(restored.restoredAliases, 3);
     assert.equal((await ownerStore.availability(alias)).ready, true);
     assert.equal((await loadWorkerConfiguration(paths)).secretBackend.backend, "windows-dpapi");
     // A Worker that was never staged is refused rather than silently rebound.

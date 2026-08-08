@@ -148,9 +148,9 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
   for (const [name, value] of [
     ["installRoot", input.paths.installRoot],
     ["stateRoot", input.paths.stateRoot],
+    ["authorityRoot", input.paths.authorityRoot],
     ["runtimeRoot", input.paths.runtimeRoot],
     ["logRoot", input.paths.logRoot],
-    ["bundle.sourceDirectory", input.bundle.sourceDirectory],
   ] as const) {
     if (
       samePath(input.platform, value, input.paths.sourceCheckoutDirectory) ||
@@ -231,11 +231,25 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       input.helperSecretBinding.vaultRoot,
       "helperSecretBinding.vaultRoot",
     );
-    if (!isDescendantPath("windows", input.paths.stateRoot, input.helperSecretBinding.vaultRoot)) {
-      throw new PlatformServiceError(
-        "INVALID_PATH",
-        "The owner helper DPAPI vault must be a strict descendant of the state root.",
-      );
+    for (const [name, root] of [
+      ["source checkout", input.paths.sourceCheckoutDirectory],
+      ["release bundle", input.bundle.sourceDirectory],
+      ["install root", input.paths.installRoot],
+      ["service state root", input.paths.stateRoot],
+      ["desktop authority root", input.paths.authorityRoot],
+      ["runtime root", input.paths.runtimeRoot],
+      ["log root", input.paths.logRoot],
+    ] as const) {
+      if (
+        samePath("windows", root, input.helperSecretBinding.vaultRoot) ||
+        isDescendantPath("windows", root, input.helperSecretBinding.vaultRoot) ||
+        isDescendantPath("windows", input.helperSecretBinding.vaultRoot, root)
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          `The owner helper DPAPI vault must remain disjoint from the ${name}.`,
+        );
+      }
     }
     if (input.serviceSecretBinding !== undefined) {
       assertRecord(input.serviceSecretBinding, "serviceSecretBinding");

@@ -221,13 +221,20 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
       "Admin auto-open is available only to the fixed Main owner session.",
     );
   }
-  const helperSecretBinding = parseHelperSecretBinding(
-    record["helperSecretBinding"],
-    platform,
-    record["stateRoot"] as string,
-    record["releaseRoot"] as string,
-  );
   const logs = parseLogs(record["logs"], platform);
+  const helperSecretBinding = parseHelperSecretBinding(record["helperSecretBinding"], platform, {
+    releaseRoot: record["releaseRoot"] as string,
+    disjointRoots: [
+      record["releaseRoot"] as string,
+      record["stateRoot"] as string,
+      record["authorityRoot"] as string,
+      record["runtimeRoot"] as string,
+      logs.core.stdout,
+      logs.core.stderr,
+      logs.sessionHelper.stdout,
+      logs.sessionHelper.stderr,
+    ],
+  });
   const localIpc = parseLocalIpc(record["localIpc"], platform);
   const health = parseHealth(record["health"]);
   const serviceSecretBinding =
@@ -257,8 +264,10 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
 function parseHelperSecretBinding(
   input: unknown,
   platform: ServiceHostConfiguration["platform"],
-  stateRoot: string,
-  releaseRoot: string,
+  roots: {
+    readonly releaseRoot: string;
+    readonly disjointRoots: readonly string[];
+  },
 ): ServiceHostConfiguration["helperSecretBinding"] {
   const record = requireRecord(input, "owner helper Secret binding");
   if (platform === "windows") {
@@ -266,7 +275,9 @@ function parseHelperSecretBinding(
     requirePlatformPath(platform, record["vaultRoot"], "owner helper DPAPI vault");
     if (
       record["backend"] !== "windows-dpapi" ||
-      !isDescendantPath(platform, stateRoot, record["vaultRoot"] as string)
+      roots.disjointRoots.some((root) =>
+        pathsOverlap(platform, root, record["vaultRoot"] as string),
+      )
     ) {
       throw new ServiceHostError("The Windows owner helper Secret binding is invalid.");
     }
@@ -287,7 +298,7 @@ function parseHelperSecretBinding(
       record["backend"] !== "macos-keychain" ||
       typeof record["expectedHelperSha256"] !== "string" ||
       !/^sha256:[a-f0-9]{64}$/u.test(record["expectedHelperSha256"]) ||
-      !isDescendantPath(platform, releaseRoot, record["helperPath"] as string)
+      !isDescendantPath(platform, roots.releaseRoot, record["helperPath"] as string)
     ) {
       throw new ServiceHostError("The macOS owner helper Secret binding is invalid.");
     }

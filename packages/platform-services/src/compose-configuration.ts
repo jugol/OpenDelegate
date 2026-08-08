@@ -18,7 +18,7 @@ export interface ComposeServiceConfigurationInput {
   readonly instanceId: string;
   readonly deviceId: string;
   readonly bundle: ReleaseBundle;
-  /** The development checkout, which installed state must never live inside. */
+  /** The source checkout or packaged launcher root, which installed state must never live inside. */
   readonly sourceCheckoutDirectory: string;
   /** Where versioned bundles land. `current` and `releases/` are created beneath it. */
   readonly installRoot: string;
@@ -62,6 +62,13 @@ export interface ComposeServiceConfigurationInput {
     readonly serviceSid: string;
     readonly vaultRoot: string;
   };
+  /** Existing owner DPAPI vault that retains only the session-helper identity. */
+  readonly windowsOwnerHelperVaultRoot?: string;
+  /** Optional encrypted core credential used by a headless systemd service. */
+  readonly systemdCredential?: {
+    readonly credentialName: string;
+    readonly encryptedSourcePath: string;
+  } | null;
   readonly retainPreviousVersions?: number;
   readonly healthTimeoutMs?: number;
 }
@@ -123,7 +130,10 @@ export function composeServiceConfiguration(
       ...base,
       helperSecretBinding: {
         backend: "windows-dpapi",
-        vaultRoot: path.join(stateRoot, "owner-secrets", "dpapi"),
+        vaultRoot: required(
+          input.windowsOwnerHelperVaultRoot,
+          "The existing Windows owner-session DPAPI vault is required.",
+        ),
       },
       ...(input.windowsServiceSecretBinding === undefined
         ? {}
@@ -161,6 +171,7 @@ export function composeServiceConfiguration(
         "The Linux Secret Service tool path is required.",
       ),
     },
+    systemdCredential: input.systemdCredential ?? null,
   });
 }
 

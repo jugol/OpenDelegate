@@ -95,6 +95,26 @@ Both roots must be disjoint strict descendants of `stateRoot`. The values are
 non-secret; preflight still resolves the SCM SID independently and refuses a
 mismatch.
 
+The logged-in helper's `windows-dpapi` vault is different: it remains under the
+owner-selected Worker home and must be disjoint from the checkout, bundle, install,
+service-state, authority, runtime, log, handoff, and service vault roots. Staging
+records that location plus the two public IPC pins before it removes core-owned
+copies from the owner vault. It never copies the helper private key to the service.
+
+After staging, compose a create-new Worker document from the Device itself:
+
+```text
+opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
+  --bundle ABSOLUTE_VERIFIED_BUNDLE --install-root ABSOLUTE_INSTALL_ROOT \
+  --data-root ABSOLUTE_DATA_ROOT --health-port PORT --instance-id INSTANCE_ID \
+  --home ABSOLUTE_WORKER_HOME
+opendelegate service plan install --config ABSOLUTE_NEW_PATH
+```
+
+This production-shaped path is currently wired for Windows. macOS and Linux fail
+closed until their separate service-account and owner-session Secret migration is
+implemented; a hand-authored document is not a substitute.
+
 ## Read-only commands
 
 ```text

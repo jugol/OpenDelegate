@@ -268,12 +268,35 @@ opendelegate worker windows-service-secret-stage \
 
 The command resolves the SCM virtual-service SID, creates only a SID-protected
 DPAPI-NG handoff, deletes the owner DPAPI record after the handoff is durable, and
-updates Worker configuration to `windows-service-dpapi`. Copy the emitted
-non-secret service name, SID, handoff root, and vault root into the native service
-configuration's `serviceSecretBinding`. Install preflight verifies the SID again.
+updates Worker configuration to `windows-service-dpapi`. Before deleting the core
+copies, it durably records only their public IPC pins and the separate owner-helper
+vault location. A crash after that configuration switch resumes deletion without
+reopening service-account-sealed material. Install preflight verifies the SID again.
 An interrupted retry resumes from the encrypted handoff. While the owner record
 still exists it remains authoritative and replaces any stale handoff before
 deletion.
+
+Compose the complete, create-new service document from those durable local facts;
+do not transcribe keys, SIDs, or bundle checksums:
+
+```text
+opendelegate worker service-document \
+  --output ABSOLUTE_NEW_SERVICE_JSON \
+  --bundle ABSOLUTE_VERIFIED_BUNDLE \
+  --install-root "C:\Program Files\OpenDelegate" \
+  --data-root "C:\ProgramData\OpenDelegate" \
+  --health-port 43190 --instance-id personal \
+  --home ABSOLUTE_WORKER_HOME
+opendelegate service plan install --config ABSOLUTE_NEW_SERVICE_JSON
+```
+
+Review the plan, then run the separately elevated `service install` command with a
+caller-stable command ID. `service-document` never overwrites an existing file and
+does not elevate or register a service.
+
+The current command deliberately refuses macOS and Linux rather than producing a
+document whose core service and owner-session helper point at the same Secret
+authority. Their separate service-account migration remains a release blocker.
 
 The service consumes the handoff only when its current identity matches, then stores
 the Device identity with `CurrentUser` DPAPI under that service profile. No Secret
