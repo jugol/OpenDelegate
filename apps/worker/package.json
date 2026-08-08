@@ -14,6 +14,7 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@node-rs/argon2": "2.0.2",
     "@opendelegate/agent-adapters": "workspace:*",
     "@opendelegate/computer-use-os": "workspace:*",
     "@opendelegate/computer-use-mcp": "workspace:*",
@@ -27,7 +28,8 @@
     "@opendelegate/secrets": "workspace:*",
     "@opendelegate/transport": "workspace:*",
     "@opendelegate/worker-runtime": "workspace:*",
-    "better-sqlite3": "13.0.1"
+    "better-sqlite3": "13.0.1",
+    "pg": "8.22.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13"

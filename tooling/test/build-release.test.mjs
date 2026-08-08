@@ -32,6 +32,7 @@ import {
   assertNoBundledWorkspacePackages,
   assertNoPackageManagerMetadata,
   assertPortableTree,
+  assertRuntimeExternalDependencies,
   assertSupportMatrixTarget,
   collectShaBoundAttestationPaths,
   createCommittedSourceSnapshot,
@@ -858,6 +859,39 @@ test("release bundles cannot depend on deployed first-party workspace source", (
         "fixture",
       ),
     /left first-party workspace imports external/u,
+  );
+});
+
+test("service-host externals must resolve from each deployed application tree", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-service-host-externals-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const application = join(root, "apps", "worker");
+  for (const dependency of ["@node-rs/argon2", "better-sqlite3", "pg"]) {
+    const packageDirectory = join(application, "node_modules", ...dependency.split("/"));
+    await mkdir(packageDirectory, { recursive: true });
+    await writeFile(
+      join(packageDirectory, "package.json"),
+      `${JSON.stringify({ name: dependency, version: "1.0.0", main: "index.js" })}\n`,
+      "utf8",
+    );
+    await writeFile(join(packageDirectory, "index.js"), "module.exports = {};\n", "utf8");
+  }
+
+  await assert.doesNotReject(
+    assertRuntimeExternalDependencies(
+      application,
+      ["@node-rs/argon2", "@node-rs/argon2-*", "better-sqlite3", "pg"],
+      "Worker service host",
+    ),
+  );
+  await rm(join(application, "node_modules", "pg"), { force: true, recursive: true });
+  await assert.rejects(
+    assertRuntimeExternalDependencies(
+      application,
+      ["@node-rs/argon2", "better-sqlite3", "pg"],
+      "Worker service host",
+    ),
+    /Worker service host cannot resolve runtime dependency pg/u,
   );
 });
 

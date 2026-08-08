@@ -256,6 +256,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@node-rs/argon2':
+        specifier: 2.0.2
+        version: 2.0.2
       '@opendelegate/agent-adapters':
         specifier: workspace:*
         version: link:../../packages/agent-adapters
@@ -298,6 +301,9 @@ importers:
       better-sqlite3:
         specifier: 13.0.1
         version: 13.0.1
+      pg:
+        specifier: 8.22.0
+        version: 8.22.0
     devDependencies:
       '@types/better-sqlite3':
         specifier: 7.6.13
