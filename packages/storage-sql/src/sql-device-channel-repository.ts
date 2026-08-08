@@ -67,7 +67,12 @@ export class SqlDeviceChannelRepository implements DeviceChannelRepository {
 
   private constructor(context: SqlDatabaseContext, retryPolicy: SqlRetryPolicy) {
     this.#context = context;
-    this.#transactions = new SqlTransactionRunner(context.database, context.backend, retryPolicy);
+    this.#transactions = new SqlTransactionRunner(
+      context.database,
+      context.backend,
+      retryPolicy,
+      context.writeCoordinator,
+    );
   }
 
   public static async openSqlite(

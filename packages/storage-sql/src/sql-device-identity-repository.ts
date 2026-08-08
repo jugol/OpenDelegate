@@ -67,6 +67,7 @@ export class SqlDeviceIdentityRepository implements DeviceIdentityRepository {
       context.database,
       context.backend,
       retryPolicy,
+      context.writeCoordinator,
     );
   }
 

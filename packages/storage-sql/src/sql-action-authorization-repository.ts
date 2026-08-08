@@ -75,6 +75,7 @@ export class SqlActionAuthorizationRepository implements ActionAuthorizationRepo
       context.database,
       context.backend,
       retryPolicy,
+      context.writeCoordinator,
     );
   }
 

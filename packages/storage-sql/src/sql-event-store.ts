@@ -57,6 +57,7 @@ export class SqlEventStore implements EventStore {
       context.database,
       context.backend,
       retryPolicy,
+      context.writeCoordinator,
     );
   }
 

@@ -44,6 +44,7 @@ export class SqlArtifactIndexRepository implements ArtifactIndexRepository {
       context.database,
       context.backend,
       retryPolicy,
+      context.writeCoordinator,
     );
   }
 
