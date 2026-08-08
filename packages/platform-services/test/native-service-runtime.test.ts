@@ -539,7 +539,7 @@ test("Windows Worker install accepts the release and staging root actions after 
         request.arguments.includes("/T") &&
         request.arguments.includes("/C") &&
         request.arguments.includes("/Q"),
-      ),
+    ),
   );
   assert.equal(
     icaclsRequests.some(

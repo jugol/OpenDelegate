@@ -228,8 +228,7 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       "0750",
       directoryAccess(configuration, "state"),
     ),
-    ...(configuration.platform === "windows" &&
-    configuration.serviceSecretBinding !== undefined
+    ...(configuration.platform === "windows" && configuration.serviceSecretBinding !== undefined
       ? [
           directoryStep(
             "ensure-service-secret-vault",
