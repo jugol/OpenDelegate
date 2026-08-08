@@ -89,10 +89,13 @@ export async function buildWorkerServiceDocument(
   }
 
   const configuration = await loadWorkerConfiguration(options.paths);
-  const bundleDirectory = platformPath(family, options.bundleDirectory);
+  const serviceBundleDirectory = platformPath(family, options.bundleDirectory);
   const [version, checksum] = await Promise.all([
-    readBundleVersion(bundleDirectory),
-    readBundleChecksum(bundleDirectory),
+    // Read through the path dialect of the process performing installation.
+    // `hostPlatform` may intentionally target another service-document dialect
+    // during validation, but must never rewrite the path used for local I/O.
+    readBundleVersion(options.bundleDirectory),
+    readBundleChecksum(options.bundleDirectory),
   ]);
   if (family === "linux") {
     if (configuration.secretBackend.backend !== "linux-systemd-credential-vault") {
@@ -125,7 +128,7 @@ export async function buildWorkerServiceDocument(
       role: "worker",
       instanceId: options.instanceId,
       deviceId: configuration.deviceId,
-      bundle: { version, sourceDirectory: bundleDirectory, checksum },
+      bundle: { version, sourceDirectory: serviceBundleDirectory, checksum },
       sourceCheckoutDirectory: platformPath(family, options.sourceCheckoutRoot),
       installRoot: platformPath(family, options.installRoot),
       dataRoot: platformPath(family, options.dataRoot),
@@ -171,7 +174,7 @@ export async function buildWorkerServiceDocument(
     role: "worker",
     instanceId: options.instanceId,
     deviceId: configuration.deviceId,
-    bundle: { version, sourceDirectory: bundleDirectory, checksum },
+    bundle: { version, sourceDirectory: serviceBundleDirectory, checksum },
     sourceCheckoutDirectory: resolve(options.sourceCheckoutRoot),
     installRoot: resolve(options.installRoot),
     dataRoot: resolve(options.dataRoot),
