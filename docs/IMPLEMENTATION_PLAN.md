@@ -324,6 +324,9 @@ Prove the complete product flow in one process with deterministic fake boundarie
   Agent Session, Workspace, Budget, Approval, Policy, Resource Lock, Artifact, and
   audit domain models.
 - Implement Task, Work Order, Run, Device health, approval, and lock state machines.
+- Persist cumulative active-execution wall time independently from Task calendar
+  age, checkpoint it during live execution, and prove that inactive Tasks can resume
+  after arbitrarily long owner or resource waits without a wall-Budget extension.
 - Implement deterministic scheduling filters and score explanations.
 - Define the semantic planning request and response schemas used by Main Agent.
 - Implement fake channel, Main Agent, Worker Agent, transport, Knowledge, Artifact,

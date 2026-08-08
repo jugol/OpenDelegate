@@ -1154,8 +1154,22 @@ may request a transition but cannot manufacture a state outside the transition r
 9. Idle time measures the absence of Task activity. A durable owner input, approval,
    or explicit owner `Retry` or `Resume` command records activity before its
    execution is budget-checked, so time spent waiting for the owner does not make
-   that owner action reject itself. Wall-time and every finite usage limit remain
-   enforced.
+   that owner action reject itself.
+10. Wall time measures cumulative automatic execution, not the Task or Work Order's
+    calendar age. Time spent waiting for owner input, approval, resources, an online
+    Device, a retry, or an explicit resume—and time spent paused or otherwise outside
+    an execution guard—does not consume wall time. A requested Task may therefore
+    preserve its Forum conversation and native-session continuity indefinitely while
+    inactive.
+11. Task wall time counts the union of its active execution intervals so parallel
+    dispatch does not multiply Task usage. Work Order wall time counts its active Run
+    intervals. Main checkpoints active Task wall time durably at least once per
+    minute and when execution activity or closure reaches the Budget service; a
+    process failure may lose no more than the current checkpoint interval.
+12. Wall-time and every other finite usage limit remain enforced against their
+    corresponding cumulative usage. Reaching the requested-Task default means the
+    system performed that much automatic work; it never means the Forum Post merely
+    existed for that long.
 
 ## Implementation Decisions
 

@@ -1523,7 +1523,7 @@ the owner must return hours later. Checking the old idle timestamp before record
 that owner's answer made the answer reject itself and produced another Budget prompt
 instead of resuming the Task. Discord then appeared to ignore a perfectly durable
 message. Owner input is Task activity by definition, while wall time remains the
-bounded lifetime of the Task.
+bounded cumulative automatic execution time of the Task.
 
 **Consequence:** A late reply can continue the same Task and native conversation
 without an owner-authorized idle extension. Replayed Discord ingress records the
@@ -1671,3 +1671,29 @@ the same impossible command indefinitely without telling the owner.
 longer available” response directing the owner to the latest Task update or a new
 message. The durable outbox does not accumulate deterministic failures, while true
 delivery or concurrency failures remain recoverable.
+
+## D-086 — Wall Budget measures active execution, not Task age
+
+**Decision:** Task `wallTimeMs` is the cumulative union of intervals in which at
+least one Task execution guard is open. Parallel Task work therefore spends wall
+time once, not once per concurrent branch. Work Order `wallTimeMs` is the cumulative
+duration of its active Runs. Main persists ordinary Budget mutations while execution
+is active at a maximum checkpoint interval of 60 seconds and again when activity or
+guard closure reaches the Budget service. Waiting, paused, offline, and otherwise
+inactive calendar time spends no wall Budget.
+
+**Rationale:** A Discord Forum Post is both a durable Task surface and the boundary
+of its native Agent sessions. The owner may return to one Task over days or months.
+Measuring `now - createdAt` made an old but mostly inactive Task appear to have used
+almost 24 hours of automatic work, then demanded a Budget extension before the
+Agent could process a new message. It also turned a runaway-control limit into a
+retention limit, which is not the product intent.
+
+**Consequence:** Requested Tasks can preserve conversation and native-session
+continuity for arbitrary calendar time. Their default 21-hour soft and 24-hour hard
+limits still bound cumulative automatic execution; autonomous Tasks retain their
+shorter finite active-work defaults. Existing event histories remain readable:
+calendar age is no longer inferred, and only durable wall-usage mutations contribute
+to the new total. A sudden Main process failure can omit at most the current
+60-second Task checkpoint interval; active Work Order Runs remain reconstructible
+from their durable start events.

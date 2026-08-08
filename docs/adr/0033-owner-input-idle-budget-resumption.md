@@ -12,9 +12,9 @@ the earlier activity timestamp first. The Task therefore returned another hard-i
 Budget message without giving the Agent the reply. Repeating the message could not
 recover the conversation.
 
-Waiting for the owner is intentionally inactive work. The total Task lifetime and
-finite resource consumption still need hard bounds, but an owner response is itself
-new activity and must not be rejected as proof that no activity occurred.
+Waiting for the owner is intentionally inactive work. Cumulative automatic execution
+and finite resource consumption still need hard bounds, but an owner response is
+itself new activity and must not be rejected as proof that no activity occurred.
 
 ## Decision
 
@@ -48,3 +48,4 @@ same ingress retry repairs the missing activity before execution is queued.
 - [`../PRODUCT_SPEC.md`](../PRODUCT_SPEC.md), FR-23
 - [`../DECISIONS.md`](../DECISIONS.md), D-078
 - [`0027-discord-single-turn-lifecycle-and-retry-stable-planning.md`](0027-discord-single-turn-lifecycle-and-retry-stable-planning.md)
+- [`0038-active-execution-wall-budget.md`](0038-active-execution-wall-budget.md)
