@@ -11,7 +11,7 @@
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
-    "ws": "8.21.1"
+    "ws": "8.21.2"
   },
   "devDependencies": {
     "@types/ws": "8.18.1"
