@@ -438,6 +438,7 @@ test("Windows Worker install accepts the release and staging root actions after 
   });
   const journal = new MemoryJournal();
   const process = new FakeProcess();
+  let protectedVaultOwnerAttempts = 0;
   process.handler = (request) => {
     if (request.arguments[0] === "showsid") {
       return processResult(0, `SERVICE SID: ${serviceSid}`);
@@ -447,6 +448,14 @@ test("Windows Worker install accepts the release and staging root actions after 
     }
     if (request.arguments[0]?.toLowerCase() === "/query") {
       return processResult(0, '"OpenDelegate","Ready","Running"');
+    }
+    if (
+      request.executable.toLowerCase().endsWith("icacls.exe") &&
+      request.arguments[0] === "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service" &&
+      request.arguments.includes("/setowner")
+    ) {
+      protectedVaultOwnerAttempts += 1;
+      return processResult(protectedVaultOwnerAttempts === 1 ? 5 : 0);
     }
     return processResult(0);
   };
@@ -487,10 +496,29 @@ test("Windows Worker install accepts the release and staging root actions after 
     plan: createServicePlan({ operation: "install", configuration }),
   });
 
-  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  assert.equal(
+    result.report.outcome,
+    "succeeded",
+    JSON.stringify({ report: result.report, requests: process.requests }),
+  );
   assert.equal(fileSystem.kinds.get(releasesRoot), "directory");
   assert.equal(fileSystem.kinds.get(stagingRoot), "directory");
   assert.equal(protectedVaultEnsureAttempts, 0);
+  assert.equal(protectedVaultOwnerAttempts, 2);
+  const protectedVaultRepair = process.requests
+    .filter(
+      (request) =>
+        request.arguments.includes(protectedServiceVault) &&
+        (request.executable.toLowerCase().endsWith("icacls.exe") ||
+          request.executable.toLowerCase().endsWith("takeown.exe")),
+    )
+    .map((request) => [request.executable.split("\\").at(-1), request.arguments[1]]);
+  assert.deepEqual(protectedVaultRepair, [
+    ["icacls.exe", "/setowner"],
+    ["takeown.exe", protectedServiceVault],
+    ["icacls.exe", "/inheritance:r"],
+    ["icacls.exe", "/setowner"],
+  ]);
   const icaclsRequests = process.requests.filter((request) =>
     request.executable.toLowerCase().endsWith("icacls.exe"),
   );

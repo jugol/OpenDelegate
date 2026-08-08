@@ -363,6 +363,7 @@ function createNativeFilesystemAdapter(
               action.access.owner,
               boundaries,
               tools,
+              true,
             );
             if ((await fileSystem.inspect(action.path)).kind !== "directory") {
               throw uncertain("A native service directory changed during access repair.");
@@ -1047,6 +1048,7 @@ async function applyDirectoryAccess(
   owner: string,
   boundaries: NativeServiceBoundaries,
   tools: NativeTools,
+  recoverProtectedOwner = false,
 ): Promise<void> {
   if (configuration.platform === "windows") {
     const action = findDirectoryAccess(configuration, path);
@@ -1060,11 +1062,28 @@ async function applyDirectoryAccess(
     // icacls treats /setowner as a separate operation. Combining it with
     // /inheritance and /grant exits with ERROR_INVALID_PARAMETER (87) on a
     // real Windows host even though mocked process boundaries accept it.
-    await runRequired(boundaries.process, {
+    const ownerRequest: NativeProcessRequest = {
       executable: tools.icacls,
       arguments: [path, "/setowner", windowsPrincipal(action.owner)],
       timeoutMs: 30_000,
-    });
+    };
+    let ownerNeedsFinalTransfer = false;
+    if (recoverProtectedOwner) {
+      const ownerResult = await boundaries.process.run(ownerRequest);
+      if (ownerResult.timedOut) {
+        throw new NativeSupervisorError("A protected Windows directory owner repair timed out.");
+      }
+      if (ownerResult.exitCode !== 0) {
+        await runRequired(boundaries.process, {
+          executable: tools.takeown,
+          arguments: ["/F", path, "/A"],
+          timeoutMs: 30_000,
+        });
+        ownerNeedsFinalTransfer = true;
+      }
+    } else {
+      await runRequired(boundaries.process, ownerRequest);
+    }
     const arguments_: string[] = [path, "/inheritance:r"];
     for (const grant of action.grants) {
       arguments_.push(
@@ -1077,6 +1096,9 @@ async function applyDirectoryAccess(
       arguments: arguments_,
       timeoutMs: 30_000,
     });
+    if (ownerNeedsFinalTransfer) {
+      await runRequired(boundaries.process, ownerRequest);
+    }
     if (resetReleaseTree) {
       await runRequired(boundaries.process, {
         executable: tools.icacls,
@@ -1946,6 +1968,7 @@ interface NativeTools {
   readonly sc: string;
   readonly schtasks: string;
   readonly icacls: string;
+  readonly takeown: string;
   readonly launchctl: string;
   readonly systemctl: string;
   readonly runuser: string;
@@ -1967,6 +1990,7 @@ function nativeTools(): NativeTools {
     sc: win32.join(systemRoot, "System32", "sc.exe"),
     schtasks: win32.join(systemRoot, "System32", "schtasks.exe"),
     icacls: win32.join(systemRoot, "System32", "icacls.exe"),
+    takeown: win32.join(systemRoot, "System32", "takeown.exe"),
     launchctl: "/bin/launchctl",
     systemctl: "/usr/bin/systemctl",
     runuser: "/usr/sbin/runuser",
@@ -2001,6 +2025,7 @@ function requiredNativeTools(
     if (step.action.kind === "directory.ensure") {
       if (configuration.platform === "windows") {
         required.add(tools.icacls);
+        required.add(tools.takeown);
       } else {
         required.add(tools.id);
       }
