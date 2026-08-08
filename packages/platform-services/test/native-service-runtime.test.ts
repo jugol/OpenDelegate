@@ -473,6 +473,18 @@ test("Windows Worker install accepts the release and staging root actions after 
   assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
   assert.equal(fileSystem.kinds.get(releasesRoot), "directory");
   assert.equal(fileSystem.kinds.get(stagingRoot), "directory");
+  const icaclsRequests = process.requests.filter((request) =>
+    request.executable.toLowerCase().endsWith("icacls.exe"),
+  );
+  assert.ok(icaclsRequests.some((request) => request.arguments.includes("/setowner")));
+  assert.ok(icaclsRequests.some((request) => request.arguments.includes("/grant:r")));
+  assert.equal(
+    icaclsRequests.some(
+      (request) =>
+        request.arguments.includes("/setowner") && request.arguments.includes("/grant:r"),
+    ),
+    false,
+  );
 });
 
 test("preflight checks every native tool and publisher trust before mutation", async () => {

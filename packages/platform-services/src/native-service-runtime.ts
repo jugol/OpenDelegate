@@ -1028,6 +1028,14 @@ async function applyDirectoryAccess(
 ): Promise<void> {
   if (configuration.platform === "windows") {
     const action = findDirectoryAccess(configuration, path);
+    // icacls treats /setowner as a separate operation. Combining it with
+    // /inheritance and /grant exits with ERROR_INVALID_PARAMETER (87) on a
+    // real Windows host even though mocked process boundaries accept it.
+    await runRequired(boundaries.process, {
+      executable: tools.icacls,
+      arguments: [path, "/setowner", windowsPrincipal(action.owner)],
+      timeoutMs: 30_000,
+    });
     const arguments_: string[] = [path, "/inheritance:r"];
     for (const grant of action.grants) {
       arguments_.push(
@@ -1035,7 +1043,6 @@ async function applyDirectoryAccess(
         `${windowsPrincipal(grant.principal)}:${windowsPermission(grant.permission)}`,
       );
     }
-    arguments_.push("/setowner", windowsPrincipal(action.owner));
     await runRequired(boundaries.process, {
       executable: tools.icacls,
       arguments: arguments_,
