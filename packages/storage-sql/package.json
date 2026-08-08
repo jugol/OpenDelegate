@@ -19,7 +19,7 @@
     "@opendelegate/event-store": "workspace:*",
     "@opendelegate/owner-auth": "workspace:*",
     "@opendelegate/policy": "workspace:*",
-    "better-sqlite3": "13.0.1",
+    "better-sqlite3": "13.0.3",
     "kysely": "0.29.4",
     "pg": "8.22.0"
   },
