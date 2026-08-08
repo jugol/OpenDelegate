@@ -62,6 +62,7 @@ approved product specification.
 39. [`0042-headless-linux-main-service-composition.md`](0042-headless-linux-main-service-composition.md)
 40. [`0043-current-worker-lease-renewal-is-budget-activity.md`](0043-current-worker-lease-renewal-is-budget-activity.md)
 41. [`0044-resource-waits-resume-on-availability-change.md`](0044-resource-waits-resume-on-availability-change.md)
+42. [`0045-bounded-provider-native-child-agents.md`](0045-bounded-provider-native-child-agents.md)
 
 ## Proposed ADRs
 

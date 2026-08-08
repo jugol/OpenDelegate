@@ -42,6 +42,7 @@ import { ActiveRunSteeringController } from "./steering.ts";
 export const CLAUDE_AGENT_SDK_VERSION = "0.3.220";
 export const CLAUDE_AGENT_SDK_CLAUDE_CODE_VERSION = "2.1.220";
 const CLAUDE_AGENT_SDK_MODULE = "@anthropic-ai/claude-agent-sdk";
+export const CLAUDE_NATIVE_SUBAGENT_MAX_CHILDREN = 4;
 
 const ALLOWED_SDK_MESSAGE_TYPES = new Set([
   "assistant",
@@ -411,6 +412,7 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
     let nativeSessionId: string | undefined;
     let finalText: string | undefined;
     let usage: AgentUsage | undefined;
+    const nativeSubagentToolUseIds = new Set<string>();
     const streamingInput = new ClaudeStreamingInput(
       claudeUserMessage(request.prompt, "now", this.#now()),
     );
@@ -470,6 +472,35 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
             interrupt: false,
             toolUseID: toolUseId,
             decisionClassification: "user_reject",
+          };
+        }
+        if (isAllowedClaudeNativeSubagentTool(toolName, request.permissions.allowedTools)) {
+          if (
+            !nativeSubagentToolUseIds.has(toolUseId) &&
+            nativeSubagentToolUseIds.size >= CLAUDE_NATIVE_SUBAGENT_MAX_CHILDREN
+          ) {
+            return {
+              behavior: "deny",
+              message: `OpenDelegate allows at most ${CLAUDE_NATIVE_SUBAGENT_MAX_CHILDREN} native child Agents in one Worker Run.`,
+              interrupt: false,
+              toolUseID: toolUseId,
+              decisionClassification: "user_reject",
+            };
+          }
+          if (!nativeSubagentToolUseIds.has(toolUseId)) {
+            nativeSubagentToolUseIds.add(toolUseId);
+            await emit({
+              kind: "progress",
+              message: `A native child Agent was delegated inside this Worker Run (${nativeSubagentToolUseIds.size}/${CLAUDE_NATIVE_SUBAGENT_MAX_CHILDREN}).`,
+            });
+          }
+          // Delegation itself adds no authority. The child remains in the same
+          // SDK query, sandbox, Workspace, and canUseTool callback, so every
+          // consequential child action still crosses OpenDelegate Policy.
+          return {
+            behavior: "allow",
+            toolUseID: toolUseId,
+            decisionClassification: "user_temporary",
           };
         }
         if (
@@ -640,6 +671,18 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
               )
                 ? "Device-local Knowledge operation is in progress."
                 : claudeProgressMessage(message),
+          });
+          continue;
+        }
+        if (type === "task_started" || type === "task_updated" || type === "task_notification") {
+          await emit({
+            kind: "progress",
+            message:
+              type === "task_started"
+                ? "A native child Agent started inside this Worker Run."
+                : type === "task_updated"
+                  ? "A native child Agent reported progress inside this Worker Run."
+                  : "A native child Agent reported a lifecycle notification inside this Worker Run.",
           });
           continue;
         }
@@ -821,6 +864,13 @@ function isConfiguredDeviceLocalKnowledgeTool(
     }
   }
   return false;
+}
+
+function isAllowedClaudeNativeSubagentTool(
+  toolName: string,
+  allowedTools: readonly string[] | undefined,
+): boolean {
+  return (toolName === "Task" || toolName === "Agent") && (allowedTools ?? []).includes(toolName);
 }
 
 function isConfiguredPlatformMutationTool(

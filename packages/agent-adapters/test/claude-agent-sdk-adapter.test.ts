@@ -416,6 +416,99 @@ test("Claude Agent SDK uses isolated settings, fail-closed sandbox, exact author
   assert.equal(capturedOptions[1]?.["resume"], sessionId);
 });
 
+test("Claude Agent SDK bounds local child Agents without granting their actions extra authority", async () => {
+  const claudeHome = await createClaudeHome();
+  const decisions: string[] = [];
+  const sdk: ClaudeAgentSdkPort = {
+    query(input) {
+      return {
+        async *[Symbol.asyncIterator]() {
+          const canUseTool = input.options["canUseTool"] as (
+            name: string,
+            toolInput: Readonly<Record<string, unknown>>,
+            options: Readonly<Record<string, unknown>>,
+          ) => Promise<{ readonly behavior: string }>;
+          for (let index = 0; index < 5; index += 1) {
+            const decision = await canUseTool(
+              index % 2 === 0 ? "Agent" : "Task",
+              { description: `private-child-${index + 1}` },
+              {
+                signal: new AbortController().signal,
+                toolUseID: `native-child-${index + 1}`,
+              },
+            );
+            decisions.push(decision.behavior);
+          }
+          yield { type: "system", subtype: "init", session_id: sessionId };
+          yield {
+            type: "task_started",
+            session_id: sessionId,
+            task_id: "private-provider-task-id",
+            description: "private child description",
+          };
+          yield {
+            type: "task_updated",
+            session_id: sessionId,
+            task_id: "private-provider-task-id",
+          };
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: sessionId,
+            result: "Finished bounded delegation.",
+          };
+        },
+      };
+    },
+  };
+  const adapter = new ClaudeAgentSdkAdapter({
+    claudeHome,
+    sdk,
+    hostPlatform: "linux",
+    authExecutable: process.execPath,
+    authPrefixArgs: [fixturePath, "claude"],
+  });
+  const cwd = await realpath(process.cwd());
+  const handle = await adapter.start({
+    operation: "start",
+    requestId: "request-claude-native-subagents",
+    runId: "run-claude-native-subagents",
+    taskId: "task-claude-native-subagents",
+    workstreamId: "implementation",
+    sessionKey: "task-claude-native-subagents/implementation",
+    deviceId: "device-linux",
+    prompt: "Delegate independent local checks.",
+    workspace: {
+      workspaceId: "workspace-claude-native-subagents",
+      cwd,
+      isolation: "none",
+    },
+    sandbox: "workspace-write",
+    permissions: {
+      mode: "allow-listed",
+      allowedTools: ["Agent", "Task"],
+      actionAuthorization: {
+        authorizeAndConsume: async () => {
+          throw new Error("Delegation itself must not request expanded authority.");
+        },
+      },
+    },
+    limits,
+  });
+  const events: NormalizedAgentEvent[] = [];
+  for await (const event of handle.events) {
+    events.push(event);
+  }
+  const result = await handle.result;
+
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(decisions, ["allow", "allow", "allow", "allow", "deny"]);
+  assert.ok(events.some((event) => event.type === "progress" && event.message.includes("(4/4)")));
+  assert.equal(JSON.stringify(events).includes("private child description"), false);
+  assert.equal(JSON.stringify(events).includes("private-provider-task-id"), false);
+});
+
 test("Claude Agent SDK supports reasoning-only turns by denying every native tool", async () => {
   const claudeHome = await createClaudeHome();
   let observedTools: unknown;

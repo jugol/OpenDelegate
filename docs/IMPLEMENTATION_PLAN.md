@@ -533,6 +533,11 @@ Replace fake agents with resumable, observable first-class providers.
   requirement.
 - Map provider events into normalized public messages, tool/action requests, progress,
   usage, and completion.
+- Enable provider-native child Agents only for bridged Codex App Server and Claude
+  Agent SDK Runs whose allow-list explicitly contains Agent delegation. Bound each
+  Run to four children and one nesting level, preserve the parent Workspace,
+  sandbox, Task, and Policy callback, and normalize only privacy-safe lifecycle
+  evidence. Main remains the only cross-Device Work Order scheduler.
 - Route provider approval mechanisms through OpenDelegate Policy.
 - Implement native-session registry with Device, provider, session ID, Workspace,
   working directory/worktree, adapter version, single-writer lease, and lineage.
@@ -556,6 +561,9 @@ Replace fake agents with resumable, observable first-class providers.
   retains the binding recorded for the existing session it replaces.
 - Main replay preserves the actual safe provider, adapter, native-session, and
   lineage observation reported by the Worker.
+- A bridged Worker can complete bounded local parallel work with native child
+  Agents; a fifth child fails closed, CLI fallbacks never claim the Capability, and
+  no child prompt or provider-native identity reaches Main.
 - Simulated session deletion continues from checkpoint with an explicit lineage
   change.
 

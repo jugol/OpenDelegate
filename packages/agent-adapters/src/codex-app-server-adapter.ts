@@ -65,6 +65,16 @@ const CODEX_APP_SERVER_DISABLED_FEATURES = [
   "workspace_dependencies",
 ] as const;
 
+/**
+ * Provider-native child Agents are a local execution optimization, not another
+ * OpenDelegate scheduler. They stay inside the immutable parent Run and Codex
+ * session, so the root thread plus at most four children is the largest team a
+ * Worker may create for one Work Order.
+ */
+export const CODEX_NATIVE_SUBAGENT_MAX_CHILDREN = 4;
+const CODEX_NATIVE_SUBAGENT_MAX_THREADS = CODEX_NATIVE_SUBAGENT_MAX_CHILDREN + 1;
+const CODEX_NATIVE_SUBAGENT_MAX_DEPTH = 1;
+
 const BENIGN_NOTIFICATION_METHODS = new Set([
   "account/rateLimits/updated",
   "account/updated",
@@ -433,7 +443,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
           "app-server",
           "--stdio",
           "--strict-config",
-          ...CODEX_APP_SERVER_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+          ...codexFeatureArguments(request),
         ],
         cwd,
         request.environment,
@@ -450,7 +460,9 @@ export class CodexAppServerAdapter implements AgentAdapter {
     let turnId: string | undefined;
     let finalText: string | undefined;
     let usage: AgentUsage | undefined;
+    const usageByNativeThread = new Map<string, AgentUsage>();
     const privateKnowledgeItemIds = new Set<string>();
+    const nativeChildThreadIds = new Set<string>();
     let turnResult: CodexTurnResult | undefined;
     connection.onServerMessage = async (message) => {
       if (isServerRequest(message)) {
@@ -477,12 +489,19 @@ export class CodexAppServerAdapter implements AgentAdapter {
         );
       }
       if (message.method === "item/agentMessage/delta") {
+        if (codexNotificationBelongsToChild(message.params, threadId, nativeChildThreadIds)) {
+          return;
+        }
         const delta = readStringField(message.params, "delta");
         await emit({ kind: "message_delta", text: delta });
         return;
       }
       if (message.method === "item/started") {
         const item = readRecordField(message.params, "item");
+        observeCodexNativeSubagents(item, nativeChildThreadIds);
+        if (codexNotificationBelongsToChild(message.params, threadId, nativeChildThreadIds)) {
+          return;
+        }
         const tool = codexItemTool(item);
         if (tool !== undefined) {
           if (tool.privateInput && typeof item["id"] === "string") {
@@ -498,6 +517,10 @@ export class CodexAppServerAdapter implements AgentAdapter {
       }
       if (message.method === "item/completed") {
         const item = readRecordField(message.params, "item");
+        observeCodexNativeSubagents(item, nativeChildThreadIds);
+        if (codexNotificationBelongsToChild(message.params, threadId, nativeChildThreadIds)) {
+          return;
+        }
         if (item["type"] === "agentMessage") {
           finalText = readStringField(item, "text");
           await emit({ kind: "public_message", text: finalText });
@@ -514,9 +537,18 @@ export class CodexAppServerAdapter implements AgentAdapter {
             privateKnowledgeItemIds.delete(item["id"]);
           }
         }
+        if (item["type"] === "subAgentActivity") {
+          await emit({
+            kind: "progress",
+            message: codexSubagentActivityMessage(item),
+          });
+        }
         return;
       }
       if (message.method === "item/mcpToolCall/progress") {
+        if (codexNotificationBelongsToChild(message.params, threadId, nativeChildThreadIds)) {
+          return;
+        }
         const itemId =
           isRecord(message.params) && typeof message.params["itemId"] === "string"
             ? message.params["itemId"]
@@ -531,8 +563,12 @@ export class CodexAppServerAdapter implements AgentAdapter {
         return;
       }
       if (message.method === "thread/tokenUsage/updated") {
-        usage = parseCodexUsage(message.params) ?? usage;
-        if (usage !== undefined) {
+        codexNotificationBelongsToChild(message.params, threadId, nativeChildThreadIds);
+        const nativeThreadId = readStringField(message.params, "threadId");
+        const threadUsage = parseCodexUsage(message.params);
+        if (threadUsage !== undefined) {
+          usageByNativeThread.set(nativeThreadId, threadUsage);
+          usage = sumCodexThreadUsage(usageByNativeThread.values());
           await emit({ kind: "usage", usage });
         }
         return;
@@ -549,13 +585,16 @@ export class CodexAppServerAdapter implements AgentAdapter {
       if (message.method === "turn/started") {
         const notificationThreadId = readStringField(message.params, "threadId");
         const turn = readRecordField(message.params, "turn");
-        turnId = readStringField(turn, "id");
         if (threadId === undefined || notificationThreadId !== threadId) {
+          if (nativeChildThreadIds.has(notificationThreadId)) {
+            return;
+          }
           throw new AgentAdapterError(
             "NATIVE_SESSION_ID_CHANGED",
             "Codex App Server started the turn on a different native thread.",
           );
         }
+        turnId = readStringField(turn, "id");
         const activeTurnId = turnId;
         steering.activate({
           nativeSessionId: threadId,
@@ -592,13 +631,16 @@ export class CodexAppServerAdapter implements AgentAdapter {
       if (message.method === "turn/completed") {
         const notificationThreadId = readStringField(message.params, "threadId");
         const turn = readRecordField(message.params, "turn");
-        turnId = readStringField(turn, "id");
         if (threadId === undefined || notificationThreadId !== threadId) {
+          if (nativeChildThreadIds.has(notificationThreadId)) {
+            return;
+          }
           throw new AgentAdapterError(
             "NATIVE_SESSION_ID_CHANGED",
             "Codex App Server completed the turn on a different native thread.",
           );
         }
+        turnId = readStringField(turn, "id");
         steering.complete();
         turnResult = {
           status: parseCodexTurnStatus(turn["status"]),
@@ -746,7 +788,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
           "app-server",
           "--stdio",
           "--strict-config",
-          ...CODEX_APP_SERVER_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+          ...codexFeatureArguments(request),
         ],
         cwd,
         request.environment,
@@ -1139,8 +1181,41 @@ function codexThreadParameters(
     ephemeral: false,
     config: {
       mcp_servers: codexMcpServers(request.toolServers),
+      ...(codexNativeSubagentsEnabled(request)
+        ? {
+            agents: {
+              enabled: true,
+              max_concurrent_threads_per_session: CODEX_NATIVE_SUBAGENT_MAX_THREADS,
+              max_depth: CODEX_NATIVE_SUBAGENT_MAX_DEPTH,
+              interrupt_message: true,
+              ...(request.modelId === undefined ? {} : { default_subagent_model: request.modelId }),
+              ...(request.effort === undefined
+                ? {}
+                : { default_subagent_reasoning_effort: request.effort }),
+            },
+          }
+        : {}),
     },
   };
+}
+
+function codexNativeSubagentsEnabled(request: AgentStartRequest | AgentResumeRequest): boolean {
+  return (
+    request.permissions.mode === "allow-listed" &&
+    (request.permissions.allowedTools ?? []).some((tool) => tool === "Agent" || tool === "Task")
+  );
+}
+
+function codexFeatureArguments(
+  request?: AgentStartRequest | AgentResumeRequest,
+): readonly string[] {
+  const enableNativeSubagents = request !== undefined && codexNativeSubagentsEnabled(request);
+  return Object.freeze([
+    ...(enableNativeSubagents ? ["--enable", "multi_agent"] : []),
+    ...CODEX_APP_SERVER_DISABLED_FEATURES.filter(
+      (feature) => !(enableNativeSubagents && feature === "multi_agent"),
+    ).flatMap((feature) => ["--disable", feature]),
+  ]);
 }
 
 function codexMcpServers(
@@ -1281,7 +1356,155 @@ function codexItemTool(item: Readonly<Record<string, unknown>>):
       privateInput: false,
     };
   }
+  if (type === "collabAgentToolCall") {
+    const operation = readCodexCollabTool(item["tool"]);
+    const receiverThreadIds = readStringArray(item["receiverThreadIds"]);
+    return {
+      name: `native-subagent.${operation}`,
+      input: {
+        operation,
+        targetCount: receiverThreadIds.length,
+        agentStates: summarizeCodexAgentStates(item["agentsStates"]),
+      },
+      // Prompts, thread IDs, and provider-native Agent paths are deliberately
+      // withheld from Main-facing events.
+      privateInput: false,
+    };
+  }
   return undefined;
+}
+
+function observeCodexNativeSubagents(
+  item: Readonly<Record<string, unknown>>,
+  childThreadIds: Set<string>,
+): void {
+  if (item["type"] === "subAgentActivity") {
+    const threadId = item["agentThreadId"];
+    if (typeof threadId !== "string" || threadId.length === 0) {
+      throw new AgentAdapterError(
+        "MALFORMED_PROVIDER_OUTPUT",
+        "Codex App Server returned an invalid native child-Agent identity.",
+      );
+    }
+    childThreadIds.add(threadId);
+  } else if (item["type"] === "collabAgentToolCall" && item["tool"] === "spawnAgent") {
+    for (const threadId of readStringArray(item["receiverThreadIds"])) {
+      childThreadIds.add(threadId);
+    }
+  } else {
+    return;
+  }
+  if (childThreadIds.size > CODEX_NATIVE_SUBAGENT_MAX_CHILDREN) {
+    throw new AgentAdapterError(
+      "NATIVE_SUBAGENT_LIMIT_EXCEEDED",
+      `Codex exceeded OpenDelegate's limit of ${CODEX_NATIVE_SUBAGENT_MAX_CHILDREN} native child Agents for one Run.`,
+    );
+  }
+}
+
+function codexNotificationBelongsToChild(
+  params: unknown,
+  rootThreadId: string | undefined,
+  childThreadIds: ReadonlySet<string>,
+): boolean {
+  const notificationThreadId = readStringField(params, "threadId");
+  if (rootThreadId === undefined) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server emitted a thread item before establishing the root native session.",
+    );
+  }
+  if (notificationThreadId === rootThreadId) {
+    return false;
+  }
+  if (childThreadIds.has(notificationThreadId)) {
+    return true;
+  }
+  throw new AgentAdapterError(
+    "NATIVE_SESSION_ID_CHANGED",
+    "Codex App Server emitted an item for an unknown native thread.",
+  );
+}
+
+function codexSubagentActivityMessage(item: Readonly<Record<string, unknown>>): string {
+  const kind = item["kind"];
+  if (kind === "started") {
+    return "A native child Agent started inside this Worker Run.";
+  }
+  if (kind === "interacted") {
+    return "A native child Agent reported progress inside this Worker Run.";
+  }
+  if (kind === "interrupted") {
+    return "A native child Agent was interrupted inside this Worker Run.";
+  }
+  throw new AgentAdapterError(
+    "MALFORMED_PROVIDER_OUTPUT",
+    "Codex App Server returned an invalid native child-Agent activity.",
+  );
+}
+
+function readCodexCollabTool(value: unknown): string {
+  if (
+    value !== "spawnAgent" &&
+    value !== "sendInput" &&
+    value !== "resumeAgent" &&
+    value !== "wait" &&
+    value !== "closeAgent"
+  ) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server returned an invalid native child-Agent operation.",
+    );
+  }
+  return value;
+}
+
+function readStringArray(value: unknown): readonly string[] {
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server returned invalid native child-Agent identities.",
+    );
+  }
+  return value;
+}
+
+function summarizeCodexAgentStates(value: unknown): Readonly<Record<string, number>> {
+  if (!isRecord(value)) {
+    throw new AgentAdapterError(
+      "MALFORMED_PROVIDER_OUTPUT",
+      "Codex App Server returned invalid native child-Agent states.",
+    );
+  }
+  const summary: Record<string, number> = {};
+  for (const state of Object.values(value)) {
+    if (!isRecord(state) || typeof state["status"] !== "string") {
+      throw new AgentAdapterError(
+        "MALFORMED_PROVIDER_OUTPUT",
+        "Codex App Server returned an invalid native child-Agent state.",
+      );
+    }
+    const status = state["status"];
+    if (
+      status !== "pendingInit" &&
+      status !== "running" &&
+      status !== "interrupted" &&
+      status !== "completed" &&
+      status !== "errored" &&
+      status !== "shutdown" &&
+      status !== "notFound"
+    ) {
+      throw new AgentAdapterError(
+        "MALFORMED_PROVIDER_OUTPUT",
+        "Codex App Server returned an unknown native child-Agent state.",
+      );
+    }
+    summary[status] = (summary[status] ?? 0) + 1;
+  }
+  return Object.freeze(summary);
 }
 
 function codexItemSucceeded(item: Readonly<Record<string, unknown>>): boolean {
@@ -1323,6 +1546,41 @@ function parseCodexUsage(params: unknown): AgentUsage | undefined {
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(outputTokens === undefined ? {} : { outputTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+  };
+}
+
+function sumCodexThreadUsage(usages: Iterable<AgentUsage>): AgentUsage {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cachedInputTokens = 0;
+  let costUsd = 0;
+  let hasInputTokens = false;
+  let hasOutputTokens = false;
+  let hasCachedInputTokens = false;
+  let hasCostUsd = false;
+  for (const usage of usages) {
+    if (usage.inputTokens !== undefined) {
+      inputTokens += usage.inputTokens;
+      hasInputTokens = true;
+    }
+    if (usage.outputTokens !== undefined) {
+      outputTokens += usage.outputTokens;
+      hasOutputTokens = true;
+    }
+    if (usage.cachedInputTokens !== undefined) {
+      cachedInputTokens += usage.cachedInputTokens;
+      hasCachedInputTokens = true;
+    }
+    if (usage.costUsd !== undefined) {
+      costUsd += usage.costUsd;
+      hasCostUsd = true;
+    }
+  }
+  return {
+    ...(hasInputTokens ? { inputTokens } : {}),
+    ...(hasOutputTokens ? { outputTokens } : {}),
+    ...(hasCachedInputTokens ? { cachedInputTokens } : {}),
+    ...(hasCostUsd ? { costUsd } : {}),
   };
 }
 

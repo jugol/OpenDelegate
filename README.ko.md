@@ -105,6 +105,9 @@ Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
 - Worker는 Main에만 연결됩니다. NxN SSH 메시나 데이터베이스 직접 접근은 필요하지 않습니다.
 - Codex, Claude 및 사용자 정의 Runner는 Agent Adapter 계약 뒤에 배치되며, 유용한 Provider-native
   세션은 재개할 수 있습니다.
+- 준비된 Codex 또는 Claude Worker는 하나의 Work Order 안에서 로컬 하위 Agent를 최대 4개까지
+  사용할 수 있습니다. 이들은 같은 Run의 Workspace와 Policy 안에 머물며, Device 간 분배는 Main만
+  수행합니다.
 - 각 Device는 선택적으로 사용하는 연결된 Markdown Knowledge를 로컬에 보관합니다. Main은 파일명,
   제목, 링크, 그래프, 인덱스, 스니펫 또는 내용을 절대 전달받지 않습니다.
 - 결과는 Discord 응답·첨부, 파일, Artifact, 호스팅 화면 또는 검증된 Git 참조로 받을 수 있습니다.

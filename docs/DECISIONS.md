@@ -1843,3 +1843,28 @@ changed, and strand the Task after the Worker returned.
 resource becomes eligible, without an owner message or retry-Budget extension.
 Eligibility, Policy, locks, Budgets, leases, and fencing are still revalidated at
 dispatch; older already-terminal Tasks require one explicit owner Retry.
+
+## D-093 — Native child Agents are bounded inside one Worker Run
+
+Implementation detail:
+[ADR-0045](adr/0045-bounded-provider-native-child-agents.md).
+
+**Decision:** A bridged Codex App Server or Claude Agent SDK Worker Run may use
+provider-native child Agents for independent local work. One Run is limited to four
+children and one nesting level. Children inherit the exact parent Task, Work Order,
+Device, Workspace, sandbox, provider session, and Policy callback. Main remains the
+only component that creates cross-Device Work Orders. OpenDelegate advertises a
+verified `native-subagents` Capability only when a supported bridged adapter is
+ready, observes bounded lifecycle and aggregate status, and withholds child prompts,
+provider thread IDs, and native paths.
+
+**Rationale:** Provider-native delegation can reduce completion time and context
+pressure on a capable Device, but treating it as a second scheduler would bypass
+Main's durable placement, leases, Budgets, and audit model. Leaving provider defaults
+unbounded also recreates the runaway child-session behavior the owner observed.
+
+**Consequence:** Workers can safely parallelize local investigation and editing while
+all consequential child actions still cross executable Policy. CLI fallbacks remain
+tool-less, a fifth observable child fails the Run closed, and a child cannot pretend
+to use another Device; it reports that dependency to Main for an ordinary Work
+Order.

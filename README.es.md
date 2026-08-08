@@ -122,6 +122,9 @@ elige los Devices y las Routes.
   base de datos.
 - Codex, Claude y los runners personalizados se sitúan detrás de contratos Agent Adapter, mientras
   que las sesiones nativas útiles de cada proveedor se pueden reanudar.
+- Un Worker Codex o Claude preparado y conectado puede usar hasta cuatro Agents secundarios locales
+  para un Work Order. Permanecen dentro del Workspace y la Policy del mismo Run; solo Main delega
+  entre Devices.
 - Cada Device conserva su propio Knowledge Markdown selectivo y enlazado. El Main nunca recibe sus
   nombres de archivo, títulos, enlaces, grafo, índice, fragmentos ni contenido.
 - El resultado puede ser una respuesta o un adjunto de Discord, un archivo, un Artifact, una vista

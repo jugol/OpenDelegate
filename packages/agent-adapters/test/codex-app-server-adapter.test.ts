@@ -94,6 +94,7 @@ test("Codex App Server ignores benign status and goal notifications across nativ
       },
       environment: {
         FIXTURE_EXPECT_MODEL: "gpt-5.6-sol",
+        FIXTURE_EXPECT_NATIVE_SUBAGENTS: "disabled",
         FIXTURE_EMIT_REMOTE_CONTROL_STATUS: "1",
         FIXTURE_EMIT_THREAD_GOAL_CLEARED: "1",
       },
@@ -139,6 +140,111 @@ test("Codex App Server ignores benign status and goal notifications across nativ
     const second = await resumed.result;
     assert.equal(second.status, "succeeded");
     assert.equal(second.session?.nativeSessionId, first.session.nativeSessionId);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex App Server bounds and reports native child Agents inside one Worker Run", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-subagents-")));
+  try {
+    const cwd = await realpath(process.cwd());
+    const adapter = new CodexAppServerAdapter({
+      codexHome: join(root, "codex-home"),
+      executable: process.execPath,
+      prefixArgs: [fixturePath, "codex-app-server"],
+    });
+    const request = {
+      operation: "start" as const,
+      requestId: "request-native-subagents",
+      runId: "run-native-subagents",
+      taskId: "task-native-subagents",
+      workstreamId: "implementation",
+      sessionKey: "task-native-subagents/implementation",
+      deviceId: "device-windows",
+      modelId: "gpt-5.6-sol",
+      effort: "xhigh",
+      prompt: "Use child Agents for independent local checks.",
+      workspace: {
+        workspaceId: "workspace-native-subagents",
+        cwd,
+        isolation: "none" as const,
+      },
+      sandbox: "workspace-write" as const,
+      permissions: {
+        mode: "allow-listed" as const,
+        allowedTools: ["Agent", "Task", "shell", "file-change"],
+        actionAuthorization: {
+          authorizeAndConsume: async () => ({
+            decision: "allow" as const,
+            reasonCode: "POLICY_TEST",
+          }),
+        },
+      },
+      limits,
+      environment: {
+        FIXTURE_EXPECT_NATIVE_SUBAGENTS: "enabled",
+        FIXTURE_EMIT_NATIVE_SUBAGENTS: "1",
+      },
+    };
+    const handle = await adapter.start(request);
+    const events: NormalizedAgentEvent[] = [];
+    for await (const event of handle.events) {
+      events.push(event);
+    }
+    const result = await handle.result;
+
+    assert.equal(result.status, "succeeded");
+    assert.deepEqual(result.usage, {
+      inputTokens: 12,
+      outputTokens: 7,
+      cachedInputTokens: 2,
+    });
+    assert.ok(
+      events.some(
+        (event) => event.type === "tool_request" && event.toolName === "native-subagent.spawnAgent",
+      ),
+    );
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "tool_result" &&
+          event.toolName === "native-subagent.spawnAgent" &&
+          event.status === "succeeded",
+      ),
+    );
+    assert.ok(
+      events.some(
+        (event) => event.type === "progress" && event.message.includes("native child Agent"),
+      ),
+    );
+    assert.equal(JSON.stringify(events).includes("private child prompt"), false);
+    assert.equal(JSON.stringify(events).includes("private child delta"), false);
+    assert.equal(JSON.stringify(events).includes("private child answer"), false);
+    assert.equal(JSON.stringify(events).includes("019abcdef-child"), false);
+
+    const overLimitAdapter = new CodexAppServerAdapter({
+      codexHome: join(root, "codex-home"),
+      executable: process.execPath,
+      prefixArgs: [fixturePath, "codex-app-server"],
+    });
+    const overLimit = await overLimitAdapter.start({
+      ...request,
+      requestId: "request-native-subagents-over-limit",
+      runId: "run-native-subagents-over-limit",
+      taskId: "task-native-subagents-over-limit",
+      sessionKey: "task-native-subagents-over-limit/implementation",
+      environment: {
+        ...request.environment,
+        FIXTURE_NATIVE_SUBAGENT_COUNT: "5",
+      },
+    });
+    for await (const event of overLimit.events) {
+      void event;
+    }
+    const failed = await overLimit.result;
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.error?.code, "NATIVE_SUBAGENT_LIMIT_EXCEEDED");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

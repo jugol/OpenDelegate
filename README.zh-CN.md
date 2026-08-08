@@ -93,6 +93,8 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
 - Worker 只连接到 Main。它们不需要 NxN SSH 网状网络，也不需要直接访问数据库。
 - Codex、Claude 和自定义 runner 位于 Agent Adapter 契约之后，同时仍可恢复有价值的 provider-native
   session。
+- 已就绪并接入桥接的 Codex 或 Claude Worker 可在一个 Work Order 内使用最多四个本地子 Agent；
+  它们始终处于同一 Run 的 Workspace 与 Policy 边界内，只有 Main 能跨 Device 分派工作。
 - 每台 Device 都保留自己选择性检索、相互链接的 Markdown
   Knowledge。Main 永远不会收到其中的文件名、标题、链接、图谱、索引、片段或内容。
 - 结果可以是 Discord 回复或附件、文件、Artifact、托管页面或经过验证的 Git 引用。

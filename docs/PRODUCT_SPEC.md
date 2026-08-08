@@ -719,6 +719,25 @@ may request a transition but cannot manufacture a state outside the transition r
 15. A successful provider-bound Run reports a safe native-session observation whose
     provider, exact adapter, and exact model, when required, match the durable
     assignment.
+16. A ready bridged Codex App Server or Claude Agent SDK adapter may advertise the
+    verified `native-subagents` Capability. CLI fallbacks and unbridged generic
+    adapters do not advertise it.
+17. Provider-native child Agents are a local Worker optimization. They inherit the
+    exact parent Task, Work Order, Device, Workspace, sandbox, provider session, and
+    OpenDelegate Policy callback and cannot create or route a cross-Device Work
+    Order.
+18. One Worker Run may create at most four native child Agents and one nesting level.
+    Provider configuration enforces the available concurrency or depth boundary;
+    OpenDelegate additionally fails closed if the observable lifecycle exceeds the
+    total child bound.
+19. Child-Agent delegation itself grants no new side-effect authority. Every child
+    command, file mutation, network action, Computer Use input, or other protected
+    action uses the same exact-action authorization path as its parent.
+20. Normalized progress may report bounded child lifecycle and aggregate state, but
+    child prompts, provider thread IDs, paths, hidden reasoning, and private
+    provider messages do not leave the Device. Provider usage is aggregated across
+    the root and child native threads before it reaches Run and Task Budget
+    accounting.
 
 ### FR-10 — Context isolation and compaction
 

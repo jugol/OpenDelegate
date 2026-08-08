@@ -10,6 +10,7 @@ const workspaceRegistry = { listSchedulingMetadata: async () => [] };
 function stubAdapter(
   adapterId: string,
   probe: Omit<AgentAdapterProbe, "contractVersion" | "adapterId" | "provider" | "capabilities">,
+  capabilityOverrides: Partial<AgentAdapterProbe["capabilities"]> = {},
 ): AgentAdapter {
   return {
     adapterId,
@@ -28,6 +29,7 @@ function stubAdapter(
           steering: false,
           checkpointContinuation: true,
           workspaceIsolation: ["none"],
+          ...capabilityOverrides,
         },
         ...probe,
       } satisfies AgentAdapterProbe;
@@ -144,6 +146,47 @@ describe("Worker agent adapter inventory", () => {
     assert.equal(
       snapshot.capabilities.some((capability) => capability.name === "claude-code"),
       false,
+    );
+  });
+
+  it("advertises native child Agents only from a ready bridged SDK adapter", async () => {
+    const inventory = createWorkerSchedulingInventoryProvider({
+      adapters: [
+        stubAdapter(
+          "claude-agent-sdk",
+          {
+            installed: true,
+            version: "0.3.220",
+            compatibility: "tested",
+            auth: { state: "ready" },
+            diagnostics: [],
+          },
+          { approvalBridge: true },
+        ),
+        stubAdapter("claude-cli", {
+          installed: true,
+          version: "2.1.220",
+          compatibility: "tested",
+          auth: { state: "ready" },
+          diagnostics: [],
+        }),
+      ],
+      environment: {},
+      workspaceRegistry,
+      probeCacheMs: 0,
+    });
+
+    const snapshot = await inventory.snapshot();
+    assert.deepEqual(
+      snapshot.capabilities.find((capability) => capability.name === "native-subagents"),
+      {
+        name: "native-subagents",
+        verification: "verified",
+        observedAtMs: snapshot.capabilities.find(
+          (capability) => capability.name === "native-subagents",
+        )?.observedAtMs,
+        evidenceSource: "agent-adapter",
+      },
     );
   });
 });

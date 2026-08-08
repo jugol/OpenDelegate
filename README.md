@@ -116,6 +116,8 @@ deterministic scheduling chooses the eligible Devices and routes.
 - Workers connect only to Main. They do not need an NxN SSH mesh or direct database access.
 - Codex, Claude, and custom runners sit behind Agent Adapter contracts while useful provider-native
   sessions remain resumable.
+- A ready bridged Codex or Claude Worker may use up to four local child Agents for one Work Order;
+  they stay inside that Run's Workspace and Policy, while only Main can delegate across Devices.
 - Each Device keeps its own selective, linked Markdown Knowledge. Main never receives its filenames,
   titles, links, graph, index, snippets, or content.
 - Results can arrive as a Discord response or attachment, file, Artifact, hosted view, or verified

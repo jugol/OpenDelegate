@@ -115,6 +115,13 @@ Knowledge files used only as selective context for agents running on that Device
     offline. OpenDelegate reports automatic wake as ready only when a separately
     verified, online wake relay can reach the target broadcast domain; a Tailscale or
     ordinary routed endpoint alone is not a wake path.
+30. **Native child Agents do not create new authority.** A bridged Codex or Claude
+    Worker Run may delegate bounded local parallel work to provider-native child
+    Agents. They remain inside the parent Task, Work Order, Device, Workspace,
+    sandbox, provider session, and Policy callback. Main alone creates cross-Device
+    Work Orders. One Run may create at most four native children with one nesting
+    level, and OpenDelegate observes their lifecycle without exporting private
+    prompts or provider thread identities.
 
 ## Core domain terms
 

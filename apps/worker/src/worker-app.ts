@@ -2943,6 +2943,19 @@ export function createWorkerSchedulingInventoryProvider(input: {
           ...(probe.version === undefined ? {} : { version: probe.version }),
         });
       }
+      const nativeSubagentAdapters = cached.probes.filter(supportsNativeSubagents);
+      if (nativeSubagentAdapters.length > 0) {
+        const verified = nativeSubagentAdapters.some(
+          (probe) => adapterReadiness(probe) === "ready",
+        );
+        const detected = nativeSubagentAdapters.some((probe) => probe.installed);
+        capabilityMap.set("native-subagents", {
+          name: "native-subagents",
+          verification: verified ? "verified" : detected ? "degraded" : "unavailable",
+          observedAtMs: cached.observedAtMs,
+          evidenceSource: "agent-adapter",
+        });
+      }
       for (const workspace of workspaces) {
         for (const capability of workspace.capabilities) {
           setStrongestCapability(capabilityMap, capability, {
@@ -3212,6 +3225,14 @@ function adapterReadiness(
     : "degraded";
 }
 
+function supportsNativeSubagents(probe: AgentAdapterProbe): boolean {
+  return (
+    probe.capabilities.approvalBridge &&
+    ((probe.provider === "codex" && probe.adapterId === "codex-app-server") ||
+      (probe.provider === "claude" && probe.adapterId === "claude-agent-sdk"))
+  );
+}
+
 function workerServiceMode(
   environment: Readonly<Record<string, string | undefined>>,
 ): WorkerSchedulingInventoryV1["serviceMode"] {
@@ -3367,6 +3388,13 @@ function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
           `- Adapter: ${assignment.agentRequirement.adapterId ?? "provider default"}`,
           `- Model: ${assignment.agentRequirement.modelId ?? "adapter default"}`,
         ]),
+    "",
+    "## Local child-Agent delegation",
+    "- If the selected provider exposes Agent or Task delegation, you may use it only when independent local work benefits from parallelism.",
+    "- Create at most four native child Agents in this Run and only one nesting level.",
+    "- Every child stays inside this exact Task, Work Order, Workspace, sandbox, and OpenDelegate Policy boundary. Do not use a child to reach another Device.",
+    "- Main owns cross-Device decomposition. If this Work Order needs another Device, report the missing dependency instead of pretending a local child can route it.",
+    "- You remain responsible for collecting child results, resolving conflicts, and satisfying every completion criterion before reporting success.",
     "",
     `Task ID: ${assignment.taskId}`,
     `Work Order ID: ${order.workOrderId}`,
