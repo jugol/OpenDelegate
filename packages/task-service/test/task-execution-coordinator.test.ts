@@ -403,8 +403,71 @@ test("active Budget exhaustion aborts and cancels authoritative work before paus
   });
   await coordinator.waitForIdle();
 
-  assert.equal((await coordinator.get(task.taskId)).state, "waiting_user");
+  const paused = await coordinator.get(task.taskId);
+  assert.equal(paused.state, "waiting_user");
+  assert.match(paused.messages.at(-1)?.content ?? "", /active automatic-execution limit/iu);
+  assert.match(paused.messages.at(-1)?.content ?? "", /Waiting, paused, offline/iu);
+  assert.doesNotMatch(paused.messages.at(-1)?.content ?? "", /wallTimeMs/u);
   assert.deepEqual(cancellations, [{ taskId: task.taskId, reason: "paused" }]);
+  await coordinator.close();
+});
+
+test("idle exhaustion explains that owner continuation restarts the window", async () => {
+  let now = Date.parse("2026-07-25T12:30:00.000Z");
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(now).toISOString() },
+  });
+  const taskService = new TaskService({
+    clock: { now: () => new Date(now).toISOString() },
+    eventStore,
+  });
+  const completeLimits = {
+    wallTimeMs: { hard: 60_000 },
+    idleTimeMs: { hard: 10 },
+    retries: { hard: 1 },
+    childWorkOrders: { hard: 4 },
+    concurrentRuns: { hard: 2 },
+    nativeTurns: { hard: 8 },
+    tokens: { hard: 100_000 },
+    costUsdMicros: { hard: 1_000_000 },
+  } as const;
+  const budget = new DurableTaskBudgetEnforcer({
+    eventStore,
+    clock: { now: () => now },
+    instanceLimits: completeLimits,
+    requestedTaskDefaults: completeLimits,
+    autonomousTaskDefaults: completeLimits,
+    usageProxy: {
+      tokensPerNativeTurn: 1_000,
+      costUsdMicrosPerNativeTurn: 10_000,
+    },
+  });
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    budget,
+    executor: {
+      async execute(request) {
+        await new Promise<void>((resolve) => {
+          request.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { state: "failed" };
+      },
+    },
+    retryDelayMs: 0,
+  });
+  const task = await coordinator.create(taskInput("idle-budget-message", "Idle Budget message"));
+  await eventually(async () => (await coordinator.get(task.taskId)).state === "running");
+
+  now += 11;
+  await eventually(async () => (await coordinator.get(task.taskId)).state === "waiting_user");
+  await coordinator.waitForIdle();
+
+  const paused = await coordinator.get(task.taskId);
+  const message = paused.messages.at(-1)?.content ?? "";
+  assert.match(message, /without verified activity/iu);
+  assert.match(message, /new message.*Retry\/Resume/iu);
+  assert.match(message, /does not require a Budget extension/iu);
+  assert.doesNotMatch(message, /idleTimeMs/u);
   await coordinator.close();
 });
 

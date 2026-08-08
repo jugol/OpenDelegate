@@ -60,6 +60,7 @@ approved product specification.
 37. [`0040-windows-worker-service-preparation-binding.md`](0040-windows-worker-service-preparation-binding.md)
 38. [`0041-headless-linux-worker-service-preparation.md`](0041-headless-linux-worker-service-preparation.md)
 39. [`0042-headless-linux-main-service-composition.md`](0042-headless-linux-main-service-composition.md)
+40. [`0043-current-worker-lease-renewal-is-budget-activity.md`](0043-current-worker-lease-renewal-is-budget-activity.md)
 
 ## Proposed ADRs
 

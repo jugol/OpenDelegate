@@ -627,7 +627,7 @@ export class TaskExecutionCoordinator {
       idempotencyKey: `${executionKey}:budget:${error.metric}:hard-limit`,
       state: "waiting_user",
       expectedTaskVersion: task.version,
-      publicMessage: `OpenDelegate paused new automatic work because the ${error.metric} hard Budget is exhausted. An owner-authorized Budget extension is required to continue.`,
+      publicMessage: budgetExhaustionPublicMessage(error),
     });
   }
 
@@ -740,6 +740,52 @@ export class TaskExecutionCoordinator {
     }
     this.#notifyIdle();
   }
+}
+
+function budgetExhaustionPublicMessage(error: BudgetHardLimitError): string {
+  const scope = error.workOrderId === undefined ? "This Task" : "A Work Order in this Task";
+  if (error.metric === "idleTimeMs") {
+    return `OpenDelegate paused automatic work after ${formatBudgetDuration(error.hard)} without verified activity for ${scope.toLowerCase()}. This protects against a stuck Run. Send a new message or use Retry/Resume to restart the idle window; inactivity alone does not require a Budget extension.`;
+  }
+  if (error.metric === "wallTimeMs") {
+    return `${scope} has used its ${formatBudgetDuration(error.hard)} active automatic-execution limit. Waiting, paused, offline, and owner-response time did not count. Extend the Task Budget in Admin to continue.`;
+  }
+  const label =
+    error.metric === "retries"
+      ? "automatic retry"
+      : error.metric === "childWorkOrders"
+        ? "child Work Order"
+        : error.metric === "concurrentRuns"
+          ? "concurrent Run"
+          : error.metric === "nativeTurns"
+            ? "native Agent turn"
+            : error.metric === "tokens"
+              ? "token"
+              : "provider cost";
+  const limit =
+    error.metric === "costUsdMicros"
+      ? `$${(error.hard / 1_000_000).toFixed(2)}`
+      : String(error.hard);
+  return `${scope} has reached its ${label} limit (${limit}). Review the latest Task details, then extend the Task Budget in Admin if more automatic work is appropriate.`;
+}
+
+function formatBudgetDuration(milliseconds: number): string {
+  const hour = 60 * 60_000;
+  const minute = 60_000;
+  const second = 1_000;
+  if (milliseconds % hour === 0) {
+    const hours = milliseconds / hour;
+    return `${String(hours)} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  if (milliseconds % minute === 0) {
+    const minutes = milliseconds / minute;
+    return `${String(minutes)} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  if (milliseconds % second === 0) {
+    const seconds = milliseconds / second;
+    return `${String(seconds)} ${seconds === 1 ? "second" : "seconds"}`;
+  }
+  return `${String(milliseconds)} ms`;
 }
 
 function ownerInputBudgetOperationId(input: AppendTaskInput): string {

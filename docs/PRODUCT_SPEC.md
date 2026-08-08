@@ -1170,6 +1170,9 @@ may request a transition but cannot manufacture a state outside the transition r
     corresponding cumulative usage. Reaching the requested-Task default means the
     system performed that much automatic work; it never means the Forum Post merely
     existed for that long.
+13. A successful, still-current Worker Run lease renewal is durable Task and Work
+    Order activity. Its retry-stable identity resets only idle time. Rejected,
+    expired, mismatched, or stale renewals never revive a Task.
 
 ## Implementation Decisions
 

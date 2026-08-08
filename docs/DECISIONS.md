@@ -1803,3 +1803,22 @@ privilege boundary.
 encrypted credential mapping for both local roles. The command does not install or
 elevate, and clean-host restart, reboot, credential, network, upgrade, rollback, and
 uninstall evidence remains required before support promotion.
+
+## D-091 — A current Worker lease renewal resets only the idle Budget
+
+Implementation detail:
+[ADR-0043](adr/0043-current-worker-lease-renewal-is-budget-activity.md).
+
+**Decision:** After an exact Worker Run lease renewal is durably accepted as
+`renewed`, and while that renewed lease remains current, Main records one
+retry-stable Task-and-Work-Order Budget activity mutation derived from the renewal
+ID. Rejected, expired, mismatched, not-due, or stale renewals do not record activity.
+
+**Rationale:** A long provider turn or tool operation may be quiet for longer than
+the default idle window while the authenticated Worker is still renewing its exact
+lease. The authoritative renewal is a bounded liveness proof; generic heartbeats or
+stale packets are not.
+
+**Consequence:** Legitimate long Runs do not fail as idle merely because they emit
+no intermediate result, exact replay repairs an interrupted activity write, and the
+finite active wall, token, cost, retry, and turn Budgets remain unchanged.
