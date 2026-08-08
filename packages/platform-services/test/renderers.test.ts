@@ -55,6 +55,10 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
     imagePath ?? "",
     /--stderr-log C:\\ProgramData\\OpenDelegate\\logs\\core\.stderr\.log/u,
   );
+  const stopService = artifacts.stopCommands.find(
+    (command) => command.executable.toLowerCase() === "sc.exe",
+  );
+  assert.equal(stopService?.timeoutMs, 45_000);
   assert.ok(
     artifacts.installCommands.some(
       (command) =>

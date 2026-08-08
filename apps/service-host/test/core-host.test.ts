@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
+import { resolve } from "node:path";
 import { afterEach, describe, it, mock } from "node:test";
 
 import { isRunningCoreHealthResponseV1 } from "@opendelegate/platform-services";
 
 import {
   CoreHealthServer,
+  resolveWorkerReleaseRoot,
   startCoLocatedMainDeviceWorkload,
   waitForCoreWorkloadReadiness,
   type CoreWorkloadHandle,
@@ -130,6 +132,24 @@ describe("co-located Main Device workload", () => {
       failure,
     );
     assert.equal(main.stop.mock.callCount(), 1);
+  });
+});
+
+describe("Worker release identity", () => {
+  it("uses the physical release behind the active release pointer", async () => {
+    const observed: string[] = [];
+    const activeRelease = resolve("current");
+    const expectedPhysicalRelease = resolve("releases", "0.1.0-alpha.1");
+    const physicalRelease = await resolveWorkerReleaseRoot(
+      activeRelease,
+      async (path) => {
+        observed.push(path);
+        return expectedPhysicalRelease;
+      },
+    );
+
+    assert.deepEqual(observed, [activeRelease]);
+    assert.equal(physicalRelease, expectedPhysicalRelease);
   });
 });
 

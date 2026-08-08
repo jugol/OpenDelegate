@@ -149,6 +149,7 @@ export function renderWindowsServiceArtifacts(
       verb: "stop",
       privilege: "elevated",
       expectedExitCodes: [0, 1062],
+      timeoutMs: 45_000,
     }),
   ] as const;
   const removeCommands = [

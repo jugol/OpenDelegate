@@ -183,7 +183,14 @@ class FakeProcess {
 
   public async run(request: NativeProcessRequest): Promise<NativeProcessResult> {
     this.requests.push(request);
-    return this.handler(request);
+    const result = this.handler(request);
+    return request.executable.toLowerCase().endsWith("sc.exe") &&
+      request.arguments[0]?.toLowerCase() === "query" &&
+      result.exitCode === 0 &&
+      result.stdout.length === 0 &&
+      result.stderr.length === 0
+      ? processResult(0, "STATE              : 1  STOPPED\r\n")
+      : result;
   }
 }
 
@@ -1128,7 +1135,66 @@ test("core health failure rolls a restart back through structured supervisor com
   const serviceVerbs = process.requests
     .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))
     .map((request) => request.arguments[0]);
-  assert.deepEqual(serviceVerbs, ["stop", "start", "stop", "start"]);
+  assert.deepEqual(serviceVerbs, ["stop", "query", "start", "stop", "query", "start"]);
+});
+
+test("Windows restart waits through STOP_PENDING before starting the replacement", async () => {
+  const configuration = windowsConfiguration({
+    health: {
+      endpoint: "http://127.0.0.1:43190/health/live",
+      timeoutMs: 1_000,
+    },
+  });
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  let statusQueries = 0;
+  process.handler = (request) => {
+    const verb = request.arguments[0]?.toLowerCase();
+    if (request.executable.toLowerCase().endsWith("sc.exe") && verb === "query") {
+      statusQueries += 1;
+      return processResult(
+        0,
+        statusQueries < 3
+          ? "STATE              : 3  STOP_PENDING\r\n"
+          : "STATE              : 1  STOPPED\r\n",
+      );
+    }
+    if (request.executable.toLowerCase().endsWith("sc.exe") && verb === "start") {
+      assert.equal(statusQueries, 3);
+    }
+    return processResult(0);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-restart-stop-pending",
+    configuration,
+    plan: createServicePlan({
+      operation: "restart",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded");
+  assert.deepEqual(
+    process.requests
+      .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))
+      .map((request) => request.arguments[0]),
+    ["stop", "query", "query", "query", "start"],
+  );
 });
 
 test("native inspection keeps core health, helper presence, and Computer Use readiness separate", async () => {

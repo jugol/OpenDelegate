@@ -12,6 +12,7 @@ import {
   type SupervisorState,
 } from "./diagnostics.ts";
 import type {
+  NativeClockBoundary,
   NativeFileSystemBoundary,
   NativeProcessBoundary,
   NativeProcessRequest,
@@ -663,6 +664,7 @@ function createNativeSupervisorAdapter(
             configuration,
             invocation,
             boundaries.process,
+            boundaries.clock,
             tools,
           );
           if (result.timedOut || !invocation.expectedExitCodes.includes(result.exitCode)) {
@@ -676,6 +678,7 @@ function createNativeSupervisorAdapter(
           operation,
           completed,
           boundaries.process,
+          boundaries.clock,
           tools,
         );
         throw error;
@@ -1203,6 +1206,7 @@ async function rollbackPartialSupervisorOperation(
     readonly exitCode: number;
   }[],
   process: NativeProcessBoundary,
+  clock: NativeClockBoundary,
   tools: NativeTools,
 ): Promise<void> {
   for (const entry of [...completed].reverse()) {
@@ -1213,7 +1217,7 @@ async function rollbackPartialSupervisorOperation(
     if (inverse === undefined) {
       continue;
     }
-    const result = await runSupervisorInvocation(configuration, inverse, process, tools);
+    const result = await runSupervisorInvocation(configuration, inverse, process, clock, tools);
     if (result.timedOut || !inverse.expectedExitCodes.includes(result.exitCode)) {
       throw uncertain(`A partial ${operation.plane} supervisor mutation could not be rolled back.`);
     }
@@ -1292,15 +1296,36 @@ async function runSupervisorInvocation(
   configuration: PlatformServiceConfiguration,
   invocation: CommandInvocation,
   process: NativeProcessBoundary,
+  clock: NativeClockBoundary,
   tools: NativeTools,
 ): Promise<NativeProcessResult> {
   const executable = resolveSupervisorExecutable(invocation.executable, tools);
   if (invocation.privilege !== "owner-session" || configuration.platform === "windows") {
-    return await process.run({
+    const result = await process.run({
       executable,
       arguments: invocation.arguments,
       timeoutMs: invocation.timeoutMs,
     });
+    if (
+      configuration.platform === "windows" &&
+      invocation.executable.toLowerCase() === "sc.exe" &&
+      invocation.arguments[0]?.toLowerCase() === "stop" &&
+      result.exitCode === 0 &&
+      !result.timedOut
+    ) {
+      const serviceName = invocation.arguments[1];
+      if (serviceName === undefined) {
+        throw new NativeSupervisorError("A Windows service stop command has no service name.");
+      }
+      await waitForWindowsServiceStopped({
+        executable,
+        serviceName,
+        timeoutMs: invocation.timeoutMs,
+        process,
+        clock,
+      });
+    }
+    return result;
   }
   if (configuration.platform === "macos") {
     return await process.run({
@@ -1327,6 +1352,49 @@ async function runSupervisorInvocation(
     timeoutMs: invocation.timeoutMs,
     environment: ownerEnvironment(configuration),
   });
+}
+
+async function waitForWindowsServiceStopped(input: {
+  readonly executable: string;
+  readonly serviceName: string;
+  readonly timeoutMs: number;
+  readonly process: NativeProcessBoundary;
+  readonly clock: NativeClockBoundary;
+}): Promise<void> {
+  const deadline = input.clock.now().getTime() + input.timeoutMs;
+  for (;;) {
+    const remainingMs = deadline - input.clock.now().getTime();
+    if (remainingMs <= 0) {
+      throw new NativeSupervisorError(
+        "The Windows service did not reach a terminal stopped state before timeout.",
+      );
+    }
+    const status = await input.process.run({
+      executable: input.executable,
+      arguments: ["query", input.serviceName],
+      timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
+    });
+    if (!status.timedOut && status.exitCode === 1060) {
+      return;
+    }
+    if (
+      !status.timedOut &&
+      status.exitCode === 0 &&
+      /STATE\s*:\s*1(?:\s|$)/iu.test(status.stdout)
+    ) {
+      return;
+    }
+    if (!status.timedOut && status.exitCode !== 0) {
+      throw new NativeSupervisorError("The Windows service stop state could not be inspected.");
+    }
+    const sleepMs = Math.min(250, deadline - input.clock.now().getTime());
+    if (sleepMs <= 0) {
+      throw new NativeSupervisorError(
+        "The Windows service did not reach a terminal stopped state before timeout.",
+      );
+    }
+    await input.clock.sleep(sleepMs);
+  }
 }
 
 function supervisorStatusRequest(

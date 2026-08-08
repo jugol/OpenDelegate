@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { arch, platform } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { isMainServiceReadyMessage, loadMainConfiguration } from "@opendelegate/main";
 import {
@@ -210,8 +210,9 @@ async function startWorkerWorkload(
   } else {
     signal.addEventListener("abort", stopWorker, { once: true });
   }
+  const workerReleaseRoot = await resolveWorkerReleaseRoot(configuration.releaseRoot);
   const paths = resolveWorkerPaths({
-    sourceCheckoutRoot: configuration.releaseRoot,
+    sourceCheckoutRoot: workerReleaseRoot,
     home: configuration.stateRoot,
   });
   const computerUseRuntime = await tryStartWorkerComputerUseRuntime(
@@ -393,7 +394,7 @@ async function tryStartWorkerComputerUseRuntime(
     });
     authority = await PersistentDesktopAuthorityStore.openCore({
       authorityRoot: configuration.authorityRoot,
-      sourceCheckoutRoot: configuration.releaseRoot,
+      sourceCheckoutRoot: paths.sourceCheckoutRoot,
       deviceId: configuration.deviceId,
       instanceId: configuration.instanceId,
       releaseVersion: configuration.releaseVersion,
@@ -431,6 +432,13 @@ async function tryStartWorkerComputerUseRuntime(
     await authority?.close().catch(() => undefined);
     return undefined;
   }
+}
+
+export async function resolveWorkerReleaseRoot(
+  releaseRoot: string,
+  canonicalize: (path: string) => Promise<string> = realpath,
+): Promise<string> {
+  return resolve(await canonicalize(releaseRoot));
 }
 
 function sessionHelperEndpoint(configuration: ServiceHostConfiguration): SessionHelperIpcEndpoint {

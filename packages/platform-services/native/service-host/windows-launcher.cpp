@@ -16,6 +16,9 @@ SERVICE_STATUS service_status{};
 PROCESS_INFORMATION child_process{};
 HANDLE child_job = nullptr;
 HANDLE child_stdin_write = INVALID_HANDLE_VALUE;
+HANDLE child_stop_event = nullptr;
+SRWLOCK child_control_lock = SRWLOCK_INIT;
+volatile LONG stop_requested = 0;
 std::vector<std::wstring> original_arguments;
 
 void report_status(DWORD state, DWORD exit_code = NO_ERROR, DWORD wait_hint = 0,
@@ -181,13 +184,48 @@ std::wstring installation_root() {
   return path;
 }
 
+HANDLE take_child_stdin_write() {
+  AcquireSRWLockExclusive(&child_control_lock);
+  const HANDLE handle = child_stdin_write;
+  child_stdin_write = INVALID_HANDLE_VALUE;
+  ReleaseSRWLockExclusive(&child_control_lock);
+  return handle;
+}
+
+void close_child_stdin_write() {
+  const HANDLE handle = take_child_stdin_write();
+  if (handle != INVALID_HANDLE_VALUE) {
+    CloseHandle(handle);
+  }
+}
+
 void write_stop_signal() {
-  if (child_stdin_write != INVALID_HANDLE_VALUE) {
+  const HANDLE handle = take_child_stdin_write();
+  if (handle != INVALID_HANDLE_VALUE) {
     const char message[] = "stop\n";
     DWORD written = 0;
-    WriteFile(child_stdin_write, message, sizeof(message) - 1, &written, nullptr);
-    CloseHandle(child_stdin_write);
-    child_stdin_write = INVALID_HANDLE_VALUE;
+    WriteFile(handle, message, sizeof(message) - 1, &written, nullptr);
+    CloseHandle(handle);
+  }
+}
+
+void request_stop() {
+  InterlockedExchange(&stop_requested, 1);
+  write_stop_signal();
+  AcquireSRWLockShared(&child_control_lock);
+  if (child_stop_event != nullptr) {
+    SetEvent(child_stop_event);
+  }
+  ReleaseSRWLockShared(&child_control_lock);
+}
+
+void close_child_stop_event() {
+  AcquireSRWLockExclusive(&child_control_lock);
+  const HANDLE handle = child_stop_event;
+  child_stop_event = nullptr;
+  ReleaseSRWLockExclusive(&child_control_lock);
+  if (handle != nullptr) {
+    CloseHandle(handle);
   }
 }
 
@@ -277,21 +315,10 @@ DWORD self_test_containment() {
              : ERROR_PROCESS_ABORTED;
 }
 
-void stop_child() {
-  write_stop_signal();
-  if (child_process.hProcess == nullptr) {
-    return;
-  }
-  if (WaitForSingleObject(child_process.hProcess, 30000) == WAIT_TIMEOUT) {
-    TerminateProcess(child_process.hProcess, ERROR_PROCESS_ABORTED);
-    WaitForSingleObject(child_process.hProcess, 5000);
-  }
-}
-
 DWORD WINAPI service_control(DWORD control, DWORD, void*, void*) {
   if (control == SERVICE_CONTROL_STOP || control == SERVICE_CONTROL_SHUTDOWN) {
-    report_status(SERVICE_STOP_PENDING, NO_ERROR, 30000);
-    write_stop_signal();
+    report_status(SERVICE_STOP_PENDING, NO_ERROR, 40000);
+    request_stop();
   }
   return NO_ERROR;
 }
@@ -312,9 +339,19 @@ int run_child(bool as_service) {
   if (job_error != NO_ERROR) {
     return static_cast<int>(job_error);
   }
+  AcquireSRWLockExclusive(&child_control_lock);
+  child_stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  const DWORD stop_event_error =
+      child_stop_event == nullptr ? GetLastError() : NO_ERROR;
+  ReleaseSRWLockExclusive(&child_control_lock);
+  if (stop_event_error != NO_ERROR) {
+    close_containment_job();
+    return static_cast<int>(stop_event_error);
+  }
 
   const std::wstring root = installation_root();
   if (root.empty()) {
+    close_child_stop_event();
     close_containment_job();
     return ERROR_PATH_NOT_FOUND;
   }
@@ -329,19 +366,23 @@ int run_child(bool as_service) {
 
   SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
   HANDLE child_stdin_read = INVALID_HANDLE_VALUE;
-  if (!CreatePipe(&child_stdin_read, &child_stdin_write, &attributes, 0) ||
-      !SetHandleInformation(child_stdin_write, HANDLE_FLAG_INHERIT, 0)) {
+  HANDLE child_stdin_write_local = INVALID_HANDLE_VALUE;
+  if (!CreatePipe(&child_stdin_read, &child_stdin_write_local, &attributes, 0) ||
+      !SetHandleInformation(child_stdin_write_local, HANDLE_FLAG_INHERIT, 0)) {
     const DWORD error = GetLastError();
     if (child_stdin_read != INVALID_HANDLE_VALUE) {
       CloseHandle(child_stdin_read);
     }
-    if (child_stdin_write != INVALID_HANDLE_VALUE) {
-      CloseHandle(child_stdin_write);
-      child_stdin_write = INVALID_HANDLE_VALUE;
+    if (child_stdin_write_local != INVALID_HANDLE_VALUE) {
+      CloseHandle(child_stdin_write_local);
     }
+    close_child_stop_event();
     close_containment_job();
     return static_cast<int>(error);
   }
+  AcquireSRWLockExclusive(&child_control_lock);
+  child_stdin_write = child_stdin_write_local;
+  ReleaseSRWLockExclusive(&child_control_lock);
 
   std::wstring session;
   if (current_login_session_identity(session)) {
@@ -371,8 +412,8 @@ int run_child(bool as_service) {
     close_owned_handle(child_stdout);
     close_owned_handle(child_stderr);
     CloseHandle(child_stdin_read);
-    CloseHandle(child_stdin_write);
-    child_stdin_write = INVALID_HANDLE_VALUE;
+    close_child_stdin_write();
+    close_child_stop_event();
     close_containment_job();
     return static_cast<int>(output_error);
   }
@@ -390,8 +431,8 @@ int run_child(bool as_service) {
   close_owned_handle(child_stderr);
   if (!created) {
     const DWORD error = GetLastError();
-    CloseHandle(child_stdin_write);
-    child_stdin_write = INVALID_HANDLE_VALUE;
+    close_child_stdin_write();
+    close_child_stop_event();
     close_containment_job();
     return static_cast<int>(error);
   }
@@ -402,8 +443,8 @@ int run_child(bool as_service) {
     CloseHandle(child_process.hThread);
     CloseHandle(child_process.hProcess);
     child_process = {};
-    CloseHandle(child_stdin_write);
-    child_stdin_write = INVALID_HANDLE_VALUE;
+    close_child_stdin_write();
+    close_child_stop_event();
     close_containment_job();
     return static_cast<int>(error);
   }
@@ -414,8 +455,8 @@ int run_child(bool as_service) {
     CloseHandle(child_process.hThread);
     CloseHandle(child_process.hProcess);
     child_process = {};
-    CloseHandle(child_stdin_write);
-    child_stdin_write = INVALID_HANDLE_VALUE;
+    close_child_stdin_write();
+    close_child_stop_event();
     close_containment_job();
     return static_cast<int>(error);
   }
@@ -424,20 +465,41 @@ int run_child(bool as_service) {
   if (as_service) {
     report_status(SERVICE_RUNNING);
   }
-  WaitForSingleObject(child_process.hProcess, INFINITE);
+  if (InterlockedCompareExchange(&stop_requested, 0, 0) != 0) {
+    request_stop();
+  }
+  const HANDLE wait_handles[] = {child_process.hProcess, child_stop_event};
+  const DWORD initial_wait = WaitForMultipleObjects(2, wait_handles, FALSE, INFINITE);
+  bool stopped_on_request =
+      initial_wait == WAIT_OBJECT_0 + 1 ||
+      InterlockedCompareExchange(&stop_requested, 0, 0) != 0;
+  DWORD terminal_wait = initial_wait == WAIT_OBJECT_0 ? WAIT_OBJECT_0 : WAIT_TIMEOUT;
+  if (stopped_on_request && initial_wait != WAIT_OBJECT_0) {
+    write_stop_signal();
+    terminal_wait = WaitForSingleObject(child_process.hProcess, 30000);
+    if (terminal_wait == WAIT_TIMEOUT) {
+      if (child_job != nullptr) {
+        TerminateJobObject(child_job, ERROR_PROCESS_ABORTED);
+      } else {
+        TerminateProcess(child_process.hProcess, ERROR_PROCESS_ABORTED);
+      }
+      terminal_wait = WaitForSingleObject(child_process.hProcess, 5000);
+    }
+  }
   DWORD exit_code = ERROR_PROCESS_ABORTED;
   GetExitCodeProcess(child_process.hProcess, &exit_code);
   CloseHandle(child_process.hProcess);
   child_process.hProcess = nullptr;
+  close_child_stop_event();
   close_containment_job();
-  if (child_stdin_write != INVALID_HANDLE_VALUE) {
-    CloseHandle(child_stdin_write);
-    child_stdin_write = INVALID_HANDLE_VALUE;
-  }
-  return static_cast<int>(exit_code);
+  close_child_stdin_write();
+  return stopped_on_request && terminal_wait == WAIT_OBJECT_0
+             ? 0
+             : static_cast<int>(exit_code);
 }
 
 void WINAPI service_main(DWORD argument_count, wchar_t** arguments) {
+  InterlockedExchange(&stop_requested, 0);
   const wchar_t* service_name =
       argument_count > 0 && arguments != nullptr && arguments[0] != nullptr
           ? arguments[0]
@@ -504,11 +566,12 @@ int wmain(int argc, wchar_t** argv) {
   if (error != ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) {
     return static_cast<int>(error);
   }
+  InterlockedExchange(&stop_requested, 0);
   SetConsoleCtrlHandler(
       [](DWORD control) -> BOOL {
         if (control == CTRL_C_EVENT || control == CTRL_BREAK_EVENT ||
             control == CTRL_CLOSE_EVENT || control == CTRL_SHUTDOWN_EVENT) {
-          stop_child();
+          request_stop();
           return TRUE;
         }
         return FALSE;
