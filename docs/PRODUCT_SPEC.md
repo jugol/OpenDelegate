@@ -1103,6 +1103,9 @@ may request a transition but cannot manufacture a state outside the transition r
 8. Transport failure uses deterministic retry and fallback before Agent diagnosis.
 9. Main unavailability does not terminate a Worker. A refused or interrupted Device
    channel remains a bounded transport failure inside the daemon's reconnect loop.
+   Socket closure rejects every in-flight channel response waiter, including Device
+   certificate renewal, so no request can strand that loop while its credential
+   expires.
 10. Exhausted repair either moves the Work Order, waits for a resource, or asks the
    owner with evidence.
 11. Cancellation is cooperative first and escalates according to adapter and Policy;

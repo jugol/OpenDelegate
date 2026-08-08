@@ -1632,3 +1632,22 @@ button press to pause immediately behind an irrelevant Budget-extension prompt.
 its idle Budget. Replayed Discord interactions repair or reuse the same activity
 mutation and remain idempotent. A genuinely exhausted cumulative Budget still uses
 the normal owner approval flow.
+
+## D-084 — Channel closure releases every in-flight Worker request
+
+**Decision:** Every Worker Device-channel client rejects and clears its pending
+event, Artifact, identity, authorization, and Run-lease response waiters when the
+underlying socket closes, whether closure is intentional or unexpected. The daemon
+then observes renewal or heartbeat failure and returns to its deterministic reconnect
+loop.
+
+**Rationale:** Certificate renewal sends an authenticated rotation request before
+the next heartbeat. If the socket disappeared after that send but before Main's
+reply, the identity response Promise previously had no timeout or close rejection.
+The process remained alive without a socket or heartbeat for twelve hours, then its
+24-hour certificate expired and required manual re-credentialing.
+
+**Consequence:** Interrupted request/response operations fail promptly and retain
+their durable outbound frame for replay after reconnect. A transient disconnect can
+no longer strand a healthy Worker until its credential lapses; normal orderly close
+keeps the same bounded cleanup behavior.

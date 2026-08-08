@@ -53,6 +53,7 @@ approved product specification.
 30. [`0033-owner-input-idle-budget-resumption.md`](0033-owner-input-idle-budget-resumption.md)
 31. [`0034-discord-nonblocking-gateway-intake.md`](0034-discord-nonblocking-gateway-intake.md)
 32. [`0035-owner-continuation-idle-budget-resumption.md`](0035-owner-continuation-idle-budget-resumption.md)
+33. [`0036-worker-channel-waiter-release.md`](0036-worker-channel-waiter-release.md)
 
 ## Proposed ADRs
 
