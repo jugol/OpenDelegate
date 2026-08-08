@@ -30,6 +30,8 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
   assert.equal(task.userId, "S-1-5-21-1000");
   assert.equal(artifacts.helper.manifest.encoding, "utf16le-bom");
   assert.match(task.command, /\\current\\bin\\opendelegate-session-helper\.exe$/i);
+  assert.match(artifacts.helper.manifest.content, /<Interval>PT1M<\/Interval>/u);
+  assert.doesNotMatch(artifacts.helper.manifest.content, /<Interval>PT15S<\/Interval>/u);
 
   assert.ok(
     artifacts.installCommands.some(
