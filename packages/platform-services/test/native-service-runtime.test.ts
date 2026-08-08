@@ -453,6 +453,16 @@ test("Windows Worker install accepts the release and staging root actions after 
   const fileSystem = new FakeFileSystem();
   const releasesRoot = "C:\\Program Files\\OpenDelegate\\releases";
   const stagingRoot = "C:\\Program Files\\OpenDelegate\\.staging";
+  const protectedServiceVault = "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service";
+  let protectedVaultEnsureAttempts = 0;
+  const ensureDirectory = fileSystem.ensureDirectory.bind(fileSystem);
+  fileSystem.ensureDirectory = async (path, mode) => {
+    if (path === protectedServiceVault) {
+      protectedVaultEnsureAttempts += 1;
+      throw new Error("service-only DACL blocks Node directory open");
+    }
+    return await ensureDirectory(path, mode);
+  };
   fileSystem.kinds.set(releasesRoot, "missing");
   fileSystem.kinds.set(stagingRoot, "missing");
   fileSystem.directories.set(releasesRoot, [{ name: "1.2.3", kind: "directory" }]);
@@ -480,6 +490,7 @@ test("Windows Worker install accepts the release and staging root actions after 
   assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
   assert.equal(fileSystem.kinds.get(releasesRoot), "directory");
   assert.equal(fileSystem.kinds.get(stagingRoot), "directory");
+  assert.equal(protectedVaultEnsureAttempts, 0);
   const icaclsRequests = process.requests.filter((request) =>
     request.executable.toLowerCase().endsWith("icacls.exe"),
   );

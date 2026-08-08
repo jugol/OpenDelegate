@@ -350,6 +350,25 @@ function createNativeFilesystemAdapter(
       assertFilesystemActionAllowed(configuration, action);
       switch (action.kind) {
         case "directory.ensure": {
+          const existing = await fileSystem.inspect(action.path);
+          if (configuration.platform === "windows" && existing.kind === "directory") {
+            // A running service-owned Secret Store intentionally removes the
+            // interactive administrator from its DACL. Reinstallation must let
+            // elevated icacls restore the canonical ACL before any Node chmod or
+            // mkdir call tries to open that already-existing directory.
+            await applyDirectoryAccess(
+              configuration,
+              action.path,
+              Number.parseInt(action.mode, 8),
+              action.access.owner,
+              boundaries,
+              tools,
+            );
+            if ((await fileSystem.inspect(action.path)).kind !== "directory") {
+              throw uncertain("A native service directory changed during access repair.");
+            }
+            return { disposition: "unchanged" };
+          }
           const disposition = await fileSystem.ensureDirectory(
             action.path,
             Number.parseInt(action.mode, 8),
