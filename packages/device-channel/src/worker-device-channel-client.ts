@@ -201,11 +201,17 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
   private helloWallSentAtMs: number | undefined;
   private helloMonotonicSentAtMs: number | undefined;
   private helloCorrelationId: string | undefined;
+  private helloAcknowledgedMainSequence: number | undefined;
   private calibration: WorkerClockCalibration | undefined;
 
   private constructor(options: ConnectWorkerDeviceChannelOptions, socket: WebSocket) {
     this.options = options;
     this.socket = socket;
+    this.socket.once("close", () => {
+      this.rejectPendingRequests(
+        new DeviceChannelClientError("The Worker Device channel disconnected."),
+      );
+    });
   }
 
   public static async connect(
@@ -603,6 +609,25 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     }
     this.closed = true;
     const error = new DeviceChannelClientError("The Worker Device channel closed.");
+    this.rejectPendingRequests(error);
+    if (this.socket.readyState === WebSocket.CLOSED) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.socket.terminate();
+        resolve();
+      }, 1_000);
+      timeout.unref();
+      this.socket.once("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      this.socket.close(1000, "Worker shutdown");
+    });
+  }
+
+  private rejectPendingRequests(error: DeviceChannelClientError): void {
     for (const waiter of this.waiters.values()) {
       waiter.reject(error);
     }
@@ -623,21 +648,6 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
       waiter.reject(error);
     }
     this.runLeaseWaiters.clear();
-    if (this.socket.readyState === WebSocket.CLOSED) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        this.socket.terminate();
-        resolve();
-      }, 1_000);
-      timeout.unref();
-      this.socket.once("close", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-      this.socket.close(1000, "Worker shutdown");
-    });
   }
 
   private async open(connectTimeoutMs: number): Promise<void> {
@@ -647,6 +657,38 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
         this.pendingRunLeaseRequestsAtConnect.set(pending.messageId, pending);
       }
     }
+    await new Promise<void>((resolve, reject) => {
+      const fail = (error?: Error): void => {
+        cleanup();
+        reject(
+          new DeviceChannelClientError(
+            `The Worker Device channel could not connect${safeErrorCode(error)}.`,
+          ),
+        );
+      };
+      const opened = (): void => {
+        cleanup();
+        const tlsSocket = this.readTlsSocket();
+        if (!tlsSocket.authorized || this.socket.protocol !== DEVICE_CHANNEL_SUBPROTOCOL) {
+          reject(new DeviceChannelClientError("The Main TLS identity was not authenticated."));
+          return;
+        }
+        resolve();
+      };
+      const cleanup = (): void => {
+        this.socket.off("error", fail);
+        this.socket.off("close", fail);
+        this.socket.off("open", opened);
+      };
+      this.socket.once("error", fail);
+      this.socket.once("close", fail);
+      this.socket.once("open", opened);
+    });
+    // Do not create the welcome waiter until the TLS socket is open. When an
+    // endpoint refuses the connection, separate pre-open and welcome promises
+    // reject from the same socket error; only the former is awaited, leaving the
+    // latter as an unhandled rejection that terminates the Worker instead of
+    // allowing its deterministic reconnect loop to continue.
     const welcome = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new DeviceChannelClientError("The Main welcome timed out."));
@@ -685,37 +727,11 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
           });
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      const fail = (error?: Error): void => {
-        cleanup();
-        reject(
-          new DeviceChannelClientError(
-            `The Worker Device channel could not connect${safeErrorCode(error)}.`,
-          ),
-        );
-      };
-      const opened = (): void => {
-        cleanup();
-        const tlsSocket = this.readTlsSocket();
-        if (!tlsSocket.authorized || this.socket.protocol !== DEVICE_CHANNEL_SUBPROTOCOL) {
-          reject(new DeviceChannelClientError("The Main TLS identity was not authenticated."));
-          return;
-        }
-        resolve();
-      };
-      const cleanup = (): void => {
-        this.socket.off("error", fail);
-        this.socket.off("close", fail);
-        this.socket.off("open", opened);
-      };
-      this.socket.once("error", fail);
-      this.socket.once("close", fail);
-      this.socket.once("open", opened);
-    });
     this.observeLifecycle("tls-authenticated");
     this.helloMonotonicSentAtMs = this.monotonicNow();
     this.helloWallSentAtMs = this.now();
     this.helloCorrelationId = this.nextId();
+    this.helloAcknowledgedMainSequence = resume.acknowledgedMainSequence;
     const hello: WorkerToMainFrameV1 = {
       ...this.envelope(resume.nextWorkerSequence, this.helloCorrelationId),
       type: "worker.hello",
@@ -732,9 +748,7 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     await this.sendDirect(hello);
     this.observeLifecycle("hello-sent");
     await welcome;
-    for (const frame of (await this.options.state.resume()).pendingOutbound) {
-      await this.send(frame);
-    }
+    await this.replayPendingOutbound((await this.options.state.resume()).pendingOutbound);
     this.deferMainAcknowledgments = false;
     await this.flushMainAcknowledgment();
     this.observeLifecycle("ready");
@@ -877,6 +891,10 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
       throw new DeviceChannelClientError("The Main Run lease decision targets another request.");
     }
     if (currentWelcome) {
+      if (this.helloAcknowledgedMainSequence === undefined) {
+        throw new DeviceChannelClientError("The Worker hello resume cursor is unavailable.");
+      }
+      await this.options.state.confirmMainAcknowledgment(this.helloAcknowledgedMainSequence);
       this.observeLifecycle("welcome-committed");
     }
     this.pendingAcknowledgmentFrame = frame;
@@ -1300,6 +1318,45 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     this.assertOpen();
     this.sendQueue = this.sendQueue.then(() => this.sendDirect(frame));
     return this.sendQueue;
+  }
+
+  /**
+   * Replays durable frames at Main's acknowledgment boundary instead of filling
+   * the WebSocket buffer in one synchronous burst. Main deliberately does not
+   * acknowledge `worker.ack` frames (that would create an acknowledgment loop),
+   * so those advance with the next acknowledged non-acknowledgment frame.
+   */
+  private async replayPendingOutbound(frames: readonly WorkerToMainFrameV1[]): Promise<void> {
+    for (const frame of frames) {
+      if (frame.type === "worker.ack") {
+        await this.send(frame);
+        continue;
+      }
+      const acknowledged = new Promise<WorkerOutboxAckV1>((resolve, reject) => {
+        this.waiters.set(frame.messageId, {
+          sequence: frame.sequence,
+          resolve,
+          reject,
+        });
+      });
+      let rejectChannelClosed: ((error: Error) => void) | undefined;
+      const channelClosed = new Promise<never>((_resolve, reject) => {
+        rejectChannelClosed = reject;
+      });
+      const onClose = (): void => {
+        rejectChannelClosed?.(
+          new DeviceChannelClientError("The Worker Device channel closed during replay."),
+        );
+      };
+      this.socket.once("close", onClose);
+      try {
+        await this.send(frame);
+        await Promise.race([acknowledged, channelClosed]);
+      } finally {
+        this.socket.off("close", onClose);
+        this.waiters.delete(frame.messageId);
+      }
+    }
   }
 
   private async sendDirect(frame: WorkerToMainFrameV1): Promise<void> {

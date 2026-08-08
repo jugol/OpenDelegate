@@ -428,18 +428,81 @@ test("a smaller Work Order retry Budget survives restart and blocks a replacemen
   assert.equal(child?.usage.retries ?? 0, 0);
 });
 
-test("a smaller Work Order wall Budget is measured durably from its registration", async () => {
-  let now = 43_000;
+test("calendar age does not spend a requested Task wall Budget", async () => {
+  let now = 42_000;
+  const sevenDaysMs = 7 * 24 * 60 * 60_000;
   const clock = { now: () => now };
   const eventStore = new InMemoryEventStore({
     clock: { now: () => new Date(now).toISOString() },
   });
+  const taskLimits = limits({
+    wallTimeMs: { hard: 10 },
+    idleTimeMs: { hard: 15 * 24 * 60 * 60_000 },
+  });
   const options = {
     eventStore,
     clock,
-    instanceLimits: limits(),
-    requestedTaskDefaults: limits(),
-    autonomousTaskDefaults: limits(),
+    instanceLimits: taskLimits,
+    requestedTaskDefaults: taskLimits,
+    autonomousTaskDefaults: taskLimits,
+    usageProxy: {
+      tokensPerNativeTurn: 100,
+      costUsdMicrosPerNativeTurn: 1_000,
+    },
+  } as const;
+  const enforcer = new DurableTaskBudgetEnforcer(options);
+  await enforcer.ensureTask({ taskId: "task-long-lived", kind: "requested" });
+
+  now += sevenDaysMs;
+  assert.equal((await enforcer.snapshot("task-long-lived")).usage.wallTimeMs ?? 0, 0);
+
+  const firstGuard = await enforcer.beginTaskExecution({
+    taskId: "task-long-lived",
+    executionKey: "execution-after-seven-days",
+    attempt: 1,
+    signal: new AbortController().signal,
+  });
+  now += 2;
+  const parallelGuard = await enforcer.beginTaskExecution({
+    taskId: "task-long-lived",
+    executionKey: "parallel-execution",
+    attempt: 1,
+    signal: new AbortController().signal,
+  });
+  now += 4;
+  await enforcer.recordActivity({
+    taskId: "task-long-lived",
+    operationId: "active-progress",
+    source: "worker-progress",
+  });
+  assert.equal((await enforcer.snapshot("task-long-lived")).usage.wallTimeMs, 6);
+  const processRestart = new DurableTaskBudgetEnforcer(options);
+  assert.equal((await processRestart.snapshot("task-long-lived")).usage.wallTimeMs, 6);
+  await firstGuard.close();
+  await parallelGuard.close();
+
+  now += sevenDaysMs;
+  const restarted = new DurableTaskBudgetEnforcer(options);
+  assert.equal((await restarted.snapshot("task-long-lived")).usage.wallTimeMs, 6);
+});
+
+test("a smaller Work Order wall Budget is measured durably from active Runs", async () => {
+  let now = 43_000;
+  const sevenDaysMs = 7 * 24 * 60 * 60_000;
+  const clock = { now: () => now };
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(now).toISOString() },
+  });
+  const parentLimits = limits({
+    wallTimeMs: { hard: 30 * 24 * 60 * 60_000 },
+    idleTimeMs: { hard: 30 * 24 * 60 * 60_000 },
+  });
+  const options = {
+    eventStore,
+    clock,
+    instanceLimits: parentLimits,
+    requestedTaskDefaults: parentLimits,
+    autonomousTaskDefaults: parentLimits,
     usageProxy: {
       tokensPerNativeTurn: 100,
       costUsdMicrosPerNativeTurn: 1_000,
@@ -453,17 +516,27 @@ test("a smaller Work Order wall Budget is measured durably from its registration
     workOrders: [
       workOrder("work-short-wall", {
         wallTimeMs: { soft: 5, hard: 10 },
-        idleTimeMs: { hard: 1_000 },
+        idleTimeMs: { hard: 30 * 24 * 60 * 60_000 },
       }),
     ],
   });
 
-  now += 6;
-  await enforcer.recordActivity({
+  now += sevenDaysMs;
+  assert.equal(
+    (await enforcer.snapshot("task-child-wall")).workOrders[0]?.usage.wallTimeMs ?? 0,
+    0,
+  );
+  await enforcer.beginWorkerRun({
     taskId: "task-child-wall",
     workOrderId: "work-short-wall",
-    operationId: "child-wall-progress",
-    source: "worker-progress",
+    runId: "run-short-wall-1",
+    attempt: 1,
+  });
+  now += 6;
+  await enforcer.finishWorkerRun({
+    taskId: "task-child-wall",
+    workOrderId: "work-short-wall",
+    runId: "run-short-wall-1",
   });
   assert.equal(
     (await enforcer.snapshot("task-child-wall")).limitEvents.some(
@@ -475,13 +548,26 @@ test("a smaller Work Order wall Budget is measured durably from its registration
     true,
   );
 
-  now += 5;
+  now += sevenDaysMs;
   const restarted = new DurableTaskBudgetEnforcer(options);
+  assert.equal((await restarted.snapshot("task-child-wall")).workOrders[0]?.usage.wallTimeMs, 6);
+  await restarted.beginWorkerRun({
+    taskId: "task-child-wall",
+    workOrderId: "work-short-wall",
+    runId: "run-short-wall-2",
+    attempt: 1,
+  });
+  now += 5;
+  await restarted.finishWorkerRun({
+    taskId: "task-child-wall",
+    workOrderId: "work-short-wall",
+    runId: "run-short-wall-2",
+  });
   await assert.rejects(
     restarted.beginWorkerRun({
       taskId: "task-child-wall",
       workOrderId: "work-short-wall",
-      runId: "run-after-child-wall",
+      runId: "run-after-exhausted-child-wall",
       attempt: 1,
     }),
     (error: unknown) =>

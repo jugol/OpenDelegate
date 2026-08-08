@@ -48,21 +48,26 @@ export {
   type WorkerToMainMessageType,
 } from "./protocol.ts";
 export {
+  EnrollmentGrantExecutorFailure,
   EnrollmentGrantFileError,
   executeWithEnrollmentGrantFile,
   parseEnrollmentGrantFile,
   type EnrollmentChannelEndpoint,
+  type EnrollmentGrantExecutorFailureKind,
   type EnrollmentGrantFileDocument,
   type EnrollmentGrantFileErrorCode,
   type EnrollmentGrantFileOptions,
 } from "./enrollment-grant-file.ts";
 export {
   EnrollmentClientError,
+  EnrollmentLocalOperationError,
   createEnrollmentRequestHandler,
   enrollWorkerDevice,
   type CreateEnrollmentRequestHandlerOptions,
   type EnrolledWorkerIdentity,
   type EnrollmentClientErrorCode,
+  type EnrollmentLocalFailureKind,
+  type EnrollmentRequestDisposition,
   type EnrollWorkerDeviceOptions,
 } from "./enrollment.ts";
 export {

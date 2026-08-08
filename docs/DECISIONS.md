@@ -1115,8 +1115,11 @@ long Forum post.
 **Decision:** Before semantic planning, deterministic Main code may recognize a
 deliberately narrow Device-directory question and read an owner-safe projection of
 Main-owned Device state containing identity, display name, OS family,
-runtime/connection state, Roles, verified capability names, route health, and
-bounded capacity. It excludes Secrets, Device Instructions, Knowledge, private
+runtime/connection state, service supervision mode, last observation time, Roles,
+verified capability names, route health, and bounded capacity. The narrow grammar
+includes fleet-list questions, uniquely matched named-Device reachability questions,
+and a registered-route follow-up for that named Device. It excludes Secrets, Device
+Instructions, Knowledge, private
 transcripts, local paths, Policy internals, and unverified capability claims.
 
 The deterministic path formats the answer without an LLM and mints authority for
@@ -1241,6 +1244,10 @@ automatic wake is not yet ready. The compact Main Device directory may include t
 two bounded states, but it never includes the wake target or raw probe evidence.
 
 ## D-070 — Repository validation is tiered by purpose
+
+**Amended by D-087:** the tier boundaries and required check names remain accepted;
+the Ubuntu job now scopes package types, tests, builds, and Admin Web browser work to
+the changed workspace graph instead of executing every suite for every pull request.
 
 **Decision:** A routine pull request has one required Ubuntu validation job covering
 canonical documents, architecture, formatting, lint, types, deterministic tests,
@@ -1506,3 +1513,213 @@ accepted for provider homes in [D-076](#d-076--the-owners-existing-provider-home
 A Device without npm reports that rather than guessing at an installer. Adapters
 that ship no npm package, such as the Claude Agent SDK on native Windows, offer no
 update, because a remedy that cannot name its target is worse than none.
+
+## D-078 — Durable owner input resets idle time before execution resumes
+
+**Decision:** Persisting an owner input through the Task coordinator records one
+idempotent Task Budget activity mutation before the resumed execution is queued. The
+mutation identity is derived from the same Task, principal, and input idempotency key
+as the durable conversation event. It may recover an already-observed idle overage;
+it does not extend wall time, turns, retries, tokens, cost, or any other hard limit.
+
+**Rationale:** `waiting_user` deliberately stops automatic execution, often because
+the owner must return hours later. Checking the old idle timestamp before recording
+that owner's answer made the answer reject itself and produced another Budget prompt
+instead of resuming the Task. Discord then appeared to ignore a perfectly durable
+message. Owner input is Task activity by definition, while wall time remains the
+bounded cumulative automatic execution time of the Task.
+
+**Consequence:** A late reply can continue the same Task and native conversation
+without an owner-authorized idle extension. Replayed Discord ingress records the
+same activity operation and cannot double-apply or conflict. A genuinely exhausted
+wall-time or finite usage Budget still pauses new work through the existing approval
+flow.
+
+## D-079 — Discord outbound delivery never blocks Gateway intake
+
+**Decision:** After an authorized Discord dispatch has durably updated Task and
+cursor state, outbox delivery starts in the background and is not awaited by the
+serialized Gateway receipt loop. Every projection also requests the same single
+flight drain. A live approved `THREAD_CREATE` payload is retained and reused when
+its starter `MESSAGE_CREATE` arrives. A cache-only thread event does not advance the
+durable Resume cursor; reconciliation remains responsible for fetching a starter
+that was missed across a disconnect.
+
+**Rationale:** Discord REST calls can take tens of seconds under network delay or
+rate pressure. Awaiting reactions, tags, cards, and replies inside the Gateway
+callback caused head-of-line blocking: one old Task delayed a new Forum Post for
+more than a minute, so the owner saw neither `👀` nor typing despite a healthy Main.
+Refetching a thread immediately after Discord supplied that same thread payload
+added another avoidable request on the latency-critical path.
+
+**Consequence:** Different Forum Posts continue entering durable intake while an
+earlier outbound request is slow. One adapter still owns one ordered outbox drain,
+delivery remains idempotent and restart-safe, and the Gateway cursor advances only
+after the inbound state change is durable. Tests that need a settled external
+projection explicitly await `flushOutbox()`; live receipt does not.
+
+## D-080 — A refused Main connection remains inside the Worker reconnect loop
+
+**Decision:** The Worker Device-channel client creates its welcome waiter only after
+the TLS socket has opened. A pre-open socket error therefore has one awaited owner:
+the connection attempt. The Worker transport resolver classifies that bounded
+failure, and the daemon retries it without exiting.
+
+**Rationale:** Creating both the socket-open waiter and the welcome waiter before a
+connection existed made `ECONNREFUSED` reject both promises. The transport resolver
+correctly handled the socket-open rejection, but the unused welcome rejection was
+unhandled and Node terminated the otherwise healthy Worker. Restarting Main could
+therefore leave every Worker offline until another process supervisor happened to
+restart it.
+
+**Consequence:** A Main restart, listener startup gap, or temporarily unreachable
+route no longer kills the Worker process. Authentication rejection and exhausted
+routes keep their existing diagnostics, while ordinary unavailability follows the
+bounded reconnect backoff. The mTLS integration test exercises a refused endpoint
+before the successful channel exchange so a duplicate rejection cannot regress.
+
+## D-081 — Worker reconnect replay advances at durable acknowledgment boundaries
+
+**Decision:** After the fresh welcome is committed, a Worker replays each durable
+non-acknowledgment frame and waits for Main's cumulative acknowledgment before
+sending the next one. `worker.ack` frames remain non-recursive: they are sent without
+waiting and are covered by the next cumulative acknowledgment of an ordinary frame.
+The channel is not reported ready until this replay completes.
+
+**Rationale:** A Worker can retain many heartbeat and acknowledgment frames while
+Main is unavailable. Sending the whole durable outbox synchronously filled the
+WebSocket buffer past its 2 MiB bound, closed the connection, and started another
+replay that also added a welcome acknowledgment. The Device appeared intermittently
+online while its backlog grew instead of recovering.
+
+**Consequence:** Reconnection applies natural backpressure at the same durable seam
+that already protects idempotency. A large backlog takes bounded round trips to
+drain but cannot overwhelm the socket, and failed Main effects are retried before
+the Worker advertises readiness. Integration coverage queues 96 heartbeats before
+connection and requires every one to be durably acknowledged before `connect()`
+returns.
+
+## D-082 — Main honors the Worker hello resume cursor before replay
+
+**Decision:** After authenticating a Worker hello, Main applies its
+`acknowledgedMainSequence` to the durable Main outbox before constructing or sending
+the reconnect replay. Main derives the corresponding message IDs from its own
+contiguous outbox and subjects the cursor to the existing acknowledgment validation.
+Receipt of the fresh welcome confirms that cursor to the Worker, so the next normal
+`worker.ack` starts after the prefix already accepted by Main.
+
+**Rationale:** A Worker may durably handle Main frames immediately before a channel
+closes, without getting a chance to transmit the normal `worker.ack`. The next hello
+already carries the Worker's safe handled prefix. Ignoring that cursor caused Main to
+replay the same growing backlog before the new welcome; sufficiently large backlogs
+prevented the welcome from arriving before the connection timeout.
+
+**Consequence:** A reconnect retires work the authenticated Worker has already
+handled, replays only the remaining Main suffix, and then sends the current welcome.
+An invalid or non-contiguous cursor still fails closed through the repository's
+normal acknowledgment checks.
+
+## D-083 — Explicit owner continuation resets idle time before execution
+
+**Decision:** After durably accepting an owner-authenticated Task approval, `Retry`,
+or `Resume`, the execution coordinator records one idempotent Task Budget activity
+mutation before it queues execution. The mutation identity is derived from the same
+durable owner action identity. It resets only idle time; wall time, retries, turns,
+tokens, cost, and every other finite limit remain intact.
+
+**Rationale:** A Task may remain failed or paused while its owner is away. The
+owner's explicit decision to approve or continue is current Task activity, just like
+a new answer. Checking the old idle timestamp first caused a valid Discord Retry
+button press to pause immediately behind an irrelevant Budget-extension prompt.
+
+**Consequence:** An owner can approve, retry, or resume an old Task without extending
+its idle Budget. Replayed Discord interactions repair or reuse the same activity
+mutation and remain idempotent. A genuinely exhausted cumulative Budget still uses
+the normal owner approval flow.
+
+## D-084 — Channel closure releases every in-flight Worker request
+
+**Decision:** Every Worker Device-channel client rejects and clears its pending
+event, Artifact, identity, authorization, and Run-lease response waiters when the
+underlying socket closes, whether closure is intentional or unexpected. The daemon
+then observes renewal or heartbeat failure and returns to its deterministic reconnect
+loop.
+
+**Rationale:** Certificate renewal sends an authenticated rotation request before
+the next heartbeat. If the socket disappeared after that send but before Main's
+reply, the identity response Promise previously had no timeout or close rejection.
+The process remained alive without a socket or heartbeat for twelve hours, then its
+24-hour certificate expired and required manual re-credentialing.
+
+**Consequence:** Interrupted request/response operations fail promptly and retain
+their durable outbound frame for replay after reconnect. A transient disconnect can
+no longer strand a healthy Worker until its credential lapses; normal orderly close
+keeps the same bounded cleanup behavior.
+
+## D-085 — Stale Discord controls are terminal owner feedback, not transport retries
+
+**Decision:** The Discord-to-Task port maps deterministic Task refusals such as an
+invalid current-state transition, missing Task, or idempotency conflict into a typed
+non-retryable callback result. The Discord outbox completes that action after
+editing the already-deferred interaction with an owner-safe explanation. Only
+storage, connectivity, rate-limit, and unknown transient failures retain durable
+retry behavior.
+
+**Rationale:** Chronological failure messages intentionally keep a nearby Retry
+button, but that message can outlive the Task state for which Retry was valid. Main
+correctly rejected one such stale command with `TRANSITION_INVALID`; the Adapter
+then classified every non-Discord exception as `TASK_CALLBACK_FAILED` and retried
+the same impossible command indefinitely without telling the owner.
+
+**Consequence:** Clicking an older control is harmless and receives a clear “no
+longer available” response directing the owner to the latest Task update or a new
+message. The durable outbox does not accumulate deterministic failures, while true
+delivery or concurrency failures remain recoverable.
+
+## D-086 — Wall Budget measures active execution, not Task age
+
+**Decision:** Task `wallTimeMs` is the cumulative union of intervals in which at
+least one Task execution guard is open. Parallel Task work therefore spends wall
+time once, not once per concurrent branch. Work Order `wallTimeMs` is the cumulative
+duration of its active Runs. Main persists ordinary Budget mutations while execution
+is active at a maximum checkpoint interval of 60 seconds and again when activity or
+guard closure reaches the Budget service. Waiting, paused, offline, and otherwise
+inactive calendar time spends no wall Budget.
+
+**Rationale:** A Discord Forum Post is both a durable Task surface and the boundary
+of its native Agent sessions. The owner may return to one Task over days or months.
+Measuring `now - createdAt` made an old but mostly inactive Task appear to have used
+almost 24 hours of automatic work, then demanded a Budget extension before the
+Agent could process a new message. It also turned a runaway-control limit into a
+retention limit, which is not the product intent.
+
+**Consequence:** Requested Tasks can preserve conversation and native-session
+continuity for arbitrary calendar time. Their default 21-hour soft and 24-hour hard
+limits still bound cumulative automatic execution; autonomous Tasks retain their
+shorter finite active-work defaults. Existing event histories remain readable:
+calendar age is no longer inferred, and only durable wall-usage mutations contribute
+to the new total. A sudden Main process failure can omit at most the current
+60-second Task checkpoint interval; active Work Order Runs remain reconstructible
+from their durable start events.
+
+## D-087 — Routine pull requests validate the changed workspace graph
+
+See [ADR-0039](adr/0039-change-scoped-pull-request-validation.md).
+
+**Decision:** The required Ubuntu pull-request job always runs repository-wide
+document, release-ledger, architecture, formatting, lint, and tooling checks. It runs
+types, deterministic package tests, and builds only for workspace packages changed
+from the pull request's immutable base SHA and their dependents. The root recursive
+test command is excluded from that selection. The Admin Web browser harness runs only
+for Admin Web or dependency-manifest changes. Check names, Secret scan, Dependency
+review, the 15-minute timeout, and the explicit Release validation matrix remain
+unchanged.
+
+**Rationale:** D-070 removed duplicated platform matrices but still made a Worker,
+documentation, or backend-only pull request execute every unrelated package and
+install Chromium. The workspace graph provides a deterministic, conservative affected
+set while common manifests still expand to broad validation.
+
+**Consequence:** Ordinary changes receive materially faster feedback and consume less
+hosted-runner quota. Shared-package changes retain dependent coverage; release owners
+still run the complete local and platform validation commands before promotion.

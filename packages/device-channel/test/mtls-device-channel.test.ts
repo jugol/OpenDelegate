@@ -86,6 +86,18 @@ test(
     });
     const workerPrivateKey = await workerSecrets.getPrivateKey(enrollment.keyId);
     assert.notEqual(workerPrivateKey, null);
+    const executeWithPrivateKeyBytes = async (
+      executor: (pkcs8: Uint8Array) => unknown | Promise<unknown>,
+    ): Promise<void> => {
+      const pkcs8 = new Uint8Array(
+        await globalThis.crypto.subtle.exportKey("pkcs8", workerPrivateKey!),
+      );
+      try {
+        await executor(pkcs8);
+      } finally {
+        pkcs8.fill(0);
+      }
+    };
     const serverIdentity = await issueServerIdentity(
       certificateAuthority.certificatePem,
       await mainSecrets.getPrivateKey(certificateAuthority.keyId),
@@ -101,6 +113,29 @@ test(
       mainDeviceId: "main-device-1",
       certificateGeneration: issued.generation,
     });
+    await assert.rejects(
+      WorkerDeviceChannelClient.connect({
+        endpointUrl: "wss://127.0.0.1:1/api/v1/device/channel",
+        deviceId: issued.deviceId,
+        workerId: "worker-runtime-1",
+        mainDeviceId: "main-device-1",
+        connectTimeoutMs: 500,
+        identity: {
+          certificatePem: verified.certificatePem,
+          certificateAuthorityPem: verified.certificateAuthorityPem,
+          certificateGeneration: verified.generation,
+          executeWithPrivateKeyBytes,
+        },
+        state: workerState,
+        onDispatch: async () => undefined,
+        onControl: async () => undefined,
+        onRevoked: async () => undefined,
+      }),
+      /could not connect \(ECONNREFUSED\)/,
+    );
+    // Flush the event-loop turn that used to surface a second, unhandled
+    // welcome rejection and terminate the long-running Worker process.
+    await new Promise<void>((resolve) => setImmediate(resolve));
     let heartbeatResolve: (() => void) | undefined;
     const heartbeatObserved = new Promise<void>((resolve) => {
       heartbeatResolve = resolve;
@@ -213,16 +248,7 @@ test(
           certificatePem: verified.certificatePem,
           certificateAuthorityPem: verified.certificateAuthorityPem,
           certificateGeneration: verified.generation,
-          executeWithPrivateKeyBytes: async (executor) => {
-            const pkcs8 = new Uint8Array(
-              await globalThis.crypto.subtle.exportKey("pkcs8", workerPrivateKey!),
-            );
-            try {
-              await executor(pkcs8);
-            } finally {
-              pkcs8.fill(0);
-            }
-          },
+          executeWithPrivateKeyBytes,
         },
         state: workerState,
         onDispatch: async (frame) => {

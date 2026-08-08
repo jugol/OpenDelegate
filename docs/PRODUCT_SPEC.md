@@ -496,9 +496,13 @@ through a secure handoff and resumes the same Task afterward.
    not repeat the Forum title, the current owner question, or mutable Task controls.
    Each accepted owner message receives one idempotent in-place acknowledgement on
    that exact message: a best-effort `👀` reaction plus Discord's typing indicator.
-   Typing is refreshed while the turn remains active; after a durable question,
-   result, or failure is delivered, the same message transitions to `✅` or `❌`.
-   OpenDelegate does not post a second generic working card for the same input.
+    Typing is refreshed while the turn remains active; after a durable question,
+    result, or failure is delivered, the same message transitions to `✅` or `❌`.
+    OpenDelegate does not post a second generic working card for the same input.
+    Durable outbound delivery runs outside the serialized Gateway receipt path, so
+    a slow reaction or reply in one thread cannot delay intake of another Forum
+    post. A live `THREAD_CREATE` payload is reused for its starter message instead
+    of requiring a redundant channel lookup before acknowledgement.
 8. Significant decisions, questions, failures, and final results remain ordinary
    replies exactly once in chronological order, keyed by their immutable Task source
    event rather than mutable Artifact or link enrichment. The full owner question
@@ -509,7 +513,10 @@ through a secure handoff and resumes the same Task afterward.
    recovery control, such as Retry; the owner is never left with only a generic
    attention notice.
 9. Buttons and menus offer pause, cancel, retry, approve, reject, inspect Runs, and
-   open Artifact actions where Discord permits.
+   open Artifact actions where Discord permits. If authoritative Task state rejects
+   a control from an older message, the deferred interaction explains that the
+   control is no longer available and the command outbox completes without retrying
+   the same deterministic refusal. Transport and storage failures remain retryable.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
     resume the Task and reopen the external conversation when permitted.
 11. If the external post is deleted, Task data remains in Main and the binding is
@@ -1097,9 +1104,14 @@ may request a transition but cannot manufacture a state outside the transition r
 7. Provider session loss creates a continuation session from an OpenDelegate
    checkpoint.
 8. Transport failure uses deterministic retry and fallback before Agent diagnosis.
-9. Exhausted repair either moves the Work Order, waits for a resource, or asks the
+9. Main unavailability does not terminate a Worker. A refused or interrupted Device
+   channel remains a bounded transport failure inside the daemon's reconnect loop.
+   Socket closure rejects every in-flight channel response waiter, including Device
+   certificate renewal, so no request can strand that loop while its credential
+   expires.
+10. Exhausted repair either moves the Work Order, waits for a resource, or asks the
    owner with evidence.
-10. Cancellation is cooperative first and escalates according to adapter and Policy;
+11. Cancellation is cooperative first and escalates according to adapter and Policy;
     it must never imply that an already completed external side effect was reversed.
 
 ### FR-22 — Workspaces
@@ -1139,6 +1151,25 @@ may request a transition but cannot manufacture a state outside the transition r
 7. Autonomous proactive Tasks always have finite defaults even if requested Tasks
    have a more permissive profile.
 8. Budget changes and limit events are audited and visible in Discord and Admin Web.
+9. Idle time measures the absence of Task activity. A durable owner input, approval,
+   or explicit owner `Retry` or `Resume` command records activity before its
+   execution is budget-checked, so time spent waiting for the owner does not make
+   that owner action reject itself.
+10. Wall time measures cumulative automatic execution, not the Task or Work Order's
+    calendar age. Time spent waiting for owner input, approval, resources, an online
+    Device, a retry, or an explicit resume—and time spent paused or otherwise outside
+    an execution guard—does not consume wall time. A requested Task may therefore
+    preserve its Forum conversation and native-session continuity indefinitely while
+    inactive.
+11. Task wall time counts the union of its active execution intervals so parallel
+    dispatch does not multiply Task usage. Work Order wall time counts its active Run
+    intervals. Main checkpoints active Task wall time durably at least once per
+    minute and when execution activity or closure reaches the Budget service; a
+    process failure may lose no more than the current checkpoint interval.
+12. Wall-time and every other finite usage limit remain enforced against their
+    corresponding cumulative usage. Reaching the requested-Task default means the
+    system performed that much automatic work; it never means the Forum Post merely
+    existed for that long.
 
 ## Implementation Decisions
 

@@ -39,6 +39,7 @@ import {
   SqliteWorkerChannelState,
   WorkerDeviceChannelClient,
   type MainDeviceChannelCallbacks,
+  type MainPingFrameV1,
   type WorkerDeviceChannelCallbacks,
   type WorkerRunLeaseRenewFrameV1,
 } from "../src/index.ts";
@@ -82,6 +83,103 @@ test(
         "Main handled prefix",
       );
       assert.equal(callbackCount, 2);
+    } finally {
+      await client?.close().catch(() => undefined);
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "Worker reconnect drains durable replay through Main acknowledgments before becoming ready",
+  { timeout: 20_000 },
+  async () => {
+    const fixture = await createChannelFixture("worker-replay-window");
+    const replayCount = 96;
+    let observedHeartbeats = 0;
+    const server = await fixture.listen({
+      onHeartbeat: async () => {
+        observedHeartbeats += 1;
+      },
+    });
+    const state = await fixture.openWorkerState("worker.sqlite");
+    const observedAtBase = Date.now() - replayCount;
+    let client: WorkerDeviceChannelClient | undefined;
+
+    try {
+      for (let index = 0; index < replayCount; index += 1) {
+        const identity = `queued-heartbeat-${index.toString()}`;
+        await state.enqueueOutbound((sequence) => ({
+          protocolVersion: PROTOCOL_VERSION,
+          messageId: identity,
+          senderDeviceId: fixture.deviceId,
+          correlationId: identity,
+          createdAt: new Date(observedAtBase + index).toISOString(),
+          idempotencyKey: identity,
+          sequence,
+          type: "worker.heartbeat",
+          payload: heartbeat(observedAtBase + index),
+        }));
+      }
+
+      client = await fixture.connect(server, state);
+
+      assert.equal(observedHeartbeats, replayCount);
+      assert.equal(
+        (await state.resume()).pendingOutbound.some((frame) => frame.type === "worker.heartbeat"),
+        false,
+      );
+      assert.equal(
+        (await fixture.mainState.resume(fixture.deviceId)).acknowledgedWorkerSequence,
+        replayCount,
+      );
+    } finally {
+      await client?.close().catch(() => undefined);
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "Worker hello retires its handled Main prefix before Main replays the outbox",
+  { timeout: 20_000 },
+  async () => {
+    const fixture = await createChannelFixture("worker-resume-cursor");
+    const state = await fixture.openWorkerState("worker.sqlite");
+    const safePrefixLength = 32;
+    let client: WorkerDeviceChannelClient | undefined;
+
+    try {
+      await fixture.mainState.observeConnection({
+        deviceId: fixture.deviceId,
+        certificateGeneration: fixture.certificateGeneration,
+      });
+      for (let index = 0; index < safePrefixLength; index += 1) {
+        const frame = await fixture.mainState.enqueueOutbound(fixture.deviceId, (sequence) =>
+          mainPing(sequence, `resume-ping-${index.toString()}`),
+        );
+        const claimId = `resume-claim-${index.toString()}`;
+        await state.commitInbound(frame);
+        assert.equal((await state.claimInboundEffect(frame, claimId)).disposition, "claimed");
+        await state.completeInboundEffect(frame, claimId);
+      }
+      assert.equal((await state.resume()).acknowledgedMainSequence, safePrefixLength);
+      assert.equal((await fixture.mainState.resume(fixture.deviceId)).acknowledgedMainSequence, 0);
+
+      const server = await fixture.listen({});
+      client = await fixture.connect(server, state);
+
+      const workerAcknowledgments = (await state.resume()).pendingOutbound.filter(
+        (frame) => frame.type === "worker.ack",
+      );
+      assert.equal(workerAcknowledgments.length, 1);
+      assert.equal(workerAcknowledgments[0]?.payload.acknowledgedMessageIds.length, 1);
+      await waitUntil(
+        async () =>
+          (await fixture.mainState.resume(fixture.deviceId)).acknowledgedMainSequence >=
+          safePrefixLength + 1,
+        "hello resume cursor and current welcome acknowledgment",
+      );
     } finally {
       await client?.close().catch(() => undefined);
       await fixture.cleanup();
@@ -262,13 +360,12 @@ test(
 
       client = await connectEventually(() => fixture.connect(server, state, callbacks));
       await waitUntil(
-        () => steeringCallbacks === 2 && receiptCallbacks === 1,
-        "durable steering receipt with failed Main audit",
+        () => steeringCallbacks === 2 && receiptCallbacks === 2,
+        "durable steering receipt after retrying the failed Main audit",
       );
       await client.close().catch(() => undefined);
 
       client = await connectEventually(() => fixture.connect(server, state, callbacks));
-      await waitUntil(() => receiptCallbacks === 2, "replayed steering receipt audit");
       await waitUntil(
         async () =>
           (await fixture.mainState.resume(fixture.deviceId)).acknowledgedMainSequence >=
@@ -506,6 +603,7 @@ test(
 );
 
 interface ChannelFixture {
+  readonly certificateGeneration: number;
   readonly deviceId: string;
   readonly mainState: SqliteDeviceChannelRepository;
   cleanup(): Promise<void>;
@@ -579,6 +677,7 @@ async function createChannelFixture(label: string): Promise<ChannelFixture> {
   const servers: MainDeviceChannelServer[] = [];
 
   return {
+    certificateGeneration: verified.generation,
     deviceId,
     mainState,
     cleanup: async () => {
@@ -641,12 +740,12 @@ async function createChannelFixture(label: string): Promise<ChannelFixture> {
   };
 }
 
-function heartbeat(): WorkerHeartbeatV1 {
+function heartbeat(observedAtMs = Date.now()): WorkerHeartbeatV1 {
   return {
     protocolVersion: PROTOCOL_VERSION,
     deviceId: "worker-effect-1",
     workerId: "worker-runtime-1",
-    observedAtMs: Date.now(),
+    observedAtMs,
     operationalState: "active",
     connectionState: "online",
     readiness: {
@@ -664,6 +763,24 @@ function heartbeat(): WorkerHeartbeatV1 {
       activeRuns: 0,
       maxOutboxEntries: 100,
       outboxDepth: 0,
+    },
+  };
+}
+
+function mainPing(sequence: number, pingId: string): MainPingFrameV1 {
+  const identity = `main-${pingId}`;
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    messageId: identity,
+    senderDeviceId: "main-effect-1",
+    correlationId: identity,
+    createdAt: new Date().toISOString(),
+    idempotencyKey: identity,
+    sequence,
+    type: "main.ping",
+    payload: {
+      pingId,
+      deadlineAtMs: Date.now() + 60_000,
     },
   };
 }

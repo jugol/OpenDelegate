@@ -23,7 +23,7 @@ import {
   type DiscordThread,
   type TaskChannelProjection,
 } from "./contracts.ts";
-import { DiscordAdapterError, DiscordApiError } from "./errors.ts";
+import { DiscordAdapterError, DiscordApiError, DiscordTaskPortError } from "./errors.ts";
 import {
   renderInteractionResult,
   renderResolvedOwnerPrompt,
@@ -61,6 +61,7 @@ export class DiscordForumAdapter {
   readonly #gateway: DiscordForumAdapterOptions["gateway"];
   readonly #diagnostics: DiscordDiagnostic[] = [];
   readonly #threadWork = new Map<string, Promise<void>>();
+  readonly #knownThreads = new Map<string, DiscordThread>();
   readonly #ownerActivityByTask = new Map<string, OwnerMessageActivity>();
   readonly #outboxOwner = `discord-adapter:${cryptoRandomSuffix()}`;
   #flushPromise: Promise<void> | undefined;
@@ -216,6 +217,7 @@ export class DiscordForumAdapter {
 
   async handleGatewayDispatch(dispatch: DiscordGatewayDispatch): Promise<void> {
     validateDispatchEnvelope(dispatch);
+    let cursorDurable = true;
     switch (dispatch.type) {
       case "MESSAGE_CREATE":
         await this.#handleMessage(dispatch.message);
@@ -223,10 +225,11 @@ export class DiscordForumAdapter {
       case "THREAD_CREATE":
       case "THREAD_UPDATE":
         await this.#withThread(dispatch.thread.id, async () => {
-          await this.#handleThread(dispatch.thread);
+          cursorDurable = await this.#handleThread(dispatch.thread);
         });
         break;
       case "THREAD_DELETE":
+        this.#knownThreads.delete(dispatch.threadId);
         if (
           dispatch.guildId === this.#config.guildId &&
           forumChannelIds(this.#config).includes(dispatch.parentId)
@@ -245,9 +248,11 @@ export class DiscordForumAdapter {
         });
         break;
     }
-    await this.#saveCursor(dispatch);
+    if (cursorDurable) {
+      await this.#saveCursor(dispatch);
+    }
     if (dispatch.type !== "INTERACTION_CREATE") {
-      await this.flushOutbox();
+      this.#flushOutboxInBackground();
     }
   }
 
@@ -395,6 +400,7 @@ export class DiscordForumAdapter {
         panelRequestKey,
       );
     }
+    this.#flushOutboxInBackground();
   }
 
   async createTaskThread(projection: TaskChannelProjection): Promise<DiscordTaskBinding> {
@@ -535,6 +541,12 @@ export class DiscordForumAdapter {
     return this.#flushPromise;
   }
 
+  #flushOutboxInBackground(): void {
+    void this.flushOutbox().catch((error: unknown) => {
+      this.#recordDiagnostic("discord.outbox_flush_failed", { error: errorText(error) });
+    });
+  }
+
   async getDiagnostics(): Promise<readonly DiscordDiagnostic[]> {
     return Object.freeze(this.#diagnostics.map(frozenClone));
   }
@@ -548,42 +560,50 @@ export class DiscordForumAdapter {
       return;
     }
     await this.#withThread(message.channelId, async () => {
-      let thread: DiscordThread;
-      try {
-        thread = await this.#api.getThread(message.channelId);
-      } catch (error) {
-        if (error instanceof DiscordApiError && error.code === "FORBIDDEN") {
-          return;
+      let thread = this.#knownThreads.get(message.channelId);
+      if (thread === undefined) {
+        try {
+          thread = await this.#api.getThread(message.channelId);
+        } catch (error) {
+          if (error instanceof DiscordApiError && error.code === "FORBIDDEN") {
+            return;
+          }
+          throw error;
         }
-        throw error;
       }
       if (!this.#isApprovedThread(thread)) {
         return;
       }
+      this.#knownThreads.set(thread.id, frozenClone(thread));
       await this.#ingestMessage(thread, message);
     });
   }
 
-  async #handleThread(thread: DiscordThread): Promise<void> {
+  async #handleThread(thread: DiscordThread): Promise<boolean> {
     if (!this.#isApprovedThread(thread)) {
-      return;
+      this.#knownThreads.delete(thread.id);
+      return true;
     }
+    this.#knownThreads.set(thread.id, frozenClone(thread));
     const binding = await this.#repository.getBindingByThread(thread.id);
     if (binding !== undefined) {
       if (binding.externalState === "deleted") {
-        return;
+        return true;
       }
       await this.#repository.updateBinding(thread.id, {
         archived: thread.archived,
         locked: thread.locked,
         externalState: "available",
       });
-      return;
+      return true;
     }
-    const starter = await this.#api.getMessage(thread.id, thread.id);
-    if (!starter.author.bot && this.#isAuthorized(starter.author.id, starter.author.roleIds)) {
-      await this.#ingestMessage(thread, starter);
-    }
+    // Discord sends THREAD_CREATE before the starter MESSAGE_CREATE. Retaining
+    // that Gateway payload lets the starter enter the durable Task path without
+    // a redundant REST lookup. Reconciliation still fetches a missing starter
+    // so a disconnect between those dispatches cannot lose the Task.
+    // The Resume cursor stays behind this cache-only event until MESSAGE_CREATE
+    // durably binds it, so a crash in between replays or reconciles the thread.
+    return false;
   }
 
   async #ingestMessage(thread: DiscordThread, message: DiscordMessage): Promise<void> {
@@ -847,6 +867,13 @@ export class DiscordForumAdapter {
   async #reconcileThread(thread: DiscordThread): Promise<void> {
     await this.#handleThread(thread);
     let binding = await this.#repository.getBindingByThread(thread.id);
+    if (binding === undefined) {
+      const starter = await this.#api.getMessage(thread.id, thread.id);
+      if (!starter.author.bot && this.#isAuthorized(starter.author.id, starter.author.roleIds)) {
+        await this.#ingestMessage(thread, starter);
+        binding = await this.#repository.getBindingByThread(thread.id);
+      }
+    }
     if (binding === undefined || binding.externalState === "deleted") {
       return;
     }
@@ -1061,6 +1088,18 @@ export class DiscordForumAdapter {
       await this.#executeOutbox(item);
       await this.#repository.completeOutbox({ id: item.id, owner: this.#outboxOwner });
     } catch (error) {
+      if (
+        error instanceof DiscordTaskPortError &&
+        (item.action.kind === "task-command" || item.action.kind === "approval-decision")
+      ) {
+        await this.#resolveTerminalTaskCallback(item.action, error);
+        await this.#repository.completeOutbox({ id: item.id, owner: this.#outboxOwner });
+        this.#recordDiagnostic("discord.task_callback_rejected", {
+          outboxId: item.id,
+          errorCode: error.code,
+        });
+        return;
+      }
       const binding = await bindingForAction(this.#repository, item.action);
       if (error instanceof DiscordApiError && binding !== undefined) {
         if (error.code === "NOT_FOUND") {
@@ -1091,6 +1130,21 @@ export class DiscordForumAdapter {
         outboxId: item.id,
         errorCode,
         error: errorText(error),
+      });
+    }
+  }
+
+  async #resolveTerminalTaskCallback(
+    action: Extract<DiscordOutboxAction, { readonly kind: "approval-decision" | "task-command" }>,
+    error: DiscordTaskPortError,
+  ): Promise<void> {
+    const message = terminalTaskCallbackMessage(error);
+    try {
+      await this.#finishDeferredInteraction(action.responseRef, message, false);
+    } catch (responseError) {
+      this.#recordDiagnostic("discord.task_callback_result_unavailable", {
+        errorCode: error.code,
+        responseError: errorText(responseError),
       });
     }
   }
@@ -1356,6 +1410,19 @@ export class DiscordForumAdapter {
     if (this.#diagnostics.length > 200) {
       this.#diagnostics.shift();
     }
+  }
+}
+
+function terminalTaskCallbackMessage(error: DiscordTaskPortError): string {
+  switch (error.code) {
+    case "CONTROL_UNAVAILABLE":
+      return "This Task control is no longer available in the Task's current state. Use the latest Task update or send a new message.";
+    case "APPROVAL_UNAVAILABLE":
+      return "This approval is no longer available in the Task's current state. Use the latest Task update.";
+    case "REQUEST_CONFLICT":
+      return "This Task control conflicts with an already processed request. Use the latest Task update.";
+    case "TASK_NOT_FOUND":
+      return "This Task is no longer available.";
   }
 }
 

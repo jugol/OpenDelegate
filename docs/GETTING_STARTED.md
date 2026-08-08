@@ -298,6 +298,13 @@ On macOS and Linux:
   --output ABSOLUTE_LOCAL_PATH
 ```
 
+For a macOS Worker, prefer to run the final `worker join` command from Terminal.app in the signed-in
+desktop session. An SSH or background process can pass a read-only Keychain check while still being
+unable to write required Secrets. OpenDelegate tests the stable Secret writes before sending the
+one-use Grant to Main. If that preflight fails, the retained Grant remains reusable until expiry. If
+the enrollment request may already have reached Main, do not replay the retained Grant: inspect the
+Device list first and issue a fresh Grant only when recovery requires it.
+
 The default grant lasts five minutes and can be used once. **Never open, paste, or send the grant**
 through Discord, a Task, an Agent prompt, a log, or an ordinary shared document. Transfer the
 unopened file with an owner-controlled local or operating-system-secure handoff.

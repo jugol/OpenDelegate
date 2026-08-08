@@ -107,7 +107,17 @@ test("pull requests stay lean while release validation retains the bounded platf
   assert.match(pullRequestWorkflow, /^\s+name:\s*Validate pull request\s*$/mu);
   assert.match(pullRequestWorkflow, /^\s+runs-on:\s*ubuntu-24\.04\s*$/mu);
   assert.match(pullRequestWorkflow, /^\s+timeout-minutes:\s*15\s*$/mu);
-  assert.match(pullRequestWorkflow, /^\s+run:\s*pnpm check\s*$/mu);
+  assert.match(pullRequestWorkflow, /^\s+fetch-depth:\s*0\s*$/mu);
+  assert.doesNotMatch(pullRequestWorkflow, /^\s+run:\s*pnpm check\s*$/mu);
+  assert.match(pullRequestWorkflow, /Test and build affected workspaces/u);
+  assert.match(pullRequestWorkflow, /--filter "\.\.\.\[\$PR_BASE_SHA\]"/u);
+  assert.match(
+    pullRequestWorkflow,
+    /git diff --quiet "\$PR_BASE_SHA"\.\.\.HEAD -- package\.json pnpm-lock\.yaml pnpm-workspace\.yaml/u,
+  );
+  assert.match(pullRequestWorkflow, /--recursive --filter "!opendelegate"/u);
+  assert.match(pullRequestWorkflow, /Determine Admin Web browser scope/u);
+  assert.match(pullRequestWorkflow, /if:\s*steps\.browser-scope\.outputs\.required == 'true'/u);
   assert.doesNotMatch(pullRequestWorkflow, /^\s+matrix:\s*$/mu);
   assert.doesNotMatch(pullRequestWorkflow, /release:build/u);
 

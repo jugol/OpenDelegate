@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { TaskDetailV1, TaskSummaryV1 } from "@opendelegate/protocol";
 
 import {
@@ -241,6 +243,13 @@ export class TaskExecutionCoordinator {
   async appendInput(input: AppendTaskInput): Promise<TaskDetailV1> {
     this.#assertOpen();
     const task = await this.#taskService.appendInput(input);
+    if (this.#budget !== undefined) {
+      await this.#budget.recordActivity({
+        taskId: task.taskId,
+        operationId: ownerInputBudgetOperationId(input),
+        source: "owner-input",
+      });
+    }
     if (this.#active.has(task.taskId)) {
       await this.#abort(task.taskId, "superseded");
     }
@@ -254,6 +263,13 @@ export class TaskExecutionCoordinator {
     this.#assertOpen();
     const task = await this.#taskService.resolveApproval(input);
     if (input.decision === "approve") {
+      if (this.#budget !== undefined) {
+        await this.#budget.recordActivity({
+          taskId: task.taskId,
+          operationId: ownerApprovalBudgetOperationId(input),
+          source: "owner-approval",
+        });
+      }
       this.#enqueue(task.taskId);
     } else {
       await this.#abort(task.taskId, "cancelled");
@@ -264,6 +280,13 @@ export class TaskExecutionCoordinator {
   async command(input: TaskCommandInput): Promise<TaskDetailV1> {
     this.#assertOpen();
     const task = await this.#taskService.command(input);
+    if (this.#budget !== undefined && (input.command === "resume" || input.command === "retry")) {
+      await this.#budget.recordActivity({
+        taskId: task.taskId,
+        operationId: ownerCommandBudgetOperationId(input),
+        source: "owner-command",
+      });
+    }
     switch (input.command) {
       case "pause":
         await this.#abort(task.taskId, "paused");
@@ -717,6 +740,36 @@ export class TaskExecutionCoordinator {
     }
     this.#notifyIdle();
   }
+}
+
+function ownerInputBudgetOperationId(input: AppendTaskInput): string {
+  const digest = createHash("sha256")
+    .update(
+      `task-input-v1\u0000${input.taskId}\u0000${input.principalId}\u0000${input.idempotencyKey}`,
+      "utf8",
+    )
+    .digest("hex");
+  return `owner-input:${digest}`;
+}
+
+function ownerCommandBudgetOperationId(input: TaskCommandInput): string {
+  const digest = createHash("sha256")
+    .update(
+      `task-command-v1\u0000${input.taskId}\u0000${input.principalId}\u0000${input.idempotencyKey}\u0000${input.command}`,
+      "utf8",
+    )
+    .digest("hex");
+  return `owner-command:${digest}`;
+}
+
+function ownerApprovalBudgetOperationId(input: ResolveTaskApprovalInput): string {
+  const digest = createHash("sha256")
+    .update(
+      `task-approval-v1\u0000${input.taskId}\u0000${input.approvalId}\u0000${input.principalId}\u0000${input.idempotencyKey}\u0000${input.decision}`,
+      "utf8",
+    )
+    .digest("hex");
+  return `owner-approval:${digest}`;
 }
 
 function latestPublicMessage(records: readonly TaskExecutionRecord[]): string | undefined {

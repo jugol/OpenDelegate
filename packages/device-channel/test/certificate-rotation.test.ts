@@ -29,6 +29,7 @@ import {
 } from "@opendelegate/device-identity";
 
 import {
+  DeviceChannelClientError,
   IdentityRotationRejectedError,
   MainDeviceChannelServer,
   SqliteDeviceChannelRepository,
@@ -76,7 +77,7 @@ class ExtractableTestIdentitySecretStore implements DeviceIdentitySecretStore {
 }
 
 test(
-  "a Worker renews its Device certificate over the authenticated channel",
+  "a Worker renews its Device certificate and releases an interrupted renewal",
   { timeout: 20_000 },
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "opendelegate-rotation-"));
@@ -114,6 +115,28 @@ test(
       certificateAuthority.certificatePem,
       await mainSecrets.getPrivateKey(certificateAuthority.keyId),
     );
+    let pauseNextRotation = false;
+    let observePausedRotation: (() => void) | undefined;
+    let releasePausedRotation: (() => void) | undefined;
+    const pausedRotationObserved = new Promise<void>((resolve) => {
+      observePausedRotation = resolve;
+    });
+    const pausedRotationRelease = new Promise<void>((resolve) => {
+      releasePausedRotation = resolve;
+    });
+    const channelAuthority = {
+      validatePeerIdentity: authority.validatePeerIdentity.bind(authority),
+      confirmCertificateRotation: authority.confirmCertificateRotation.bind(authority),
+      async issueCertificateRotation(
+        input: Parameters<DeviceIdentityAuthority["issueCertificateRotation"]>[0],
+      ) {
+        if (pauseNextRotation) {
+          observePausedRotation?.();
+          await pausedRotationRelease;
+        }
+        return authority.issueCertificateRotation(input);
+      },
+    };
 
     let server: MainDeviceChannelServer | undefined;
     let client: WorkerDeviceChannelClient | undefined;
@@ -133,7 +156,7 @@ test(
       });
       server = await MainDeviceChannelServer.listen({
         mainDeviceId: MAIN_DEVICE_ID,
-        authority,
+        authority: channelAuthority,
         repository: mainState,
         tls: {
           certificateAuthorityPem: certificateAuthority.certificatePem,
@@ -228,7 +251,42 @@ test(
         renewedLifecycle.notAfter >=
           readDeviceCertificateLifecycle(issued.certificatePem, Date.now()).notAfter,
       );
+
+      // If transport disappears after the durable request is sent but before Main
+      // answers it, renewal must return control to the daemon reconnect loop.
+      pauseNextRotation = true;
+      const interruptedRenewal = await workerIdentity.createEnrollmentRequest({
+        deviceId: issued.deviceId,
+        expectedMainSpkiSha256: grant.expectedMainSpkiSha256,
+      });
+      const interruptedDecision = client.rotateIdentity(interruptedRenewal.certificateRequestPem);
+      await pausedRotationObserved;
+      await server.close();
+      server = undefined;
+      let interruptedOutcome:
+        | { readonly status: "rejected"; readonly error: unknown }
+        | { readonly status: "resolved" }
+        | { readonly status: "timeout" };
+      try {
+        interruptedOutcome = await Promise.race([
+          interruptedDecision.then(
+            () => ({ status: "resolved" as const }),
+            (error: unknown) => ({ status: "rejected" as const, error }),
+          ),
+          new Promise<{ readonly status: "timeout" }>((resolve) => {
+            setTimeout(() => resolve({ status: "timeout" }), 1_000);
+          }),
+        ]);
+      } finally {
+        releasePausedRotation?.();
+      }
+      assert.equal(interruptedOutcome.status, "rejected");
+      if (interruptedOutcome.status === "rejected") {
+        assert.ok(interruptedOutcome.error instanceof DeviceChannelClientError);
+        assert.match(interruptedOutcome.error.message, /disconnected/iu);
+      }
     } finally {
+      releasePausedRotation?.();
       await client?.close();
       await server?.close();
       await workerState?.close();

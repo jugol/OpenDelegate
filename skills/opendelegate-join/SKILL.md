@@ -125,6 +125,14 @@ That transient unit is a disposable enrollment boundary, not the installed Worke
 reuse its name for restart, persistence, or upgrade, and do not infer that stopping it leaves a
 restartable unit definition behind.
 
+On macOS, prefer to run `worker join` from the signed-in owner's Terminal.app session. An SSH or
+background shell may pass a read-only Keychain check while still being unable to write required
+Secrets. OpenDelegate must prove stable core Secret writes before submitting the one-use Grant to
+Main. A failure in that preflight leaves the Grant reusable until expiry and may recommend the
+desktop session without claiming that SSH caused every Keychain failure. If an enrollment request
+may have reached Main, never replay the retained Grant: inspect Main first and issue a fresh Grant
+only when recovery requires it. Do not weaken the Keychain backend or copy a key into a file.
+
 The deterministic implementation must:
 
 1. generate a Device-local non-exported or restrictively stored ECDSA P-256 key;
