@@ -14,7 +14,7 @@
     "@opendelegate/device-identity": "workspace:*",
     "@opendelegate/protocol": "workspace:*",
     "@opendelegate/worker-runtime": "workspace:*",
-    "better-sqlite3": "13.0.1",
+    "better-sqlite3": "13.0.3",
     "ws": "8.21.1"
   },
   "devDependencies": {
