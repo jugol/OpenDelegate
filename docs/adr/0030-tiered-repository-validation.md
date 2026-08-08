@@ -1,8 +1,11 @@
 # ADR-0030: Tiered repository validation
 
-Status: **Accepted**
+Status: **Accepted — amended by ADR-0039**
 
 Date: **2026-07-30**
+
+ADR-0039 preserves this three-tier structure and required check names while scoping
+the routine Ubuntu job's package and browser work to the changed workspace graph.
 
 ## Context
 
@@ -72,4 +75,3 @@ dependency-change protection.
 - [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md), CI validation strategy
 - [`../DECISIONS.md`](../DECISIONS.md), D-070
 - [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md), validation cadence
-

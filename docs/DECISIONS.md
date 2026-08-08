@@ -1245,6 +1245,10 @@ two bounded states, but it never includes the wake target or raw probe evidence.
 
 ## D-070 — Repository validation is tiered by purpose
 
+**Amended by D-087:** the tier boundaries and required check names remain accepted;
+the Ubuntu job now scopes package types, tests, builds, and Admin Web browser work to
+the changed workspace graph instead of executing every suite for every pull request.
+
 **Decision:** A routine pull request has one required Ubuntu validation job covering
 canonical documents, architecture, formatting, lint, types, deterministic tests,
 builds, and the Admin Web browser harness. Secret scanning and dependency review are
@@ -1697,3 +1701,25 @@ calendar age is no longer inferred, and only durable wall-usage mutations contri
 to the new total. A sudden Main process failure can omit at most the current
 60-second Task checkpoint interval; active Work Order Runs remain reconstructible
 from their durable start events.
+
+## D-087 — Routine pull requests validate the changed workspace graph
+
+See [ADR-0039](adr/0039-change-scoped-pull-request-validation.md).
+
+**Decision:** The required Ubuntu pull-request job always runs repository-wide
+document, release-ledger, architecture, formatting, lint, and tooling checks. It runs
+types, deterministic package tests, and builds only for workspace packages changed
+from the pull request's immutable base SHA and their dependents. The root recursive
+test command is excluded from that selection. The Admin Web browser harness runs only
+for Admin Web or dependency-manifest changes. Check names, Secret scan, Dependency
+review, the 15-minute timeout, and the explicit Release validation matrix remain
+unchanged.
+
+**Rationale:** D-070 removed duplicated platform matrices but still made a Worker,
+documentation, or backend-only pull request execute every unrelated package and
+install Chromium. The workspace graph provides a deterministic, conservative affected
+set while common manifests still expand to broad validation.
+
+**Consequence:** Ordinary changes receive materially faster feedback and consume less
+hosted-runner quota. Shared-package changes retain dependent coverage; release owners
+still run the complete local and platform validation commands before promotion.
