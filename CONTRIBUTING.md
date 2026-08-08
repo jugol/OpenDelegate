@@ -108,9 +108,11 @@ release tag, or describe a contract fixture as live platform proof. See
 
 ### Validation cadence
 
-Every pull request runs one Ubuntu validation job covering documents, architecture, formatting,
-lint, types, deterministic tests, builds, and the Admin Web browser harness. Secret scanning and
-dependency review are the only additional required checks.
+Every pull request runs one Ubuntu validation job. Documents, release evidence, architecture,
+formatting, lint, and tooling remain repository-wide checks. Types, deterministic package tests, and
+builds follow the changed workspace packages plus their dependents. The Admin Web browser harness
+runs only for Admin Web or dependency-manifest changes. Secret scanning and dependency review are
+the only additional required checks.
 
 Do not rerun the same full suite on every operating system for ordinary pull requests. Use the
 manually dispatched **Release validation** workflow when a release candidate or a platform-sensitive

@@ -948,11 +948,12 @@ chain without rewriting any candidate payload, archive, metadata, or ledger.
 
 ### Tiered repository validation
 
-Routine pull requests run one required Ubuntu validation job. It checks canonical
-documents and release evidence, architecture boundaries, formatting, lint, types,
-the deterministic unit and acceptance harness, application builds, and the Admin
-Web browser harness. Fast secret scanning and dependency review remain separate
-required checks.
+Routine pull requests run one required Ubuntu validation job. It always checks
+canonical documents and release evidence, architecture boundaries, formatting,
+lint, and tooling. It typechecks, tests, and builds workspace packages changed from
+the pull request base plus their dependents. The Admin Web browser harness runs only
+for Admin Web or dependency-manifest changes. Fast secret scanning and dependency
+review remain separate required checks.
 
 The repository does not repeat that complete suite on macOS and Windows for every
 pull request or rerun the same commit automatically after merge. Cross-platform
