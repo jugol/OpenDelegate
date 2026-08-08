@@ -513,7 +513,10 @@ through a secure handoff and resumes the same Task afterward.
    recovery control, such as Retry; the owner is never left with only a generic
    attention notice.
 9. Buttons and menus offer pause, cancel, retry, approve, reject, inspect Runs, and
-   open Artifact actions where Discord permits.
+   open Artifact actions where Discord permits. If authoritative Task state rejects
+   a control from an older message, the deferred interaction explains that the
+   control is no longer available and the command outbox completes without retrying
+   the same deterministic refusal. Transport and storage failures remain retryable.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
     resume the Task and reopen the external conversation when permitted.
 11. If the external post is deleted, Task data remains in Main and the binding is

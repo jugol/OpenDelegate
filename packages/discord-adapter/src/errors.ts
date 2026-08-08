@@ -13,6 +13,24 @@ export class DiscordApiError extends Error {
   }
 }
 
+export type DiscordTaskPortErrorCode =
+  "APPROVAL_UNAVAILABLE" | "CONTROL_UNAVAILABLE" | "REQUEST_CONFLICT" | "TASK_NOT_FOUND";
+
+/**
+ * A deterministic Task-authority refusal. Retrying the same Discord callback
+ * cannot change its outcome, so the outbox must resolve it for the owner rather
+ * than treating it as a transport failure.
+ */
+export class DiscordTaskPortError extends Error {
+  readonly code: DiscordTaskPortErrorCode;
+
+  constructor(code: DiscordTaskPortErrorCode, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "DiscordTaskPortError";
+    this.code = code;
+  }
+}
+
 export type DiscordAdapterErrorCode =
   "CONFIG_INVALID" | "IDEMPOTENCY_CONFLICT" | "PERSISTENCE_CONFLICT" | "PROJECTION_INVALID";
 

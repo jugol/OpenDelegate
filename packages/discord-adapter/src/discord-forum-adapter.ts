@@ -23,7 +23,7 @@ import {
   type DiscordThread,
   type TaskChannelProjection,
 } from "./contracts.ts";
-import { DiscordAdapterError, DiscordApiError } from "./errors.ts";
+import { DiscordAdapterError, DiscordApiError, DiscordTaskPortError } from "./errors.ts";
 import {
   renderInteractionResult,
   renderResolvedOwnerPrompt,
@@ -1088,6 +1088,18 @@ export class DiscordForumAdapter {
       await this.#executeOutbox(item);
       await this.#repository.completeOutbox({ id: item.id, owner: this.#outboxOwner });
     } catch (error) {
+      if (
+        error instanceof DiscordTaskPortError &&
+        (item.action.kind === "task-command" || item.action.kind === "approval-decision")
+      ) {
+        await this.#resolveTerminalTaskCallback(item.action, error);
+        await this.#repository.completeOutbox({ id: item.id, owner: this.#outboxOwner });
+        this.#recordDiagnostic("discord.task_callback_rejected", {
+          outboxId: item.id,
+          errorCode: error.code,
+        });
+        return;
+      }
       const binding = await bindingForAction(this.#repository, item.action);
       if (error instanceof DiscordApiError && binding !== undefined) {
         if (error.code === "NOT_FOUND") {
@@ -1118,6 +1130,21 @@ export class DiscordForumAdapter {
         outboxId: item.id,
         errorCode,
         error: errorText(error),
+      });
+    }
+  }
+
+  async #resolveTerminalTaskCallback(
+    action: Extract<DiscordOutboxAction, { readonly kind: "approval-decision" | "task-command" }>,
+    error: DiscordTaskPortError,
+  ): Promise<void> {
+    const message = terminalTaskCallbackMessage(error);
+    try {
+      await this.#finishDeferredInteraction(action.responseRef, message, false);
+    } catch (responseError) {
+      this.#recordDiagnostic("discord.task_callback_result_unavailable", {
+        errorCode: error.code,
+        responseError: errorText(responseError),
       });
     }
   }
@@ -1383,6 +1410,19 @@ export class DiscordForumAdapter {
     if (this.#diagnostics.length > 200) {
       this.#diagnostics.shift();
     }
+  }
+}
+
+function terminalTaskCallbackMessage(error: DiscordTaskPortError): string {
+  switch (error.code) {
+    case "CONTROL_UNAVAILABLE":
+      return "This Task control is no longer available in the Task's current state. Use the latest Task update or send a new message.";
+    case "APPROVAL_UNAVAILABLE":
+      return "This approval is no longer available in the Task's current state. Use the latest Task update.";
+    case "REQUEST_CONFLICT":
+      return "This Task control conflicts with an already processed request. Use the latest Task update.";
+    case "TASK_NOT_FOUND":
+      return "This Task is no longer available.";
   }
 }
 
