@@ -55,6 +55,7 @@ approved product specification.
 32. [`0035-owner-continuation-idle-budget-resumption.md`](0035-owner-continuation-idle-budget-resumption.md)
 33. [`0036-worker-channel-waiter-release.md`](0036-worker-channel-waiter-release.md)
 34. [`0037-discord-terminal-control-refusal.md`](0037-discord-terminal-control-refusal.md)
+35. [`0038-active-execution-wall-budget.md`](0038-active-execution-wall-budget.md)
 
 ## Proposed ADRs
 

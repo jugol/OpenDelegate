@@ -18,6 +18,7 @@ export const TASK_BUDGET_EXHAUSTED_ABORT_REASON = Object.freeze({
   code: "TASK_BUDGET_EXHAUSTED",
 });
 const MAXIMUM_TIMER_DELAY_MS = 2_147_483_647;
+const ACTIVE_WALL_TIME_CHECKPOINT_MS = 60_000;
 const MAXIMUM_OPERATION_ID_BYTES = 1_024;
 const MAXIMUM_TASK_ID_BYTES = 512;
 const MAXIMUM_WORK_ORDERS_PER_MUTATION = 256;
@@ -33,7 +34,8 @@ const budgetMetrics = [
   "costUsdMicros",
 ] as const satisfies readonly BudgetMetric[];
 
-const measuredTimeMetrics = new Set<BudgetMetric>(["wallTimeMs", "idleTimeMs"]);
+const continuouslyMeasuredTimeMetrics = new Set<BudgetMetric>(["idleTimeMs"]);
+const timeMetrics = new Set<BudgetMetric>(["wallTimeMs", "idleTimeMs"]);
 
 export const DEFAULT_INSTANCE_BUDGET_LIMITS: Readonly<BudgetLimits> = freezeLimits({
   wallTimeMs: { soft: 21 * 60 * 60_000, hard: 24 * 60 * 60_000 },
@@ -306,6 +308,12 @@ interface ActiveRun {
   readonly workOrderId: string;
   readonly proxyTokens: number;
   readonly proxyCostUsdMicros: number;
+  readonly startedAtMs: number;
+}
+
+interface ActiveTaskExecutionWindow {
+  readonly windowId: string;
+  lastAccountedAtMs: number;
 }
 
 interface ProjectedBudget {
@@ -360,6 +368,7 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
   readonly #usageProxy: ProviderUsageProxy;
   readonly #locks = new Map<string, Promise<void>>();
   readonly #guards = new Map<string, Set<GuardControl>>();
+  readonly #activeTaskExecutionWindows = new Map<string, ActiveTaskExecutionWindow>();
 
   public constructor(options: DurableTaskBudgetEnforcerOptions) {
     if (
@@ -466,7 +475,7 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
       usageDelta: input.attempt > 1 ? { retries: 1 } : {},
       activityAtMs: this.#now(),
     });
-    return this.#createGuard(input.taskId, input.signal);
+    return this.#createGuard(input.taskId, input.executionKey, input.signal);
   }
 
   public async registerWorkOrders(input: {
@@ -645,6 +654,8 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
       if (active.workOrderId !== input.workOrderId) {
         throw new Error("The Worker Run Budget scope does not match its Work Order.");
       }
+      const finishedAtMs = this.#now();
+      const runWallTimeMs = Math.max(0, finishedAtMs - active.startedAtMs);
       const actualTokens = providerTokenTotal(usage);
       const actualCost = usage?.costUsdMicros;
       const extraTokens =
@@ -663,6 +674,7 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
           },
           workOrderUsageDelta: {
             concurrentRuns: -1,
+            ...(runWallTimeMs === 0 ? {} : { wallTimeMs: runWallTimeMs }),
             ...(extraTokens === 0 ? {} : { tokens: extraTokens }),
             ...(extraCost === 0 ? {} : { costUsdMicros: extraCost }),
           },
@@ -671,7 +683,7 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
             runId: input.runId,
             workOrderId: input.workOrderId,
           },
-          activityAtMs: this.#now(),
+          activityAtMs: finishedAtMs,
         },
         true,
         operationFingerprint,
@@ -804,6 +816,7 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
   ): Promise<TaskBudgetSnapshot> {
     assertOperationId(draft.operationId);
     assertSource(draft.source);
+    state = await this.#flushActiveTaskWallTimeLocked(state, this.#now());
     const operationDigest = digest(draft.operationId);
     const operationFingerprint = explicitFingerprint ?? mutationFingerprint(state.taskId, draft);
     const existing = state.operations.get(operationDigest);
@@ -820,11 +833,17 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
     if (draft.workOrderId !== undefined && workOrder === undefined) {
       throw new Error("The Work Order has no durable child Budget.");
     }
-    const taskTimeHit = allowObservedOverage ? undefined : hardTimeLimit(state, now);
+    const taskTimeHit = allowObservedOverage
+      ? undefined
+      : hardTimeLimit(state, now, this.#activeTaskWallTimeMs(state.taskId, now));
     const workOrderTimeHit =
       allowObservedOverage || workOrder === undefined
         ? undefined
-        : hardWorkOrderTimeLimit(workOrder, now);
+        : hardWorkOrderTimeLimit(
+            workOrder,
+            now,
+            activeWorkOrderWallTime(state, workOrder.workOrderId, now),
+          );
     let timeHit:
       | {
           readonly metric: "wallTimeMs" | "idleTimeMs";
@@ -967,7 +986,7 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
       const previous = effectiveMetricUsage(before, metric, now);
       const current = effectiveMetricUsage(after, metric, now);
       const timeOperationId =
-        measuredTimeMetrics.has(metric) && limit?.soft !== undefined
+        timeMetrics.has(metric) && limit?.soft !== undefined
           ? timeSoftOperationId(metric as "wallTimeMs" | "idleTimeMs", limit.soft, limit.hard)
           : undefined;
       if (
@@ -995,7 +1014,7 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
         const previous = effectiveWorkOrderMetricUsage(beforeWorkOrder, metric, now);
         const current = effectiveWorkOrderMetricUsage(workOrder, metric, now);
         const timeOperationId =
-          measuredTimeMetrics.has(metric) && limit?.soft !== undefined
+          timeMetrics.has(metric) && limit?.soft !== undefined
             ? timeSoftOperationId(
                 metric as "wallTimeMs" | "idleTimeMs",
                 limit.soft,
@@ -1095,20 +1114,29 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
       hard: number;
       attempted: number;
       workOrderId?: string;
+      operationId?: string;
     }> = [];
     for (const metric of budgetMetrics) {
-      if (measuredTimeMetrics.has(metric) || (usageDelta[metric] ?? 0) <= 0) {
+      if (continuouslyMeasuredTimeMetrics.has(metric) || (usageDelta[metric] ?? 0) <= 0) {
         continue;
       }
       const limit = after.limits[metric];
       const previous = before.usage[metric] ?? 0;
       const current = after.usage[metric] ?? 0;
-      if (limit !== undefined && previous <= limit.hard && current > limit.hard) {
+      if (
+        limit !== undefined &&
+        (metric === "wallTimeMs"
+          ? previous < limit.hard && current >= limit.hard
+          : previous <= limit.hard && current > limit.hard)
+      ) {
         candidates.push({
           metric,
           current,
           hard: limit.hard,
           attempted: usageDelta[metric] ?? 0,
+          ...(metric === "wallTimeMs"
+            ? { operationId: timeHardOperationId(metric, limit.hard) }
+            : {}),
         });
       }
     }
@@ -1118,19 +1146,32 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
       draft.workOrderId === undefined ? undefined : before.workOrders.get(draft.workOrderId);
     if (workOrder !== undefined && beforeWorkOrder !== undefined) {
       for (const metric of budgetMetrics) {
-        if (measuredTimeMetrics.has(metric) || (workOrderUsageDelta[metric] ?? 0) <= 0) {
+        if (
+          continuouslyMeasuredTimeMetrics.has(metric) ||
+          (workOrderUsageDelta[metric] ?? 0) <= 0
+        ) {
           continue;
         }
         const limit = workOrder.limits[metric];
         const previous = beforeWorkOrder.usage[metric] ?? 0;
         const current = workOrder.usage[metric] ?? 0;
-        if (limit !== undefined && previous <= limit.hard && current > limit.hard) {
+        if (
+          limit !== undefined &&
+          (metric === "wallTimeMs"
+            ? previous < limit.hard && current >= limit.hard
+            : previous <= limit.hard && current > limit.hard)
+        ) {
           candidates.push({
             metric,
             current,
             hard: limit.hard,
             attempted: workOrderUsageDelta[metric] ?? 0,
             workOrderId: workOrder.workOrderId,
+            ...(metric === "wallTimeMs"
+              ? {
+                  operationId: timeHardOperationId(metric, limit.hard, workOrder.workOrderId),
+                }
+              : {}),
           });
         }
       }
@@ -1139,7 +1180,7 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
       const state = await this.#loadRequired(after.taskId);
       await this.#appendLimitEvent(
         state,
-        `observed:${draft.operationId}`,
+        candidate.operationId ?? `observed:${draft.operationId}`,
         draft.source,
         candidate.metric,
         candidate.current,
@@ -1245,11 +1286,64 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
     return state;
   }
 
+  #activeTaskWallTimeMs(taskId: string, now: number): number {
+    const window = this.#activeTaskExecutionWindows.get(taskId);
+    return window === undefined ? 0 : Math.max(0, now - window.lastAccountedAtMs);
+  }
+
+  async #flushActiveTaskWallTimeLocked(
+    state: ProjectedBudget,
+    occurredAtMs: number,
+  ): Promise<ProjectedBudget> {
+    const window = this.#activeTaskExecutionWindows.get(state.taskId);
+    if (window === undefined) {
+      return state;
+    }
+    const fromMs = window.lastAccountedAtMs;
+    const elapsedMs = Math.max(0, occurredAtMs - fromMs);
+    if (elapsedMs === 0) {
+      return state;
+    }
+    const operationId = `task-wall-time:${window.windowId}:${fromMs}:${occurredAtMs}`;
+    const source = "task-execution-wall-time";
+    const usageDelta = normalizeUsageDelta({ wallTimeMs: elapsedMs });
+    const draft: MutationDraft = {
+      operationId,
+      source,
+      usageDelta,
+    };
+    const operationDigest = digest(operationId);
+    await this.#appendMutation(state, {
+      schemaVersion: 1,
+      taskId: state.taskId,
+      operationDigest,
+      operationFingerprint: mutationFingerprint(state.taskId, draft),
+      occurredAtMs,
+      source,
+      usageDelta,
+      workOrderUsageDelta: {},
+      workOrderId: null,
+      registeredWorkOrders: [],
+      activityAtMs: null,
+      runStart: null,
+      runFinish: null,
+      extension: null,
+      limitEvent: null,
+    });
+    window.lastAccountedAtMs = occurredAtMs;
+    let next = await this.#loadRequired(state.taskId);
+    await this.#appendCrossedSoftLimits(state, next, draft, usageDelta, {});
+    next = await this.#loadRequired(state.taskId);
+    await this.#appendObservedHardLimits(state, next, draft, usageDelta, {});
+    return this.#loadRequired(state.taskId);
+  }
+
   #snapshot(state: ProjectedBudget): TaskBudgetSnapshot {
     const now = this.#now();
     const usage: Partial<Record<BudgetMetric, number>> = { ...state.usage };
     usage.concurrentRuns ??= 0;
-    usage.wallTimeMs = Math.max(0, now - state.createdAtMs);
+    usage.wallTimeMs =
+      (state.usage.wallTimeMs ?? 0) + this.#activeTaskWallTimeMs(state.taskId, now);
     usage.idleTimeMs = Math.max(0, now - state.lastActivityAtMs);
     return deepFreeze({
       taskId: state.taskId,
@@ -1266,7 +1360,9 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
           limits: cloneLimits(entry.limits),
           usage: {
             ...cloneUsage(entry.usage),
-            wallTimeMs: Math.max(0, now - entry.createdAtMs),
+            wallTimeMs:
+              (entry.usage.wallTimeMs ?? 0) +
+              activeWorkOrderWallTime(state, entry.workOrderId, now),
             idleTimeMs: Math.max(0, now - entry.lastActivityAtMs),
           },
         })),
@@ -1279,8 +1375,13 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
     });
   }
 
-  #createGuard(taskId: string, upstreamSignal: AbortSignal): TaskBudgetExecutionGuard {
+  #createGuard(
+    taskId: string,
+    executionKey: string,
+    upstreamSignal: AbortSignal,
+  ): TaskBudgetExecutionGuard {
     const controller = new AbortController();
+    const startedAtMs = this.#now();
     const control: GuardControl = {
       taskId,
       controller,
@@ -1295,6 +1396,12 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
       control.upstreamAbort();
     }
     const controls = this.#guards.get(taskId) ?? new Set<GuardControl>();
+    if (controls.size === 0) {
+      this.#activeTaskExecutionWindows.set(taskId, {
+        windowId: digest(`task-execution-window-v1\0${taskId}\0${executionKey}\0${startedAtMs}`),
+        lastAccountedAtMs: startedAtMs,
+      });
+    }
     controls.add(control);
     this.#guards.set(taskId, controls);
     void this.#scheduleGuard(control);
@@ -1309,10 +1416,18 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
         if (control.timer !== undefined) {
           clearTimeout(control.timer);
         }
-        upstreamSignal.removeEventListener("abort", control.upstreamAbort);
-        controls.delete(control);
-        if (controls.size === 0) {
-          this.#guards.delete(taskId);
+        try {
+          await this.#withLock(taskId, async () => {
+            const state = await this.#loadRequired(taskId);
+            await this.#flushActiveTaskWallTimeLocked(state, this.#now());
+          });
+        } finally {
+          upstreamSignal.removeEventListener("abort", control.upstreamAbort);
+          controls.delete(control);
+          if (controls.size === 0) {
+            this.#guards.delete(taskId);
+            this.#activeTaskExecutionWindows.delete(taskId);
+          }
         }
       },
     });
@@ -1342,19 +1457,34 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
       clearTimeout(control.timer);
     }
     while (!control.closed && !control.controller.signal.aborted) {
-      const state = await this.#loadRequired(control.taskId);
-      const now = this.#now();
-      const taskHit = hardTimeLimit(state, now);
+      let state = await this.#loadRequired(control.taskId);
+      let now = this.#now();
+      if (this.#activeTaskWallTimeMs(state.taskId, now) >= ACTIVE_WALL_TIME_CHECKPOINT_MS) {
+        state = await this.#withLock(control.taskId, async () =>
+          this.#flushActiveTaskWallTimeLocked(
+            await this.#loadRequired(control.taskId),
+            this.#now(),
+          ),
+        );
+        now = this.#now();
+      }
+      const taskHit = hardTimeLimit(state, now, this.#activeTaskWallTimeMs(state.taskId, now));
       const activeWorkOrderHit =
         taskHit === undefined ? hardActiveWorkOrderTimeLimit(state, now) : undefined;
       const hit = taskHit ?? activeWorkOrderHit;
       if (hit !== undefined) {
         await this.#withLock(control.taskId, async () => {
-          const current = await this.#loadRequired(control.taskId);
-          const currentTaskHit = hardTimeLimit(current, this.#now());
+          let current = await this.#loadRequired(control.taskId);
+          current = await this.#flushActiveTaskWallTimeLocked(current, this.#now());
+          const currentNow = this.#now();
+          const currentTaskHit = hardTimeLimit(
+            current,
+            currentNow,
+            this.#activeTaskWallTimeMs(current.taskId, currentNow),
+          );
           const currentActiveWorkOrderHit =
             currentTaskHit === undefined
-              ? hardActiveWorkOrderTimeLimit(current, this.#now())
+              ? hardActiveWorkOrderTimeLimit(current, currentNow)
               : undefined;
           const currentHit = currentTaskHit ?? currentActiveWorkOrderHit;
           if (currentHit === undefined) {
@@ -1394,17 +1524,27 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
         }
         continue;
       }
-      const taskSoftHit = reachedTimeSoftLimit(state, now);
+      const taskSoftHit = reachedTimeSoftLimit(
+        state,
+        now,
+        this.#activeTaskWallTimeMs(state.taskId, now),
+      );
       const activeWorkOrderSoftHit =
         taskSoftHit === undefined ? reachedActiveWorkOrderSoftLimit(state, now) : undefined;
       const softHit = taskSoftHit ?? activeWorkOrderSoftHit;
       if (softHit !== undefined) {
         await this.#withLock(control.taskId, async () => {
-          const current = await this.#loadRequired(control.taskId);
-          const currentTaskHit = reachedTimeSoftLimit(current, this.#now());
+          let current = await this.#loadRequired(control.taskId);
+          current = await this.#flushActiveTaskWallTimeLocked(current, this.#now());
+          const currentNow = this.#now();
+          const currentTaskHit = reachedTimeSoftLimit(
+            current,
+            currentNow,
+            this.#activeTaskWallTimeMs(current.taskId, currentNow),
+          );
           const currentActiveWorkOrderHit =
             currentTaskHit === undefined
-              ? reachedActiveWorkOrderSoftLimit(current, this.#now())
+              ? reachedActiveWorkOrderSoftLimit(current, currentNow)
               : undefined;
           const currentHit = currentTaskHit ?? currentActiveWorkOrderHit;
           if (currentHit === undefined) {
@@ -1428,8 +1568,8 @@ export class DurableTaskBudgetEnforcer implements TaskBudgetAdministrationPort {
         });
         continue;
       }
-      const delays = timeRemaining(state, now);
-      const delay = Math.min(...delays);
+      const delays = timeRemaining(state, now, this.#activeTaskWallTimeMs(state.taskId, now));
+      const delay = Math.min(...delays, ACTIVE_WALL_TIME_CHECKPOINT_MS);
       if (control.closed || control.controller.signal.aborted) {
         return;
       }
@@ -1580,7 +1720,10 @@ function projectBudget(events: readonly StoredEvent[], taskId: string): Projecte
       ) {
         throw corruptBudget();
       }
-      state.activeRuns.set(payload.runStart.runId, payload.runStart);
+      state.activeRuns.set(payload.runStart.runId, {
+        ...payload.runStart,
+        startedAtMs: payload.occurredAtMs,
+      });
     }
     if (payload.runFinish !== null) {
       const active = state.activeRuns.get(payload.runFinish.runId);
@@ -2005,7 +2148,7 @@ function projectedHardLimitHits(
     readonly attempted: number;
   }> = [];
   for (const metric of budgetMetrics) {
-    if (measuredTimeMetrics.has(metric)) {
+    if (continuouslyMeasuredTimeMetrics.has(metric)) {
       continue;
     }
     const amount = delta[metric] ?? 0;
@@ -2029,6 +2172,7 @@ function projectedHardLimitHits(
 function hardTimeLimit(
   state: ProjectedBudget,
   now: number,
+  activeWallTimeMs = 0,
 ):
   | {
       readonly metric: "wallTimeMs" | "idleTimeMs";
@@ -2039,7 +2183,7 @@ function hardTimeLimit(
   | undefined {
   for (const metric of ["wallTimeMs", "idleTimeMs"] as const) {
     const limit = state.limits[metric];
-    const current = effectiveMetricUsage(state, metric, now);
+    const current = effectiveMetricUsage(state, metric, now, activeWallTimeMs);
     if (limit !== undefined && current >= limit.hard) {
       return { metric, current, hard: limit.hard, workOrderId: undefined };
     }
@@ -2066,7 +2210,11 @@ function hardActiveWorkOrderTimeLimit(
     if (workOrder === undefined) {
       throw corruptBudget();
     }
-    const hit = hardWorkOrderTimeLimit(workOrder, now);
+    const hit = hardWorkOrderTimeLimit(
+      workOrder,
+      now,
+      activeWorkOrderWallTime(state, workOrderId, now),
+    );
     if (hit !== undefined) {
       return {
         ...hit,
@@ -2080,6 +2228,7 @@ function hardActiveWorkOrderTimeLimit(
 function hardWorkOrderTimeLimit(
   workOrder: MutableWorkOrderBudget,
   now: number,
+  activeWallTimeMs = 0,
 ):
   | {
       readonly metric: "wallTimeMs" | "idleTimeMs";
@@ -2089,7 +2238,7 @@ function hardWorkOrderTimeLimit(
   | undefined {
   for (const metric of ["wallTimeMs", "idleTimeMs"] as const) {
     const limit = workOrder.limits[metric];
-    const current = effectiveWorkOrderMetricUsage(workOrder, metric, now);
+    const current = effectiveWorkOrderMetricUsage(workOrder, metric, now, activeWallTimeMs);
     if (limit !== undefined && current >= limit.hard) {
       return { metric, current, hard: limit.hard };
     }
@@ -2100,6 +2249,7 @@ function hardWorkOrderTimeLimit(
 function reachedTimeSoftLimit(
   state: ProjectedBudget,
   now: number,
+  activeWallTimeMs = 0,
 ):
   | {
       readonly metric: "wallTimeMs" | "idleTimeMs";
@@ -2115,7 +2265,7 @@ function reachedTimeSoftLimit(
       continue;
     }
     const operationId = timeSoftOperationId(metric, limit.soft, limit.hard);
-    const current = effectiveMetricUsage(state, metric, now);
+    const current = effectiveMetricUsage(state, metric, now, activeWallTimeMs);
     if (current >= limit.soft && !state.operations.has(digest(operationId))) {
       return {
         metric,
@@ -2155,7 +2305,12 @@ function reachedActiveWorkOrderSoftLimit(
         continue;
       }
       const operationId = timeSoftOperationId(metric, limit.soft, limit.hard, workOrderId);
-      const current = effectiveWorkOrderMetricUsage(workOrder, metric, now);
+      const current = effectiveWorkOrderMetricUsage(
+        workOrder,
+        metric,
+        now,
+        activeWorkOrderWallTime(state, workOrderId, now),
+      );
       if (current >= limit.soft && !state.operations.has(digest(operationId))) {
         return {
           metric,
@@ -2170,13 +2325,17 @@ function reachedActiveWorkOrderSoftLimit(
   return undefined;
 }
 
-function timeRemaining(state: ProjectedBudget, now: number): readonly number[] {
+function timeRemaining(
+  state: ProjectedBudget,
+  now: number,
+  activeTaskWallTimeMs = 0,
+): readonly number[] {
   const taskDelays = (["wallTimeMs", "idleTimeMs"] as const).map((metric) => {
     const limit = state.limits[metric];
     if (limit === undefined) {
       return MAXIMUM_TIMER_DELAY_MS;
     }
-    const current = effectiveMetricUsage(state, metric, now);
+    const current = effectiveMetricUsage(state, metric, now, activeTaskWallTimeMs);
     const softOperation =
       limit.soft === undefined ? undefined : timeSoftOperationId(metric, limit.soft, limit.hard);
     const boundary =
@@ -2200,7 +2359,12 @@ function timeRemaining(state: ProjectedBudget, now: number): readonly number[] {
       if (limit === undefined) {
         return MAXIMUM_TIMER_DELAY_MS;
       }
-      const current = effectiveWorkOrderMetricUsage(workOrder, metric, now);
+      const current = effectiveWorkOrderMetricUsage(
+        workOrder,
+        metric,
+        now,
+        activeWorkOrderWallTime(state, workOrderId, now),
+      );
       const softOperation =
         limit.soft === undefined
           ? undefined
@@ -2218,9 +2382,14 @@ function timeRemaining(state: ProjectedBudget, now: number): readonly number[] {
   return [...taskDelays, ...workOrderDelays];
 }
 
-function effectiveMetricUsage(state: ProjectedBudget, metric: BudgetMetric, now: number): number {
+function effectiveMetricUsage(
+  state: ProjectedBudget,
+  metric: BudgetMetric,
+  now: number,
+  activeWallTimeMs = 0,
+): number {
   if (metric === "wallTimeMs") {
-    return Math.max(0, now - state.createdAtMs);
+    return (state.usage.wallTimeMs ?? 0) + activeWallTimeMs;
   }
   if (metric === "idleTimeMs") {
     return Math.max(0, now - state.lastActivityAtMs);
@@ -2232,14 +2401,21 @@ function effectiveWorkOrderMetricUsage(
   workOrder: MutableWorkOrderBudget,
   metric: BudgetMetric,
   now: number,
+  activeWallTimeMs = 0,
 ): number {
   if (metric === "wallTimeMs") {
-    return Math.max(0, now - workOrder.createdAtMs);
+    return (workOrder.usage.wallTimeMs ?? 0) + activeWallTimeMs;
   }
   if (metric === "idleTimeMs") {
     return Math.max(0, now - workOrder.lastActivityAtMs);
   }
   return workOrder.usage[metric] ?? 0;
+}
+
+function activeWorkOrderWallTime(state: ProjectedBudget, workOrderId: string, now: number): number {
+  return [...state.activeRuns.values()]
+    .filter((run) => run.workOrderId === workOrderId)
+    .reduce((total, run) => total + Math.max(0, now - run.startedAtMs), 0);
 }
 
 function normalizeProviderUsage(
