@@ -421,6 +421,17 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     "releases",
     activeVersion,
   );
+  const targetRuntimeConfiguration = requireRenderedFile(artifacts, "runtime-configuration");
+  const previousRuntimeConfiguration = requireRenderedFile(
+    renderPlatformServiceArtifacts({
+      ...definition.configuration,
+      bundle: {
+        ...definition.configuration.bundle,
+        version: activeVersion,
+      },
+    }),
+    "runtime-configuration",
+  );
   const steps: ServicePlanStep[] = [
     {
       id: "stage-release",
@@ -465,6 +476,20 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
+    {
+      id: "write-runtime-configuration",
+      description: "Atomically bind the service runtime configuration to the new release.",
+      action: {
+        kind: "file.write",
+        file: targetRuntimeConfiguration,
+        atomic: true,
+      },
+      rollback: {
+        kind: "file.write",
+        file: previousRuntimeConfiguration,
+        atomic: true,
+      },
+    },
     {
       id: "activate-release",
       description: "Atomically switch the stable current pointer to the new release.",

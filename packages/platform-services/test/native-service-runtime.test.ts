@@ -756,6 +756,70 @@ test("upgrade refuses a configuration that does not match installed service defi
   assert.equal(mutations(), 0);
 });
 
+test("upgrade accepts an exact installed topology rendered for the active version", async () => {
+  const configuration = linuxConfiguration();
+  const installedConfiguration = linuxConfiguration({
+    bundle: {
+      ...configuration.bundle,
+      version: "1.2.2",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  for (const file of renderPlatformServiceArtifacts(installedConfiguration).files) {
+    fileSystem.files.set(file.path, Buffer.from(file.content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("/opt/opendelegate/releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (request.executable === "/usr/bin/id") {
+      return processResult(0, "400\n");
+    }
+    if (request.arguments.includes("is-active")) {
+      return processResult(0, "active\n");
+    }
+    return processResult(0);
+  };
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "linux",
+    elevated: true,
+    loggedIn: true,
+    fileSystem,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "linux",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-upgrade-exact-active-version",
+    configuration,
+    plan: createServicePlan({
+      operation: "upgrade",
+      configuration,
+      activeVersion: "1.2.2",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  const runtimeConfiguration = renderPlatformServiceArtifacts(configuration).files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtimeConfiguration);
+  assert.deepEqual(
+    fileSystem.files.get(runtimeConfiguration.path),
+    Buffer.from(runtimeConfiguration.content),
+  );
+});
+
 test("Admin auto-open reconfiguration atomically replaces only the installed runtime configuration", async () => {
   const previousConfiguration = linuxConfiguration({ role: "main" });
   const configuration = linuxConfiguration({

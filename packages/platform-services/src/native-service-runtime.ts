@@ -254,7 +254,15 @@ export async function preflightNativeServiceOperation(input: {
     configuration.platform,
   );
   if (input.plan.operation === "upgrade") {
-    await assertUpgradeConfigurationMatchesInstalled(configuration, input.boundaries.fileSystem);
+    const activeVersion = input.plan.fromVersion;
+    if (activeVersion === undefined) {
+      failPreflight("Upgrade requires the exact active service version.");
+    }
+    await assertUpgradeConfigurationMatchesInstalled(
+      configuration,
+      activeVersion,
+      input.boundaries.fileSystem,
+    );
   }
   if (input.plan.operation === "reconfigure") {
     await assertReconfigurationMatchesInstalled(
@@ -1702,7 +1710,7 @@ async function assertRenderedFilePreconditions(
   fileSystem: NativeFileSystemBoundary,
   platform: PlatformFamily,
 ): Promise<void> {
-  if (plan.operation === "reconfigure") {
+  if (plan.operation === "reconfigure" || plan.operation === "upgrade") {
     return;
   }
   for (const step of plan.steps) {
@@ -1766,13 +1774,28 @@ async function assertReconfigurationMatchesInstalled(
 
 async function assertUpgradeConfigurationMatchesInstalled(
   configuration: PlatformServiceConfiguration,
+  activeVersion: string,
   fileSystem: NativeFileSystemBoundary,
 ): Promise<void> {
-  for (const file of renderPlatformServiceArtifacts(configuration).files) {
-    const expected = encodeRenderedFile(file);
+  const installedConfiguration = parsePlatformServiceConfiguration({
+    ...configuration,
+    bundle: {
+      ...configuration.bundle,
+      version: activeVersion,
+    },
+  });
+  const installedFiles = new Map(
+    renderPlatformServiceArtifacts(installedConfiguration).files.map((file) => [file.path, file]),
+  );
+  for (const targetFile of renderPlatformServiceArtifacts(configuration).files) {
+    const installedFile = installedFiles.get(targetFile.path);
+    if (installedFile === undefined || installedFile.purpose !== targetFile.purpose) {
+      failPreflight("Upgrade requires the installed service topology to match the target version.");
+    }
+    const expected = encodeRenderedFile(installedFile);
     let existing: Buffer;
     try {
-      existing = await fileSystem.read(file.path, MAXIMUM_RENDERED_FILE_BYTES);
+      existing = await fileSystem.read(targetFile.path, MAXIMUM_RENDERED_FILE_BYTES);
     } catch (error) {
       throw new ServiceCommandExecutionError(
         "SERVICE_COMMAND_PREFLIGHT_FAILED",

@@ -117,6 +117,9 @@ represents a supported release or completed first milestone.
 - Recovered certificate rotation after prior failed rotations and owner-authorized recredentialing
   by selecting the active current-generation certificate, and discarded key-bound rotation requests
   replayed from an earlier Worker process session.
+- Allowed native service upgrades to validate the installed topology against the actual active
+  version, and atomically advance or roll back the durable runtime configuration with the release
+  pointer.
 - Accepted the exact private `0550` directory and `0440` file modes emitted by current systemd
   credential mounts, allowing headless Linux vaults to become ready without permitting general
   group-readable credential paths.
