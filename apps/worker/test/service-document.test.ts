@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { test } from "node:test";
 
 import { buildWorkerServiceDocument } from "../src/service-document.ts";
@@ -96,8 +96,17 @@ test("a staged Windows Worker composes its service document from durable public 
 
     assert.equal(document.platform, "windows");
     assert.deepEqual(document.ipcTrust, { protocolVersion: 2, core, helper });
-    assert.equal(document.helperSecretBinding.vaultRoot, ownerVaultRoot);
+    assert.equal(document.bundle.sourceDirectory, win32.resolve(bundle));
+    assert.equal(document.helperSecretBinding.vaultRoot, win32.resolve(ownerVaultRoot));
     assert.equal(document.serviceSecretBinding?.serviceSid, SERVICE_SID);
+    assert.equal(
+      document.serviceSecretBinding?.handoffRoot,
+      win32.resolve(join(dataRoot, "state", "secrets", "handoff")),
+    );
+    assert.equal(
+      document.serviceSecretBinding?.vaultRoot,
+      win32.resolve(join(dataRoot, "state", "secrets", "service")),
+    );
     assert.equal(
       document.bundle.checksum,
       `sha256:${createHash("sha256").update("fixture  payload\n").digest("hex")}`,

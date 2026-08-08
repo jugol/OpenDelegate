@@ -78,10 +78,7 @@ export async function buildWorkerServiceDocument(
       throw new WorkerAppError("CONFIG_INVALID", `The ${label} must be an absolute path.`);
     }
   }
-  if (
-    hostPlatform === platform() &&
-    resolve(options.paths.home) !== resolve(options.dataRoot, "state")
-  ) {
+  if (resolve(options.paths.home) !== resolve(options.dataRoot, "state")) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
       "The enrolled Worker home must equal DATA_ROOT/state because the native core service opens that exact durable state root.",
@@ -193,13 +190,16 @@ export async function buildWorkerServiceDocument(
       helperIpcSigningKey: `secret://worker/${WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS}`,
     },
     healthPort: options.healthPort,
-    windowsOwnerHelperVaultRoot: servicePreparation.ownerHelperSecretBinding.vaultRoot,
+    windowsOwnerHelperVaultRoot: platformPath(
+      family,
+      servicePreparation.ownerHelperSecretBinding.vaultRoot,
+    ),
     windowsServiceSecretBinding: {
       backend: configuration.secretBackend.backend,
-      handoffRoot: configuration.secretBackend.handoffRoot,
+      handoffRoot: platformPath(family, configuration.secretBackend.handoffRoot),
       serviceName: configuration.secretBackend.serviceName,
       serviceSid: configuration.secretBackend.serviceSid,
-      vaultRoot: configuration.secretBackend.vaultRoot,
+      vaultRoot: platformPath(family, configuration.secretBackend.vaultRoot),
     },
   });
 }
