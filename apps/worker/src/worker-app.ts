@@ -1561,23 +1561,38 @@ export async function runWorkerDaemon(options: RunWorkerDaemonOptions): Promise<
   if (reconnectMinimumMs > reconnectMaximumMs) {
     throw appError("CONFIG_INVALID", "Worker reconnect intervals are invalid.");
   }
-  const composition = await createWorkerRuntime(options);
-  try {
-    await runWorkerConnectionLoop(composition, {
-      reconnectMinimumMs,
-      reconnectMaximumMs,
-      heartbeatIntervalMs,
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-      ...(options.onReady === undefined ? {} : { onReady: options.onReady }),
-      ...(options.onConnectionDiagnostic === undefined
-        ? {}
-        : { onConnectionDiagnostic: options.onConnectionDiagnostic }),
-      ...(options.onCertificateRenewal === undefined
-        ? {}
-        : { onCertificateRenewal: options.onCertificateRenewal }),
-    });
-  } finally {
-    await composition.close();
+  let readyReported = false;
+  while (!isAborted(options.signal)) {
+    const composition = await createWorkerRuntime(options);
+    try {
+      const outcome = await runWorkerConnectionLoop(composition, {
+        reconnectMinimumMs,
+        reconnectMaximumMs,
+        heartbeatIntervalMs,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.onReady === undefined
+          ? {}
+          : {
+              onReady: async () => {
+                if (!readyReported) {
+                  readyReported = true;
+                  await options.onReady?.();
+                }
+              },
+            }),
+        ...(options.onConnectionDiagnostic === undefined
+          ? {}
+          : { onConnectionDiagnostic: options.onConnectionDiagnostic }),
+        ...(options.onCertificateRenewal === undefined
+          ? {}
+          : { onCertificateRenewal: options.onCertificateRenewal }),
+      });
+      if (outcome !== "configuration-reload") {
+        return;
+      }
+    } finally {
+      await composition.close();
+    }
   }
 }
 
@@ -1596,19 +1611,37 @@ export async function runWorkerConnectionLoop(
       outcome: WorkerCertificateRenewalOutcome,
     ) => void | Promise<void>;
   },
-): Promise<void> {
+): Promise<"configuration-reload" | "stopped"> {
   let backoff = options.reconnectMinimumMs;
   let readyReported = false;
   let reportedCode: WorkerRouteIncidentCode | undefined;
+  let renewalRetryDelayMs = CERTIFICATE_RENEWAL_RETRY_MINIMUM_MS;
+  let renewalNotBeforeMs = 0;
+  const renewWhenDue = async (): Promise<WorkerCertificateRenewalOutcome | undefined> => {
+    const now = Date.now();
+    if (now < renewalNotBeforeMs) {
+      return undefined;
+    }
+    const outcome = await renewCertificateIfDue(composition, options.onCertificateRenewal);
+    if (outcome.status === "not-due") {
+      renewalNotBeforeMs = Math.max(now, outcome.renewAfter);
+      renewalRetryDelayMs = CERTIFICATE_RENEWAL_RETRY_MINIMUM_MS;
+    } else if (outcome.status === "unavailable") {
+      renewalNotBeforeMs = now + renewalRetryDelayMs;
+      renewalRetryDelayMs = Math.min(CERTIFICATE_RENEWAL_RETRY_MAXIMUM_MS, renewalRetryDelayMs * 2);
+    }
+    return outcome;
+  };
   while (!isAborted(options.signal)) {
     const result = await composition.runtime.connect();
     if (!result.connected) {
-      // Retrying cannot repair a lapsed credential, so the reason is reported once
-      // per distinct cause rather than buried under an endless backoff.
-      const code = blockingConnectionCode(result.diagnostics);
-      if (code !== undefined && code !== reportedCode) {
-        reportedCode = code;
-        await options.onConnectionDiagnostic?.({ code, retryable: false });
+      // Surface one bounded, redacted diagnostic per distinct cause. Retryable
+      // routes keep their backoff, while credential failures remain actionable
+      // instead of being buried under an endless reconnect loop.
+      const diagnostic = connectionDiagnostic(result.diagnostics);
+      if (diagnostic !== undefined && diagnostic.code !== reportedCode) {
+        reportedCode = diagnostic.code;
+        await options.onConnectionDiagnostic?.(diagnostic);
       }
       await abortableDelay(backoff, options.signal);
       backoff = Math.min(options.reconnectMaximumMs, backoff * 2);
@@ -1620,24 +1653,32 @@ export async function runWorkerConnectionLoop(
       await options.onReady?.();
       readyReported = true;
     }
-    await renewCertificateIfDue(composition, options.onCertificateRenewal);
+    if ((await renewWhenDue())?.status === "renewed") {
+      // The replacement key and certificate are durable, but this Runtime was
+      // composed with the superseded identity. Close it and rebuild from the
+      // rewritten configuration before accepting any more work.
+      return "configuration-reload";
+    }
     while (!isAborted(options.signal)) {
       await abortableDelay(options.heartbeatIntervalMs, options.signal);
       // The Device certificate outlives most heartbeats but not most uptimes, so
       // the renewal deadline is checked on the same beat that proves the channel
       // is still usable for the exchange.
-      await renewCertificateIfDue(composition, options.onCertificateRenewal);
+      if ((await renewWhenDue())?.status === "renewed") {
+        return "configuration-reload";
+      }
       if (isAborted(options.signal) || !(await composition.pulse())) {
         break;
       }
     }
   }
+  return "stopped";
 }
 
 async function renewCertificateIfDue(
   composition: Pick<WorkerRuntimeComposition, "renewCertificate">,
   report: ((outcome: WorkerCertificateRenewalOutcome) => void | Promise<void>) | undefined,
-): Promise<void> {
+): Promise<WorkerCertificateRenewalOutcome> {
   let outcome: WorkerCertificateRenewalOutcome;
   try {
     outcome = await composition.renewCertificate();
@@ -1652,7 +1693,11 @@ async function renewCertificateIfDue(
   if (outcome.status !== "not-due") {
     await report?.(outcome);
   }
+  return outcome;
 }
+
+const CERTIFICATE_RENEWAL_RETRY_MINIMUM_MS = 60_000;
+const CERTIFICATE_RENEWAL_RETRY_MAXIMUM_MS = 15 * 60_000;
 
 export interface WorkerConnectionDiagnostic {
   readonly code: WorkerRouteIncidentCode;
@@ -1664,13 +1709,24 @@ const BLOCKING_CONNECTION_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Set(
   "PEER_IDENTITY_MISMATCH",
 ]);
 
-function blockingConnectionCode(
+const CONNECTION_DIAGNOSTIC_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Set([
+  "CERTIFICATE_EXPIRED",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "PEER_IDENTITY_MISMATCH",
+  "TLS_HANDSHAKE_FAILED",
+  "TRANSPORT_BOUNDARY_ERROR",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+
+function connectionDiagnostic(
   diagnostics: readonly TransportAttemptTrace[] | undefined,
-): WorkerRouteIncidentCode | undefined {
+): WorkerConnectionDiagnostic | undefined {
   for (const attempt of diagnostics ?? []) {
-    if (attempt.outcome !== "authentication-rejected") {
-      continue;
-    }
     const diagnostic = attempt.diagnostic;
     if (typeof diagnostic !== "object" || diagnostic === null || Array.isArray(diagnostic)) {
       continue;
@@ -1678,9 +1734,13 @@ function blockingConnectionCode(
     const code = (diagnostic as { readonly [key: string]: unknown })["code"];
     if (
       typeof code === "string" &&
-      BLOCKING_CONNECTION_CODES.has(code as WorkerRouteIncidentCode)
+      CONNECTION_DIAGNOSTIC_CODES.has(code as WorkerRouteIncidentCode)
     ) {
-      return code as WorkerRouteIncidentCode;
+      const recognized = code as WorkerRouteIncidentCode;
+      return {
+        code: recognized,
+        retryable: !BLOCKING_CONNECTION_CODES.has(recognized),
+      };
     }
   }
   return undefined;

@@ -816,13 +816,18 @@ export class MainDeviceChannelServer {
         } else if (frame.type === "worker.pong") {
           // The durable commit and last-observed timestamp are the entire pong side effect.
         }
+        acknowledgedWorkerSequence = (
+          await this.options.repository.completeInboundEffect(frame, claimId)
+        ).acknowledgedSequence;
       } catch (error) {
-        await this.options.repository.releaseInboundEffect(frame, claimId);
+        // Completion is part of the effect boundary. If its durable write is
+        // interrupted (for example by a transient SQLite writer), leaving the
+        // claim in `processing` would make every reconnect reject the same
+        // frame forever. A successful completion can make this release invalid,
+        // so preserve the original failure and let replay observe `handled`.
+        await this.options.repository.releaseInboundEffect(frame, claimId).catch(() => undefined);
         throw error;
       }
-      acknowledgedWorkerSequence = (
-        await this.options.repository.completeInboundEffect(frame, claimId)
-      ).acknowledgedSequence;
     } else if (frame.type === "worker.artifact.prepare") {
       artifactResponse = await this.findArtifactResponse(connection.peer.deviceId, frame);
     } else if (

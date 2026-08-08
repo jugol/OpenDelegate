@@ -38,6 +38,7 @@ import {
   SqliteDeviceChannelRepository,
   SqliteWorkerChannelState,
   WorkerDeviceChannelClient,
+  type DeviceChannelRepository,
   type MainDeviceChannelCallbacks,
   type MainPingFrameV1,
   type WorkerDeviceChannelCallbacks,
@@ -83,6 +84,64 @@ test(
         "Main handled prefix",
       );
       assert.equal(callbackCount, 2);
+    } finally {
+      await client?.close().catch(() => undefined);
+      await fixture.cleanup();
+    }
+  },
+);
+
+test(
+  "Main releases an inbound claim when the durable completion write fails",
+  { timeout: 20_000 },
+  async () => {
+    const fixture = await createChannelFixture("main-completion-failure");
+    let callbackCount = 0;
+    let completionAttempts = 0;
+    const repository = new Proxy(fixture.mainState, {
+      get(target, property) {
+        if (property === "completeInboundEffect") {
+          return async (
+            ...arguments_: Parameters<DeviceChannelRepository["completeInboundEffect"]>
+          ) => {
+            if (arguments_[0].type === "worker.heartbeat") {
+              completionAttempts += 1;
+              if (completionAttempts === 1) {
+                throw new Error("synthetic durable completion failure");
+              }
+            }
+            return target.completeInboundEffect(...arguments_);
+          };
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as DeviceChannelRepository;
+    const server = await fixture.listen(
+      {
+        onHeartbeat: async () => {
+          callbackCount += 1;
+        },
+      },
+      repository,
+    );
+    const state = await fixture.openWorkerState("worker.sqlite");
+    let client: WorkerDeviceChannelClient | undefined;
+
+    try {
+      client = await fixture.connect(server, state);
+      await client.sendHeartbeat(heartbeat());
+      await waitUntil(() => callbackCount === 1, "first Main handler before completion failure");
+      await client.close().catch(() => undefined);
+
+      client = await connectEventually(() => fixture.connect(server, state));
+      await waitUntil(() => callbackCount === 2, "Main handler replay after completion failure");
+      await waitUntil(
+        async () =>
+          (await fixture.mainState.resume(fixture.deviceId)).acknowledgedWorkerSequence >= 1,
+        "Main completion after replay",
+      );
+      assert.equal(completionAttempts, 2);
     } finally {
       await client?.close().catch(() => undefined);
       await fixture.cleanup();
@@ -612,7 +671,10 @@ interface ChannelFixture {
     state: SqliteWorkerChannelState,
     callbacks?: WorkerDeviceChannelCallbacks,
   ): Promise<WorkerDeviceChannelClient>;
-  listen(callbacks: MainDeviceChannelCallbacks): Promise<MainDeviceChannelServer>;
+  listen(
+    callbacks: MainDeviceChannelCallbacks,
+    repository?: DeviceChannelRepository,
+  ): Promise<MainDeviceChannelServer>;
   openWorkerState(filename: string): Promise<SqliteWorkerChannelState>;
 }
 
@@ -711,12 +773,12 @@ async function createChannelFixture(label: string): Promise<ChannelFixture> {
         },
         state,
       }),
-    listen: async (callbacks) => {
+    listen: async (callbacks, repository = mainState) => {
       const server = await MainDeviceChannelServer.listen({
         ...callbacks,
         mainDeviceId: "main-effect-1",
         authority,
-        repository: mainState,
+        repository,
         tls: {
           certificateAuthorityPem: certificateAuthority.certificatePem,
           certificate: serverIdentity.certificatePem,

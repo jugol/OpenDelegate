@@ -63,7 +63,7 @@ describe("Worker certificate renewal", () => {
     });
     const reported: WorkerCertificateRenewalOutcome[] = [];
 
-    await runWorkerConnectionLoop(
+    const loopOutcome = await runWorkerConnectionLoop(
       {
         runtime: { connect: connectedOnce(controller) } as never,
         pulse: async () => false,
@@ -83,9 +83,10 @@ describe("Worker certificate renewal", () => {
     assert.deepEqual(reported, [
       { status: "renewed", generation: 3, notAfter: Date.UTC(2026, 7, 2, 21, 40, 24) },
     ]);
+    assert.equal(loopOutcome, "configuration-reload");
   });
 
-  it("keeps the connection loop alive when a renewal attempt throws", async () => {
+  it("keeps the connection loop alive without storming Main when renewal throws", async () => {
     const controller = new AbortController();
     let calls = 0;
     const renewCertificate = mock.fn(async (): Promise<WorkerCertificateRenewalOutcome> => {
@@ -119,6 +120,10 @@ describe("Worker certificate renewal", () => {
     assert.equal(reported.length, 1);
     assert.equal(reported[0]?.status, "unavailable");
     assert.match((reported[0] as { readonly reason: string }).reason, /SERVICE_UNAVAILABLE/u);
-    assert.ok(renewCertificate.mock.callCount() >= 2, "the loop survives to try again");
+    assert.equal(
+      renewCertificate.mock.callCount(),
+      1,
+      "the next reconnect stays inside the bounded renewal retry window",
+    );
   });
 });

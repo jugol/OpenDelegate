@@ -22,6 +22,8 @@ import {
   readWorkerComputerUseCoreKeyBinding,
   resolveWorkerPaths,
   runWorkerDaemon,
+  type WorkerCertificateRenewalOutcome,
+  type WorkerConnectionDiagnostic,
   type WorkerComputerUseRuntimePort,
 } from "@opendelegate/worker";
 
@@ -242,6 +244,31 @@ async function startWorkerWorkload(
     paths,
     signal: workerController.signal,
     onReady: resolveReady,
+    onConnectionDiagnostic: (diagnostic: WorkerConnectionDiagnostic) => {
+      writeWorkerServiceEvent("worker.connection-diagnostic", {
+        code: diagnostic.code,
+        retryable: diagnostic.retryable,
+      });
+      if (!diagnostic.retryable) {
+        rejectReady(new ServiceHostError(`The Worker connection is blocked (${diagnostic.code}).`));
+      }
+    },
+    onCertificateRenewal: (outcome: WorkerCertificateRenewalOutcome) => {
+      if (outcome.status === "not-due") {
+        return;
+      }
+      writeWorkerServiceEvent(
+        outcome.status === "renewed"
+          ? "worker.certificate-renewed"
+          : "worker.certificate-renewal-deferred",
+        outcome.status === "renewed"
+          ? {
+              certificateGeneration: outcome.generation,
+              expiresAt: new Date(outcome.notAfter).toISOString(),
+            }
+          : { reason: outcome.reason },
+      );
+    },
     ...(computerUseRuntime === undefined ? {} : { computerUseRuntime }),
   }).finally(async () => {
     signal.removeEventListener("abort", stopWorker);
@@ -260,6 +287,17 @@ async function startWorkerWorkload(
       await completed.catch(() => undefined);
     },
   };
+}
+
+function writeWorkerServiceEvent(event: string, fields: Readonly<Record<string, unknown>>): void {
+  process.stderr.write(
+    `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "info",
+      event,
+      ...fields,
+    })}\n`,
+  );
 }
 
 export async function waitForCoreWorkloadReadiness(
