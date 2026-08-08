@@ -1,10 +1,11 @@
 # Platform Services
 
 `@opendelegate/platform-services` is the deterministic Phase 4 boundary for installing and
-supervising OpenDelegate's two Device runtime planes:
+supervising OpenDelegate's Device runtime planes:
 
 - an always-on, least-privilege core service; and
-- a per-owner login-session helper that alone represents graphical desktop readiness.
+- on graphical-capable Devices, a per-owner login-session helper that alone represents
+  graphical desktop readiness.
 
 The package renders platform-native definitions, builds auditable lifecycle plans, executes plans
 through injected privileged adapters, and produces redacted diagnostics. It does not ask an LLM to
@@ -21,6 +22,13 @@ choose commands or service paths.
 Linux also exposes a foreground invocation for owners of non-systemd machines. That invocation
 explicitly requires an external supervisor and is not represented as equivalent to systemd
 persistence.
+
+A genuinely headless Linux configuration sets `helperSecretBinding` to `null` and
+contains only the core IPC public pin and Secret reference. Rendering then omits the
+user unit, helper manifest, helper supervisor commands, and helper health step. It
+does not synthesize a second key or claim Computer Use. Graphical Linux remains a
+two-plane configuration and must provide Secret Service, a distinct owner key, and
+both public pins together.
 
 Every platform configuration records the owner login preference explicitly:
 

@@ -54,6 +54,10 @@ describe("native two-plane JavaScript host", () => {
       configuration.localIpc.core.privateKeyReference,
       "secret://windows/core-ipc-signing-v2",
     );
+    assert.equal(configuration.localIpc.sessionHelper, "enabled");
+    if (configuration.localIpc.sessionHelper !== "enabled") {
+      assert.fail("fixture must include the session helper");
+    }
     assert.equal(
       configuration.localIpc.helper.privateKeyReference,
       "secret://windows/helper-ipc-signing-v2",
@@ -74,6 +78,27 @@ describe("native two-plane JavaScript host", () => {
     const logOverlap = validConfiguration();
     logOverlap.helperSecretBinding.vaultRoot = "C:\\ProgramData\\OpenDelegate\\logs";
     assert.throws(() => parseServiceHostConfiguration(logOverlap), /helper Secret binding/u);
+  });
+
+  it("accepts an explicit headless Linux core without inventing helper authority", () => {
+    const configuration = parseServiceHostConfiguration(headlessLinuxConfiguration());
+    assert.equal(configuration.platform, "linux");
+    assert.equal(configuration.helperSecretBinding, null);
+    assert.equal(configuration.localIpc.sessionHelper, "disabled");
+    assert.equal(Object.hasOwn(configuration.localIpc, "helper"), false);
+    assert.equal(configuration.localIpc.allowedPeers.length, 1);
+
+    assert.throws(
+      () =>
+        parseServiceHostConfiguration({
+          ...headlessLinuxConfiguration(),
+          helperSecretBinding: {
+            backend: "linux-secret-service",
+            secretToolPath: "/usr/bin/secret-tool",
+          },
+        }),
+      /local IPC configuration/u,
+    );
   });
 
   it("refuses linked, oversized, and unstable configuration files", async () => {
@@ -151,6 +176,58 @@ function validConfiguration() {
         peerIdentity: "NT SERVICE\\OpenDelegate-personal",
       },
       allowedPeers: ["NT SERVICE\\OpenDelegate-personal", "S-1-5-21-1000"],
+    },
+    health: {
+      endpoint: "http://127.0.0.1:43190/health/live",
+      timeoutMs: 30_000,
+    },
+  };
+}
+
+function headlessLinuxConfiguration() {
+  return {
+    schemaVersion: 3,
+    instanceId: "personal",
+    deviceId: "device-linux-headless",
+    platform: "linux",
+    role: "worker",
+    releaseVersion: "1.2.3",
+    releaseRoot: "/opt/opendelegate/current",
+    stateRoot: "/var/lib/opendelegate/state",
+    authorityRoot: "/var/lib/opendelegate/authority",
+    runtimeRoot: "/run/opendelegate",
+    ownerSession: {
+      userName: "owner",
+      stableUserId: "1000",
+      uid: 1000,
+      homeDirectory: "/home/owner",
+      adminAutoOpen: { enabled: false },
+    },
+    helperSecretBinding: null,
+    logs: {
+      core: {
+        stdout: "/var/log/opendelegate/core.stdout.log",
+        stderr: "/var/log/opendelegate/core.stderr.log",
+      },
+      sessionHelper: {
+        stdout: "/var/log/opendelegate/helper.stdout.log",
+        stderr: "/var/log/opendelegate/helper.stderr.log",
+      },
+    },
+    localIpc: {
+      kind: "unix-domain-socket",
+      endpoint: "/run/opendelegate/session-helper.sock",
+      authentication: "ed25519-mutual-signature-v2",
+      sessionHelper: "disabled",
+      credentialReferenceDocument: "/var/lib/opendelegate/state/config/secret-references.json",
+      core: {
+        privateKeyReference: "secret://linux/core-ipc-signing-v2",
+        privateKeyReferenceKey: "coreIpcSigningKey",
+        keyId: "sha256:f9acccda515ce25409e456e45f25417bcda0c1cc0255490965f6ab59d5a81b48",
+        publicKeySpkiBase64Url: "MCowBQYDK2VwAyEAjBmMzBDNPDdi86mu7kAWdhSpEsUBySgfGN0q2ganv5I",
+      },
+      allowedPeers: ["opendelegate"],
+      socketMode: "0660",
     },
     health: {
       endpoint: "http://127.0.0.1:43190/health/live",

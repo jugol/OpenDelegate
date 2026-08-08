@@ -217,6 +217,7 @@ test("plan and render are read-only and use the validated platform-services cont
   assert.equal(rendered.kind, "render");
   assert.equal(rendered.artifacts.platform, "linux");
   assert.equal(rendered.artifacts.core.plane, "core");
+  assert.ok(rendered.artifacts.helper);
   assert.equal(rendered.artifacts.helper.plane, "session-helper");
 
   const planned = await runServiceLifecycleCommand(

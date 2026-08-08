@@ -86,3 +86,39 @@ test("diagnostics expose log locations, versions, readiness, and rollback withou
   assert.doesNotMatch(serialized, /secret:\/\//);
   assert.doesNotMatch(serialized, /device-identity/);
 });
+
+test("headless Linux diagnostics never claim a helper or authenticated desktop IPC", () => {
+  const graphical = linuxConfiguration();
+  const configuration = linuxConfiguration({
+    helperSecretBinding: null,
+    ipcTrust: { protocolVersion: 2, core: graphical.ipcTrust.core },
+    secretReferences: {
+      deviceIdentity: "secret://linux/device-identity",
+      coreIpcSigningKey: "secret://linux/core-ipc-signing-v2",
+    },
+    systemdCredential: {
+      credentialName: "opendelegate-vault-key",
+      encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+    },
+  });
+  const diagnostic = createServiceDiagnostic({
+    configuration,
+    retainedVersions: [],
+    coreSupervisorState: "running",
+    // Even a contradictory native observation cannot make a non-installed helper ready.
+    helperSupervisorState: "running",
+    readiness: evaluateSessionHelperReadiness({
+      helperProcess: "running",
+      loggedIn: true,
+      desktopUnlocked: true,
+      permissions: GRANTED,
+    }),
+  });
+
+  assert.equal(diagnostic.core.status, "running");
+  assert.equal(diagnostic.helper.status, "not-installed");
+  assert.equal(diagnostic.readiness.computerUse, "unavailable");
+  assert.equal(diagnostic.readiness.headlessWorkAvailable, true);
+  assert.match(diagnostic.readiness.reason, /core-only/u);
+  assert.equal(diagnostic.ipc.authenticated, false);
+});

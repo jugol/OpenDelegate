@@ -28,6 +28,7 @@ export function renderWindowsServiceArtifacts(
   const taskName = `\\OpenDelegate-${configuration.instanceId}-SessionHelper`;
   const coreIdentity = `NT SERVICE\\${serviceName}`;
   const ipc: LocalIpcDefinition = {
+    sessionHelper: "enabled",
     kind: "named-pipe",
     endpoint: `\\\\.\\pipe\\OpenDelegate\\${configuration.instanceId}\\session-helper`,
     authentication: "ed25519-mutual-signature-v2",

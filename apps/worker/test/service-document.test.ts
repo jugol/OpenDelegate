@@ -8,18 +8,17 @@ import { test } from "node:test";
 import { buildWorkerServiceDocument } from "../src/service-document.ts";
 import { resolveWorkerPaths, WorkerAppError } from "../src/worker-app.ts";
 
-const checkout = join(process.cwd(), "..", "..");
 const SERVICE_SID = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
 
 test("a staged Windows Worker composes its service document from durable public bindings", async () => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-service-document-"));
   const bundle = join(root, "bundle");
+  const dataRoot = join(root, "runtime-data");
   const paths = resolveWorkerPaths({
     sourceCheckoutRoot: bundle,
-    home: join(root, "worker-home"),
+    home: join(dataRoot, "state"),
   });
   const installRoot = join(root, "installed");
-  const dataRoot = join(root, "runtime-data");
   const ownerVaultRoot = join(root, "owner-vault");
   const core = keyPin();
   const helper = keyPin();
@@ -104,6 +103,25 @@ test("a staged Windows Worker composes its service document from durable public 
       `sha256:${createHash("sha256").update("fixture  payload\n").digest("hex")}`,
     );
 
+    await assert.rejects(
+      buildWorkerServiceDocument({
+        paths,
+        bundleDirectory: bundle,
+        installRoot,
+        dataRoot: join(root, "different-runtime-data"),
+        instanceId: "personal",
+        healthPort: 43_190,
+        sourceCheckoutRoot: bundle,
+        hostPlatform: "win32",
+        ownerSession: {
+          userName: "WORKSTATION\\owner",
+          stableUserId: "S-1-5-21-1000",
+        },
+      }),
+      (error: unknown) =>
+        error instanceof WorkerAppError && error.message.includes("DATA_ROOT/state"),
+    );
+
     await writeFile(join(bundle, "release-metadata.json"), " ".repeat(1024 * 1024 + 1));
     await assert.rejects(
       buildWorkerServiceDocument({
@@ -130,23 +148,150 @@ test("a staged Windows Worker composes its service document from durable public 
   }
 });
 
-test("service-document fails closed where per-plane service Secret migration is not implemented", async () => {
-  await assert.rejects(
-    buildWorkerServiceDocument({
-      paths: resolveWorkerPaths({ sourceCheckoutRoot: checkout, home: join(tmpdir(), "unused") }),
-      bundleDirectory: "/tmp/bundle",
+test("a systemd-enrolled headless Linux Worker composes a core-only service document", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-linux-service-document-"));
+  const bundle = join(root, "bundle");
+  const serviceBundle = posixTestPath(bundle);
+  const dataRoot = join(root, "runtime-data");
+  const serviceDataRoot = posixTestPath(dataRoot);
+  const paths = resolveWorkerPaths({
+    sourceCheckoutRoot: bundle,
+    home: join(dataRoot, "state"),
+  });
+  const core = keyPin();
+  try {
+    await mkdir(paths.configDirectory, { recursive: true });
+    await mkdir(bundle, { recursive: true });
+    await writeFile(
+      paths.configFile,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        deviceId: "device-linux-headless",
+        workerId: "worker-primary",
+        mainDeviceId: "device-main",
+        keyId: "device-key-linux",
+        certificateGeneration: 1,
+        certificatePem: "-----BEGIN CERTIFICATE-----\nworker\n-----END CERTIFICATE-----",
+        certificateAuthorityPem:
+          "-----BEGIN CERTIFICATE-----\nauthority\n-----END CERTIFICATE-----",
+        expectedMainSpkiSha256: `sha256:${"A".repeat(43)}`,
+        transportProfile: {
+          deviceId: "device-main",
+          endpoints: [
+            {
+              endpointId: "main-private",
+              label: "Main private route",
+              kind: "wss",
+              url: "wss://main.example.test/api/v1/device/channel",
+              credentialRef: "device-identity",
+            },
+          ],
+        },
+        secretBackend: {
+          backend: "linux-systemd-credential-vault",
+          credentialName: "opendelegate-vault-key",
+          encryptedCredentialFile: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+          vaultRoot: "/var/lib/opendelegate-runtime/state/secrets/systemd-vault",
+          servicePreparation: {
+            schemaVersion: 1,
+            mode: "headless",
+            serviceIdentity: {
+              userName: "opendelegate",
+              groupName: "opendelegate",
+              uid: 995,
+            },
+            ipcTrust: { core },
+          },
+        },
+        agent: { provider: "auto", allowUntestedVersion: false },
+        workspaces: [],
+        createdAt: "2026-08-08T00:00:00.000Z",
+      })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await writeFile(
+      join(bundle, "release-metadata.json"),
+      `${JSON.stringify({ productVersion: "0.1.0" })}\n`,
+    );
+    await writeFile(join(bundle, "SHA256SUMS"), "fixture  payload\n");
+
+    const document = await buildWorkerServiceDocument({
+      paths,
+      bundleDirectory: serviceBundle,
       installRoot: "/opt/opendelegate",
-      dataRoot: "/var/lib/opendelegate",
+      dataRoot: serviceDataRoot,
       instanceId: "personal",
       healthPort: 43_190,
-      sourceCheckoutRoot: checkout,
+      sourceCheckoutRoot: serviceBundle,
       hostPlatform: "linux",
-      ownerSession: { userName: "owner", stableUserId: "1000" },
+      ownerSession: {
+        userName: "owner",
+        stableUserId: "1000",
+        uid: 1000,
+        homeDirectory: "/home/owner",
+      },
+    });
+
+    assert.equal(document.platform, "linux");
+    assert.equal(document.helperSecretBinding, null);
+    assert.deepEqual(document.ipcTrust, { protocolVersion: 2, core });
+    assert.equal(Object.hasOwn(document.secretReferences, "helperIpcSigningKey"), false);
+    assert.deepEqual(document.systemdCredential, {
+      credentialName: "opendelegate-vault-key",
+      encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+    });
+    assert.deepEqual(document.serviceIdentity, {
+      userName: "opendelegate",
+      groupName: "opendelegate",
+    });
+    await assert.rejects(
+      buildWorkerServiceDocument({
+        paths,
+        bundleDirectory: serviceBundle,
+        installRoot: "/opt/opendelegate",
+        dataRoot: serviceDataRoot,
+        instanceId: "personal",
+        healthPort: 43_190,
+        sourceCheckoutRoot: serviceBundle,
+        hostPlatform: "linux",
+        ownerSession: {
+          userName: "owner",
+          stableUserId: "1000",
+          uid: 1000,
+          homeDirectory: "/home/owner",
+        },
+        serviceIdentity: { userName: "other", groupName: "other" },
+      }),
+      (error: unknown) =>
+        error instanceof WorkerAppError &&
+        error.code === "CONFIG_INVALID" &&
+        error.message.includes("does not match"),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("service-document still fails closed for macOS before Keychain plane migration", async () => {
+  await assert.rejects(
+    buildWorkerServiceDocument({
+      paths: resolveWorkerPaths({
+        sourceCheckoutRoot: process.cwd(),
+        home: join(tmpdir(), "unused"),
+      }),
+      bundleDirectory: "/tmp/bundle",
+      installRoot: "/Library/OpenDelegate",
+      dataRoot: "/Library/Application Support/OpenDelegate",
+      instanceId: "personal",
+      healthPort: 43_190,
+      sourceCheckoutRoot: process.cwd(),
+      hostPlatform: "darwin",
+      ownerSession: { userName: "owner", stableUserId: "501" },
     }),
     (error: unknown) =>
       error instanceof WorkerAppError &&
       error.code === "CONFIG_INVALID" &&
-      error.message.includes("two-plane runtime"),
+      error.message.includes("Keychain migration"),
   );
 });
 
@@ -164,4 +309,10 @@ function keyPin(): {
   } finally {
     spki.fill(0);
   }
+}
+
+function posixTestPath(value: string): string {
+  return process.platform === "win32"
+    ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/")
+    : value;
 }

@@ -357,6 +357,9 @@ async function tryStartWorkerComputerUseRuntime(
   paths: ReturnType<typeof resolveWorkerPaths>,
   signal: AbortSignal,
 ): Promise<(WorkerComputerUseRuntimePort & { close(): Promise<void> }) | undefined> {
+  if (configuration.localIpc.sessionHelper === "disabled") {
+    return undefined;
+  }
   let authority: PersistentDesktopAuthorityStore | undefined;
   try {
     const workerConfiguration = await loadWorkerConfiguration(paths);

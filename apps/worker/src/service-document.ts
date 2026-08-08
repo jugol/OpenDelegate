@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { platform } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, posix, resolve, win32 } from "node:path";
 
 import {
   composeServiceConfiguration,
@@ -34,6 +34,12 @@ export interface BuildWorkerServiceDocumentOptions {
   readonly ownerSession?: {
     readonly userName: string;
     readonly stableUserId: string;
+    readonly uid?: number;
+    readonly homeDirectory?: string;
+  };
+  readonly serviceIdentity?: {
+    readonly userName: string;
+    readonly groupName: string;
   };
 }
 
@@ -57,10 +63,10 @@ export async function buildWorkerServiceDocument(
       "The current host platform has no native OpenDelegate service integration.",
     );
   }
-  if (family !== "windows") {
+  if (family === "macos") {
     throw new WorkerAppError(
       "CONFIG_INVALID",
-      `Persistent ${family} Worker preparation still lacks the separate core-service and owner-session Secret migration required by the two-plane runtime. No install document was written.`,
+      "Persistent macOS Worker preparation still lacks the separate core-service and owner-session Keychain migration required by the two-plane runtime. No install document was written.",
     );
   }
   for (const [label, value] of [
@@ -72,8 +78,78 @@ export async function buildWorkerServiceDocument(
       throw new WorkerAppError("CONFIG_INVALID", `The ${label} must be an absolute path.`);
     }
   }
+  if (
+    hostPlatform === platform() &&
+    resolve(options.paths.home) !== resolve(options.dataRoot, "state")
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "The enrolled Worker home must equal DATA_ROOT/state because the native core service opens that exact durable state root.",
+    );
+  }
 
   const configuration = await loadWorkerConfiguration(options.paths);
+  const bundleDirectory = platformPath(family, options.bundleDirectory);
+  const [version, checksum] = await Promise.all([
+    readBundleVersion(bundleDirectory),
+    readBundleChecksum(bundleDirectory),
+  ]);
+  if (family === "linux") {
+    if (configuration.secretBackend.backend !== "linux-systemd-credential-vault") {
+      throw new WorkerAppError(
+        "CONFIG_INVALID",
+        "A persistent headless Linux Worker must join under its systemd credential vault before composing a service document.",
+      );
+    }
+    const servicePreparation = configuration.secretBackend.servicePreparation;
+    if (servicePreparation === undefined || servicePreparation.mode !== "headless") {
+      throw new WorkerAppError(
+        "CONFIG_INVALID",
+        "This Linux Worker predates durable core service preparation. Re-enroll it under the eventual systemd service identity; OpenDelegate will not guess the lost public pin.",
+      );
+    }
+    const ownerSession = requireUnixOwnerSession(options.ownerSession);
+    const serviceIdentity = servicePreparation.serviceIdentity;
+    if (
+      options.serviceIdentity !== undefined &&
+      (options.serviceIdentity.userName !== serviceIdentity.userName ||
+        options.serviceIdentity.groupName !== serviceIdentity.groupName)
+    ) {
+      throw new WorkerAppError(
+        "CONFIG_INVALID",
+        "The requested Linux service identity does not match the identity bound during Worker enrollment.",
+      );
+    }
+    return composeServiceConfiguration({
+      platform: "linux",
+      role: "worker",
+      instanceId: options.instanceId,
+      deviceId: configuration.deviceId,
+      bundle: { version, sourceDirectory: bundleDirectory, checksum },
+      sourceCheckoutDirectory: platformPath(family, options.sourceCheckoutRoot),
+      installRoot: platformPath(family, options.installRoot),
+      dataRoot: platformPath(family, options.dataRoot),
+      ownerSession: {
+        ...ownerSession,
+        adminAutoOpen: { enabled: false },
+      },
+      serviceIdentity: {
+        userName: serviceIdentity.userName,
+        groupName: serviceIdentity.groupName,
+      },
+      ipcTrust: {
+        core: servicePreparation.ipcTrust.core,
+      },
+      secretReferences: {
+        coreIpcSigningKey: `secret://worker/${WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS}`,
+      },
+      systemdCredential: {
+        credentialName: configuration.secretBackend.credentialName,
+        encryptedSourcePath: configuration.secretBackend.encryptedCredentialFile,
+      },
+      healthPort: options.healthPort,
+    });
+  }
   if (configuration.secretBackend.backend !== "windows-service-dpapi") {
     throw new WorkerAppError(
       "CONFIG_INVALID",
@@ -88,11 +164,6 @@ export async function buildWorkerServiceDocument(
     );
   }
 
-  const bundleDirectory = resolve(options.bundleDirectory);
-  const [version, checksum] = await Promise.all([
-    readBundleVersion(bundleDirectory),
-    readBundleChecksum(bundleDirectory),
-  ]);
   const ownerSession = options.ownerSession ?? (await resolveWindowsOwnerSession());
 
   return composeServiceConfiguration({
@@ -128,6 +199,36 @@ export async function buildWorkerServiceDocument(
       vaultRoot: configuration.secretBackend.vaultRoot,
     },
   });
+}
+
+function platformPath(family: PlatformFamily, value: string): string {
+  return family === "windows" ? win32.resolve(value) : posix.normalize(value);
+}
+
+function requireUnixOwnerSession(value: BuildWorkerServiceDocumentOptions["ownerSession"]): {
+  readonly userName: string;
+  readonly stableUserId: string;
+  readonly uid: number;
+  readonly homeDirectory: string;
+} {
+  if (
+    value === undefined ||
+    !Number.isSafeInteger(value.uid) ||
+    (value.uid ?? -1) < 0 ||
+    value.stableUserId !== String(value.uid) ||
+    value.homeDirectory === undefined
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "Linux service-document requires the installation owner's user name, numeric UID, and home directory.",
+    );
+  }
+  return {
+    userName: value.userName,
+    stableUserId: value.stableUserId,
+    uid: value.uid!,
+    homeDirectory: value.homeDirectory,
+  };
 }
 
 /**

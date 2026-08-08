@@ -33,11 +33,11 @@ export interface ComposeServiceConfigurationInput {
    */
   readonly ipcTrust: {
     readonly core: LocalIpcPublicKeyPin;
-    readonly helper: LocalIpcPublicKeyPin;
+    readonly helper?: LocalIpcPublicKeyPin;
   };
   readonly secretReferences: {
     readonly coreIpcSigningKey: string;
-    readonly helperIpcSigningKey: string;
+    readonly helperIpcSigningKey?: string;
   };
   /** Loopback port for the core plane's liveness endpoint. */
   readonly healthPort: number;
@@ -48,7 +48,7 @@ export interface ComposeServiceConfigurationInput {
     readonly helperPath: string;
     readonly expectedHelperSha256: `sha256:${string}`;
   };
-  /** Required on Linux, where owner Secrets go through the Secret Service tool. */
+  /** Required only on graphical Linux, where owner Secrets use Secret Service. */
   readonly linuxSecretToolPath?: string;
   /**
    * The staged Windows handoff, when one exists. The core service runs under its
@@ -111,11 +111,13 @@ export function composeServiceConfiguration(
     ipcTrust: {
       protocolVersion: 2 as const,
       core: input.ipcTrust.core,
-      helper: input.ipcTrust.helper,
+      ...(input.ipcTrust.helper === undefined ? {} : { helper: input.ipcTrust.helper }),
     },
     secretReferences: {
       coreIpcSigningKey: input.secretReferences.coreIpcSigningKey,
-      helperIpcSigningKey: input.secretReferences.helperIpcSigningKey,
+      ...(input.secretReferences.helperIpcSigningKey === undefined
+        ? {}
+        : { helperIpcSigningKey: input.secretReferences.helperIpcSigningKey }),
     },
     health: {
       endpoint: healthEndpoint(input.healthPort),
@@ -125,6 +127,7 @@ export function composeServiceConfiguration(
   };
 
   if (input.platform === "windows") {
+    requireSessionHelper(input, "Windows");
     return parsePlatformServiceConfiguration({
       platform: "windows",
       ...base,
@@ -145,6 +148,7 @@ export function composeServiceConfiguration(
     "A service account identity is required off Windows.",
   );
   if (input.platform === "macos") {
+    requireSessionHelper(input, "macOS");
     const helper = required(
       input.macOsKeychainHelper,
       "The pinned macOS Keychain helper is required.",
@@ -160,19 +164,52 @@ export function composeServiceConfiguration(
       },
     });
   }
+  const linuxHelperEnabled = input.linuxSecretToolPath !== undefined;
+  if (
+    linuxHelperEnabled !== (input.ipcTrust.helper !== undefined) ||
+    linuxHelperEnabled !== (input.secretReferences.helperIpcSigningKey !== undefined)
+  ) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Linux session-helper binding, public pin, and Secret reference must be supplied together.",
+    );
+  }
+  if (
+    !linuxHelperEnabled &&
+    (input.systemdCredential === undefined || input.systemdCredential === null)
+  ) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Headless Linux requires its encrypted systemd core credential mapping.",
+    );
+  }
   return parsePlatformServiceConfiguration({
     platform: "linux",
     ...base,
     serviceIdentity,
-    helperSecretBinding: {
-      backend: "linux-secret-service",
-      secretToolPath: required(
-        input.linuxSecretToolPath,
-        "The Linux Secret Service tool path is required.",
-      ),
-    },
+    helperSecretBinding: linuxHelperEnabled
+      ? {
+          backend: "linux-secret-service",
+          secretToolPath: input.linuxSecretToolPath!,
+        }
+      : null,
     systemdCredential: input.systemdCredential ?? null,
   });
+}
+
+function requireSessionHelper(
+  input: ComposeServiceConfigurationInput,
+  platform: "Windows" | "macOS",
+): void {
+  if (
+    input.ipcTrust.helper === undefined ||
+    input.secretReferences.helperIpcSigningKey === undefined
+  ) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      `${platform} requires the owner-session helper public pin and Secret reference.`,
+    );
+  }
 }
 
 function healthEndpoint(port: number): string {

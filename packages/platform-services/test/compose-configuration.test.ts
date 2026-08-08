@@ -185,13 +185,38 @@ describe("native service configuration composition", () => {
   });
 
   it("carries the encrypted headless systemd credential without key material", () => {
-    const configuration = composeServiceConfiguration(linuxInput());
+    const input = linuxInput();
+    const { linuxSecretToolPath, ...headlessInput } = input;
+    assert.equal(linuxSecretToolPath, "/usr/bin/secret-tool");
+    const configuration = composeServiceConfiguration({
+      ...headlessInput,
+      ipcTrust: { core: CORE_PIN },
+      secretReferences: {
+        coreIpcSigningKey: "secret://worker/opendelegate/session-helper-core-signing/v2",
+      },
+    });
 
     assert.equal(configuration.platform, "linux");
+    assert.equal(configuration.helperSecretBinding, null);
     assert.deepEqual(configuration.systemdCredential, {
       credentialName: "opendelegate-vault-key",
       encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
     });
     assert.doesNotMatch(JSON.stringify(configuration), /credentialValue|plaintext|privateKey/u);
+
+    assert.throws(
+      () =>
+        composeServiceConfiguration({
+          ...headlessInput,
+          ipcTrust: { core: CORE_PIN },
+          secretReferences: {
+            coreIpcSigningKey: "secret://worker/opendelegate/session-helper-core-signing/v2",
+          },
+          systemdCredential: null,
+        }),
+      (error: unknown) =>
+        error instanceof PlatformServiceError &&
+        error.message.includes("encrypted systemd core credential"),
+    );
   });
 });

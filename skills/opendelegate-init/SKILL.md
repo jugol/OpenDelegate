@@ -328,12 +328,17 @@ runtime configuration, restarts and health-checks only the owner-session helper,
 failure while the core stays running. Configuration Chat never elevates or launches this command
 itself.
 
-Use the native, two-plane service package:
+Use the native service package with an explicit graphical shape:
 
 - Windows: SCM core plus per-user helper;
 - macOS: LaunchDaemon plus LaunchAgent; or
 - Linux: systemd system unit plus graphical user unit, with the documented foreground fallback when
   systemd is unavailable.
+
+An explicitly headless Linux **Worker** is the deliberate exception: its packaged service document
+contains only the systemd core and reports Computer Use unavailable. It does not install a fake
+graphical unit. This does not make a headless Main service complete; keep Main foreground-only until
+the packaged Main service composer and clean-host proof exist.
 
 On Windows, run the packaged `worker windows-service-secret-stage` command against `MAIN_HOME`
 before installing either a Main or Worker core service. Main also hosts a local Worker, so both

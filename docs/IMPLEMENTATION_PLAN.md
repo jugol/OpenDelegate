@@ -433,11 +433,15 @@ Make Main and Worker roles truly persistent on all target operating systems.
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
-- Implement a Device-local service-preparation boundary on every OS that migrates
-  core-owned Secrets to the native service identity, leaves the owner-session key
-  in its separate store, and durably exports only the two public IPC pins into a
-  create-new install document. Windows is implemented by D-088; macOS and Linux
-  remain required and must fail closed until their equivalent migration exists.
+- Implement a Device-local service-preparation boundary for every persistent shape.
+  A graphical Device migrates core-owned Secrets to the native service identity,
+  leaves the owner-session key in its separate store, and durably exports only the
+  two public IPC pins into a create-new install document. Windows is implemented by
+  D-088. D-089 implements the distinct headless Linux shape by enrolling directly
+  under the final systemd identity, exporting the core public pin and that exact
+  non-root identity, and omitting the unavailable helper entirely. macOS and
+  graphical Linux remain required and must fail closed until their equivalent
+  two-plane migration exists.
 - Build release bundles and smoke them on clean hosts using isolated temporary state
   and dynamically selected adjacent loopback listeners.
 - Keep bundle assembly independent from service activation. Installed systems switch

@@ -324,6 +324,69 @@ test("Worker service-document takes only what the document needs and defaults it
     },
   );
 
+  assert.deepEqual(
+    parseWorkerArguments([
+      "service-document",
+      "--output",
+      "service.json",
+      "--bundle",
+      "bundle",
+      "--install-root",
+      "install",
+      "--data-root",
+      "data",
+      "--health-port",
+      "43190",
+      "--owner-user",
+      "owner",
+      "--owner-uid",
+      "1000",
+      "--owner-home",
+      "owner-home",
+      "--service-user",
+      "opendelegate",
+      "--service-group",
+      "opendelegate",
+    ]).serviceDocument,
+    {
+      outputFile: resolve("service.json"),
+      bundleDirectory: resolve("bundle"),
+      installRoot: resolve("install"),
+      dataRoot: resolve("data"),
+      instanceId: "personal",
+      healthPort: 43_190,
+      ownerSession: {
+        userName: "owner",
+        stableUserId: "1000",
+        uid: 1000,
+        homeDirectory: resolve("owner-home"),
+      },
+      serviceIdentity: {
+        userName: "opendelegate",
+        groupName: "opendelegate",
+      },
+    },
+  );
+  assert.throws(
+    () =>
+      parseWorkerArguments([
+        "service-document",
+        "--output",
+        "service.json",
+        "--bundle",
+        "bundle",
+        "--install-root",
+        "install",
+        "--data-root",
+        "data",
+        "--health-port",
+        "43190",
+        "--owner-user",
+        "owner",
+      ]),
+    WorkerAppError,
+  );
+
   // Every path the document names is required: a partial document cannot be
   // completed later, because the install reads it as authoritative.
   assert.throws(
@@ -865,6 +928,17 @@ test("headless Linux provisioning encrypts a generated key over stdin and persis
       encryptedCredentialFile,
       vaultRoot,
     });
+    const persistedLinuxResult = {
+      ...result,
+      encryptedCredentialFile: posixTestPath(encryptedCredentialFile),
+      vaultRoot: posixTestPath(vaultRoot),
+    };
+    if (process.platform === "win32") {
+      await writeFile(configurationFile, `${JSON.stringify(persistedLinuxResult, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o644,
+      });
+    }
     assert.deepEqual(command?.args, ["encrypt", "--name=opendelegate-vault-key", "-", "-"]);
     assert.equal(command?.executable, resolve("/usr/bin/systemd-creds"));
     assert.deepEqual(command?.environment, {});
@@ -881,7 +955,7 @@ test("headless Linux provisioning encrypts a generated key over stdin and persis
     );
     assert.deepEqual(
       await loadWorkerSecretBackendConfiguration(configurationFile, checkout),
-      result,
+      persistedLinuxResult,
     );
     const persisted = Buffer.concat([
       await readFile(configurationFile),
@@ -913,6 +987,12 @@ test("headless Linux provisioning encrypts a generated key over stdin and persis
     await rm(home, { recursive: true, force: true });
   }
 });
+
+function posixTestPath(value: string): string {
+  return process.platform === "win32"
+    ? value.replace(/^[A-Za-z]:/u, "").replaceAll("\\", "/")
+    : value;
+}
 
 test("Worker CLI registers and lists explicit Device-local Workspaces without an opaque patch", () => {
   assert.deepEqual(

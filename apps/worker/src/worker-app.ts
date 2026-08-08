@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
   createHash,
   createPrivateKey,
@@ -19,7 +20,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { arch, cpus, homedir, hostname, platform, release, totalmem } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -274,6 +275,8 @@ export type WorkerSecretBackendConfiguration =
       readonly credentialName: string;
       readonly encryptedCredentialFile: string;
       readonly vaultRoot: string;
+      /** Public facts captured while join runs under the eventual service identity. */
+      readonly servicePreparation?: WorkerLinuxHeadlessServicePreparation;
     };
 
 export interface WorkerLocalIpcPublicKeyPin {
@@ -291,6 +294,19 @@ export interface WorkerWindowsServicePreparation {
   readonly ipcTrust: {
     readonly core: WorkerLocalIpcPublicKeyPin;
     readonly helper: WorkerLocalIpcPublicKeyPin;
+  };
+}
+
+export interface WorkerLinuxHeadlessServicePreparation {
+  readonly schemaVersion: 1;
+  readonly mode: "headless";
+  readonly serviceIdentity: {
+    readonly userName: string;
+    readonly groupName: string;
+    readonly uid: number;
+  };
+  readonly ipcTrust: {
+    readonly core: WorkerLocalIpcPublicKeyPin;
   };
 }
 
@@ -448,6 +464,7 @@ export interface WorkerDiagnosticSnapshot {
   readonly channelEndpointCount: number;
   readonly secretBackend: WorkerSecretBackendConfiguration["backend"];
   readonly serviceSecretSealing?: WindowsServiceSecretSealing;
+  readonly serviceMode?: "headless";
   readonly secretStoreStatus: "ready" | "unavailable";
   readonly identityKeyReady: boolean;
   readonly agents: readonly {
@@ -560,10 +577,16 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
             }
             // Prove that the selected service or desktop identity can write all
             // stable core Secrets before submitting the one-use Grant to Main.
-            await provisionWorkerComputerUseCoreSecrets(managedSecrets);
+            const coreIpc = await provisionWorkerComputerUseCoreSecrets(managedSecrets);
+            const linuxServiceIdentity =
+              options.secretBackend.backend === "linux-systemd-credential-vault"
+                ? await resolveCurrentLinuxServiceIdentity()
+                : undefined;
             return {
               identity: createWorkerEnrollmentIdentity(managedSecrets),
               managedSecrets,
+              coreIpc,
+              linuxServiceIdentity,
             };
           },
           enroll: async (_validated, { identity }) =>
@@ -576,7 +599,37 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
                 osFamily: osFamily(platform()),
               },
             }),
-          finalize: async ({ channelEndpoints }, { managedSecrets }, enrolled) => {
+          finalize: async (
+            { channelEndpoints },
+            { managedSecrets, coreIpc, linuxServiceIdentity },
+            enrolled,
+          ) => {
+            if (
+              options.secretBackend.backend === "linux-systemd-credential-vault" &&
+              linuxServiceIdentity === undefined
+            ) {
+              throw appError(
+                "CONFIG_INVALID",
+                "The prepared Linux service identity is missing from the enrollment transaction.",
+              );
+            }
+            const secretBackend =
+              options.secretBackend.backend === "linux-systemd-credential-vault"
+                ? {
+                    ...options.secretBackend,
+                    servicePreparation: {
+                      schemaVersion: 1 as const,
+                      mode: "headless" as const,
+                      serviceIdentity: linuxServiceIdentity,
+                      ipcTrust: {
+                        core: {
+                          keyId: coreIpc.keyId,
+                          publicKeySpkiBase64Url: coreIpc.publicKeySpkiBase64Url,
+                        },
+                      },
+                    },
+                  }
+                : options.secretBackend;
             const configuration = validateWorkerConfigurationDocument({
               schemaVersion: CONFIG_SCHEMA_VERSION,
               deviceId: enrolled.deviceId,
@@ -594,7 +647,7 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
                   credentialRef: "device-identity",
                 })),
               },
-              secretBackend: options.secretBackend,
+              secretBackend,
               agent:
                 options.agent === undefined
                   ? {
@@ -1490,6 +1543,10 @@ export async function diagnoseWorker(input: {
     ...(configuration.secretBackend.backend === "windows-service-dpapi" &&
     configuration.secretBackend.servicePreparation !== undefined
       ? { serviceSecretSealing: configuration.secretBackend.servicePreparation.sealing }
+      : {}),
+    ...(configuration.secretBackend.backend === "linux-systemd-credential-vault" &&
+    configuration.secretBackend.servicePreparation !== undefined
+      ? { serviceMode: configuration.secretBackend.servicePreparation.mode }
       : {}),
     secretStoreStatus: health.status,
     identityKeyReady: keyAvailability.ready,
@@ -3726,27 +3783,121 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
       assertExactKeys(record, ["backend", "secretToolPath"]);
       return {
         backend: "linux-secret-service",
-        secretToolPath: requireAbsolutePath(text(record["secretToolPath"]), "secret-tool"),
+        secretToolPath: requirePosixAbsolutePath(text(record["secretToolPath"]), "secret-tool"),
       };
     case "linux-systemd-credential-vault":
-      assertExactKeys(record, [
-        "backend",
-        "credentialName",
-        "encryptedCredentialFile",
-        "vaultRoot",
-      ]);
-      return {
-        backend: "linux-systemd-credential-vault",
-        credentialName: strictCredentialName(record["credentialName"]),
-        encryptedCredentialFile: requireAbsolutePath(
-          text(record["encryptedCredentialFile"]),
-          "encrypted systemd credential",
-        ),
-        vaultRoot: requireAbsolutePath(text(record["vaultRoot"]), "vault root"),
-      };
+      assertExactKeys(
+        record,
+        ["backend", "credentialName", "encryptedCredentialFile", "vaultRoot"],
+        ["servicePreparation"],
+      );
+      {
+        const servicePreparation =
+          record["servicePreparation"] === undefined
+            ? undefined
+            : validateLinuxHeadlessServicePreparation(record["servicePreparation"]);
+        return {
+          backend: "linux-systemd-credential-vault",
+          credentialName: strictCredentialName(record["credentialName"]),
+          encryptedCredentialFile: requirePosixAbsolutePath(
+            text(record["encryptedCredentialFile"]),
+            "encrypted systemd credential",
+          ),
+          vaultRoot: requirePosixAbsolutePath(text(record["vaultRoot"]), "vault root"),
+          ...(servicePreparation === undefined ? {} : { servicePreparation }),
+        };
+      }
     default:
       throw appError("CONFIG_INVALID", "Worker Secret Store configuration is invalid.");
   }
+}
+
+function validateLinuxHeadlessServicePreparation(
+  value: unknown,
+): WorkerLinuxHeadlessServicePreparation {
+  const record = readRecord(value);
+  assertExactKeys(record, ["schemaVersion", "mode", "serviceIdentity", "ipcTrust"]);
+  if (record["schemaVersion"] !== 1 || record["mode"] !== "headless") {
+    throw appError("CONFIG_INVALID", "Linux headless service preparation is unsupported.");
+  }
+  const ipcTrust = readRecord(record["ipcTrust"]);
+  assertExactKeys(ipcTrust, ["core"]);
+  const serviceIdentity = readRecord(record["serviceIdentity"]);
+  assertExactKeys(serviceIdentity, ["userName", "groupName", "uid"]);
+  const userName = unixAccountName(serviceIdentity["userName"], "Linux service user");
+  const groupName = unixAccountName(serviceIdentity["groupName"], "Linux service group");
+  const uid = nonNegativeInteger(serviceIdentity["uid"]);
+  if (userName === "root" || uid === 0) {
+    throw appError("CONFIG_INVALID", "The Linux core service identity must not be root.");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    mode: "headless",
+    serviceIdentity: Object.freeze({ userName, groupName, uid }),
+    ipcTrust: Object.freeze({
+      core: validateWorkerLocalIpcPublicKeyPin(ipcTrust["core"]),
+    }),
+  });
+}
+
+async function resolveCurrentLinuxServiceIdentity(): Promise<{
+  readonly userName: string;
+  readonly groupName: string;
+  readonly uid: number;
+}> {
+  if (process.platform !== "linux" || typeof process.getuid !== "function") {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "Headless systemd enrollment must run on Linux under the eventual service identity.",
+    );
+  }
+  const uid = process.getuid();
+  if (!Number.isSafeInteger(uid) || uid <= 0) {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "Headless systemd enrollment must run under a non-root service identity.",
+    );
+  }
+  const [userName, groupName] = await Promise.all([
+    readLinuxIdentityName(["-un"]),
+    readLinuxIdentityName(["-gn"]),
+  ]);
+  return Object.freeze({ userName, groupName, uid });
+}
+
+async function readLinuxIdentityName(args: readonly string[]): Promise<string> {
+  const value = await new Promise<string>((settle, fail) => {
+    execFile(
+      "/usr/bin/id",
+      [...args],
+      { shell: false, timeout: 5_000, maxBuffer: 4_096 },
+      (error, stdout) => (error === null ? settle(stdout) : fail(error)),
+    );
+  }).catch(() => {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "The Linux service identity could not be resolved safely.",
+    );
+  });
+  return unixAccountName(value.trim(), "Linux service identity");
+}
+
+function unixAccountName(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z_][A-Za-z0-9._-]{0,63}\$?$/u.test(value) ||
+    value.includes("\0")
+  ) {
+    throw appError("CONFIG_INVALID", `The ${label} is invalid.`);
+  }
+  return value;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw appError("CONFIG_INVALID", "Worker configuration integer is invalid.");
+  }
+  return value;
 }
 
 function validateWindowsServicePreparation(value: unknown): WorkerWindowsServicePreparation {
@@ -4081,6 +4232,19 @@ function requireAbsolutePath(value: string, label: string): string {
     throw appError("CONFIG_PATH_UNSAFE", `The ${label} must be an absolute safe path.`);
   }
   return resolve(value);
+}
+
+function requirePosixAbsolutePath(value: string, label: string): string {
+  if (
+    typeof value !== "string" ||
+    !posix.isAbsolute(value) ||
+    value !== value.trim() ||
+    value.includes("\0") ||
+    value.includes("\\")
+  ) {
+    throw appError("CONFIG_PATH_UNSAFE", `The ${label} must be an absolute safe POSIX path.`);
+  }
+  return posix.resolve(value);
 }
 
 /**

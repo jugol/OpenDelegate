@@ -13,6 +13,50 @@ export function renderRuntimeConfiguration(
   ipc: LocalIpcDefinition,
 ): RenderedFile {
   const { configuration } = definition;
+  const localIpc =
+    ipc.sessionHelper === "disabled"
+      ? {
+          kind: ipc.kind,
+          endpoint: ipc.endpoint,
+          authentication: ipc.authentication,
+          sessionHelper: "disabled" as const,
+          credentialReferenceDocument: definition.secretReferencesPath,
+          core: {
+            privateKeyReference: ipc.corePrivateKeyReference,
+            privateKeyReferenceKey: "coreIpcSigningKey",
+            keyId: ipc.corePublicKey.keyId,
+            publicKeySpkiBase64Url: ipc.corePublicKey.publicKeySpkiBase64Url,
+          },
+          allowedPeers: ipc.allowedPeers,
+          ...(ipc.socketMode === undefined ? {} : { socketMode: ipc.socketMode }),
+        }
+      : {
+          kind: ipc.kind,
+          endpoint: ipc.endpoint,
+          authentication: ipc.authentication,
+          sessionHelper: "enabled" as const,
+          credentialReferenceDocument: definition.secretReferencesPath,
+          core: {
+            privateKeyReference: ipc.corePrivateKeyReference,
+            privateKeyReferenceKey: "coreIpcSigningKey",
+            keyId: ipc.corePublicKey.keyId,
+            publicKeySpkiBase64Url: ipc.corePublicKey.publicKeySpkiBase64Url,
+            peerKeyId: ipc.helperPublicKey.keyId,
+            peerPublicKeySpkiBase64Url: ipc.helperPublicKey.publicKeySpkiBase64Url,
+            peerIdentity: ipc.allowedPeers[1]!,
+          },
+          helper: {
+            privateKeyReference: ipc.helperPrivateKeyReference,
+            privateKeyReferenceKey: "helperIpcSigningKey",
+            keyId: ipc.helperPublicKey.keyId,
+            publicKeySpkiBase64Url: ipc.helperPublicKey.publicKeySpkiBase64Url,
+            peerKeyId: ipc.corePublicKey.keyId,
+            peerPublicKeySpkiBase64Url: ipc.corePublicKey.publicKeySpkiBase64Url,
+            peerIdentity: ipc.allowedPeers[0]!,
+          },
+          allowedPeers: ipc.allowedPeers,
+          ...(ipc.socketMode === undefined ? {} : { socketMode: ipc.socketMode }),
+        };
   return {
     purpose: "runtime-configuration",
     path: definition.runtimeConfigurationPath,
@@ -42,32 +86,7 @@ export function renderRuntimeConfiguration(
           stderr: definition.helperStderrLogPath,
         },
       },
-      localIpc: {
-        kind: ipc.kind,
-        endpoint: ipc.endpoint,
-        authentication: ipc.authentication,
-        credentialReferenceDocument: definition.secretReferencesPath,
-        core: {
-          privateKeyReference: ipc.corePrivateKeyReference,
-          privateKeyReferenceKey: "coreIpcSigningKey",
-          keyId: ipc.corePublicKey.keyId,
-          publicKeySpkiBase64Url: ipc.corePublicKey.publicKeySpkiBase64Url,
-          peerKeyId: ipc.helperPublicKey.keyId,
-          peerPublicKeySpkiBase64Url: ipc.helperPublicKey.publicKeySpkiBase64Url,
-          peerIdentity: ipc.allowedPeers[1]!,
-        },
-        helper: {
-          privateKeyReference: ipc.helperPrivateKeyReference,
-          privateKeyReferenceKey: "helperIpcSigningKey",
-          keyId: ipc.helperPublicKey.keyId,
-          publicKeySpkiBase64Url: ipc.helperPublicKey.publicKeySpkiBase64Url,
-          peerKeyId: ipc.corePublicKey.keyId,
-          peerPublicKeySpkiBase64Url: ipc.corePublicKey.publicKeySpkiBase64Url,
-          peerIdentity: ipc.allowedPeers[0]!,
-        },
-        allowedPeers: ipc.allowedPeers,
-        ...(ipc.socketMode === undefined ? {} : { socketMode: ipc.socketMode }),
-      },
+      localIpc,
       health: configuration.health,
       ...(configuration.platform !== "windows" || configuration.serviceSecretBinding === undefined
         ? {}

@@ -58,6 +58,7 @@ approved product specification.
 35. [`0038-active-execution-wall-budget.md`](0038-active-execution-wall-budget.md)
 36. [`0039-change-scoped-pull-request-validation.md`](0039-change-scoped-pull-request-validation.md)
 37. [`0040-windows-worker-service-preparation-binding.md`](0040-windows-worker-service-preparation-binding.md)
+38. [`0041-headless-linux-worker-service-preparation.md`](0041-headless-linux-worker-service-preparation.md)
 
 ## Proposed ADRs
 

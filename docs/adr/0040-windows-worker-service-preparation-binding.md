@@ -40,9 +40,10 @@ verification. A legacy staged Worker without the binding must use an
 owner-restorable handoff or a new owner-approved re-credentialing Grant; public pins
 are never guessed.
 
-macOS and Linux service-document composition remains fail-closed until each platform
-has an equivalent explicit migration between its core-service and owner-session
-Secret authorities.
+macOS and graphical Linux service-document composition remains fail-closed until
+each platform has an equivalent explicit migration between its core-service and
+owner-session Secret authorities. ADR-0041 separately defines headless Linux, where
+no graphical helper or owner-session key exists to migrate.
 
 ## Consequences
 
@@ -55,8 +56,9 @@ Worker diagnostics instead of depending on one staging process's stdout.
 
 This is contract and test evidence only. Windows support still requires clean-host
 SCM, restart, reboot, ACL, DPAPI-NG, and owner-session evidence before release
-promotion. macOS and Linux remain explicit first-milestone blockers rather than
-receiving a syntactically valid but unusable service document.
+promotion. macOS and graphical Linux remain explicit first-milestone blockers
+rather than receiving a syntactically valid but unusable service document; headless
+Linux follows ADR-0041's separate core-only acceptance path.
 
 ## Verification
 
@@ -69,7 +71,8 @@ receiving a syntactically valid but unusable service document.
   the session-helper key.
 - The owner-helper vault is rejected when it overlaps immutable input, a service
   root, or a service log path.
-- macOS and Linux service-document requests fail before writing install input.
+- macOS and graphical Linux service-document requests fail before writing install
+  input; headless Linux requires ADR-0041's durable core-only binding.
 
 ## References
 

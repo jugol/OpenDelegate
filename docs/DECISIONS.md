@@ -1752,7 +1752,33 @@ never leaves the owner store. Keeping the helper vault under service-owned state
 would also collapse the ownership boundary the two-plane design is meant to protect.
 
 **Consequence:** Windows can compose deterministic service input from local durable
-facts without Secret transcription and can recover a crash around staging. macOS
-and Linux remain fail-closed in this command until they have equivalent explicit
-core-service and owner-session Secret migration; a syntactically valid document is
-not treated as a working persistent installation.
+facts without Secret transcription and can recover a crash around staging. As
+amended by D-089, macOS and graphical Linux remain fail-closed until they have an
+equivalent explicit core-service and owner-session Secret migration; a syntactically
+valid document is not treated as a working persistent installation.
+
+## D-089 — Headless Linux is an explicit core-only service shape
+
+Implementation detail: [ADR-0041](adr/0041-headless-linux-worker-service-preparation.md).
+
+**Decision:** A Linux Device with no graphical-session capability does not install
+or claim an owner-session helper. Enrollment runs under the eventual non-login
+systemd identity with the final encrypted credential mapping and durably records
+the core IPC public pin plus that exact non-root identity. Its create-new service
+document sets the helper binding to `null` and omits the helper pin, Secret
+reference, user unit, supervisor commands, health step, and Computer Use claim.
+Graphical Linux continues to require two distinct plane-local keys and Secret
+authorities.
+
+**Rationale:** Requiring Secret Service, an unlocked graphical keyring, and a second
+private key on a headless NAS creates a permanently failing helper rather than a
+security boundary. The systemd-enrolled core already owns its final encrypted vault,
+so copying that private material through an owner session would add risk without a
+migration need.
+
+**Consequence:** Headless Linux can be persistently useful for non-graphical work
+without desktop packages or fabricated IPC identity. Enabling Computer Use later is
+an explicit graphical service re-preparation; OpenDelegate never places the helper
+key in the core vault or silently widens a core-only installation. D-088's statement
+that all Linux service documents remain blocked is superseded only for this
+headless core-only shape; macOS and graphical Linux remain blocked.

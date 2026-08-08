@@ -30,6 +30,7 @@ export function renderMacOsServiceArtifacts(
   const coreDomainTarget = `system/${coreLabel}`;
   const helperDomainTarget = `${userDomain}/${helperLabel}`;
   const ipc: LocalIpcDefinition = {
+    sessionHelper: "enabled",
     kind: "unix-domain-socket",
     endpoint: posix.join(configuration.paths.runtimeRoot, "session-helper.sock"),
     authentication: "ed25519-mutual-signature-v2",

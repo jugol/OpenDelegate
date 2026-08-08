@@ -269,16 +269,22 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
   if (configuration.platform !== "windows") {
     steps.push(supervisorStep("install-core", artifacts, "core", "install", "remove"));
   }
-  steps.push(
-    supervisorStep("install-helper", artifacts, "session-helper", "install", "remove"),
-    supervisorStep("start-core", artifacts, "core", "start", "stop"),
-    supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
-    healthStep("health-core", artifacts, "core"),
-    healthStep("health-helper", artifacts, "session-helper"),
-    pruneStep(artifacts),
-  );
+  if (hasSessionHelper(artifacts)) {
+    steps.push(supervisorStep("install-helper", artifacts, "session-helper", "install", "remove"));
+  }
+  steps.push(supervisorStep("start-core", artifacts, "core", "start", "stop"));
+  if (hasSessionHelper(artifacts)) {
+    steps.push(supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"));
+  }
+  steps.push(healthStep("health-core", artifacts, "core"));
+  if (hasSessionHelper(artifacts)) {
+    steps.push(healthStep("health-helper", artifacts, "session-helper"));
+  }
+  steps.push(pruneStep(artifacts));
   return plan("install", artifacts, steps, [
-    "The core plane starts at boot; the session helper starts only in the configured owner's login session.",
+    hasSessionHelper(artifacts)
+      ? "The core plane starts at boot; the session helper starts only in the configured owner's login session."
+      : "This headless Linux installation starts only the core plane; Computer Use is explicitly unavailable.",
     "Release activation uses an atomic current pointer and retains prior healthy versions.",
   ]);
 }
@@ -292,12 +298,18 @@ function lifecyclePlan(
     operation === "start"
       ? [
           supervisorStep("start-core", artifacts, "core", "start", "stop"),
-          supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
+          ...(hasSessionHelper(artifacts)
+            ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
+            : []),
           healthStep("health-core", artifacts, "core"),
-          healthStep("health-helper", artifacts, "session-helper"),
+          ...(hasSessionHelper(artifacts)
+            ? [healthStep("health-helper", artifacts, "session-helper")]
+            : []),
         ]
       : [
-          supervisorStep("stop-helper", artifacts, "session-helper", "stop"),
+          ...(hasSessionHelper(artifacts)
+            ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop")]
+            : []),
           supervisorStep("stop-core", artifacts, "core", "stop"),
         ];
   return plan(operation, artifacts, steps, [], activeVersion);
@@ -308,12 +320,18 @@ function restartPlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     "restart",
     artifacts,
     [
-      supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start"),
+      ...(hasSessionHelper(artifacts)
+        ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
+        : []),
       supervisorStep("stop-core", artifacts, "core", "stop", "start"),
       supervisorStep("start-core", artifacts, "core", "start", "stop"),
-      supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
+      ...(hasSessionHelper(artifacts)
+        ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
+        : []),
       healthStep("health-core", artifacts, "core"),
-      healthStep("health-helper", artifacts, "session-helper"),
+      ...(hasSessionHelper(artifacts)
+        ? [healthStep("health-helper", artifacts, "session-helper")]
+        : []),
     ],
     [],
     activeVersion,
@@ -325,6 +343,12 @@ function reconfigurePlan(
   previousArtifacts: PlatformServiceArtifacts,
   activeVersion: string,
 ): ServicePlan {
+  if (!hasSessionHelper(artifacts) || !hasSessionHelper(previousArtifacts)) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Admin login reconfiguration requires an installed owner-session helper.",
+    );
+  }
   const runtimeConfiguration = requireRenderedFile(artifacts, "runtime-configuration");
   const previousRuntimeConfiguration = requireRenderedFile(
     previousArtifacts,
@@ -414,7 +438,9 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         releaseDirectory: definition.releaseDirectory,
       },
     },
-    supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start"),
+    ...(hasSessionHelper(artifacts)
+      ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
+      : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
     {
       id: "activate-release",
@@ -433,9 +459,13 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
       },
     },
     supervisorStep("start-core", artifacts, "core", "start", "stop"),
-    supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
+    ...(hasSessionHelper(artifacts)
+      ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
+      : []),
     healthStep("health-core", artifacts, "core"),
-    healthStep("health-helper", artifacts, "session-helper"),
+    ...(hasSessionHelper(artifacts)
+      ? [healthStep("health-helper", artifacts, "session-helper")]
+      : []),
     pruneStep(artifacts),
   ];
   return plan(
@@ -457,19 +487,27 @@ function uninstallPlan(
 ): ServicePlan {
   const { configuration } = artifacts.definition;
   const steps: ServicePlanStep[] = [
-    supervisorStep("stop-helper", artifacts, "session-helper", "stop"),
+    ...(hasSessionHelper(artifacts)
+      ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop")]
+      : []),
     supervisorStep("stop-core", artifacts, "core", "stop"),
-    supervisorStep("remove-helper", artifacts, "session-helper", "remove"),
+    ...(hasSessionHelper(artifacts)
+      ? [supervisorStep("remove-helper", artifacts, "session-helper", "remove")]
+      : []),
     supervisorStep("remove-core", artifacts, "core", "remove"),
-    {
-      id: "remove-helper-manifest",
-      description: "Remove the helper supervisor manifest.",
-      action: {
-        kind: "path.remove",
-        path: artifacts.helper.manifest.path,
-        recursive: false,
-      },
-    },
+    ...(artifacts.helper === null
+      ? []
+      : [
+          {
+            id: "remove-helper-manifest",
+            description: "Remove the helper supervisor manifest.",
+            action: {
+              kind: "path.remove" as const,
+              path: artifacts.helper.manifest.path,
+              recursive: false,
+            },
+          },
+        ]),
     {
       id: "remove-core-manifest",
       description: "Remove the core supervisor manifest.",
@@ -559,6 +597,14 @@ function uninstallPlan(
     );
   }
   return plan("uninstall", artifacts, steps, notes, activeVersion);
+}
+
+function hasSessionHelper(
+  artifacts: PlatformServiceArtifacts,
+): artifacts is PlatformServiceArtifacts & {
+  readonly helper: NonNullable<PlatformServiceArtifacts["helper"]>;
+} {
+  return artifacts.helper !== null;
 }
 
 function releaseInstallSteps(artifacts: PlatformServiceArtifacts): readonly ServicePlanStep[] {

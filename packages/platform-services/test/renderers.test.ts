@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   PlatformServiceError,
+  createServicePlan,
   parseLaunchdPlist,
   parseSystemdUnit,
   parseWindowsTaskXml,
@@ -14,6 +15,7 @@ import { linuxConfiguration, macOsConfiguration, windowsConfiguration } from "./
 test("renders an SCM boot service and least-privilege interactive logon helper on Windows", () => {
   const artifacts = renderPlatformServiceArtifacts(windowsConfiguration());
   assert.equal(artifacts.platform, "windows");
+  assert.ok(artifacts.helper);
   assert.equal(artifacts.core.bootSemantics, "boot");
   assert.equal(artifacts.helper.bootSemantics, "login");
   assert.equal(artifacts.core.identity, "NT SERVICE\\OpenDelegate-personal");
@@ -66,6 +68,7 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
 test("renders a LaunchDaemon and Aqua LaunchAgent with separate privilege planes", () => {
   const artifacts = renderPlatformServiceArtifacts(macOsConfiguration());
   assert.equal(artifacts.platform, "macos");
+  assert.ok(artifacts.helper);
   const daemon = parseLaunchdPlist(artifacts.core.manifest.content);
   const agent = parseLaunchdPlist(artifacts.helper.manifest.content);
 
@@ -99,6 +102,7 @@ test("renders hardened system and graphical-user systemd units", () => {
     }),
   );
   assert.equal(artifacts.platform, "linux");
+  assert.ok(artifacts.helper);
   const core = parseSystemdUnit(artifacts.core.manifest.content);
   const helper = parseSystemdUnit(artifacts.helper.manifest.content);
 
@@ -132,6 +136,60 @@ test("renders hardened system and graphical-user systemd units", () => {
   assert.equal(helperReload?.availabilityPolicy, "defer-if-logged-out");
   assert.match(artifacts.foregroundFallback.command, /opendelegate-service-host$/);
   assert.equal(artifacts.foregroundFallback.requiresExternalSupervisor, true);
+});
+
+test("renders an explicit headless Linux core without a phantom helper", () => {
+  const graphical = linuxConfiguration({
+    systemdCredential: {
+      credentialName: "opendelegate-vault-key",
+      encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+    },
+  });
+  const configuration = linuxConfiguration({
+    helperSecretBinding: null,
+    ipcTrust: {
+      protocolVersion: 2,
+      core: graphical.ipcTrust.core,
+    },
+    secretReferences: {
+      deviceIdentity: "secret://linux/device-identity",
+      coreIpcSigningKey: "secret://linux/core-ipc-signing-v2",
+    },
+    systemdCredential: {
+      credentialName: "opendelegate-vault-key",
+      encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+    },
+  });
+  const artifacts = renderPlatformServiceArtifacts(configuration);
+
+  assert.equal(artifacts.helper, null);
+  assert.equal(artifacts.ipc.sessionHelper, "disabled");
+  assert.equal(
+    artifacts.files.some((file) => file.purpose === "helper-manifest"),
+    false,
+  );
+  assert.equal(
+    [...artifacts.installCommands, ...artifacts.startCommands].some(
+      (command) => command.plane === "session-helper",
+    ),
+    false,
+  );
+  const runtimeFile = artifacts.files.find((file) => file.purpose === "runtime-configuration");
+  assert.ok(runtimeFile);
+  const runtime = JSON.parse(runtimeFile.content) as {
+    helperSecretBinding: unknown;
+    localIpc: { sessionHelper: string; helper?: unknown };
+  };
+  assert.equal(runtime.helperSecretBinding, null);
+  assert.equal(runtime.localIpc.sessionHelper, "disabled");
+  assert.equal(Object.hasOwn(runtime.localIpc, "helper"), false);
+
+  const plan = createServicePlan({ operation: "install", configuration });
+  assert.equal(
+    plan.steps.some((step) => step.id.includes("helper")),
+    false,
+  );
+  assert.match(plan.notes.join("\n"), /Computer Use is explicitly unavailable/u);
 });
 
 test("rendering is byte-for-byte deterministic", () => {
@@ -196,6 +254,7 @@ test("persists the owner Admin auto-open choice for every login-session renderer
     };
     assert.equal(runtime.role, "main");
     assert.deepEqual(runtime.ownerSession.adminAutoOpen, configuration.ownerSession.adminAutoOpen);
+    assert.ok(artifacts.helper);
     assert.equal(artifacts.helper.bootSemantics, "login");
     assert.doesNotMatch(artifacts.core.manifest.content, /admin\.example|43180/u);
   }
@@ -203,10 +262,12 @@ test("persists the owner Admin auto-open choice for every login-session renderer
 
 test("manifest parsers reject widened privilege and ambiguous duplicate state", () => {
   const windows = renderPlatformServiceArtifacts(windowsConfiguration());
+  const helper = windows.helper;
+  assert.ok(helper);
   assert.throws(
     () =>
       parseWindowsTaskXml(
-        windows.helper.manifest.content.replace(
+        helper.manifest.content.replace(
           "<RunLevel>LeastPrivilege</RunLevel>",
           "<RunLevel>HighestAvailable</RunLevel>",
         ),
@@ -217,7 +278,7 @@ test("manifest parsers reject widened privilege and ambiguous duplicate state", 
   assert.throws(
     () =>
       parseWindowsTaskXml(
-        windows.helper.manifest.content
+        helper.manifest.content
           .replace("<Principals>", "<Settings>")
           .replace("</Principals>", "</Settings>"),
       ),
@@ -227,7 +288,7 @@ test("manifest parsers reject widened privilege and ambiguous duplicate state", 
   assert.throws(
     () =>
       parseWindowsTaskXml(
-        windows.helper.manifest.content.replace(
+        helper.manifest.content.replace(
           "</LogonTrigger>",
           `${"0".repeat(70 * 1024)}</LogonTrigger>`,
         ),
@@ -238,15 +299,15 @@ test("manifest parsers reject widened privilege and ambiguous duplicate state", 
   assert.throws(
     () =>
       parseWindowsTaskXml(
-        windows.helper.manifest.content.replace("</LogonTrigger>", "</Principal></LogonTrigger>"),
+        helper.manifest.content.replace("</LogonTrigger>", "</Principal></LogonTrigger>"),
       ),
     (error: unknown) =>
       error instanceof PlatformServiceError && error.code === "INVALID_CONFIGURATION",
   );
   for (const content of [
-    windows.helper.manifest.content.replace("<Principals>", "<Principals>JUNK"),
-    windows.helper.manifest.content.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
-    windows.helper.manifest.content.replace(
+    helper.manifest.content.replace("<Principals>", "<Principals>JUNK"),
+    helper.manifest.content.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
+    helper.manifest.content.replace(
       "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
       "<MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>",
     ),

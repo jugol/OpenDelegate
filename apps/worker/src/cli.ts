@@ -89,6 +89,16 @@ export interface ParsedWorkerArguments {
     readonly dataRoot: string;
     readonly instanceId: string;
     readonly healthPort: number;
+    readonly ownerSession?: {
+      readonly userName: string;
+      readonly stableUserId: string;
+      readonly uid: number;
+      readonly homeDirectory: string;
+    };
+    readonly serviceIdentity?: {
+      readonly userName: string;
+      readonly groupName: string;
+    };
   };
   readonly workspace?: {
     readonly workspaceId: string;
@@ -144,6 +154,11 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   let installRoot: string | undefined;
   let dataRoot: string | undefined;
   let healthPort: number | undefined;
+  let ownerUser: string | undefined;
+  let ownerUid: number | undefined;
+  let ownerHome: string | undefined;
+  let serviceUser: string | undefined;
+  let serviceGroup: string | undefined;
   let workspaceId: string | undefined;
   let workspaceAlias: string | undefined;
   let workspaceType: "directory" | "git" | "mounted-storage" | undefined;
@@ -182,7 +197,12 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       option !== "--bundle" &&
       option !== "--install-root" &&
       option !== "--data-root" &&
-      option !== "--health-port"
+      option !== "--health-port" &&
+      option !== "--owner-user" &&
+      option !== "--owner-uid" &&
+      option !== "--owner-home" &&
+      option !== "--service-user" &&
+      option !== "--service-group"
     ) {
       throw new WorkerAppError("CONFIG_INVALID", `Unknown Worker option: ${String(option)}.`);
     }
@@ -237,6 +257,27 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
         if (!Number.isSafeInteger(healthPort) || healthPort < 1 || healthPort > 65_535) {
           throw new WorkerAppError("CONFIG_INVALID", "--health-port must be a usable TCP port.");
         }
+        break;
+      case "--owner-user":
+        ownerUser = target;
+        break;
+      case "--owner-uid":
+        if (!/^(?:0|[1-9][0-9]{0,9})$/u.test(target)) {
+          throw new WorkerAppError("CONFIG_INVALID", "--owner-uid must be a numeric Unix UID.");
+        }
+        ownerUid = Number(target);
+        if (!Number.isSafeInteger(ownerUid)) {
+          throw new WorkerAppError("CONFIG_INVALID", "--owner-uid must be a numeric Unix UID.");
+        }
+        break;
+      case "--owner-home":
+        ownerHome = resolve(target);
+        break;
+      case "--service-user":
+        serviceUser = target;
+        break;
+      case "--service-group":
+        serviceGroup = target;
         break;
       case "--systemd-creds":
         systemdCredsPath = resolve(target);
@@ -392,7 +433,12 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     bundleDirectory !== undefined ||
     installRoot !== undefined ||
     dataRoot !== undefined ||
-    healthPort !== undefined;
+    healthPort !== undefined ||
+    ownerUser !== undefined ||
+    ownerUid !== undefined ||
+    ownerHome !== undefined ||
+    serviceUser !== undefined ||
+    serviceGroup !== undefined;
   if (command !== "service-document" && hasServiceDocumentOption) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
@@ -410,6 +456,25 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     throw new WorkerAppError(
       "CONFIG_INVALID",
       "service-document requires --output, --bundle, --install-root, --data-root, and --health-port.",
+    );
+  }
+  if (
+    command === "service-document" &&
+    [ownerUser, ownerUid, ownerHome].filter((value) => value !== undefined).length !== 0 &&
+    [ownerUser, ownerUid, ownerHome].some((value) => value === undefined)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "Linux owner identity requires --owner-user, --owner-uid, and --owner-home together.",
+    );
+  }
+  if (
+    command === "service-document" &&
+    [serviceUser, serviceGroup].filter((value) => value !== undefined).length === 1
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "Linux service identity requires --service-user and --service-group together.",
     );
   }
   if (
@@ -553,6 +618,24 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
             dataRoot: dataRoot!,
             instanceId: instanceId ?? "personal",
             healthPort: healthPort!,
+            ...(ownerUser === undefined || ownerUid === undefined || ownerHome === undefined
+              ? {}
+              : {
+                  ownerSession: {
+                    userName: ownerUser,
+                    stableUserId: String(ownerUid),
+                    uid: ownerUid,
+                    homeDirectory: ownerHome,
+                  },
+                }),
+            ...(serviceUser === undefined || serviceGroup === undefined
+              ? {}
+              : {
+                  serviceIdentity: {
+                    userName: serviceUser,
+                    groupName: serviceGroup,
+                  },
+                }),
           },
         }),
     ...(command !== "workspace-register"
@@ -658,6 +741,10 @@ async function run(arguments_: readonly string[]): Promise<void> {
       instanceId: request.instanceId,
       healthPort: request.healthPort,
       sourceCheckoutRoot: installationRoot,
+      ...(request.ownerSession === undefined ? {} : { ownerSession: request.ownerSession }),
+      ...(request.serviceIdentity === undefined
+        ? {}
+        : { serviceIdentity: request.serviceIdentity }),
     });
     // The document carries no Secret values. Create-new prevents a repeated CLI
     // invocation from silently replacing input the owner already reviewed; the
@@ -933,6 +1020,8 @@ Usage:
   opendelegate worker service-document --output ABSOLUTE_PATH
     --bundle ABSOLUTE_PATH --install-root ABSOLUTE_PATH --data-root ABSOLUTE_PATH
     --health-port PORT [--instance-id INSTANCE_ID] [--home <path>]
+    [--owner-user USER --owner-uid UID --owner-home ABSOLUTE_PATH]
+    [--service-user USER --service-group GROUP]
   opendelegate worker run [--home <path>]
   opendelegate worker service-host [--home <path>]
   opendelegate worker status [--home <path>]
@@ -947,12 +1036,14 @@ The one-use Enrollment Grant token is accepted only inside the protected grant
 file. It is never accepted in argv or environment variables. Worker state,
 Device-local Knowledge, and managed credentials remain outside the installation.
 
-service-document currently composes a staged Windows Worker's native service
-document from its durable public IPC pins, owner-helper binding, and the bundle's
-checksum manifest. It writes only a create-new document and never elevates or
-registers a service. macOS and Linux fail closed until their separate per-plane
-Secret migration is implemented. Installing the reviewed Windows document is a
-separate, elevated step:
+service-document composes a staged Windows Worker or an explicitly headless Linux
+Worker from durable public IPC bindings and the bundle checksum manifest. Linux
+requires the owner arguments shown above and deliberately emits no graphical helper.
+The optional service-account arguments only verify the identity captured at join.
+It writes only a create-new document and never elevates or
+registers a service. Graphical Linux and macOS remain fail-closed until their
+separate owner-session Secret migration is implemented. Installing the reviewed
+document is a separate, elevated step:
 'opendelegate service install --config <path> --command-id <id>'.
 `);
 }

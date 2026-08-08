@@ -47,7 +47,7 @@ const WINDOWS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "vaultRoot"]);
 const MACOS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "helperPath", "expectedHelperSha256"]);
 const LINUX_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "secretToolPath"]);
 const HEALTH_KEYS = new Set(["endpoint", "timeoutMs"]);
-const IPC_TRUST_KEYS = new Set(["protocolVersion", "core", "helper"]);
+const CORE_IPC_TRUST_KEYS = new Set(["protocolVersion", "core"]);
 const IPC_PUBLIC_KEY_KEYS = new Set(["keyId", "publicKeySpkiBase64Url"]);
 const VERSION_PATTERN = /^[0-9]+(?:\.[0-9]+){2}(?:-[0-9A-Za-z.-]+)?$/;
 const INSTANCE_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?$/;
@@ -348,8 +348,8 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
     if (input.serviceIdentity.userName === "root") {
       throw new PlatformServiceError("INVALID_IDENTITY", "The core service must not run as root.");
     }
-    assertRecord(input.helperSecretBinding, "helperSecretBinding");
     if (input.platform === "macos") {
+      assertRecord(input.helperSecretBinding, "helperSecretBinding");
       assertExactKeys(input.helperSecretBinding, MACOS_HELPER_SECRET_BINDING_KEYS);
       if (
         input.helperSecretBinding.backend !== "macos-keychain" ||
@@ -373,7 +373,8 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
           "The pinned macOS Keychain helper must be inside the immutable installation.",
         );
       }
-    } else {
+    } else if (input.helperSecretBinding !== null) {
+      assertRecord(input.helperSecretBinding, "helperSecretBinding");
       assertExactKeys(input.helperSecretBinding, LINUX_HELPER_SECRET_BINDING_KEYS);
       if (input.helperSecretBinding.backend !== "linux-secret-service") {
         throw new PlatformServiceError(
@@ -385,6 +386,16 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
         "linux",
         input.helperSecretBinding.secretToolPath,
         "helperSecretBinding.secretToolPath",
+      );
+    }
+    if (
+      input.platform === "linux" &&
+      input.helperSecretBinding === null &&
+      input.systemdCredential === null
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_CONFIGURATION",
+        "Headless Linux requires its encrypted systemd core credential mapping.",
       );
     }
     if (input.platform === "linux" && input.systemdCredential !== null) {
@@ -439,7 +450,11 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
   }
 
   assertRecord(input.ipcTrust, "ipcTrust");
-  assertExactKeys(input.ipcTrust, IPC_TRUST_KEYS);
+  const headlessLinux = input.platform === "linux" && input.helperSecretBinding === null;
+  assertExactKeys(
+    input.ipcTrust,
+    headlessLinux ? CORE_IPC_TRUST_KEYS : new Set([...CORE_IPC_TRUST_KEYS, "helper"]),
+  );
   if (input.ipcTrust.protocolVersion !== 2) {
     throw new PlatformServiceError(
       "INVALID_CONFIGURATION",
@@ -447,22 +462,44 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
     );
   }
   validateIpcPublicKey(input.ipcTrust.core, "core");
-  validateIpcPublicKey(input.ipcTrust.helper, "helper");
-  if (input.ipcTrust.core.keyId === input.ipcTrust.helper.keyId) {
+  if (!headlessLinux) {
+    const helperTrust = input.ipcTrust.helper;
+    if (helperTrust === undefined) {
+      throw new PlatformServiceError(
+        "INVALID_CONFIGURATION",
+        "The owner-session helper IPC identity is required.",
+      );
+    }
+    validateIpcPublicKey(helperTrust, "helper");
+    if (input.ipcTrust.core.keyId === helperTrust.keyId) {
+      throw new PlatformServiceError(
+        "INVALID_IDENTITY",
+        "Core and helper must use distinct plane-local signing identities.",
+      );
+    }
+  } else if (Object.hasOwn(input.ipcTrust, "helper")) {
     throw new PlatformServiceError(
-      "INVALID_IDENTITY",
-      "Core and helper must use distinct plane-local signing identities.",
+      "INVALID_CONFIGURATION",
+      "A headless Linux service must not claim an owner-session helper identity.",
     );
   }
 
   assertRecord(input.secretReferences, "secretReferences");
+  if (!Object.hasOwn(input.secretReferences, "coreIpcSigningKey")) {
+    throw new PlatformServiceError(
+      "INVALID_SECRET_REFERENCE",
+      "The core signing-key Secret reference is required.",
+    );
+  }
   if (
-    !Object.hasOwn(input.secretReferences, "coreIpcSigningKey") ||
-    !Object.hasOwn(input.secretReferences, "helperIpcSigningKey")
+    (!headlessLinux && !Object.hasOwn(input.secretReferences, "helperIpcSigningKey")) ||
+    (headlessLinux && Object.hasOwn(input.secretReferences, "helperIpcSigningKey"))
   ) {
     throw new PlatformServiceError(
       "INVALID_SECRET_REFERENCE",
-      "Distinct core and helper signing-key Secret references are required.",
+      headlessLinux
+        ? "A headless Linux service must not claim an owner-session helper Secret."
+        : "Distinct core and helper signing-key Secret references are required.",
     );
   }
   if (Object.hasOwn(input.secretReferences, "helperIpc")) {

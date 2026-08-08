@@ -63,9 +63,12 @@ export interface LocalIpcPublicKeyPin {
   readonly publicKeySpkiBase64Url: string;
 }
 
-export interface LocalIpcTrustConfiguration {
+export interface CoreIpcTrustConfiguration {
   readonly protocolVersion: 2;
   readonly core: LocalIpcPublicKeyPin;
+}
+
+export interface LocalIpcTrustConfiguration extends CoreIpcTrustConfiguration {
   readonly helper: LocalIpcPublicKeyPin;
 }
 
@@ -76,7 +79,7 @@ interface BaseServiceConfiguration {
   readonly bundle: ReleaseBundle;
   readonly paths: RuntimePaths;
   readonly ownerSession: OwnerSessionIdentity;
-  readonly ipcTrust: LocalIpcTrustConfiguration;
+  readonly ipcTrust: CoreIpcTrustConfiguration;
   readonly secretReferences: Readonly<Record<string, string>>;
   readonly health: LocalHealthConfiguration;
   readonly retainPreviousVersions: number;
@@ -84,6 +87,7 @@ interface BaseServiceConfiguration {
 
 export interface WindowsServiceConfiguration extends BaseServiceConfiguration {
   readonly platform: "windows";
+  readonly ipcTrust: LocalIpcTrustConfiguration;
   readonly helperSecretBinding: WindowsOwnerHelperSecretBinding;
   readonly serviceSecretBinding?: WindowsServiceSecretBinding;
 }
@@ -103,6 +107,7 @@ export interface WindowsServiceSecretBinding {
 
 export interface MacOsServiceConfiguration extends BaseServiceConfiguration {
   readonly platform: "macos";
+  readonly ipcTrust: LocalIpcTrustConfiguration;
   readonly serviceIdentity: ServiceIdentity;
   readonly helperSecretBinding: MacOsOwnerHelperSecretBinding;
 }
@@ -115,8 +120,12 @@ export interface MacOsOwnerHelperSecretBinding {
 
 export interface LinuxServiceConfiguration extends BaseServiceConfiguration {
   readonly platform: "linux";
+  readonly ipcTrust: CoreIpcTrustConfiguration & {
+    readonly helper?: LocalIpcPublicKeyPin;
+  };
   readonly serviceIdentity: ServiceIdentity;
-  readonly helperSecretBinding: LinuxOwnerHelperSecretBinding;
+  /** Null on explicitly headless Devices that do not install a graphical helper. */
+  readonly helperSecretBinding: LinuxOwnerHelperSecretBinding | null;
   readonly systemdCredential?: SystemdEncryptedCredential | null;
 }
 
@@ -183,17 +192,25 @@ export interface CommandInvocation {
   readonly expectedExitCodes: readonly number[];
 }
 
-export interface LocalIpcDefinition {
+interface CoreIpcDefinition {
   readonly kind: "named-pipe" | "unix-domain-socket";
   readonly endpoint: string;
   readonly authentication: "ed25519-mutual-signature-v2";
   readonly corePrivateKeyReference: string;
-  readonly helperPrivateKeyReference: string;
   readonly corePublicKey: LocalIpcPublicKeyPin;
-  readonly helperPublicKey: LocalIpcPublicKeyPin;
   readonly allowedPeers: readonly string[];
   readonly socketMode?: "0660";
 }
+
+export type LocalIpcDefinition =
+  | (CoreIpcDefinition & {
+      readonly sessionHelper: "disabled";
+    })
+  | (CoreIpcDefinition & {
+      readonly sessionHelper: "enabled";
+      readonly helperPrivateKeyReference: string;
+      readonly helperPublicKey: LocalIpcPublicKeyPin;
+    });
 
 export interface ServicePlaneArtifact {
   readonly plane: RuntimePlane;
@@ -216,7 +233,7 @@ export interface PlatformServiceArtifacts {
   readonly platform: PlatformFamily;
   readonly definition: PlatformServiceDefinition;
   readonly core: ServicePlaneArtifact;
-  readonly helper: ServicePlaneArtifact;
+  readonly helper: ServicePlaneArtifact | null;
   readonly ipc: LocalIpcDefinition;
   readonly files: readonly RenderedFile[];
   readonly installCommands: readonly CommandInvocation[];

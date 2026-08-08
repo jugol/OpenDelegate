@@ -109,17 +109,22 @@ First use the packaged deterministic boundary:
 opendelegate worker secret-backend-provision \
   --secret-backend-config /etc/opendelegate/worker-secret-backend.json \
   --encrypted-credential-file /etc/credstore.encrypted/opendelegate-vault-key.cred \
-  --vault-root /var/lib/opendelegate/secrets/systemd-vault
+  --vault-root /var/lib/opendelegate-runtime/state/secrets/systemd-vault
 ```
 
 It may run only in an already authorized administrative context; never invoke `sudo` or another
-elevation mechanism autonomously. Then run `worker join` through an owner-reviewed transient systemd
-unit with
+elevation mechanism autonomously. Before enrollment, verify that the eventual `opendelegate`
+non-login account and primary group already exist with `/nonexistent` as home and `nologin` (or
+`/bin/false`) as shell. If they are absent, prepare them with fixed-argv native account tools only
+inside the owner's authorized administrative boundary; do not let a model invent a shell command or
+silently reuse an interactive account. Then run `worker join` through an owner-reviewed transient
+systemd unit with
 `LoadCredentialEncrypted=opendelegate-vault-key:/etc/credstore.encrypted/opendelegate-vault-key.cred`,
-`StateDirectory=opendelegate`, the eventual non-login Worker identity, the descriptor path, and an
-external Worker home below that StateDirectory. Only encrypted-credential and descriptor paths may
-appear in argv. The plaintext key must exist only in bounded stdin and the systemd runtime
-credential directory.
+`StateDirectory=opendelegate-runtime`, the eventual non-login Worker identity, the descriptor path,
+and `/var/lib/opendelegate-runtime/state` as Worker home. Only encrypted-credential and descriptor
+paths may appear in argv. The plaintext key must exist only in bounded stdin and the systemd runtime
+credential directory. Join records the exact non-root service identity and core IPC public pin;
+later service composition must consume those facts instead of asking a model to guess them.
 
 That transient unit is a disposable enrollment boundary, not the installed Worker service. Do not
 reuse its name for restart, persistence, or upgrade, and do not infer that stopping it leaves a
@@ -174,8 +179,11 @@ approved persistent startup. Configure the graphical helper separately at user l
 must remain healthy with desktop and Computer Use reported unavailable.
 
 For headless systemd, copy the descriptor's `credentialName` and `encryptedCredentialFile` into the
-service configuration's `systemdCredential` mapping. The generated unit must contain
-`LoadCredentialEncrypted=` and the Worker must see the matching runtime `CREDENTIALS_DIRECTORY`.
+service configuration's `systemdCredential` mapping. Do this through the packaged
+`worker service-document` command, not by writing JSON. The generated unit must contain
+`LoadCredentialEncrypted=` and the Worker must see the matching runtime `CREDENTIALS_DIRECTORY`. It
+must set `helperSecretBinding` to `null` and contain no helper pin, helper Secret reference, user
+unit, helper command, helper health check, or Computer Use readiness claim.
 
 On Windows, an ordinary foreground join intentionally creates an owner-bound DPAPI record. Before
 installing the Worker service, invoke the packaged one-way encrypted staging boundary:
@@ -203,6 +211,18 @@ opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
 opendelegate service plan install --config ABSOLUTE_NEW_PATH
 ```
 
+For an explicitly headless systemd Worker, provide the installation owner's exact Unix identity; the
+service account is read from the durable enrollment binding and must not be transcribed:
+
+```text
+opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
+  --bundle ABSOLUTE_VERIFIED_BUNDLE --install-root /opt/opendelegate \
+  --data-root /var/lib/opendelegate-runtime --health-port PORT \
+  --instance-id INSTANCE_ID --home /var/lib/opendelegate-runtime/state \
+  --owner-user OWNER --owner-uid OWNER_UID --owner-home /home/OWNER
+opendelegate service plan install --config ABSOLUTE_NEW_PATH
+```
+
 The output is create-new and contains no Secret values. Review the plan, then run the separately
 elevated `service install` with a caller-stable command ID. The installer independently verifies the
 SID before mutation; the service imports the SID-protected handoff into its own CurrentUser DPAPI
@@ -211,10 +231,12 @@ profile. A pre-existing staged Worker without the durable public preparation bin
 re-credentialing Grant when service-account sealing prevents that restore, and then stage again. Do
 not guess the missing pins.
 
-The current `service-document` path intentionally refuses macOS and Linux until their core-service
-and owner-session Secret stores have an equally explicit migration. Do not hand-author a document or
-weaken the two-plane identity boundary to bypass that blocker. Do not claim persistent Windows
-support until clean-host SCM, restart, reboot, ACL, and DPAPI-NG evidence is recorded.
+The current `service-document` path intentionally refuses macOS and graphical Linux until their
+core-service and owner-session Secret stores have an equally explicit migration. Explicitly headless
+Linux uses only the core plane and must not fabricate the absent graphical plane. Do not hand-author
+a document or weaken the two-plane identity boundary to bypass either blocker. Do not claim
+persistent Windows or headless Linux support until their respective clean-host restart, reboot,
+credential, ownership, networking, and lifecycle evidence is recorded.
 
 Network, firewall, driver, kernel, new package-source, and remote-installer changes still require
 owner approval. Installing packages from already configured official sources may use the accepted
