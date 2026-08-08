@@ -5,6 +5,7 @@ import {
   DISCORD_GATEWAY_INTENTS,
   DiscordApiError,
   DiscordForumAdapter,
+  DiscordTaskPortError,
   InMemoryDiscordStateRepository,
   type DiscordApiPort,
   type DiscordGatewayDispatch,
@@ -55,6 +56,7 @@ class FakeTaskPort implements DiscordTaskPort {
   public readonly calls: Array<Record<string, unknown>> = [];
   public readonly taskByIdempotency = new Map<string, string>();
   public blockCommands: Promise<void> | undefined;
+  public commandError: Error | undefined;
   public afterAppendTaskInput: (() => void) | undefined;
 
   public async createTask(input: Parameters<DiscordTaskPort["createTask"]>[0]) {
@@ -76,6 +78,9 @@ class FakeTaskPort implements DiscordTaskPort {
   public async commandTask(input: Parameters<DiscordTaskPort["commandTask"]>[0]) {
     await this.blockCommands;
     this.calls.push({ kind: "command", ...input });
+    if (this.commandError !== undefined) {
+      throw this.commandError;
+    }
   }
 
   public async resolveApproval(input: Parameters<DiscordTaskPort["resolveApproval"]>[0]) {
@@ -1179,6 +1184,43 @@ test("pause, resume, cancel, and retry controls map to channel-neutral idempoten
     tasks.calls.filter((call) => call["kind"] === "command").map((call) => call["command"]),
     ["pause", "resume", "cancel", "retry"],
   );
+});
+
+test("a stale Task control resolves once instead of retrying forever", async () => {
+  const { adapter, api, tasks, repository, clock } = fixture();
+  const thread = forumThread("300000000000000036");
+  const starter = ownerMessage(thread.id, thread.id, "Control the current Task state");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  tasks.commandError = new DiscordTaskPortError(
+    "CONTROL_UNAVAILABLE",
+    "The Task command is not valid now.",
+  );
+
+  await adapter.handleGatewayDispatch(
+    interactionDispatch(2, {
+      id: "400000000000000036",
+      token: "stale-control-token",
+      guildId: GUILD_ID,
+      channelId: thread.id,
+      messageId: "900",
+      customId: "od:v1:retry",
+      author: { id: OWNER_ID, bot: false, roleIds: [] },
+      receivedAtMs: 1_000,
+    }),
+  );
+  await adapter.flushOutbox();
+  clock.value += 60_000;
+  await adapter.flushOutbox();
+
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "command").length, 1);
+  assert.equal(
+    (await repository.listOutbox()).every((item) => item.delivered),
+    true,
+  );
+  const result = api.operations.find((operation) => operation["kind"] === "interaction-result");
+  assert.match(JSON.stringify(result), /no longer available/iu);
 });
 
 test("Discord outage leaves an idempotent durable outbox that drains after restart", async () => {

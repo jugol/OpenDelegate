@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createDiscordTaskPort,
+  DiscordTaskPortError,
   type DiscordTaskPort,
   type DiscordTaskServicePort,
 } from "../src/index.ts";
@@ -113,4 +114,47 @@ test("Discord Task intake, replies, commands, and approvals use one durable Task
       },
     },
   ]);
+});
+
+test("terminal Task transition errors cross the Discord port as non-retryable refusals", async () => {
+  const transitionError = Object.assign(new Error("The Task command is not valid now."), {
+    code: "TRANSITION_INVALID",
+  });
+  const tasks: DiscordTaskServicePort = {
+    async create() {
+      return { taskId: "task-1" };
+    },
+    async appendInput(input) {
+      return { taskId: input.taskId };
+    },
+    async command() {
+      throw transitionError;
+    },
+    async resolveApproval() {
+      throw transitionError;
+    },
+  };
+  const port = createDiscordTaskPort(tasks);
+
+  await assert.rejects(
+    port.commandTask({
+      taskId: "task-1",
+      principalId: "owner-1",
+      idempotencyKey: "stale-retry",
+      command: "retry",
+    }),
+    (error: unknown) =>
+      error instanceof DiscordTaskPortError && error.code === "CONTROL_UNAVAILABLE",
+  );
+  await assert.rejects(
+    port.resolveApproval({
+      taskId: "task-1",
+      approvalId: "approval-1",
+      principalId: "owner-1",
+      idempotencyKey: "stale-approval",
+      decision: "approve",
+    }),
+    (error: unknown) =>
+      error instanceof DiscordTaskPortError && error.code === "APPROVAL_UNAVAILABLE",
+  );
 });

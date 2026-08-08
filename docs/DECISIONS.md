@@ -1651,3 +1651,23 @@ The process remained alive without a socket or heartbeat for twelve hours, then 
 their durable outbound frame for replay after reconnect. A transient disconnect can
 no longer strand a healthy Worker until its credential lapses; normal orderly close
 keeps the same bounded cleanup behavior.
+
+## D-085 — Stale Discord controls are terminal owner feedback, not transport retries
+
+**Decision:** The Discord-to-Task port maps deterministic Task refusals such as an
+invalid current-state transition, missing Task, or idempotency conflict into a typed
+non-retryable callback result. The Discord outbox completes that action after
+editing the already-deferred interaction with an owner-safe explanation. Only
+storage, connectivity, rate-limit, and unknown transient failures retain durable
+retry behavior.
+
+**Rationale:** Chronological failure messages intentionally keep a nearby Retry
+button, but that message can outlive the Task state for which Retry was valid. Main
+correctly rejected one such stale command with `TRANSITION_INVALID`; the Adapter
+then classified every non-Discord exception as `TASK_CALLBACK_FAILED` and retried
+the same impossible command indefinitely without telling the owner.
+
+**Consequence:** Clicking an older control is harmless and receives a clear “no
+longer available” response directing the owner to the latest Task update or a new
+message. The durable outbox does not accumulate deterministic failures, while true
+delivery or concurrency failures remain recoverable.
