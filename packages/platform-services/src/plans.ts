@@ -228,6 +228,17 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       "0750",
       directoryAccess(configuration, "state"),
     ),
+    ...(configuration.platform === "windows" &&
+    configuration.serviceSecretBinding !== undefined
+      ? [
+          directoryStep(
+            "ensure-service-secret-vault",
+            configuration.serviceSecretBinding.vaultRoot,
+            "0700",
+            directoryAccess(configuration, "service-secret"),
+          ),
+        ]
+      : []),
     directoryStep(
       "ensure-config-root",
       pathJoin(configuration.platform, configuration.paths.stateRoot, "config"),
@@ -830,7 +841,7 @@ function directoryStep(
 
 function directoryAccess(
   configuration: PlatformServiceConfiguration,
-  profile: "installer-only" | "read-execute" | "shared" | "state",
+  profile: "installer-only" | "read-execute" | "service-secret" | "shared" | "state",
 ): DirectoryAccessPolicy {
   const installer =
     configuration.platform === "windows" ? "BUILTIN\\Administrators" : "platform-installer";
@@ -843,6 +854,14 @@ function directoryAccess(
       ? configuration.ownerSession.stableUserId
       : configuration.ownerSession.userName;
   const grants: DirectoryAccessGrant[] = [{ principal: installer, permission: "full-control" }];
+  if (profile === "service-secret") {
+    grants.push({ principal: core, permission: "full-control" });
+    return {
+      owner: core,
+      grants,
+      denyUnlisted: true,
+    };
+  }
   if (profile !== "installer-only") {
     grants.push({
       principal: core,

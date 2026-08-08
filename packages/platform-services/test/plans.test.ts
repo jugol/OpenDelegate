@@ -99,6 +99,32 @@ test("install/start/stop/restart plans are deterministic and supervise both plan
   }
 });
 
+test("Windows install grants the virtual service temporary full control of its DPAPI vault", () => {
+  const configuration = windowsConfiguration({
+    serviceSecretBinding: {
+      backend: "windows-service-dpapi",
+      handoffRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\handoff",
+      serviceName: "OpenDelegate-personal",
+      serviceSid: "S-1-5-80-1-2-3-4-5",
+      vaultRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service",
+    },
+  });
+  const install = createServicePlan({ operation: "install", configuration });
+  const vault = install.steps.find((step) => step.id === "ensure-service-secret-vault");
+  assert.ok(vault);
+  assert.equal(vault.action.kind, "directory.ensure");
+  assert.equal(vault.action.path, configuration.serviceSecretBinding?.vaultRoot);
+  assert.equal(vault.action.access.owner, "NT SERVICE\\OpenDelegate-personal");
+  assert.deepEqual(vault.action.access.grants, [
+    { principal: "BUILTIN\\Administrators", permission: "full-control" },
+    { principal: "NT SERVICE\\OpenDelegate-personal", permission: "full-control" },
+  ]);
+  assert.ok(
+    install.steps.findIndex((step) => step.id === "ensure-service-secret-vault") <
+      install.steps.findIndex((step) => step.id === "start-core"),
+  );
+});
+
 test("Admin preference reconfiguration atomically rewrites runtime state and restarts only the owner helper", async () => {
   const previousConfiguration = linuxConfiguration({ role: "main" });
   const configuration = linuxConfiguration({
