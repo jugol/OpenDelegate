@@ -1,4 +1,8 @@
 export {
+  buildWorkerServiceDocument,
+  type BuildWorkerServiceDocumentOptions,
+} from "./service-document.ts";
+export {
   WorkerAppError,
   WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
   WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,

@@ -151,6 +151,28 @@ describe("Task Budget owner surface", () => {
     expect(screen.getByText("owner_primary extended this Budget from revision 3.")).toBeTruthy();
   });
 
+  it("does not tell the Owner to extend an idle-only hard stop", async () => {
+    const api = budgetApi({
+      getTaskBudget: vi.fn().mockResolvedValue({
+        ...snapshot,
+        usage: {
+          ...snapshot.usage,
+          tokens: 100_000,
+          idleTimeMs: snapshot.limits.idleTimeMs.hard,
+        },
+      }),
+    });
+
+    renderBudget(api);
+
+    expect(await screen.findByText("Hard Budget stop")).toBeTruthy();
+    expect(screen.getByText(/new Owner message or Retry\/Resume/iu)).toBeTruthy();
+    expect(screen.getByText(/inactivity alone does not require/iu)).toBeTruthy();
+    expect(document.body.textContent).not.toContain(
+      "New work stays stopped until the Owner explicitly extends",
+    );
+  });
+
   it("keeps the form open and explains an enforced Instance ceiling rejection", async () => {
     const api = budgetApi({
       getTaskBudget: vi.fn().mockResolvedValue(snapshot),

@@ -49,8 +49,46 @@ function windowsInput(
       coreIpcSigningKey: "secret://worker/opendelegate/session-helper-core-signing/v2",
       helperIpcSigningKey: "secret://worker/opendelegate/session-helper-owner-signing/v2",
     },
+    windowsOwnerHelperVaultRoot:
+      "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
     healthPort: 43_190,
     ...overrides,
+  };
+}
+
+function linuxInput(): ComposeServiceConfigurationInput {
+  return {
+    platform: "linux",
+    role: "worker",
+    instanceId: "personal",
+    deviceId: "device-linux",
+    bundle: {
+      version: "0.1.0-alpha.1",
+      sourceDirectory: "/mnt/release-input/opendelegate",
+      checksum: `sha256:${"a".repeat(64)}`,
+    },
+    sourceCheckoutDirectory: "/home/owner/src/OpenDelegate",
+    installRoot: "/opt/opendelegate",
+    dataRoot: "/var/lib/opendelegate-runtime",
+    ownerSession: {
+      userName: "owner",
+      stableUserId: "1000",
+      uid: 1000,
+      homeDirectory: "/home/owner",
+      adminAutoOpen: { enabled: false },
+    },
+    ipcTrust: { core: CORE_PIN, helper: HELPER_PIN },
+    secretReferences: {
+      coreIpcSigningKey: "secret://worker/opendelegate/session-helper-core-signing/v2",
+      helperIpcSigningKey: "secret://worker/opendelegate/session-helper-owner-signing/v2",
+    },
+    healthPort: 43_190,
+    serviceIdentity: { userName: "opendelegate", groupName: "opendelegate" },
+    linuxSecretToolPath: "/usr/bin/secret-tool",
+    systemdCredential: {
+      credentialName: "opendelegate-vault-key",
+      encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+    },
   };
 }
 
@@ -71,13 +109,13 @@ describe("native service configuration composition", () => {
     assert.doesNotThrow(() => createPlatformServiceDefinition(configuration));
   });
 
-  it("puts the owner Secret vault under the state root, where the reader requires it", () => {
+  it("keeps the owner-session Secret vault outside service-owned roots", () => {
     const configuration = composeServiceConfiguration(windowsInput());
 
     assert.equal(configuration.platform, "windows");
     assert.equal(
       configuration.platform === "windows" ? configuration.helperSecretBinding.vaultRoot : "",
-      "C:\\ProgramData\\OpenDelegate\\state\\owner-secrets\\dpapi",
+      "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
     );
   });
 
@@ -133,6 +171,52 @@ describe("native service configuration composition", () => {
           windowsInput({ dataRoot: "C:\\src\\OpenDelegate\\service-data" }),
         ),
       PlatformServiceError,
+    );
+  });
+
+  it("accepts a packaged launcher that is itself the verified bundle source", () => {
+    const input = windowsInput();
+    assert.doesNotThrow(() =>
+      composeServiceConfiguration({
+        ...input,
+        sourceCheckoutDirectory: input.bundle.sourceDirectory,
+      }),
+    );
+  });
+
+  it("carries the encrypted headless systemd credential without key material", () => {
+    const input = linuxInput();
+    const { linuxSecretToolPath, ...headlessInput } = input;
+    assert.equal(linuxSecretToolPath, "/usr/bin/secret-tool");
+    const configuration = composeServiceConfiguration({
+      ...headlessInput,
+      ipcTrust: { core: CORE_PIN },
+      secretReferences: {
+        coreIpcSigningKey: "secret://worker/opendelegate/session-helper-core-signing/v2",
+      },
+    });
+
+    assert.equal(configuration.platform, "linux");
+    assert.equal(configuration.helperSecretBinding, null);
+    assert.deepEqual(configuration.systemdCredential, {
+      credentialName: "opendelegate-vault-key",
+      encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+    });
+    assert.doesNotMatch(JSON.stringify(configuration), /credentialValue|plaintext|privateKey/u);
+
+    assert.throws(
+      () =>
+        composeServiceConfiguration({
+          ...headlessInput,
+          ipcTrust: { core: CORE_PIN },
+          secretReferences: {
+            coreIpcSigningKey: "secret://worker/opendelegate/session-helper-core-signing/v2",
+          },
+          systemdCredential: null,
+        }),
+      (error: unknown) =>
+        error instanceof PlatformServiceError &&
+        error.message.includes("encrypted systemd core credential"),
     );
   });
 });

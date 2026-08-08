@@ -50,7 +50,7 @@ export interface ServiceDiagnostic {
   readonly ipc: {
     readonly kind: "named-pipe" | "unix-domain-socket";
     readonly endpoint: string;
-    readonly authenticated: true;
+    readonly authenticated: boolean;
   };
   readonly rollback?: RollbackDiagnostic;
   readonly secretValuesIncluded: false;
@@ -58,6 +58,7 @@ export interface ServiceDiagnostic {
 
 export function createServiceDiagnostic(input: CreateServiceDiagnosticInput): ServiceDiagnostic {
   const definition = createPlatformServiceDefinition(input.configuration);
+  const helperConfigured = input.configuration.helperSecretBinding !== null;
   const coreIdentity =
     input.configuration.platform === "windows"
       ? `NT SERVICE\\OpenDelegate-${input.configuration.instanceId}`
@@ -83,14 +84,24 @@ export function createServiceDiagnostic(input: CreateServiceDiagnosticInput): Se
       identity: coreIdentity,
     },
     helper: {
-      status: input.helperSupervisorState,
+      status: helperConfigured ? input.helperSupervisorState : "not-installed",
       bootSemantics: "login",
       identity: input.configuration.ownerSession.userName,
     },
-    readiness: {
-      ...input.readiness,
-      headlessWorkAvailable: input.coreSupervisorState === "running",
-    },
+    readiness: helperConfigured
+      ? {
+          ...input.readiness,
+          headlessWorkAvailable: input.coreSupervisorState === "running",
+        }
+      : {
+          ...input.readiness,
+          session: "helper-unavailable",
+          computerUse: "unavailable",
+          headlessWorkAvailable: input.coreSupervisorState === "running",
+          helperProcess: "stopped",
+          reason:
+            "This Device is configured for headless core-only work; no Computer Use helper is installed.",
+        },
     versions: {
       ...(input.activeVersion === undefined ? {} : { active: input.activeVersion }),
       retained: [...input.retainedVersions].sort((left, right) => left.localeCompare(right)),
@@ -107,7 +118,7 @@ export function createServiceDiagnostic(input: CreateServiceDiagnosticInput): Se
     },
     ipc: {
       ...ipc,
-      authenticated: true,
+      authenticated: helperConfigured,
     },
     ...(input.lastRollback === undefined ? {} : { rollback: input.lastRollback }),
     secretValuesIncluded: false,

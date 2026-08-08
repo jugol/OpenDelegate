@@ -402,6 +402,8 @@ export const frenchMessages = {
     hardTitle: "Arrêt budgétaire strict",
     hardDetail:
       "{metrics} a atteint l’arrêt strict. Tout nouveau travail reste bloqué jusqu’à l’augmentation explicite de ce budget par le propriétaire.",
+    hardIdleDetail:
+      "{metrics} a atteint l’arrêt pour inactivité. Un nouveau message du propriétaire ou Réessayer/Reprendre redémarre la fenêtre d’inactivité ; l’inactivité seule ne nécessite pas d’augmenter le budget de la tâche.",
     limitEvents: "Événements de limite",
     noLimitEvents: "Aucun avertissement ni arrêt strict n’a été enregistré.",
     hardEvent: "Arrêt strict",

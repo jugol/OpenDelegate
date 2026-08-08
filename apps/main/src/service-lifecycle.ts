@@ -559,6 +559,7 @@ export function serviceLifecycleHelpText(): string {
   return `OpenDelegate native service lifecycle
 
 Usage:
+  opendelegate service document --worker-config PATH --output NEW_PATH --home MAIN_HOME
   opendelegate service render --config PATH [--home MAIN_HOME]
   opendelegate service plan OPERATION --config PATH [--home MAIN_HOME] [--active-version VERSION]
   opendelegate service install --config PATH [--home MAIN_HOME] --command-id ID
@@ -571,6 +572,8 @@ Usage:
 
 Plan operations: install, reconfigure, start, stop, restart, upgrade, uninstall.
 
+document is create-new and derives a headless Linux Main definition from its
+co-located Worker's already prepared core-only document. It never installs or elevates.
 Main templates require --home so every command resolves the durable admin.open-on-login
 preference and canonical Admin origin; Worker templates never read Main state. render and plan
 are read-only. Lifecycle mutations require an approved platform-specific

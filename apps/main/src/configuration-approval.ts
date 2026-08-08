@@ -41,6 +41,7 @@ export interface ConfigurationApprovalRuntimeOptions {
   };
   readonly expirationMs?: number;
   readonly lifecycle?: ConfigurationApplyLifecycle;
+  readonly onConfigurationApplied?: () => void;
   readonly additionalExecutors?: readonly {
     readonly kind: string;
     readonly executor: ApprovalExecutionPort;
@@ -73,6 +74,7 @@ export function createConfigurationApprovalRuntime(
   const configurationExecutor = new ConfigurationApprovalExecutor(
     options.configuration,
     options.lifecycle,
+    options.onConfigurationApplied,
   );
   const executor = new RoutedApprovalExecutionPort(
     configurationExecutor,
@@ -138,8 +140,13 @@ class RoutedApprovalExecutionPort implements ApprovalExecutionPort {
 export class ConfigurationApprovalExecutor implements ApprovalExecutionPort {
   readonly #configuration: ConfigurationService;
   readonly #lifecycle: ConfigurationApplyLifecycle | undefined;
+  readonly #onConfigurationApplied: (() => void) | undefined;
 
-  constructor(configuration: ConfigurationService, lifecycle?: ConfigurationApplyLifecycle) {
+  constructor(
+    configuration: ConfigurationService,
+    lifecycle?: ConfigurationApplyLifecycle,
+    onConfigurationApplied?: () => void,
+  ) {
     if (
       configuration === null ||
       typeof configuration !== "object" ||
@@ -155,8 +162,12 @@ export class ConfigurationApprovalExecutor implements ApprovalExecutionPort {
     ) {
       throw new TypeError("The Configuration apply lifecycle is invalid.");
     }
+    if (onConfigurationApplied !== undefined && typeof onConfigurationApplied !== "function") {
+      throw new TypeError("The Configuration applied callback is invalid.");
+    }
     this.#configuration = configuration;
     this.#lifecycle = lifecycle;
+    this.#onConfigurationApplied = onConfigurationApplied;
   }
 
   async execute(input: ApprovalExecutionContext): Promise<ActionTargetValue> {
@@ -255,6 +266,7 @@ export class ConfigurationApprovalExecutor implements ApprovalExecutionPort {
         { cause: error },
       );
     }
+    this.#onConfigurationApplied?.();
     return {
       revision: receipt.result.commit.revision,
       changeSetId: receipt.result.commit.changeSetId,

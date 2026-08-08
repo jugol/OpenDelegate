@@ -28,6 +28,7 @@ export interface TaskExecutionRequest {
    * written by earlier releases remain reusable after upgrade.
    */
   readonly planningKey: string;
+  readonly resourceResume: boolean;
   readonly signal: AbortSignal;
 }
 
@@ -96,15 +97,26 @@ export interface TaskExecutionCoordinatorOptions {
 export type TaskExecutorErrorCode =
   "EXECUTOR_FAILED" | "EXECUTOR_RESULT_INVALID" | "WORKER_OFFLINE" | (string & {});
 
+export type TaskExecutorRetryKind = "failure" | "resource";
+
+export interface TaskExecutorErrorOptions extends ErrorOptions {
+  /**
+   * Resource waits resume only after a deterministic availability signal and
+   * never consume the automatic execution-failure retry Budget.
+   */
+  readonly retryKind?: TaskExecutorRetryKind;
+}
+
 export class TaskExecutorError extends Error {
   readonly code: TaskExecutorErrorCode;
   readonly retryable: boolean;
+  readonly retryKind: TaskExecutorRetryKind | undefined;
 
   constructor(
     code: TaskExecutorErrorCode,
     message: string,
     retryable = false,
-    options?: ErrorOptions,
+    options?: TaskExecutorErrorOptions,
   ) {
     assertErrorText(code, 160);
     assertErrorText(message, 2_048);
@@ -112,6 +124,7 @@ export class TaskExecutorError extends Error {
     this.name = "TaskExecutorError";
     this.code = code;
     this.retryable = retryable;
+    this.retryKind = retryable ? (options?.retryKind ?? "failure") : undefined;
   }
 }
 
@@ -133,6 +146,8 @@ interface ActiveExecution {
   readonly promise: Promise<void>;
 }
 
+type ExecutionContinuation = "none" | "resource-changed" | "retry";
+
 const DEFAULT_MAXIMUM_CONCURRENT_TASKS = 4;
 const DEFAULT_MAXIMUM_AUTOMATIC_ATTEMPTS = 3;
 const DEFAULT_RETRY_DELAY_MS = 1_000;
@@ -151,7 +166,9 @@ export class TaskExecutionCoordinator {
   readonly #pendingBeforeStart = new Set<string>();
   readonly #retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   readonly #rerunAfterActive = new Set<string>();
+  readonly #waitingForResource = new Set<string>();
   readonly #idleWaiters = new Set<() => void>();
+  #resourceRevision = 0;
   #drainScheduled = false;
   #executionStarted: boolean;
   #startPromise: Promise<void> | undefined;
@@ -208,6 +225,9 @@ export class TaskExecutionCoordinator {
     const tasks = await this.#taskService.list();
     for (const task of tasks) {
       if (isAutomaticallyExecutableTask(task)) {
+        if (task.state === "waiting_resource") {
+          this.#waitingForResource.add(task.taskId);
+        }
         await this.#ensureTaskBudget(await this.#taskService.get(task.taskId));
         this.#enqueue(task.taskId);
       }
@@ -243,6 +263,7 @@ export class TaskExecutionCoordinator {
   async appendInput(input: AppendTaskInput): Promise<TaskDetailV1> {
     this.#assertOpen();
     const task = await this.#taskService.appendInput(input);
+    this.#waitingForResource.delete(task.taskId);
     if (this.#budget !== undefined) {
       await this.#budget.recordActivity({
         taskId: task.taskId,
@@ -262,6 +283,7 @@ export class TaskExecutionCoordinator {
   async resolveApproval(input: ResolveTaskApprovalInput): Promise<TaskDetailV1> {
     this.#assertOpen();
     const task = await this.#taskService.resolveApproval(input);
+    this.#waitingForResource.delete(task.taskId);
     if (input.decision === "approve") {
       if (this.#budget !== undefined) {
         await this.#budget.recordActivity({
@@ -280,6 +302,7 @@ export class TaskExecutionCoordinator {
   async command(input: TaskCommandInput): Promise<TaskDetailV1> {
     this.#assertOpen();
     const task = await this.#taskService.command(input);
+    this.#waitingForResource.delete(task.taskId);
     if (this.#budget !== undefined && (input.command === "resume" || input.command === "retry")) {
       await this.#budget.recordActivity({
         taskId: task.taskId,
@@ -302,6 +325,21 @@ export class TaskExecutionCoordinator {
     return task;
   }
 
+  /**
+   * Signals a material deterministic change in Device, route, Secret, lock, or
+   * other scheduling availability. Duplicate signals are harmless: queued and
+   * active Tasks are deduplicated by the coordinator.
+   */
+  notifyResourceAvailabilityChanged(): void {
+    if (this.#closed || this.#failure !== undefined) {
+      return;
+    }
+    this.#resourceRevision += 1;
+    for (const taskId of this.#waitingForResource) {
+      this.#enqueue(taskId);
+    }
+  }
+
   async waitForIdle(): Promise<void> {
     if (!this.#isIdle()) {
       await new Promise<void>((resolve) => this.#idleWaiters.add(resolve));
@@ -320,6 +358,7 @@ export class TaskExecutionCoordinator {
     this.#queued.clear();
     this.#pendingBeforeStart.clear();
     this.#rerunAfterActive.clear();
+    this.#waitingForResource.clear();
     for (const timer of this.#retryTimers.values()) {
       clearTimeout(timer);
     }
@@ -396,13 +435,13 @@ export class TaskExecutionCoordinator {
 
   #startExecution(taskId: string): void {
     const controller = new AbortController();
-    let retry = false;
+    let continuation: ExecutionContinuation = "none";
     let executionKey = `task-execution:${taskId}:pending`;
     const promise = this.#execute(taskId, controller.signal, (key) => {
       executionKey = key;
     })
-      .then((shouldRetry) => {
-        retry = shouldRetry;
+      .then((next) => {
+        continuation = next;
       })
       .catch(() => {
         this.#failExecutionPipeline();
@@ -412,7 +451,9 @@ export class TaskExecutionCoordinator {
         const rerun = this.#rerunAfterActive.delete(taskId);
         if (rerun && !this.#closed) {
           this.#enqueue(taskId);
-        } else if (retry && !this.#closed) {
+        } else if (continuation === "resource-changed" && !this.#closed) {
+          this.#enqueue(taskId);
+        } else if (continuation === "retry" && !this.#closed) {
           this.#scheduleRetry(taskId);
         }
         this.#scheduleDrain();
@@ -431,17 +472,24 @@ export class TaskExecutionCoordinator {
     taskId: string,
     signal: AbortSignal,
     setExecutionKey: (executionKey: string) => void,
-  ): Promise<boolean> {
+  ): Promise<ExecutionContinuation> {
     let task = await this.#taskService.get(taskId);
     if (!isAutomaticallyExecutable(task.state)) {
-      return false;
+      return "none";
     }
     const cycle = await this.#taskService.executionCycle(taskId);
-    const runningRecords = cycle.records.filter((record) => record.state === "running");
+    const retryRecords = cycle.records.filter((record) => record.state === "queued");
+    const attempt = retryRecords.length + 1;
+    const currentAttemptRecords = recordsAfterLastRetry(cycle.records);
+    const resumesResourceWait = task.state === "waiting_resource";
+    const runningRecords = currentAttemptRecords.filter((record) => record.state === "running");
     const resumesInterruptedAttempt = task.state === "running" && runningRecords.length > 0;
-    const attempt = resumesInterruptedAttempt ? runningRecords.length : runningRecords.length + 1;
-    const executionKey = `task-execution:${taskId}:cycle:${cycle.cycleId}:attempt:${attempt}`;
+    const dispatch = resumesInterruptedAttempt ? runningRecords.length : runningRecords.length + 1;
+    const baseExecutionKey = `task-execution:${taskId}:cycle:${cycle.cycleId}:attempt:${attempt}`;
+    const executionKey =
+      dispatch === 1 ? baseExecutionKey : `${baseExecutionKey}:resource:${dispatch - 1}`;
     const planningKey = `task-execution:${taskId}:cycle:${cycle.cycleId}:attempt:1`;
+    const resourceRevision = this.#resourceRevision;
     setExecutionKey(executionKey);
 
     if (attempt > this.#maximumAutomaticAttempts) {
@@ -450,14 +498,25 @@ export class TaskExecutionCoordinator {
         idempotencyKey: `${executionKey}:attempt-limit`,
         state: "failed",
         expectedTaskVersion: task.version,
-        publicMessage: latestPublicMessage(cycle.records) ?? exhaustedResourceMessage(attempt - 1),
+        publicMessage: exhaustedRetryMessage(attempt - 1),
       });
-      return false;
+      return "none";
     }
 
     let budgetGuard: TaskBudgetExecutionGuard | undefined;
     if (this.#budget !== undefined) {
       try {
+        if (resumesResourceWait) {
+          const waitingRecord = latestResourceWaitRecord(currentAttemptRecords);
+          if (waitingRecord === undefined) {
+            throw new Error("The waiting-resource Task has no durable resource-wait record.");
+          }
+          await this.#budget.recordActivity({
+            taskId,
+            operationId: `resource-resume:${waitingRecord.eventId}`,
+            source: "resource-availability",
+          });
+        }
         budgetGuard = await this.#budget.beginTaskExecution({
           taskId,
           executionKey,
@@ -467,7 +526,7 @@ export class TaskExecutionCoordinator {
       } catch (error) {
         if (error instanceof BudgetHardLimitError) {
           await this.#recordBudgetExhaustion(task, executionKey, error);
-          return false;
+          return "none";
         }
         throw error;
       }
@@ -482,7 +541,7 @@ export class TaskExecutionCoordinator {
           expectedTaskVersion: task.version,
         });
         if (recorded === undefined) {
-          return false;
+          return "none";
         }
         task = recorded;
       }
@@ -493,6 +552,7 @@ export class TaskExecutionCoordinator {
           attempt,
           executionKey,
           planningKey,
+          resourceResume: resumesResourceWait,
           signal: budgetGuard?.signal ?? signal,
         }),
       );
@@ -512,10 +572,10 @@ export class TaskExecutionCoordinator {
               : { workOrderId: budgetExhaustion.workOrderId }),
           }),
         );
-        return false;
+        return "none";
       }
       if (signal.aborted) {
-        return false;
+        return "none";
       }
       if (result.state === "completed") {
         await this.#recordUnlessSuperseded({
@@ -526,18 +586,20 @@ export class TaskExecutionCoordinator {
           expectedTaskVersion: task.version,
           ...(result.publicMessage === undefined ? {} : { publicMessage: result.publicMessage }),
         });
-        return false;
+        return "none";
       }
 
-      if (result.state === "waiting_resource" && attempt >= this.#maximumAutomaticAttempts) {
-        await this.#recordUnlessSuperseded({
-          taskId,
-          idempotencyKey: `${executionKey}:attempt-limit`,
-          state: "failed",
-          expectedTaskVersion: task.version,
-          publicMessage: result.publicMessage ?? exhaustedResourceMessage(attempt),
-        });
-        return false;
+      if (result.state === "waiting_resource") {
+        return await this.#recordResourceWait(
+          {
+            taskId,
+            idempotencyKey: `${executionKey}:waiting-resource`,
+            state: "waiting_resource",
+            expectedTaskVersion: task.version,
+            publicMessage: resourceWaitMessage(result.publicMessage),
+          },
+          resourceRevision,
+        );
       }
       await this.#recordUnlessSuperseded({
         taskId,
@@ -550,14 +612,14 @@ export class TaskExecutionCoordinator {
             : {}
           : { publicMessage: result.publicMessage }),
       });
-      return result.state === "waiting_resource";
+      return "none";
     } catch (error) {
       if (error instanceof TaskExecutorError && error.code === "WORKER_CANCELLATION_FAILED") {
         throw error;
       }
       if (error instanceof BudgetHardLimitError) {
         await this.#recordBudgetExhaustion(task, executionKey, error);
-        return false;
+        return "none";
       }
       const budgetExhaustion = budgetGuard?.exhaustion();
       if (budgetExhaustion !== undefined) {
@@ -575,10 +637,10 @@ export class TaskExecutionCoordinator {
               : { workOrderId: budgetExhaustion.workOrderId }),
           }),
         );
-        return false;
+        return "none";
       }
       if (signal.aborted) {
-        return false;
+        return "none";
       }
       const executorError =
         error instanceof TaskExecutorError
@@ -588,15 +650,27 @@ export class TaskExecutionCoordinator {
               "The Task executor failed without a structured result.",
               true,
             );
+      if (executorError.retryable && executorError.retryKind === "resource") {
+        return await this.#recordResourceWait(
+          {
+            taskId,
+            idempotencyKey: `${executionKey}:waiting-resource`,
+            state: "waiting_resource",
+            expectedTaskVersion: task.version,
+            publicMessage: resourceErrorMessage(executorError),
+          },
+          resourceRevision,
+        );
+      }
       const willRetry = executorError.retryable && attempt < this.#maximumAutomaticAttempts;
       await this.#recordUnlessSuperseded({
         taskId,
-        idempotencyKey: `${executionKey}:${willRetry ? "waiting-resource" : "failed"}`,
-        state: willRetry ? "waiting_resource" : "failed",
+        idempotencyKey: `${executionKey}:${willRetry ? "retry-queued" : "failed"}`,
+        state: willRetry ? "queued" : "failed",
         expectedTaskVersion: task.version,
         publicMessage: executorFailureMessage(executorError, willRetry),
       });
-      return willRetry;
+      return willRetry ? "retry" : "none";
     } finally {
       await budgetGuard?.close();
     }
@@ -627,15 +701,32 @@ export class TaskExecutionCoordinator {
       idempotencyKey: `${executionKey}:budget:${error.metric}:hard-limit`,
       state: "waiting_user",
       expectedTaskVersion: task.version,
-      publicMessage: `OpenDelegate paused new automatic work because the ${error.metric} hard Budget is exhausted. An owner-authorized Budget extension is required to continue.`,
+      publicMessage: budgetExhaustionPublicMessage(error),
     });
+  }
+
+  async #recordResourceWait(
+    input: Parameters<TaskServicePort["recordExecution"]>[0],
+    observedResourceRevision: number,
+  ): Promise<ExecutionContinuation> {
+    const recorded = await this.#recordUnlessSuperseded(input);
+    if (recorded === undefined) {
+      return "none";
+    }
+    return this.#resourceRevision === observedResourceRevision ? "none" : "resource-changed";
   }
 
   async #recordUnlessSuperseded(
     input: Parameters<TaskServicePort["recordExecution"]>[0],
   ): Promise<TaskDetailV1 | undefined> {
     try {
-      return await this.#taskService.recordExecution(input);
+      const recorded = await this.#taskService.recordExecution(input);
+      if (input.state === "waiting_resource") {
+        this.#waitingForResource.add(input.taskId);
+      } else if (input.state !== "running") {
+        this.#waitingForResource.delete(input.taskId);
+      }
+      return recorded;
     } catch (error) {
       if (isPotentialSupersession(error)) {
         const current = await this.#taskService.get(input.taskId);
@@ -665,6 +756,7 @@ export class TaskExecutionCoordinator {
 
   async #abort(taskId: string, reason: "cancelled" | "paused" | "superseded"): Promise<void> {
     this.#pendingBeforeStart.delete(taskId);
+    this.#waitingForResource.delete(taskId);
     const timer = this.#retryTimers.get(taskId);
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -731,6 +823,7 @@ export class TaskExecutionCoordinator {
     this.#queued.clear();
     this.#pendingBeforeStart.clear();
     this.#rerunAfterActive.clear();
+    this.#waitingForResource.clear();
     for (const timer of this.#retryTimers.values()) {
       clearTimeout(timer);
     }
@@ -740,6 +833,52 @@ export class TaskExecutionCoordinator {
     }
     this.#notifyIdle();
   }
+}
+
+function budgetExhaustionPublicMessage(error: BudgetHardLimitError): string {
+  const scope = error.workOrderId === undefined ? "This Task" : "A Work Order in this Task";
+  if (error.metric === "idleTimeMs") {
+    return `OpenDelegate paused automatic work after ${formatBudgetDuration(error.hard)} without verified activity for ${scope.toLowerCase()}. This protects against a stuck Run. Send a new message or use Retry/Resume to restart the idle window; inactivity alone does not require a Budget extension.`;
+  }
+  if (error.metric === "wallTimeMs") {
+    return `${scope} has used its ${formatBudgetDuration(error.hard)} active automatic-execution limit. Waiting, paused, offline, and owner-response time did not count. Extend the Task Budget in Admin to continue.`;
+  }
+  const label =
+    error.metric === "retries"
+      ? "automatic retry"
+      : error.metric === "childWorkOrders"
+        ? "child Work Order"
+        : error.metric === "concurrentRuns"
+          ? "concurrent Run"
+          : error.metric === "nativeTurns"
+            ? "native Agent turn"
+            : error.metric === "tokens"
+              ? "token"
+              : "provider cost";
+  const limit =
+    error.metric === "costUsdMicros"
+      ? `$${(error.hard / 1_000_000).toFixed(2)}`
+      : String(error.hard);
+  return `${scope} has reached its ${label} limit (${limit}). Review the latest Task details, then extend the Task Budget in Admin if more automatic work is appropriate.`;
+}
+
+function formatBudgetDuration(milliseconds: number): string {
+  const hour = 60 * 60_000;
+  const minute = 60_000;
+  const second = 1_000;
+  if (milliseconds % hour === 0) {
+    const hours = milliseconds / hour;
+    return `${String(hours)} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  if (milliseconds % minute === 0) {
+    const minutes = milliseconds / minute;
+    return `${String(minutes)} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  if (milliseconds % second === 0) {
+    const seconds = milliseconds / second;
+    return `${String(seconds)} ${seconds === 1 ? "second" : "seconds"}`;
+  }
+  return `${String(milliseconds)} ms`;
 }
 
 function ownerInputBudgetOperationId(input: AppendTaskInput): string {
@@ -772,18 +911,40 @@ function ownerApprovalBudgetOperationId(input: ResolveTaskApprovalInput): string
   return `owner-approval:${digest}`;
 }
 
-function latestPublicMessage(records: readonly TaskExecutionRecord[]): string | undefined {
+function recordsAfterLastRetry(
+  records: readonly TaskExecutionRecord[],
+): readonly TaskExecutionRecord[] {
   for (let index = records.length - 1; index >= 0; index -= 1) {
-    const message = records[index]?.publicMessage;
-    if (message !== null && message !== undefined) {
-      return message;
+    if (records[index]?.state === "queued") {
+      return records.slice(index + 1);
+    }
+  }
+  return records;
+}
+
+function latestResourceWaitRecord(
+  records: readonly TaskExecutionRecord[],
+): TaskExecutionRecord | undefined {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    if (records[index]?.state === "waiting_resource") {
+      return records[index];
     }
   }
   return undefined;
 }
 
-function exhaustedResourceMessage(attempts: number): string {
-  return `OpenDelegate could not find an eligible Device, route, Secret, or lock after ${attempts.toString()} automatic attempts. Check Device health and Runs, then retry.`;
+function exhaustedRetryMessage(attempts: number): string {
+  return `OpenDelegate stopped after ${attempts.toString()} automatic execution failures. Check the latest Task Run diagnostic, then retry.`;
+}
+
+function resourceWaitMessage(publicMessage: string | undefined): string {
+  const explanation =
+    publicMessage ?? "No eligible Device, route, Secret, or lock is currently available.";
+  return `${explanation} OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget.`;
+}
+
+function resourceErrorMessage(error: TaskExecutorError): string {
+  return `${resourceWaitMessage(error.message)} Resource code: ${error.code}.`;
 }
 
 function executorFailureMessage(error: TaskExecutorError, willRetry: boolean): string {

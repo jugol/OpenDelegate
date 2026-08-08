@@ -236,15 +236,16 @@ function BudgetAlert({
   if (state === "within") {
     return null;
   }
-  const metrics = budgetMetrics
-    .filter((metric) => {
-      const limit = snapshot.limits[metric];
-      const usage = snapshot.usage[metric] ?? 0;
-      return metricState(usage, limit.soft, limit.hard) === state;
-    })
+  const reachedMetrics = budgetMetrics.filter((metric) => {
+    const limit = snapshot.limits[metric];
+    const usage = snapshot.usage[metric] ?? 0;
+    return metricState(usage, limit.soft, limit.hard) === state;
+  });
+  const metrics = reachedMetrics
     .map((metric) => messages.budget[metricMessageKeys[metric]])
     .join(", ");
   const hard = state === "hard";
+  const idleOnly = hard && reachedMetrics.every((metric) => metric === "idleTimeMs");
   return (
     <div
       className={`task-budget-alert task-budget-alert--${state}`}
@@ -254,9 +255,14 @@ function BudgetAlert({
       <div>
         <strong>{hard ? messages.budget.hardTitle : messages.budget.softTitle}</strong>
         <p>
-          {formatMessage(hard ? messages.budget.hardDetail : messages.budget.softDetail, {
-            metrics,
-          })}
+          {formatMessage(
+            hard
+              ? idleOnly
+                ? messages.budget.hardIdleDetail
+                : messages.budget.hardDetail
+              : messages.budget.softDetail,
+            { metrics },
+          )}
         </p>
       </div>
     </div>

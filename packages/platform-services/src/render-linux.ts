@@ -24,17 +24,33 @@ export function renderLinuxServiceArtifacts(
   const { configuration } = definition;
   const coreUnitName = `opendelegate-${configuration.instanceId}.service`;
   const helperUnitName = `opendelegate-${configuration.instanceId}-session-helper.service`;
-  const ipc: LocalIpcDefinition = {
-    kind: "unix-domain-socket",
-    endpoint: posix.join(configuration.paths.runtimeRoot, "session-helper.sock"),
-    authentication: "ed25519-mutual-signature-v2",
-    corePrivateKeyReference: configuration.secretReferences.coreIpcSigningKey ?? "",
-    helperPrivateKeyReference: configuration.secretReferences.helperIpcSigningKey ?? "",
-    corePublicKey: configuration.ipcTrust.core,
-    helperPublicKey: configuration.ipcTrust.helper,
-    allowedPeers: [configuration.serviceIdentity.userName, configuration.ownerSession.stableUserId],
-    socketMode: "0660",
-  };
+  const helperEnabled = configuration.helperSecretBinding !== null;
+  const ipc: LocalIpcDefinition = helperEnabled
+    ? {
+        sessionHelper: "enabled",
+        kind: "unix-domain-socket",
+        endpoint: posix.join(configuration.paths.runtimeRoot, "session-helper.sock"),
+        authentication: "ed25519-mutual-signature-v2",
+        corePrivateKeyReference: configuration.secretReferences.coreIpcSigningKey ?? "",
+        helperPrivateKeyReference: configuration.secretReferences.helperIpcSigningKey ?? "",
+        corePublicKey: configuration.ipcTrust.core,
+        helperPublicKey: configuration.ipcTrust.helper!,
+        allowedPeers: [
+          configuration.serviceIdentity.userName,
+          configuration.ownerSession.stableUserId,
+        ],
+        socketMode: "0660",
+      }
+    : {
+        sessionHelper: "disabled",
+        kind: "unix-domain-socket",
+        endpoint: posix.join(configuration.paths.runtimeRoot, "session-helper.sock"),
+        authentication: "ed25519-mutual-signature-v2",
+        corePrivateKeyReference: configuration.secretReferences.coreIpcSigningKey ?? "",
+        corePublicKey: configuration.ipcTrust.core,
+        allowedPeers: [configuration.serviceIdentity.userName],
+        socketMode: "0660",
+      };
   const coreManifest: RenderedFile = {
     purpose: "core-manifest",
     path: `/etc/systemd/system/${coreUnitName}`,
@@ -42,22 +58,24 @@ export function renderLinuxServiceArtifacts(
     encoding: "utf8",
     mode: "0644",
   };
-  const helperManifest: RenderedFile = {
-    purpose: "helper-manifest",
-    path: posix.join(
-      configuration.ownerSession.homeDirectory ?? "",
-      ".config",
-      "systemd",
-      "user",
-      helperUnitName,
-    ),
-    content: renderUserUnit(definition),
-    encoding: "utf8",
-    mode: "0644",
-  };
+  const helperManifest: RenderedFile | null = helperEnabled
+    ? {
+        purpose: "helper-manifest",
+        path: posix.join(
+          configuration.ownerSession.homeDirectory ?? "",
+          ".config",
+          "systemd",
+          "user",
+          helperUnitName,
+        ),
+        content: renderUserUnit(definition),
+        encoding: "utf8",
+        mode: "0644",
+      }
+    : null;
   const runtimeConfiguration = renderRuntimeConfiguration(definition, ipc);
   const secretReferences = renderSecretReferences(definition);
-  const installCommands = [
+  const coreInstallCommands = [
     command("/usr/bin/systemctl", ["daemon-reload"], {
       plane: "core",
       verb: "reload",
@@ -68,51 +86,60 @@ export function renderLinuxServiceArtifacts(
       verb: "enable",
       privilege: "elevated",
     }),
-    command("/usr/bin/systemctl", ["--user", "daemon-reload"], {
-      plane: "session-helper",
-      verb: "reload",
-      privilege: "owner-session",
-      availabilityPolicy: "defer-if-logged-out",
-    }),
-    command("/usr/bin/systemctl", ["--user", "--no-reload", "enable", helperUnitName], {
-      plane: "session-helper",
-      verb: "enable",
-      privilege: "owner-session",
-    }),
   ] as const;
-  const startCommands = [
+  const helperInstallCommands = helperEnabled
+    ? [
+        command("/usr/bin/systemctl", ["--user", "daemon-reload"], {
+          plane: "session-helper",
+          verb: "reload",
+          privilege: "owner-session",
+          availabilityPolicy: "defer-if-logged-out",
+        }),
+        command("/usr/bin/systemctl", ["--user", "--no-reload", "enable", helperUnitName], {
+          plane: "session-helper",
+          verb: "enable",
+          privilege: "owner-session",
+        }),
+      ]
+    : [];
+  const installCommands = [...coreInstallCommands, ...helperInstallCommands];
+  const coreStartCommands = [
     command("/usr/bin/systemctl", ["start", coreUnitName], {
       plane: "core",
       verb: "start",
       privilege: "elevated",
     }),
-    command("/usr/bin/systemctl", ["--user", "start", helperUnitName], {
-      plane: "session-helper",
-      verb: "start",
-      privilege: "owner-session",
-      availabilityPolicy: "defer-if-logged-out",
-    }),
   ] as const;
-  const stopCommands = [
-    command("/usr/bin/systemctl", ["--user", "stop", helperUnitName], {
-      plane: "session-helper",
-      verb: "stop",
-      privilege: "owner-session",
-      availabilityPolicy: "defer-if-logged-out",
-    }),
+  const startCommands = helperEnabled
+    ? [
+        ...coreStartCommands,
+        command("/usr/bin/systemctl", ["--user", "start", helperUnitName], {
+          plane: "session-helper",
+          verb: "start",
+          privilege: "owner-session",
+          availabilityPolicy: "defer-if-logged-out",
+        }),
+      ]
+    : [...coreStartCommands];
+  const coreStopCommands = [
     command("/usr/bin/systemctl", ["stop", coreUnitName], {
       plane: "core",
       verb: "stop",
       privilege: "elevated",
     }),
   ] as const;
-  const removeCommands = [
-    command("/usr/bin/systemctl", ["--user", "--no-reload", "disable", helperUnitName], {
-      plane: "session-helper",
-      verb: "remove",
-      privilege: "owner-session",
-      expectedExitCodes: [0, 1],
-    }),
+  const stopCommands = helperEnabled
+    ? [
+        command("/usr/bin/systemctl", ["--user", "stop", helperUnitName], {
+          plane: "session-helper",
+          verb: "stop",
+          privilege: "owner-session",
+          availabilityPolicy: "defer-if-logged-out",
+        }),
+        ...coreStopCommands,
+      ]
+    : [...coreStopCommands];
+  const coreRemoveCommands = [
     command("/usr/bin/systemctl", ["disable", coreUnitName], {
       plane: "core",
       verb: "remove",
@@ -125,6 +152,17 @@ export function renderLinuxServiceArtifacts(
       privilege: "elevated",
     }),
   ] as const;
+  const removeCommands = helperEnabled
+    ? [
+        command("/usr/bin/systemctl", ["--user", "--no-reload", "disable", helperUnitName], {
+          plane: "session-helper",
+          verb: "remove",
+          privilege: "owner-session",
+          expectedExitCodes: [0, 1],
+        }),
+        ...coreRemoveCommands,
+      ]
+    : [...coreRemoveCommands];
   return {
     platform: "linux",
     definition,
@@ -136,16 +174,22 @@ export function renderLinuxServiceArtifacts(
       stdoutLogPath: definition.coreStdoutLogPath,
       stderrLogPath: definition.coreStderrLogPath,
     },
-    helper: {
-      plane: "session-helper",
-      bootSemantics: "login",
-      identity: configuration.ownerSession.userName,
-      manifest: helperManifest,
-      stdoutLogPath: definition.helperStdoutLogPath,
-      stderrLogPath: definition.helperStderrLogPath,
-    },
+    helper:
+      helperManifest === null
+        ? null
+        : {
+            plane: "session-helper",
+            bootSemantics: "login",
+            identity: configuration.ownerSession.userName,
+            manifest: helperManifest,
+            stdoutLogPath: definition.helperStdoutLogPath,
+            stderrLogPath: definition.helperStderrLogPath,
+          },
     ipc,
-    files: [runtimeConfiguration, secretReferences, coreManifest, helperManifest],
+    files:
+      helperManifest === null
+        ? [runtimeConfiguration, secretReferences, coreManifest]
+        : [runtimeConfiguration, secretReferences, coreManifest, helperManifest],
     installCommands,
     startCommands,
     stopCommands,
@@ -155,8 +199,9 @@ export function renderLinuxServiceArtifacts(
       arguments: serviceArguments(definition, "core"),
       requiresExternalSupervisor: true,
       restartPolicy: "on-failure",
-      limitation:
-        "On Linux without systemd, an owner-selected external supervisor must own restart and boot persistence; the helper remains tied to a graphical login session.",
+      limitation: helperEnabled
+        ? "On Linux without systemd, an owner-selected external supervisor must own restart and boot persistence; the helper remains tied to a graphical login session."
+        : "On Linux without systemd, an owner-selected external supervisor must own restart and boot persistence; this headless configuration deliberately has no Computer Use helper.",
     },
   };
 }

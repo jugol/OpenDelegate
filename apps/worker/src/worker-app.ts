@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
   createHash,
   createPrivateKey,
@@ -19,7 +20,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { arch, cpus, homedir, hostname, platform, release, totalmem } from "node:os";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -253,6 +254,12 @@ export type WorkerSecretBackendConfiguration =
       readonly serviceName: string;
       readonly serviceSid: string;
       readonly vaultRoot: string;
+      /**
+       * Public, non-secret facts captured before the core Secrets leave the
+       * owner's DPAPI vault. Native service configuration can be composed after
+       * staging without reopening service-account-sealed material.
+       */
+      readonly servicePreparation?: WorkerWindowsServicePreparation;
     }
   | {
       readonly backend: "macos-keychain";
@@ -268,7 +275,40 @@ export type WorkerSecretBackendConfiguration =
       readonly credentialName: string;
       readonly encryptedCredentialFile: string;
       readonly vaultRoot: string;
+      /** Public facts captured while join runs under the eventual service identity. */
+      readonly servicePreparation?: WorkerLinuxHeadlessServicePreparation;
     };
+
+export interface WorkerLocalIpcPublicKeyPin {
+  readonly keyId: `sha256:${string}`;
+  readonly publicKeySpkiBase64Url: string;
+}
+
+export interface WorkerWindowsServicePreparation {
+  readonly schemaVersion: 1;
+  readonly sealing: WindowsServiceSecretSealing;
+  readonly ownerHelperSecretBinding: {
+    readonly backend: "windows-dpapi";
+    readonly vaultRoot: string;
+  };
+  readonly ipcTrust: {
+    readonly core: WorkerLocalIpcPublicKeyPin;
+    readonly helper: WorkerLocalIpcPublicKeyPin;
+  };
+}
+
+export interface WorkerLinuxHeadlessServicePreparation {
+  readonly schemaVersion: 1;
+  readonly mode: "headless";
+  readonly serviceIdentity: {
+    readonly userName: string;
+    readonly groupName: string;
+    readonly uid: number;
+  };
+  readonly ipcTrust: {
+    readonly core: WorkerLocalIpcPublicKeyPin;
+  };
+}
 
 export interface WorkerAgentConfiguration {
   readonly provider: "auto" | "claude" | "codex";
@@ -401,17 +441,10 @@ export interface PrepareWindowsServiceSecretBackendOptions {
   readonly vaultRoot: string;
 }
 
-/**
- * The durable backend, which is idempotent across repeated preparation, plus
- * what this particular call observed while sealing.
- *
- * Sealing is absent when the call staged nothing because the backend was
- * already prepared: the stored blob does not record which descriptor sealed it,
- * and reporting a guess would be worse than reporting nothing.
- */
+/** The durable backend and its persisted effective handoff sealing strength. */
 export interface WindowsServiceSecretBackendPreparation {
   readonly backend: Extract<WorkerSecretBackendConfiguration, { backend: "windows-service-dpapi" }>;
-  readonly sealing?: WindowsServiceSecretSealing;
+  readonly sealing: WindowsServiceSecretSealing;
 }
 
 export interface WorkerRuntimeComposition {
@@ -430,6 +463,8 @@ export interface WorkerDiagnosticSnapshot {
   readonly certificateGeneration: number;
   readonly channelEndpointCount: number;
   readonly secretBackend: WorkerSecretBackendConfiguration["backend"];
+  readonly serviceSecretSealing?: WindowsServiceSecretSealing;
+  readonly serviceMode?: "headless";
   readonly secretStoreStatus: "ready" | "unavailable";
   readonly identityKeyReady: boolean;
   readonly agents: readonly {
@@ -542,10 +577,16 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
             }
             // Prove that the selected service or desktop identity can write all
             // stable core Secrets before submitting the one-use Grant to Main.
-            await provisionWorkerComputerUseCoreSecrets(managedSecrets);
+            const coreIpc = await provisionWorkerComputerUseCoreSecrets(managedSecrets);
+            const linuxServiceIdentity =
+              options.secretBackend.backend === "linux-systemd-credential-vault"
+                ? await resolveCurrentLinuxServiceIdentity()
+                : undefined;
             return {
               identity: createWorkerEnrollmentIdentity(managedSecrets),
               managedSecrets,
+              coreIpc,
+              linuxServiceIdentity,
             };
           },
           enroll: async (_validated, { identity }) =>
@@ -558,7 +599,37 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
                 osFamily: osFamily(platform()),
               },
             }),
-          finalize: async ({ channelEndpoints }, { managedSecrets }, enrolled) => {
+          finalize: async (
+            { channelEndpoints },
+            { managedSecrets, coreIpc, linuxServiceIdentity },
+            enrolled,
+          ) => {
+            if (
+              options.secretBackend.backend === "linux-systemd-credential-vault" &&
+              linuxServiceIdentity === undefined
+            ) {
+              throw appError(
+                "CONFIG_INVALID",
+                "The prepared Linux service identity is missing from the enrollment transaction.",
+              );
+            }
+            const secretBackend =
+              options.secretBackend.backend === "linux-systemd-credential-vault"
+                ? {
+                    ...options.secretBackend,
+                    servicePreparation: {
+                      schemaVersion: 1 as const,
+                      mode: "headless" as const,
+                      serviceIdentity: linuxServiceIdentity,
+                      ipcTrust: {
+                        core: {
+                          keyId: coreIpc.keyId,
+                          publicKeySpkiBase64Url: coreIpc.publicKeySpkiBase64Url,
+                        },
+                      },
+                    },
+                  }
+                : options.secretBackend;
             const configuration = validateWorkerConfigurationDocument({
               schemaVersion: CONFIG_SCHEMA_VERSION,
               deviceId: enrolled.deviceId,
@@ -576,7 +647,7 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
                   credentialRef: "device-identity",
                 })),
               },
-              secretBackend: options.secretBackend,
+              secretBackend,
               agent:
                 options.agent === undefined
                   ? {
@@ -1469,6 +1540,14 @@ export async function diagnoseWorker(input: {
     certificateGeneration: configuration.certificateGeneration,
     channelEndpointCount: configuration.transportProfile.endpoints.length,
     secretBackend: configuration.secretBackend.backend,
+    ...(configuration.secretBackend.backend === "windows-service-dpapi" &&
+    configuration.secretBackend.servicePreparation !== undefined
+      ? { serviceSecretSealing: configuration.secretBackend.servicePreparation.sealing }
+      : {}),
+    ...(configuration.secretBackend.backend === "linux-systemd-credential-vault" &&
+    configuration.secretBackend.servicePreparation !== undefined
+      ? { serviceMode: configuration.secretBackend.servicePreparation.mode }
+      : {}),
     secretStoreStatus: health.status,
     identityKeyReady: keyAvailability.ready,
     agents,
@@ -1819,13 +1898,6 @@ export async function prepareWindowsServiceSecretBackend(
       "The Windows service SID could not be resolved safely.",
     );
   }
-  const target = Object.freeze({
-    backend: "windows-service-dpapi" as const,
-    handoffRoot,
-    serviceName,
-    serviceSid,
-    vaultRoot,
-  });
   if (configuration.secretBackend.backend === "windows-service-dpapi") {
     if (
       configuration.secretBackend.handoffRoot !== handoffRoot ||
@@ -1838,7 +1910,67 @@ export async function prepareWindowsServiceSecretBackend(
         "The enrolled Worker is already bound to a different Windows service Secret backend.",
       );
     }
-    return { backend: target };
+    if (configuration.secretBackend.servicePreparation === undefined) {
+      throw appError(
+        "CONFIG_INVALID",
+        "This Worker was staged by an older build that did not retain the public service-preparation binding. If the handoff is owner-restorable, run windows-service-secret-restore and stage again; otherwise use a new owner-approved re-credentialing Grant before staging again.",
+      );
+    }
+    try {
+      const ownerStore = new WindowsDpapiSecretStore({
+        deviceId: configuration.deviceId,
+        hostPlatform: "win32",
+        ...(options.powershellPath === undefined ? {} : { powershellPath: options.powershellPath }),
+        ...(options.runner === undefined ? {} : { runner: options.runner }),
+        sourceCheckoutRoot: options.paths.sourceCheckoutRoot,
+        vaultRoot:
+          configuration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot,
+      });
+      const handoff = new WindowsServiceDpapiSecretHandoff({
+        deviceId: configuration.deviceId,
+        handoffRoot,
+        hostPlatform: "win32",
+        ...(options.powershellPath === undefined ? {} : { powershellPath: options.powershellPath }),
+        ...(options.runner === undefined ? {} : { runner: options.runner }),
+        serviceSid,
+        sourceCheckoutRoot: options.paths.sourceCheckoutRoot,
+      });
+      const coreAliases = [
+        `${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`,
+        WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
+        WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
+      ] as const;
+      for (const alias of coreAliases) {
+        if (!(await handoff.availability(alias)).ready) {
+          throw appError(
+            "SECRET_BACKEND_UNAVAILABLE",
+            "The Windows service Secret handoff is incomplete.",
+          );
+        }
+      }
+      // A crash after the durable configuration switch but before owner-vault
+      // cleanup resumes here. The handoff is complete, so removing only the
+      // core-owned duplicates left in the owner vault is safe and idempotent.
+      for (const alias of coreAliases) {
+        if ((await ownerStore.availability(alias)).ready) {
+          await ownerStore.delete(alias);
+        }
+      }
+      return {
+        backend: configuration.secretBackend,
+        sealing: configuration.secretBackend.servicePreparation.sealing,
+      };
+    } catch (error) {
+      if (error instanceof WorkerAppError) {
+        throw error;
+      }
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        error instanceof SecretError && error.detail !== undefined
+          ? `The Windows service Secret cleanup did not complete. ${error.detail}`
+          : "The Windows service Secret cleanup did not complete.",
+      );
+    }
   }
   if (configuration.secretBackend.backend !== "windows-dpapi") {
     throw appError(
@@ -1888,8 +2020,8 @@ export async function prepareWindowsServiceSecretBackend(
   try {
     // The logged-in session helper owns this key. It intentionally remains in
     // the owner DPAPI vault and is never staged for or opened by the service.
-    await provisionWorkerSessionHelperOwnerSigningSecret(ownerStore);
-
+    const helperIpc = await provisionWorkerSessionHelperOwnerSigningSecret(ownerStore);
+    const coreIpc = await readWorkerComputerUseCoreKeyBinding(ownerStore);
     // Phase one is copy-only. A failure leaves every source Secret intact, so a
     // later invocation can safely resume even if some handoff entries exist.
     for (const alias of coreAliases) {
@@ -1920,18 +2052,50 @@ export async function prepareWindowsServiceSecretBackend(
       }
     }
 
-    // Phase two removes only core-owned source copies after every handoff entry
-    // is durable. The owner helper key is deliberately not in this collection.
-    for (const alias of coreAliases) {
-      if ((await ownerStore.availability(alias)).ready) {
-        await ownerStore.delete(alias);
-      }
-    }
+    const servicePreparation = Object.freeze({
+      schemaVersion: 1 as const,
+      sealing,
+      ownerHelperSecretBinding: Object.freeze({
+        backend: "windows-dpapi" as const,
+        vaultRoot: configuration.secretBackend.vaultRoot,
+      }),
+      ipcTrust: Object.freeze({
+        core: Object.freeze({
+          keyId: coreIpc.keyId,
+          publicKeySpkiBase64Url: coreIpc.publicKeySpkiBase64Url,
+        }),
+        helper: Object.freeze({
+          keyId: helperIpc.keyId,
+          publicKeySpkiBase64Url: helperIpc.publicKeySpkiBase64Url,
+        }),
+      }),
+    });
+    const target = Object.freeze({
+      backend: "windows-service-dpapi" as const,
+      handoffRoot,
+      serviceName,
+      serviceSid,
+      vaultRoot,
+      servicePreparation,
+    });
+
+    // Persist the public pins and service binding before deleting their source
+    // Secrets. A crash can then resume cleanup without reopening a service-
+    // account-sealed handoff merely to rediscover public keys.
     const updated = validateWorkerConfigurationDocument({
       ...configuration,
       secretBackend: target,
     });
     await writeConfiguration(options.paths.configFile, updated);
+
+    // Phase two removes only core-owned source copies after both the handoff and
+    // its public recovery binding are durable. The owner helper key is deliberately
+    // not in this collection.
+    for (const alias of coreAliases) {
+      if ((await ownerStore.availability(alias)).ready) {
+        await ownerStore.delete(alias);
+      }
+    }
     return { backend: target, sealing };
   } catch (error) {
     if (error instanceof WorkerAppError) {
@@ -1968,7 +2132,8 @@ export interface WindowsServiceSecretRestoreResult {
  * enrollment to the service identity, after which a foreground run fails
  * because the service Secret Store expects the service account. An owner who
  * cannot complete service installation would be left with an enrolled Device
- * that has no way to run at all, and re-enrolling is the only escape.
+ * that has no way to run at all, and owner-approved re-credentialing is the
+ * only escape.
  *
  * This is possible only when the handoff was machine-sealed. A Secret sealed to
  * the service account cannot be opened by the staging account by design, so
@@ -1996,14 +2161,27 @@ export async function restoreWindowsServiceSecretBackend(
     "Foreground Windows DPAPI vault root",
   );
   const staged = configuration.secretBackend;
+  const retainedOwnerVault = staged.servicePreparation?.ownerHelperSecretBinding.vaultRoot;
+  if (
+    retainedOwnerVault !== undefined &&
+    !pathsEqualForCurrentHost(vaultRoot, retainedOwnerVault)
+  ) {
+    throw appError(
+      "CONFIG_INVALID",
+      "The restored core Secrets must return to the retained owner-session helper vault.",
+    );
+  }
   if (
     pathsEqualForCurrentHost(vaultRoot, staged.handoffRoot) ||
+    pathsEqualForCurrentHost(vaultRoot, staged.vaultRoot) ||
     isWithin(staged.handoffRoot, vaultRoot) ||
-    isWithin(vaultRoot, staged.handoffRoot)
+    isWithin(vaultRoot, staged.handoffRoot) ||
+    isWithin(staged.vaultRoot, vaultRoot) ||
+    isWithin(vaultRoot, staged.vaultRoot)
   ) {
     throw appError(
       "CONFIG_PATH_UNSAFE",
-      "The foreground vault must be disjoint from the service handoff.",
+      "The foreground vault must be disjoint from the service handoff and service vault.",
     );
   }
 
@@ -2035,12 +2213,15 @@ export async function restoreWindowsServiceSecretBackend(
     // Copy first and rebind last, so an interrupted restore leaves the handoff
     // intact and can simply be run again.
     for (const alias of coreAliases) {
-      if (!(await handoff.availability(alias)).ready) {
-        continue;
-      }
       if ((await ownerStore.availability(alias)).ready) {
         restoredAliases += 1;
         continue;
+      }
+      if (!(await handoff.availability(alias)).ready) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "The service handoff is missing a required core Secret, so foreground restoration remains staged.",
+        );
       }
       const material = await handoff.consume(alias);
       try {
@@ -2050,10 +2231,10 @@ export async function restoreWindowsServiceSecretBackend(
       }
       restoredAliases += 1;
     }
-    if (restoredAliases === 0) {
+    if (restoredAliases !== coreAliases.length) {
       throw appError(
         "SECRET_BACKEND_UNAVAILABLE",
-        "The service handoff holds no restorable Secret for this Worker.",
+        "The service handoff did not restore every required core Secret.",
       );
     }
     const backend = validateSecretBackend({
@@ -2117,7 +2298,7 @@ export async function loadWorkerSecretBackendConfiguration(
   }
 }
 
-async function readStableWorkerFile(path: string, maximumBytes: number): Promise<Buffer> {
+export async function readStableWorkerFile(path: string, maximumBytes: number): Promise<Buffer> {
   const noFollow = fileConstants.O_NOFOLLOW ?? 0;
   const nonBlocking = fileConstants.O_NONBLOCK ?? 0;
   const handle = await open(path, fileConstants.O_RDONLY | noFollow | nonBlocking);
@@ -3546,20 +3727,48 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
         vaultRoot: requireAbsolutePath(text(record["vaultRoot"]), "vault root"),
       };
     case "windows-service-dpapi":
-      assertExactKeys(record, ["backend", "handoffRoot", "serviceName", "serviceSid", "vaultRoot"]);
+      assertExactKeys(
+        record,
+        ["backend", "handoffRoot", "serviceName", "serviceSid", "vaultRoot"],
+        ["servicePreparation"],
+      );
       if (
         !/^OpenDelegate-[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(text(record["serviceName"])) ||
         !/^S-1-5-80-(?:[0-9]{1,10}-){4}[0-9]{1,10}$/u.test(text(record["serviceSid"]))
       ) {
         throw appError("CONFIG_INVALID", "Windows service Secret identity is invalid.");
       }
-      return {
-        backend: "windows-service-dpapi",
-        handoffRoot: requireAbsolutePath(text(record["handoffRoot"]), "handoff root"),
-        serviceName: text(record["serviceName"]),
-        serviceSid: text(record["serviceSid"]),
-        vaultRoot: requireAbsolutePath(text(record["vaultRoot"]), "vault root"),
-      };
+      {
+        const handoffRoot = requireAbsolutePath(text(record["handoffRoot"]), "handoff root");
+        const vaultRoot = requireAbsolutePath(text(record["vaultRoot"]), "vault root");
+        const servicePreparation =
+          record["servicePreparation"] === undefined
+            ? undefined
+            : validateWindowsServicePreparation(record["servicePreparation"]);
+        const ownerVaultRoot = servicePreparation?.ownerHelperSecretBinding.vaultRoot;
+        if (
+          ownerVaultRoot !== undefined &&
+          (pathsEqualForCurrentHost(ownerVaultRoot, handoffRoot) ||
+            pathsEqualForCurrentHost(ownerVaultRoot, vaultRoot) ||
+            isWithin(ownerVaultRoot, handoffRoot) ||
+            isWithin(ownerVaultRoot, vaultRoot) ||
+            isWithin(handoffRoot, ownerVaultRoot) ||
+            isWithin(vaultRoot, ownerVaultRoot))
+        ) {
+          throw appError(
+            "CONFIG_PATH_UNSAFE",
+            "Owner-session, handoff, and service Secret vaults must be disjoint.",
+          );
+        }
+        return {
+          backend: "windows-service-dpapi",
+          handoffRoot,
+          serviceName: text(record["serviceName"]),
+          serviceSid: text(record["serviceSid"]),
+          vaultRoot,
+          ...(servicePreparation === undefined ? {} : { servicePreparation }),
+        };
+      }
     case "macos-keychain":
       assertExactKeys(record, ["backend", "helperPath", "expectedHelperSha256"]);
       if (!/^sha256:[0-9a-f]{64}$/u.test(text(record["expectedHelperSha256"]))) {
@@ -3574,27 +3783,188 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
       assertExactKeys(record, ["backend", "secretToolPath"]);
       return {
         backend: "linux-secret-service",
-        secretToolPath: requireAbsolutePath(text(record["secretToolPath"]), "secret-tool"),
+        secretToolPath: requirePosixAbsolutePath(text(record["secretToolPath"]), "secret-tool"),
       };
     case "linux-systemd-credential-vault":
-      assertExactKeys(record, [
-        "backend",
-        "credentialName",
-        "encryptedCredentialFile",
-        "vaultRoot",
-      ]);
-      return {
-        backend: "linux-systemd-credential-vault",
-        credentialName: strictCredentialName(record["credentialName"]),
-        encryptedCredentialFile: requireAbsolutePath(
-          text(record["encryptedCredentialFile"]),
-          "encrypted systemd credential",
-        ),
-        vaultRoot: requireAbsolutePath(text(record["vaultRoot"]), "vault root"),
-      };
+      assertExactKeys(
+        record,
+        ["backend", "credentialName", "encryptedCredentialFile", "vaultRoot"],
+        ["servicePreparation"],
+      );
+      {
+        const servicePreparation =
+          record["servicePreparation"] === undefined
+            ? undefined
+            : validateLinuxHeadlessServicePreparation(record["servicePreparation"]);
+        return {
+          backend: "linux-systemd-credential-vault",
+          credentialName: strictCredentialName(record["credentialName"]),
+          encryptedCredentialFile: requirePosixAbsolutePath(
+            text(record["encryptedCredentialFile"]),
+            "encrypted systemd credential",
+          ),
+          vaultRoot: requirePosixAbsolutePath(text(record["vaultRoot"]), "vault root"),
+          ...(servicePreparation === undefined ? {} : { servicePreparation }),
+        };
+      }
     default:
       throw appError("CONFIG_INVALID", "Worker Secret Store configuration is invalid.");
   }
+}
+
+function validateLinuxHeadlessServicePreparation(
+  value: unknown,
+): WorkerLinuxHeadlessServicePreparation {
+  const record = readRecord(value);
+  assertExactKeys(record, ["schemaVersion", "mode", "serviceIdentity", "ipcTrust"]);
+  if (record["schemaVersion"] !== 1 || record["mode"] !== "headless") {
+    throw appError("CONFIG_INVALID", "Linux headless service preparation is unsupported.");
+  }
+  const ipcTrust = readRecord(record["ipcTrust"]);
+  assertExactKeys(ipcTrust, ["core"]);
+  const serviceIdentity = readRecord(record["serviceIdentity"]);
+  assertExactKeys(serviceIdentity, ["userName", "groupName", "uid"]);
+  const userName = unixAccountName(serviceIdentity["userName"], "Linux service user");
+  const groupName = unixAccountName(serviceIdentity["groupName"], "Linux service group");
+  const uid = nonNegativeInteger(serviceIdentity["uid"]);
+  if (userName === "root" || uid === 0) {
+    throw appError("CONFIG_INVALID", "The Linux core service identity must not be root.");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    mode: "headless",
+    serviceIdentity: Object.freeze({ userName, groupName, uid }),
+    ipcTrust: Object.freeze({
+      core: validateWorkerLocalIpcPublicKeyPin(ipcTrust["core"]),
+    }),
+  });
+}
+
+async function resolveCurrentLinuxServiceIdentity(): Promise<{
+  readonly userName: string;
+  readonly groupName: string;
+  readonly uid: number;
+}> {
+  if (process.platform !== "linux" || typeof process.getuid !== "function") {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "Headless systemd enrollment must run on Linux under the eventual service identity.",
+    );
+  }
+  const uid = process.getuid();
+  if (!Number.isSafeInteger(uid) || uid <= 0) {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "Headless systemd enrollment must run under a non-root service identity.",
+    );
+  }
+  const [userName, groupName] = await Promise.all([
+    readLinuxIdentityName(["-un"]),
+    readLinuxIdentityName(["-gn"]),
+  ]);
+  return Object.freeze({ userName, groupName, uid });
+}
+
+async function readLinuxIdentityName(args: readonly string[]): Promise<string> {
+  const value = await new Promise<string>((settle, fail) => {
+    execFile(
+      "/usr/bin/id",
+      [...args],
+      { shell: false, timeout: 5_000, maxBuffer: 4_096 },
+      (error, stdout) => (error === null ? settle(stdout) : fail(error)),
+    );
+  }).catch(() => {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "The Linux service identity could not be resolved safely.",
+    );
+  });
+  return unixAccountName(value.trim(), "Linux service identity");
+}
+
+function unixAccountName(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^[A-Za-z_][A-Za-z0-9._-]{0,63}\$?$/u.test(value) ||
+    value.includes("\0")
+  ) {
+    throw appError("CONFIG_INVALID", `The ${label} is invalid.`);
+  }
+  return value;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw appError("CONFIG_INVALID", "Worker configuration integer is invalid.");
+  }
+  return value;
+}
+
+function validateWindowsServicePreparation(value: unknown): WorkerWindowsServicePreparation {
+  const record = readRecord(value);
+  assertExactKeys(record, ["schemaVersion", "sealing", "ownerHelperSecretBinding", "ipcTrust"]);
+  if (record["schemaVersion"] !== 1) {
+    throw appError("CONFIG_INVALID", "Windows service preparation version is unsupported.");
+  }
+  if (record["sealing"] !== "service-account" && record["sealing"] !== "machine") {
+    throw appError("CONFIG_INVALID", "Windows service Secret sealing is invalid.");
+  }
+  const ownerHelper = readRecord(record["ownerHelperSecretBinding"]);
+  assertExactKeys(ownerHelper, ["backend", "vaultRoot"]);
+  if (ownerHelper["backend"] !== "windows-dpapi") {
+    throw appError("CONFIG_INVALID", "Windows owner-session Secret binding is invalid.");
+  }
+  const ipcTrust = readRecord(record["ipcTrust"]);
+  assertExactKeys(ipcTrust, ["core", "helper"]);
+  const core = validateWorkerLocalIpcPublicKeyPin(ipcTrust["core"]);
+  const helper = validateWorkerLocalIpcPublicKeyPin(ipcTrust["helper"]);
+  if (core.keyId === helper.keyId) {
+    throw appError("CONFIG_INVALID", "Core and owner-session helper must use distinct keys.");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    sealing: record["sealing"],
+    ownerHelperSecretBinding: Object.freeze({
+      backend: "windows-dpapi",
+      vaultRoot: requireAbsolutePath(
+        text(ownerHelper["vaultRoot"]),
+        "owner-session helper vault root",
+      ),
+    }),
+    ipcTrust: Object.freeze({ core, helper }),
+  });
+}
+
+function validateWorkerLocalIpcPublicKeyPin(value: unknown): WorkerLocalIpcPublicKeyPin {
+  const record = readRecord(value);
+  assertExactKeys(record, ["keyId", "publicKeySpkiBase64Url"]);
+  const keyId = text(record["keyId"]);
+  const publicKeySpkiBase64Url = text(record["publicKeySpkiBase64Url"]);
+  if (!/^sha256:[a-f0-9]{64}$/u.test(keyId) || !/^[A-Za-z0-9_-]+$/u.test(publicKeySpkiBase64Url)) {
+    throw appError("CONFIG_INVALID", "The local IPC public-key pin is invalid.");
+  }
+  const bytes = Buffer.from(publicKeySpkiBase64Url, "base64url");
+  try {
+    const key = createPublicKey({ key: bytes, format: "der", type: "spki" });
+    const expected = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    if (
+      bytes.length === 0 ||
+      bytes.length > 256 ||
+      bytes.toString("base64url") !== publicKeySpkiBase64Url ||
+      key.asymmetricKeyType !== "ed25519" ||
+      expected !== keyId
+    ) {
+      throw new Error("binding");
+    }
+  } catch {
+    throw appError("CONFIG_INVALID", "The local IPC public-key pin is invalid.");
+  } finally {
+    bytes.fill(0);
+  }
+  return Object.freeze({
+    keyId: keyId as `sha256:${string}`,
+    publicKeySpkiBase64Url,
+  });
 }
 
 function validateAgentConfiguration(value: unknown): WorkerAgentConfiguration {
@@ -3862,6 +4232,19 @@ function requireAbsolutePath(value: string, label: string): string {
     throw appError("CONFIG_PATH_UNSAFE", `The ${label} must be an absolute safe path.`);
   }
   return resolve(value);
+}
+
+function requirePosixAbsolutePath(value: string, label: string): string {
+  if (
+    typeof value !== "string" ||
+    !posix.isAbsolute(value) ||
+    value !== value.trim() ||
+    value.includes("\0") ||
+    value.includes("\\")
+  ) {
+    throw appError("CONFIG_PATH_UNSAFE", `The ${label} must be an absolute safe POSIX path.`);
+  }
+  return posix.resolve(value);
 }
 
 /**

@@ -65,12 +65,19 @@ import {
   runServiceLifecycleCommand,
   serviceLifecycleHelpText,
   ServiceLifecycleCliError,
+  loadServiceConfigurationFile,
   type ParsedServiceLifecycleArguments,
 } from "./service-lifecycle.ts";
 import {
   resolveEffectiveMainServiceConfiguration,
   resolveMainServiceHomeBinding,
 } from "./main-service-configuration.ts";
+import {
+  composeHeadlessLinuxMainServiceDocument,
+  parseMainServiceDocumentArguments,
+  writeMainServiceDocument,
+  type ParsedMainServiceDocumentArguments,
+} from "./main-service-document.ts";
 import {
   assertCompositionMatchesMain,
   DeviceEnrollmentCliError,
@@ -158,6 +165,7 @@ export interface ParsedArguments {
   readonly secretBackendConfigurationFile?: string;
   readonly deviceEnrollmentConfigurationFile?: string;
   readonly service?: ParsedServiceLifecycleArguments;
+  readonly serviceDocument?: ParsedMainServiceDocumentArguments;
   readonly open: boolean;
 }
 
@@ -178,6 +186,13 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
     };
   }
   if (commandValue === "service") {
+    if (values[1] === "document") {
+      return {
+        command: "service",
+        serviceDocument: parseMainServiceDocumentArguments(values.slice(2)),
+        open: false,
+      };
+    }
     return {
       command: "service",
       service: parseServiceLifecycleArguments(values.slice(1)),
@@ -792,6 +807,10 @@ async function runBackupLifecycleFromCli(options: ParsedArguments): Promise<void
 }
 
 async function runServiceLifecycleFromCli(options: ParsedArguments): Promise<void> {
+  if (options.serviceDocument !== undefined) {
+    await runMainServiceDocumentFromCli(options.serviceDocument);
+    return;
+  }
   const parsed = options.service;
   if (parsed === undefined) {
     throw new ServiceLifecycleCliError(
@@ -903,6 +922,67 @@ async function runServiceLifecycleFromCli(options: ParsedArguments): Promise<voi
   if (result.kind === "operation" && result.report.outcome !== "succeeded") {
     process.exitCode = 1;
   }
+}
+
+async function runMainServiceDocumentFromCli(
+  request: ParsedMainServiceDocumentArguments,
+): Promise<void> {
+  const baseAdapters = createDefaultServiceLifecycleAdapters();
+  if (baseAdapters.hostPlatform !== "linux") {
+    throw new ServiceLifecycleCliError(
+      "SERVICE_PLATFORM_MISMATCH",
+      "A headless Linux Main service document must be composed on its enrolled Linux Device.",
+    );
+  }
+  const workerConfiguration = await loadServiceConfigurationFile(request.workerConfigurationPath);
+  const boundHome = await resolveMainServiceHomeBinding({
+    command: "install",
+    home: request.home,
+    hostPlatform: baseAdapters.hostPlatform,
+    template: {
+      platform: workerConfiguration.platform,
+      role: "main",
+      paths: { stateRoot: workerConfiguration.paths.stateRoot },
+    },
+  });
+  const paths = resolveRuntimePaths({ home: boundHome, sourceCheckout: installationRoot });
+  const main = await loadMainConfiguration(paths.configurationFile);
+  const template = composeHeadlessLinuxMainServiceDocument({
+    main,
+    home: paths.home,
+    workerConfiguration,
+  });
+  const values = await inspectPersistedMainConfiguration({
+    configuration: main,
+    home: paths.home,
+    sourceCheckout: installationRoot,
+    environment: process.env,
+  });
+  const effective = await resolveEffectiveMainServiceConfiguration({
+    command: "install",
+    home: paths.home,
+    hostPlatform: baseAdapters.hostPlatform,
+    service: { inspect: async () => values },
+    main,
+    template,
+  });
+  await writeMainServiceDocument({
+    outputPath: request.outputPath,
+    configuration: effective.configuration,
+  });
+  process.stdout.write(
+    `${JSON.stringify({
+      event: "main.service-document.written",
+      path: request.outputPath,
+      deviceId: effective.configuration.deviceId,
+      instanceId: effective.configuration.instanceId,
+      role: effective.configuration.role,
+      bundleVersion: effective.configuration.bundle.version,
+      bundleChecksum: effective.configuration.bundle.checksum,
+      nextStep:
+        "Review 'opendelegate service plan install --config <path> --home <main-home>', then run service install with a stable command ID from an elevated shell.",
+    })}\n`,
+  );
 }
 
 async function runDeviceEnrollmentFromCli(options: ParsedArguments): Promise<void> {
@@ -1527,6 +1607,7 @@ Usage:
   opendelegate serve [--home PATH] [--open]
   opendelegate status [--home PATH]
   opendelegate service help
+  opendelegate service document --worker-config PATH --output NEW_PATH --home MAIN_HOME
   opendelegate service render --config PATH [--home MAIN_HOME]
   opendelegate service plan OPERATION --config PATH [--home MAIN_HOME]
     [--active-version VERSION]

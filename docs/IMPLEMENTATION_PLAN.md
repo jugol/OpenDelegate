@@ -327,6 +327,14 @@ Prove the complete product flow in one process with deterministic fake boundarie
 - Persist cumulative active-execution wall time independently from Task calendar
   age, checkpoint it during live execution, and prove that inactive Tasks can resume
   after arbitrarily long owner or resource waits without a wall-Budget extension.
+- Treat only a durable, still-current Worker Run lease renewal as Task and Work
+  Order activity, so a quiet long Run remains live without allowing rejected or
+  stale Worker traffic to reset its idle Budget.
+- Keep `waiting_resource` Tasks dormant without fixed polling or retry-Budget use,
+  then re-evaluate them after startup or a material Worker, Secret, Configuration,
+  route, or lock availability signal. Deduplicate wake-ups, preserve signals that
+  race the first durable wait, and reset only the applicable idle windows before
+  dispatch.
 - Implement deterministic scheduling filters and score explanations.
 - Define the semantic planning request and response schemas used by Main Agent.
 - Implement fake channel, Main Agent, Worker Agent, transport, Knowledge, Artifact,
@@ -433,6 +441,21 @@ Make Main and Worker roles truly persistent on all target operating systems.
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
+- Implement a Device-local service-preparation boundary for every persistent shape.
+  A graphical Device migrates core-owned Secrets to the native service identity,
+  leaves the owner-session key in its separate store, and durably exports only the
+  two public IPC pins into a create-new install document. Windows is implemented by
+  D-088. D-089 implements the distinct headless Linux shape by enrolling directly
+  under the final systemd identity, exporting the core public pin and that exact
+  non-root identity, and omitting the unavailable helper entirely. macOS and
+  graphical Linux remain required and must fail closed until their equivalent
+  two-plane migration exists.
+- Compose a headless Linux Main document from its co-located Worker's already
+  prepared core-only document rather than accepting a second hand-authored
+  topology. Bind the durable Instance, Device, state root, systemd credential, and
+  disabled helper shape, and carry forward the prepared service identity, before
+  changing only the runtime role and effective Main preference, as specified by
+  D-090.
 - Build release bundles and smoke them on clean hosts using isolated temporary state
   and dynamically selected adjacent loopback listeners.
 - Keep bundle assembly independent from service activation. Installed systems switch

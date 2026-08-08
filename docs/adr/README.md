@@ -57,6 +57,11 @@ approved product specification.
 34. [`0037-discord-terminal-control-refusal.md`](0037-discord-terminal-control-refusal.md)
 35. [`0038-active-execution-wall-budget.md`](0038-active-execution-wall-budget.md)
 36. [`0039-change-scoped-pull-request-validation.md`](0039-change-scoped-pull-request-validation.md)
+37. [`0040-windows-worker-service-preparation-binding.md`](0040-windows-worker-service-preparation-binding.md)
+38. [`0041-headless-linux-worker-service-preparation.md`](0041-headless-linux-worker-service-preparation.md)
+39. [`0042-headless-linux-main-service-composition.md`](0042-headless-linux-main-service-composition.md)
+40. [`0043-current-worker-lease-renewal-is-budget-activity.md`](0043-current-worker-lease-renewal-is-budget-activity.md)
+41. [`0044-resource-waits-resume-on-availability-change.md`](0044-resource-waits-resume-on-availability-change.md)
 
 ## Proposed ADRs
 

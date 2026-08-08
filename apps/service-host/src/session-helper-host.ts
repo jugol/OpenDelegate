@@ -47,6 +47,12 @@ export async function runSessionHelperServiceHost(
   if (configuration.role !== parsed.role) {
     throw new ServiceHostError("The session-helper role does not match its durable configuration.");
   }
+  if (
+    configuration.helperSecretBinding === null ||
+    configuration.localIpc.sessionHelper !== "enabled"
+  ) {
+    throw new ServiceHostError("This headless Linux service has no owner-session helper.");
+  }
   await verifyServiceHostReleaseIdentity(configuration);
   const sessionId = requireNativeSessionIdentity(configuration);
   const store = (options.createStore ?? createOwnerSessionStore)(configuration);
@@ -126,6 +132,9 @@ export async function runSessionHelperServiceHost(
 
 function createOwnerSessionStore(configuration: ServiceHostConfiguration): ManagedSecretStore {
   const binding = configuration.helperSecretBinding;
+  if (binding === null) {
+    throw new ServiceHostError("This headless Linux service has no owner-session Secret Store.");
+  }
   if (binding.backend === "windows-dpapi") {
     return createPlatformManagedSecretStore({
       backend: binding.backend,
@@ -176,6 +185,9 @@ function requireNativeSessionIdentity(configuration: ServiceHostConfiguration): 
 }
 
 async function prepareEndpoint(configuration: ServiceHostConfiguration): Promise<void> {
+  if (configuration.localIpc.sessionHelper !== "enabled") {
+    throw new ServiceHostError("This headless Linux service has no owner-session IPC endpoint.");
+  }
   const existing = await readHelperPlanePresence({
     runtimeRoot: configuration.runtimeRoot,
     expected: {

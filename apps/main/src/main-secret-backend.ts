@@ -39,6 +39,8 @@ export type MainSecretBackendConfiguration =
   | {
       readonly backend: "linux-systemd-credential-vault";
       readonly credentialName: string;
+      /** Public source used by the eventual systemd LoadCredentialEncrypted mapping. */
+      readonly encryptedCredentialFile?: string;
       readonly vaultRoot: string;
     };
 
@@ -110,10 +112,17 @@ export function validateMainSecretBackendConfiguration(
         secretToolPath: requireAbsolutePath(record["secretToolPath"]),
       });
     case "linux-systemd-credential-vault":
-      assertExactKeys(record, ["backend", "credentialName", "vaultRoot"]);
+      assertExactKeys(
+        record,
+        ["backend", "credentialName", "vaultRoot"],
+        ["encryptedCredentialFile"],
+      );
       return Object.freeze({
         backend: "linux-systemd-credential-vault",
         credentialName: requireIdentifier(record["credentialName"], "credential name"),
+        ...(record["encryptedCredentialFile"] === undefined
+          ? {}
+          : { encryptedCredentialFile: requireAbsolutePath(record["encryptedCredentialFile"]) }),
         vaultRoot: requireAbsolutePath(record["vaultRoot"]),
       });
     default:
@@ -295,9 +304,12 @@ function requireRecord(input: unknown): Record<string, unknown> {
 
 function assertExactKeys(
   input: Readonly<Record<string, unknown>>,
-  expected: readonly string[],
+  required: readonly string[],
+  optional: readonly string[] = [],
 ): void {
-  if (Object.keys(input).sort().join(",") !== [...expected].sort().join(",")) {
+  const keys = Object.keys(input);
+  const allowed = new Set([...required, ...optional]);
+  if (required.some((key) => !Object.hasOwn(input, key)) || keys.some((key) => !allowed.has(key))) {
     throw invalidConfiguration();
   }
 }

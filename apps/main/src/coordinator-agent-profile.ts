@@ -37,7 +37,10 @@ export async function resolveCoordinatorSessionBinding(
     try {
       catalog = await adapter.listModels();
     } catch {
-      throw unavailable("The active Coordinator Agent model catalog could not be refreshed.", true);
+      throw unavailable(
+        "The active Coordinator Agent model catalog could not be refreshed.",
+        "failure",
+      );
     }
     return catalog;
   };
@@ -90,6 +93,9 @@ export async function resolveCoordinatorSessionBinding(
   );
 }
 
-function unavailable(message: string, retryable = false): TaskExecutorError {
-  return new TaskExecutorError("MAIN_AGENT_PROFILE_UNAVAILABLE", message, retryable);
+function unavailable(
+  message: string,
+  retryKind: "failure" | "resource" = "resource",
+): TaskExecutorError {
+  return new TaskExecutorError("MAIN_AGENT_PROFILE_UNAVAILABLE", message, true, { retryKind });
 }

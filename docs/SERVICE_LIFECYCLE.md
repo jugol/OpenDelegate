@@ -73,7 +73,48 @@ Headless Linux may include one non-secret encrypted credential source:
 The renderer emits `LoadCredentialEncrypted=` and `PrivateMounts=yes`. The source
 must be absolute and outside the checkout; the configuration never accepts the
 plaintext key. Use the packaged Worker `secret-backend-provision` boundary and the
-join skill rather than manually creating a plaintext credential.
+join skill rather than manually creating a plaintext credential. That join must run
+under the same non-login identity as the eventual service; it records that identity
+and the core IPC public pin after proving access to the final vault.
+
+For a genuinely headless Device, compose a core-only document after enrollment:
+
+```text
+opendelegate worker service-document --output /tmp/opendelegate-worker.json \
+  --bundle /opt/opendelegate-candidate --install-root /opt/opendelegate \
+  --data-root /var/lib/opendelegate-runtime --health-port 43190 \
+  --instance-id personal --home /var/lib/opendelegate-runtime/state \
+  --owner-user OWNER --owner-uid OWNER_UID --owner-home /home/OWNER
+opendelegate service plan install --config /tmp/opendelegate-worker.json
+```
+
+The resulting document has `helperSecretBinding: null` and contains no helper pin,
+Secret reference, user unit, supervisor action, or helper health check. It therefore
+reports Computer Use as unavailable by configuration instead of repeatedly failing
+a graphical service. Enabling a graphical helper later requires an explicit new
+two-plane preparation and service document.
+
+When this Device is also the fixed Main, do not install the Worker document. While
+running under the same named systemd credential, derive one create-new Main document:
+
+```text
+opendelegate service document \
+  --worker-config /tmp/opendelegate-worker.json \
+  --output /tmp/opendelegate-main.json \
+  --home /var/lib/opendelegate-runtime/state
+opendelegate service plan install \
+  --config /tmp/opendelegate-main.json \
+  --home /var/lib/opendelegate-runtime/state
+```
+
+The first command proves that the initialized Main and local Worker use the same
+Instance, Device, state root, and systemd credential mapping, while carrying forward
+the Worker's already reviewed service identity. It changes only the runtime role and
+effective Main preference. Run both commands in a
+credential-bearing transient unit when Main uses
+`linux-systemd-credential-vault`; PostgreSQL and protected Configuration inspection
+must never receive a credential through argv or the environment. A headless Main
+must keep `admin.open-on-login` disabled because it has no login helper.
 
 A Windows Main or Worker install or upgrade includes the non-secret binding emitted
 by `worker windows-service-secret-stage`. Main stages the same binding because its
@@ -94,6 +135,28 @@ service hosts a co-located local Worker:
 Both roots must be disjoint strict descendants of `stateRoot`. The values are
 non-secret; preflight still resolves the SCM SID independently and refuses a
 mismatch.
+
+The logged-in helper's `windows-dpapi` vault is different: it remains under the
+owner-selected Worker home and must be disjoint from the checkout, bundle, install,
+service-state, authority, runtime, log, handoff, and service vault roots. Staging
+records that location plus the two public IPC pins before it removes core-owned
+copies from the owner vault. It never copies the helper private key to the service.
+
+After staging, compose a create-new Worker document from the Device itself:
+
+```text
+opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
+  --bundle ABSOLUTE_VERIFIED_BUNDLE --install-root ABSOLUTE_INSTALL_ROOT \
+  --data-root ABSOLUTE_DATA_ROOT --health-port PORT --instance-id INSTANCE_ID \
+  --home ABSOLUTE_WORKER_HOME
+opendelegate service plan install --config ABSOLUTE_NEW_PATH
+```
+
+This production-shaped path is wired for staged Windows, explicitly headless
+systemd Linux Workers, and a headless Main derived from its co-located Worker.
+macOS and graphical Linux fail closed until their separate
+service-account and owner-session Secret migration is implemented; a hand-authored
+document is not a substitute.
 
 ## Read-only commands
 

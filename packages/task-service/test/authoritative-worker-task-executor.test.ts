@@ -780,6 +780,28 @@ test("a long Worker Run survives multiple durable lease renewals and exact repla
   const eventStore = new InMemoryEventStore({
     clock: { now: () => new Date(clock.now()).toISOString() },
   });
+  const limits = {
+    wallTimeMs: { hard: 2_000_000 },
+    idleTimeMs: { hard: 300_000 },
+    retries: { hard: 10 },
+    childWorkOrders: { hard: 10 },
+    concurrentRuns: { hard: 4 },
+    nativeTurns: { hard: 100 },
+    tokens: { hard: 10_000_000 },
+    costUsdMicros: { hard: 100_000_000 },
+  } as const;
+  const budget = new DurableTaskBudgetEnforcer({
+    eventStore,
+    clock,
+    instanceLimits: limits,
+    requestedTaskDefaults: limits,
+    autonomousTaskDefaults: limits,
+    usageProxy: {
+      tokensPerNativeTurn: 1_000,
+      costUsdMicrosPerNativeTurn: 10_000,
+    },
+  });
+  await budget.ensureTask({ taskId: "task-release", kind: "requested" });
   const shared = {
     clock,
     eventStore,
@@ -788,6 +810,7 @@ test("a long Worker Run survives multiple durable lease renewals and exact repla
     planner: fixedPlanner(),
     targetResolver: fixedTargetResolver(),
     verifier: fixedVerifier(),
+    budget,
   } as const;
   const firstDispatch = new RecordingDispatchPort();
   const first = new AuthoritativeWorkerTaskExecutor({
@@ -812,6 +835,10 @@ test("a long Worker Run survives multiple durable lease renewals and exact repla
     priorLeaseExpiresAtMs: NOW_MS + 300_000,
     leaseExpiresAtMs: NOW_MS + 540_000,
   });
+  let budgetSnapshot = await budget.snapshot("task-release");
+  assert.equal(budgetSnapshot.lastActivityAtMs, NOW_MS + 240_000);
+  assert.equal(budgetSnapshot.usage.idleTimeMs, 0);
+  assert.equal(budgetSnapshot.workOrders[0]?.usage.idleTimeMs, 0);
 
   clock.set(NOW_MS + 480_000);
   const secondRenewal = await first.renewWorkerRunLease(
@@ -820,6 +847,31 @@ test("a long Worker Run survives multiple durable lease renewals and exact repla
   );
   assert.equal(secondRenewal.status, "renewed");
   assert.equal(secondRenewal.leaseExpiresAtMs, NOW_MS + 780_000);
+  budgetSnapshot = await budget.snapshot("task-release");
+  assert.equal(budgetSnapshot.lastActivityAtMs, NOW_MS + 480_000);
+  assert.equal(budgetSnapshot.usage.idleTimeMs, 0);
+  assert.equal(budgetSnapshot.workOrders[0]?.usage.idleTimeMs, 0);
+
+  clock.set(NOW_MS + 481_000);
+  const rejectedRenewal = await first.renewWorkerRunLease(
+    "device-worker-2",
+    renewalRequest(assignment, "renewal-wrong-device", secondRenewal.leaseExpiresAtMs),
+  );
+  assert.equal(rejectedRenewal.status, "rejected");
+  budgetSnapshot = await budget.snapshot("task-release");
+  assert.equal(budgetSnapshot.lastActivityAtMs, NOW_MS + 480_000);
+  assert.equal(budgetSnapshot.usage.idleTimeMs, 1_000);
+  assert.equal(budgetSnapshot.workOrders[0]?.usage.idleTimeMs, 1_000);
+  assert.deepEqual(
+    await first.renewWorkerRunLease(
+      "device-worker-2",
+      renewalRequest(assignment, "renewal-1", assignment.leaseExpiresAtMs),
+    ),
+    firstRenewal,
+  );
+  budgetSnapshot = await budget.snapshot("task-release");
+  assert.equal(budgetSnapshot.lastActivityAtMs, NOW_MS + 480_000);
+  assert.equal(budgetSnapshot.usage.idleTimeMs, 1_000);
 
   await first.cancel({
     taskId: "task-release",
@@ -850,6 +902,31 @@ test("a long Worker Run survives multiple durable lease renewals and exact repla
     }),
   ]);
   assert.equal((await resumed).state, "completed");
+  assert.equal((await budget.snapshot("task-release")).lastActivityAtMs, NOW_MS + 610_000);
+
+  clock.set(NOW_MS + 611_000);
+  assert.deepEqual(
+    await restarted.renewWorkerRunLease(
+      "device-worker-1",
+      renewalRequest(assignment, "renewal-2", firstRenewal.leaseExpiresAtMs),
+    ),
+    secondRenewal,
+  );
+  budgetSnapshot = await budget.snapshot("task-release");
+  assert.equal(budgetSnapshot.lastActivityAtMs, NOW_MS + 610_000);
+  assert.equal(budgetSnapshot.usage.idleTimeMs, 1_000);
+
+  clock.set(NOW_MS + 800_000);
+  assert.deepEqual(
+    await restarted.renewWorkerRunLease(
+      "device-worker-1",
+      renewalRequest(assignment, "renewal-2", firstRenewal.leaseExpiresAtMs),
+    ),
+    secondRenewal,
+  );
+  budgetSnapshot = await budget.snapshot("task-release");
+  assert.equal(budgetSnapshot.lastActivityAtMs, NOW_MS + 610_000);
+  assert.equal(budgetSnapshot.usage.idleTimeMs, 190_000);
 });
 
 test("lease renewal rejects stale, late, mismatched, and concurrent prior-expiry commands without resurrection", async () => {
@@ -1230,6 +1307,7 @@ function request(executionKey: string, attempt: number): TaskExecutionRequest {
     attempt,
     executionKey,
     planningKey: executionKey,
+    resourceResume: false,
     signal: new AbortController().signal,
     task: {
       taskId: "task-release",

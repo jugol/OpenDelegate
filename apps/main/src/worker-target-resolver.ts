@@ -288,6 +288,7 @@ function unavailable(): TaskExecutorError {
     "WORKER_OFFLINE",
     "No eligible Worker is online for this Work Order.",
     true,
+    { retryKind: "resource" },
   );
 }
 
@@ -296,6 +297,7 @@ function agentBindingUnavailable(): TaskExecutorError {
     "AGENT_BINDING_UNAVAILABLE",
     "No eligible Device currently exposes the required Agent Adapter and exact model. Check the Device Agent profile and adapter model catalog, then retry.",
     true,
+    { retryKind: "resource" },
   );
 }
 

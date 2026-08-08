@@ -136,7 +136,11 @@ creates an exclusive, non-overwriting encrypted credential plus a non-secret
 descriptor.
 `worker join --secret-backend-config` must run inside a transient unit carrying the
 same `LoadCredentialEncrypted=` mapping and eventual service identity. The native
-Linux service renderer preserves that mapping for boot.
+Linux service renderer preserves that mapping for boot. During that join, Worker
+also records the exact non-root service identity and core IPC public pin it just
+proved against the final vault. A headless service document consumes only those
+public facts and emits no graphical helper, owner-session Secret reference, or user
+unit, as specified by ADR-0041.
 
 ### Device identity bridge
 

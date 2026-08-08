@@ -47,7 +47,7 @@ export function windowsConfiguration(
     },
     helperSecretBinding: {
       backend: "windows-dpapi",
-      vaultRoot: "C:\\ProgramData\\OpenDelegate\\state\\owner-secrets\\dpapi",
+      vaultRoot: "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
     },
     ipcTrust: IPC_TRUST,
     secretReferences: {

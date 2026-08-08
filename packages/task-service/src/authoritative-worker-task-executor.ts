@@ -743,6 +743,7 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     const requestFingerprint = fingerprint(request);
     const streamId = runStreamId(request.taskId, request.workOrderId);
     let retireExpired: WorkerRunAssignmentV1 | undefined;
+    let activityEligible = false;
     const outcome = await this.#withStreamLock(streamId, async () => {
       const projection = await this.#loadRunJournal(request.taskId, request.workOrderId);
       const replay = projection.renewalDecisions.get(request.renewalId);
@@ -753,6 +754,13 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
             "The Run lease renewal identity was reused with different content.",
           );
         }
+        const current = projection.runs.at(-1);
+        activityEligible =
+          authenticatedDeviceId === request.deviceId &&
+          replay.outcome.status === "renewed" &&
+          current !== undefined &&
+          !isTerminal(current.status) &&
+          artifactScopeMatchesAssignment(request, current.assignment);
         return replay.outcome;
       }
 
@@ -812,10 +820,23 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
         payload,
         occurredAt: new Date(decidedAtMs).toISOString(),
       });
+      activityEligible = decision.status === "renewed";
       return decision;
     });
     if (retireExpired !== undefined) {
       await this.#retireExpiredRun(request.taskId, request.workOrderId, retireExpired);
+    }
+    if (
+      activityEligible &&
+      outcome.status === "renewed" &&
+      this.#now() < outcome.leaseExpiresAtMs
+    ) {
+      await this.#budget?.recordActivity({
+        taskId: request.taskId,
+        workOrderId: request.workOrderId,
+        operationId: `worker-run-lease-renewal:${request.renewalId}`,
+        source: "worker-run-lease-renewal",
+      });
     }
     this.#notifyRun(request.runId);
     return outcome;
@@ -1062,6 +1083,14 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     ) {
       await this.#finishBudgetForPersistedRun(current);
       return failureFrom(current);
+    }
+    if (request.resourceResume) {
+      await this.#budget?.recordActivity({
+        taskId: request.task.taskId,
+        workOrderId: workOrder.workOrderId,
+        operationId: `work-order-resource-resume:${digest(`${request.executionKey}\0${workOrder.workOrderId}`)}`,
+        source: "resource-availability",
+      });
     }
     if (current !== undefined && !isTerminal(current.status)) {
       const now = this.#now();

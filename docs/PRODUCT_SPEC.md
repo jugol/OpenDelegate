@@ -558,16 +558,23 @@ through a secure handoff and resumes the same Task afterward.
     without an LLM turn. Otherwise, a retry never asks the Main Agent to reinterpret
     the same owner turn merely because Worker selection, dispatch, or another
     deterministic resource stage failed.
+13. A Task in `waiting_resource` is dormant until startup reconciliation or a
+    material availability signal changes an applicable Worker, route, Secret,
+    Configuration, or lock input. Waiting does not poll on a fixed timer, consume an
+    execution-failure attempt, or spend retry Budget. Main deduplicates wake-ups and
+    preserves a signal that races the first durable wait. A genuine retryable
+    execution failure instead returns the Task to `queued` and uses the bounded retry
+    timer and failure Budget.
 
 #### Canonical Task states
 
 | State | Meaning | Typical Discord projection |
 | --- | --- | --- |
 | `intake` | Persisting and understanding new intent | Intake |
-| `queued` | Ready but waiting for eligible capacity | Queued or Running |
+| `queued` | Ready for dispatch or a bounded retry after execution failure | Queued or Running |
 | `running` | Coordinator or at least one required Run is active | Running |
 | `waiting_user` | A material user answer or approval is required | Waiting |
-| `waiting_resource` | No eligible Device, route, Secret, or lock is available | Waiting |
+| `waiting_resource` | Dormant until a material Device, route, Secret, Configuration, or lock availability change | Waiting |
 | `review` | Work is complete enough for owner or coordinator review | Review |
 | `completed` | Completion criteria are satisfied | Done |
 | `failed` | The Task cannot proceed under current policy or resources | Failed |
@@ -1170,6 +1177,9 @@ may request a transition but cannot manufacture a state outside the transition r
     corresponding cumulative usage. Reaching the requested-Task default means the
     system performed that much automatic work; it never means the Forum Post merely
     existed for that long.
+13. A successful, still-current Worker Run lease renewal is durable Task and Work
+    Order activity. Its retry-stable identity resets only idle time. Rejected,
+    expired, mismatched, or stale renewals never revive a Task.
 
 ## Implementation Decisions
 

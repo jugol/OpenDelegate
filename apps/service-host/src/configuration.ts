@@ -53,21 +53,34 @@ export interface ServiceHostConfiguration {
     | {
         readonly backend: "linux-secret-service";
         readonly secretToolPath: string;
-      };
+      }
+    | null;
   readonly logs: {
     readonly core: { readonly stdout: string; readonly stderr: string };
     readonly sessionHelper: { readonly stdout: string; readonly stderr: string };
   };
-  readonly localIpc: {
-    readonly kind: "named-pipe" | "unix-domain-socket";
-    readonly endpoint: string;
-    readonly authentication: "ed25519-mutual-signature-v2";
-    readonly credentialReferenceDocument: string;
-    readonly core: ServiceHostIpcPlaneBinding;
-    readonly helper: ServiceHostIpcPlaneBinding;
-    readonly allowedPeers: readonly string[];
-    readonly socketMode?: "0660";
-  };
+  readonly localIpc:
+    | {
+        readonly kind: "unix-domain-socket";
+        readonly endpoint: string;
+        readonly authentication: "ed25519-mutual-signature-v2";
+        readonly sessionHelper: "disabled";
+        readonly credentialReferenceDocument: string;
+        readonly core: ServiceHostCoreIpcPlaneBinding;
+        readonly allowedPeers: readonly string[];
+        readonly socketMode?: "0660";
+      }
+    | {
+        readonly kind: "named-pipe" | "unix-domain-socket";
+        readonly endpoint: string;
+        readonly authentication: "ed25519-mutual-signature-v2";
+        readonly sessionHelper: "enabled";
+        readonly credentialReferenceDocument: string;
+        readonly core: ServiceHostIpcPlaneBinding;
+        readonly helper: ServiceHostIpcPlaneBinding;
+        readonly allowedPeers: readonly string[];
+        readonly socketMode?: "0660";
+      };
   readonly health: {
     readonly endpoint: string;
     readonly timeoutMs: number;
@@ -76,13 +89,20 @@ export interface ServiceHostConfiguration {
 }
 
 export interface ServiceHostIpcPlaneBinding {
+  readonly peerKeyId: `sha256:${string}`;
+  readonly peerPublicKeySpkiBase64Url: string;
+  readonly peerIdentity: string;
   readonly privateKeyReference: string;
   readonly privateKeyReferenceKey: "coreIpcSigningKey" | "helperIpcSigningKey";
   readonly keyId: `sha256:${string}`;
   readonly publicKeySpkiBase64Url: string;
-  readonly peerKeyId: `sha256:${string}`;
-  readonly peerPublicKeySpkiBase64Url: string;
-  readonly peerIdentity: string;
+}
+
+export interface ServiceHostCoreIpcPlaneBinding {
+  readonly privateKeyReference: string;
+  readonly privateKeyReferenceKey: "coreIpcSigningKey";
+  readonly keyId: `sha256:${string}`;
+  readonly publicKeySpkiBase64Url: string;
 }
 
 export class ServiceHostError extends Error {
@@ -221,14 +241,21 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
       "Admin auto-open is available only to the fixed Main owner session.",
     );
   }
-  const helperSecretBinding = parseHelperSecretBinding(
-    record["helperSecretBinding"],
-    platform,
-    record["stateRoot"] as string,
-    record["releaseRoot"] as string,
-  );
   const logs = parseLogs(record["logs"], platform);
-  const localIpc = parseLocalIpc(record["localIpc"], platform);
+  const helperSecretBinding = parseHelperSecretBinding(record["helperSecretBinding"], platform, {
+    releaseRoot: record["releaseRoot"] as string,
+    disjointRoots: [
+      record["releaseRoot"] as string,
+      record["stateRoot"] as string,
+      record["authorityRoot"] as string,
+      record["runtimeRoot"] as string,
+      logs.core.stdout,
+      logs.core.stderr,
+      logs.sessionHelper.stdout,
+      logs.sessionHelper.stderr,
+    ],
+  });
+  const localIpc = parseLocalIpc(record["localIpc"], platform, helperSecretBinding !== null);
   const health = parseHealth(record["health"]);
   const serviceSecretBinding =
     record["serviceSecretBinding"] === undefined
@@ -257,16 +284,26 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
 function parseHelperSecretBinding(
   input: unknown,
   platform: ServiceHostConfiguration["platform"],
-  stateRoot: string,
-  releaseRoot: string,
+  roots: {
+    readonly releaseRoot: string;
+    readonly disjointRoots: readonly string[];
+  },
 ): ServiceHostConfiguration["helperSecretBinding"] {
+  if (input === null) {
+    if (platform !== "linux") {
+      throw new ServiceHostError("Only Linux may explicitly disable the session helper.");
+    }
+    return null;
+  }
   const record = requireRecord(input, "owner helper Secret binding");
   if (platform === "windows") {
     requireExactKeys(record, ["backend", "vaultRoot"], [], "owner helper Secret binding");
     requirePlatformPath(platform, record["vaultRoot"], "owner helper DPAPI vault");
     if (
       record["backend"] !== "windows-dpapi" ||
-      !isDescendantPath(platform, stateRoot, record["vaultRoot"] as string)
+      roots.disjointRoots.some((root) =>
+        pathsOverlap(platform, root, record["vaultRoot"] as string),
+      )
     ) {
       throw new ServiceHostError("The Windows owner helper Secret binding is invalid.");
     }
@@ -287,7 +324,7 @@ function parseHelperSecretBinding(
       record["backend"] !== "macos-keychain" ||
       typeof record["expectedHelperSha256"] !== "string" ||
       !/^sha256:[a-f0-9]{64}$/u.test(record["expectedHelperSha256"]) ||
-      !isDescendantPath(platform, releaseRoot, record["helperPath"] as string)
+      !isDescendantPath(platform, roots.releaseRoot, record["helperPath"] as string)
     ) {
       throw new ServiceHostError("The macOS owner helper Secret binding is invalid.");
     }
@@ -412,26 +449,41 @@ function parseLogs(
 function parseLocalIpc(
   input: unknown,
   platform: ServiceHostConfiguration["platform"],
+  helperEnabled: boolean,
 ): ServiceHostConfiguration["localIpc"] {
   const record = requireRecord(input, "local IPC");
+  const sessionHelper = record["sessionHelper"] ?? "enabled";
   requireExactKeys(
     record,
-    [
-      "kind",
-      "endpoint",
-      "authentication",
-      "credentialReferenceDocument",
-      "core",
-      "helper",
-      "allowedPeers",
-    ],
-    ["socketMode"],
+    sessionHelper === "disabled"
+      ? [
+          "kind",
+          "endpoint",
+          "authentication",
+          "sessionHelper",
+          "credentialReferenceDocument",
+          "core",
+          "allowedPeers",
+        ]
+      : [
+          "kind",
+          "endpoint",
+          "authentication",
+          "credentialReferenceDocument",
+          "core",
+          "helper",
+          "allowedPeers",
+        ],
+    sessionHelper === "disabled" ? ["socketMode"] : ["socketMode", "sessionHelper"],
     "local IPC",
   );
   const expectedKind = platform === "windows" ? "named-pipe" : "unix-domain-socket";
   if (
     record["kind"] !== expectedKind ||
     record["authentication"] !== "ed25519-mutual-signature-v2" ||
+    (sessionHelper !== "enabled" && sessionHelper !== "disabled") ||
+    helperEnabled !== (sessionHelper === "enabled") ||
+    (sessionHelper === "disabled" && platform !== "linux") ||
     !Array.isArray(record["allowedPeers"]) ||
     record["allowedPeers"].length === 0 ||
     record["allowedPeers"].some((value) => !isText(value, 256))
@@ -439,6 +491,23 @@ function parseLocalIpc(
     throw new ServiceHostError("The local IPC configuration is invalid.");
   }
   requirePlatformPath(platform, record["credentialReferenceDocument"], "Secret reference document");
+  if (sessionHelper === "disabled") {
+    if ((record["allowedPeers"] as string[]).length !== 1) {
+      throw new ServiceHostError("The headless local IPC configuration is invalid.");
+    }
+    const core = parseCoreIpcPlane(record["core"]);
+    requireUnixIpcEndpoint(record, platform);
+    return {
+      kind: "unix-domain-socket",
+      endpoint: record["endpoint"] as string,
+      authentication: "ed25519-mutual-signature-v2",
+      sessionHelper: "disabled",
+      credentialReferenceDocument: record["credentialReferenceDocument"] as string,
+      core,
+      allowedPeers: Object.freeze([...(record["allowedPeers"] as string[])]),
+      ...(record["socketMode"] === undefined ? {} : { socketMode: "0660" as const }),
+    };
+  }
   const core = parseIpcPlane(record["core"], "core", record["allowedPeers"]);
   const helper = parseIpcPlane(record["helper"], "helper", record["allowedPeers"]);
   if (
@@ -469,12 +538,50 @@ function parseLocalIpc(
     kind: expectedKind,
     endpoint: record["endpoint"] as string,
     authentication: "ed25519-mutual-signature-v2",
+    sessionHelper: "enabled",
     credentialReferenceDocument: record["credentialReferenceDocument"] as string,
     core,
     helper,
     allowedPeers: Object.freeze([...(record["allowedPeers"] as string[])]),
     ...(record["socketMode"] === undefined ? {} : { socketMode: "0660" as const }),
   };
+}
+
+function parseCoreIpcPlane(input: unknown): ServiceHostCoreIpcPlaneBinding {
+  const record = requireRecord(input, "core IPC plane");
+  requireExactKeys(
+    record,
+    ["privateKeyReference", "privateKeyReferenceKey", "keyId", "publicKeySpkiBase64Url"],
+    [],
+    "core IPC plane",
+  );
+  if (
+    typeof record["privateKeyReference"] !== "string" ||
+    !SECRET_REFERENCE_PATTERN.test(record["privateKeyReference"]) ||
+    record["privateKeyReferenceKey"] !== "coreIpcSigningKey"
+  ) {
+    throw new ServiceHostError("The core IPC plane identity is invalid.");
+  }
+  validateEd25519Pin(record["keyId"], record["publicKeySpkiBase64Url"], "core IPC signing key");
+  return {
+    privateKeyReference: record["privateKeyReference"],
+    privateKeyReferenceKey: "coreIpcSigningKey",
+    keyId: record["keyId"] as `sha256:${string}`,
+    publicKeySpkiBase64Url: record["publicKeySpkiBase64Url"] as string,
+  };
+}
+
+function requireUnixIpcEndpoint(
+  record: Record<string, unknown>,
+  platform: ServiceHostConfiguration["platform"],
+): void {
+  if (platform === "windows") {
+    throw new ServiceHostError("The headless local IPC endpoint is invalid.");
+  }
+  requirePlatformPath(platform, record["endpoint"], "IPC endpoint");
+  if (record["socketMode"] !== undefined && record["socketMode"] !== "0660") {
+    throw new ServiceHostError("The local IPC endpoint is invalid.");
+  }
 }
 
 function parseIpcPlane(

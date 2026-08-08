@@ -50,7 +50,7 @@ without putting key material in argv or the environment:
 opendelegate worker secret-backend-provision \
   --secret-backend-config /etc/opendelegate/worker-secret-backend.json \
   --encrypted-credential-file /etc/credstore.encrypted/opendelegate-vault-key.cred \
-  --vault-root /var/lib/opendelegate/secrets/systemd-vault
+  --vault-root /var/lib/opendelegate-runtime/state/secrets/systemd-vault
 ```
 
 The command generates 32 random bytes in-process, sends them only to
@@ -62,15 +62,31 @@ same non-login identity that will run the Worker:
 
 ```text
 systemd-run --wait --pipe --collect --uid=opendelegate \
-  --property=StateDirectory=opendelegate \
+  --property=StateDirectory=opendelegate-runtime \
   --property=LoadCredentialEncrypted=opendelegate-vault-key:/etc/credstore.encrypted/opendelegate-vault-key.cred \
   /opt/opendelegate/current/bin/opendelegate worker join \
   --grant-file ABSOLUTE_LOCAL_PATH \
   --secret-backend-config /etc/opendelegate/worker-secret-backend.json \
-  --home /var/lib/opendelegate/worker
+  --home /var/lib/opendelegate-runtime/state
 ```
 
-The native Linux service configuration must carry the same non-secret mapping:
+Join records the core IPC public pin and exact non-root service identity after
+proving that identity can open and write the final vault. Compose a create-new
+headless service document from that durable binding:
+
+```text
+opendelegate worker service-document \
+  --output /tmp/opendelegate-worker.json \
+  --bundle /opt/opendelegate-candidate \
+  --install-root /opt/opendelegate \
+  --data-root /var/lib/opendelegate-runtime \
+  --health-port 43190 --instance-id personal \
+  --home /var/lib/opendelegate-runtime/state \
+  --owner-user OWNER --owner-uid OWNER_UID --owner-home /home/OWNER
+opendelegate service plan install --config /tmp/opendelegate-worker.json
+```
+
+The document carries the same non-secret mapping:
 
 ```json
 {
@@ -80,6 +96,13 @@ The native Linux service configuration must carry the same non-secret mapping:
   }
 }
 ```
+
+It explicitly sets `helperSecretBinding` to `null` and emits no helper key, user
+unit, supervisor command, or helper health check. That is the correct shape for a
+headless NAS: non-graphical work stays available and Computer Use is unavailable by
+configuration. Graphical Linux still requires a separate owner-session Secret
+Service key and two-plane preparation; never place that helper key in the systemd
+core vault.
 
 ## Local state
 
@@ -268,12 +291,36 @@ opendelegate worker windows-service-secret-stage \
 
 The command resolves the SCM virtual-service SID, creates only a SID-protected
 DPAPI-NG handoff, deletes the owner DPAPI record after the handoff is durable, and
-updates Worker configuration to `windows-service-dpapi`. Copy the emitted
-non-secret service name, SID, handoff root, and vault root into the native service
-configuration's `serviceSecretBinding`. Install preflight verifies the SID again.
+updates Worker configuration to `windows-service-dpapi`. Before deleting the core
+copies, it durably records only their public IPC pins and the separate owner-helper
+vault location. A crash after that configuration switch resumes deletion without
+reopening service-account-sealed material. Install preflight verifies the SID again.
 An interrupted retry resumes from the encrypted handoff. While the owner record
 still exists it remains authoritative and replaces any stale handoff before
 deletion.
+
+Compose the complete, create-new service document from those durable local facts;
+do not transcribe keys, SIDs, or bundle checksums:
+
+```text
+opendelegate worker service-document \
+  --output ABSOLUTE_NEW_SERVICE_JSON \
+  --bundle ABSOLUTE_VERIFIED_BUNDLE \
+  --install-root "C:\Program Files\OpenDelegate" \
+  --data-root "C:\ProgramData\OpenDelegate" \
+  --health-port 43190 --instance-id personal \
+  --home "C:\ProgramData\OpenDelegate\state"
+opendelegate service plan install --config ABSOLUTE_NEW_SERVICE_JSON
+```
+
+Review the plan, then run the separately elevated `service install` command with a
+caller-stable command ID. `service-document` never overwrites an existing file and
+does not elevate or register a service.
+
+The current command deliberately refuses macOS and graphical Linux rather than
+producing a document whose core service and owner-session helper point at the same
+Secret authority. Their separate service-account migration remains a release
+blocker. Explicitly headless Linux follows the core-only path above.
 
 The service consumes the handoff only when its current identity matches, then stores
 the Device identity with `CurrentUser` DPAPI under that service profile. No Secret

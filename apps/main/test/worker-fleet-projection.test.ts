@@ -221,6 +221,57 @@ test("authenticated heartbeat becomes scheduling and Admin metadata without loca
   assert.equal((await fleet.deviceSummaries())[0]?.runtime, "unavailable");
 });
 
+test("heartbeat observation reports only material scheduling availability changes", async () => {
+  let now = 20_000;
+  const fleet = new MainWorkerFleetProjection({
+    identities: { list: async () => [identity] },
+    clock: { now: () => now },
+    offlineAfterMs: 5_000,
+  });
+
+  assert.equal(
+    await fleet.observeHeartbeat("device-worker-1", heartbeat({ observedAtMs: 10_000 })),
+    true,
+  );
+  now += 1;
+  assert.equal(
+    await fleet.observeHeartbeat(
+      "device-worker-1",
+      heartbeat({
+        observedAtMs: 10_001,
+        routes: heartbeat().routes!.map((route) => ({
+          ...route,
+          ...(route.lastAttempt === undefined
+            ? {}
+            : { lastAttempt: { ...route.lastAttempt, observedAtMs: 10_001 } }),
+        })),
+        currentRuns: heartbeat().currentRuns!.map((run) => ({
+          ...run,
+          leaseExpiresAtMs: run.leaseExpiresAtMs + 1_000,
+        })),
+      }),
+    ),
+    false,
+  );
+  now += 5_001;
+  assert.equal((await fleet.list())[0]?.status, "offline");
+  assert.equal(
+    await fleet.observeHeartbeat("device-worker-1", heartbeat({ observedAtMs: 10_002 })),
+    true,
+  );
+  now += 1;
+  assert.equal(
+    await fleet.observeHeartbeat(
+      "device-worker-1",
+      heartbeat({
+        observedAtMs: 10_003,
+        capacity: { ...heartbeat().capacity, acceptingWork: false },
+      }),
+    ),
+    true,
+  );
+});
+
 test("restart keeps the last durable observation while live scheduling remains offline", async () => {
   let now = 10_000;
   const observations = memoryObservationStore();

@@ -1723,3 +1723,123 @@ set while common manifests still expand to broad validation.
 **Consequence:** Ordinary changes receive materially faster feedback and consume less
 hosted-runner quota. Shared-package changes retain dependent coverage; release owners
 still run the complete local and platform validation commands before promotion.
+
+## D-088 — Windows service staging preserves a public two-plane binding
+
+Implementation detail: [ADR-0040](adr/0040-windows-worker-service-preparation-binding.md).
+
+**Decision:** Before Windows staging removes core-owned Secrets from the owner's
+DPAPI vault, it durably records only the core and owner-session helper public IPC
+pins, effective non-secret sealing strength, and existing owner-helper vault
+location in Worker configuration. The
+owner-helper vault remains outside every service-owned root. `worker
+service-document` consumes that binding after staging and writes one create-new,
+strictly validated install document; it never reopens service-account-sealed
+material, copies a helper private key, overwrites install input, elevates, or
+registers a service.
+
+The staging configuration switch is committed after the service handoff is complete
+and before owner-vault core copies are deleted. Replay with that binding finishes
+only the bounded deletion. A legacy staged Worker without the binding must use
+`windows-service-secret-restore` when the handoff is owner-restorable, or a new
+owner-approved re-credentialing Grant when service-account sealing prevents that
+restore, and then stage again. OpenDelegate does not guess lost public pins.
+
+**Rationale:** The first Worker service-document implementation attempted to read
+both plane keys from the service store after staging. That sequence cannot work:
+the core handoff may be sealed to the SCM identity, while the helper key intentionally
+never leaves the owner store. Keeping the helper vault under service-owned state
+would also collapse the ownership boundary the two-plane design is meant to protect.
+
+**Consequence:** Windows can compose deterministic service input from local durable
+facts without Secret transcription and can recover a crash around staging. As
+amended by D-089, macOS and graphical Linux remain fail-closed until they have an
+equivalent explicit core-service and owner-session Secret migration; a syntactically
+valid document is not treated as a working persistent installation.
+
+## D-089 — Headless Linux is an explicit core-only service shape
+
+Implementation detail: [ADR-0041](adr/0041-headless-linux-worker-service-preparation.md).
+
+**Decision:** A Linux Device with no graphical-session capability does not install
+or claim an owner-session helper. Enrollment runs under the eventual non-login
+systemd identity with the final encrypted credential mapping and durably records
+the core IPC public pin plus that exact non-root identity. Its create-new service
+document sets the helper binding to `null` and omits the helper pin, Secret
+reference, user unit, supervisor commands, health step, and Computer Use claim.
+Graphical Linux continues to require two distinct plane-local keys and Secret
+authorities.
+
+**Rationale:** Requiring Secret Service, an unlocked graphical keyring, and a second
+private key on a headless NAS creates a permanently failing helper rather than a
+security boundary. The systemd-enrolled core already owns its final encrypted vault,
+so copying that private material through an owner session would add risk without a
+migration need.
+
+**Consequence:** Headless Linux can be persistently useful for non-graphical work
+without desktop packages or fabricated IPC identity. Enabling Computer Use later is
+an explicit graphical service re-preparation; OpenDelegate never places the helper
+key in the core vault or silently widens a core-only installation. D-088's statement
+that all Linux service documents remain blocked is superseded only for this
+headless core-only shape; macOS and graphical Linux remain blocked.
+
+## D-090 — Headless Linux Main reuses its co-located Worker's prepared service facts
+
+Implementation detail: [ADR-0042](adr/0042-headless-linux-main-service-composition.md).
+
+**Decision:** A headless Linux Main service document is derived from the strictly
+validated core-only document produced for Main's co-located Worker. Composition
+requires the durable Main and Worker Instance ID, Device ID, state root, and named
+systemd credential to match, and rejects any helper authority. It changes the role
+to `main`, resolves the durable Admin auto-open preference, and writes a create-new
+document. Headless auto-open must remain disabled because no login helper exists.
+
+**Rationale:** Main is a normal Device and the native core already supervises Main
+plus its local Worker as one workload. A second hand-authored topology would
+duplicate security-sensitive facts and permit drift without creating a useful new
+privilege boundary.
+
+**Consequence:** A NAS Main can use one reviewed systemd core definition and one
+encrypted credential mapping for both local roles. The command does not install or
+elevate, and clean-host restart, reboot, credential, network, upgrade, rollback, and
+uninstall evidence remains required before support promotion.
+
+## D-091 — A current Worker lease renewal resets only the idle Budget
+
+Implementation detail:
+[ADR-0043](adr/0043-current-worker-lease-renewal-is-budget-activity.md).
+
+**Decision:** After an exact Worker Run lease renewal is durably accepted as
+`renewed`, and while that renewed lease remains current, Main records one
+retry-stable Task-and-Work-Order Budget activity mutation derived from the renewal
+ID. Rejected, expired, mismatched, not-due, or stale renewals do not record activity.
+
+**Rationale:** A long provider turn or tool operation may be quiet for longer than
+the default idle window while the authenticated Worker is still renewing its exact
+lease. The authoritative renewal is a bounded liveness proof; generic heartbeats or
+stale packets are not.
+
+**Consequence:** Legitimate long Runs do not fail as idle merely because they emit
+no intermediate result, exact replay repairs an interrupted activity write, and the
+finite active wall, token, cost, retry, and turn Budgets remain unchanged.
+
+## D-092 — Resource waits resume from material availability signals
+
+Implementation detail:
+[ADR-0044](adr/0044-resource-waits-resume-on-availability-change.md).
+
+**Decision:** `waiting_resource` is a durable dormant Task state. Main does not poll
+it on a fixed retry timer or charge execution-failure attempts. Startup
+reconciliation and material Worker, Secret, Configuration, route, or lock
+availability changes trigger deduplicated re-evaluation. A signal racing the first
+durable wait is retained. Genuine retryable execution failures remain `queued` and
+bounded by the normal failure retry policy.
+
+**Rationale:** Resource absence is not execution failure. Fixed-delay probing could
+exhaust all retries before a normal Worker heartbeat, waste capacity while nothing
+changed, and strand the Task after the Worker returned.
+
+**Consequence:** A Task may wait for a Device for hours or days and continue when the
+resource becomes eligible, without an owner message or retry-Budget extension.
+Eligibility, Policy, locks, Budgets, leases, and fencing are still revalidated at
+dispatch; older already-terminal Tasks require one explicit owner Retry.

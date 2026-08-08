@@ -195,9 +195,12 @@ best-effort flow, but it does not prove a pinned executable identity or service 
 1. Prefer SQLite. Use `init --database sqlite` unless the owner selects PostgreSQL. Main persists
    one top-level, non-secret `secretBackend` descriptor. Windows and macOS, plus Linux graphical
    sessions with Secret Service, receive a platform default. Headless Linux has no implicit
-   fallback: write an absolute-path backend document selecting `linux-systemd-credential-vault` and
-   pass it with `--secret-backend-config ABSOLUTE_PATH`. The systemd unit must supply the named
-   vault key through `CREDENTIALS_DIRECTORY`.
+   fallback. Use the packaged Worker `secret-backend-provision` boundary once, and pass its
+   non-secret descriptor directly with `--secret-backend-config ABSOLUTE_PATH`; Main accepts the
+   descriptor's encrypted credential source but loads only the named key from
+   `CREDENTIALS_DIRECTORY`. Run init inside an owner-reviewed transient unit carrying that exact
+   `LoadCredentialEncrypted=` mapping and the eventual non-login service identity. Never hand-write
+   or persist the plaintext key.
 
    For a new PostgreSQL Main, choose an opaque alias such as `database-primary`, construct the
    canonical reference `secret://main/database-primary`, and invoke:
@@ -328,12 +331,28 @@ runtime configuration, restarts and health-checks only the owner-session helper,
 failure while the core stays running. Configuration Chat never elevates or launches this command
 itself.
 
-Use the native, two-plane service package:
+Use the native service package with an explicit graphical shape:
 
 - Windows: SCM core plus per-user helper;
 - macOS: LaunchDaemon plus LaunchAgent; or
 - Linux: systemd system unit plus graphical user unit, with the documented foreground fallback when
   systemd is unavailable.
+
+An explicitly headless Linux Device is the deliberate exception: its packaged Worker service
+document contains only the systemd core and reports Computer Use unavailable. It does not install a
+fake graphical unit. When that Device is Main, run the packaged create-new composition boundary:
+
+```text
+opendelegate service document --worker-config WORKER_DOCUMENT \
+  --output NEW_MAIN_DOCUMENT --home MAIN_HOME
+opendelegate service plan install --config NEW_MAIN_DOCUMENT --home MAIN_HOME
+```
+
+Run these reads inside the same credential-bearing transient boundary when Main uses the systemd
+vault. The composer verifies the durable Main/Worker Instance, Device, state root, and credential,
+then changes only the role and effective Main preference. Install only the Main document; its core
+starts both workloads. Keep `admin.open-on-login` disabled on headless Main. Clean-host proof still
+gates a supported claim.
 
 On Windows, run the packaged `worker windows-service-secret-stage` command against `MAIN_HOME`
 before installing either a Main or Worker core service. Main also hosts a local Worker, so both

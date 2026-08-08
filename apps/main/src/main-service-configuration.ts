@@ -144,13 +144,21 @@ export async function resolveEffectiveMainServiceConfiguration(
   if (typeof enabled !== "boolean") {
     throw new TypeError("The effective Admin auto-open setting is unavailable.");
   }
+  const headlessMain = template.platform === "linux" && template.helperSecretBinding === null;
+  if (headlessMain && enabled) {
+    throw new TypeError(
+      "Admin auto-open must be disabled for a headless Main with no owner-session helper.",
+    );
+  }
 
   const selected: AdminAutoOpenConfiguration = enabled
     ? { enabled: true, url: origin }
     : { enabled: false };
-  const alternate: AdminAutoOpenConfiguration = enabled
+  const alternate: AdminAutoOpenConfiguration = headlessMain
     ? { enabled: false }
-    : { enabled: true, url: origin };
+    : enabled
+      ? { enabled: false }
+      : { enabled: true, url: origin };
   return Object.freeze({
     configuration: withAdminAutoOpen(template, selected),
     alternateConfiguration: withAdminAutoOpen(template, alternate),
