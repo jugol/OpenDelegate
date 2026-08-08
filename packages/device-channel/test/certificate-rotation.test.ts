@@ -30,6 +30,7 @@ import {
 
 import {
   DeviceChannelClientError,
+  DEVICE_CHANNEL_PROTOCOL_VERSION,
   IdentityRotationRejectedError,
   MainDeviceChannelServer,
   SqliteDeviceChannelRepository,
@@ -297,7 +298,7 @@ test(
 );
 
 test(
-  "a second renewal offer is refused while one is still awaiting proof",
+  "a stale pre-session renewal is discarded and a second live offer is refused while one awaits proof",
   { timeout: 20_000 },
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "opendelegate-rotation-pending-"));
@@ -335,6 +336,17 @@ test(
       certificateAuthority.certificatePem,
       await mainSecrets.getPrivateKey(certificateAuthority.keyId),
     );
+    let rotationIssueCount = 0;
+    const channelAuthority = {
+      validatePeerIdentity: authority.validatePeerIdentity.bind(authority),
+      confirmCertificateRotation: authority.confirmCertificateRotation.bind(authority),
+      async issueCertificateRotation(
+        input: Parameters<DeviceIdentityAuthority["issueCertificateRotation"]>[0],
+      ) {
+        rotationIssueCount += 1;
+        return authority.issueCertificateRotation(input);
+      },
+    };
 
     let server: MainDeviceChannelServer | undefined;
     let client: WorkerDeviceChannelClient | undefined;
@@ -354,7 +366,7 @@ test(
       });
       server = await MainDeviceChannelServer.listen({
         mainDeviceId: MAIN_DEVICE_ID,
-        authority,
+        authority: channelAuthority,
         repository: mainState,
         tls: {
           certificateAuthorityPem: certificateAuthority.certificatePem,
@@ -362,6 +374,24 @@ test(
           privateKey: serverIdentity.privateKeyPem,
         },
       });
+      const staleRequest = await workerIdentity.createEnrollmentRequest({
+        deviceId: issued.deviceId,
+        expectedMainSpkiSha256: grant.expectedMainSpkiSha256,
+      });
+      await workerState.enqueueOutbound((sequence) => ({
+        protocolVersion: DEVICE_CHANNEL_PROTOCOL_VERSION,
+        messageId: "rotation-from-prior-worker-session",
+        senderDeviceId: issued.deviceId,
+        correlationId: "rotation-from-prior-worker-session",
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        idempotencyKey: "rotation-from-prior-worker-session",
+        sequence,
+        type: "worker.identity.rotate",
+        payload: {
+          deviceId: issued.deviceId,
+          certificateRequestPem: staleRequest.certificateRequestPem,
+        },
+      }));
       client = await WorkerDeviceChannelClient.connect({
         endpointUrl: server.address().url,
         deviceId: issued.deviceId,
@@ -383,6 +413,11 @@ test(
         },
         state: workerState,
       });
+      assert.equal(
+        rotationIssueCount,
+        0,
+        "a prior session's key-bound rotation must not create an orphan pending certificate",
+      );
 
       const first = await workerIdentity.createEnrollmentRequest({
         deviceId: issued.deviceId,

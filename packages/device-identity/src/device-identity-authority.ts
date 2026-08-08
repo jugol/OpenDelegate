@@ -997,9 +997,10 @@ export class DeviceIdentityAuthority {
       }
       const certificates = await transaction.listDeviceCertificates(deviceId);
       const previous = certificates.find(
-        (candidate) => candidate.generation === device.identityGeneration,
+        (candidate) =>
+          candidate.generation === device.identityGeneration && candidate.status === "active",
       );
-      if (previous === undefined || previous.status !== "active" || now >= previous.notAfter) {
+      if (previous === undefined || now >= previous.notAfter) {
         throw rotationInvalid();
       }
       const overlapEndsAt = Math.min(

@@ -246,6 +246,7 @@ interface ActiveConnection {
   readonly socket: WebSocket;
   readonly certificatePem: string;
   readonly peer: AuthenticatedDevicePeer;
+  readonly workerSessionSequenceFloor: number;
   lastObservedAtMs: number;
   queue: Promise<void>;
   closed: boolean;
@@ -682,6 +683,7 @@ export class MainDeviceChannelServer {
       socket,
       certificatePem,
       peer,
+      workerSessionSequenceFloor: hello.sequence,
       lastObservedAtMs: this.now(),
       queue: Promise.resolve(),
       closed: false,
@@ -1041,6 +1043,18 @@ export class MainDeviceChannelServer {
         readonly retryable: boolean;
       }
   > {
+    // A rotation request is coupled to an in-memory private key and response
+    // waiter. After a Worker restart neither can safely resume, so replaying an
+    // older session's request could create an orphan pending certificate. The
+    // hello sequence is the durable outbox cursor at this connection boundary;
+    // fresh requests use that sequence or a later one.
+    if (frame.sequence < connection.workerSessionSequenceFloor) {
+      return {
+        status: "rejected",
+        code: "ROTATION_INVALID",
+        retryable: false,
+      };
+    }
     try {
       if (frame.type === "worker.identity.rotate") {
         return {

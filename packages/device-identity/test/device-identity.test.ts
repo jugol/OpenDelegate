@@ -786,6 +786,111 @@ test("certificate rotation requires new-key proof and gives the old generation o
   );
 });
 
+test("certificate rotation selects the active credential after an expired rotation and recredential", async () => {
+  const now = Date.UTC(2026, 6, 24, 0, 0, 0);
+  const clock = new MutableClock(now);
+  const repository = new InMemoryDeviceIdentityRepository();
+  const authority = new DeviceIdentityAuthority({
+    clock,
+    repository,
+    secrets: new InMemoryDeviceIdentitySecretStore(),
+  });
+  const certificateAuthority = await authority.bootstrapCertificateAuthority({
+    instanceId: "instance-recredential-rotation",
+  });
+  const worker = new WorkerDeviceIdentity({
+    clock,
+    secrets: new InMemoryDeviceIdentitySecretStore(),
+  });
+  const discovery = {
+    architecture: "x64",
+    hostname: "recredential-rotation",
+    osFamily: "windows" as const,
+  };
+
+  const enrollmentGrant = await authority.createEnrollmentGrant({
+    allowedBootstrapRoles: ["worker"],
+    deviceId: "device-recredential-rotation",
+    expiresInMs: 5 * 60_000,
+    protocolRange: { minimum: 1, maximum: 1 },
+  });
+  const enrollmentRequest = await worker.createEnrollmentRequest({
+    deviceId: enrollmentGrant.deviceId,
+    expectedMainSpkiSha256: certificateAuthority.spkiSha256,
+  });
+  const original = await authority.enrollDevice({
+    certificateRequestPem: enrollmentRequest.certificateRequestPem,
+    deviceId: enrollmentGrant.deviceId,
+    discovery,
+    grantId: enrollmentGrant.grantId,
+    protocolVersion: 1,
+    token: enrollmentGrant.secret.reveal(),
+  });
+
+  const abandonedRequest = await worker.createEnrollmentRequest({
+    deviceId: enrollmentGrant.deviceId,
+    expectedMainSpkiSha256: certificateAuthority.spkiSha256,
+  });
+  const abandoned = await authority.issueCertificateRotation({
+    currentCertificatePem: original.certificatePem,
+    deviceId: enrollmentGrant.deviceId,
+    newCertificateRequestPem: abandonedRequest.certificateRequestPem,
+  });
+  clock.set(abandoned.activationExpiresAt);
+
+  const recredentialGrant = await authority.createEnrollmentGrant({
+    allowedBootstrapRoles: ["worker"],
+    deviceId: enrollmentGrant.deviceId,
+    expiresInMs: 5 * 60_000,
+    intent: "recredential",
+    protocolRange: { minimum: 1, maximum: 1 },
+  });
+  const recredentialRequest = await worker.createEnrollmentRequest({
+    deviceId: enrollmentGrant.deviceId,
+    expectedMainSpkiSha256: certificateAuthority.spkiSha256,
+  });
+  const recredentialed = await authority.enrollDevice({
+    certificateRequestPem: recredentialRequest.certificateRequestPem,
+    deviceId: enrollmentGrant.deviceId,
+    discovery,
+    grantId: recredentialGrant.grantId,
+    protocolVersion: 1,
+    token: recredentialGrant.secret.reveal(),
+  });
+  assert.equal(recredentialed.generation, 2);
+
+  const nextRequest = await worker.createEnrollmentRequest({
+    deviceId: enrollmentGrant.deviceId,
+    expectedMainSpkiSha256: certificateAuthority.spkiSha256,
+  });
+  const pending = await authority.issueCertificateRotation({
+    currentCertificatePem: recredentialed.certificatePem,
+    deviceId: enrollmentGrant.deviceId,
+    newCertificateRequestPem: nextRequest.certificateRequestPem,
+  });
+  const confirmed = await authority.confirmCertificateRotation({
+    activationChallenge: pending.activationChallenge,
+    certificatePem: pending.certificatePem,
+    deviceId: enrollmentGrant.deviceId,
+    signature: await worker.createRotationProof({
+      activationChallenge: pending.activationChallenge,
+      certificateSerial: pending.serialNumber,
+      deviceId: enrollmentGrant.deviceId,
+      keyId: nextRequest.keyId,
+    }),
+  });
+
+  assert.equal(confirmed.generation, 3);
+  assert.equal(confirmed.status, "active");
+  const generationTwo = (await repository.snapshot()).certificates.filter(
+    (certificate) => certificate.generation === 2,
+  );
+  assert.deepEqual(
+    generationTwo.map((certificate) => certificate.status),
+    ["revoked", "overlap"],
+  );
+});
+
 test("Device revocation atomically rejects every certificate generation and is idempotent", async () => {
   const now = Date.UTC(2026, 6, 24, 0, 0, 0);
   const clock = new MutableClock(now);
