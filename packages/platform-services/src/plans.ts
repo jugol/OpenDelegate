@@ -229,6 +229,18 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       directoryAccess(configuration, "state"),
     ),
     directoryStep(
+      "ensure-config-root",
+      pathJoin(configuration.platform, configuration.paths.stateRoot, "config"),
+      "0750",
+      directoryAccess(configuration, "state"),
+    ),
+    directoryStep(
+      "ensure-manifest-root",
+      pathJoin(configuration.platform, configuration.paths.stateRoot, "manifests"),
+      "0750",
+      directoryAccess(configuration, "state"),
+    ),
+    directoryStep(
       "ensure-authority-root",
       configuration.paths.authorityRoot,
       "0700",

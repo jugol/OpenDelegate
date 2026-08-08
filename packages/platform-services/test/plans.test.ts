@@ -58,6 +58,15 @@ test("install/start/stop/restart plans are deterministic and supervise both plan
       ),
       true,
     );
+    const configRootIndex = install.steps.findIndex((step) => step.id === "ensure-config-root");
+    const manifestRootIndex = install.steps.findIndex(
+      (step) => step.id === "ensure-manifest-root",
+    );
+    const firstRenderedFileIndex = install.steps.findIndex(
+      (step) => step.action.kind === "file.write",
+    );
+    assert.ok(configRootIndex >= 0 && configRootIndex < firstRenderedFileIndex);
+    assert.ok(manifestRootIndex >= 0 && manifestRootIndex < firstRenderedFileIndex);
     assert.ok(install.steps.some((step) => step.action.kind === "release.stage"));
     assert.ok(install.steps.some((step) => step.action.kind === "health.check"));
     assert.ok(

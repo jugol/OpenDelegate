@@ -1766,7 +1766,9 @@ function assertFilesystemActionAllowed(
     configuration,
   }).steps;
   for (const step of artifacts) {
-    if (step.action.kind === "file.write") {
+    if (step.action.kind === "directory.ensure") {
+      allowedExact.add(step.action.path);
+    } else if (step.action.kind === "file.write") {
       allowedExact.add(step.action.file.path);
     }
   }
