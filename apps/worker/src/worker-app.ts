@@ -47,6 +47,10 @@ import {
 } from "@opendelegate/computer-use-os";
 import {
   DeviceCertificateUnusableError,
+  EnrollmentClientError,
+  EnrollmentGrantExecutorFailure,
+  EnrollmentGrantFileError,
+  EnrollmentLocalOperationError,
   WorkerDeviceChannelClient,
   enrollWorkerDevice,
   executeWithEnrollmentGrantFile,
@@ -207,6 +211,17 @@ export class WorkerAppError extends Error {
     this.name = "WorkerAppError";
     this.code = code;
   }
+}
+
+interface WorkerJoinPhases<TValidated, TPrepared, TEnrolled, TResult> {
+  readonly validate: () => TValidated | Promise<TValidated>;
+  readonly prepare: (validated: TValidated) => TPrepared | Promise<TPrepared>;
+  readonly enroll: (validated: TValidated, prepared: TPrepared) => TEnrolled | Promise<TEnrolled>;
+  readonly finalize: (
+    validated: TValidated,
+    prepared: TPrepared,
+    enrolled: TEnrolled,
+  ) => TResult | Promise<TResult>;
 }
 
 export interface WorkerPaths {
@@ -498,104 +513,113 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
       grantPath,
       { sourceCheckoutRoot: options.paths.sourceCheckoutRoot },
       async (grant) => {
-        const channelEndpoints = grant.channelEndpoints.filter(
-          (endpoint) => endpoint.kind === "wss",
-        );
-        if (channelEndpoints.length === 0) {
-          throw appError(
-            "CONFIG_INVALID",
-            "The Enrollment Grant does not contain a mutual-TLS WSS Worker endpoint.",
-          );
-        }
-        const managedSecrets = createWorkerManagedSecretStore(
-          options.secretBackend,
-          grant.deviceId,
-          options.paths,
-          environment,
-        );
-        const health = await managedSecrets.health();
-        if (health.status !== "ready") {
-          throw appError(
-            "SECRET_BACKEND_UNAVAILABLE",
-            "The selected Device-local Secret Store is unavailable.",
-          );
-        }
-        const identity = new WorkerDeviceIdentity({
-          clock: { now: () => Date.now() },
-          secrets: new ManagedDeviceIdentitySecretStore(managedSecrets),
-        });
-        const enrolled = await enrollWorkerDevice({
-          grant,
-          identity,
-          discovery: {
-            architecture: arch(),
-            hostname: hostname(),
-            osFamily: osFamily(platform()),
+        return await executeWorkerJoinPhases({
+          validate: () => {
+            const channelEndpoints = grant.channelEndpoints.filter(
+              (endpoint) => endpoint.kind === "wss",
+            );
+            if (channelEndpoints.length === 0) {
+              throw appError(
+                "CONFIG_INVALID",
+                "The Enrollment Grant does not contain a mutual-TLS WSS Worker endpoint.",
+              );
+            }
+            return { channelEndpoints };
+          },
+          prepare: async () => {
+            const managedSecrets = createWorkerManagedSecretStore(
+              options.secretBackend,
+              grant.deviceId,
+              options.paths,
+              environment,
+            );
+            const health = await managedSecrets.health();
+            if (health.status !== "ready") {
+              throw appError(
+                "SECRET_BACKEND_UNAVAILABLE",
+                "The selected Device-local Secret Store is unavailable.",
+              );
+            }
+            // Prove that the selected service or desktop identity can write all
+            // stable core Secrets before submitting the one-use Grant to Main.
+            await provisionWorkerComputerUseCoreSecrets(managedSecrets);
+            return {
+              identity: createWorkerEnrollmentIdentity(managedSecrets),
+              managedSecrets,
+            };
+          },
+          enroll: async (_validated, { identity }) =>
+            await enrollWorkerDevice({
+              grant,
+              identity,
+              discovery: {
+                architecture: arch(),
+                hostname: hostname(),
+                osFamily: osFamily(platform()),
+              },
+            }),
+          finalize: async ({ channelEndpoints }, { managedSecrets }, enrolled) => {
+            const configuration = validateWorkerConfigurationDocument({
+              schemaVersion: CONFIG_SCHEMA_VERSION,
+              deviceId: enrolled.deviceId,
+              workerId: "worker-primary",
+              mainDeviceId: enrolled.mainDeviceId,
+              keyId: enrolled.keyId,
+              certificateGeneration: enrolled.generation,
+              certificatePem: enrolled.certificatePem,
+              certificateAuthorityPem: enrolled.certificateAuthorityPem,
+              expectedMainSpkiSha256: grant.expectedMainSpkiSha256,
+              transportProfile: {
+                deviceId: enrolled.mainDeviceId,
+                endpoints: channelEndpoints.map((endpoint) => ({
+                  ...endpoint,
+                  credentialRef: "device-identity",
+                })),
+              },
+              secretBackend: options.secretBackend,
+              agent:
+                options.agent === undefined
+                  ? {
+                      provider: "auto",
+                      allowUntestedVersion: false,
+                    }
+                  : {
+                      ...options.agent,
+                      ...(options.agent.codexHome === undefined
+                        ? {}
+                        : {
+                            codexHome: requireExternalProvisioningPath(
+                              options.agent.codexHome,
+                              options.paths.sourceCheckoutRoot,
+                              "Codex provider home",
+                            ),
+                          }),
+                      ...(options.agent.claudeHome === undefined
+                        ? {}
+                        : {
+                            claudeHome: requireExternalProvisioningPath(
+                              options.agent.claudeHome,
+                              options.paths.sourceCheckoutRoot,
+                              "Claude provider home",
+                            ),
+                          }),
+                    },
+              workspaces: [],
+              createdAt: new Date().toISOString(),
+            });
+            await writeConfiguration(options.paths.configFile, configuration);
+            const channelVerified = await verifyInitialWorkerChannel({
+              configuration,
+              managedSecrets,
+              paths: options.paths,
+            });
+            return { channelVerified, configuration };
           },
         });
-        await provisionWorkerComputerUseCoreSecrets(managedSecrets);
-        const configuration = validateWorkerConfigurationDocument({
-          schemaVersion: CONFIG_SCHEMA_VERSION,
-          deviceId: enrolled.deviceId,
-          workerId: "worker-primary",
-          mainDeviceId: enrolled.mainDeviceId,
-          keyId: enrolled.keyId,
-          certificateGeneration: enrolled.generation,
-          certificatePem: enrolled.certificatePem,
-          certificateAuthorityPem: enrolled.certificateAuthorityPem,
-          expectedMainSpkiSha256: grant.expectedMainSpkiSha256,
-          transportProfile: {
-            deviceId: enrolled.mainDeviceId,
-            endpoints: channelEndpoints.map((endpoint) => ({
-              ...endpoint,
-              credentialRef: "device-identity",
-            })),
-          },
-          secretBackend: options.secretBackend,
-          agent:
-            options.agent === undefined
-              ? {
-                  provider: "auto",
-                  allowUntestedVersion: false,
-                }
-              : {
-                  ...options.agent,
-                  ...(options.agent.codexHome === undefined
-                    ? {}
-                    : {
-                        codexHome: requireExternalProvisioningPath(
-                          options.agent.codexHome,
-                          options.paths.sourceCheckoutRoot,
-                          "Codex provider home",
-                        ),
-                      }),
-                  ...(options.agent.claudeHome === undefined
-                    ? {}
-                    : {
-                        claudeHome: requireExternalProvisioningPath(
-                          options.agent.claudeHome,
-                          options.paths.sourceCheckoutRoot,
-                          "Claude provider home",
-                        ),
-                      }),
-                },
-          workspaces: [],
-          createdAt: new Date().toISOString(),
-        });
-        await writeConfiguration(options.paths.configFile, configuration);
-        const channelVerified = await verifyInitialWorkerChannel({
-          configuration,
-          managedSecrets,
-          paths: options.paths,
-        });
-        return { channelVerified, configuration };
       },
     );
   } catch (error) {
-    if (error instanceof WorkerAppError) {
-      throw error;
-    }
-    throw appError("ENROLLMENT_FAILED", "Worker enrollment did not complete.");
+    throw normalizeWorkerJoinFailure(error, options.secretBackend);
   }
   if (!result.channelVerified) {
     throw appError(
@@ -604,6 +628,105 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
     );
   }
   return result.configuration;
+}
+
+function createWorkerEnrollmentIdentity(
+  managedSecrets: ManagedSecretStore,
+): Pick<
+  WorkerDeviceIdentity,
+  "createEnrollmentRequest" | "verifyIssuedDeviceIdentity" | "verifyMainIdentity"
+> {
+  const identity = new WorkerDeviceIdentity({
+    clock: { now: () => Date.now() },
+    secrets: new ManagedDeviceIdentitySecretStore(managedSecrets),
+  });
+  return Object.freeze({
+    createEnrollmentRequest: async (request) => {
+      try {
+        return await identity.createEnrollmentRequest(request);
+      } catch (error) {
+        if (error instanceof SecretError) {
+          throw new EnrollmentLocalOperationError("secret-store");
+        }
+        throw error;
+      }
+    },
+    verifyIssuedDeviceIdentity: (request) => identity.verifyIssuedDeviceIdentity(request),
+    verifyMainIdentity: (request) => identity.verifyMainIdentity(request),
+  });
+}
+
+export async function executeWorkerJoinPhases<TValidated, TPrepared, TEnrolled, TResult>(
+  phases: WorkerJoinPhases<TValidated, TPrepared, TEnrolled, TResult>,
+): Promise<TResult> {
+  let validated: TValidated;
+  try {
+    validated = await phases.validate();
+  } catch {
+    throw new EnrollmentGrantExecutorFailure("pre-enrollment-validation");
+  }
+  let prepared: TPrepared;
+  try {
+    prepared = await phases.prepare(validated);
+  } catch {
+    throw new EnrollmentGrantExecutorFailure("pre-enrollment-secret");
+  }
+  let enrolled: TEnrolled;
+  try {
+    enrolled = await phases.enroll(validated, prepared);
+  } catch (error) {
+    if (error instanceof EnrollmentClientError && error.requestDisposition === "not-submitted") {
+      throw new EnrollmentGrantExecutorFailure(
+        error.localFailureKind === "secret-store"
+          ? "pre-enrollment-secret"
+          : "pre-enrollment-validation",
+      );
+    }
+    throw new EnrollmentGrantExecutorFailure("enrollment-state-uncertain");
+  }
+  try {
+    return await phases.finalize(validated, prepared, enrolled);
+  } catch {
+    throw new EnrollmentGrantExecutorFailure("post-enrollment");
+  }
+}
+
+export function normalizeWorkerJoinFailure(
+  error: unknown,
+  secretBackend: WorkerSecretBackendConfiguration,
+): WorkerAppError {
+  if (error instanceof WorkerAppError) {
+    return error;
+  }
+  if (error instanceof EnrollmentGrantFileError && error.code === "GRANT_EXECUTOR_FAILED") {
+    if (error.executorFailureKind === "pre-enrollment-validation") {
+      return appError(
+        "CONFIG_INVALID",
+        "Worker join validation failed before any request was sent to Main, so the retained Grant remains reusable until it expires. Check the Grant endpoints and local enrollment diagnostics before retrying.",
+      );
+    }
+    if (error.executorFailureKind === "pre-enrollment-secret") {
+      return appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        secretBackend.backend === "macos-keychain"
+          ? "Worker join failed before any request was sent to Main, so the retained Grant remains reusable until it expires. If this command ran through SSH or a background shell, retry it from Terminal.app in the signed-in macOS desktop session. If it still fails there, diagnose the signed Keychain helper and Keychain access instead of weakening Secret storage."
+          : "Worker join failed before any request was sent to Main, so the retained Grant remains reusable until it expires. Retry from the configured owner or service identity after diagnosing the Device-local Secret Store.",
+      );
+    }
+    if (error.executorFailureKind === "enrollment-state-uncertain") {
+      return appError(
+        "ENROLLMENT_FAILED",
+        "The enrollment request may have reached Main. Do not retry the retained one-use Grant. Check Main for this Device; if it is absent, issue a fresh Grant, and if it is present, run Worker status and diagnose before re-enrolling.",
+      );
+    }
+    if (error.executorFailureKind === "post-enrollment") {
+      return appError(
+        "ENROLLMENT_FAILED",
+        "Main accepted the enrollment, but local configuration finalization failed. Do not replay the retained one-use Grant. Keep the Device-local identity intact and run Worker status and diagnose before deciding whether to issue a fresh Grant.",
+      );
+    }
+  }
+  return appError("ENROLLMENT_FAILED", "Worker enrollment did not complete.");
 }
 
 export async function loadWorkerConfiguration(

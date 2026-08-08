@@ -9,6 +9,7 @@ import {
   type IssuedDeviceIdentity,
   type VerifiedIssuedDeviceIdentity,
   type WorkerDeviceIdentity,
+  type WorkerEnrollmentRequest,
 } from "@opendelegate/device-identity";
 
 import {
@@ -42,13 +43,37 @@ export type EnrollmentClientErrorCode =
   | "ENROLLMENT_RESPONSE_INVALID"
   | "ENROLLMENT_UNAVAILABLE";
 
+export type EnrollmentRequestDisposition = "not-submitted" | "submitted-or-unknown";
+export type EnrollmentLocalFailureKind = "secret-store";
+
+export class EnrollmentLocalOperationError extends Error {
+  public readonly kind: EnrollmentLocalFailureKind;
+
+  public constructor(kind: EnrollmentLocalFailureKind) {
+    super("A classified local enrollment operation failed.");
+    this.name = "EnrollmentLocalOperationError";
+    this.kind = kind;
+  }
+}
+
 export class EnrollmentClientError extends Error {
   public readonly code: EnrollmentClientErrorCode;
+  public readonly localFailureKind: EnrollmentLocalFailureKind | undefined;
+  public readonly requestDisposition: EnrollmentRequestDisposition;
 
-  public constructor(code: EnrollmentClientErrorCode, message: string) {
+  public constructor(
+    code: EnrollmentClientErrorCode,
+    message: string,
+    options?: {
+      readonly localFailureKind?: EnrollmentLocalFailureKind | undefined;
+      readonly requestDisposition?: EnrollmentRequestDisposition;
+    },
+  ) {
     super(message);
     this.name = "EnrollmentClientError";
     this.code = code;
+    this.localFailureKind = options?.localFailureKind;
+    this.requestDisposition = options?.requestDisposition ?? "submitted-or-unknown";
   }
 }
 
@@ -60,9 +85,19 @@ export async function enrollWorkerDevice(
   options: EnrollWorkerDeviceOptions,
 ): Promise<EnrolledWorkerIdentity> {
   const clock = options.clock ?? { now: () => Date.now() };
-  const grant = validateGrant(options.grant, clock);
-  const requestTimeoutMs = validateRequestTimeout(options.requestTimeoutMs ?? 30_000);
-  const discovery = validateDiscovery(options.discovery);
+  let grant: EnrollmentGrantFileDocument;
+  let requestTimeoutMs: number;
+  let discovery: DeviceDiscoveryBootstrap;
+  try {
+    grant = validateGrant(options.grant, clock);
+    requestTimeoutMs = validateRequestTimeout(options.requestTimeoutMs ?? 30_000);
+    discovery = validateDiscovery(options.discovery);
+  } catch (error) {
+    throw notSubmittedEnrollmentError(
+      error,
+      "The local enrollment configuration could not be validated.",
+    );
+  }
   try {
     await options.identity.verifyMainIdentity({
       certificatePem: grant.certificateAuthorityPem,
@@ -72,12 +107,25 @@ export async function enrollWorkerDevice(
     throw clientError(
       "ENROLLMENT_CONFIGURATION_INVALID",
       "The Enrollment Grant Main identity could not be verified.",
+      { requestDisposition: "not-submitted" },
     );
   }
-  const certificateRequest = await options.identity.createEnrollmentRequest({
-    deviceId: grant.deviceId,
-    expectedMainSpkiSha256: grant.expectedMainSpkiSha256,
-  });
+  let certificateRequest: WorkerEnrollmentRequest;
+  try {
+    certificateRequest = await options.identity.createEnrollmentRequest({
+      deviceId: grant.deviceId,
+      expectedMainSpkiSha256: grant.expectedMainSpkiSha256,
+    });
+  } catch (error) {
+    throw clientError(
+      "ENROLLMENT_CONFIGURATION_INVALID",
+      "The local Device identity request could not be prepared.",
+      {
+        localFailureKind: error instanceof EnrollmentLocalOperationError ? error.kind : undefined,
+        requestDisposition: "not-submitted",
+      },
+    );
+  }
   const requestBody = Buffer.from(
     JSON.stringify({
       grantId: grant.grantId,
@@ -97,6 +145,8 @@ export async function enrollWorkerDevice(
       requestTimeoutMs,
       url: grant.enrollmentUrl,
     });
+  } catch (error) {
+    throw submittedEnrollmentError(error);
   } finally {
     requestBody.fill(0);
   }
@@ -115,6 +165,7 @@ export async function enrollWorkerDevice(
     throw clientError(
       "ENROLLMENT_RESPONSE_INVALID",
       "Main returned an invalid Device identity response.",
+      { requestDisposition: "submitted-or-unknown" },
     );
   }
   if (
@@ -126,6 +177,7 @@ export async function enrollWorkerDevice(
     throw clientError(
       "ENROLLMENT_RESPONSE_INVALID",
       "Main returned an identity outside the Enrollment Grant scope.",
+      { requestDisposition: "submitted-or-unknown" },
     );
   }
   return deepFreeze({
@@ -532,8 +584,46 @@ function hasControlCharacter(value: string): boolean {
   });
 }
 
-function clientError(code: EnrollmentClientErrorCode, message: string): EnrollmentClientError {
-  return new EnrollmentClientError(code, message);
+function clientError(
+  code: EnrollmentClientErrorCode,
+  message: string,
+  options?: {
+    readonly localFailureKind?: EnrollmentLocalFailureKind | undefined;
+    readonly requestDisposition?: EnrollmentRequestDisposition;
+  },
+): EnrollmentClientError {
+  return new EnrollmentClientError(code, message, options);
+}
+
+function submittedEnrollmentError(error: unknown): EnrollmentClientError {
+  if (error instanceof EnrollmentClientError) {
+    return clientError(error.code, error.message, {
+      localFailureKind: error.localFailureKind,
+      requestDisposition: "submitted-or-unknown",
+    });
+  }
+  return clientError(
+    "ENROLLMENT_UNAVAILABLE",
+    "The enrollment request did not return a verified response.",
+    {
+      requestDisposition: "submitted-or-unknown",
+    },
+  );
+}
+
+function notSubmittedEnrollmentError(
+  error: unknown,
+  fallbackMessage: string,
+): EnrollmentClientError {
+  if (error instanceof EnrollmentClientError) {
+    return clientError(error.code, error.message, {
+      localFailureKind: error.localFailureKind,
+      requestDisposition: "not-submitted",
+    });
+  }
+  return clientError("ENROLLMENT_CONFIGURATION_INVALID", fallbackMessage, {
+    requestDisposition: "not-submitted",
+  });
 }
 
 function deepFreeze<TValue>(value: TValue): TValue {

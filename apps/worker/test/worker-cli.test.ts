@@ -8,6 +8,11 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 
 import {
+  EnrollmentClientError,
+  EnrollmentGrantExecutorFailure,
+  EnrollmentGrantFileError,
+} from "@opendelegate/device-channel";
+import {
   WindowsDpapiSecretStore,
   WindowsServiceDpapiSecretHandoff,
   type NativeSecretCommandRequest,
@@ -34,9 +39,181 @@ import {
   resolveWorkerAgentSandbox,
   resolveWorkerPaths,
 } from "../src/index.ts";
+import { executeWorkerJoinPhases, normalizeWorkerJoinFailure } from "../src/worker-app.ts";
 
 const executeFile = promisify(execFile);
 const checkout = resolve(import.meta.dirname, "../../..");
+
+test("Worker join phase boundary never submits a Grant after local preparation fails", async () => {
+  const observed: string[] = [];
+  await assert.rejects(
+    executeWorkerJoinPhases({
+      validate: () => {
+        observed.push("validate");
+        return "validated";
+      },
+      prepare: () => {
+        observed.push("prepare");
+        throw new Error("local Secret Store failed");
+      },
+      enroll: () => {
+        observed.push("enroll");
+      },
+      finalize: () => {
+        observed.push("finalize");
+      },
+    }),
+    (error: unknown) =>
+      error instanceof EnrollmentGrantExecutorFailure && error.kind === "pre-enrollment-secret",
+  );
+  assert.deepEqual(observed, ["validate", "prepare"]);
+});
+
+test("Worker join separates Grant validation failures from Secret Store guidance", async () => {
+  const observed: string[] = [];
+  await assert.rejects(
+    executeWorkerJoinPhases({
+      validate: () => {
+        observed.push("validate");
+        throw new Error("invalid endpoint");
+      },
+      prepare: () => {
+        observed.push("prepare");
+      },
+      enroll: () => {
+        observed.push("enroll");
+      },
+      finalize: () => {
+        observed.push("finalize");
+      },
+    }),
+    (error: unknown) =>
+      error instanceof EnrollmentGrantExecutorFailure && error.kind === "pre-enrollment-validation",
+  );
+  assert.deepEqual(observed, ["validate"]);
+});
+
+test("Worker join preserves a Grant when local identity creation fails before submission", async () => {
+  const observed: string[] = [];
+  await assert.rejects(
+    executeWorkerJoinPhases({
+      validate: () => "validated",
+      prepare: () => "prepared",
+      enroll: () => {
+        observed.push("enroll");
+        throw new EnrollmentClientError(
+          "ENROLLMENT_CONFIGURATION_INVALID",
+          "The local Device identity request could not be prepared.",
+          { localFailureKind: "secret-store", requestDisposition: "not-submitted" },
+        );
+      },
+      finalize: () => {
+        observed.push("finalize");
+      },
+    }),
+    (error: unknown) =>
+      error instanceof EnrollmentGrantExecutorFailure && error.kind === "pre-enrollment-secret",
+  );
+  assert.deepEqual(observed, ["enroll"]);
+});
+
+test("Worker join phase boundary marks enrollment submission failures as uncertain", async () => {
+  const observed: string[] = [];
+  await assert.rejects(
+    executeWorkerJoinPhases({
+      validate: () => "validated",
+      prepare: () => {
+        observed.push("prepare");
+        return "prepared";
+      },
+      enroll: () => {
+        observed.push("enroll");
+        throw new Error("response lost");
+      },
+      finalize: () => {
+        observed.push("finalize");
+      },
+    }),
+    (error: unknown) =>
+      error instanceof EnrollmentGrantExecutorFailure &&
+      error.kind === "enrollment-state-uncertain",
+  );
+  assert.deepEqual(observed, ["prepare", "enroll"]);
+});
+
+test("Worker join phase boundary marks local failures after accepted enrollment", async () => {
+  const observed: string[] = [];
+  await assert.rejects(
+    executeWorkerJoinPhases({
+      validate: () => "validated",
+      prepare: () => {
+        observed.push("prepare");
+        return "prepared";
+      },
+      enroll: () => {
+        observed.push("enroll");
+        return "enrolled";
+      },
+      finalize: () => {
+        observed.push("finalize");
+        throw new Error("configuration write failed");
+      },
+    }),
+    (error: unknown) =>
+      error instanceof EnrollmentGrantExecutorFailure && error.kind === "post-enrollment",
+  );
+  assert.deepEqual(observed, ["prepare", "enroll", "finalize"]);
+});
+
+test("macOS Worker join gives retry guidance only for pre-enrollment failures", () => {
+  const callbackError = new EnrollmentGrantFileError(
+    "GRANT_EXECUTOR_FAILED",
+    "Enrollment did not complete; the local Grant file was retained for operator recovery.",
+    { executorFailureKind: "pre-enrollment-secret" },
+  );
+
+  const error = normalizeWorkerJoinFailure(callbackError, {
+    backend: "macos-keychain",
+    expectedHelperSha256: `sha256:${"a".repeat(64)}`,
+    helperPath: "/Applications/OpenDelegate/opendelegate-keychain-helper",
+  });
+
+  assert.equal(error.code, "SECRET_BACKEND_UNAVAILABLE");
+  assert.match(error.message, /before any request was sent to Main/u);
+  assert.match(error.message, /retained Grant remains reusable/u);
+  assert.match(error.message, /Terminal\.app/u);
+
+  const validation = normalizeWorkerJoinFailure(
+    new EnrollmentGrantFileError(
+      "GRANT_EXECUTOR_FAILED",
+      "Enrollment did not complete; the local Grant file was retained for operator recovery.",
+      { executorFailureKind: "pre-enrollment-validation" },
+    ),
+    {
+      backend: "macos-keychain",
+      expectedHelperSha256: `sha256:${"a".repeat(64)}`,
+      helperPath: "/Applications/OpenDelegate/opendelegate-keychain-helper",
+    },
+  );
+  assert.equal(validation.code, "CONFIG_INVALID");
+  assert.doesNotMatch(validation.message, /Keychain|Terminal\.app/u);
+
+  const uncertain = normalizeWorkerJoinFailure(
+    new EnrollmentGrantFileError(
+      "GRANT_EXECUTOR_FAILED",
+      "Enrollment did not complete; the local Grant file was retained for operator recovery.",
+      { executorFailureKind: "enrollment-state-uncertain" },
+    ),
+    {
+      backend: "macos-keychain",
+      expectedHelperSha256: `sha256:${"a".repeat(64)}`,
+      helperPath: "/Applications/OpenDelegate/opendelegate-keychain-helper",
+    },
+  );
+  assert.equal(uncertain.code, "ENROLLMENT_FAILED");
+  assert.match(uncertain.message, /Do not retry/u);
+  assert.match(uncertain.message, /issue a fresh Grant/u);
+});
 
 test("unattended CLI adapters without a Policy approval bridge receive no native tools", () => {
   assert.deepEqual(
