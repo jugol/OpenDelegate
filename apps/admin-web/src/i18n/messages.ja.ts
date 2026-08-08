@@ -393,6 +393,8 @@ export const japaneseMessages = {
     hardTitle: "予算のハード停止",
     hardDetail:
       "{metrics} がハード停止に達しました。オーナーがこのタスク予算を明示的に拡張するまで、新しい作業は停止したままです。",
+    hardIdleDetail:
+      "{metrics} が非アクティブ停止に達しました。オーナーの新しいメッセージまたは再試行/再開でアイドル時間を再開できます。非アクティブだけを理由にタスク予算を拡張する必要はありません。",
     limitEvents: "上限イベント",
     noLimitEvents: "ソフト警告またはハード停止のイベントは記録されていません。",
     hardEvent: "ハード停止",

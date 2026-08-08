@@ -367,6 +367,8 @@ export const simplifiedChineseMessages = {
     softDetail: "{metrics} 已达到预警阈值。执行仍可继续，请先检查后续工作。",
     hardTitle: "预算硬停止",
     hardDetail: "{metrics} 已达到硬停止限额。在所有者明确增加此任务预算之前，新工作将保持停止。",
+    hardIdleDetail:
+      "{metrics} 已达到非活动停止限额。所有者发送新消息或选择重试/继续即可重新开始空闲计时；仅因非活动无需增加任务预算。",
     limitEvents: "限额事件",
     noLimitEvents: "尚未记录预警或硬停止事件。",
     hardEvent: "硬停止",

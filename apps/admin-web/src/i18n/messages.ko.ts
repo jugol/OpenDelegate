@@ -391,6 +391,8 @@ export const koreanMessages = {
     hardTitle: "예산 강제 중단",
     hardDetail:
       "{metrics} 항목이 강제 중단 한도에 도달했습니다. 소유자가 이 작업 예산을 명시적으로 늘릴 때까지 새 작업은 중단됩니다.",
+    hardIdleDetail:
+      "{metrics} 항목이 비활성 중단 한도에 도달했습니다. 새 소유자 메시지나 다시 시도/재개로 유휴 시간을 다시 시작할 수 있으며, 비활성만으로는 작업 예산을 늘릴 필요가 없습니다.",
     limitEvents: "한도 이벤트",
     noLimitEvents: "기록된 사전 경고 또는 강제 중단 이벤트가 없습니다.",
     hardEvent: "강제 중단",
