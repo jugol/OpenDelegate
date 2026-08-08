@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 
-import { EnrollmentGrantFileError, executeWithEnrollmentGrantFile } from "../src/index.ts";
+import {
+  EnrollmentGrantExecutorFailure,
+  EnrollmentGrantFileError,
+  executeWithEnrollmentGrantFile,
+} from "../src/index.ts";
 
 const temporaryRoots: string[] = [];
 
@@ -83,17 +87,36 @@ describe("Enrollment Grant file boundary", () => {
 
   test("does not remove a still-usable grant when the enrollment callback fails", async () => {
     const fixture = await createFixture();
+    const callbackError = new EnrollmentGrantExecutorFailure("pre-enrollment-secret");
     await assert.rejects(
       executeWithEnrollmentGrantFile(
         fixture.grantPath,
         { sourceCheckoutRoot: fixture.checkout },
         async () => {
-          throw new Error(`boundary failed with ${"a".repeat(43)}`);
+          throw callbackError;
         },
       ),
       (error: unknown) =>
         error instanceof EnrollmentGrantFileError &&
         error.code === "GRANT_EXECUTOR_FAILED" &&
+        error.executorFailureKind === "pre-enrollment-secret",
+    );
+
+    const untrustedError = Object.assign(new Error(`boundary failed with ${"a".repeat(43)}`), {
+      code: "PRE_ENROLLMENT_SECRET",
+    });
+    await assert.rejects(
+      executeWithEnrollmentGrantFile(
+        fixture.grantPath,
+        { sourceCheckoutRoot: fixture.checkout },
+        async () => {
+          throw untrustedError;
+        },
+      ),
+      (error: unknown) =>
+        error instanceof EnrollmentGrantFileError &&
+        error.code === "GRANT_EXECUTOR_FAILED" &&
+        error.executorFailureKind === undefined &&
         !error.message.includes("a".repeat(43)),
     );
 

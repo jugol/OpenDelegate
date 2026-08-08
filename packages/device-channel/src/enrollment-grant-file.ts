@@ -38,13 +38,35 @@ export interface EnrollmentGrantFileOptions {
 export type EnrollmentGrantFileErrorCode =
   "GRANT_EXECUTOR_FAILED" | "GRANT_FILE_INVALID" | "GRANT_FILE_UNAVAILABLE" | "GRANT_FILE_UNSAFE";
 
+export type EnrollmentGrantExecutorFailureKind =
+  | "pre-enrollment-validation"
+  | "pre-enrollment-secret"
+  | "enrollment-state-uncertain"
+  | "post-enrollment";
+
+export class EnrollmentGrantExecutorFailure extends Error {
+  public readonly kind: EnrollmentGrantExecutorFailureKind;
+
+  public constructor(kind: EnrollmentGrantExecutorFailureKind) {
+    super("The enrollment executor stopped at a classified recovery boundary.");
+    this.name = "EnrollmentGrantExecutorFailure";
+    this.kind = kind;
+  }
+}
+
 export class EnrollmentGrantFileError extends Error {
   public readonly code: EnrollmentGrantFileErrorCode;
+  public readonly executorFailureKind: EnrollmentGrantExecutorFailureKind | undefined;
 
-  public constructor(code: EnrollmentGrantFileErrorCode, message: string) {
+  public constructor(
+    code: EnrollmentGrantFileErrorCode,
+    message: string,
+    options?: { readonly executorFailureKind?: EnrollmentGrantExecutorFailureKind | undefined },
+  ) {
     super(message);
     this.name = "EnrollmentGrantFileError";
     this.code = code;
+    this.executorFailureKind = options?.executorFailureKind;
   }
 }
 
@@ -108,10 +130,14 @@ export async function executeWithEnrollmentGrantFile<TResult>(
   let result: TResult;
   try {
     result = await executor(grant);
-  } catch {
+  } catch (error) {
     throw grantError(
       "GRANT_EXECUTOR_FAILED",
-      "Enrollment did not complete; the local Grant file was retained for a bounded retry.",
+      "Enrollment did not complete; the local Grant file was retained for operator recovery.",
+      {
+        executorFailureKind:
+          error instanceof EnrollmentGrantExecutorFailure ? error.kind : undefined,
+      },
     );
   }
 
@@ -403,8 +429,12 @@ function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoExcepti
   return error instanceof Error && "code" in error && error.code === code;
 }
 
-function grantError(code: EnrollmentGrantFileErrorCode, message: string): EnrollmentGrantFileError {
-  return new EnrollmentGrantFileError(code, message);
+function grantError(
+  code: EnrollmentGrantFileErrorCode,
+  message: string,
+  options?: { readonly executorFailureKind?: EnrollmentGrantExecutorFailureKind | undefined },
+): EnrollmentGrantFileError {
+  return new EnrollmentGrantFileError(code, message, options);
 }
 
 function deepFreeze<TValue>(value: TValue): TValue {

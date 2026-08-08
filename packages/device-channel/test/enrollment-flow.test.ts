@@ -27,6 +27,7 @@ import {
 
 import {
   EnrollmentClientError,
+  EnrollmentLocalOperationError,
   createEnrollmentRequestHandler,
   enrollWorkerDevice,
   type EnrollmentGrantFileDocument,
@@ -100,6 +101,30 @@ test("pinned TLS 1.3 enrollment consumes one grant and binds the issued identity
       secrets: new InMemoryDeviceIdentitySecretStore(),
     });
 
+    await assert.rejects(
+      enrollWorkerDevice({
+        clock,
+        discovery: {
+          architecture: "arm64",
+          hostname: "worker-local-preflight",
+          osFamily: "macos",
+        },
+        grant,
+        identity: {
+          verifyMainIdentity: (request) => worker.verifyMainIdentity(request),
+          createEnrollmentRequest: async () => {
+            throw new EnrollmentLocalOperationError("secret-store");
+          },
+          verifyIssuedDeviceIdentity: (request) => worker.verifyIssuedDeviceIdentity(request),
+        },
+      }),
+      (error: unknown) =>
+        error instanceof EnrollmentClientError &&
+        error.code === "ENROLLMENT_CONFIGURATION_INVALID" &&
+        error.localFailureKind === "secret-store" &&
+        error.requestDisposition === "not-submitted",
+    );
+
     const enrolled = await enrollWorkerDevice({
       clock,
       discovery: {
@@ -135,6 +160,7 @@ test("pinned TLS 1.3 enrollment consumes one grant and binds the issued identity
       (error: unknown) =>
         error instanceof EnrollmentClientError &&
         error.code === "ENROLLMENT_REJECTED" &&
+        error.requestDisposition === "submitted-or-unknown" &&
         !error.message.includes(rawToken),
     );
   } finally {

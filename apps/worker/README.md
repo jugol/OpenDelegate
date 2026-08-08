@@ -31,6 +31,16 @@ Service when the current session can actually use it. A headless Linux host must
 select the systemd credential-backed vault explicitly; `Auto` never invents or
 persists a plaintext fallback key.
 
+On macOS, prefer to execute `worker join` from Terminal.app in the signed-in desktop
+session. An SSH or background process can pass a read-only Keychain health check while
+still being unable to write the required Secrets. OpenDelegate proves the stable core
+Secret writes before submitting the one-use Grant to Main. A failure in that preflight
+leaves the Grant reusable until expiry and suggests Terminal.app as one possible remedy;
+it does not assume that every Keychain failure is caused by SSH. Once an enrollment
+request may have reached Main, the CLI says not to replay the retained Grant and directs
+the owner to inspect Main before issuing a fresh one. Never replace this boundary with a
+plaintext key.
+
 ### Headless systemd Linux
 
 Provision the encrypted master credential and a non-secret backend descriptor
