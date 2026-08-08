@@ -175,9 +175,9 @@ export async function buildWorkerServiceDocument(
     instanceId: options.instanceId,
     deviceId: configuration.deviceId,
     bundle: { version, sourceDirectory: serviceBundleDirectory, checksum },
-    sourceCheckoutDirectory: resolve(options.sourceCheckoutRoot),
-    installRoot: resolve(options.installRoot),
-    dataRoot: resolve(options.dataRoot),
+    sourceCheckoutDirectory: platformPath(family, options.sourceCheckoutRoot),
+    installRoot: platformPath(family, options.installRoot),
+    dataRoot: platformPath(family, options.dataRoot),
     ownerSession: {
       userName: ownerSession.userName,
       stableUserId: ownerSession.stableUserId,
