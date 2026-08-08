@@ -1307,6 +1307,7 @@ function request(executionKey: string, attempt: number): TaskExecutionRequest {
     attempt,
     executionKey,
     planningKey: executionKey,
+    resourceResume: false,
     signal: new AbortController().signal,
     task: {
       taskId: "task-release",

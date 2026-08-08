@@ -57,6 +57,7 @@ export interface MainSecureSecretIngestServiceOptions {
   readonly secretStore: ManagedSecretStore;
   readonly idSource?: () => string;
   readonly maximumLedgerEntries?: number;
+  readonly onAvailabilityChanged?: () => void;
 }
 
 /**
@@ -72,6 +73,7 @@ export class MainSecureSecretIngestService
   readonly #secretStore: ManagedSecretStore;
   readonly #idSource: () => string;
   readonly #maximumLedgerEntries: number;
+  readonly #onAvailabilityChanged: (() => void) | undefined;
   readonly #availableReferences = new Set<string>();
   readonly #referencePurposes = new Map<string, SecureSecretIngestPurposeV1>();
   readonly #operationTails = new Map<string, Promise<void>>();
@@ -97,6 +99,12 @@ export class MainSecureSecretIngestService
     if (options.idSource !== undefined && typeof options.idSource !== "function") {
       throw new TypeError("The secure-ingest ID source is invalid.");
     }
+    if (
+      options.onAvailabilityChanged !== undefined &&
+      typeof options.onAvailabilityChanged !== "function"
+    ) {
+      throw new TypeError("The secure-ingest availability callback is invalid.");
+    }
     this.#ledgerDirectory = resolve(options.ledgerDirectory);
     this.#secretStore = options.secretStore;
     this.#maximumLedgerEntries = requireMaximumLedgerEntries(
@@ -104,6 +112,7 @@ export class MainSecureSecretIngestService
     );
     this.#idSource =
       options.idSource ?? (() => `secret_${randomUUID().toLowerCase().replaceAll("-", "")}`);
+    this.#onAvailabilityChanged = options.onAvailabilityChanged;
   }
 
   public static async open(
@@ -210,9 +219,13 @@ export class MainSecureSecretIngestService
     const material = copyAndValidateMaterial(input.secret, purpose);
     const operationId = digest(`${principalId}\0${idempotencyKey}`);
     try {
-      return await this.#enqueue(operationId, () =>
+      const result = await this.#enqueue(operationId, () =>
         this.#ingestSerialized(operationId, purpose, material),
       );
+      if (result.availabilityChanged) {
+        this.#onAvailabilityChanged?.();
+      }
+      return result.receipt;
     } finally {
       material.fill(0);
     }
@@ -264,7 +277,10 @@ export class MainSecureSecretIngestService
     operationId: string,
     purpose: SecureSecretIngestPurposeV1,
     material: Buffer,
-  ): Promise<SecureSecretIngestReceiptV1> {
+  ): Promise<{
+    readonly receipt: SecureSecretIngestReceiptV1;
+    readonly availabilityChanged: boolean;
+  }> {
     const path = join(this.#ledgerDirectory, `${operationId}.json`);
     const snapshot = await this.#withLedgerMutation(async () => {
       await this.#assertLedgerDirectory();
@@ -297,8 +313,13 @@ export class MainSecureSecretIngestService
     if (snapshot.record.purpose !== purpose) {
       throw new SecureSecretIngestPortError("SECRET_INGEST_IDEMPOTENCY_CONFLICT");
     }
+    const wasAvailable = this.#availableReferences.has(snapshot.record.secretRef);
     await this.#recoverOrVerify(path, snapshot, material);
-    return receipt(snapshot.record.secretRef);
+    return Object.freeze({
+      receipt: receipt(snapshot.record.secretRef),
+      availabilityChanged:
+        !wasAvailable && this.#availableReferences.has(snapshot.record.secretRef),
+    });
   }
 
   async #recoverOrVerify(

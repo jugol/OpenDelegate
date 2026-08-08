@@ -133,6 +133,7 @@ export interface ConfigurationServiceAgentToolBrokerOptions {
   ) => ConfigurationContext | Promise<ConfigurationContext>;
   readonly authorizeMutation: ConfigurationMutationAuthorizer;
   readonly approvalRequester?: ConfigurationApprovalRequester;
+  readonly onConfigurationApplied?: () => void;
 }
 
 export class ConfigurationAgentToolBrokerError extends Error {
@@ -167,6 +168,7 @@ export class ConfigurationServiceAgentToolBroker implements ConfigurationAgentTo
   readonly #contextForDevice: ConfigurationServiceAgentToolBrokerOptions["contextForDevice"];
   readonly #authorizeMutation: ConfigurationMutationAuthorizer;
   readonly #approvalRequester: ConfigurationApprovalRequester | undefined;
+  readonly #onConfigurationApplied: (() => void) | undefined;
 
   constructor(options: ConfigurationServiceAgentToolBrokerOptions) {
     if (
@@ -174,7 +176,9 @@ export class ConfigurationServiceAgentToolBroker implements ConfigurationAgentTo
       typeof options.service !== "object" ||
       typeof options.service.executeTool !== "function" ||
       typeof options.contextForDevice !== "function" ||
-      typeof options.authorizeMutation !== "function"
+      typeof options.authorizeMutation !== "function" ||
+      (options.onConfigurationApplied !== undefined &&
+        typeof options.onConfigurationApplied !== "function")
     ) {
       throw new TypeError("A valid Configuration Service tool broker configuration is required.");
     }
@@ -182,6 +186,7 @@ export class ConfigurationServiceAgentToolBroker implements ConfigurationAgentTo
     this.#contextForDevice = options.contextForDevice;
     this.#authorizeMutation = options.authorizeMutation;
     this.#approvalRequester = options.approvalRequester;
+    this.#onConfigurationApplied = options.onConfigurationApplied;
   }
 
   async execute(input: ConfigurationAgentToolBrokerInput): Promise<ConfigurationToolReceipt> {
@@ -206,8 +211,10 @@ export class ConfigurationServiceAgentToolBroker implements ConfigurationAgentTo
       );
     }
     let protectedMutation: Parameters<ConfigurationMutationAuthorizer>[0] | undefined;
+    const revisionBeforeApply =
+      input.request.tool === "apply" ? await this.#service.getRevision() : undefined;
     try {
-      return await this.#service.executeTool({
+      const receipt = await this.#service.executeTool({
         operationId: input.operationId,
         actor: input.principalId,
         context,
@@ -220,6 +227,14 @@ export class ConfigurationServiceAgentToolBroker implements ConfigurationAgentTo
           return authorization;
         },
       });
+      if (
+        receipt.tool === "apply" &&
+        revisionBeforeApply !== undefined &&
+        receipt.result.commit.revision > revisionBeforeApply
+      ) {
+        this.#onConfigurationApplied?.();
+      }
+      return receipt;
     } catch (error) {
       if (!(error instanceof ConfigurationError)) {
         throw new ConfigurationAgentToolBrokerError(

@@ -330,6 +330,11 @@ Prove the complete product flow in one process with deterministic fake boundarie
 - Treat only a durable, still-current Worker Run lease renewal as Task and Work
   Order activity, so a quiet long Run remains live without allowing rejected or
   stale Worker traffic to reset its idle Budget.
+- Keep `waiting_resource` Tasks dormant without fixed polling or retry-Budget use,
+  then re-evaluate them after startup or a material Worker, Secret, Configuration,
+  route, or lock availability signal. Deduplicate wake-ups, preserve signals that
+  race the first durable wait, and reset only the applicable idle windows before
+  dispatch.
 - Implement deterministic scheduling filters and score explanations.
 - Define the semantic planning request and response schemas used by Main Agent.
 - Implement fake channel, Main Agent, Worker Agent, transport, Knowledge, Artifact,

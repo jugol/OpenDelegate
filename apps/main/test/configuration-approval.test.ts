@@ -36,7 +36,7 @@ const CONTEXT = {
 const FIRST_DISCORD_BINDING = discordBinding("discord-token-primary", "22222222222222222");
 const SECOND_DISCORD_BINDING = discordBinding("discord-token-replacement", "33333333333333333");
 
-function harness(lifecycle?: ConfigurationApplyLifecycle) {
+function harness(lifecycle?: ConfigurationApplyLifecycle, onConfigurationApplied?: () => void) {
   let sequence = 0;
   const configuration = new ConfigurationService({
     definitions: [
@@ -53,31 +53,39 @@ function harness(lifecycle?: ConfigurationApplyLifecycle) {
     clock: { now: () => NOW },
     idSource: { nextId: () => `approval_${++sequence}` },
     ...(lifecycle === undefined ? {} : { lifecycle }),
+    ...(onConfigurationApplied === undefined ? {} : { onConfigurationApplied }),
   });
   const broker = new ConfigurationServiceAgentToolBroker({
     service: configuration,
     contextForDevice: () => CONTEXT,
     authorizeMutation: authorizeMainConfigurationMutation,
     approvalRequester: approvals.requester,
+    ...(onConfigurationApplied === undefined ? {} : { onConfigurationApplied }),
   });
   return { approvals, broker, configuration };
 }
 
 test("approved Configuration execution commits its prepared runtime lifecycle", async () => {
   const events: string[] = [];
-  const { approvals, broker } = harness({
-    async prepare(input) {
-      events.push(`prepare:${input.diff[0]?.key}`);
-      return {
-        async commit() {
-          events.push("commit");
-        },
-        async rollback() {
-          events.push("rollback");
-        },
-      };
+  let availabilityChanges = 0;
+  const { approvals, broker } = harness(
+    {
+      async prepare(input) {
+        events.push(`prepare:${input.diff[0]?.key}`);
+        return {
+          async commit() {
+            events.push("commit");
+          },
+          async rollback() {
+            events.push("rollback");
+          },
+        };
+      },
     },
-  });
+    () => {
+      availabilityChanges += 1;
+    },
+  );
   const proposed = await broker.execute({
     operationId: "configuration:propose:lifecycle",
     principalId: "owner_personal",
@@ -123,6 +131,7 @@ test("approved Configuration execution commits its prepared runtime lifecycle", 
   });
   assert.equal(approved.executionStatus, "succeeded");
   assert.deepEqual(events, ["prepare:artifact.exposure", "commit"]);
+  assert.equal(availabilityChanges, 1);
 });
 
 test("a prepared runtime commit failure compensates durable Configuration and runtime state", async () => {
@@ -584,7 +593,10 @@ test("denying a protected Configuration proposal never applies it", async () => 
 });
 
 test("automatic Device profile changes remain automatic and create no Approval", async () => {
-  const { approvals, broker, configuration } = harness();
+  let availabilityChanges = 0;
+  const { approvals, broker, configuration } = harness(undefined, () => {
+    availabilityChanges += 1;
+  });
   const proposed = await broker.execute({
     operationId: "configuration:propose:role",
     principalId: "owner_personal",
@@ -618,6 +630,20 @@ test("automatic Device profile changes remain automatic and create no Approval",
   assert.equal(applied.authorization.authority, "policy");
   assert.deepEqual((await configuration.inspect(CONTEXT))["device.roles"]?.value, ["development"]);
   assert.deepEqual(await approvals.controlPlane.list(), []);
+  assert.equal(availabilityChanges, 1);
+
+  const replay = await broker.execute({
+    operationId: "configuration:apply:role",
+    principalId: "owner_personal",
+    targetDeviceId: CONTEXT.deviceId,
+    request: {
+      tool: "apply",
+      proposalId: proposed.result.proposal.id,
+      expectedRevision: 0,
+    },
+  });
+  assert.deepEqual(replay, applied);
+  assert.equal(availabilityChanges, 1);
 });
 
 class ReadyDiscordRuntime implements DiscordBindingRuntime {

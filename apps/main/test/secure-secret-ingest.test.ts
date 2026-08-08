@@ -93,12 +93,16 @@ test("secure ingest stores only bytes in the Main-local store and replays an ava
   const root = await mkdtemp(join(tmpdir(), "opendelegate-secure-ingest-"));
   const store = new TestManagedSecretStore();
   let sequence = 0;
+  let availabilityChanges = 0;
   try {
     const service = await MainSecureSecretIngestService.open({
       mainDeviceId: "device_main",
       ledgerDirectory: join(root, "ledger"),
       secretStore: store,
       idSource: () => `database_${++sequence}`,
+      onAvailabilityChanged: () => {
+        availabilityChanges += 1;
+      },
     });
     const raw = Buffer.from(
       "postgresql://owner:local-only-password@database.test/opendelegate",
@@ -116,6 +120,7 @@ test("secure ingest stores only bytes in the Main-local store and replays an ava
       availability: "ready",
     });
     assert.equal(store.values.size, 1);
+    assert.equal(availabilityChanges, 1);
     assert.ok(store.observedStoreInputs[0]?.every((byte) => byte === 0));
     assert.equal(
       service.isAvailable({
@@ -146,6 +151,7 @@ test("secure ingest stores only bytes in the Main-local store and replays an ava
     });
     assert.deepEqual(replay, first);
     assert.equal(store.values.size, 1);
+    assert.equal(availabilityChanges, 1);
 
     const files = await readdir(join(root, "ledger"));
     assert.equal(files.length, 1);

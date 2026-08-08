@@ -755,7 +755,7 @@ function stateSummary(state: DiscordTaskState): string {
     case "intake":
       return "OpenDelegate is reading this Task.";
     case "queued":
-      return "This Task is queued for eligible capacity.";
+      return "This Task is queued for its next eligible execution attempt.";
     case "running":
       return "OpenDelegate is working on this Task.";
     case "waiting_user":

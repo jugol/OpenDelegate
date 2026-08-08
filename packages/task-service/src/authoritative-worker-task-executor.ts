@@ -1084,6 +1084,14 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       await this.#finishBudgetForPersistedRun(current);
       return failureFrom(current);
     }
+    if (request.resourceResume) {
+      await this.#budget?.recordActivity({
+        taskId: request.task.taskId,
+        workOrderId: workOrder.workOrderId,
+        operationId: `work-order-resource-resume:${digest(`${request.executionKey}\0${workOrder.workOrderId}`)}`,
+        source: "resource-availability",
+      });
+    }
     if (current !== undefined && !isTerminal(current.status)) {
       const now = this.#now();
       if (now < projection.lastAuthorityAtMs) {

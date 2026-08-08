@@ -1822,3 +1822,24 @@ stale packets are not.
 **Consequence:** Legitimate long Runs do not fail as idle merely because they emit
 no intermediate result, exact replay repairs an interrupted activity write, and the
 finite active wall, token, cost, retry, and turn Budgets remain unchanged.
+
+## D-092 — Resource waits resume from material availability signals
+
+Implementation detail:
+[ADR-0044](adr/0044-resource-waits-resume-on-availability-change.md).
+
+**Decision:** `waiting_resource` is a durable dormant Task state. Main does not poll
+it on a fixed retry timer or charge execution-failure attempts. Startup
+reconciliation and material Worker, Secret, Configuration, route, or lock
+availability changes trigger deduplicated re-evaluation. A signal racing the first
+durable wait is retained. Genuine retryable execution failures remain `queued` and
+bounded by the normal failure retry policy.
+
+**Rationale:** Resource absence is not execution failure. Fixed-delay probing could
+exhaust all retries before a normal Worker heartbeat, waste capacity while nothing
+changed, and strand the Task after the Worker returned.
+
+**Consequence:** A Task may wait for a Device for hours or days and continue when the
+resource becomes eligible, without an owner message or retry-Budget extension.
+Eligibility, Policy, locks, Budgets, leases, and fencing are still revalidated at
+dispatch; older already-terminal Tasks require one explicit owner Retry.

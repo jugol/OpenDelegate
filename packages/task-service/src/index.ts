@@ -1246,6 +1246,9 @@ export {
   type TaskExecutionRequest,
   type TaskExecutionResult,
   type TaskExecutor,
+  type TaskExecutorErrorCode,
+  type TaskExecutorErrorOptions,
+  type TaskExecutorRetryKind,
 } from "./task-execution-coordinator.ts";
 export {
   AuthoritativeWorkerTaskExecutor,

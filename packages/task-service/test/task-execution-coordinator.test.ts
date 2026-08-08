@@ -164,7 +164,7 @@ test("retryable execution failure is bounded durably and cannot run away", async
   await coordinator.close();
 });
 
-test("the final retry preserves a structured waiting-resource explanation", async () => {
+test("a structured resource wait stays durable without consuming failure attempts", async () => {
   const taskService = fixture();
   const coordinator = new TaskExecutionCoordinator({
     taskService,
@@ -182,13 +182,120 @@ test("the final retry preserves a structured waiting-resource explanation", asyn
 
   const task = await coordinator.create(taskInput("resource-explanation", "Need a capable Device"));
   await coordinator.waitForIdle();
-  const failed = await coordinator.get(task.taskId);
+  const waiting = await coordinator.get(task.taskId);
 
-  assert.equal(failed.state, "failed");
-  assert.equal(
-    failed.messages.at(-1)?.content,
-    "No enrolled Device currently satisfies this Work Order.",
+  assert.equal(waiting.state, "waiting_resource");
+  assert.match(
+    waiting.messages.at(-1)?.content ?? "",
+    /No enrolled Device currently satisfies this Work Order/u,
   );
+  assert.match(waiting.messages.at(-1)?.content ?? "", /continue automatically/u);
+  await coordinator.close();
+});
+
+test("a resource availability signal resumes the same attempt without retry Budget usage", async () => {
+  const eventStore = new InMemoryEventStore({ clock });
+  const taskService = new TaskService({ clock, eventStore });
+  let budgetNow = Date.parse(clock.now());
+  const limits = {
+    wallTimeMs: { hard: 60_000 },
+    idleTimeMs: { hard: 30_000 },
+    retries: { hard: 1 },
+    childWorkOrders: { hard: 4 },
+    concurrentRuns: { hard: 2 },
+    nativeTurns: { hard: 8 },
+    tokens: { hard: 100_000 },
+    costUsdMicros: { hard: 1_000_000 },
+  } as const;
+  const budget = new DurableTaskBudgetEnforcer({
+    eventStore,
+    clock: { now: () => budgetNow },
+    instanceLimits: limits,
+    requestedTaskDefaults: limits,
+    autonomousTaskDefaults: limits,
+    usageProxy: {
+      tokensPerNativeTurn: 1_000,
+      costUsdMicrosPerNativeTurn: 10_000,
+    },
+  });
+  const requests: TaskExecutionRequest[] = [];
+  let workerAvailable = false;
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    budget,
+    executor: {
+      async execute(request) {
+        requests.push(request);
+        if (!workerAvailable) {
+          throw new TaskExecutorError("WORKER_OFFLINE", "No eligible Worker is online.", true, {
+            retryKind: "resource",
+          });
+        }
+        return {
+          state: "completed",
+          verifiedCompletionCriteria: [...request.task.completionCriteria],
+        };
+      },
+    },
+    retryDelayMs: 0,
+  });
+
+  const task = await coordinator.create(taskInput("resource-signal", "Resume on availability"));
+  await coordinator.waitForIdle();
+  assert.equal((await coordinator.get(task.taskId)).state, "waiting_resource");
+
+  budgetNow += 31_000;
+  workerAvailable = true;
+  coordinator.notifyResourceAvailabilityChanged();
+  await coordinator.waitForIdle();
+
+  assert.equal((await coordinator.get(task.taskId)).state, "completed");
+  assert.deepEqual(
+    requests.map(({ attempt }) => attempt),
+    [1, 1],
+  );
+  assert.match(requests[1]?.executionKey ?? "", /:attempt:1:resource:1$/u);
+  assert.equal((await budget.snapshot(task.taskId)).usage.retries ?? 0, 0);
+  await coordinator.close();
+});
+
+test("a resource change racing the first wait cannot be lost", async () => {
+  const taskService = fixture();
+  let executionCount = 0;
+  let markFirstStarted: (() => void) | undefined;
+  let releaseFirst: (() => void) | undefined;
+  const firstStarted = new Promise<void>((resolve) => {
+    markFirstStarted = resolve;
+  });
+  const firstReleased = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    executor: {
+      async execute(request) {
+        executionCount += 1;
+        if (executionCount === 1) {
+          markFirstStarted?.();
+          await firstReleased;
+          return { state: "waiting_resource" };
+        }
+        return {
+          state: "completed",
+          verifiedCompletionCriteria: [...request.task.completionCriteria],
+        };
+      },
+    },
+  });
+
+  const task = await coordinator.create(taskInput("resource-race", "Do not lose wakeup"));
+  await firstStarted;
+  coordinator.notifyResourceAvailabilityChanged();
+  releaseFirst?.();
+  await coordinator.waitForIdle();
+
+  assert.equal(executionCount, 2);
+  assert.equal((await coordinator.get(task.taskId)).state, "completed");
   await coordinator.close();
 });
 
@@ -230,7 +337,7 @@ test("the automatic retry budget survives a coordinator process restart", async 
     retryDelayMs: 60_000,
   });
   const task = await firstProcess.create(taskInput("restart-budget", "Restart budget"));
-  await eventually(async () => (await firstProcess.get(task.taskId)).state === "waiting_resource");
+  await eventually(async () => (await firstProcess.get(task.taskId)).state === "queued");
   await firstProcess.close();
 
   const restarted = new TaskExecutionCoordinator({

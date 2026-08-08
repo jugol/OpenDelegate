@@ -134,7 +134,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
   public async observeHeartbeat(
     authenticatedDeviceId: string,
     heartbeat: WorkerHeartbeatV1,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (authenticatedDeviceId !== heartbeat.deviceId) {
       throw new Error("The heartbeat identity does not match the authenticated Device.");
     }
@@ -158,13 +158,13 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
     const previous = this.#heartbeats.get(authenticatedDeviceId);
     if (previous !== undefined) {
       if (heartbeat.observedAtMs < previous.heartbeat.observedAtMs) {
-        return;
+        return false;
       }
       if (heartbeat.observedAtMs === previous.heartbeat.observedAtMs) {
         if (!isDeepStrictEqual(heartbeat, previous.heartbeat)) {
           throw new Error("The Worker reused one heartbeat time for different inventory.");
         }
-        return;
+        return false;
       }
     }
     const durable = await this.#observations?.accept({
@@ -173,20 +173,27 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
       heartbeat,
     });
     if (durable?.disposition === "stale") {
-      return;
+      return false;
     }
     const current = this.#heartbeats.get(authenticatedDeviceId);
     if (current !== undefined) {
       if (heartbeat.observedAtMs < current.heartbeat.observedAtMs) {
-        return;
+        return false;
       }
       if (heartbeat.observedAtMs === current.heartbeat.observedAtMs) {
         if (!isDeepStrictEqual(heartbeat, current.heartbeat)) {
           throw new Error("The Worker reused one heartbeat time for different inventory.");
         }
-        return;
+        return false;
       }
     }
+    const schedulingChanged =
+      current === undefined ||
+      now - current.receivedAtMs > this.#offlineAfterMs ||
+      !isDeepStrictEqual(
+        schedulingAvailabilityView(current.heartbeat),
+        schedulingAvailabilityView(heartbeat),
+      );
     this.#heartbeats.set(
       authenticatedDeviceId,
       Object.freeze({
@@ -194,6 +201,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
         receivedAtMs: now,
       }),
     );
+    return schedulingChanged;
   }
 
   public async list(): Promise<readonly AgentAwareWorkerCandidate[]> {
@@ -727,6 +735,20 @@ function validatePolicies(
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function schedulingAvailabilityView(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => schedulingAvailabilityView(entry));
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !key.endsWith("AtMs"))
+      .map(([key, entry]) => [key, schedulingAvailabilityView(entry)]),
+  );
 }
 
 function validateProfileList(

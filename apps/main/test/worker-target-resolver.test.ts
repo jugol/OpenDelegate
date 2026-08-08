@@ -100,6 +100,7 @@ test("target resolution fails with a retryable structured error when no eligible
     {
       code: "WORKER_OFFLINE",
       retryable: true,
+      retryKind: "resource",
     },
   );
 });

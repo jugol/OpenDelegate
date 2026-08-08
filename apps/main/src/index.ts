@@ -880,6 +880,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
       mainDeviceId: configuration.deviceId,
       ledgerDirectory: join(paths.stateDirectory, "secure-secret-ingest"),
       secretStore: managedSecretStore,
+      onAvailabilityChanged: () => taskExecution?.notifyResourceAvailabilityChanged(),
     });
     const configuredDatabaseReference =
       configuration.database.adapter === "postgresql" ? configuration.database.uriRef : undefined;
@@ -974,6 +975,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         nextId: () => `approval_${randomUUID()}`,
       },
       lifecycle: discordBindingLifecycle,
+      onConfigurationApplied: () => taskExecution?.notifyResourceAvailabilityChanged(),
       ...(configuration.deviceChannel === undefined
         ? {}
         : {
@@ -1057,6 +1059,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         }),
         authorizeMutation: authorizeMainConfigurationMutation,
         approvalRequester: approvalRuntime.requester,
+        onConfigurationApplied: () => taskExecution?.notifyResourceAvailabilityChanged(),
       });
     }
     const configuredConfigurationAgent =
@@ -1234,7 +1237,12 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             ...(options.deviceChannel?.listenerFactory === undefined
               ? {}
               : { listenerFactory: options.deviceChannel.listenerFactory }),
-            onHeartbeat: (deviceId, heartbeat) => fleet!.observeHeartbeat(deviceId, heartbeat),
+            onHeartbeat: async (deviceId, heartbeat) => {
+              const schedulingChanged = await fleet!.observeHeartbeat(deviceId, heartbeat);
+              if (schedulingChanged) {
+                taskExecution?.notifyResourceAvailabilityChanged();
+              }
+            },
             onEvents: async (deviceId, events) => {
               if (authoritativeWorkerExecutor === undefined) {
                 throw new Error("The authoritative Worker executor is not ready.");

@@ -148,7 +148,8 @@ test("Coordinator profile fails closed when it selects a different active adapte
 
   await assert.rejects(resolveCoordinatorSessionBinding(profile, adapter), {
     code: "MAIN_AGENT_PROFILE_UNAVAILABLE",
-    retryable: false,
+    retryable: true,
+    retryKind: "resource",
   });
 });
 
@@ -821,6 +822,7 @@ function request(attempt: number, ownerMessage?: string): TaskExecutionRequest {
     attempt,
     executionKey: `task-execution:task_release:attempt:${attempt}`,
     planningKey: "task-execution:task_release:attempt:1",
+    resourceResume: false,
     signal: controller.signal,
     task: {
       taskId: "task_release",

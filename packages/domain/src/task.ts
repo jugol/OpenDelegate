@@ -95,6 +95,7 @@ const allowedTransitions = {
     "cancelled",
   ],
   running: [
+    "queued",
     "waiting_user",
     "waiting_resource",
     "review",
