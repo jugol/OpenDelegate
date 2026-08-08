@@ -94,6 +94,28 @@ reports Computer Use as unavailable by configuration instead of repeatedly faili
 a graphical service. Enabling a graphical helper later requires an explicit new
 two-plane preparation and service document.
 
+When this Device is also the fixed Main, do not install the Worker document. While
+running under the same named systemd credential, derive one create-new Main document:
+
+```text
+opendelegate service document \
+  --worker-config /tmp/opendelegate-worker.json \
+  --output /tmp/opendelegate-main.json \
+  --home /var/lib/opendelegate-runtime/state
+opendelegate service plan install \
+  --config /tmp/opendelegate-main.json \
+  --home /var/lib/opendelegate-runtime/state
+```
+
+The first command proves that the initialized Main and local Worker use the same
+Instance, Device, state root, and systemd credential mapping, while carrying forward
+the Worker's already reviewed service identity. It changes only the runtime role and
+effective Main preference. Run both commands in a
+credential-bearing transient unit when Main uses
+`linux-systemd-credential-vault`; PostgreSQL and protected Configuration inspection
+must never receive a credential through argv or the environment. A headless Main
+must keep `admin.open-on-login` disabled because it has no login helper.
+
 A Windows Main or Worker install or upgrade includes the non-secret binding emitted
 by `worker windows-service-secret-stage`. Main stages the same binding because its
 service hosts a co-located local Worker:
@@ -130,8 +152,9 @@ opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
 opendelegate service plan install --config ABSOLUTE_NEW_PATH
 ```
 
-This production-shaped path is wired for staged Windows and explicitly headless
-systemd Linux. macOS and graphical Linux fail closed until their separate
+This production-shaped path is wired for staged Windows, explicitly headless
+systemd Linux Workers, and a headless Main derived from its co-located Worker.
+macOS and graphical Linux fail closed until their separate
 service-account and owner-session Secret migration is implemented; a hand-authored
 document is not a substitute.
 

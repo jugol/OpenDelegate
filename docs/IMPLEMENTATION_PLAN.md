@@ -442,6 +442,12 @@ Make Main and Worker roles truly persistent on all target operating systems.
   non-root identity, and omitting the unavailable helper entirely. macOS and
   graphical Linux remain required and must fail closed until their equivalent
   two-plane migration exists.
+- Compose a headless Linux Main document from its co-located Worker's already
+  prepared core-only document rather than accepting a second hand-authored
+  topology. Bind the durable Instance, Device, state root, systemd credential, and
+  disabled helper shape, and carry forward the prepared service identity, before
+  changing only the runtime role and effective Main preference, as specified by
+  D-090.
 - Build release bundles and smoke them on clean hosts using isolated temporary state
   and dynamically selected adjacent loopback listeners.
 - Keep bundle assembly independent from service activation. Installed systems switch

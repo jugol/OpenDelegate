@@ -59,6 +59,7 @@ approved product specification.
 36. [`0039-change-scoped-pull-request-validation.md`](0039-change-scoped-pull-request-validation.md)
 37. [`0040-windows-worker-service-preparation-binding.md`](0040-windows-worker-service-preparation-binding.md)
 38. [`0041-headless-linux-worker-service-preparation.md`](0041-headless-linux-worker-service-preparation.md)
+39. [`0042-headless-linux-main-service-composition.md`](0042-headless-linux-main-service-composition.md)
 
 ## Proposed ADRs
 

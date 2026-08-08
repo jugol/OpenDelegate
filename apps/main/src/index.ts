@@ -3274,6 +3274,12 @@ export {
   type EffectiveMainServiceConfigurationInput,
 } from "./main-service-configuration.ts";
 export {
+  composeHeadlessLinuxMainServiceDocument,
+  parseMainServiceDocumentArguments,
+  writeMainServiceDocument,
+  type ParsedMainServiceDocumentArguments,
+} from "./main-service-document.ts";
+export {
   MainActionAuthorizationRuntime,
   type MainActionAuthorizationRuntimeOptions,
   type MainActionRunAuthorityPort,

@@ -27,14 +27,17 @@ test("headless Linux has no implicit Secret Service fallback", async () => {
 });
 
 test("an explicit systemd credential vault is persisted as non-secret metadata", () => {
+  const encryptedCredentialFile = resolve("runtime/credentials/opendelegate-vault-key.cred");
   const configuration = validateMainSecretBackendConfiguration({
     backend: "linux-systemd-credential-vault",
     credentialName: "opendelegate-main-vault-key",
+    encryptedCredentialFile,
     vaultRoot: resolve("runtime/secrets/main"),
   });
 
   assert.equal(configuration.backend, "linux-systemd-credential-vault");
   assert.equal(configuration.credentialName, "opendelegate-main-vault-key");
+  assert.equal(configuration.encryptedCredentialFile, encryptedCredentialFile);
   assert.doesNotMatch(JSON.stringify(configuration), /credential-value|password|token/u);
 });
 

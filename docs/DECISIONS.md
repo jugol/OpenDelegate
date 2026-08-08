@@ -1782,3 +1782,24 @@ an explicit graphical service re-preparation; OpenDelegate never places the help
 key in the core vault or silently widens a core-only installation. D-088's statement
 that all Linux service documents remain blocked is superseded only for this
 headless core-only shape; macOS and graphical Linux remain blocked.
+
+## D-090 — Headless Linux Main reuses its co-located Worker's prepared service facts
+
+Implementation detail: [ADR-0042](adr/0042-headless-linux-main-service-composition.md).
+
+**Decision:** A headless Linux Main service document is derived from the strictly
+validated core-only document produced for Main's co-located Worker. Composition
+requires the durable Main and Worker Instance ID, Device ID, state root, and named
+systemd credential to match, and rejects any helper authority. It changes the role
+to `main`, resolves the durable Admin auto-open preference, and writes a create-new
+document. Headless auto-open must remain disabled because no login helper exists.
+
+**Rationale:** Main is a normal Device and the native core already supervises Main
+plus its local Worker as one workload. A second hand-authored topology would
+duplicate security-sensitive facts and permit drift without creating a useful new
+privilege boundary.
+
+**Consequence:** A NAS Main can use one reviewed systemd core definition and one
+encrypted credential mapping for both local roles. The command does not install or
+elevate, and clean-host restart, reboot, credential, network, upgrade, rollback, and
+uninstall evidence remains required before support promotion.

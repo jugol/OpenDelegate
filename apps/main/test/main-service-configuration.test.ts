@@ -272,6 +272,68 @@ test("Main service rendering replaces template state with the effective owner pr
   });
 });
 
+test("a headless Main rejects an enabled Admin auto-open preference it cannot honor", async () => {
+  const configuration = configurationService();
+  const graphical = serviceConfiguration({ enabled: false });
+  if (graphical.platform !== "linux") {
+    throw new Error("Expected a Linux service fixture.");
+  }
+  const headless = {
+    ...graphical,
+    helperSecretBinding: null,
+    systemdCredential: {
+      credentialName: "opendelegate-vault-key",
+      encryptedSourcePath: "/etc/credstore.encrypted/opendelegate-vault-key.cred",
+    },
+    ipcTrust: { protocolVersion: 2 as const, core: graphical.ipcTrust.core },
+    secretReferences: {
+      deviceIdentity: "secret://linux/device-identity",
+      coreIpcSigningKey: "secret://linux/core-ipc-signing-v2",
+    },
+  };
+  const disabled = await resolveEffectiveMainServiceConfiguration({
+    command: "render",
+    home: "/var/lib/opendelegate",
+    hostPlatform: "linux",
+    service: configuration,
+    main: mainConfiguration(),
+    template: headless,
+  });
+  assert.deepEqual(disabled.configuration.ownerSession.adminAutoOpen, { enabled: false });
+  assert.deepEqual(disabled.alternateConfiguration.ownerSession.adminAutoOpen, {
+    enabled: false,
+  });
+
+  const proposal = await configuration.propose({
+    actor: "owner_personal",
+    reason: "Open Admin after owner login.",
+    changes: [
+      {
+        operation: "set",
+        key: "admin.open-on-login",
+        scope: { kind: "main", id: "device_main" },
+        value: true,
+      },
+    ],
+  });
+  await configuration.apply({
+    proposalId: proposal.id,
+    expectedRevision: 0,
+    actor: "owner_personal",
+  });
+  await assert.rejects(
+    resolveEffectiveMainServiceConfiguration({
+      command: "render",
+      home: "/var/lib/opendelegate",
+      hostPlatform: "linux",
+      service: configuration,
+      main: mainConfiguration(),
+      template: headless,
+    }),
+    /must be disabled.*headless Main/iu,
+  );
+});
+
 test("Main service rendering rejects a Worker or a template for another Instance", async () => {
   const configuration = configurationService();
   await assert.rejects(

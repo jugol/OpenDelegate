@@ -223,6 +223,11 @@ opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
 opendelegate service plan install --config ABSOLUTE_NEW_PATH
 ```
 
+If this enrolled Device is also the fixed Main, do not install the Worker document. Feed it to
+`opendelegate service document --worker-config ABSOLUTE_NEW_PATH --output NEW_MAIN_PATH --home MAIN_HOME`
+while the same systemd credential is loaded, review the Main install plan, and install only that
+Main document. The resulting core service starts Main and this local Worker together.
+
 The output is create-new and contains no Secret values. Review the plan, then run the separately
 elevated `service install` with a caller-stable command ID. The installer independently verifies the
 SID before mutation; the service imports the SID-protected handoff into its own CurrentUser DPAPI
