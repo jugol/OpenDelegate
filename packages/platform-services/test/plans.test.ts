@@ -67,6 +67,16 @@ test("install/start/stop/restart plans are deterministic and supervise both plan
     );
     assert.ok(configRootIndex >= 0 && configRootIndex < firstRenderedFileIndex);
     assert.ok(manifestRootIndex >= 0 && manifestRootIndex < firstRenderedFileIndex);
+    if (configuration.platform === "windows") {
+      const promoteIndex = install.steps.findIndex((step) => step.id === "promote-release");
+      const secureReleaseIndex = install.steps.findIndex(
+        (step) => step.id === "secure-release-root",
+      );
+      const activateIndex = install.steps.findIndex((step) => step.id === "activate-release");
+      assert.ok(promoteIndex < secureReleaseIndex && secureReleaseIndex < activateIndex);
+    } else {
+      assert.equal(install.steps.some((step) => step.id === "secure-release-root"), false);
+    }
     assert.ok(install.steps.some((step) => step.action.kind === "release.stage"));
     assert.ok(install.steps.some((step) => step.action.kind === "health.check"));
     assert.ok(

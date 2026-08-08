@@ -661,6 +661,16 @@ function releaseInstallSteps(artifacts: PlatformServiceArtifacts): readonly Serv
         releaseDirectory: definition.releaseDirectory,
       },
     },
+    ...(definition.configuration.platform === "windows"
+      ? [
+          directoryStep(
+            "secure-release-root",
+            definition.releaseDirectory,
+            "0750",
+            directoryAccess(definition.configuration, "read-execute"),
+          ),
+        ]
+      : []),
     {
       id: "activate-release",
       description: "Atomically activate the installed release through current.",

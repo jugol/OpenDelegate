@@ -485,6 +485,15 @@ test("Windows Worker install accepts the release and staging root actions after 
     ),
     false,
   );
+  assert.ok(
+    icaclsRequests.some(
+      (request) =>
+        request.arguments[0] === "C:\\Program Files\\OpenDelegate\\releases\\1.2.3" &&
+        request.arguments.includes("/grant:r") &&
+        request.arguments.includes("/T") &&
+        request.arguments.includes("/C"),
+    ),
+  );
 });
 
 test("preflight checks every native tool and publisher trust before mutation", async () => {
