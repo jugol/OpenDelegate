@@ -207,6 +207,11 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
   private constructor(options: ConnectWorkerDeviceChannelOptions, socket: WebSocket) {
     this.options = options;
     this.socket = socket;
+    this.socket.once("close", () => {
+      this.rejectPendingRequests(
+        new DeviceChannelClientError("The Worker Device channel disconnected."),
+      );
+    });
   }
 
   public static async connect(
@@ -604,6 +609,25 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     }
     this.closed = true;
     const error = new DeviceChannelClientError("The Worker Device channel closed.");
+    this.rejectPendingRequests(error);
+    if (this.socket.readyState === WebSocket.CLOSED) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.socket.terminate();
+        resolve();
+      }, 1_000);
+      timeout.unref();
+      this.socket.once("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      this.socket.close(1000, "Worker shutdown");
+    });
+  }
+
+  private rejectPendingRequests(error: DeviceChannelClientError): void {
     for (const waiter of this.waiters.values()) {
       waiter.reject(error);
     }
@@ -624,21 +648,6 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
       waiter.reject(error);
     }
     this.runLeaseWaiters.clear();
-    if (this.socket.readyState === WebSocket.CLOSED) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        this.socket.terminate();
-        resolve();
-      }, 1_000);
-      timeout.unref();
-      this.socket.once("close", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-      this.socket.close(1000, "Worker shutdown");
-    });
   }
 
   private async open(connectTimeoutMs: number): Promise<void> {
