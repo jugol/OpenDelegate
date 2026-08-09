@@ -110,6 +110,19 @@ test("diagnostic sanitization copies only allowlisted inert values", () => {
     retryable: true,
   });
   assert.equal(getterRead, false);
+  assert.deepEqual(
+    sanitizeWorkerDiagnostic({
+      code: "WORKSPACE_RESOLUTION_FAILED",
+      stage: "startup",
+      retryable: true,
+      detail: "private path",
+    }),
+    {
+      code: "WORKSPACE_RESOLUTION_FAILED",
+      stage: "startup",
+      retryable: true,
+    },
+  );
 });
 
 test("the local repository refuses an incompatible durable state document", async () => {

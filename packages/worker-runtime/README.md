@@ -89,6 +89,11 @@ Registration is idempotent only for the exact same path identity and metadata.
 `opendelegate-worktree` isolation it composes `ManagedGitWorktreeManager` and derives
 a stable, opaque worktree identity from Task, workstream, and Workspace. Follow-up
 Runs therefore reuse the same worktree while unrelated workstreams remain isolated.
+Production Worker composition uses the configured first Workspace as its default.
+For installations created before that configuration link existed, exactly one
+active registered Workspace is also an unambiguous default. Zero or multiple
+registered Workspaces still require an explicit Work Order `workspaceId` and fail
+closed instead of guessing.
 
 The manager creates detached worktrees from the registered repository's current
 commit with bounded, non-shell Git subprocesses. Its checksummed local journal

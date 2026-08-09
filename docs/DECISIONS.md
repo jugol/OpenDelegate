@@ -1983,3 +1983,28 @@ like independent Discord participants or exposing Device-local execution details
 **Consequence:** Owners see a concise current picture of Main and subordinate Device
 work near the active turn. Questions, failures, and results remain the only durable
 chronological replies, while stale or overly frequent progress is safely discarded.
+
+## D-099 — Scheduling preserves exact execution metadata and repairs singleton Workspace defaults
+
+Implementation detail:
+[ADR-0051](adr/0051-scheduling-metadata-and-singleton-workspace-default.md).
+
+**Decision:** Every Main-owned Worker projection used for deterministic Agent
+selection preserves the provider model's supported effort values. Owner-safe Device
+planning context also includes opaque registered Workspace IDs. A Worker uses its
+configured first Workspace as the default; when an older or CLI-created installation
+has no configured default and exactly one active registered Workspace, production
+composition selects that singleton deterministically. Zero or multiple registered
+Workspaces still require an explicit Work Order `workspaceId`.
+
+**Rationale:** Dropping model effort metadata can falsely exclude a ready Device,
+while advertising a registered Workspace without giving the Run bridge any default
+causes dispatch to succeed and process startup to fail. Both defects appeared as an
+incorrect offline wait during live multi-Device QA even though the authenticated
+Workers were online and ready.
+
+**Consequence:** Exact Device Agent profiles remain schedulable through all
+projections, one-Workspace upgrades work without editing Device-local configuration,
+and multi-Workspace Devices remain fail-closed and explicit. Workspace startup
+failures use a stable owner-safe diagnostic rather than the generic process-start
+code.

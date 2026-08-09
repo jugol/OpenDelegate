@@ -1102,6 +1102,7 @@ interface PlanningDeviceObservation {
   readonly lastObservation?: DeviceSummaryV1["lastObservation"];
   readonly roles: readonly string[];
   readonly capabilities: readonly string[];
+  readonly workspaceIds: readonly string[];
   readonly readyAgentAdapters: readonly {
     readonly provider: string;
     readonly adapterId: string;
@@ -1166,6 +1167,7 @@ function projectPlanningDeviceContext(
             (capability: NonNullable<DeviceSummaryV1["capabilities"]>[number]) => capability.name,
           ),
       ),
+      workspaceIds: Object.freeze([...(device.workspaceIds ?? [])]),
       readyAgentAdapters: Object.freeze(
         (device.agentAdapters ?? [])
           .filter(
@@ -1215,6 +1217,7 @@ function planningContextInstructions(
   }
   return Object.freeze([
     "The following JSON is a current, bounded, Main-owned, owner-safe Device snapshot for planning target preferences. Only verified capability names are included:",
+    "Workspace IDs are opaque registered execution roots. Set workspaceId when an outcome requires a specific Workspace. When a Device has exactly one registered Workspace, OpenDelegate can select that singleton deterministically if workspaceId is omitted; multiple Workspaces require an explicit choice.",
     "For an offline Worker, wakeOnLan is its last authenticated target observation. relay-required means the target reported magic-packet wake enabled, but OpenDelegate has no verified online relay and must not claim that it can wake the Device.",
     JSON.stringify({ schemaVersion: 1, devices }),
   ]);

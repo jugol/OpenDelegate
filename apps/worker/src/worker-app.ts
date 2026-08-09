@@ -898,6 +898,18 @@ export async function createWorkerRuntime(
       await workspaceRegistry.register(workspace);
     }
   }
+  const configuredDefaultWorkspaceId = configuration.workspaces[0]?.workspaceId;
+  const activeRegisteredWorkspaces =
+    configuredDefaultWorkspaceId === undefined
+      ? (await workspaceRegistry.listSchedulingMetadata()).filter(
+          (workspace) => workspace.state === "active",
+        )
+      : Object.freeze([]);
+  const singletonRegisteredWorkspaceId =
+    activeRegisteredWorkspaces.length === 1
+      ? activeRegisteredWorkspaces[0]?.workspaceId
+      : undefined;
+  const defaultWorkspaceId = configuredDefaultWorkspaceId ?? singletonRegisteredWorkspaceId;
   const knowledge = new LocalKnowledgeService({ root: options.paths.knowledgeDirectory });
   await knowledge.rebuild();
   const runCapabilityBroker = await LocalRunCapabilityBroker.listen({
@@ -964,9 +976,7 @@ export async function createWorkerRuntime(
     artifactLifecycle,
     workspaceResolver: new RegisteredWorkerWorkspaceResolver({
       registry: workspaceRegistry,
-      ...(configuration.workspaces[0] === undefined
-        ? {}
-        : { defaultWorkspaceId: configuration.workspaces[0].workspaceId }),
+      ...(defaultWorkspaceId === undefined ? {} : { defaultWorkspaceId }),
     }),
     initialContextProvider: new LocalKnowledgeInitialContextProvider({ knowledge }),
     runCapabilityProvider: new CompositeWorkerRunCapabilityProvider([

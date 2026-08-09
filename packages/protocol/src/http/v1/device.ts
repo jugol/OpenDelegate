@@ -352,6 +352,12 @@ export const DeviceSummarySchema = Type.Object(
         uniqueItems: true,
       }),
     ),
+    workspaceIds: Type.Optional(
+      Type.Array(OpaqueIdSchema, {
+        maxItems: 128,
+        uniqueItems: true,
+      }),
+    ),
     agentAdapters: Type.Optional(
       Type.Array(DeviceAgentAdapterSchema, {
         maxItems: 64,

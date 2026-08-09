@@ -50,6 +50,13 @@ test("authenticated heartbeat becomes scheduling and Admin metadata without loca
     { name: "computer-use", verification: "verified" },
   ]);
   assert.deepEqual(candidate?.workspaceIds, ["workspace-product"]);
+  assert.deepEqual(candidate?.agentAdapters?.[0]?.models, [
+    {
+      modelId: "gpt-5.6-sol",
+      isDefault: true,
+      supportedEfforts: ["medium", "high", "xhigh"],
+    },
+  ]);
   assert.deepEqual(candidate?.availableSecretRefs, ["registry-token"]);
   assert.deepEqual(candidate?.transports, [
     {
@@ -147,6 +154,7 @@ test("authenticated heartbeat becomes scheduling and Admin metadata without loca
       { name: "computer-use", verification: "verified" },
     ],
     policies: [],
+    workspaceIds: ["workspace-product"],
     agentAdapters: [
       {
         provider: "codex",
@@ -156,6 +164,15 @@ test("authenticated heartbeat becomes scheduling and Admin metadata without loca
         version: "1.2.3",
         availableUpgrade: { packageName: "@openai/codex", targetVersion: "1.2.4" },
         observedAtMs: 9_900,
+        modelCatalogObservedAtMs: 9_900,
+        models: [
+          {
+            modelId: "gpt-5.6-sol",
+            displayName: "GPT-5.6 Sol",
+            isDefault: true,
+            supportedEfforts: ["medium", "high", "xhigh"],
+          },
+        ],
       },
     ],
     agentExecutionProfile: {
@@ -482,6 +499,15 @@ function heartbeat(overrides: Partial<WorkerHeartbeatV1> = {}): WorkerHeartbeatV
           version: "1.2.3",
           availableUpgrade: { packageName: "@openai/codex", targetVersion: "1.2.4" },
           observedAtMs: 9_900,
+          modelCatalogObservedAtMs: 9_900,
+          models: [
+            {
+              modelId: "gpt-5.6-sol",
+              displayName: "GPT-5.6 Sol",
+              isDefault: true,
+              supportedEfforts: ["medium", "high", "xhigh"],
+            },
+          ],
         },
       ],
       wakeOnLan: {

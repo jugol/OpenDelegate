@@ -77,6 +77,7 @@ function workerSummary(deviceId = "device-main"): DeviceSummaryV1 {
         effectiveScope: "device",
       },
     ],
+    workspaceIds: ["workspace-product"],
     agentAdapters: [
       {
         provider: "codex",
@@ -147,6 +148,7 @@ test("co-located Main and Worker roles project as one authoritative Device", () 
   assert.equal(merged.serviceMode, "system-service");
   assert.deepEqual(merged.capabilities, workerSummary().capabilities);
   assert.deepEqual(merged.agentAdapters, workerSummary().agentAdapters);
+  assert.deepEqual(merged.workspaceIds, ["workspace-product"]);
   assert.deepEqual(merged.resourceLocks, workerSummary().resourceLocks);
   assert.deepEqual(merged.currentRuns, workerSummary().currentRuns);
   assert.deepEqual(

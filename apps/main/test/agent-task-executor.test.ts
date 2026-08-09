@@ -702,6 +702,7 @@ test("Main planning exposes only verified capabilities and never Device instruct
             { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
             { name: "DEGRADED_CAPABILITY_SENTINEL", verification: "degraded" },
           ],
+          workspaceIds: ["workspace-build"],
           wakeOnLan: {
             targetState: "enabled",
             automaticWakeState: "relay-required",
@@ -724,6 +725,8 @@ test("Main planning exposes only verified capabilities and never Device instruct
   assert.equal(planned.state, "ready");
   const prompt = adapter.starts[0]?.prompt ?? "";
   assert.match(prompt, /"capabilities":\["codex"\]/u);
+  assert.match(prompt, /"workspaceIds":\["workspace-build"\]/u);
+  assert.match(prompt, /multiple Workspaces require an explicit choice/u);
   assert.match(
     prompt,
     /"wakeOnLan":\{"targetState":"enabled","automaticWakeState":"relay-required","observedAtMs":9900\}/u,

@@ -722,13 +722,21 @@ export class WorkerRuntime {
     } catch (error: unknown) {
       const requirementUnavailable =
         error instanceof AgentRunBridgeError && error.code === "AGENT_REQUIREMENT_UNAVAILABLE";
+      const workspaceUnavailable =
+        error instanceof AgentRunBridgeError && error.code === "WORKSPACE_RESOLUTION_FAILED";
       await this.finalizeRun(assignment.runId, {
         type: "worker.run.failed",
         report: requirementUnavailable
           ? "The Worker could not satisfy the immutable Agent requirement for this Run."
-          : "The Worker could not start the Run.",
+          : workspaceUnavailable
+            ? "The Worker could not resolve a registered Workspace for this Run."
+            : "The Worker could not start the Run.",
         diagnostic: sanitizeWorkerDiagnostic({
-          code: requirementUnavailable ? "AGENT_REQUIREMENT_UNAVAILABLE" : "PROCESS_START_FAILED",
+          code: requirementUnavailable
+            ? "AGENT_REQUIREMENT_UNAVAILABLE"
+            : workspaceUnavailable
+              ? "WORKSPACE_RESOLUTION_FAILED"
+              : "PROCESS_START_FAILED",
           stage: "startup",
           retryable: error instanceof AgentRunBridgeError ? error.retryable : true,
           cause: error,

@@ -17,6 +17,7 @@ import {
 } from "@opendelegate/transport";
 
 import {
+  AgentRunBridgeError,
   WorkerRuntime,
   WorkerRuntimeError,
   createSqliteWorkerStateRepository,
@@ -384,6 +385,49 @@ test("a custom Run process cannot put paths or provider identifiers in progress"
       (await runtime.pendingOutbox()).some((event) => event.type === "worker.run.progress"),
       false,
     );
+  } finally {
+    await runtime.close();
+    repository.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Workspace startup failure preserves an owner-safe diagnostic", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-worker-workspace-failure-"));
+  const repository = createSqliteWorkerStateRepository({
+    filename: join(directory, "worker.sqlite"),
+  });
+  const runtime = await WorkerRuntime.create({
+    configuration: configuration(),
+    repository,
+    processFactory: {
+      start: () =>
+        Promise.reject(
+          new AgentRunBridgeError(
+            "WORKSPACE_RESOLUTION_FAILED",
+            "Private Workspace path detail.",
+            true,
+          ),
+        ),
+    },
+    clock: { now: () => 1_000 },
+  });
+
+  try {
+    assert.equal((await runtime.acceptAssignment(assignment())).disposition, "accepted");
+    const failed = (await runtime.pendingOutbox()).find(
+      (event) => event.type === "worker.run.failed",
+    );
+    assert.deepEqual(failed?.payload.diagnostic, {
+      code: "WORKSPACE_RESOLUTION_FAILED",
+      retryable: true,
+      stage: "startup",
+    });
+    assert.equal(
+      failed?.payload.report,
+      "The Worker could not resolve a registered Workspace for this Run.",
+    );
+    assert.doesNotMatch(JSON.stringify(failed), /Private Workspace path detail/u);
   } finally {
     await runtime.close();
     repository.close();
