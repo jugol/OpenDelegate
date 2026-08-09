@@ -740,6 +740,11 @@ may request a transition but cannot manufacture a state outside the transition r
     provider messages do not leave the Device. Provider usage is aggregated across
     the root and child native threads before it reaches Run and Task Budget
     accounting.
+21. When a bridged provider starts native child sessions, each Run-scoped local MCP
+    capability may authenticate at most the root session plus four simultaneous
+    child sessions. All clients share the same immutable Task, Work Order, Run,
+    Device, lease, fence, expiry, Workspace, tool allow-list, and Policy authority;
+    disposal or authority loss revokes every connection together.
 
 ### FR-10 — Context isolation and compaction
 

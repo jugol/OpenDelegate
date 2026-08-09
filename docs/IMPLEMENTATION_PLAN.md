@@ -538,6 +538,10 @@ Replace fake agents with resumable, observable first-class providers.
   Run to four children and one nesting level, preserve the parent Workspace,
   sandbox, Task, and Policy callback, and normalize only privacy-safe lifecycle
   evidence. Main remains the only cross-Device Work Order scheduler.
+- Keep local MCP capability descriptors single-connection by default. For an exact
+  bridged native-Agent Run, permit no more than five simultaneous authenticated
+  connections (one root plus four children), rechecking the same lease, fence, and
+  current-execution authority before every request and revoking them as one unit.
 - Route provider approval mechanisms through OpenDelegate Policy.
 - Implement native-session registry with Device, provider, session ID, Workspace,
   working directory/worktree, adapter version, single-writer lease, and lineage.
@@ -564,6 +568,10 @@ Replace fake agents with resumable, observable first-class providers.
 - A bridged Worker can complete bounded local parallel work with native child
   Agents; a fifth child fails closed, CLI fallbacks never claim the Capability, and
   no child prompt or provider-native identity reaches Main.
+- Parent and child provider sessions can initialize the same Run-scoped Artifact,
+  Knowledge, Computer Use, and platform-mutation MCP capabilities without a stale
+  one-use descriptor failure; a sixth simultaneous claim fails closed and Run
+  disposal closes all clients.
 - Simulated session deletion continues from checkpoint with an explicit lineage
   change.
 

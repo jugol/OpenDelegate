@@ -121,7 +121,10 @@ Knowledge files used only as selective context for agents running on that Device
     sandbox, provider session, and Policy callback. Main alone creates cross-Device
     Work Orders. One Run may create at most four native children with one nesting
     level, and OpenDelegate observes their lifecycle without exporting private
-    prompts or provider thread identities.
+    prompts or provider thread identities. Run-scoped local tool capabilities may
+    accept only the parent plus those four simultaneous provider sessions; every
+    connection retains the same exact Run binding and creates no additional
+    authority.
 
 ## Core domain terms
 

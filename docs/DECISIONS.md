@@ -1932,3 +1932,26 @@ then left the provider turn alive after its child tool failed.
 waiting for the first Bash tool to expose host incompatibility. Owners may still
 make an audited Device-policy change separately, but adapter selection never treats
 that security weakening as installation repair.
+
+## D-097 — Native child sessions share one bounded Run-capability authority
+
+Implementation detail:
+[ADR-0049](adr/0049-native-child-run-capability-fanout.md).
+
+**Decision:** Local Run capabilities remain single-connection by default. When the
+exact execution plan enables provider-native child Agents through Codex App Server
+or Claude Agent SDK, the descriptor may authenticate at most five simultaneous
+clients: the root provider session and four children. Every client is bound to the
+same Task, Work Order, Run, Device, lease, fence, expiry, Workspace, tool allow-list,
+and Policy callback. Revocation or disposal closes them together.
+
+**Rationale:** Live NAS testing proved that Codex initializes inherited MCP servers
+inside every child session. Deleting the descriptor after the root MCP claim caused
+all child starts to fail before their first turn, even though provider delegation
+itself was correctly enabled. A bounded shared bearer adds no authority because the
+root process already holds that exact bearer and tool surface.
+
+**Consequence:** Native children can use inherited Artifact, Knowledge, Computer
+Use, and platform-mutation bridges without stale-descriptor startup failure. A
+non-native Run retains one-use behavior, a sixth simultaneous connection fails
+closed, and no client can widen or outlive the parent Run.

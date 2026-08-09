@@ -159,6 +159,7 @@ export class WorkerPlatformMutationRunCapabilityProvider implements WorkerRunCap
   public async prepare(context: {
     readonly assignment: WorkerRunAssignmentV1;
     readonly workspace: WorkspaceBinding;
+    readonly maxConcurrentConnections?: number;
     readonly leaseAuthority?: WorkerRunLeaseAuthority;
     isExecutionCurrent(): Promise<boolean>;
   }): Promise<WorkerRunCapabilityLease | undefined> {
@@ -193,6 +194,7 @@ export class WorkerPlatformMutationRunCapabilityProvider implements WorkerRunCap
     try {
       brokerLease = await this.#options.broker.register({
         capability: PLATFORM_MUTATION_CAPABILITY,
+        maxConcurrentConnections: context.maxConcurrentConnections ?? 1,
         binding,
         metadata: {
           schemaVersion: PLATFORM_MUTATION_SCHEMA_VERSION,

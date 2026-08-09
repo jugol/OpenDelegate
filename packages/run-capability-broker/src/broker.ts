@@ -28,6 +28,8 @@ import {
 const DEFAULT_MAX_FRAME_BYTES = 256 * 1024;
 const MAXIMUM_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_IN_FLIGHT_REQUESTS = 16;
+const DEFAULT_MAX_CONCURRENT_CONNECTIONS = 1;
+const MAXIMUM_MAX_CONCURRENT_CONNECTIONS = 16;
 const CAPABILITY_FILE_BYTES = 64 * 1024;
 const MAXIMUM_UNIX_SOCKET_PATH_BYTES = 100;
 const UNIX_ENDPOINT_DIRECTORY_PREFIX = "odc-";
@@ -41,12 +43,13 @@ interface RegisteredCapability {
   readonly binding: RunCapabilityBinding;
   readonly metadata: RunCapabilityJsonValue;
   readonly expiresAtMs: number;
+  readonly maxConcurrentConnections: number;
   readonly capabilityFile: string;
   readonly currentBinding: RunCapabilityRegistration["currentBinding"];
   readonly isExecutionCurrent: RunCapabilityRegistration["isExecutionCurrent"];
   readonly handler: RunCapabilityRegistration["handler"];
   readonly sockets: Set<Socket>;
-  consumed: boolean;
+  claimed: boolean;
   disposed: boolean;
 }
 
@@ -140,10 +143,15 @@ export class LocalRunCapabilityBroker {
     const binding = normalizeBinding(input.binding);
     const metadata = normalizeJsonValue(input.metadata, this.#options.maxFrameBytes / 2);
     const expiresAtMs = requireTimestamp(input.expiresAtMs);
+    const maxConcurrentConnections =
+      input.maxConcurrentConnections === undefined
+        ? DEFAULT_MAX_CONCURRENT_CONNECTIONS
+        : requirePositiveInteger(input.maxConcurrentConnections);
     const now = readClock(this.#options.clock);
     if (
       expiresAtMs <= now ||
       expiresAtMs > binding.leaseExpiresAtMs ||
+      maxConcurrentConnections > MAXIMUM_MAX_CONCURRENT_CONNECTIONS ||
       typeof input.currentBinding !== "function" ||
       typeof input.isExecutionCurrent !== "function" ||
       typeof input.handler !== "function"
@@ -171,6 +179,7 @@ export class LocalRunCapabilityBroker {
       token: token.toString("base64url"),
       expiresAtMs,
       maxFrameBytes: this.#options.maxFrameBytes,
+      maxConcurrentConnections,
     };
     const registration: RegisteredCapability = {
       capabilityId,
@@ -179,12 +188,13 @@ export class LocalRunCapabilityBroker {
       binding,
       metadata,
       expiresAtMs,
+      maxConcurrentConnections,
       capabilityFile,
       currentBinding: input.currentBinding,
       isExecutionCurrent: input.isExecutionCurrent,
       handler: input.handler,
       sockets: new Set(),
-      consumed: false,
+      claimed: false,
       disposed: false,
     };
     if (safeCurrentBinding(registration) === undefined) {
@@ -263,7 +273,8 @@ export class LocalRunCapabilityBroker {
       if (
         registration === undefined ||
         registration.disposed ||
-        registration.consumed ||
+        (registration.maxConcurrentConnections === 1 && registration.claimed) ||
+        registration.sockets.size >= registration.maxConcurrentConnections ||
         registration.capability !== claim.capability
       ) {
         await writeClaimError(socket, "CAPABILITY_CONSUMED", this.#options.maxFrameBytes);
@@ -277,6 +288,9 @@ export class LocalRunCapabilityBroker {
       if (!tokenMatches) {
         throw new RunCapabilityBrokerError("CAPABILITY_CONSUMED");
       }
+      // Reserve capacity before any asynchronous authority checks so concurrent
+      // claims cannot race past the parent-plus-child connection bound.
+      registration.sockets.add(socket);
       if (now >= registration.expiresAtMs) {
         await writeClaimError(socket, "CAPABILITY_EXPIRED", this.#options.maxFrameBytes);
         await this.#disposeRegistration(registration);
@@ -293,10 +307,11 @@ export class LocalRunCapabilityBroker {
         await this.#disposeRegistration(registration);
         return;
       }
-      registration.consumed = true;
-      registration.token.fill(0);
-      registration.sockets.add(socket);
-      await unlink(registration.capabilityFile).catch(() => undefined);
+      registration.claimed = true;
+      if (registration.maxConcurrentConnections === 1) {
+        registration.token.fill(0);
+        await unlink(registration.capabilityFile).catch(() => undefined);
+      }
       await writeFrame(
         socket,
         {

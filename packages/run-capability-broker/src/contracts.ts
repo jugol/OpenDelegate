@@ -34,6 +34,12 @@ export interface RunCapabilityRegistration {
   readonly metadata: RunCapabilityJsonValue;
   readonly expiresAtMs: number;
   /**
+   * Maximum simultaneous authenticated clients for this exact capability.
+   * One remains the secure default. A provider-native Agent team may opt into
+   * parent-plus-child fan-out without minting any additional authority.
+   */
+  readonly maxConcurrentConnections?: number;
+  /**
    * Returns the live Main-authority snapshot. Immutable Run/fence fields must
    * remain byte-identical; only leaseExpiresAtMs may advance after renewal.
    */
@@ -87,7 +93,7 @@ export type RunCapabilityBrokerErrorCode =
   | "REQUEST_FAILED";
 
 const PUBLIC_MESSAGES: Readonly<Record<RunCapabilityBrokerErrorCode, string>> = Object.freeze({
-  CAPABILITY_CONSUMED: "The one-time Run capability has already been consumed.",
+  CAPABILITY_CONSUMED: "The Run capability cannot accept another connection.",
   CAPABILITY_EXPIRED: "The Run capability has expired.",
   CAPABILITY_FILE_INVALID: "The Run capability file is invalid.",
   CAPABILITY_FILE_UNSAFE: "The Run capability file is not protected safely.",

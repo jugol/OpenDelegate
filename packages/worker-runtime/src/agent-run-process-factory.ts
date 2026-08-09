@@ -102,6 +102,8 @@ export interface WorkerRunCapabilityProvider {
      * before returning them to the native Agent.
      */
     readonly egressGuard: WorkerEgressGuard;
+    /** Parent plus bounded provider-native child sessions, or one otherwise. */
+    readonly maxConcurrentConnections?: number;
     readonly leaseAuthority: WorkerRunLeaseAuthority;
     readonly artifact?: {
       readonly plan: WorkerArtifactOutputPlan;
@@ -140,6 +142,7 @@ export class CompositeWorkerRunCapabilityProvider implements WorkerRunCapability
     readonly assignment: WorkerRunAssignmentV1;
     readonly workspace: WorkspaceBinding;
     readonly egressGuard: WorkerEgressGuard;
+    readonly maxConcurrentConnections?: number;
     readonly leaseAuthority: WorkerRunLeaseAuthority;
     readonly artifact?: {
       readonly plan: WorkerArtifactOutputPlan;
@@ -154,6 +157,9 @@ export class CompositeWorkerRunCapabilityProvider implements WorkerRunCapability
           assignment: structuredClone(context.assignment),
           workspace: cloneWorkspace(context.workspace),
           egressGuard: context.egressGuard,
+          ...(context.maxConcurrentConnections === undefined
+            ? {}
+            : { maxConcurrentConnections: context.maxConcurrentConnections }),
           leaseAuthority: context.leaseAuthority,
           ...(context.artifact === undefined
             ? {}
@@ -351,6 +357,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
     const environment = prepared.plan.environment;
     const capabilityLease = await this.#prepareRunCapabilities(
       context,
+      prepared.plan,
       prepared.workspace,
       prepared.egressGuard,
       artifactPlan,
@@ -484,6 +491,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
 
   async #prepareRunCapabilities(
     context: RunExecutionContext,
+    plan: WorkerAgentExecutionPlan,
     workspace: WorkspaceBinding,
     egressGuard: WorkerEgressGuard,
     artifactPlan: WorkerArtifactOutputPlan | undefined,
@@ -497,6 +505,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
         assignment: structuredClone(context.assignment),
         workspace: cloneWorkspace(workspace),
         egressGuard,
+        maxConcurrentConnections: runCapabilityConnectionLimit(plan),
         leaseAuthority: context.leaseAuthority,
         ...(artifactPlan === undefined
           ? {}
@@ -1971,6 +1980,17 @@ function cloneWorkspace(workspace: WorkspaceBinding): WorkspaceBinding {
     ...(workspace.worktreePath === undefined ? {} : { worktreePath: workspace.worktreePath }),
     isolation: workspace.isolation,
   };
+}
+
+function runCapabilityConnectionLimit(plan: WorkerAgentExecutionPlan): number {
+  const nativeAgentAdapter =
+    (plan.provider === "codex" && plan.adapterId === "codex-app-server") ||
+    (plan.provider === "claude" && plan.adapterId === "claude-agent-sdk");
+  const nativeAgentToolsAllowed =
+    plan.permissions.mode === "allow-listed" &&
+    (plan.permissions.allowedTools ?? []).some((tool) => tool === "Agent" || tool === "Task");
+  // The provider limit is one parent plus at most four native child Agents.
+  return nativeAgentAdapter && nativeAgentToolsAllowed ? 5 : 1;
 }
 
 function permissionsForRun(

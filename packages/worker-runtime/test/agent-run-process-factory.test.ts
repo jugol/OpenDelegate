@@ -234,7 +234,7 @@ function executionPlan(prompt: string): WorkerAgentExecutionPlan {
 }
 
 class RecordingAdapter implements AgentAdapter {
-  public readonly adapterId = "codex-fixture";
+  public readonly adapterId: string;
   public readonly provider = "codex" as const;
   public readonly starts: AgentStartRequest[] = [];
   public readonly resumes: AgentResumeRequest[] = [];
@@ -246,7 +246,9 @@ class RecordingAdapter implements AgentAdapter {
   public constructor(
     workspacePath: string,
     handleFactory?: (request: AgentStartRequest | AgentResumeRequest) => AgentRunHandle,
+    adapterId = "codex-fixture",
   ) {
+    this.adapterId = adapterId;
     this.#workspacePath = workspacePath;
     this.#handleFactory = handleFactory;
   }
@@ -313,7 +315,7 @@ class RecordingAdapter implements AgentAdapter {
     request: AgentStartRequest | AgentResumeRequest,
     nativeSessionId: string,
   ): AgentRunHandle {
-    const session = nativeSessionFor(request, this.#workspacePath, nativeSessionId);
+    const session = nativeSessionFor(request, this.#workspacePath, nativeSessionId, this.adapterId);
     return {
       events: events([
         {
@@ -363,6 +365,7 @@ function nativeSessionFor(
   request: AgentStartRequest | AgentResumeRequest,
   workspacePath: string,
   nativeSessionId = "native-session-release",
+  adapterId = "codex-fixture",
 ): NativeSessionReference {
   const continuation = request.operation === "start" ? request.continuationOf : undefined;
   const continuationReason = request.operation === "start" ? request.continuationReason : undefined;
@@ -372,7 +375,7 @@ function nativeSessionFor(
   return {
     schemaVersion: 1,
     provider: "codex",
-    adapterId: "codex-fixture",
+    adapterId,
     adapterVersion: "1.2.3",
     ...(request.modelId === undefined ? {} : { modelId: request.modelId }),
     ...(request.effort === undefined ? {} : { effort: request.effort }),
@@ -886,7 +889,7 @@ test("ephemeral Run capability servers are disposed after the exact Agent turn",
     mkdir(workspaceDirectory, { recursive: true }),
   ]);
   const workspacePath = await realpath(workspaceDirectory);
-  const adapter = new RecordingAdapter(workspacePath);
+  const adapter = new RecordingAdapter(workspacePath, undefined, "codex-app-server");
   const sessionStore = new SqliteNativeSessionReferenceStore({
     filename: join(runtimeDirectory, "worker.sqlite"),
     sourceCheckoutDirectory: checkout,
@@ -909,39 +912,43 @@ test("ephemeral Run capability servers are disposed after the exact Agent turn",
         planAuthorityCurrent = await isExecutionCurrent();
         return {
           ...executionPlan(current.workOrder.brief),
+          adapterId: "codex-app-server",
           permissions: {
             mode: "allow-listed",
-            allowedTools: ["Read"],
+            allowedTools: ["Read", "Agent"],
             actionAuthorization,
           },
         };
       },
     },
-    runCapabilityProvider: {
-      prepare(context) {
-        prepared += 1;
-        assert.equal(context.assignment.runId, "run-capability");
-        return Promise.resolve({
-          toolServers: [
-            {
-              serverName: "opendelegate_computer_use",
-              command: process.execPath,
-              args: [
-                "opendelegate-worker-tools.mjs",
-                "--capability-file",
-                join(runtimeDirectory, "capability.json"),
-              ],
-              enabledTools: ["computer_use_capture"],
-              startupTimeoutMs: 5_000,
-              toolTimeoutMs: 30_000,
+    runCapabilityProvider: new CompositeWorkerRunCapabilityProvider([
+      {
+        prepare(context) {
+          prepared += 1;
+          assert.equal(context.assignment.runId, "run-capability");
+          assert.equal(context.maxConcurrentConnections, 5);
+          return Promise.resolve({
+            toolServers: [
+              {
+                serverName: "opendelegate_computer_use",
+                command: process.execPath,
+                args: [
+                  "opendelegate-worker-tools.mjs",
+                  "--capability-file",
+                  join(runtimeDirectory, "capability.json"),
+                ],
+                enabledTools: ["computer_use_capture"],
+                startupTimeoutMs: 5_000,
+                toolTimeoutMs: 30_000,
+              },
+            ],
+            async dispose() {
+              disposed += 1;
             },
-          ],
-          async dispose() {
-            disposed += 1;
-          },
-        });
+          });
+        },
       },
-    },
+    ]),
     workspaceResolver: {
       resolve: () =>
         Promise.resolve({
@@ -965,6 +972,7 @@ test("ephemeral Run capability servers are disposed after the exact Agent turn",
     );
     assert.deepEqual(adapter.starts[0]?.permissions.allowedTools, [
       "Read",
+      "Agent",
       "mcp__opendelegate_computer_use__computer_use_capture",
     ]);
     assert.equal(adapter.starts[0]?.permissions.actionAuthorization, actionAuthorization);
