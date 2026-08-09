@@ -300,7 +300,11 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
     const temporary = `${linkPath}.${randomUUID()}.opendelegate-link`;
     try {
       await symlink(target, temporary, platform === "windows" ? "junction" : "dir");
-      await rename(temporary, linkPath);
+      if (platform === "windows" && existing.kind === "symbolic-link") {
+        await replaceWindowsDirectoryLink(temporary, linkPath);
+      } else {
+        await rename(temporary, linkPath);
+      }
       await syncNativeDirectory(dirname(linkPath));
       return "changed";
     } finally {
@@ -362,6 +366,48 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
     ]);
     return leftMetadata.dev === rightMetadata.dev;
   }
+}
+
+async function replaceWindowsDirectoryLink(source: string, destination: string): Promise<void> {
+  const previous = `${destination}.${randomUUID()}.opendelegate-previous-link`;
+  await rename(destination, previous);
+  try {
+    await rename(source, destination);
+  } catch (error) {
+    try {
+      await rename(previous, destination);
+    } catch (restoreError) {
+      throw unsafePath(
+        `The Windows activation pointer could not be installed or restored (${safeErrorCode(error)}/${safeErrorCode(restoreError)}).`,
+      );
+    }
+    throw error;
+  }
+
+  try {
+    await rm(previous, { force: true });
+  } catch (error) {
+    const rejected = `${destination}.${randomUUID()}.opendelegate-rejected-link`;
+    try {
+      await rename(destination, rejected);
+      await rename(previous, destination);
+      await rm(rejected, { force: true });
+    } catch (restoreError) {
+      throw unsafePath(
+        `The Windows activation pointer cleanup could not be rolled back (${safeErrorCode(error)}/${safeErrorCode(restoreError)}).`,
+      );
+    }
+    throw error;
+  }
+}
+
+function safeErrorCode(error: unknown): string {
+  return error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string"
+    ? error.code
+    : "UNKNOWN";
 }
 
 class NodeNativeProcessBoundary implements NativeProcessBoundary {
