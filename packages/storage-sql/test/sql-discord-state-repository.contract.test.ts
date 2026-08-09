@@ -231,6 +231,26 @@ function registerDiscordRepositoryContract(label: string, createFixture: Fixture
           state: "open",
           messageId: "100000000000000103",
         });
+        const failure = await repository.updateBinding(created.threadId, {
+          failureSurface: {
+            requestKey: "failure-projection:03-update",
+            sourceEventId: "event_failure_before_retry",
+            messageId: "100000000000000104",
+            outboxCreatedAtMs: 7_200,
+            state: "open",
+          },
+        });
+        assert.deepEqual(failure.failureSurface, {
+          requestKey: "failure-projection:03-update",
+          sourceEventId: "event_failure_before_retry",
+          messageId: "100000000000000104",
+          outboxCreatedAtMs: 7_200,
+          state: "open",
+        });
+        assert.deepEqual(
+          (await repository.getBindingByThread(created.threadId))?.failureSurface,
+          failure.failureSurface,
+        );
         const closedActivity = await repository.updateBinding(created.threadId, {
           activitySurface: {
             cycleId: "activity_cycle_1",

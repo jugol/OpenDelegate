@@ -1119,7 +1119,8 @@ runtime/connection state, service supervision mode, last observation time, Roles
 verified capability names, route health, and bounded capacity. The narrow grammar
 includes fleet-list questions, uniquely matched named-Device reachability questions,
 common fleet-list detail qualifiers such as OS, verified capabilities, or whether a
-Device is accepting work, an explicit non-mutation guard sentence, and a
+Device is accepting work, a bounded repeat modifier such as Korean `다시`, an
+explicit non-mutation guard sentence, and a
 registered-route follow-up for that named Device. An affirmative action joined to
 the query never qualifies for direct completion. The projection excludes Secrets,
 Device Instructions, Knowledge, private transcripts, local paths, Policy internals,
@@ -2073,21 +2074,26 @@ Implementation detail:
 [ADR-0054](adr/0054-discord-retry-resolves-prior-failure.md).
 
 **Decision:** When a Task with a delivered chronological failure update enters a new
-`running` attempt, the Discord Adapter durably resolves every still-unresolved
-failure update for that Task. It recovers the original Discord message through the
-failure update's idempotency request key, edits the card into a historical “Retry
-started” receipt, and removes all buttons. The resolution itself is an idempotent
-outbox action persisted by SQLite or PostgreSQL. It preserves the concrete earlier
-failure explanation and does not delete history.
+`running` attempt, the Discord Adapter durably resolves the currently open failure
+update for that Task. Successful failure delivery stores the exact Discord
+message ID, request key, source event, outbox time, and open/resolved state on the
+durable Task binding. Resolution PATCHes that exact message into a historical “Retry
+started” receipt and removes all buttons. The failure surface and resolution action
+are persisted by SQLite or PostgreSQL. The edit preserves the concrete earlier
+failure explanation and does not delete history. A request nonce remains only a
+short duplicate-send guard and is never treated as durable message identity.
 
 **Rationale:** Live alpha.14 QA recovered a failed Device-directory Task and posted
 the correct result, but the older `Task needs attention` card still displayed an
 active Retry button above it. The status panel correctly showed Done, yet two
 simultaneously actionable-looking states forced the owner to infer which control was
-current.
+current. A first alpha.15 repair attempted to recover the old message from Discord's
+request nonce; live QA proved that an aged nonce could create a second message
+instead, so durable message identity is required.
 
 **Consequence:** A successful retry leaves one clear current control surface while
 retaining useful failure history. Restart and Discord outage replay cannot duplicate
-the edit. If the old message was externally deleted, OpenDelegate records a bounded
-diagnostic and continues projecting the authoritative current Task; D-085 still
-handles clicks on legacy stale controls safely.
+the edit, and nonce expiry cannot create a replacement card. If the old message was
+externally deleted, OpenDelegate records a bounded diagnostic and continues
+projecting the authoritative current Task; D-085 still handles clicks on legacy
+stale controls safely.

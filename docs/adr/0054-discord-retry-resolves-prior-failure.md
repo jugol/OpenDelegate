@@ -13,25 +13,29 @@ older failure reply still displayed its active Retry control. The control was sa
 under ADR-0037, yet the transcript visually advertised two incompatible current
 states.
 
-The Discord outbox already persists the idempotency request key used to create each
-significant update. Calling the idempotent create operation with that key recovers
-the original Discord message identity even though the binding does not store every
-chronological message ID.
+An initial repair tried to call Discord's create-message endpoint again with the
+same nonce and `enforce_nonce`. Live alpha.15 QA showed that an aged nonce is not a
+durable address: Discord created and edited a second “Retry started” message while
+the original Retry remained active. The exact message ID therefore has to cross the
+successful delivery boundary into durable Main state.
 
 ## Decision
 
-When a Task projection enters `running`, the Adapter finds delivered failure updates
-for that Task that do not yet have a durable resolution action. For each one it
-enqueues a `resolve-task-failure` action keyed by the Task and original failure
-request key. Delivery reconciles the original message identity and edits that same
-message into a blue historical receipt containing the prior safe explanation,
-“Retry started,” and no controls.
+When a chronological failure is delivered, the Adapter records one typed failure
+surface on the Task binding: request key, source event ID, exact Discord message ID,
+outbox creation time, and open state. SQL migration 0015 stores the surface as
+canonical JSON in SQLite or PostgreSQL. When that Task projection later enters
+`running`, the Adapter finds the matching delivered failure action and enqueues one
+`resolve-task-failure` action. Delivery PATCHes the stored message ID directly into
+a blue historical receipt containing the prior safe explanation, “Retry started,”
+and no controls, then marks the surface resolved.
 
-The action is part of the typed Discord outbox contract and is validated and stored
-identically by SQLite and PostgreSQL. Repeated projections, process restart, and
-transport replay reuse the same resolution action. Resolution never changes Task
-state or authorizes work. A missing externally deleted message records a bounded
-diagnostic and does not mark the whole Forum binding deleted.
+The surface and action are typed, bounded, and validated identically by SQLite and
+PostgreSQL. Repeated projections, process restart, and transport replay reuse the
+same surface and resolution action. A Discord nonce remains a bounded duplicate-send
+guard only. Resolution never changes Task state or authorizes work. A missing
+externally deleted message records a bounded diagnostic and does not mark the whole
+Forum binding deleted.
 
 ## Consequences
 
@@ -46,7 +50,10 @@ that predate this lifecycle or for edits Discord could not deliver.
 - Publishing the same Task as running creates one durable resolution action, edits
   the original failure message, renders “Retry started,” and removes the custom ID.
 - Replaying the running projection does not create a second resolution or message.
-- SQLite persists and restores the exact typed resolution action across restart.
+- Expiring the fake Discord nonce cache before Retry still edits the stored original
+  message ID and creates no second chronological message.
+- SQLite persists and restores the exact typed failure surface and resolution action
+  across restart.
 - A missing historical message records a diagnostic while current Task projection
   continues.
 

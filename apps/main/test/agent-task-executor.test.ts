@@ -579,6 +579,33 @@ test("Main Agent answers read-only Device questions from the bounded Main-owned 
   );
   assert.equal(adapter.starts.length, 0);
 
+  const liveForumFollowUp = await reasoner.plan({
+    task: {
+      ...task,
+      objective:
+        "현재 온라인이고 작업을 받을 수 있는 장치들을 OS와 검증된 주요 capability만 간단히 알려줘. 파일, 서비스, 계정, 권한, 설정, 네트워크 또는 외부 시스템은 변경하지 마.",
+      completionCriteria: ["Complete the requested work and report the observable result."],
+      messages: [
+        {
+          messageId: "message_live_forum_follow_up",
+          role: "owner" as const,
+          content: "지금 접속 가능한 장치 목록을 다시 알려줘.",
+          occurredAt: NOW,
+        },
+      ],
+    },
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_live_forum_follow_up:attempt:1",
+    signal: controller.signal,
+  });
+
+  assert.equal(liveForumFollowUp.state, "completed");
+  assert.match(
+    liveForumFollowUp.state === "completed" ? liveForumFollowUp.publicMessage : "",
+    /현재 등록된 기기 2대 중 1대/u,
+  );
+  assert.equal(adapter.starts.length, 0);
+
   await assert.rejects(
     reasoner.plan({
       task: {

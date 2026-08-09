@@ -39,7 +39,8 @@ whether a Device is accepting work. A separate trailing sentence that only forbi
 file, service, account, permission, configuration, network, or external-system
 mutation may be discarded as a safety guard before classification. A trailing
 affirmative action is never discarded, so a compound query still requires Worker
-planning and evidence.
+planning and evidence. A bounded repeat modifier such as Korean `다시` does not turn
+an otherwise exact fleet-list follow-up into semantic planning.
 
 The authoritative executor rejects `completed` from a planner unless the injected
 direct-completion authorizer recognizes that exact deterministic decision. Copying
@@ -88,6 +89,8 @@ It does not require another owner message merely to invalidate that stale plan.
   OS and verified capabilities, and adds a non-mutation guard completes directly;
   replacing the guard with an affirmative file action falls through to semantic
   planning.
+- A same-Task owner follow-up asking for the Device list `다시` completes from the
+  authoritative directory without resuming a native Agent session.
 - A code-switched generic test objective plus one exact Device question completes
   directly, and the same trusted decision supersedes a stale cached Work Order on
   Retry without semantic replanning or Worker selection.

@@ -355,7 +355,7 @@ export class DiscordForumAdapter {
     if (binding === undefined) {
       throw new DiscordAdapterError("PROJECTION_INVALID", "The Task has no Discord Forum binding.");
     }
-    await this.#enqueueFailureResolutions(projection);
+    await this.#enqueueFailureResolutions(projection, binding);
     await this.#refreshOwnerActivity(projection, binding);
     const projectionDigest = digestValue(panelProjection(projection));
     const ownerMessageCompletion = await this.#ownerMessageCompletion(projection, binding);
@@ -784,43 +784,53 @@ export class DiscordForumAdapter {
     }
   }
 
-  async #enqueueFailureResolutions(projection: TaskChannelProjection): Promise<void> {
-    if (projection.state !== "running") {
+  async #enqueueFailureResolutions(
+    projection: TaskChannelProjection,
+    binding: DiscordTaskBinding,
+  ): Promise<void> {
+    const surface = binding.failureSurface;
+    if (projection.state !== "running" || surface === undefined || surface.state !== "open") {
       return;
     }
     const outbox = await this.#repository.listOutbox();
-    const resolvedFailureKeys = new Set(
-      outbox
-        .filter((item) => item.action.kind === "resolve-task-failure")
-        .map((item) =>
-          item.action.kind === "resolve-task-failure" ? item.action.failureRequestKey : "",
-        ),
-    );
-    const unresolvedFailures = outbox.filter(
+    if (
+      outbox.some(
+        (item) =>
+          item.action.kind === "resolve-task-failure" &&
+          item.action.taskId === projection.taskId &&
+          item.action.failureRequestKey === surface.requestKey,
+      )
+    ) {
+      return;
+    }
+    const failure = outbox.find(
       (item) =>
+        item.id === surface.requestKey &&
         item.delivered &&
         item.action.kind === "post-task-update" &&
         item.action.taskId === projection.taskId &&
         item.action.projection.significance === "failure" &&
-        !resolvedFailureKeys.has(item.id),
+        item.action.projection.sourceEventId === surface.sourceEventId,
     );
-    for (const failure of unresolvedFailures) {
-      if (failure.action.kind !== "post-task-update") {
-        continue;
-      }
-      await this.#enqueueOutbox(
-        `${digestValue({
-          taskId: projection.taskId,
-          failureRequestKey: failure.id,
-        })}:01-resolve-failure`,
-        {
-          kind: "resolve-task-failure",
-          taskId: projection.taskId,
-          failureRequestKey: failure.id,
-          projection: frozenClone(failure.action.projection),
-        },
-      );
+    if (failure?.action.kind !== "post-task-update") {
+      this.#recordDiagnostic("discord.task_failure_surface_orphaned", {
+        taskId: projection.taskId,
+        requestKey: surface.requestKey,
+      });
+      return;
     }
+    await this.#enqueueOutbox(
+      `${digestValue({
+        taskId: projection.taskId,
+        failureRequestKey: failure.id,
+      })}:01-resolve-failure`,
+      {
+        kind: "resolve-task-failure",
+        taskId: projection.taskId,
+        failureRequestKey: failure.id,
+        projection: frozenClone(failure.action.projection),
+      },
+    );
   }
 
   async #significantUpdateRequestKey(
@@ -1405,11 +1415,32 @@ export class DiscordForumAdapter {
       }
       case "post-task-update": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        await this.#api.createMessage({
+        if (binding.failureSurface?.requestKey === item.id) {
+          return;
+        }
+        const result = await this.#api.createMessage({
           threadId: binding.threadId,
           requestKey: item.id,
           payload: renderTaskUpdate(action.projection),
         });
+        if (action.projection.significance === "failure") {
+          const sourceEventId = action.projection.sourceEventId;
+          if (sourceEventId === undefined) {
+            throw new DiscordAdapterError(
+              "PROJECTION_INVALID",
+              "A chronological Discord failure has no source event ID.",
+            );
+          }
+          await this.#repository.updateBinding(binding.threadId, {
+            failureSurface: Object.freeze({
+              requestKey: item.id,
+              sourceEventId,
+              messageId: result.messageId,
+              outboxCreatedAtMs: item.createdAtMs,
+              state: "open" as const,
+            }),
+          });
+        }
         return;
       }
       case "upsert-task-activity": {
@@ -1601,15 +1632,25 @@ export class DiscordForumAdapter {
       }
       case "resolve-task-failure": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        const failure = await this.#api.createMessage({
-          threadId: binding.threadId,
-          requestKey: action.failureRequestKey,
-          payload: renderTaskUpdate(action.projection),
-        });
+        const surface = binding.failureSurface;
+        if (
+          surface === undefined ||
+          surface.requestKey !== action.failureRequestKey ||
+          surface.sourceEventId !== action.projection.sourceEventId
+        ) {
+          this.#recordDiagnostic("discord.task_failure_surface_unavailable", {
+            taskId: action.taskId,
+            requestKey: action.failureRequestKey,
+          });
+          return;
+        }
+        if (surface.state === "resolved") {
+          return;
+        }
         try {
           await this.#api.editMessage({
             threadId: binding.threadId,
-            messageId: failure.messageId,
+            messageId: surface.messageId,
             payload: renderResolvedTaskFailure(action.projection),
           });
         } catch (error) {
@@ -1618,9 +1659,12 @@ export class DiscordForumAdapter {
           }
           this.#recordDiagnostic("discord.task_failure_message_missing", {
             threadId: binding.threadId,
-            messageId: failure.messageId,
+            messageId: surface.messageId,
           });
         }
+        await this.#repository.updateBinding(binding.threadId, {
+          failureSurface: Object.freeze({ ...surface, state: "resolved" as const }),
+        });
         return;
       }
       case "complete-owner-message": {

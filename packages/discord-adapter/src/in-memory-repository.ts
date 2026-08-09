@@ -175,6 +175,7 @@ export class InMemoryDiscordStateRepository implements DiscordStateRepository {
         DiscordTaskBinding,
         | "statusPanelMessageId"
         | "activitySurface"
+        | "failureSurface"
         | "lastReconciledMessageId"
         | "externalState"
         | "archived"

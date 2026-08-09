@@ -124,6 +124,10 @@ class FakeDiscordApi implements DiscordApiPort {
   readonly #messageByRequestKey = new Map<string, string>();
   #nextMessage = 900;
 
+  public forgetMessageRequestKeys(): void {
+    this.#messageByRequestKey.clear();
+  }
+
   public async probeInstallation(): Promise<DiscordInstallationProbe> {
     return this.probe;
   }
@@ -1436,7 +1440,7 @@ test("a chronological failure update carries its Retry control", () => {
 });
 
 test("a successful retry resolves the prior failure control in place", async () => {
-  const { adapter, api } = fixture();
+  const { adapter, api, repository } = fixture();
   const thread = forumThread("300000000000000134");
   const starter = ownerMessage(thread.id, thread.id, "Recover after a bounded failure.");
   api.threads.set(thread.id, thread);
@@ -1459,6 +1463,7 @@ test("a successful retry resolves the prior failure control in place", async () 
       JSON.stringify(operation["payload"]).includes("od:v1:retry"),
   );
   assert.notEqual(failureMessage, undefined);
+  api.forgetMessageRequestKeys();
 
   await adapter.publishTaskProjection({
     taskId: "task-1",
@@ -1488,6 +1493,14 @@ test("a successful retry resolves the prior failure control in place", async () 
   const rendered = JSON.stringify(resolvedFailure?.["payload"]);
   assert.match(rendered, /Retry started/u);
   assert.doesNotMatch(rendered, /od:v1:retry/u);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.deepEqual((await repository.getBindingByTask("task-1"))?.failureSurface, {
+    requestKey: failureMessage?.["requestKey"],
+    sourceEventId: "event_retryable_failure",
+    messageId: failureMessage?.["messageId"],
+    outboxCreatedAtMs: 1_003,
+    state: "resolved",
+  });
 });
 
 test("a failed turn replaces the newest owner-message acknowledgement with failure", async () => {

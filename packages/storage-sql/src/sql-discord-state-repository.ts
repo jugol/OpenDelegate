@@ -315,6 +315,10 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
             binding.activitySurface === undefined
               ? null
               : encodeCanonicalJson(binding.activitySurface),
+          failure_surface_json:
+            binding.failureSurface === undefined
+              ? null
+              : encodeCanonicalJson(binding.failureSurface),
           last_reconciled_message_id: binding.lastReconciledMessageId ?? null,
           external_state: binding.externalState,
           archived: this.#dbBoolean(binding.archived),
@@ -333,6 +337,7 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
         DiscordTaskBinding,
         | "statusPanelMessageId"
         | "activitySurface"
+        | "failureSurface"
         | "lastReconciledMessageId"
         | "externalState"
         | "archived"
@@ -378,6 +383,10 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
             updated.activitySurface === undefined
               ? null
               : encodeCanonicalJson(updated.activitySurface),
+          failure_surface_json:
+            updated.failureSurface === undefined
+              ? null
+              : encodeCanonicalJson(updated.failureSurface),
           last_reconciled_message_id: updated.lastReconciledMessageId ?? null,
           external_state: updated.externalState,
           archived: this.#dbBoolean(updated.archived),
@@ -730,6 +739,9 @@ function decodeBinding(row: Selectable<DiscordTaskBindingsTable>): DiscordTaskBi
     ...(row.activity_surface_json === null
       ? {}
       : { activitySurface: decodeActivitySurface(row.activity_surface_json) }),
+    ...(row.failure_surface_json === null
+      ? {}
+      : { failureSurface: decodeFailureSurface(row.failure_surface_json) }),
     ...(row.last_reconciled_message_id === null
       ? {}
       : { lastReconciledMessageId: row.last_reconciled_message_id }),
@@ -754,6 +766,12 @@ function decodeActivitySurface(
 ): NonNullable<DiscordTaskBinding["activitySurface"]> {
   const value = decodeCanonicalJson(encoded);
   validateActivitySurface(value);
+  return deepFreeze(value);
+}
+
+function decodeFailureSurface(encoded: string): NonNullable<DiscordTaskBinding["failureSurface"]> {
+  const value = decodeCanonicalJson(encoded);
+  validateFailureSurface(value);
   return deepFreeze(value);
 }
 
@@ -830,6 +848,9 @@ function validateNewBinding(
   if (binding.activitySurface !== undefined) {
     validateActivitySurface(binding.activitySurface);
   }
+  if (binding.failureSurface !== undefined) {
+    validateFailureSurface(binding.failureSurface);
+  }
   if (binding.lastReconciledMessageId !== undefined) {
     assertSnowflake(binding.lastReconciledMessageId, "Discord reconciled message ID");
   }
@@ -874,12 +895,31 @@ function validateActivitySurface(
   }
 }
 
+function validateFailureSurface(
+  value: unknown,
+): asserts value is NonNullable<DiscordTaskBinding["failureSurface"]> {
+  const surface = assertPlainRecord(value, "Discord Task failure surface");
+  assertOnlyKeys(surface, [
+    "requestKey",
+    "sourceEventId",
+    "messageId",
+    "outboxCreatedAtMs",
+    "state",
+  ]);
+  requireBoundedString(surface["requestKey"], "Discord failure request key", 512);
+  requireBoundedString(surface["sourceEventId"], "Discord failure source event ID", 160);
+  assertSnowflake(surface["messageId"], "Discord Task failure message ID");
+  requireSafeNonNegative(surface["outboxCreatedAtMs"], "Task failure outbox timestamp");
+  requireOneOf(surface["state"], ["open", "resolved"]);
+}
+
 function validateBindingPatch(
   patch: Partial<
     Pick<
       DiscordTaskBinding,
       | "statusPanelMessageId"
       | "activitySurface"
+      | "failureSurface"
       | "lastReconciledMessageId"
       | "externalState"
       | "archived"
@@ -891,6 +931,7 @@ function validateBindingPatch(
   assertOnlyKeys(patch, [
     "statusPanelMessageId",
     "activitySurface",
+    "failureSurface",
     "lastReconciledMessageId",
     "externalState",
     "archived",
@@ -901,6 +942,9 @@ function validateBindingPatch(
   }
   if (hasOwn(patch, "activitySurface") && patch.activitySurface !== undefined) {
     validateActivitySurface(patch.activitySurface);
+  }
+  if (hasOwn(patch, "failureSurface") && patch.failureSurface !== undefined) {
+    validateFailureSurface(patch.failureSurface);
   }
   if (hasOwn(patch, "lastReconciledMessageId")) {
     assertSnowflake(patch.lastReconciledMessageId, "Discord reconciled message ID");
@@ -926,6 +970,7 @@ function applyBindingPatch(
       DiscordTaskBinding,
       | "statusPanelMessageId"
       | "activitySurface"
+      | "failureSurface"
       | "lastReconciledMessageId"
       | "externalState"
       | "archived"
@@ -939,6 +984,7 @@ function applyBindingPatch(
       ? { statusPanelMessageId: patch.statusPanelMessageId }
       : {}),
     ...(hasOwn(patch, "activitySurface") ? { activitySurface: patch.activitySurface } : {}),
+    ...(hasOwn(patch, "failureSurface") ? { failureSurface: patch.failureSurface } : {}),
     ...(hasOwn(patch, "lastReconciledMessageId")
       ? { lastReconciledMessageId: patch.lastReconciledMessageId }
       : {}),
