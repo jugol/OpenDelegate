@@ -1242,7 +1242,7 @@ test("core health failure rolls a restart back through structured supervisor com
   assert.deepEqual(serviceVerbs, ["stop", "query", "start", "stop", "query", "start"]);
 });
 
-test("Windows restart waits through STOP_PENDING before starting the replacement", async () => {
+test("Windows restart reads localized service states before starting the replacement", async () => {
   const configuration = windowsConfiguration({
     health: {
       endpoint: "http://127.0.0.1:43190/health/live",
@@ -1259,8 +1259,8 @@ test("Windows restart waits through STOP_PENDING before starting the replacement
       return processResult(
         0,
         statusQueries < 3
-          ? "STATE              : 3  STOP_PENDING\r\n"
-          : "STATE              : 1  STOPPED\r\n",
+          ? "상태               : 3  중지_대기\r\n"
+          : "상태               : 1  중지됨\r\n",
       );
     }
     if (request.executable.toLowerCase().endsWith("sc.exe") && verb === "start") {
@@ -1413,7 +1413,7 @@ test("native inspection keeps core health, helper presence, and Computer Use rea
   const process = new FakeProcess();
   process.handler = (request) =>
     request.executable.toLowerCase().endsWith("sc.exe")
-      ? processResult(0, "STATE              : 4  RUNNING\r\n")
+      ? processResult(0, "상태               : 4  실행_중\r\n")
       : processResult(1);
   const { boundaries } = fakeBoundaries({
     platform: "windows",

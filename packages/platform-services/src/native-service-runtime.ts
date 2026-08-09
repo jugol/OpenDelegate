@@ -1468,7 +1468,7 @@ async function waitForWindowsServiceStopped(input: {
     if (
       !status.timedOut &&
       status.exitCode === 0 &&
-      /STATE\s*:\s*1(?:\s|$)/iu.test(status.stdout)
+      windowsServiceStateCode(status.stdout) === "1"
     ) {
       return;
     }
@@ -1560,7 +1560,7 @@ function parseSupervisorState(
       if (result.exitCode === 1060) {
         return "not-installed";
       }
-      const numeric = /\bSTATE\s*:\s*(\d+)\b/u.exec(result.stdout)?.[1];
+      const numeric = windowsServiceStateCode(result.stdout);
       return numeric === "4"
         ? "running"
         : numeric === "2"
@@ -1600,6 +1600,25 @@ function parseSupervisorState(
     return "stopped";
   }
   return result.exitCode === 4 ? "not-installed" : "unknown";
+}
+
+function windowsServiceStateCode(output: string): string | undefined {
+  const named =
+    /\b(STOPPED|START_PENDING|STOP_PENDING|RUNNING|CONTINUE_PENDING|PAUSE_PENDING|PAUSED)\b/iu
+      .exec(output)?.[1]
+      ?.toUpperCase();
+  if (named !== undefined) {
+    return {
+      STOPPED: "1",
+      START_PENDING: "2",
+      STOP_PENDING: "3",
+      RUNNING: "4",
+      CONTINUE_PENDING: "5",
+      PAUSE_PENDING: "6",
+      PAUSED: "7",
+    }[named];
+  }
+  return /^\s*[^:\r\n]+:\s*([1-7])(?:\s|$)/mu.exec(output)?.[1];
 }
 
 async function probeCoreOnce(
