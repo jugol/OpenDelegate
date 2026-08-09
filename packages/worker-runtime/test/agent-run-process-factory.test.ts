@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   type AgentAdapter,
   type AgentAdapterProbe,
+  type AgentModelCatalog,
   type AgentResumeRequest,
   type AgentRunHandle,
   type AgentRunLimits,
@@ -273,6 +274,20 @@ class RecordingAdapter implements AgentAdapter {
     });
   }
 
+  public listModels(): Promise<AgentModelCatalog> {
+    return Promise.resolve({
+      observedAt: "2026-07-25T00:00:00.000Z",
+      models: [
+        {
+          modelId: "gpt-fixture",
+          displayName: "GPT Fixture",
+          isDefault: true,
+          supportedEfforts: ["high"],
+        },
+      ],
+    });
+  }
+
   public start(request: AgentStartRequest): Promise<AgentRunHandle> {
     this.starts.push(request);
     return Promise.resolve(
@@ -359,6 +374,8 @@ function nativeSessionFor(
     provider: "codex",
     adapterId: "codex-fixture",
     adapterVersion: "1.2.3",
+    ...(request.modelId === undefined ? {} : { modelId: request.modelId }),
+    ...(request.effort === undefined ? {} : { effort: request.effort }),
     nativeSessionId,
     sessionKey: request.sessionKey,
     taskId: request.taskId,
@@ -515,6 +532,74 @@ test("an assignment Agent requirement cannot be silently substituted and reports
     assert.equal(JSON.stringify(outcome.agentSession).includes("sessionKey"), false);
     assert.equal(JSON.stringify(outcome.agentSession).includes("cwd"), false);
     assert.equal(JSON.stringify(outcome.agentSession).includes("worktreePath"), false);
+  } finally {
+    sessionStore.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an explicit model and effort survive Worker session validation and persistence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-agent-model-"));
+  const checkout = join(root, "checkout");
+  const runtimeDirectory = join(root, "runtime");
+  const workspaceDirectory = join(root, "workspace");
+  await Promise.all([
+    mkdir(checkout, { recursive: true }),
+    mkdir(runtimeDirectory, { recursive: true }),
+    mkdir(workspaceDirectory, { recursive: true }),
+  ]);
+  const workspacePath = await realpath(workspaceDirectory);
+  const adapter = new RecordingAdapter(workspacePath);
+  const sessionStore = new SqliteNativeSessionReferenceStore({
+    filename: join(runtimeDirectory, "worker.sqlite"),
+    sourceCheckoutDirectory: checkout,
+  });
+  const factory = new AgentRunProcessFactory({
+    adapters: [adapter],
+    sessionStore,
+    executionPlanResolver: {
+      resolve: ({ assignment: current }) =>
+        Promise.resolve({
+          ...executionPlan(current.workOrder.brief),
+          modelId: "gpt-fixture",
+          effort: "high",
+        }),
+    },
+    workspaceResolver: {
+      resolve: () =>
+        Promise.resolve({
+          workspaceId: "workspace-repository",
+          cwd: workspacePath,
+          isolation: "none",
+        }),
+    },
+  });
+
+  try {
+    const process = await factory.start(
+      executionContext(
+        assignment("run-model-bound", "work-order-model-bound", {
+          agentRequirement: {
+            provider: "codex",
+            adapterId: "codex-fixture",
+            modelId: "gpt-fixture",
+            effort: "high",
+            allowedCompatibilities: ["tested"],
+          },
+        }),
+      ),
+    );
+    const outcome = await process.completion;
+
+    assert.equal(outcome.status, "succeeded");
+    assert.equal(outcome.agentSession?.modelId, "gpt-fixture");
+    assert.equal(outcome.agentSession?.effort, "high");
+    const request = adapter.starts[0]!;
+    assert.equal(request.modelId, "gpt-fixture");
+    assert.equal(request.effort, "high");
+    const stored = await sessionStore.load(request.sessionKey);
+    assert.equal(stored?.modelId, "gpt-fixture");
+    assert.equal(stored?.effort, "high");
   } finally {
     sessionStore.close();
     await rm(root, { recursive: true, force: true });

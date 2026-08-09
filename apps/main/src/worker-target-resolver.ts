@@ -30,6 +30,7 @@ export interface AgentAwareWorkerCandidate extends DeviceCandidate {
     readonly models: readonly {
       readonly modelId: string;
       readonly isDefault: boolean;
+      readonly supportedEfforts?: readonly string[];
     }[];
   }[];
 }
@@ -201,6 +202,7 @@ function bindingSatisfiesHardRequirement(
     binding.provider === required.provider &&
     (required.adapterId === undefined || binding.adapterId === required.adapterId) &&
     (required.modelId === undefined || binding.modelId === required.modelId) &&
+    (required.effort === undefined || binding.effort === required.effort) &&
     (required.allowedCompatibilities ?? (["tested"] as const)).includes("tested")
   );
 }
@@ -221,7 +223,11 @@ function bindingIsAvailable(
   }
   return (
     binding.modelId === undefined ||
-    adapter.models.some((model) => model.modelId === binding.modelId)
+    adapter.models.some(
+      (model) =>
+        model.modelId === binding.modelId &&
+        (binding.effort === undefined || (model.supportedEfforts ?? []).includes(binding.effort)),
+    )
   );
 }
 
@@ -230,6 +236,7 @@ function bindingRequirement(binding: AgentBinding): WorkerAgentRequirementV1 {
     provider: binding.provider,
     adapterId: binding.adapterId,
     ...(binding.modelId === undefined ? {} : { modelId: binding.modelId }),
+    ...(binding.effort === undefined ? {} : { effort: binding.effort }),
     allowedCompatibilities: Object.freeze(["tested"] as const),
   });
 }

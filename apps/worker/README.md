@@ -278,6 +278,11 @@ sandbox can start. If AppArmor, a container policy, or the kernel blocks it, the
 adapter is reported `platform-incompatible` so a declared Prefer fallback can be
 selected. OpenDelegate does not weaken the Device sandbox automatically.
 
+The effective provider, adapter, model, and optional effort are part of the native
+session binding. Worker validation, durable session keys, resume, and owner-safe Run
+observations preserve that exact binding; a later turn cannot silently inherit a
+different model or tuning value.
+
 An always-on service often has a smaller `PATH` than the owner's terminal. Use
 `--codex-executable` or `--claude-executable` at join when the provider is installed
 outside that service path. Windows requires a native `.exe`; `.cmd` and `.bat`

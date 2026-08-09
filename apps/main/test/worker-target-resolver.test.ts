@@ -208,6 +208,7 @@ test("a Device profile resolves one exact adapter and model into the dispatch ta
             provider: "claude",
             adapterId: "claude-agent-sdk",
             modelId: "claude-opus-5",
+            effort: "max",
           },
         },
         agentAdapters: [
@@ -216,7 +217,13 @@ test("a Device profile resolves one exact adapter and model into the dispatch ta
             adapterId: "claude-agent-sdk",
             readiness: "ready",
             compatibility: "tested",
-            models: [{ modelId: "claude-opus-5", isDefault: true }],
+            models: [
+              {
+                modelId: "claude-opus-5",
+                isDefault: true,
+                supportedEfforts: ["max"],
+              },
+            ],
           },
         ],
       },
@@ -234,6 +241,7 @@ test("a Device profile resolves one exact adapter and model into the dispatch ta
     provider: "claude",
     adapterId: "claude-agent-sdk",
     modelId: "claude-opus-5",
+    effort: "max",
     allowedCompatibilities: ["tested"],
   });
 });

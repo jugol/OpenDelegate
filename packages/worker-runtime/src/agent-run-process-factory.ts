@@ -454,6 +454,8 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       expected: {
         provider: prepared.plan.provider,
         adapterId: prepared.plan.adapterId,
+        ...(prepared.plan.modelId === undefined ? {} : { modelId: prepared.plan.modelId }),
+        ...(prepared.plan.effort === undefined ? {} : { effort: prepared.plan.effort }),
         sessionKey: prepared.sessionKey,
         taskId: context.assignment.taskId,
         workstreamId: prepared.plan.workstreamId,
@@ -609,6 +611,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       adapter,
       immutableAssignment.agentRequirement,
       plan.modelId,
+      plan.effort,
       plan.environment,
       plan.secretEnvironment,
     );
@@ -619,6 +622,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       provider: plan.provider,
       adapterId: plan.adapterId,
       ...(plan.modelId === undefined ? {} : { modelId: plan.modelId }),
+      ...(plan.effort === undefined ? {} : { effort: plan.effort }),
       workspaceId: workspace.workspaceId,
     });
     let session: NativeSessionReference | undefined;
@@ -656,6 +660,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
         provider: plan.provider,
         adapterId: plan.adapterId,
         ...(plan.modelId === undefined ? {} : { modelId: plan.modelId }),
+        ...(plan.effort === undefined ? {} : { effort: plan.effort }),
         sessionKey,
         taskId: assignment.taskId,
         workstreamId: plan.workstreamId,
@@ -1229,6 +1234,7 @@ interface SessionBinding {
   readonly provider: AgentProvider;
   readonly adapterId: string;
   readonly modelId?: string;
+  readonly effort?: string;
   readonly sessionKey: string;
   readonly taskId: string;
   readonly workstreamId: string;
@@ -1242,6 +1248,7 @@ function assertSessionBinding(session: NativeSessionReference, expected: Session
     session.provider !== expected.provider ||
     session.adapterId !== expected.adapterId ||
     session.modelId !== expected.modelId ||
+    session.effort !== expected.effort ||
     session.sessionKey !== expected.sessionKey ||
     session.taskId !== expected.taskId ||
     session.workstreamId !== expected.workstreamId ||
@@ -1327,6 +1334,7 @@ async function assertAgentRequirementAvailable(
   adapter: AgentAdapter,
   requirement: WorkerAgentRequirementV1 | undefined,
   modelId?: string,
+  effort?: string,
   environment?: Readonly<Record<string, string>>,
   secretEnvironment?: Readonly<Record<string, string>>,
 ): Promise<void> {
@@ -1336,7 +1344,8 @@ async function assertAgentRequirementAvailable(
   if (
     adapter.provider !== requirement.provider ||
     (requirement.adapterId !== undefined && adapter.adapterId !== requirement.adapterId) ||
-    (requirement.modelId !== undefined && modelId !== requirement.modelId)
+    (requirement.modelId !== undefined && modelId !== requirement.modelId) ||
+    (requirement.effort !== undefined && effort !== requirement.effort)
   ) {
     throw agentRequirementUnavailable();
   }
@@ -1377,9 +1386,16 @@ async function assertAgentRequirementAvailable(
     } catch {
       throw agentRequirementUnavailable();
     }
-    if (!catalog.models.some((model) => model.modelId === requirement.modelId)) {
+    const model = catalog.models.find((candidate) => candidate.modelId === requirement.modelId);
+    if (
+      model === undefined ||
+      (requirement.effort !== undefined &&
+        !(model.supportedEfforts ?? []).includes(requirement.effort))
+    ) {
       throw agentRequirementUnavailable();
     }
+  } else if (requirement.effort !== undefined) {
+    throw agentRequirementUnavailable();
   }
 }
 
@@ -1399,6 +1415,7 @@ function toWorkerAgentSessionObservation(
     adapterId: session.adapterId,
     adapterVersion: session.adapterVersion,
     ...(session.modelId === undefined ? {} : { modelId: session.modelId }),
+    ...(session.effort === undefined ? {} : { effort: session.effort }),
     nativeSessionId: session.nativeSessionId,
     workstreamId: session.workstreamId,
     workspaceId: session.workspaceId,
@@ -1925,9 +1942,10 @@ function createSessionKey(input: {
   readonly provider: AgentProvider;
   readonly adapterId: string;
   readonly modelId?: string;
+  readonly effort?: string;
   readonly workspaceId: string;
 }): string {
-  const version = input.modelId === undefined ? "v1" : "v2";
+  const version = input.effort !== undefined ? "v3" : input.modelId === undefined ? "v1" : "v2";
   const digest = createHash("sha256")
     .update(
       JSON.stringify([
@@ -1938,6 +1956,7 @@ function createSessionKey(input: {
         input.provider,
         input.adapterId,
         ...(input.modelId === undefined ? [] : [input.modelId]),
+        ...(input.effort === undefined ? [] : [input.effort]),
         input.workspaceId,
       ]),
     )

@@ -122,6 +122,9 @@ represents a supported release or completed first milestone.
 - Kept Windows core services on their exact non-admin virtual account while using SCM SID type
   `UNRESTRICTED`, so headless provider DNS/HTTPS is available without moving Agent execution into
   the interactive owner session.
+- Preserved an exact Agent model and optional effort through Worker session validation, durable
+  session keying, storage, resume checks, and owner-safe Run observations, so a successful pinned or
+  Prefer-selected provider turn is not discarded after completion.
 - Recovered certificate rotation after prior failed rotations and owner-authorized recredentialing
   by selecting the active current-generation certificate, and discarded key-bound rotation requests
   replayed from an earlier Worker process session.
