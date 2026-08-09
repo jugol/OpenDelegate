@@ -1119,6 +1119,7 @@ interface PlanningDeviceObservation {
   }[];
   readonly activeRuns: number;
   readonly maximumConcurrentRuns?: number;
+  readonly acceptingWork?: boolean;
 }
 
 function projectPlanningDeviceContext(
@@ -1201,7 +1202,10 @@ function projectPlanningDeviceContext(
       activeRuns: device.capacity?.activeRuns ?? device.currentRuns?.length ?? 0,
       ...(device.capacity === undefined
         ? {}
-        : { maximumConcurrentRuns: device.capacity.maximumConcurrentRuns }),
+        : {
+            maximumConcurrentRuns: device.capacity.maximumConcurrentRuns,
+            acceptingWork: device.capacity.acceptingWork,
+          }),
     });
   });
   return Object.freeze(projected);
@@ -1248,6 +1252,7 @@ const DEVICE_DIRECTORY_QUERY_PATTERNS: Readonly<
   ko: Object.freeze([
     /^(?:(?:지금|현재)\s*)?(?:(?:접속|연결|사용)\s*)?(?:(?:가능한|가능|된|되어\s*있는|중인|온라인인)\s*)?(?:디바이스|기기|장치|컴퓨터)(?:가|는|들이|들은)?\s*(?:뭐뭐가?|뭐가|무엇(?:이|인가요?)?|어떤(?:\s*것들이?|\s*게)?|몇\s*대)(?:\s*(?:있어(?:요)?|있나(?:요)?|있습니까|인가요?|야))?[?!.~]*$/u,
     /^(?:(?:지금|현재)\s*)?(?:(?:접속\s*가능한|연결된|온라인인|등록된)\s*)?(?:디바이스|기기|장치|컴퓨터)(?:들)?(?:의|을|를)?\s*(?:목록|상태)?(?:을|를)?\s*(?:알려\s*줘|보여\s*줘|말해\s*줘|나열해\s*줘)(?:요)?[?!.~]*$/u,
+    /^(?:(?:지금|현재)\s*)?(?:(?:접속|연결|사용)\s*가능(?:하고|하며)?\s*|온라인(?:이고|이며)\s*)?(?:작업(?:을)?\s*(?:받을|수행할)\s*수\s*있는\s*)?(?:디바이스|기기|장치|컴퓨터)(?:들)?(?:의|을|를)?\s*(?:(?:os|운영\s*체제)(?:와|과|,)?\s*)?(?:(?:검증된\s*)?(?:주요\s*)?(?:capabilit(?:y|ies)|기능|역할)(?:만)?\s*)?(?:간단히\s*)?(?:알려\s*줘|보여\s*줘|말해\s*줘|나열해\s*줘)(?:요)?[?!.~]*$/iu,
   ]),
   es: Object.freeze([
     /^(?:qu[eé]|cu[aá]les)\s+(?:dispositivos?|ordenadores?|computadoras?|m[aá]quinas?)\s+(?:est[aá]n\s+)?(?:actualmente\s+)?(?:disponibles?|en\s+l[ií]nea|accesibles?|conectados?)[ ?!.]*$/iu,
@@ -1306,6 +1311,13 @@ const VAGUE_TASK_OBJECTIVE_PATTERNS = Object.freeze([
   /^(?:tarea de prueba|nueva tarea|tarea sin t[ií]tulo)[ ?!.]*$/iu,
   /^(?:测试任务|新任务|未命名任务)[？?！!.]*$/u,
 ]);
+
+const KOREAN_DIRECTORY_SAFETY_QUALIFIER = new RegExp(
+  "^(?:(?:파일|서비스|계정|권한|설정|네트워크|외부\\s*시스템))" +
+    "(?:(?:\\s*,\\s*|\\s+(?:또는|및|과|와)\\s+)(?:파일|서비스|계정|권한|설정|네트워크|외부\\s*시스템))*" +
+    "(?:은|는|을|를)?\\s*(?:변경|수정|삭제|생성|재시작|호출|접근)\\s*하지\\s*(?:마|말아\\s*줘)(?:요)?[.!?~]*$",
+  "u",
+);
 
 function answerDeviceDirectoryQuestion(
   task: TaskExecutionRequest["task"],
@@ -1371,13 +1383,14 @@ function deviceDirectoryQuestionForTask(
 }
 
 function classifyDeviceDirectoryQuestion(query: string): DeviceDirectoryQuestion | undefined {
-  const genericLocale = deviceDirectoryQueryLocale(query);
+  const boundedQuery = stripDirectorySafetyQualifier(query);
+  const genericLocale = deviceDirectoryQueryLocale(boundedQuery);
   if (genericLocale !== undefined) {
     return Object.freeze({ locale: genericLocale });
   }
   for (const locale of ["ko", "en", "ja", "fr", "es", "zh"] as const) {
     for (const pattern of NAMED_DEVICE_QUERY_PATTERNS[locale]) {
-      const match = pattern.exec(query);
+      const match = pattern.exec(boundedQuery);
       const target = match?.[1]?.trim().replace(/^["'`]+|["'`]+$/gu, "");
       if (target !== undefined && target.length > 0) {
         return Object.freeze({ locale, target });
@@ -1385,6 +1398,14 @@ function classifyDeviceDirectoryQuestion(query: string): DeviceDirectoryQuestion
     }
   }
   return undefined;
+}
+
+function stripDirectorySafetyQualifier(query: string): string {
+  const sentence = /^(.{1,512}?[.!?。！？])\s+(.{1,512})$/u.exec(query);
+  if (sentence?.[1] === undefined || sentence[2] === undefined) {
+    return query;
+  }
+  return KOREAN_DIRECTORY_SAFETY_QUALIFIER.test(sentence[2]) ? sentence[1] : query;
 }
 
 function classifyDeviceRouteQuestion(
@@ -1556,7 +1577,39 @@ function renderDeviceDirectoryAnswer(
                 : device.connection === "online"
                   ? "reachable"
                   : "offline";
-    return `- ${device.name} — ${connection} · ${device.osFamily} · ${device.role} · runtime ${device.runtime}`;
+    const acceptingWork =
+      device.acceptingWork === undefined
+        ? undefined
+        : locale === "ko"
+          ? device.acceptingWork
+            ? "작업 가능"
+            : "작업 대기 불가"
+          : device.acceptingWork
+            ? "accepting work"
+            : "not accepting work";
+    const capabilities =
+      device.capabilities.length === 0
+        ? locale === "ko"
+          ? "검증 기능 없음"
+          : "no verified capabilities"
+        : `${locale === "ko" ? "검증 기능" : "verified capabilities"}: ${device.capabilities
+            .slice(0, 12)
+            .join(", ")}`;
+    const capacity =
+      device.maximumConcurrentRuns === undefined
+        ? undefined
+        : `${locale === "ko" ? "작업" : "Runs"} ${device.activeRuns.toString()}/${device.maximumConcurrentRuns.toString()}`;
+    return [
+      `- ${device.name} — ${connection}`,
+      device.osFamily,
+      device.role,
+      `runtime ${device.runtime}`,
+      acceptingWork,
+      capacity,
+      capabilities,
+    ]
+      .filter((part): part is string => part !== undefined)
+      .join(" · ");
   });
   if (visible.length < devices.length) {
     const omitted = devices.length - visible.length;

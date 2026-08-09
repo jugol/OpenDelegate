@@ -1118,9 +1118,12 @@ Main-owned Device state containing identity, display name, OS family,
 runtime/connection state, service supervision mode, last observation time, Roles,
 verified capability names, route health, and bounded capacity. The narrow grammar
 includes fleet-list questions, uniquely matched named-Device reachability questions,
-and a registered-route follow-up for that named Device. It excludes Secrets, Device
-Instructions, Knowledge, private
-transcripts, local paths, Policy internals, and unverified capability claims.
+common fleet-list detail qualifiers such as OS, verified capabilities, or whether a
+Device is accepting work, an explicit non-mutation guard sentence, and a
+registered-route follow-up for that named Device. An affirmative action joined to
+the query never qualifies for direct completion. The projection excludes Secrets,
+Device Instructions, Knowledge, private transcripts, local paths, Policy internals,
+and unverified capability claims.
 
 The deterministic path formats the answer without an LLM and mints authority for
 that exact decision, Task, and planning key. The authoritative executor rejects a

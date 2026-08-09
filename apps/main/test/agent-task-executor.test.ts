@@ -475,6 +475,10 @@ test("Main Agent answers read-only Device questions from the bounded Main-owned 
           runtime: "healthy",
           serviceMode: "system-service",
           roles: ["main-coordinator"],
+          capabilities: [
+            { name: "codex", verification: "verified" },
+            { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
+          ],
           instructions: ["PRIVATE_DEVICE_INSTRUCTION_SENTINEL"],
           routes: [
             {
@@ -546,6 +550,50 @@ test("Main Agent answers read-only Device questions from the bounded Main-owned 
     }),
     true,
   );
+
+  const liveForumResult = await reasoner.plan({
+    task: {
+      ...task,
+      objective:
+        "현재 온라인이고 작업을 받을 수 있는 장치들을 OS와 검증된 주요 capability만 간단히 알려줘. 파일, 서비스, 계정, 권한, 설정, 네트워크 또는 외부 시스템은 변경하지 마.",
+      completionCriteria: ["Complete the requested work and report the observable result."],
+      messages: [],
+    },
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_live_forum:attempt:1",
+    signal: controller.signal,
+  });
+
+  assert.equal(liveForumResult.state, "completed");
+  assert.match(
+    liveForumResult.state === "completed" ? liveForumResult.publicMessage : "",
+    /현재 등록된 기기 2대 중 1대/u,
+  );
+  assert.match(
+    liveForumResult.state === "completed" ? liveForumResult.publicMessage : "",
+    /codex/u,
+  );
+  assert.doesNotMatch(
+    liveForumResult.state === "completed" ? liveForumResult.publicMessage : "",
+    /UNVERIFIED_CAPABILITY_SENTINEL/u,
+  );
+  assert.equal(adapter.starts.length, 0);
+
+  await assert.rejects(
+    reasoner.plan({
+      task: {
+        ...task,
+        objective: "현재 온라인이고 작업을 받을 수 있는 장치들을 알려줘. 그리고 파일을 삭제해줘.",
+        completionCriteria: ["Complete the requested work and report the observable result."],
+        messages: [],
+      },
+      attempt: 1,
+      executionKey: "task-execution:task_release:cycle:cycle_compound_forum:attempt:1",
+      signal: controller.signal,
+    }),
+    (error: unknown) => error instanceof TaskExecutorError && error.code === "WORK_PLAN_INVALID",
+  );
+  assert.equal(adapter.starts.length, 1);
 });
 
 test("Main Agent answers a named Device reachability question without spending an Agent turn", async () => {
