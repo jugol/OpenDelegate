@@ -1677,7 +1677,9 @@ the same impossible command indefinitely without telling the owner.
 **Consequence:** Clicking an older control is harmless and receives a clear “no
 longer available” response directing the owner to the latest Task update or a new
 message. The durable outbox does not accumulate deterministic failures, while true
-delivery or concurrency failures remain recoverable.
+delivery or concurrency failures remain recoverable. D-102 additionally removes a
+successfully superseded failure control in place; this refusal remains the fallback
+for legacy messages or a missed Discord edit.
 
 ## D-086 — Wall Budget measures active execution, not Task age
 
@@ -2064,3 +2066,28 @@ creation and decisions wake Discord immediately, while periodic reconciliation
 repairs missed presentation. Provider prose, action arguments, local paths, native
 IDs, and Secrets never enter the Discord summary; replay executes an approved action
 at most once.
+
+## D-102 — A successful retry resolves its prior Discord failure control in place
+
+Implementation detail:
+[ADR-0054](adr/0054-discord-retry-resolves-prior-failure.md).
+
+**Decision:** When a Task with a delivered chronological failure update enters a new
+`running` attempt, the Discord Adapter durably resolves every still-unresolved
+failure update for that Task. It recovers the original Discord message through the
+failure update's idempotency request key, edits the card into a historical “Retry
+started” receipt, and removes all buttons. The resolution itself is an idempotent
+outbox action persisted by SQLite or PostgreSQL. It preserves the concrete earlier
+failure explanation and does not delete history.
+
+**Rationale:** Live alpha.14 QA recovered a failed Device-directory Task and posted
+the correct result, but the older `Task needs attention` card still displayed an
+active Retry button above it. The status panel correctly showed Done, yet two
+simultaneously actionable-looking states forced the owner to infer which control was
+current.
+
+**Consequence:** A successful retry leaves one clear current control surface while
+retaining useful failure history. Restart and Discord outage replay cannot duplicate
+the edit. If the old message was externally deleted, OpenDelegate records a bounded
+diagnostic and continues projecting the authoritative current Task; D-085 still
+handles clicks on legacy stale controls safely.

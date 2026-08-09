@@ -482,6 +482,12 @@ export type DiscordOutboxAction =
       readonly projection: TaskChannelProjection;
     }
   | {
+      readonly kind: "resolve-task-failure";
+      readonly taskId: string;
+      readonly failureRequestKey: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
       readonly kind: "complete-owner-message";
       readonly taskId: string;
       readonly completion: DiscordOwnerMessageCompletion;

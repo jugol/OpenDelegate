@@ -68,6 +68,10 @@ approved product specification.
 45. [`0048-linux-claude-nested-sandbox-readiness.md`](0048-linux-claude-nested-sandbox-readiness.md)
 46. [`0049-native-child-run-capability-fanout.md`](0049-native-child-run-capability-fanout.md)
 47. [`0050-discord-bounded-live-task-activity.md`](0050-discord-bounded-live-task-activity.md)
+48. [`0051-scheduling-metadata-and-singleton-workspace-default.md`](0051-scheduling-metadata-and-singleton-workspace-default.md)
+49. [`0052-windows-codex-service-sandbox-directory.md`](0052-windows-codex-service-sandbox-directory.md)
+50. [`0053-discord-worker-action-approval.md`](0053-discord-worker-action-approval.md)
+51. [`0054-discord-retry-resolves-prior-failure.md`](0054-discord-retry-resolves-prior-failure.md)
 
 ## Proposed ADRs
 

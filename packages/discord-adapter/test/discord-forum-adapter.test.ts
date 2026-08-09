@@ -1435,6 +1435,61 @@ test("a chronological failure update carries its Retry control", () => {
   assert.match(rendered, /od:v1:retry/);
 });
 
+test("a successful retry resolves the prior failure control in place", async () => {
+  const { adapter, api } = fixture();
+  const thread = forumThread("300000000000000134");
+  const starter = ownerMessage(thread.id, thread.id, "Recover after a bounded failure.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Recover after a bounded failure.",
+    summary: "The first attempt could not produce a valid plan.",
+    sourceEventId: "event_retryable_failure",
+    significance: "failure",
+  });
+  await adapter.flushOutbox();
+
+  const failureMessage = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("od:v1:retry"),
+  );
+  assert.notEqual(failureMessage, undefined);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Recover after a bounded failure.",
+    summary: "The retry is now running.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Recover after a bounded failure.",
+    summary: "The retry is now running.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+
+  const resolvedFailures = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "message-edit" &&
+      operation["messageId"] === failureMessage?.["messageId"],
+  );
+  assert.equal(resolvedFailures.length, 1);
+  const resolvedFailure = resolvedFailures[0];
+  assert.notEqual(resolvedFailure, undefined);
+  const rendered = JSON.stringify(resolvedFailure?.["payload"]);
+  assert.match(rendered, /Retry started/u);
+  assert.doesNotMatch(rendered, /od:v1:retry/u);
+});
+
 test("a failed turn replaces the newest owner-message acknowledgement with failure", async () => {
   const { adapter, api } = fixture();
   const thread = forumThread("300000000000000034");

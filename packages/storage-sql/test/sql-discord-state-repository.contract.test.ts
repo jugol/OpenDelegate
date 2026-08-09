@@ -420,6 +420,34 @@ test("SQLite Discord schema has no credential column and stores only the opaque 
   }
 });
 
+test("SQLite persists a durable Discord failure-resolution action across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "resolve-task-failure",
+    taskId: "task-1",
+    failureRequestKey: "failure-projection:03-update",
+    projection: {
+      taskId: "task-1",
+      state: "failed",
+      objective: "Recover the Task.",
+      summary: "The previous attempt stopped safely.",
+      sourceEventId: "event_failure_before_retry",
+      significance: "failure",
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("resolve-failure", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
+    await fixture.cleanup();
+  }
+});
+
 test("SQLite rejects noncanonical or credential-shaped Discord outbox data before persistence", async () => {
   const fixture = await createSqliteFixture();
   const repository = await fixture.open("apply");

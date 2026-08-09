@@ -523,14 +523,18 @@ through a secure handoff and resumes the same Task afterward.
    message in place, removes its controls, and resumes the Task once. A failure reply
    includes the owner-safe concrete reason or exhausted resource and the applicable
    recovery control, such as Retry; the owner is never left with only a generic
-   attention notice.
+   attention notice. When that Task enters a new running attempt, the prior failure
+   reply is edited in place into a historical “Retry started” receipt and its stale
+   controls are removed; the current status or result remains below it.
 9. Buttons and menus offer pause, cancel, retry, approve once, reject, inspect Runs,
    and open Artifact actions where Discord permits. A Discord Approval decision
    resolves the exact same durable Approval service record shown in Admin Web; it
    never creates a parallel Task-local approval authority. If authoritative Task state rejects
    a control from an older message, the deferred interaction explains that the
    control is no longer available and the command outbox completes without retrying
-   the same deterministic refusal. Transport and storage failures remain retryable.
+   the same deterministic refusal. This is a repair path for legacy or externally
+   missed edits, not the normal successful-retry UX. Transport and storage failures
+   remain retryable.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
     resume the Task and reopen the external conversation when permitted.
 11. If the external post is deleted, Task data remains in Main and the binding is

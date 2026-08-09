@@ -208,6 +208,37 @@ export function renderResolvedOwnerPrompt(
   });
 }
 
+export function renderResolvedTaskFailure(
+  projection: TaskChannelProjection,
+): DiscordMessagePayload {
+  validateProjection(projection);
+  if (projection.significance !== "failure") {
+    throw new DiscordAdapterError(
+      "PROJECTION_INVALID",
+      "Only a chronological failure projection can be resolved in place.",
+    );
+  }
+  return Object.freeze({
+    flags: DISCORD_COMPONENTS_V2_FLAG,
+    components: Object.freeze([
+      Object.freeze({
+        type: 17 as const,
+        accent_color: STATUS_COLORS.running,
+        components: Object.freeze([
+          Object.freeze({
+            type: 10 as const,
+            content: `## Retry started\n\n${safeMarkdown(
+              projection.summary,
+              1_400,
+            )}\n\n↻ OpenDelegate accepted a retry. Follow the latest status or result below.`,
+          }),
+        ]),
+      }),
+    ]),
+    allowed_mentions: Object.freeze({ parse: Object.freeze([]) }),
+  });
+}
+
 function taskUpdateHeadline(significance: TaskChannelProjection["significance"]): string {
   switch (significance) {
     case "final":

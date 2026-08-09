@@ -27,6 +27,7 @@ import { DiscordAdapterError, DiscordApiError, DiscordTaskPortError } from "./er
 import {
   renderInteractionResult,
   renderResolvedOwnerPrompt,
+  renderResolvedTaskFailure,
   renderStatusPanel,
   renderTaskActivity,
   renderTaskUpdate,
@@ -354,6 +355,7 @@ export class DiscordForumAdapter {
     if (binding === undefined) {
       throw new DiscordAdapterError("PROJECTION_INVALID", "The Task has no Discord Forum binding.");
     }
+    await this.#enqueueFailureResolutions(projection);
     await this.#refreshOwnerActivity(projection, binding);
     const projectionDigest = digestValue(panelProjection(projection));
     const ownerMessageCompletion = await this.#ownerMessageCompletion(projection, binding);
@@ -779,6 +781,45 @@ export class DiscordForumAdapter {
         promptRequestKey: prompt.id,
         projection: frozenClone(prompt.action.projection),
       });
+    }
+  }
+
+  async #enqueueFailureResolutions(projection: TaskChannelProjection): Promise<void> {
+    if (projection.state !== "running") {
+      return;
+    }
+    const outbox = await this.#repository.listOutbox();
+    const resolvedFailureKeys = new Set(
+      outbox
+        .filter((item) => item.action.kind === "resolve-task-failure")
+        .map((item) =>
+          item.action.kind === "resolve-task-failure" ? item.action.failureRequestKey : "",
+        ),
+    );
+    const unresolvedFailures = outbox.filter(
+      (item) =>
+        item.delivered &&
+        item.action.kind === "post-task-update" &&
+        item.action.taskId === projection.taskId &&
+        item.action.projection.significance === "failure" &&
+        !resolvedFailureKeys.has(item.id),
+    );
+    for (const failure of unresolvedFailures) {
+      if (failure.action.kind !== "post-task-update") {
+        continue;
+      }
+      await this.#enqueueOutbox(
+        `${digestValue({
+          taskId: projection.taskId,
+          failureRequestKey: failure.id,
+        })}:01-resolve-failure`,
+        {
+          kind: "resolve-task-failure",
+          taskId: projection.taskId,
+          failureRequestKey: failure.id,
+          projection: frozenClone(failure.action.projection),
+        },
+      );
     }
   }
 
@@ -1558,6 +1599,30 @@ export class DiscordForumAdapter {
         }
         return;
       }
+      case "resolve-task-failure": {
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const failure = await this.#api.createMessage({
+          threadId: binding.threadId,
+          requestKey: action.failureRequestKey,
+          payload: renderTaskUpdate(action.projection),
+        });
+        try {
+          await this.#api.editMessage({
+            threadId: binding.threadId,
+            messageId: failure.messageId,
+            payload: renderResolvedTaskFailure(action.projection),
+          });
+        } catch (error) {
+          if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+            throw error;
+          }
+          this.#recordDiagnostic("discord.task_failure_message_missing", {
+            threadId: binding.threadId,
+            messageId: failure.messageId,
+          });
+        }
+        return;
+      }
       case "complete-owner-message": {
         const dependency = (await this.#repository.listOutbox()).find(
           (candidate) => candidate.id === action.afterRequestKey,
@@ -1836,6 +1901,7 @@ async function bindingForAction(
     case "upsert-task-activity":
     case "close-task-activity":
     case "resolve-owner-prompt":
+    case "resolve-task-failure":
     case "complete-owner-message":
       return repository.getBindingByTask(action.taskId);
     case "task-command":
