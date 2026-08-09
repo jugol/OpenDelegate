@@ -905,7 +905,7 @@ export async function createWorkerRuntime(
     sourceCheckoutDirectory: options.paths.sourceCheckoutRoot,
     maxFrameBytes: 8 * 1024 * 1024,
   });
-  const toolServerLaunch = workerToolServerLaunch();
+  const toolServerLaunch = resolveWorkerToolServerLaunch();
   const nativeSessionLeaseStore = createWorkerNativeSessionLeaseStore(options.paths);
   const adapters = createWorkerAgentAdapters(
     configuration.agent,
@@ -1457,11 +1457,10 @@ async function createWorkerPlatformMutationProvider(input: {
   }
 }
 
-function workerToolServerLaunch(): {
+export function resolveWorkerToolServerLaunch(modulePath = fileURLToPath(import.meta.url)): {
   readonly command: string;
   readonly argsPrefix: readonly string[];
 } {
-  const modulePath = fileURLToPath(import.meta.url);
   if (extname(modulePath).toLowerCase() === ".ts") {
     return Object.freeze({
       command: process.execPath,
@@ -1473,7 +1472,10 @@ function workerToolServerLaunch(): {
   }
   return Object.freeze({
     command: process.execPath,
-    argsPrefix: Object.freeze([modulePath]),
+    argsPrefix: Object.freeze([
+      resolve(dirname(modulePath), "../launcher/opendelegate.mjs"),
+      "worker",
+    ]),
   });
 }
 
