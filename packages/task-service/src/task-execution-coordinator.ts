@@ -838,7 +838,7 @@ export class TaskExecutionCoordinator {
 function budgetExhaustionPublicMessage(error: BudgetHardLimitError): string {
   const scope = error.workOrderId === undefined ? "This Task" : "A Work Order in this Task";
   if (error.metric === "idleTimeMs") {
-    return `OpenDelegate paused automatic work after ${formatBudgetDuration(error.hard)} without verified activity for ${scope.toLowerCase()}. This protects against a stuck Run. Send a new message or use Retry/Resume to restart the idle window; inactivity alone does not require a Budget extension.`;
+    return `OpenDelegate paused automatic work after ${formatBudgetDuration(error.hard)} without verified activity for ${scope.toLowerCase()}. This protects against a stuck Run. Send a new message such as "Continue" to resume and restart the idle window; inactivity alone does not require a Budget extension.`;
   }
   if (error.metric === "wallTimeMs") {
     return `${scope} has used its ${formatBudgetDuration(error.hard)} active automatic-execution limit. Waiting, paused, offline, and owner-response time did not count. Extend the Task Budget in Admin to continue.`;

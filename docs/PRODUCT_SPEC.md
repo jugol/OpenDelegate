@@ -596,7 +596,9 @@ may request a transition but cannot manufacture a state outside the transition r
    affinity, and owner preferences.
 4. Main uses semantic reasoning only when choosing or decomposing among eligible
    options is not mechanically determined.
-5. A dispatch creates a leased Worker Run with a unique idempotency key.
+5. A dispatch creates a leased Worker Run with a unique idempotency key. Worker IDs
+   are Device-scoped, so durable references pair the Device ID and Worker ID; two
+   different Devices may use the same local Worker ID.
 6. Claim, heartbeat, timeout, cancellation, and retry behavior does not require an
    LLM.
 7. A retry creates a new Run linked to the previous attempt.

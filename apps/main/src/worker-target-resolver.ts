@@ -1,4 +1,5 @@
 import {
+  SchedulerError,
   scheduleWorkOrder,
   type DeviceCandidate,
   type ScheduleRequest,
@@ -278,8 +279,14 @@ function trySchedule(
 ): ReturnType<typeof scheduleWorkOrder> | undefined {
   try {
     return scheduleWorkOrder(request, candidates);
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof SchedulerError && error.code === "SCHEDULER_NO_ELIGIBLE_DEVICE") {
+      return undefined;
+    }
+    throw new TaskExecutorError(
+      "WORKER_CANDIDATE_STATE_INVALID",
+      "OpenDelegate could not validate the current Worker candidate state. Check Main diagnostics before retrying this Task.",
+    );
   }
 }
 

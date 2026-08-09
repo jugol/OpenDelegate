@@ -414,7 +414,7 @@ export const spanishMessages = {
     hardDetail:
       "{metrics} alcanzó la parada estricta. El trabajo nuevo permanecerá detenido hasta que el propietario amplíe explícitamente este presupuesto.",
     hardIdleDetail:
-      "{metrics} alcanzó la detención por inactividad. Un mensaje nuevo del propietario o Reintentar/Reanudar reinicia la ventana de inactividad; la inactividad por sí sola no requiere ampliar el presupuesto de la tarea.",
+      "{metrics} alcanzó la detención por inactividad. El propietario puede enviar un mensaje nuevo, por ejemplo, «Continuar», para reiniciar la ventana de inactividad; la inactividad por sí sola no requiere ampliar el presupuesto de la tarea.",
     limitEvents: "Eventos de límite",
     noLimitEvents: "No se registraron avisos preventivos ni paradas estrictas.",
     hardEvent: "Parada estricta",

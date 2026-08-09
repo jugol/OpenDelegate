@@ -400,7 +400,7 @@ export const englishMessages = {
     hardDetail:
       "{metrics} reached the hard stop. New work stays stopped until the Owner explicitly extends this Task Budget.",
     hardIdleDetail:
-      "{metrics} reached the inactivity stop. A new Owner message or Retry/Resume restarts the idle window; inactivity alone does not require a Task Budget extension.",
+      "{metrics} reached the inactivity stop. Send a new Owner message, such as “Continue,” to restart the idle window; inactivity alone does not require a Task Budget extension.",
     limitEvents: "Limit events",
     noLimitEvents: "No soft-warning or hard-stop event has been recorded.",
     hardEvent: "Hard stop",

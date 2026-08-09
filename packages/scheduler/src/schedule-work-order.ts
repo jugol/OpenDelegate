@@ -23,13 +23,7 @@ export function scheduleWorkOrder(
   const deviceIds = snapshots
     .filter((snapshot) => snapshot.deviceIdValid)
     .map((snapshot) => snapshot.deviceId);
-  const workerIds = snapshots
-    .filter((snapshot) => snapshot.workerIdValid)
-    .map((snapshot) => snapshot.workerId);
-  if (
-    new Set(deviceIds).size !== deviceIds.length ||
-    new Set(workerIds).size !== workerIds.length
-  ) {
+  if (new Set(deviceIds).size !== deviceIds.length) {
     throw new SchedulerError(request.workOrderId, [], "SCHEDULER_INPUT_INVALID");
   }
 

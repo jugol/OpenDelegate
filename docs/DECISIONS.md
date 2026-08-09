@@ -1868,3 +1868,22 @@ all consequential child actions still cross executable Policy. CLI fallbacks rem
 tool-less, a fifth observable child fails the Run closed, and a child cannot pretend
 to use another Device; it reports that dependency to Main for an ordinary Work
 Order.
+
+## D-094 — Worker identity is scoped by Device
+
+Implementation detail:
+[ADR-0046](adr/0046-device-scoped-worker-identity.md).
+
+**Decision:** A Worker ID identifies a Worker within one Device. Durable Run,
+dispatch, authorization, lease, and audit references use the `(Device ID, Worker
+ID)` pair. Different Devices may use the same local Worker ID, including the default
+`worker-primary`. Scheduler input still rejects duplicate Device candidates.
+
+**Rationale:** Each Device owns its Worker runtime and local configuration. Requiring
+an Instance-global Worker name adds no authority boundary, makes ordinary generated
+defaults collide across Devices, and contradicts protocol records that already carry
+both identities.
+
+**Consequence:** A multi-Device fleet can use consistent local service defaults
+without becoming unschedulable. Candidate corruption is reported as invalid state
+rather than being mislabeled as an offline Worker.

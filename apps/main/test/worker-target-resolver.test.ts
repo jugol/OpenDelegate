@@ -50,6 +50,45 @@ test("target resolution filters mechanically ineligible Devices before determini
   });
 });
 
+test("local Worker IDs may repeat across different Device candidates", async () => {
+  const resolver = new DeterministicWorkerTargetResolver({
+    candidates: source([
+      candidate("device-nas", {
+        workerId: "worker-primary",
+      }),
+      candidate("device-windows", {
+        workerId: "worker-primary",
+        osFamily: "windows",
+        capabilities: [
+          { name: "codex", verification: "verified" },
+          { name: "windows", verification: "verified" },
+        ],
+      }),
+    ]),
+  });
+
+  const selected = await resolver.resolve({
+    task: task(),
+    workOrder: {
+      ...workOrder(),
+      requiredOsFamily: "windows",
+      requiredCapabilities: ["windows"],
+      schedulingHints: {
+        preferredDeviceIds: ["device-windows"],
+        preferredRoles: [],
+      },
+    },
+    previousRuns: [],
+    signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(selected, {
+    deviceId: "device-windows",
+    workerId: "worker-primary",
+    routeId: "route-device-windows",
+  });
+});
+
 test("a retry prefers an eligible Device that has not already owned this Work Order", async () => {
   const resolver = new DeterministicWorkerTargetResolver({
     candidates: source([
@@ -101,6 +140,28 @@ test("target resolution fails with a retryable structured error when no eligible
       code: "WORKER_OFFLINE",
       retryable: true,
       retryKind: "resource",
+    },
+  );
+});
+
+test("invalid candidate state is not mislabeled as an offline Worker", async () => {
+  const resolver = new DeterministicWorkerTargetResolver({
+    candidates: source([
+      candidate("device-duplicate"),
+      candidate("device-duplicate", { workerId: "worker-other" }),
+    ]),
+  });
+
+  await assert.rejects(
+    resolver.resolve({
+      task: task(),
+      workOrder: workOrder(),
+      previousRuns: [],
+      signal: new AbortController().signal,
+    }),
+    {
+      code: "WORKER_CANDIDATE_STATE_INVALID",
+      retryable: false,
     },
   );
 });

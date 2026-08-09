@@ -208,8 +208,9 @@ owns isolation.
 ### Worker Run
 
 One execution attempt of a Work Order on one Device through one Agent Adapter. A
-retry is a new Run. A related follow-up may resume that Device and adapter's existing
-Worker Session.
+retry is a new Run. Worker IDs are Device-scoped, so durable references pair the
+Device ID and Worker ID. A related follow-up may resume that Device and adapter's
+existing Worker Session.
 
 ### Agent Adapter
 
