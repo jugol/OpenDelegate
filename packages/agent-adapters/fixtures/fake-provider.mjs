@@ -225,6 +225,12 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
           turn: { id: turnId, status: "inProgress", items: [], error: null },
         },
       });
+      if (process.env.FIXTURE_CODEX_EMIT_SKILLS_CHANGED === "1") {
+        send({
+          method: "skills/changed",
+          params: { threadId },
+        });
+      }
       if (process.env.FIXTURE_CODEX_EMIT_UNSUPPORTED_AFTER_TURN_STARTED === "1") {
         send({
           method: "fixture/unsupported",
