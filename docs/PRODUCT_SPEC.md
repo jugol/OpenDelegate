@@ -607,7 +607,10 @@ may request a transition but cannot manufacture a state outside the transition r
 1. Each Work Order has a stable ID, explicit brief, completion criteria, constraints,
    selected inputs, required Capabilities, scheduling hints, and an optional Agent
    requirement naming a provider plus an optional exact adapter, exact model, and
-   allowed compatibility set.
+   allowed compatibility set. Agent-authored IDs are plan-local labels; Main
+   deterministically replaces them with owner-input-cycle-scoped durable IDs and
+   remaps dependencies before persistence. Retries in one cycle keep the same IDs,
+   while a later owner cycle cannot collide merely because an Agent reused a label.
 2. A deterministic eligibility stage filters Devices by health, connection, Policy,
    Capability, Secret availability, resource capacity, and hard Task constraints.
 3. A deterministic score may rank workload, route cost, artifact locality, session

@@ -1120,7 +1120,8 @@ verified capability names, route health, and bounded capacity. The narrow gramma
 includes fleet-list questions, uniquely matched named-Device reachability questions,
 common fleet-list detail qualifiers such as OS, verified capabilities, or whether a
 Device is accepting work, a bounded repeat modifier such as Korean `다시`, an
-explicit non-mutation guard sentence, and a
+explicit non-mutation guard sentence, and a self-contained latest fleet query even
+after earlier owner messages in the same Device-directory Task, plus a
 registered-route follow-up for that named Device. An affirmative action joined to
 the query never qualifies for direct completion. The projection excludes Secrets,
 Device Instructions, Knowledge, private transcripts, local paths, Policy internals,
@@ -2097,3 +2098,28 @@ the edit, and nonce expiry cannot create a replacement card. If the old message 
 externally deleted, OpenDelegate records a bounded diagnostic and continues
 projecting the authoritative current Task; D-085 still handles clicks on legacy
 stale controls safely.
+
+## D-103 — Agent Work Order labels become durable owner-cycle-scoped IDs
+
+Implementation detail:
+[ADR-0055](adr/0055-owner-cycle-scoped-work-order-ids.md).
+
+**Decision:** A Main Agent supplies unique plan-local Work Order labels only. Before
+the plan reaches the authoritative executor, deterministic Main code replaces every
+label with an opaque ID derived from the stable semantic planning key and ordinal,
+then remaps every `dependsOn` edge through the same bijection. The same owner-input
+cycle and retry-stable planning key always produce the same durable IDs. A later
+owner-input cycle produces a different ID namespace even when the native Agent
+reuses labels such as `wo-01`.
+
+**Rationale:** Live Discord follow-up QA showed a native Agent reasonably reusing
+`wo-01` for a new owner turn. The orchestration journal correctly rejected the new
+content under the old durable ID as `WORK_ORDER_ID_CONFLICT`, but that made an
+ordinary long-lived Task fail because model-authored naming leaked across owner
+cycles. Prompt advice alone cannot make global identity reliable.
+
+**Consequence:** Retry idempotency and journal conflict detection remain strict,
+dependency graphs preserve their meaning, and long-running Discord Tasks may accept
+many distinct owner turns without relying on a model to remember every historical
+identifier. Invalid duplicate labels or unknown dependency labels still fail closed
+during ordinary plan validation.

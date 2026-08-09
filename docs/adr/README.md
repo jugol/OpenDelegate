@@ -72,6 +72,7 @@ approved product specification.
 49. [`0052-windows-codex-service-sandbox-directory.md`](0052-windows-codex-service-sandbox-directory.md)
 50. [`0053-discord-worker-action-approval.md`](0053-discord-worker-action-approval.md)
 51. [`0054-discord-retry-resolves-prior-failure.md`](0054-discord-retry-resolves-prior-failure.md)
+52. [`0055-owner-cycle-scoped-work-order-ids.md`](0055-owner-cycle-scoped-work-order-ids.md)
 
 ## Proposed ADRs
 
