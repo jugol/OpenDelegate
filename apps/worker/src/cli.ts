@@ -938,8 +938,16 @@ function isInternalMcpBridge(command: WorkerCliCommand): boolean {
 async function runForeground(paths: WorkerPaths): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => controller.abort();
+  const watchStdin =
+    process.env["OPENDELEGATE_NATIVE_SERVICE"] === "1" ||
+    process.env["OPENDELEGATE_TEST_EXIT_ON_STDIN_END"] === "1";
+  const stdinWasFlowing = process.stdin.readableFlowing === true;
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  if (watchStdin) {
+    process.stdin.once("end", stop);
+    process.stdin.resume();
+  }
   try {
     writeJson({ event: "worker.starting", home: paths.home });
     await runWorkerDaemon({
@@ -974,6 +982,12 @@ async function runForeground(paths: WorkerPaths): Promise<void> {
   } finally {
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
+    if (watchStdin) {
+      process.stdin.off("end", stop);
+      if (!stdinWasFlowing) {
+        process.stdin.pause();
+      }
+    }
   }
 }
 

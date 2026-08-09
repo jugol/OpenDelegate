@@ -11,13 +11,14 @@ import {
   type ServiceDiagnostic,
   type SupervisorState,
 } from "./diagnostics.ts";
-import type {
-  NativeClockBoundary,
-  NativeFileSystemBoundary,
-  NativeProcessBoundary,
-  NativeProcessRequest,
-  NativeProcessResult,
-  NativeServiceBoundaries,
+import {
+  NativeBoundaryError,
+  type NativeClockBoundary,
+  type NativeFileSystemBoundary,
+  type NativeProcessBoundary,
+  type NativeProcessRequest,
+  type NativeProcessResult,
+  type NativeServiceBoundaries,
 } from "./native-service-boundaries.ts";
 import {
   createServicePlan,
@@ -679,6 +680,7 @@ function createNativeSupervisorAdapter(
         readonly invocation: CommandInvocation;
         readonly exitCode: number;
       }> = [];
+      let activeLifecycleInvocation: CommandInvocation | undefined;
       try {
         for (const invocation of operation.invocations) {
           if (
@@ -688,6 +690,8 @@ function createNativeSupervisorAdapter(
           ) {
             continue;
           }
+          activeLifecycleInvocation =
+            invocation.verb === "start" || invocation.verb === "stop" ? invocation : undefined;
           const result = await runSupervisorInvocation(
             configuration,
             invocation,
@@ -699,12 +703,15 @@ function createNativeSupervisorAdapter(
             throw new NativeSupervisorError("A native supervisor command failed or timed out.");
           }
           completed.push({ invocation, exitCode: result.exitCode });
+          activeLifecycleInvocation = undefined;
         }
       } catch (error) {
         await rollbackPartialSupervisorOperation(
           configuration,
           operation,
-          completed,
+          activeLifecycleInvocation === undefined
+            ? completed
+            : [...completed, { invocation: activeLifecycleInvocation, exitCode: 0 }],
           boundaries.process,
           boundaries.clock,
           tools,
@@ -1275,6 +1282,22 @@ async function rollbackPartialSupervisorOperation(
 
 function inverseSupervisorInvocation(invocation: CommandInvocation): CommandInvocation | undefined {
   const args = invocation.arguments;
+  if (invocation.executable === "sc.exe" && args[0] === "start" && args[1] !== undefined) {
+    return {
+      ...invocation,
+      arguments: ["stop", args[1]],
+      verb: "stop",
+      expectedExitCodes: [0, 1060, 1062],
+    };
+  }
+  if (invocation.executable === "sc.exe" && args[0] === "stop" && args[1] !== undefined) {
+    return {
+      ...invocation,
+      arguments: ["start", args[1]],
+      verb: "start",
+      expectedExitCodes: [0, 1056, 1060],
+    };
+  }
   if (invocation.executable === "sc.exe" && args[0] === "create" && args[1] !== undefined) {
     return {
       ...invocation,
@@ -1411,6 +1434,7 @@ async function waitForWindowsServiceStopped(input: {
   readonly clock: NativeClockBoundary;
 }): Promise<void> {
   const deadline = input.clock.now().getTime() + input.timeoutMs;
+  let transientInspectionFailures = 0;
   for (;;) {
     const remainingMs = deadline - input.clock.now().getTime();
     if (remainingMs <= 0) {
@@ -1418,11 +1442,26 @@ async function waitForWindowsServiceStopped(input: {
         "The Windows service did not reach a terminal stopped state before timeout.",
       );
     }
-    const status = await input.process.run({
-      executable: input.executable,
-      arguments: ["query", input.serviceName],
-      timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
-    });
+    let status: NativeProcessResult;
+    try {
+      status = await input.process.run({
+        executable: input.executable,
+        arguments: ["query", input.serviceName],
+        timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
+      });
+      transientInspectionFailures = 0;
+    } catch (error) {
+      if (!(error instanceof NativeBoundaryError) || transientInspectionFailures >= 2) {
+        throw error;
+      }
+      transientInspectionFailures += 1;
+      const retryDelayMs = Math.min(500, deadline - input.clock.now().getTime());
+      if (retryDelayMs <= 0) {
+        throw error;
+      }
+      await input.clock.sleep(retryDelayMs);
+      continue;
+    }
     if (!status.timedOut && status.exitCode === 1060) {
       return;
     }
@@ -1436,7 +1475,7 @@ async function waitForWindowsServiceStopped(input: {
     if (!status.timedOut && status.exitCode !== 0) {
       throw new NativeSupervisorError("The Windows service stop state could not be inspected.");
     }
-    const sleepMs = Math.min(250, deadline - input.clock.now().getTime());
+    const sleepMs = Math.min(500, deadline - input.clock.now().getTime());
     if (sleepMs <= 0) {
       throw new NativeSupervisorError(
         "The Windows service did not reach a terminal stopped state before timeout.",

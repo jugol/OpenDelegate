@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync, sign as signPayload } from "node:crypt
 import test from "node:test";
 
 import {
+  NativeBoundaryError,
   ServiceCommandExecutionError,
   createNativeReleaseVerifier,
   createNativeServiceExecutor,
@@ -1292,6 +1293,113 @@ test("Windows restart waits through STOP_PENDING before starting the replacement
   });
 
   assert.equal(result.report.outcome, "succeeded");
+  assert.deepEqual(
+    process.requests
+      .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))
+      .map((request) => request.arguments[0]),
+    ["stop", "query", "query", "query", "start"],
+  );
+});
+
+test("Windows restart tolerates a transient service status process failure", async () => {
+  const configuration = windowsConfiguration({
+    health: {
+      endpoint: "http://127.0.0.1:43190/health/live",
+      timeoutMs: 1_000,
+    },
+  });
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  let statusQueries = 0;
+  process.handler = (request) => {
+    const verb = request.arguments[0]?.toLowerCase();
+    if (request.executable.toLowerCase().endsWith("sc.exe") && verb === "query") {
+      statusQueries += 1;
+      if (statusQueries === 1) {
+        throw new NativeBoundaryError(
+          "NATIVE_PROCESS_FAILED",
+          "A transient Windows service status process failed to start.",
+        );
+      }
+      return processResult(0, "STATE              : 1  STOPPED\r\n");
+    }
+    return processResult(0);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-restart-transient-query-failure",
+    configuration,
+    plan: createServicePlan({
+      operation: "restart",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded");
+  assert.deepEqual(
+    process.requests
+      .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))
+      .map((request) => request.arguments[0]),
+    ["stop", "query", "query", "start"],
+  );
+});
+
+test("Windows restart compensates an uncertain service stop before reporting failure", async () => {
+  const configuration = windowsConfiguration();
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (
+      request.executable.toLowerCase().endsWith("sc.exe") &&
+      request.arguments[0]?.toLowerCase() === "query"
+    ) {
+      throw new NativeBoundaryError(
+        "NATIVE_PROCESS_FAILED",
+        "The Windows service status process remained unavailable.",
+      );
+    }
+    return processResult(0);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-restart-compensate-uncertain-stop",
+    configuration,
+    plan: createServicePlan({
+      operation: "restart",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "failed");
+  assert.equal(result.report.failedStepId, "stop-core");
   assert.deepEqual(
     process.requests
       .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))

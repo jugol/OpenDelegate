@@ -354,7 +354,7 @@ async function runShutdownChild(
     env: {
       ...process.env,
       NODE_NO_WARNINGS: "1",
-      OPENDELEGATE_TEST_EXIT_ON_STDIN_END: "1",
+      OPENDELEGATE_NATIVE_SERVICE: "1",
     },
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
