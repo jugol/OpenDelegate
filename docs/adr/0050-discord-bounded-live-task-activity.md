@@ -35,14 +35,23 @@ a short rolling list. It may include the currently relevant Pause and Cancel
 controls so recovery controls are not available only near the Forum starter.
 
 Worker Agent bridges classify provider progress into a closed owner-safe vocabulary:
-working, using Device-local tools, verifying, consulting Device-local Knowledge, or
-coordinating child Agents. The Worker runtime owns the public wording and accepts no
+working, using Device-local tools, verifying, consulting Device-local Knowledge,
+coordinating child Agents, or waiting for owner approval. The Worker runtime owns the public wording and accepts no
 free-form progress text at its durable outbox boundary. Token deltas, hidden
 reasoning, raw tool inputs, private provider messages, native session identifiers,
 credentials, and local paths therefore have no representation in progress events.
 Identical reports are deduplicated, reports are rate-limited, and each Run has a hard
 report count bound. Claimed, completed, and verification phase changes bypass the
 display throttle because they are low-frequency orchestration facts.
+
+The Worker records one generic `working` milestone only after the Run is durably in
+the running state. This covers quiet provider reasoning and early provider events
+that can precede that transition. Subsequent provider tool requests and explicit
+progress signals are collapsed into the same closed categories; message deltas,
+tool arguments, and tool results are never streamed. An activity revision also
+wakes the Discord projector immediately. The existing periodic reconciliation loop
+remains the crash and transient-failure repair path, so presentation delivery cannot
+become execution authority.
 
 Main accepts progress only for the exact current, unexpired Run lease and fencing
 token. A progress event is non-terminal: it does not complete a Run, renew a lease,
@@ -94,3 +103,4 @@ comes from the ordinary owner-safe failure reply and inspection surfaces.
 - [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md), Phase 7
 - [`0027-discord-single-turn-lifecycle-and-retry-stable-planning.md`](0027-discord-single-turn-lifecycle-and-retry-stable-planning.md)
 - [`../research/messaging-agent-conversation-ux.md`](../research/messaging-agent-conversation-ux.md)
+- [`0053-discord-worker-action-approval.md`](0053-discord-worker-action-approval.md)

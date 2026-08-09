@@ -1969,7 +1969,11 @@ message. Main planning, dispatch, normalized Worker progress, Work Order complet
 and verification update a short rolling milestone list in that message. Worker
 bridges map provider activity to a closed owner-safe progress vocabulary, and the
 Worker outbox accepts no free-form progress text. Per-Run deduplication, rate, and
-count bounds still apply. Progress is non-terminal presentation data:
+count bounds still apply. Every Run records one owner-safe start milestone after its
+durable `running` transition; later provider tool requests and explicit progress are
+reduced to meaningful category changes. Activity changes wake the Discord projector
+immediately, while its periodic reconciliation remains the repair path. Progress is
+non-terminal presentation data:
 it does not enter Task conversation or checkpoint context, renew a lease, or reset a
 Budget. The Discord binding persists the activity identity and closed revision so
 delayed outbox work cannot duplicate or resurrect a finished surface.
@@ -2008,3 +2012,52 @@ projections, one-Workspace upgrades work without editing Device-local configurat
 and multi-Workspace Devices remain fail-closed and explicit. Workspace startup
 failures use a stable owner-safe diagnostic rather than the generic process-start
 code.
+
+## D-100 — Windows Codex service sandbox access is exact and lifecycle-repaired
+
+Implementation detail:
+[ADR-0052](adr/0052-windows-codex-service-sandbox-directory.md).
+
+**Decision:** A persistent Windows Worker that can select Codex declares the exact
+owner-provider `.sandbox-bin` directory in its validated service configuration.
+Install, start, restart, and upgrade create or repair only that directory with an
+inheritance-free ACL: Administrators, SYSTEM, the owner SID, and the exact
+`NT SERVICE\OpenDelegate-<instance>` identity receive Full Control. The source
+checkout and the remainder of the owner provider home are never widened.
+
+**Rationale:** Live installed-service QA proved that Codex initializes its helper by
+changing the `.sandbox-bin` security descriptor. Ordinary inherited Modify access
+was sufficient to read the owner-authenticated provider home but not to perform that
+bounded `WRITE_DAC` operation, causing a read-only Task to request an unrelated
+sandbox escalation and wait indefinitely.
+
+**Consequence:** The native service can start Codex without running OpenDelegate as
+the owner or administrator and without sharing the entire provider home. Lifecycle
+repair handles directories recreated between releases. A malformed, checkout-local,
+or broader path fails service-document validation before mutation.
+
+## D-101 — Worker action Approval stays on the one live Discord Task surface
+
+Implementation detail:
+[ADR-0053](adr/0053-discord-worker-action-approval.md).
+
+**Decision:** A provider action-approval event becomes the closed
+`waiting-approval` Worker progress category. Main projects the oldest pending
+`worker-action.authorize` record for that exact Task into its existing mutable
+Discord activity message with a friendly Device/action/risk/evidence summary and
+approve-once/reject controls. The Discord callback resolves the same global durable
+Approval Service record used by Admin Web. Additional pending actions appear one at
+a time. The Worker may wait for the owner for the Approval TTL; no arbitrary short
+execution timeout converts a healthy long Task into failure.
+
+**Rationale:** Previously the Worker waited correctly but Discord showed only generic
+activity, so the Task looked frozen. A second chronological attention card would
+repeat controls and recreate the message noise removed by D-065 and D-098. A
+Task-local Approval path would also disagree with Admin Web and could execute the
+same protected effect twice.
+
+**Consequence:** Long multi-Device work remains concise and actionable. Approval
+creation and decisions wake Discord immediately, while periodic reconciliation
+repairs missed presentation. Provider prose, action arguments, local paths, native
+IDs, and Secrets never enter the Discord summary; replay executes an approved action
+at most once.

@@ -1220,6 +1220,12 @@ class AdapterRunProcess implements RunProcess {
         await this.#persistSession(event.session);
       } else if (event.type === "public_message") {
         this.#collector.add(event.text);
+      } else if (event.type === "tool_request" && this.#context.reportProgress !== undefined) {
+        await this.#context
+          .reportProgress({ kind: classifyToolProgress(event.toolName) })
+          .catch(() => undefined);
+      } else if (event.type === "approval_request" && this.#context.reportProgress !== undefined) {
+        await this.#context.reportProgress({ kind: "waiting-approval" }).catch(() => undefined);
       } else if (event.type === "progress" && this.#context.reportProgress !== undefined) {
         await this.#context
           .reportProgress({ kind: classifyProgress(event.message) })
@@ -1277,6 +1283,30 @@ function classifyProgress(value: string): WorkerRunProgressKindV1 {
     return "using-tools";
   }
   return "working";
+}
+
+function classifyToolProgress(toolName: string): WorkerRunProgressKindV1 {
+  const normalized = toolName.toLocaleLowerCase("en-US");
+  if (normalized.includes("knowledge")) {
+    return "consulting-knowledge";
+  }
+  if (
+    normalized.includes("subagent") ||
+    normalized.includes("child_agent") ||
+    normalized.includes("delegate") ||
+    normalized.includes("spawn_agent")
+  ) {
+    return "delegating";
+  }
+  if (
+    normalized.includes("verify") ||
+    normalized.includes("validate") ||
+    normalized.includes("test") ||
+    normalized.includes("check")
+  ) {
+    return "verifying";
+  }
+  return "using-tools";
 }
 
 interface SessionBinding {

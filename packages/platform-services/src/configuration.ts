@@ -44,6 +44,7 @@ const WINDOWS_SERVICE_SECRET_BINDING_KEYS = new Set([
   "vaultRoot",
 ]);
 const WINDOWS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "vaultRoot"]);
+const WINDOWS_AGENT_SANDBOX_KEYS = new Set(["codexSandboxBinDirectory"]);
 const MACOS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "helperPath", "expectedHelperSha256"]);
 const LINUX_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "secretToolPath"]);
 const HEALTH_KEYS = new Set(["endpoint", "timeoutMs"]);
@@ -107,7 +108,7 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
     input.platform === "linux"
       ? new Set(["systemdCredential"])
       : input.platform === "windows"
-        ? new Set(["serviceSecretBinding"])
+        ? new Set(["agentSandbox", "serviceSecretBinding"])
         : undefined,
   );
 
@@ -307,6 +308,27 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
         throw new PlatformServiceError(
           "INVALID_PATH",
           "The Windows service handoff and persistent Secret vault must be disjoint.",
+        );
+      }
+    }
+    if (input.agentSandbox !== undefined) {
+      assertRecord(input.agentSandbox, "agentSandbox");
+      assertExactKeys(input.agentSandbox, WINDOWS_AGENT_SANDBOX_KEYS);
+      const sandboxDirectory = input.agentSandbox.codexSandboxBinDirectory;
+      assertSafeAbsolutePath("windows", sandboxDirectory, "agentSandbox.codexSandboxBinDirectory");
+      if (win32.basename(sandboxDirectory).toLocaleLowerCase("en-US") !== ".sandbox-bin") {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          "The Codex sandbox helper path must name the exact .sandbox-bin directory.",
+        );
+      }
+      if (
+        samePath("windows", sandboxDirectory, input.paths.sourceCheckoutDirectory) ||
+        isDescendantPath("windows", input.paths.sourceCheckoutDirectory, sandboxDirectory)
+      ) {
+        throw new PlatformServiceError(
+          "PATH_INSIDE_CHECKOUT",
+          "The Codex sandbox helper directory must remain outside the source checkout.",
         );
       }
     }

@@ -90,6 +90,15 @@ export interface WindowsServiceConfiguration extends BaseServiceConfiguration {
   readonly ipcTrust: LocalIpcTrustConfiguration;
   readonly helperSecretBinding: WindowsOwnerHelperSecretBinding;
   readonly serviceSecretBinding?: WindowsServiceSecretBinding;
+  /**
+   * Exact provider-owned helper directory that the SCM virtual-service identity
+   * must be able to secure before Codex can enter its Windows sandbox.
+   */
+  readonly agentSandbox?: WindowsAgentSandboxConfiguration;
+}
+
+export interface WindowsAgentSandboxConfiguration {
+  readonly codexSandboxBinDirectory: string;
 }
 
 export interface WindowsOwnerHelperSecretBinding {

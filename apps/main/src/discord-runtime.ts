@@ -84,6 +84,22 @@ export interface DiscordTaskActivityProjectionPort {
     | Promise<NonNullable<TaskChannelProjection["activity"]> | undefined>;
 }
 
+export interface DiscordTaskApprovalProjectionPort {
+  current(
+    taskId: string,
+  ):
+    | NonNullable<TaskChannelProjection["approval"]>
+    | undefined
+    | Promise<NonNullable<TaskChannelProjection["approval"]> | undefined>;
+  resolve(input: {
+    readonly taskId: string;
+    readonly approvalId: string;
+    readonly principalId: string;
+    readonly idempotencyKey: string;
+    readonly decision: "approve" | "reject";
+  }): Promise<boolean>;
+}
+
 export interface DiscordRuntimeTaskServicePort
   extends DiscordTaskServicePort, DiscordProjectionTaskPort {}
 
@@ -106,6 +122,7 @@ export interface DiscordMainRuntimeOptions {
   readonly tasks: DiscordProjectionTaskPort;
   readonly artifactPresentation?: DiscordArtifactPresentationPort;
   readonly taskActivity?: DiscordTaskActivityProjectionPort;
+  readonly taskApproval?: DiscordTaskApprovalProjectionPort;
   readonly clock: DiscordClock;
   readonly scheduler?: DiscordRuntimeScheduler;
   readonly synchronizationIntervalMs?: number;
@@ -139,6 +156,7 @@ export interface CreateProductionDiscordRuntimeOptions {
   readonly synchronizationIntervalMs?: number;
   readonly artifactPresentation?: DiscordArtifactPresentationPort;
   readonly taskActivity?: DiscordTaskActivityProjectionPort;
+  readonly taskApproval?: DiscordTaskApprovalProjectionPort;
   readonly interactionTokenVault?: DiscordInteractionTokenVault;
   readonly api?: DiscordApiPort;
   readonly gateway?: DiscordGatewayPort;
@@ -162,6 +180,7 @@ export class DiscordMainRuntime {
   readonly #tasks: DiscordProjectionTaskPort;
   readonly #artifactPresentation: DiscordArtifactPresentationPort | undefined;
   readonly #taskActivity: DiscordTaskActivityProjectionPort | undefined;
+  readonly #taskApproval: DiscordTaskApprovalProjectionPort | undefined;
   readonly #clock: DiscordClock;
   readonly #scheduler: DiscordRuntimeScheduler;
   readonly #synchronizationIntervalMs: number;
@@ -192,6 +211,7 @@ export class DiscordMainRuntime {
     this.#tasks = options.tasks;
     this.#artifactPresentation = options.artifactPresentation;
     this.#taskActivity = options.taskActivity;
+    this.#taskApproval = options.taskApproval;
     this.#clock = options.clock;
     this.#scheduler = options.scheduler ?? new NodeDiscordRuntimeScheduler();
     this.#synchronizationIntervalMs = synchronizationIntervalMs;
@@ -216,7 +236,8 @@ export class DiscordMainRuntime {
     if (this.#artifactPresentation !== undefined) {
       artifact = await this.#artifactPresentation.forTask(task.taskId);
     }
-    await this.#adapter.createTaskThread(projectTask(task, artifact));
+    const approval = await this.#taskApproval?.current(task.taskId);
+    await this.#adapter.createTaskThread(projectTask(task, artifact, undefined, approval));
     await this.#adapter.flushOutbox();
   }
 
@@ -325,6 +346,14 @@ export class DiscordMainRuntime {
         const task = await this.#tasks.get(binding.taskId);
         let artifact: NonNullable<TaskChannelProjection["artifact"]> | undefined;
         const activity = await this.#taskActivity?.activity(task.taskId);
+        let approval: NonNullable<TaskChannelProjection["approval"]> | undefined;
+        if (this.#taskApproval !== undefined) {
+          try {
+            approval = await this.#taskApproval.current(task.taskId);
+          } catch (error) {
+            this.#recordDiagnostic("discord.runtime.approval_projection_failed", errorCode(error));
+          }
+        }
         if (this.#artifactPresentation !== undefined) {
           try {
             artifact = await this.#artifactPresentation.forTask(task.taskId);
@@ -332,7 +361,7 @@ export class DiscordMainRuntime {
             this.#recordDiagnostic("discord.runtime.artifact_projection_failed", errorCode(error));
           }
         }
-        await this.#adapter.publishTaskProjection(projectTask(task, artifact, activity));
+        await this.#adapter.publishTaskProjection(projectTask(task, artifact, activity, approval));
       } catch (error) {
         this.#recordDiagnostic("discord.runtime.task_projection_failed", errorCode(error));
       }
@@ -692,11 +721,22 @@ export async function createProductionDiscordRuntime(
     const gateway = new ObservedDiscordGatewayPort(gatewayDriver, () => {
       runtimeReference.current?.observeGatewaySessionEstablished();
     });
+    const taskService: DiscordTaskServicePort = {
+      create: (input) => options.tasks.create(input),
+      appendInput: (input) => options.tasks.appendInput(input),
+      command: (input) => options.tasks.command(input),
+      resolveApproval: async (input) => {
+        if (await options.taskApproval?.resolve(input)) {
+          return Object.freeze({ taskId: input.taskId });
+        }
+        return await options.tasks.resolveApproval(input);
+      },
+    };
     const adapter = new DiscordForumAdapter({
       config: options.config,
       repository,
       api,
-      tasks: createDiscordTaskPort(options.tasks),
+      tasks: createDiscordTaskPort(taskService),
       clock,
       gateway,
     });
@@ -708,6 +748,7 @@ export async function createProductionDiscordRuntime(
         ? {}
         : { artifactPresentation: options.artifactPresentation }),
       ...(options.taskActivity === undefined ? {} : { taskActivity: options.taskActivity }),
+      ...(options.taskApproval === undefined ? {} : { taskApproval: options.taskApproval }),
       clock,
       closeResource: async () => repository.close(),
       ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
@@ -732,6 +773,7 @@ function projectTask(
   task: DiscordProjectionTask,
   artifact?: NonNullable<TaskChannelProjection["artifact"]>,
   activity?: NonNullable<TaskChannelProjection["activity"]>,
+  approval?: NonNullable<TaskChannelProjection["approval"]>,
 ): TaskChannelProjection {
   const latestEvent = task.events.at(-1);
   const latestMessage = task.messages.at(-1);
@@ -749,6 +791,7 @@ function projectTask(
     significance: executionUpdate ? significanceFor(task.state) : "status",
     ...(artifact === undefined ? {} : { artifact: Object.freeze({ ...artifact }) }),
     ...(activity === undefined ? {} : { activity: structuredClone(activity) }),
+    ...(approval === undefined ? {} : { approval: Object.freeze({ ...approval }) }),
   });
 }
 

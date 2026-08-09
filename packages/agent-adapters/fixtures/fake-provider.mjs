@@ -122,6 +122,13 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
     }
     if (message.method === "thread/start" || message.method === "thread/resume") {
       if (
+        process.env.FIXTURE_EXPECT_APPROVAL_POLICY &&
+        message.params.approvalPolicy !== process.env.FIXTURE_EXPECT_APPROVAL_POLICY
+      ) {
+        send({ id: message.id, error: { code: -32602, message: "approval policy mismatch" } });
+        continue;
+      }
+      if (
         process.env.FIXTURE_EXPECT_MODEL &&
         message.params.model !== process.env.FIXTURE_EXPECT_MODEL
       ) {
@@ -195,6 +202,13 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
     }
     if (message.method === "turn/start") {
       if (
+        process.env.FIXTURE_EXPECT_APPROVAL_POLICY &&
+        message.params.approvalPolicy !== process.env.FIXTURE_EXPECT_APPROVAL_POLICY
+      ) {
+        send({ id: message.id, error: { code: -32602, message: "approval policy mismatch" } });
+        continue;
+      }
+      if (
         process.env.FIXTURE_EXPECT_MODEL &&
         message.params.model !== process.env.FIXTURE_EXPECT_MODEL
       ) {
@@ -242,6 +256,29 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         method: "item/agentMessage/delta",
         params: { threadId, turnId, itemId: "message-1", delta: "Working" },
       });
+      if (process.env.FIXTURE_COMPLETE_WITHOUT_APPROVAL === "1") {
+        send({
+          method: "item/completed",
+          params: {
+            threadId,
+            turnId,
+            completedAtMs: Date.now(),
+            item: {
+              type: "agentMessage",
+              id: "message-1",
+              text: "Finished without tools",
+            },
+          },
+        });
+        send({
+          method: "turn/completed",
+          params: {
+            threadId,
+            turn: { id: turnId, status: "completed", items: [], error: null },
+          },
+        });
+        continue;
+      }
       if (process.env.FIXTURE_CODEX_WAIT_FOR_STEER === "1") {
         continue;
       }

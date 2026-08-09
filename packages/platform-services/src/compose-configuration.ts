@@ -62,6 +62,9 @@ export interface ComposeServiceConfigurationInput {
     readonly serviceSid: string;
     readonly vaultRoot: string;
   };
+  readonly windowsAgentSandbox?: {
+    readonly codexSandboxBinDirectory: string;
+  };
   /** Existing owner DPAPI vault that retains only the session-helper identity. */
   readonly windowsOwnerHelperVaultRoot?: string;
   /** Optional encrypted core credential used by a headless systemd service. */
@@ -141,6 +144,9 @@ export function composeServiceConfiguration(
       ...(input.windowsServiceSecretBinding === undefined
         ? {}
         : { serviceSecretBinding: input.windowsServiceSecretBinding }),
+      ...(input.windowsAgentSandbox === undefined
+        ? {}
+        : { agentSandbox: input.windowsAgentSandbox }),
     });
   }
   const serviceIdentity = required(

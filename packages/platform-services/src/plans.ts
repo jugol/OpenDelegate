@@ -280,6 +280,7 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       "0700",
       directoryAccess(configuration, "installer-only"),
     ),
+    ...windowsAgentSandboxSteps(configuration),
     ...releaseInstallSteps(artifacts),
     ...artifacts.files.map((file): ServicePlanStep => ({
       id: `write-${file.purpose}`,
@@ -319,6 +320,7 @@ function lifecyclePlan(
   const steps =
     operation === "start"
       ? [
+          ...windowsAgentSandboxSteps(artifacts.definition.configuration),
           supervisorStep("start-core", artifacts, "core", "start", "stop"),
           ...(hasSessionHelper(artifacts)
             ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
@@ -346,6 +348,7 @@ function restartPlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
         : []),
       supervisorStep("stop-core", artifacts, "core", "stop", "start"),
+      ...windowsAgentSandboxSteps(artifacts.definition.configuration),
       supervisorStep("start-core", artifacts, "core", "start", "stop"),
       ...(hasSessionHelper(artifacts)
         ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
@@ -485,6 +488,7 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
+    ...windowsAgentSandboxSteps(definition.configuration),
     ...(definition.configuration.platform === "windows"
       ? [
           windowsServiceSidRepairStep(artifacts),
@@ -920,7 +924,8 @@ function directoryStep(
 
 function directoryAccess(
   configuration: PlatformServiceConfiguration,
-  profile: "installer-only" | "read-execute" | "service-secret" | "shared" | "state",
+  profile:
+    "installer-only" | "provider-sandbox" | "read-execute" | "service-secret" | "shared" | "state",
 ): DirectoryAccessPolicy {
   const installer =
     configuration.platform === "windows" ? "BUILTIN\\Administrators" : "platform-installer";
@@ -933,6 +938,24 @@ function directoryAccess(
       ? configuration.ownerSession.stableUserId
       : configuration.ownerSession.userName;
   const grants: DirectoryAccessGrant[] = [{ principal: installer, permission: "full-control" }];
+  if (profile === "provider-sandbox") {
+    if (configuration.platform !== "windows") {
+      throw new PlatformServiceError(
+        "INVALID_CONFIGURATION",
+        "Provider sandbox access is available only for Windows services.",
+      );
+    }
+    grants.push(
+      { principal: "S-1-5-18", permission: "full-control" },
+      { principal: owner, permission: "full-control" },
+      { principal: core, permission: "full-control" },
+    );
+    return {
+      owner,
+      grants,
+      denyUnlisted: true,
+    };
+  }
   if (profile === "service-secret") {
     grants.push({ principal: core, permission: "full-control" });
     return {
@@ -956,6 +979,22 @@ function directoryAccess(
     grants,
     denyUnlisted: true,
   };
+}
+
+function windowsAgentSandboxSteps(
+  configuration: PlatformServiceConfiguration,
+): readonly ServicePlanStep[] {
+  if (configuration.platform !== "windows" || configuration.agentSandbox === undefined) {
+    return [];
+  }
+  return [
+    directoryStep(
+      "ensure-codex-sandbox-helper",
+      configuration.agentSandbox.codexSandboxBinDirectory,
+      "0700",
+      directoryAccess(configuration, "provider-sandbox"),
+    ),
+  ];
 }
 
 function plan(

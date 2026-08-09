@@ -63,6 +63,35 @@ test("rejects relative or source-checkout runtime state paths", () => {
   );
 });
 
+test("accepts only the exact external Windows Codex sandbox helper directory", () => {
+  const accepted = createPlatformServiceDefinition(
+    windowsConfiguration({
+      agentSandbox: {
+        codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+      },
+    }),
+  ).configuration;
+  assert.equal(
+    accepted.platform === "windows" ? accepted.agentSandbox?.codexSandboxBinDirectory : undefined,
+    "C:\\Users\\owner\\.codex\\.sandbox-bin",
+  );
+
+  for (const codexSandboxBinDirectory of [
+    "C:\\Users\\owner\\.codex",
+    "C:\\src\\OpenDelegate\\.sandbox-bin",
+  ]) {
+    assert.throws(
+      () =>
+        createPlatformServiceDefinition(
+          windowsConfiguration({ agentSandbox: { codexSandboxBinDirectory } }),
+        ),
+      (error: unknown) =>
+        error instanceof PlatformServiceError &&
+        (error.code === "INVALID_PATH" || error.code === "PATH_INSIDE_CHECKOUT"),
+    );
+  }
+});
+
 test("rejects overlapping mutable roots and bundle sources", () => {
   const linux = linuxConfiguration();
   assert.throws(

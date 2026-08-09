@@ -79,6 +79,7 @@ export interface MainActionAuthorizationRuntimeOptions {
   readonly configuredGrants?: () => Promise<readonly OwnerGrant[]>;
   readonly configuredPolicy?: MainConfiguredActionPolicyPort;
   readonly approvalExpirationMs?: number;
+  readonly onApprovalChange?: (taskId: string) => void | Promise<void>;
 }
 
 export interface MainActionAuthorizationAuditRecord {
@@ -116,6 +117,7 @@ export class MainActionAuthorizationRuntime implements ApprovalExecutionPort {
   readonly #configuredGrants: () => Promise<readonly OwnerGrant[]>;
   readonly #configuredPolicy: MainConfiguredActionPolicyPort | undefined;
   readonly #approvalExpirationMs: number;
+  readonly #onApprovalChange: MainActionAuthorizationRuntimeOptions["onApprovalChange"];
   #approvals: ApprovalService | undefined;
   #closePromise: Promise<void> | undefined;
   #closed = false;
@@ -127,6 +129,7 @@ export class MainActionAuthorizationRuntime implements ApprovalExecutionPort {
     this.#configuredGrants = options.configuredGrants ?? (async () => []);
     this.#configuredPolicy = options.configuredPolicy;
     this.#approvalExpirationMs = options.approvalExpirationMs ?? 24 * 60 * 60_000;
+    this.#onApprovalChange = options.onApprovalChange;
     if (
       options.repository === null ||
       typeof options.repository !== "object" ||
@@ -140,6 +143,7 @@ export class MainActionAuthorizationRuntime implements ApprovalExecutionPort {
         (this.#configuredPolicy === null ||
           typeof this.#configuredPolicy !== "object" ||
           typeof this.#configuredPolicy.decide !== "function")) ||
+      (this.#onApprovalChange !== undefined && typeof this.#onApprovalChange !== "function") ||
       !Number.isSafeInteger(this.#approvalExpirationMs) ||
       this.#approvalExpirationMs <= 0 ||
       this.#approvalExpirationMs > 30 * 24 * 60 * 60_000
@@ -294,6 +298,7 @@ export class MainActionAuthorizationRuntime implements ApprovalExecutionPort {
       });
       stored = { ...stored, approvalId: approval.approvalId };
       await this.#save(stored, now);
+      await this.#notifyApprovalChange(request.taskId);
     } else {
       approval = await approvals.get(stored.approvalId);
     }
@@ -684,6 +689,14 @@ export class MainActionAuthorizationRuntime implements ApprovalExecutionPort {
   #assertOpen(): void {
     if (this.#closed) {
       throw new Error("The Main action authorization runtime is closed.");
+    }
+  }
+
+  async #notifyApprovalChange(taskId: string): Promise<void> {
+    try {
+      await this.#onApprovalChange?.(taskId);
+    } catch {
+      // Approval authority is durable; periodic presentation reconciliation repairs a missed wake.
     }
   }
 }

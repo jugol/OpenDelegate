@@ -79,6 +79,7 @@ import {
   type MainArtifactRuntime,
 } from "./artifact-runtime.ts";
 import { DiscordArtifactPresentation } from "./discord-artifact-presentation.ts";
+import { DiscordActionApproval } from "./discord-action-approval.ts";
 import { DiscordBindingConfigurationLifecycle } from "./discord-binding-configuration-lifecycle.ts";
 import {
   DiscordBindingController,
@@ -999,6 +1000,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         runAuthority: actionRunAuthority,
         clock,
         configuredPolicy: createConfigurationMainActionPolicy(runtimePolicy),
+        onApprovalChange: () => {
+          void discordBindingController?.runtime?.synchronizeNow().catch(() => undefined);
+        },
       });
       actionAuthorization.attachApprovalService(approvalRuntime.service);
       actionApprovalExecutor.bind(actionAuthorization);
@@ -1290,6 +1294,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             nextId: (kind) => `${kind}_${randomUUID()}`,
           },
           budget,
+          onActivityChange: () => {
+            void discordBindingController?.runtime?.synchronizeNow().catch(() => undefined);
+          },
         });
         actionRunAuthority.bind(authoritativeWorkerExecutor);
         configuredTaskExecution = {
@@ -1388,6 +1395,13 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     const ownerDiscordStatusObserver = options.discord?.onStatusChange;
     const discordSecretStore = options.discord?.secretStore ?? managedSecretStore;
     const discordTaskActivityExecutor = authoritativeWorkerExecutor;
+    const discordActionApproval = new DiscordActionApproval({
+      approvals: approvalRuntime.service,
+      listDevices: listMainOwnedDeviceDirectory,
+      onChanged: () => {
+        void discordBindingController?.runtime?.synchronizeNow().catch(() => undefined);
+      },
+    });
     discordBindingController = new DiscordBindingController<DiscordMainRuntime>({
       credentialCapability: async (alias) => {
         if (!secretIngest.hasAliasPurpose(alias, "discord-bot-token")) {
@@ -1414,6 +1428,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
               productVersion: options.build.version,
               database,
               tasks,
+              taskApproval: discordActionApproval,
               ...(discordTaskActivityExecutor === undefined
                 ? {}
                 : {
@@ -3324,3 +3339,7 @@ export {
   type MainActionAuthorizationRuntimeOptions,
   type MainActionRunAuthorityPort,
 } from "./action-authorization-runtime.ts";
+export {
+  DiscordActionApproval,
+  type DiscordActionApprovalOptions,
+} from "./discord-action-approval.ts";

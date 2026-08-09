@@ -27,12 +27,14 @@ test("only current leased Worker reports can authorize Task completion", async (
   const clock = mutableClock(NOW_MS);
   const dispatch = new RecordingDispatchPort();
   const verificationInputs: AuthoritativeWorkerReport[][] = [];
+  const activityChanges: string[] = [];
   const executor = new AuthoritativeWorkerTaskExecutor({
     clock,
     eventStore: new InMemoryEventStore({
       clock: { now: () => new Date(clock.now()).toISOString() },
     }),
     idSource: sequentialIds(),
+    onActivityChange: (taskId) => activityChanges.push(taskId),
     leaseDurationMs: 60_000,
     checkpoints: {
       async build(taskId) {
@@ -120,6 +122,8 @@ test("only current leased Worker reports can authorize Task completion", async (
   assert.equal(activity?.totalWorkOrders, 1);
   assert.equal(activity?.milestones.at(-1)?.deviceId, assignment.deviceId);
   assert.equal(activity?.milestones.at(-1)?.summary, "The Worker is running the platform build.");
+  assert.equal(activityChanges.length >= 4, true);
+  assert.deepEqual(new Set(activityChanges), new Set([assignment.taskId]));
   assert.deepEqual(
     await executor.acceptWorkerEvents("device-worker-1", [
       workerEvent(assignment, 3, "worker.run.succeeded", {

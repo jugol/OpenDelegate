@@ -153,6 +153,9 @@ export function renderTaskActivity(projection: TaskChannelProjection): DiscordMe
     "## OpenDelegate is working",
     `**${progress}**`,
     ...milestoneLines,
+    ...(projection.approval === undefined
+      ? []
+      : [`⚠️ **Approval needed** — ${safeMarkdown(projection.approval.description, 500)}`]),
     "_This one message updates when meaningful progress changes._",
   ].join("\n\n");
   const buttons = controlButtons(projection);

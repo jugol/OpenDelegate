@@ -180,6 +180,11 @@ export interface AuthoritativeWorkerTaskExecutorOptions {
   readonly budget?: TaskBudgetEnforcementPort;
   readonly checkpoints?: TaskContinuationCheckpointPort;
   readonly directCompletionAuthorizer?: DirectPlanningCompletionAuthorizer;
+  /**
+   * Best-effort presentation wake-up. Durable Task and Worker state never depend
+   * on this callback, and callers must coalesce or throttle their own refreshes.
+   */
+  readonly onActivityChange?: (taskId: string) => void;
 }
 
 export type TaskExecutionActivityPhase = "planning" | "dispatching" | "working" | "verifying";
@@ -400,6 +405,7 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
   readonly #budget: TaskBudgetEnforcementPort | undefined;
   readonly #checkpoints: TaskContinuationCheckpointPort | undefined;
   readonly #directCompletionAuthorizer: DirectPlanningCompletionAuthorizer | undefined;
+  readonly #onActivityChange: ((taskId: string) => void) | undefined;
   readonly #leaseDurationMs: number;
   readonly #active = new Map<string, ActiveTaskExecution>();
   readonly #runWaiters = new Map<string, Set<() => void>>();
@@ -426,6 +432,7 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     this.#budget = options.budget;
     this.#checkpoints = options.checkpoints;
     this.#directCompletionAuthorizer = options.directCompletionAuthorizer;
+    this.#onActivityChange = options.onActivityChange;
     this.#leaseDurationMs = leaseDurationMs;
   }
 
@@ -463,6 +470,7 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       },
     };
     this.#active.set(request.executionKey, active);
+    this.#notifyActivityChanged(active.taskId);
     const abortFromRequest = (): void => {
       active.controller.abort(request.signal.reason);
     };
@@ -613,6 +621,16 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       throw corruptState();
     }
     activity.updatedAtMs = this.#nextActivityTimestamp();
+    this.#notifyActivityChanged(active.taskId);
+  }
+
+  #notifyActivityChanged(taskId: string): void {
+    try {
+      this.#onActivityChange?.(taskId);
+    } catch {
+      // Presentation wake-ups are explicitly best effort. The periodic Discord
+      // reconciler remains the repair path and orchestration must never fail here.
+    }
   }
 
   #updateActivityForWorkerEvent(event: SequencedWorkerEventV1): void {
@@ -2959,6 +2977,7 @@ function assertOptions(options: AuthoritativeWorkerTaskExecutorOptions): void {
     (options.checkpoints !== undefined && !hasMethods(options.checkpoints, ["build"])) ||
     (options.directCompletionAuthorizer !== undefined &&
       !hasMethods(options.directCompletionAuthorizer, ["authorize"])) ||
+    (options.onActivityChange !== undefined && typeof options.onActivityChange !== "function") ||
     (options.budget !== undefined &&
       !hasMethods(options.budget, [
         "ensureTask",

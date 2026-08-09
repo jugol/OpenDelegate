@@ -441,6 +441,11 @@ Make Main and Worker roles truly persistent on all target operating systems.
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
+- On Windows, prepare only the active owner's exact Codex `.sandbox-bin` helper
+  directory for the virtual-service identity. Install, start, restart, and upgrade
+  reassert an inheritance-free ACL granting Full Control to Administrators, SYSTEM,
+  the owner SID, and the exact OpenDelegate service SID; no broader provider home or
+  source checkout is opened.
 - Implement a Device-local service-preparation boundary for every persistent shape.
   A graphical Device migrates core-owned Secrets to the native service identity,
   leaves the owner-session key in its separate store, and durably exports only the
@@ -469,6 +474,9 @@ Make Main and Worker roles truly persistent on all target operating systems.
 - User-session helper loss removes graphical Capabilities without dropping headless
   work.
 - Failed upgrades roll back to a healthy version.
+- A Windows Codex Run can initialize its sandbox helper from the installed service
+  identity, while an ACL probe proves that sibling provider-home content was not
+  widened.
 - A bundle build completes while an existing Main remains healthy on its configured
   listeners, without changing its process, service definition, or active version.
 
@@ -628,6 +636,12 @@ Make Discord the complete primary Task interface.
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.
 - Implement pause, resume, cancel, retry, approval, denial, and inspect interactions.
+- Project a pending protected Worker action into that same live activity message
+  with an owner-safe Device/action/risk/evidence summary and approve-once/reject
+  controls. Resolve the global durable Approval record—not a parallel Task approval—
+  and reveal multiple pending actions one at a time. Provider approval events map to
+  a bounded `waiting-approval` progress category so a long Run remains visibly alive
+  without an arbitrary execution timeout.
 - Implement system incident and recommendation post creation.
 - Handle archive, lock, reopen, delete, permission loss, rate limit, and reconnect.
 - Implement owner-approved live add, extension, replacement, and disable for the
@@ -653,6 +667,9 @@ Make Discord the complete primary Task interface.
   milestones edit that one message under a bounded rate and rolling-size limit;
   terminal delivery closes it, stale revisions cannot recreate it, and Task context
   contains none of its presentation-only progress text.
+- A protected Worker action edits that one message to show an approve-once/reject
+  decision; the exact durable Approval can be resolved from Discord or Admin Web,
+  executes once under replay, and disappears after the waiting Run continues.
 - A narrowly recognized read-only Device availability question is answered
   deterministically from bounded Main-owned state without an LLM turn or artificial
   Worker Run. Generic supported-locale test placeholders, including Korean-English

@@ -381,9 +381,12 @@ test("a custom Run process cannot put paths or provider identifiers in progress"
         (error: unknown) => error instanceof WorkerRuntimeError && error.code === "INVALID_MESSAGE",
       );
     }
-    assert.equal(
-      (await runtime.pendingOutbox()).some((event) => event.type === "worker.run.progress"),
-      false,
+    const progress = (await runtime.pendingOutbox()).filter(
+      (event) => event.type === "worker.run.progress",
+    );
+    assert.deepEqual(
+      progress.map((event) => event.payload.report),
+      ["Worker Agent is making progress."],
     );
   } finally {
     await runtime.close();
@@ -502,7 +505,7 @@ test("a Worker restart retires even a renewed Run and admits only a new higher-f
     assert.equal(starts, 1);
     assert.deepEqual(
       (await reopened.pendingOutbox()).map((event) => event.type),
-      ["worker.run.claimed", "worker.run.failed"],
+      ["worker.run.claimed", "worker.run.progress", "worker.run.failed"],
     );
     const replacement = {
       ...assignment({
@@ -670,11 +673,11 @@ test("a completion observed after lease expiry is reported as failed rather than
     await runtime.acceptAssignment(assignment());
     now = 2_001;
     process.succeed();
-    await waitFor(async () => (await runtime.pendingOutbox()).length === 2);
+    await waitFor(async () => (await runtime.pendingOutbox()).length === 3);
 
     assert.deepEqual(
       (await runtime.pendingOutbox()).map((event) => event.type),
-      ["worker.run.claimed", "worker.run.failed"],
+      ["worker.run.claimed", "worker.run.progress", "worker.run.failed"],
     );
   } finally {
     await runtime.close();
@@ -803,7 +806,7 @@ test("unacknowledged events replay in sequence after disconnect and process rest
       },
     };
     process.succeed("Completed while Main was offline.", undefined, agentSession);
-    await waitFor(async () => (await runtime.pendingOutbox()).length === 2);
+    await waitFor(async () => (await runtime.pendingOutbox()).length === 3);
 
     const deliveredBeforeDisconnect: string[][] = [];
     const failingConnection: WorkerMainConnection = {
@@ -814,8 +817,10 @@ test("unacknowledged events replay in sequence after disconnect and process rest
       sendHeartbeat: () => Promise.resolve(),
     };
     await assert.rejects(() => runtime.flushOutbox(failingConnection), /connection reset/);
-    assert.deepEqual(deliveredBeforeDisconnect, [["run-1:claimed", "run-1:succeeded"]]);
-    assert.equal((await runtime.pendingOutbox()).length, 2);
+    assert.deepEqual(deliveredBeforeDisconnect, [
+      ["run-1:claimed", "run-1:progress:1", "run-1:succeeded"],
+    ]);
+    assert.equal((await runtime.pendingOutbox()).length, 3);
     await runtime.close();
 
     const reopened = await WorkerRuntime.create({
@@ -831,7 +836,9 @@ test("unacknowledged events replay in sequence after disconnect and process rest
     const replayConnection: WorkerMainConnection = {
       sendEvents(events) {
         replayed.push(events.map((event) => event.messageId));
-        replayedSessions.push(events[1]?.payload.agentSession);
+        replayedSessions.push(
+          events.find((event) => event.type === "worker.run.succeeded")?.payload.agentSession,
+        );
         return Promise.resolve({
           protocolVersion: PROTOCOL_VERSION,
           acknowledgedMessageIds: events.map((event) => event.messageId),
@@ -840,8 +847,8 @@ test("unacknowledged events replay in sequence after disconnect and process rest
       sendHeartbeat: () => Promise.resolve(),
     };
 
-    assert.equal(await reopened.flushOutbox(replayConnection), 2);
-    assert.deepEqual(replayed, [["run-1:claimed", "run-1:succeeded"]]);
+    assert.equal(await reopened.flushOutbox(replayConnection), 3);
+    assert.deepEqual(replayed, [["run-1:claimed", "run-1:progress:1", "run-1:succeeded"]]);
     assert.deepEqual(replayedSessions, [agentSession]);
     assert.deepEqual(await reopened.pendingOutbox(), []);
     assert.equal((await reopened.acceptAssignment(assignment())).disposition, "duplicate");
@@ -876,7 +883,7 @@ test("an acknowledged stale restart terminal cannot poison later replacement Run
           }),
         sendHeartbeat: () => Promise.resolve(),
       }),
-      1,
+      2,
     );
     assert.deepEqual(await first.pendingOutbox(), []);
     await first.close();
@@ -900,10 +907,10 @@ test("an acknowledged stale restart terminal cannot poison later replacement Run
     };
     assert.equal((await restarted.acceptAssignment(replacement)).disposition, "accepted");
     replacementProcess.succeed("The replacement Run completed.");
-    await waitFor(async () => (await restarted!.pendingOutbox()).length === 3);
+    await waitFor(async () => (await restarted!.pendingOutbox()).length === 4);
     assert.deepEqual(
       (await restarted.pendingOutbox()).map((event) => event.type),
-      ["worker.run.failed", "worker.run.claimed", "worker.run.succeeded"],
+      ["worker.run.failed", "worker.run.claimed", "worker.run.progress", "worker.run.succeeded"],
     );
 
     const delivered: string[][] = [];
@@ -918,9 +925,11 @@ test("an acknowledged stale restart terminal cannot poison later replacement Run
         },
         sendHeartbeat: () => Promise.resolve(),
       }),
-      3,
+      4,
     );
-    assert.deepEqual(delivered, [["run-1:failed", "run-2:claimed", "run-2:succeeded"]]);
+    assert.deepEqual(delivered, [
+      ["run-1:failed", "run-2:claimed", "run-2:progress:1", "run-2:succeeded"],
+    ]);
     assert.deepEqual(await restarted.pendingOutbox(), []);
   } finally {
     await restarted?.close();
@@ -950,9 +959,11 @@ test("provider usage is included in the durable terminal Worker event", async ()
       cachedInputTokens: 20,
       costUsdMicros: 4_200,
     });
-    await waitFor(async () => (await runtime.pendingOutbox()).length === 2);
+    await waitFor(async () => (await runtime.pendingOutbox()).length === 3);
 
-    const terminal = (await runtime.pendingOutbox())[1];
+    const terminal = (await runtime.pendingOutbox()).find(
+      (event) => event.type === "worker.run.succeeded",
+    );
     assert.equal(terminal?.type, "worker.run.succeeded");
     assert.deepEqual(terminal?.payload.usage, {
       inputTokens: 120,
@@ -1417,14 +1428,14 @@ test("the outbound route resolver falls back deterministically and flushes befor
       }),
     );
     process.succeed();
-    await waitFor(async () => (await runtime.pendingOutbox()).length === 2);
+    await waitFor(async () => (await runtime.pendingOutbox()).length === 3);
 
     assert.deepEqual(await runtime.connect(), {
       connected: true,
       endpointId: "route-main-tailnet",
-      replayedEvents: 2,
+      replayedEvents: 3,
     });
-    assert.deepEqual(sent, ["run-1:claimed", "run-1:succeeded"]);
+    assert.deepEqual(sent, ["run-1:claimed", "run-1:progress:1", "run-1:succeeded"]);
     assert.deepEqual(ordering, ["events", "heartbeat"]);
     assert.equal(routeIncidentCount, 0, "successful deterministic fallback must not escalate");
     const heartbeat = await runtime.heartbeat();

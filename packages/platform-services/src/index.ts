@@ -141,6 +141,7 @@ export {
   type ServiceIdentity,
   type ServiceOperation,
   type ServicePlaneArtifact,
+  type WindowsAgentSandboxConfiguration,
   type WindowsServiceConfiguration,
   type WindowsServiceSecretBinding,
 } from "./types.ts";

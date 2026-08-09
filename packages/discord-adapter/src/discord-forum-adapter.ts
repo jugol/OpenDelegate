@@ -1898,6 +1898,9 @@ function activityProjection(projection: TaskChannelProjection): TaskChannelProje
     summary: projection.summary,
     significance: "status" as const,
     activity: frozenClone(projection.activity),
+    ...(projection.approval === undefined
+      ? {}
+      : { approval: Object.freeze({ ...projection.approval }) }),
     ...(projection.artifact === undefined
       ? {}
       : { artifact: Object.freeze({ ...projection.artifact }) }),

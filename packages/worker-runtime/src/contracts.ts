@@ -371,7 +371,12 @@ export interface RunProcess {
  * Device and must never cross the Worker runtime boundary as progress text.
  */
 export type WorkerRunProgressKindV1 =
-  "consulting-knowledge" | "delegating" | "using-tools" | "verifying" | "working";
+  | "consulting-knowledge"
+  | "delegating"
+  | "using-tools"
+  | "verifying"
+  | "waiting-approval"
+  | "working";
 
 export interface RunExecutionContext {
   readonly assignment: WorkerRunAssignmentV1;

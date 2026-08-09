@@ -695,7 +695,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
         // Reasoning effort is a turn-level override; thread/start and
         // thread/resume do not accept it.
         ...(request.effort === undefined ? {} : { effort: request.effort }),
-        approvalPolicy: "on-request",
+        approvalPolicy: request.permissions.mode === "deny" ? "never" : "on-request",
         approvalsReviewer: "user",
       });
       while (turnResult === undefined) {

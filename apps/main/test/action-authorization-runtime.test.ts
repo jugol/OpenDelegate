@@ -24,7 +24,12 @@ test("approval is required before an exact permit can be durably consumed", asyn
   const filename = join(root, "actions.sqlite3");
   const now = 10_000;
   let id = 0;
-  const runtime = await createRuntime(filename, () => now);
+  const approvalChanges: string[] = [];
+  const runtime = await createRuntime(filename, () => now, undefined, {
+    onApprovalChange: (taskId) => {
+      approvalChanges.push(taskId);
+    },
+  });
   const approvals = new ApprovalService({
     repository: new InMemoryApprovalRepository(),
     executor: runtime,
@@ -35,6 +40,7 @@ test("approval is required before an exact permit can be durably consumed", asyn
   try {
     const pending = await runtime.authorize(authorizationInput("action-request-1"));
     assert.equal(pending.decision, "require-approval");
+    assert.deepEqual(approvalChanges, ["task-1"]);
     assert.equal((await approvals.list({ state: "pending" })).length, 1);
     assert.deepEqual(await runtime.consume(consumptionInput(pending, "action-request-1")), {
       decision: "deny",
@@ -701,7 +707,11 @@ test("an unavailable configured action Policy fails closed", async () => {
 type RuntimeOverrides = Partial<
   Pick<
     MainActionAuthorizationRuntimeOptions,
-    "approvalExpirationMs" | "configuredGrants" | "configuredPolicy" | "runAuthority"
+    | "approvalExpirationMs"
+    | "configuredGrants"
+    | "configuredPolicy"
+    | "runAuthority"
+    | "onApprovalChange"
   >
 >;
 

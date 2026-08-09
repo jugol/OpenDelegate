@@ -429,6 +429,9 @@ test("Windows Worker install accepts the release and staging root actions after 
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
   const configuration = windowsConfiguration({
     role: "worker",
+    agentSandbox: {
+      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    },
     serviceSecretBinding: {
       backend: "windows-service-dpapi",
       handoffRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\handoff",
@@ -525,6 +528,13 @@ test("Windows Worker install accepts the release and staging root actions after 
   );
   assert.ok(icaclsRequests.some((request) => request.arguments.includes("/setowner")));
   assert.ok(icaclsRequests.some((request) => request.arguments.includes("/grant:r")));
+  assert.ok(
+    icaclsRequests.some(
+      (request) =>
+        request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin" &&
+        request.arguments.includes("NT SERVICE\\OpenDelegate-personal:(OI)(CI)F"),
+    ),
+  );
   assert.equal(
     icaclsRequests.some(
       (request) =>

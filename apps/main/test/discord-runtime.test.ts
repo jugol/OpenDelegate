@@ -87,6 +87,7 @@ const AGENT_LIMITS = {
 test("Main Discord runtime adds a Task Artifact link without making status projection depend on it", async () => {
   const projections: TaskChannelProjection[] = [];
   let artifactAvailable = true;
+  let approvalAvailable = true;
   const runtime = new DiscordMainRuntime({
     adapter: {
       start: () => Promise.resolve(),
@@ -161,6 +162,16 @@ test("Main Discord runtime adds a Task Artifact link without making status proje
             })
           : Promise.reject(new Error("Artifact metadata is offline.")),
     },
+    taskApproval: {
+      current: () =>
+        approvalAvailable
+          ? Promise.resolve({
+              approvalId: "approval-worker-action",
+              description: "Windows Worker wants to install a required package.",
+            })
+          : Promise.resolve(undefined),
+      resolve: () => Promise.resolve(false),
+    },
     clock: new TestClock(),
     synchronizationIntervalMs: 60_000,
   });
@@ -170,10 +181,16 @@ test("Main Discord runtime adds a Task Artifact link without making status proje
     label: "Open report",
     url: "https://reports.example.test/artifacts/artifact-report",
   });
+  assert.deepEqual(projections.at(-1)?.approval, {
+    approvalId: "approval-worker-action",
+    description: "Windows Worker wants to install a required package.",
+  });
 
   artifactAvailable = false;
+  approvalAvailable = false;
   await runtime.synchronizeNow();
   assert.equal(projections.at(-1)?.artifact, undefined);
+  assert.equal(projections.at(-1)?.approval, undefined);
   assert.equal(runtime.diagnostics.at(-1)?.event, "discord.runtime.artifact_projection_failed");
   await runtime.close();
 });

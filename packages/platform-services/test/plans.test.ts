@@ -126,6 +126,43 @@ test("Windows install grants the virtual service temporary full control of its D
   );
 });
 
+test("Windows lifecycle plans repair only the Codex sandbox helper ACL before start", () => {
+  const sandboxDirectory = "C:\\Users\\owner\\.codex\\.sandbox-bin";
+  const configuration = windowsConfiguration({
+    agentSandbox: { codexSandboxBinDirectory: sandboxDirectory },
+  });
+  for (const input of [
+    { operation: "install" as const, configuration },
+    { operation: "start" as const, configuration, activeVersion: "1.2.3" },
+    { operation: "restart" as const, configuration, activeVersion: "1.2.3" },
+    {
+      operation: "upgrade" as const,
+      configuration: windowsConfiguration({
+        agentSandbox: { codexSandboxBinDirectory: sandboxDirectory },
+        bundle: { ...configuration.bundle, version: "1.2.4" },
+      }),
+      activeVersion: "1.2.3",
+    },
+  ]) {
+    const plan = createServicePlan(input);
+    const sandbox = plan.steps.find((step) => step.id === "ensure-codex-sandbox-helper");
+    assert.ok(sandbox);
+    assert.equal(sandbox.action.kind, "directory.ensure");
+    assert.equal(sandbox.action.path, sandboxDirectory);
+    assert.equal(sandbox.action.access.owner, "S-1-5-21-1000");
+    assert.deepEqual(sandbox.action.access.grants, [
+      { principal: "BUILTIN\\Administrators", permission: "full-control" },
+      { principal: "S-1-5-18", permission: "full-control" },
+      { principal: "S-1-5-21-1000", permission: "full-control" },
+      { principal: "NT SERVICE\\OpenDelegate-personal", permission: "full-control" },
+    ]);
+    assert.ok(
+      plan.steps.findIndex((step) => step.id === "ensure-codex-sandbox-helper") <
+        plan.steps.findIndex((step) => step.id === "start-core"),
+    );
+  }
+});
+
 test("Admin preference reconfiguration atomically rewrites runtime state and restarts only the owner helper", async () => {
   const previousConfiguration = linuxConfiguration({ role: "main" });
   const configuration = linuxConfiguration({

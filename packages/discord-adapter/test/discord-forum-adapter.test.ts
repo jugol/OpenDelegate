@@ -1120,6 +1120,10 @@ test("one bounded live activity message is edited and closed for a Task cycle", 
   await adapter.flushOutbox();
   await adapter.publishTaskProjection({
     ...base,
+    approval: {
+      approvalId: "approval-worker-action",
+      description: "Mac Studio wants to temporarily expand its sandbox for this Task.",
+    },
     activity: {
       ...base.activity!,
       revision: 2,
@@ -1154,7 +1158,9 @@ test("one bounded live activity message is edited and closed for a Task cycle", 
   assert.equal(activityWrites.length, 2);
   assert.equal(activityWrites[0]?.["messageId"], activityWrites[1]?.["messageId"]);
   assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Mac Studio/u);
-  assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Pause/u);
+  assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Approval needed/u);
+  assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Approve/u);
+  assert.doesNotMatch(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Pause/u);
   assert.equal((await repository.getBindingByTask("task-1"))?.activitySurface?.state, "open");
 
   await adapter.publishTaskProjection({

@@ -67,7 +67,11 @@ test("a staged Windows Worker composes its service document from durable public 
             ipcTrust: { core, helper },
           },
         },
-        agent: { provider: "auto", allowUntestedVersion: false },
+        agent: {
+          provider: "auto",
+          codexHome: "C:\\Users\\owner\\.codex",
+          allowUntestedVersion: false,
+        },
         workspaces: [],
         createdAt: "2026-08-08T00:00:00.000Z",
       })}\n`,
@@ -99,6 +103,10 @@ test("a staged Windows Worker composes its service document from durable public 
     assert.equal(document.bundle.sourceDirectory, win32.resolve(bundle));
     assert.equal(document.helperSecretBinding.vaultRoot, win32.resolve(ownerVaultRoot));
     assert.equal(document.serviceSecretBinding?.serviceSid, SERVICE_SID);
+    assert.equal(
+      document.agentSandbox?.codexSandboxBinDirectory,
+      "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    );
     assert.equal(
       document.serviceSecretBinding?.handoffRoot,
       win32.resolve(join(dataRoot, "state", "secrets", "handoff")),

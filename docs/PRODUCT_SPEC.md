@@ -505,8 +505,12 @@ through a secure handoff and resumes the same Task afterward.
    uses a closed owner-safe vocabulary rather than free-form provider prose; token
    deltas, raw tool activity, hidden reasoning, native session identifiers, local
    paths, and heartbeats never enter it. The message retains only a short rolling
-   set of meaningful milestones and closes before a question, failure, or final
-   result becomes the canonical reply.
+   set of meaningful milestones. If the current Worker Run requires an owner
+   decision, the same message shows one owner-safe action, Device, risk, and evidence
+   summary plus approve-once and reject controls; it does not create a second
+   “attention” card. The Worker waits durably without an arbitrary short timeout.
+   The activity message closes before a question, failure, or final result becomes
+   the canonical reply.
    Durable outbound delivery runs outside the serialized Gateway receipt path, so
    a slow reaction or reply in one thread cannot delay intake of another Forum
    post. A live `THREAD_CREATE` payload is reused for its starter message instead
@@ -520,8 +524,10 @@ through a secure handoff and resumes the same Task afterward.
    includes the owner-safe concrete reason or exhausted resource and the applicable
    recovery control, such as Retry; the owner is never left with only a generic
    attention notice.
-9. Buttons and menus offer pause, cancel, retry, approve, reject, inspect Runs, and
-   open Artifact actions where Discord permits. If authoritative Task state rejects
+9. Buttons and menus offer pause, cancel, retry, approve once, reject, inspect Runs,
+   and open Artifact actions where Discord permits. A Discord Approval decision
+   resolves the exact same durable Approval service record shown in Admin Web; it
+   never creates a parallel Task-local approval authority. If authoritative Task state rejects
    a control from an older message, the deferred interaction explains that the
    control is no longer available and the command outbox completes without retrying
    the same deterministic refusal. Transport and storage failures remain retryable.
@@ -1051,7 +1057,11 @@ may request a transition but cannot manufacture a state outside the transition r
 10. A once grant is atomically consumed by the executable enforcement boundary before
     the action. Stateless preview or evaluation cannot authorize it, and a consumed
     or replayed grant fails closed across process restart.
-11. Discord and Admin Web show the proposed action, reason, target, risk, and evidence.
+11. Discord and Admin Web show the proposed action, reason, target, risk, and
+    evidence. Discord uses an owner-safe summary on the current live Task surface
+    and offers approve-once or reject; Admin Web retains the complete normalized
+    Approval detail and broader grant scopes. Multiple pending Worker actions are
+    serialized visibly rather than collapsed or duplicated.
 12. The executor rejects actions outside the approved scope even if an Agent claims
     approval exists.
 13. More permissive owner configuration is supported and clearly surfaced.

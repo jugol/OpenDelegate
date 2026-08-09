@@ -746,13 +746,40 @@ export class WorkerRuntime {
       return;
     }
     this.processes.set(assignment.runId, { process, leaseAuthority });
+    const startedAtMs = this.readNow();
+    const startedMessage = progressMessage("working");
+    const startedMessageDigest = createHash("sha256").update(startedMessage).digest("hex");
     const transition = await this.mutate<boolean>((state) => {
-      const run = state.runs.find((candidate) => candidate.assignment.runId === assignment.runId);
+      const touched = touchClock(state, startedAtMs);
+      const run = touched.runs.find((candidate) => candidate.assignment.runId === assignment.runId);
       if (run === undefined || run.state !== "starting") {
-        return { value: false };
+        return { nextState: touched, value: false };
+      }
+      const canReportStart =
+        (run.progressCount ?? 0) < MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN &&
+        touched.outbox.length + countActiveRuns(touched) < touched.configuration.maxOutboxEntries;
+      if (canReportStart) {
+        const nextProgressCount = (run.progressCount ?? 0) + 1;
+        const event = createProgressEvent(
+          this.configuration.deviceId,
+          assignment,
+          startedAtMs,
+          nextProgressCount,
+          startedMessage,
+        );
+        return {
+          nextState: replaceRun(appendOutbox(touched, event), assignment.runId, {
+            ...run,
+            state: "running",
+            progressCount: nextProgressCount,
+            lastProgressAtMs: startedAtMs,
+            lastProgressDigest: startedMessageDigest,
+          }),
+          value: true,
+        };
       }
       return {
-        nextState: replaceRun(state, assignment.runId, { ...run, state: "running" }),
+        nextState: replaceRun(touched, assignment.runId, { ...run, state: "running" }),
         value: true,
       };
     });
@@ -1542,6 +1569,8 @@ function progressMessage(kind: WorkerRunProgressKindV1): string {
       return "Worker Agent is using Device-local tools.";
     case "verifying":
       return "Worker Agent is verifying its work.";
+    case "waiting-approval":
+      return "Worker Agent is waiting for owner approval.";
     case "working":
       return "Worker Agent is making progress.";
     default:

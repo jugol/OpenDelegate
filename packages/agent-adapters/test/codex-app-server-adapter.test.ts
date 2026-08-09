@@ -298,12 +298,16 @@ test("Codex App Server fails before launch without the exact action authorizatio
       },
       sandbox: "read-only",
       permissions: { mode: "deny" },
+      environment: {
+        FIXTURE_COMPLETE_WITHOUT_APPROVAL: "1",
+        FIXTURE_EXPECT_APPROVAL_POLICY: "never",
+      },
       limits,
     });
     for await (const event of reasoningOnly.events) {
       void event;
     }
-    assert.equal((await reasoningOnly.result).status, "failed");
+    assert.equal((await reasoningOnly.result).status, "succeeded");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

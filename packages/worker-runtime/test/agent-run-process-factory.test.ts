@@ -1929,11 +1929,19 @@ test("public reports are bounded and redact local Secret values and common encod
         {
           sequence: 4,
           observedAt: "2026-07-25T00:00:01.000Z",
+          type: "approval_request",
+          requestId: "approval-safe-progress",
+          actionType: "package.install",
+          summary: "PRIVATE_APPROVAL_SUMMARY",
+        },
+        {
+          sequence: 5,
+          observedAt: "2026-07-25T00:00:01.000Z",
           type: "progress",
           message: `Checking the build with ${secret}`,
         },
         {
-          sequence: 5,
+          sequence: 6,
           observedAt: "2026-07-25T00:00:01.000Z",
           type: "public_message",
           role: "assistant",
@@ -1998,7 +2006,7 @@ test("public reports are bounded and redact local Secret values and common encod
     assert.equal(outcome.report.includes("PRIVATE_DELTA"), false);
     assert.equal(outcome.report.includes("PRIVATE_TOOL_INPUT"), false);
     assert.equal(outcome.report.endsWith("[Report truncated by OpenDelegate.]"), true);
-    assert.deepEqual(progressKinds, ["verifying"]);
+    assert.deepEqual(progressKinds, ["using-tools", "waiting-approval", "verifying"]);
   } finally {
     sessionStore.close();
     await rm(root, { recursive: true, force: true });
