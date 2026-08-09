@@ -35,6 +35,7 @@ import {
   restoreWindowsServiceSecretBackend,
   readWorkerSessionHelperOwnerKeyBinding,
   registerWorkerWorkspace,
+  setWorkerWorkspaceIsolation,
   resolveWorkerAgentPermissions,
   resolveWorkerAgentSandbox,
   resolveWorkerPaths,
@@ -1042,6 +1043,25 @@ test("Worker CLI registers and lists explicit Device-local Workspaces without an
     command: "workspace-list",
     home: resolve("worker-home"),
   });
+  assert.deepEqual(
+    parseWorkerArguments([
+      "workspace-set-isolation",
+      "--workspace-id",
+      "workspace-open-delegate",
+      "--isolation",
+      "opendelegate-worktree",
+      "--home",
+      "worker-home",
+    ]),
+    {
+      command: "workspace-set-isolation",
+      home: resolve("worker-home"),
+      workspaceIsolationUpdate: {
+        workspaceId: "workspace-open-delegate",
+        isolation: "opendelegate-worktree",
+      },
+    },
+  );
   assert.throws(
     () =>
       parseWorkerArguments([
@@ -1071,6 +1091,8 @@ test("Worker paths and Auto backend keep persistent state outside the checkout",
   });
   assert.equal(paths.home, home);
   assert.equal(paths.configFile.startsWith(checkout), false);
+  assert.equal(paths.managedWorktreeStateFile, join(home, "state", "managed-worktrees.sqlite3"));
+  assert.equal(paths.managedWorktreeDirectory, join(home, "state", "worktrees"));
   assert.deepEqual(
     await defaultSecretBackend({
       paths,
@@ -1248,6 +1270,24 @@ test("Workspace registration is durable, idempotent, and lists no Device-local p
         capabilities: ["git", "typescript"],
         state: "active",
         revision: 1,
+      },
+    ]);
+    const isolated = await setWorkerWorkspaceIsolation({
+      paths,
+      workspaceId: "workspace-open-delegate",
+      isolation: "opendelegate-worktree",
+    });
+    assert.equal(isolated.isolation, "opendelegate-worktree");
+    assert.equal(isolated.revision, 2);
+    assert.deepEqual(await listWorkerWorkspaces(paths), [
+      {
+        workspaceId: "workspace-open-delegate",
+        alias: "OpenDelegate",
+        type: "git",
+        isolation: "opendelegate-worktree",
+        capabilities: ["git", "typescript"],
+        state: "active",
+        revision: 2,
       },
     ]);
     assert.equal(JSON.stringify(await listWorkerWorkspaces(paths)).includes(workspaceRoot), false);

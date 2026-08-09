@@ -2155,3 +2155,28 @@ execution and therefore remain forbidden.
 or authority-bearing plans still fail closed. The authoritative protocol remains
 strict because it receives a complete canonical Work Order, and Workers can never
 gain an inferred credential.
+
+## D-105 — OpenDelegate-managed Git Workspaces are materialized by the production Worker
+
+Implementation detail:
+[ADR-0057](adr/0057-production-managed-worktree-composition.md).
+
+**Decision:** A Git Workspace explicitly registered with `opendelegate-worktree`
+is resolved through the production Worker's durable `ManagedGitWorktreeManager`.
+The manager stores its journal and materialized roots under Device-local Worker
+state, outside the source checkout and installed bundle, and derives one stable
+worktree from Task, workstream, and Workspace identity. Changing an existing
+Workspace isolation mode uses a revisioned deterministic local command.
+
+**Rationale:** Live Windows service QA showed that a Workspace advertised as
+`agent-native-worktree` still reached Codex App Server as the owner-owned repository
+root. A harmless read then failed provider sandbox setup and incorrectly requested
+medium-risk sandbox escalation. The managed-worktree implementation already
+existed, but production composition and the packaged configuration surface did not
+instantiate or expose it.
+
+**Consequence:** Service-hosted providers receive an exact service-managed working
+directory on Windows, macOS, and Linux without broadening permissions on the
+owner's original checkout. Related retries and follow-ups reuse the same worktree;
+unrelated workstreams remain isolated. `agent-native-worktree` retains its explicit
+meaning and is never silently migrated.

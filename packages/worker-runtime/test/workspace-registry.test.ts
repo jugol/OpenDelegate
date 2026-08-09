@@ -113,6 +113,37 @@ test("Workspace registration is revisioned and immutable path identity cannot dr
   );
 });
 
+test("OpenDelegate-managed worktree isolation remains Git-only during metadata updates", async (t) => {
+  const fixture = await workspaceFixture();
+  const registry = new SqliteWorkspaceRegistry({
+    filename: fixture.database,
+    sourceCheckoutDirectory: fixture.checkout,
+  });
+  t.after(async () => {
+    registry.close();
+    await rm(fixture.root, { recursive: true, force: true });
+  });
+  const registered = await registry.register({
+    workspaceId: "workspace-directory",
+    alias: "Directory",
+    type: "directory",
+    rootPath: fixture.workspace,
+    isolation: "none",
+    capabilities: ["files"],
+  });
+  await assert.rejects(
+    registry.updateMetadata({
+      workspaceId: registered.workspaceId,
+      expectedRevision: registered.revision,
+      alias: registered.alias,
+      isolation: "opendelegate-worktree",
+      capabilities: registered.capabilities,
+    }),
+    (error: unknown) =>
+      error instanceof WorkspaceRegistryError && error.code === "WORKSPACE_INVALID",
+  );
+});
+
 test("Workspace registry rejects checkout state, linked roots, duplicate aliases, and implicit selection", async (t) => {
   const fixture = await workspaceFixture();
 

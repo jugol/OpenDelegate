@@ -172,7 +172,10 @@ Use the packaged deterministic boundary rather than editing Worker configuration
 ```text
 opendelegate worker workspace-register --workspace-id ID --alias NAME \
   --type directory|git|mounted-storage --path ABSOLUTE_PATH \
-  --isolation none|agent-native-worktree [--capability NAME ...]
+  --isolation none|agent-native-worktree|opendelegate-worktree \
+  [--capability NAME ...]
+opendelegate worker workspace-set-isolation --workspace-id ID \
+  --isolation none|agent-native-worktree|opendelegate-worktree
 opendelegate worker workspace-list
 ```
 

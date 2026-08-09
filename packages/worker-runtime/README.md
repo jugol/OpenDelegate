@@ -77,7 +77,10 @@ rather than requiring an Agent to edit `worker.json`:
 ```text
 opendelegate worker workspace-register --workspace-id ID --alias NAME \
   --type directory|git|mounted-storage --path ABSOLUTE_PATH \
-  --isolation none|agent-native-worktree [--capability NAME ...]
+  --isolation none|agent-native-worktree|opendelegate-worktree \
+  [--capability NAME ...]
+opendelegate worker workspace-set-isolation --workspace-id ID \
+  --isolation none|agent-native-worktree|opendelegate-worktree
 opendelegate worker workspace-list
 ```
 
@@ -94,6 +97,11 @@ For installations created before that configuration link existed, exactly one
 active registered Workspace is also an unambiguous default. Zero or multiple
 registered Workspaces still require an explicit Work Order `workspaceId` and fail
 closed instead of guessing.
+
+The production Worker stores its managed-worktree journal and roots under Worker
+state, outside both the installed bundle and registered repository. Changing
+isolation is an explicit revisioned local command; `agent-native-worktree` is never
+silently relabeled as OpenDelegate-managed isolation.
 
 The manager creates detached worktrees from the registered repository's current
 commit with bounded, non-shell Git subprocesses. Its checksummed local journal

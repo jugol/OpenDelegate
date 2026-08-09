@@ -104,6 +104,7 @@ import {
   CompositeWorkerRunCapabilityProvider,
   DEFAULT_MAXIMUM_CONCURRENT_RUNS,
   LocalKnowledgeInitialContextProvider,
+  ManagedGitWorktreeManager,
   RegisteredWorkerWorkspaceResolver,
   SqliteNativeSessionReferenceStore,
   SqliteWorkerStateRepository,
@@ -236,6 +237,8 @@ export interface WorkerPaths {
   readonly sessionStateFile: string;
   readonly nativeSessionLeaseStateFile: string;
   readonly workspaceStateFile: string;
+  readonly managedWorktreeStateFile: string;
+  readonly managedWorktreeDirectory: string;
   readonly desktopLeaseStateFile: string;
   readonly computerUseStartStateFile: string;
   readonly runCapabilityDirectory: string;
@@ -325,7 +328,7 @@ export interface WorkerWorkspaceConfiguration {
   readonly alias: string;
   readonly type: "directory" | "git" | "mounted-storage";
   readonly rootPath: string;
-  readonly isolation: "agent-native-worktree" | "none";
+  readonly isolation: "agent-native-worktree" | "opendelegate-worktree" | "none";
   readonly capabilities: readonly string[];
 }
 
@@ -416,6 +419,12 @@ export interface WorkerComputerUseCapabilityProbe {
 export interface RegisterWorkerWorkspaceOptions {
   readonly paths: WorkerPaths;
   readonly workspace: WorkerWorkspaceConfiguration;
+}
+
+export interface SetWorkerWorkspaceIsolationOptions {
+  readonly paths: WorkerPaths;
+  readonly workspaceId: string;
+  readonly isolation: WorkerWorkspaceConfiguration["isolation"];
 }
 
 export interface ProvisionHeadlessLinuxSecretBackendOptions {
@@ -527,6 +536,8 @@ export function resolveWorkerPaths(input: {
     sessionStateFile: join(stateDirectory, "sessions.sqlite3"),
     nativeSessionLeaseStateFile: join(stateDirectory, "native-session-leases.json"),
     workspaceStateFile: join(stateDirectory, "workspaces.sqlite3"),
+    managedWorktreeStateFile: join(stateDirectory, "managed-worktrees.sqlite3"),
+    managedWorktreeDirectory: join(stateDirectory, "worktrees"),
     desktopLeaseStateFile: join(stateDirectory, "desktop-leases.sqlite3"),
     computerUseStartStateFile: join(stateDirectory, "computer-use-starts.sqlite3"),
     runCapabilityDirectory: join(stateDirectory, "run-capabilities"),
@@ -851,6 +862,33 @@ export async function listWorkerWorkspaces(
   }
 }
 
+export async function setWorkerWorkspaceIsolation(
+  options: SetWorkerWorkspaceIsolationOptions,
+): Promise<WorkspaceRecord> {
+  await loadWorkerConfiguration(options.paths);
+  await prepareRuntimeDirectories(options.paths);
+  const registry = new SqliteWorkspaceRegistry({
+    filename: options.paths.workspaceStateFile,
+    sourceCheckoutDirectory: options.paths.sourceCheckoutRoot,
+  });
+  try {
+    const current = await registry.resolve(options.workspaceId);
+    if (current.isolation === options.isolation) {
+      return current;
+    }
+    return await registry.updateMetadata({
+      workspaceId: current.workspaceId,
+      expectedRevision: current.revision,
+      alias: current.alias,
+      isolation: options.isolation,
+      capabilities: current.capabilities,
+      state: current.state,
+    });
+  } finally {
+    registry.close();
+  }
+}
+
 export async function createWorkerRuntime(
   options: Pick<
     RunWorkerDaemonOptions,
@@ -889,6 +927,11 @@ export async function createWorkerRuntime(
   });
   const workspaceRegistry = new SqliteWorkspaceRegistry({
     filename: options.paths.workspaceStateFile,
+    sourceCheckoutDirectory: options.paths.sourceCheckoutRoot,
+  });
+  const managedWorktreeManager = new ManagedGitWorktreeManager({
+    filename: options.paths.managedWorktreeStateFile,
+    managedRootDirectory: options.paths.managedWorktreeDirectory,
     sourceCheckoutDirectory: options.paths.sourceCheckoutRoot,
   });
   for (const workspace of configuration.workspaces) {
@@ -976,6 +1019,7 @@ export async function createWorkerRuntime(
     artifactLifecycle,
     workspaceResolver: new RegisteredWorkerWorkspaceResolver({
       registry: workspaceRegistry,
+      managedWorktreeManager,
       ...(defaultWorkspaceId === undefined ? {} : { defaultWorkspaceId }),
     }),
     initialContextProvider: new LocalKnowledgeInitialContextProvider({ knowledge }),
@@ -1108,6 +1152,7 @@ export async function createWorkerRuntime(
       await computerUse?.close().catch(() => undefined);
       await channelState.close().catch(() => undefined);
       sessionStore.close();
+      managedWorktreeManager.close();
       workspaceRegistry.close();
     },
   };
@@ -4240,7 +4285,11 @@ function validateWorkspace(value: unknown): WorkerWorkspaceConfiguration {
   ) {
     throw appError("CONFIG_INVALID", "Worker Workspace type is invalid.");
   }
-  if (record["isolation"] !== "none" && record["isolation"] !== "agent-native-worktree") {
+  if (
+    record["isolation"] !== "none" &&
+    record["isolation"] !== "agent-native-worktree" &&
+    record["isolation"] !== "opendelegate-worktree"
+  ) {
     throw appError("CONFIG_INVALID", "Worker Workspace isolation is invalid.");
   }
   if (!Array.isArray(record["capabilities"])) {
@@ -4283,6 +4332,7 @@ async function prepareRuntimeDirectories(paths: WorkerPaths): Promise<void> {
     paths.stateDirectory,
     paths.knowledgeDirectory,
     paths.runCapabilityDirectory,
+    paths.managedWorktreeDirectory,
   ]) {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const metadata = await lstat(directory);

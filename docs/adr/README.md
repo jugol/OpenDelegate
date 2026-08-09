@@ -73,6 +73,8 @@ approved product specification.
 50. [`0053-discord-worker-action-approval.md`](0053-discord-worker-action-approval.md)
 51. [`0054-discord-retry-resolves-prior-failure.md`](0054-discord-retry-resolves-prior-failure.md)
 52. [`0055-owner-cycle-scoped-work-order-ids.md`](0055-owner-cycle-scoped-work-order-ids.md)
+53. [`0056-authority-reducing-work-order-default.md`](0056-authority-reducing-work-order-default.md)
+54. [`0057-production-managed-worktree-composition.md`](0057-production-managed-worktree-composition.md)
 
 ## Proposed ADRs
 
