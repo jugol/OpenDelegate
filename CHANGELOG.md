@@ -114,6 +114,9 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
+- Routed bundled Worker Run-tool subprocesses through the release launcher so Knowledge, Artifact,
+  platform-mutation, and Computer Use MCP bridges execute their CLI command instead of silently
+  exiting from a library bundle.
 - Accepted Claude Agent SDK `command_lifecycle` events during native child-Agent execution,
   preserved an authoritative terminal result when SDK transport cleanup throws, and reported missing
   Linux `bubblewrap`/`socat` sandbox prerequisites before dispatch. Linux readiness now also proves
