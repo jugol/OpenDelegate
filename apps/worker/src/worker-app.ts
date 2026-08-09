@@ -3316,6 +3316,7 @@ function adapterBlocker(
   }
   if (
     diagnosticCodes.has("CLAUDE_SANDBOX_UNAVAILABLE_NATIVE_WINDOWS") ||
+    diagnosticCodes.has("CLAUDE_SANDBOX_RUNTIME_UNAVAILABLE") ||
     probe.unsupportedOnDevice === true
   ) {
     return "platform-incompatible";

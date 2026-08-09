@@ -116,7 +116,9 @@ represents a supported release or completed first milestone.
 
 - Accepted Claude Agent SDK `command_lifecycle` events during native child-Agent execution,
   preserved an authoritative terminal result when SDK transport cleanup throws, and reported missing
-  Linux `bubblewrap`/`socat` sandbox prerequisites before dispatch.
+  Linux `bubblewrap`/`socat` sandbox prerequisites before dispatch. Linux readiness now also proves
+  bounded nested user-namespace creation, so AppArmor, container, or kernel incompatibility routes
+  to an explicitly configured Prefer fallback instead of hanging the first native child Agent.
 - Kept Windows core services on their exact non-admin virtual account while using SCM SID type
   `UNRESTRICTED`, so headless provider DNS/HTTPS is available without moving Agent execution into
   the interactive owner session.

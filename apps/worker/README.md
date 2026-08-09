@@ -272,6 +272,12 @@ not copied or inherited. Provider credentials are never accepted through a Run
 environment or written into the checkout. Claude network access is limited to the
 DNS names recorded at join.
 
+On Linux, a present `bubblewrap` executable is not sufficient readiness evidence.
+The Worker also proves that the nested user namespace required by Claude's fail-closed
+sandbox can start. If AppArmor, a container policy, or the kernel blocks it, the
+adapter is reported `platform-incompatible` so a declared Prefer fallback can be
+selected. OpenDelegate does not weaken the Device sandbox automatically.
+
 An always-on service often has a smaller `PATH` than the owner's terminal. Use
 `--codex-executable` or `--claude-executable` at join when the provider is installed
 outside that service path. Windows requires a native `.exe`; `.cmd` and `.bat`

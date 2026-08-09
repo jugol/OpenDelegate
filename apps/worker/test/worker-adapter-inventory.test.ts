@@ -115,6 +115,18 @@ describe("Worker agent adapter inventory", () => {
             },
           ],
         }),
+        stubAdapter("claude-sandbox-runtime", {
+          installed: true,
+          version: "0.3.220",
+          compatibility: "incompatible",
+          auth: { state: "ready" },
+          diagnostics: [
+            {
+              code: "CLAUDE_SANDBOX_RUNTIME_UNAVAILABLE",
+              message: "A Device policy blocks nested sandbox creation.",
+            },
+          ],
+        }),
       ],
       environment: {},
       workspaceRegistry,
@@ -126,6 +138,7 @@ describe("Worker agent adapter inventory", () => {
     assert.deepEqual((snapshot.agentAdapters ?? []).map((adapter) => adapter.adapterId).sort(), [
       "claude-missing",
       "claude-sandbox-dependency",
+      "claude-sandbox-runtime",
       "claude-untested",
     ]);
     assert.deepEqual(
@@ -148,6 +161,12 @@ describe("Worker agent adapter inventory", () => {
         (adapter) => adapter.adapterId === "claude-sandbox-dependency",
       )?.blockedBy,
       "executable-unavailable",
+    );
+    assert.equal(
+      (snapshot.agentAdapters ?? []).find(
+        (adapter) => adapter.adapterId === "claude-sandbox-runtime",
+      )?.blockedBy,
+      "platform-incompatible",
     );
   });
 

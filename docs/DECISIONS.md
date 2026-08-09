@@ -1910,3 +1910,25 @@ the product owns a complete restricted-resource policy.
 while Codex and other authenticated providers can run headlessly. Install and
 upgrade repair the SID type deterministically, and the Windows release lab must test
 provider traffic from the installed service rather than only an owner terminal.
+
+## D-096 — Linux Claude readiness proves the nested sandbox primitive
+
+Implementation detail:
+[ADR-0048](adr/0048-linux-claude-nested-sandbox-readiness.md).
+
+**Decision:** A Linux Claude Agent SDK adapter is ready only when its required
+`bubblewrap` and `socat` executables exist and a bounded, read-only nested
+user-namespace smoke test succeeds. Failure marks the adapter incompatible before a
+Run starts. A Prefer profile may then use only its explicitly configured fallback;
+OpenDelegate never enables Claude's weaker nested sandbox or modifies host security
+policy implicitly.
+
+**Rationale:** Live native-child-Agent testing on Ubuntu showed that the packaged
+AppArmor profile allowed the first `bubblewrap` namespace but removed the capability
+needed by the nested sandbox. Executable-only probing advertised Claude as ready,
+then left the provider turn alive after its child tool failed.
+
+**Consequence:** Tasks fail closed or route through an explicit fallback without
+waiting for the first Bash tool to expose host incompatibility. Owners may still
+make an audited Device-policy change separately, but adapter selection never treats
+that security weakening as installation repair.

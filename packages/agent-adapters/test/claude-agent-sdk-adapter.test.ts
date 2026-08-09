@@ -686,6 +686,35 @@ test("Claude Agent SDK reports missing Linux sandbox executables before a Run st
   );
 });
 
+test("Claude Agent SDK rejects a Linux sandbox whose nested user namespace is blocked", async () => {
+  const adapter = new ClaudeAgentSdkAdapter({
+    claudeHome: await createClaudeHome(),
+    hostPlatform: "linux",
+    sdk: {
+      query() {
+        throw new Error("query must not start");
+      },
+    },
+    authExecutable: process.execPath,
+    authPrefixArgs: [fixturePath, "claude"],
+    sandboxDependencyProbe: async () => [],
+    sandboxRuntimeProbe: async () => false,
+  });
+
+  const probe = await adapter.probe({
+    secretEnvironment: { ANTHROPIC_API_KEY: "fixture-api-key" },
+  });
+
+  assert.equal(probe.compatibility, "incompatible");
+  assert.ok(
+    probe.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === "CLAUDE_SANDBOX_RUNTIME_UNAVAILABLE" &&
+        diagnostic.message.includes("nested user namespace"),
+    ),
+  );
+});
+
 test("Claude Agent SDK stays advertisable off native Windows even when the package is missing", async () => {
   // A missing package has a remedy, so hiding the adapter would hide the remedy too.
   const claudeHome = await createClaudeHome();

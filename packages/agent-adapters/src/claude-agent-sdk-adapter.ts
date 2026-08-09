@@ -134,6 +134,7 @@ export interface ClaudeAgentSdkAdapterOptions {
     executableNames: readonly string[],
     environment: NodeJS.ProcessEnv,
   ) => Promise<readonly string[]>;
+  readonly sandboxRuntimeProbe?: (environment: NodeJS.ProcessEnv) => Promise<boolean>;
 }
 
 export class ClaudeAgentSdkAdapter implements AgentAdapter {
@@ -152,6 +153,7 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
     executableNames: readonly string[],
     environment: NodeJS.ProcessEnv,
   ) => Promise<readonly string[]>;
+  readonly #sandboxRuntimeProbe: (environment: NodeJS.ProcessEnv) => Promise<boolean>;
 
   public constructor(options: ClaudeAgentSdkAdapterOptions) {
     this.#claudeHome = resolveControlledProviderHome(options.claudeHome, "Claude");
@@ -170,6 +172,12 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
       // An injected SDK is a deterministic test boundary. Production resolves
       // the package dynamically and probes the real Device PATH.
       (options.sdk === undefined ? missingExecutablesOnPath : async () => []);
+    this.#sandboxRuntimeProbe =
+      options.sandboxRuntimeProbe ??
+      // Unit tests inject the SDK and opt into this probe explicitly. Production
+      // must prove the nested Linux sandbox primitive instead of treating a
+      // present bwrap executable as sufficient evidence.
+      (options.sdk === undefined ? probeNestedLinuxSandbox : async () => true);
   }
 
   public async probe(input: AgentAdapterProbeInput = {}): Promise<AgentAdapterProbe> {
@@ -210,6 +218,12 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
             buildChildEnvironment(input.environment, input.secretEnvironment),
           )
         : [];
+    const sandboxRuntimeReady =
+      this.#hostPlatform === "linux" && sdkInstalled && missingSandboxExecutables.length === 0
+        ? await this.#sandboxRuntimeProbe(
+            buildChildEnvironment(input.environment, input.secretEnvironment),
+          )
+        : true;
     if (nativeWindows) {
       diagnostics.push({
         code: "CLAUDE_SANDBOX_UNAVAILABLE_NATIVE_WINDOWS",
@@ -224,6 +238,13 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
           `Claude Agent SDK's fail-closed Linux sandbox is missing required ` +
           `executables: ${missingSandboxExecutables.join(", ")}. Install the ` +
           "bubblewrap and socat packages from this Device's configured official package sources.",
+      });
+    }
+    if (!sandboxRuntimeReady) {
+      diagnostics.push({
+        code: "CLAUDE_SANDBOX_RUNTIME_UNAVAILABLE",
+        message:
+          "Claude Agent SDK's fail-closed Linux sandbox cannot create its required nested user namespace. A Device AppArmor, container, or kernel policy is blocking the sandbox; use a ready fallback Agent or explicitly repair that Device policy.",
       });
     }
     let authState: AgentAdapterProbe["auth"]["state"];
@@ -270,7 +291,10 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
       installed: sdkInstalled,
       version: CLAUDE_AGENT_SDK_VERSION,
       compatibility:
-        nativeWindows || !sdkInstalled || missingSandboxExecutables.length > 0
+        nativeWindows ||
+        !sdkInstalled ||
+        missingSandboxExecutables.length > 0 ||
+        !sandboxRuntimeReady
           ? "incompatible"
           : "tested",
       auth: { state: authState },
@@ -383,12 +407,14 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
     });
     if (
       probe.diagnostics.some(
-        (diagnostic) => diagnostic.code === "CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE",
+        (diagnostic) =>
+          diagnostic.code === "CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE" ||
+          diagnostic.code === "CLAUDE_SANDBOX_RUNTIME_UNAVAILABLE",
       )
     ) {
       throw new AgentAdapterError(
         "SANDBOX_UNAVAILABLE",
-        "Claude Agent SDK requires the bubblewrap and socat packages for its fail-closed Linux sandbox.",
+        "Claude Agent SDK cannot start its fail-closed Linux sandbox on this Device.",
         true,
       );
     }
@@ -1149,6 +1175,47 @@ async function missingExecutablesOnPath(
     }
   }
   return Object.freeze(missing);
+}
+
+async function probeNestedLinuxSandbox(environment: NodeJS.ProcessEnv): Promise<boolean> {
+  try {
+    const result = await captureCommand(
+      {
+        executable: "bwrap",
+        args: [
+          "--die-with-parent",
+          "--unshare-user",
+          "--uid",
+          "0",
+          "--gid",
+          "0",
+          "--ro-bind",
+          "/",
+          "/",
+          "--",
+          "bwrap",
+          "--die-with-parent",
+          "--unshare-user",
+          "--uid",
+          "0",
+          "--gid",
+          "0",
+          "--ro-bind",
+          "/",
+          "/",
+          "--",
+          "true",
+        ],
+        cwd: process.cwd(),
+        environment: environment as Readonly<Record<string, string>>,
+      },
+      3_000,
+      8 * 1024,
+    );
+    return !result.timedOut && result.exitCode === 0;
+  } catch {
+    return false;
+  }
 }
 
 function validateNetworkDomain(value: string): string {
