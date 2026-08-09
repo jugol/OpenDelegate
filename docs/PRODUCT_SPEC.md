@@ -605,12 +605,16 @@ may request a transition but cannot manufacture a state outside the transition r
 ### FR-7 — Work Orders, Runs, and scheduling
 
 1. Each Work Order has a stable ID, explicit brief, completion criteria, constraints,
-   selected inputs, required Capabilities, scheduling hints, and an optional Agent
+   selected inputs, required Capabilities, required Secret references, scheduling
+   hints, and an optional Agent
    requirement naming a provider plus an optional exact adapter, exact model, and
    allowed compatibility set. Agent-authored IDs are plan-local labels; Main
    deterministically replaces them with owner-input-cycle-scoped durable IDs and
    remaps dependencies before persistence. Retries in one cycle keep the same IDs,
    while a later owner cycle cannot collide merely because an Agent reused a label.
+   If and only if an Agent omits `requiredSecretRefs`, Main deterministically supplies
+   the least-authority value `[]`; an explicit malformed value or any other missing
+   authority, ordering, input, constraint, or eligibility field still fails closed.
 2. A deterministic eligibility stage filters Devices by health, connection, Policy,
    Capability, Secret availability, resource capacity, and hard Task constraints.
 3. A deterministic score may rank workload, route cost, artifact locality, session

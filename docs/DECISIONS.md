@@ -2030,7 +2030,10 @@ owner-provider `.sandbox-bin` directory in its validated service configuration.
 Install, start, restart, and upgrade create or repair only that directory with an
 inheritance-free ACL: Administrators, SYSTEM, the owner SID, and the exact
 `NT SERVICE\OpenDelegate-<instance>` identity receive Full Control. The source
-checkout and the remainder of the owner provider home are never widened.
+checkout and the remainder of the owner provider home are never widened. After
+Codex starts, its exact local `CodexSandboxUsers` group may additionally receive
+only Read & Execute plus Synchronize for provider-created child sandbox identities;
+that provider-managed ACE may never receive write, ownership, or ACL-control rights.
 
 **Rationale:** Live installed-service QA proved that Codex initializes its helper by
 changing the `.sandbox-bin` security descriptor. Ordinary inherited Modify access
@@ -2041,7 +2044,9 @@ sandbox escalation and wait indefinitely.
 **Consequence:** The native service can start Codex without running OpenDelegate as
 the owner or administrator and without sharing the entire provider home. Lifecycle
 repair handles directories recreated between releases. A malformed, checkout-local,
-or broader path fails service-document validation before mutation.
+or broader path fails service-document validation before mutation. Post-start
+verification accepts only the exact bounded provider group grant and rejects every
+other identity or broader right.
 
 ## D-101 — Worker action Approval stays on the one live Discord Task surface
 
@@ -2127,3 +2132,26 @@ dependency graphs preserve their meaning, and long-running Discord Tasks may acc
 many distinct owner turns without relying on a model to remember every historical
 identifier. Invalid duplicate labels or unknown dependency labels still fail closed
 during ordinary plan validation.
+
+## D-104 — Omitted Work Order Secret references default to zero authority
+
+Implementation detail:
+[ADR-0056](adr/0056-authority-reducing-work-order-default.md).
+
+**Decision:** Every planning prompt explicitly requires `requiredSecretRefs` on
+every Work Order. If a Main Agent nevertheless omits that one field, deterministic
+Main code inserts `requiredSecretRefs: []` before durable ID scoping and
+authoritative protocol validation. An explicit value is never replaced, and no
+other missing Work Order field receives an inferred default.
+
+**Rationale:** Live alpha.18 multi-Device Discord QA produced an otherwise valid,
+correctly bounded two-Work-Order plan but omitted the empty Secret array. Rejecting
+the whole owner turn as `WORK_PLAN_INVALID` added no safety: an empty array grants no
+credential and prevents Secret injection. Defaults for dependencies, constraints,
+Capabilities, placement, or non-empty Secret needs could widen authority or alter
+execution and therefore remain forbidden.
+
+**Consequence:** Harmless schema omission no longer strands a Task, while malformed
+or authority-bearing plans still fail closed. The authoritative protocol remains
+strict because it receives a complete canonical Work Order, and Workers can never
+gain an inferred credential.

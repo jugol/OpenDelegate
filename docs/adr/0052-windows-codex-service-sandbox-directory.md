@@ -30,12 +30,21 @@ owner SID, and `NT SERVICE\OpenDelegate-<instance>`. Native service execution us
 the same guarded directory mutation and exact service-plan allowlist as every other
 service-owned path.
 
+After startup, Codex may add the exact local `CodexSandboxUsers` group so its
+provider-created child sandbox identities can traverse and execute the helper. A
+post-start verifier may accept that one additional explicit ACE only when its rights
+are exactly Read & Execute plus Synchronize. OpenDelegate never grants that group
+write, delete, ownership, or ACL-control rights, and every other identity remains
+invalid.
+
 ## Consequences
 
 Codex can initialize its Windows sandbox under the installed Worker identity while
 the rest of the provider home retains its existing boundary. Re-running lifecycle
 commands repairs a deleted or recreated helper directory. Claude-only Workers do
-not add the Codex directory action. An invalid path fails before host mutation.
+not add the Codex directory action. An invalid path fails before host mutation. A
+provider-managed child-sandbox group remains useful without widening the provider
+home or granting it authority to mutate the helper directory.
 
 ## Verification
 
@@ -44,6 +53,8 @@ not add the Codex directory action. An invalid path fails before host mutation.
 - Install, start, restart, and upgrade place the ACL step before core start.
 - Native execution emits an exact service Full-Control ACE for `.sandbox-bin` and no
   recursive grant.
+- Post-start verification accepts at most one exact `CodexSandboxUsers` Read &
+  Execute plus Synchronize ACE and rejects broader rights or another identity.
 
 ## References
 

@@ -515,6 +515,43 @@ test("Main Agent scopes repeated plan-local Work Order labels to the owner-input
   ]);
 });
 
+test("Main Agent safely defaults an omitted Secret requirement to no credential authority", async () => {
+  const adapter = new FakeAgentAdapter("orchestration-omitted-secret-refs");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  const decision = await reasoner.plan({
+    task: request(1).task,
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_no_secrets:attempt:1",
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(decision.state, "ready");
+  if (decision.state !== "ready") {
+    assert.fail("Expected a ready Work Order plan.");
+  }
+  assert.deepEqual(decision.plan.workOrders[0]?.requiredSecretRefs, []);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /Every Work Order must include requiredSecretRefs\. Use \[\] when no credential is needed/u,
+  );
+});
+
 test("Main Agent answers read-only Device questions from the bounded Main-owned directory", async () => {
   const adapter = new FakeAgentAdapter("device-directory-answer");
   const reasoner = new AgentBackedTaskExecutor({
@@ -1126,6 +1163,7 @@ type FakeAgentMode =
   | "placement-question"
   | "outcome-platform-question"
   | "orchestration"
+  | "orchestration-omitted-secret-refs"
   | "orchestration-dependencies"
   | "device-directory-answer"
   | "outcome-continuation";
@@ -1182,6 +1220,19 @@ class FakeAgentAdapter implements AgentAdapter {
 
   async start(input: AgentStartRequest): Promise<AgentRunHandle> {
     this.starts.push(structuredClone(input));
+    if (this.#mode === "orchestration-omitted-secret-refs") {
+      const workOrder = structuredClone(releaseWorkOrder()) as unknown as Record<string, unknown>;
+      delete workOrder["requiredSecretRefs"];
+      return handle(session(input), {
+        schemaVersion: 1,
+        state: "ready",
+        plan: {
+          protocolVersion: "v1",
+          taskId: input.taskId,
+          workOrders: [workOrder],
+        },
+      });
+    }
     if (this.#mode === "orchestration-dependencies") {
       return handle(session(input), {
         schemaVersion: 1,

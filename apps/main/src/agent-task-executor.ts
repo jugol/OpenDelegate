@@ -773,6 +773,7 @@ function buildPlanningPrompt(
         "Return one exact JSON object and no Markdown fence.",
         'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
         'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"plan-local unique label","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["plan-local workOrderId"],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":[],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}.',
+        "Every Work Order must include requiredSecretRefs. Use [] when no credential is needed; OpenDelegate never infers credential authority.",
         "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
         "A continuation checkpoint never carries Secret references. If a Work Order needs one, return waiting_user so deterministic configuration can bind it without exposing a credential.",
         "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -789,6 +790,7 @@ function buildPlanningPrompt(
     "Return one exact JSON object and no Markdown fence.",
     'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
     'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"plan-local unique label","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["plan-local workOrderId"],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":["..."],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}. Omit requiredAgent when the Device profile may choose any ready binding; when present, use only an outcome-relevant hard requirement and tested-only is the default if allowedCompatibilities is omitted.',
+    "Every Work Order must include requiredSecretRefs. Use [] when no credential is needed; OpenDelegate never infers credential authority.",
     "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
     "Use unique plan-local Work Order labels and explicit completion criteria. OpenDelegate assigns durable owner-cycle-scoped IDs and remaps dependencies deterministically. Keep independent work parallel by leaving dependsOn empty; add dependencies only when evidence must flow between Work Orders.",
     "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -1085,13 +1087,34 @@ function parsePlanningResult(
     Array.isArray(parsed["plan"]["workOrders"])
   ) {
     type ReadyPlan = Extract<TaskWorkPlanDecision, { readonly state: "ready" }>["plan"];
-    const plan = structuredClone(parsed["plan"]) as unknown as ReadyPlan;
+    const plan = structuredClone(
+      applyAuthorityReducingPlanningDefaults(parsed["plan"]),
+    ) as unknown as ReadyPlan;
     return {
       state: "ready",
       plan: scopePlanningWorkOrderIds(plan, planningKey),
     };
   }
   throw invalidWorkPlan();
+}
+
+function applyAuthorityReducingPlanningDefaults(plan: Record<string, unknown>): unknown {
+  const workOrders = plan["workOrders"];
+  if (!Array.isArray(workOrders)) {
+    return plan;
+  }
+  return {
+    ...plan,
+    workOrders: workOrders.map((workOrder) => {
+      if (!isRecord(workOrder) || workOrder["requiredSecretRefs"] !== undefined) {
+        return workOrder;
+      }
+      return {
+        ...workOrder,
+        requiredSecretRefs: [],
+      };
+    }),
+  };
 }
 
 function scopePlanningWorkOrderIds<
