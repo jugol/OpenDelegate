@@ -471,6 +471,16 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         releaseDirectory: definition.releaseDirectory,
       },
     },
+    ...(definition.configuration.platform === "windows"
+      ? [
+          directoryStep(
+            "secure-release-root",
+            definition.releaseDirectory,
+            "0750",
+            directoryAccess(definition.configuration, "read-execute"),
+          ),
+        ]
+      : []),
     ...(hasSessionHelper(artifacts)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),

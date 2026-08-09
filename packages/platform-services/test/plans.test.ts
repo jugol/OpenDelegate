@@ -59,9 +59,7 @@ test("install/start/stop/restart plans are deterministic and supervise both plan
       true,
     );
     const configRootIndex = install.steps.findIndex((step) => step.id === "ensure-config-root");
-    const manifestRootIndex = install.steps.findIndex(
-      (step) => step.id === "ensure-manifest-root",
-    );
+    const manifestRootIndex = install.steps.findIndex((step) => step.id === "ensure-manifest-root");
     const firstRenderedFileIndex = install.steps.findIndex(
       (step) => step.action.kind === "file.write",
     );
@@ -75,7 +73,10 @@ test("install/start/stop/restart plans are deterministic and supervise both plan
       const activateIndex = install.steps.findIndex((step) => step.id === "activate-release");
       assert.ok(promoteIndex < secureReleaseIndex && secureReleaseIndex < activateIndex);
     } else {
-      assert.equal(install.steps.some((step) => step.id === "secure-release-root"), false);
+      assert.equal(
+        install.steps.some((step) => step.id === "secure-release-root"),
+        false,
+      );
     }
     assert.ok(install.steps.some((step) => step.action.kind === "release.stage"));
     assert.ok(install.steps.some((step) => step.action.kind === "health.check"));
@@ -235,6 +236,20 @@ test("upgrade atomically activates a staged release and rolls back after failed 
   assert.equal(activation.rollback?.kind, "activation.switch");
   if (activation.rollback?.kind === "activation.switch") {
     assert.match(activation.rollback.targetReleaseDirectory, /1\.2\.3$/);
+  }
+  const secureReleaseIndex = plan.steps.findIndex((step) => step.id === "secure-release-root");
+  const stopCoreIndex = plan.steps.findIndex((step) => step.id === "stop-core");
+  assert.ok(secureReleaseIndex > plan.steps.findIndex((step) => step.id === "promote-release"));
+  assert.ok(secureReleaseIndex < stopCoreIndex);
+  const secureRelease = plan.steps[secureReleaseIndex];
+  assert.equal(secureRelease?.action.kind, "directory.ensure");
+  if (secureRelease?.action.kind === "directory.ensure") {
+    assert.ok(
+      secureRelease.action.access.grants.some(
+        (grant) =>
+          grant.principal.startsWith("NT SERVICE\\") && grant.permission === "read-execute",
+      ),
+    );
   }
 
   const adapter = new RecordingAdapter("health.check");
