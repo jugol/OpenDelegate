@@ -140,11 +140,25 @@ export type WorkerCapabilityEvidenceSource =
  */
 export type WorkerCapabilityBlockerV1 = "session-helper-absent";
 
+/**
+ * A bounded, owner-actionable explanation for an Agent Adapter that is not
+ * ready. Raw provider diagnostics stay on the Device because they can contain
+ * local paths or provider output; this enum is safe to project through Main.
+ */
+export type WorkerAgentAdapterBlockerV1 =
+  | "provider-home-unavailable"
+  | "executable-unavailable"
+  | "authentication-required"
+  | "version-unsupported"
+  | "platform-incompatible"
+  | "probe-failed";
+
 export interface WorkerSchedulingAgentAdapterV1 {
   readonly provider: "codex" | "claude" | "generic-command";
   readonly adapterId: string;
   readonly readiness: "ready" | "degraded" | "unavailable";
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
+  readonly blockedBy?: WorkerAgentAdapterBlockerV1;
   readonly version?: string;
   /**
    * The upgrade that would make this adapter usable, when the Device has one.

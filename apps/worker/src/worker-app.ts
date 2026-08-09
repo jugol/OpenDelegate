@@ -3051,11 +3051,13 @@ export function createWorkerSchedulingInventoryProvider(input: {
           const catalog = cached!.modelCatalogs.get(
             agentAdapterIdentity(probe.provider, probe.adapterId),
           );
+          const blockedBy = adapterBlocker(probe);
           return Object.freeze({
             provider: schedulingProvider(probe.provider),
             adapterId: probe.adapterId,
             readiness: adapterReadiness(probe),
             compatibility: probe.compatibility,
+            ...(blockedBy === undefined ? {} : { blockedBy }),
             ...(probe.version === undefined ? {} : { version: probe.version }),
             ...(probe.remediation === undefined
               ? {}
@@ -3091,6 +3093,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
             adapterId: adapter.adapterId,
             readiness: "unavailable" as const,
             compatibility: "untested" as const,
+            blockedBy: "probe-failed" as const,
             observedAtMs: cached!.observedAtMs,
           }),
         ),
@@ -3283,6 +3286,47 @@ function adapterReadiness(
     probe.capabilities.resume
     ? "ready"
     : "degraded";
+}
+
+function adapterBlocker(
+  probe: AgentAdapterProbe,
+): NonNullable<WorkerSchedulingInventoryV1["agentAdapters"]>[number]["blockedBy"] {
+  if (adapterReadiness(probe) === "ready") {
+    return undefined;
+  }
+  const diagnosticCodes = new Set(probe.diagnostics.map((diagnostic) => diagnostic.code));
+  if (diagnosticCodes.has("CONTROLLED_PROVIDER_HOME_UNSAFE")) {
+    return "provider-home-unavailable";
+  }
+  if (
+    !probe.installed ||
+    diagnosticCodes.has("EXECUTABLE_NOT_FOUND") ||
+    diagnosticCodes.has("SDK_PACKAGE_UNAVAILABLE")
+  ) {
+    return "executable-unavailable";
+  }
+  if (
+    probe.auth.state === "not_ready" ||
+    diagnosticCodes.has("AUTH_NOT_READY") ||
+    diagnosticCodes.has("AUTH_PROBE_FAILED") ||
+    diagnosticCodes.has("AUTH_PROBE_TIMEOUT")
+  ) {
+    return "authentication-required";
+  }
+  if (
+    diagnosticCodes.has("CLAUDE_SANDBOX_UNAVAILABLE_NATIVE_WINDOWS") ||
+    probe.unsupportedOnDevice === true
+  ) {
+    return "platform-incompatible";
+  }
+  if (
+    probe.compatibility === "untested" ||
+    diagnosticCodes.has("UNRECOGNIZED_PROVIDER_VERSION") ||
+    diagnosticCodes.has("UNTESTED_PROVIDER_VERSION")
+  ) {
+    return "version-unsupported";
+  }
+  return "probe-failed";
 }
 
 function supportsNativeSubagents(probe: AgentAdapterProbe): boolean {

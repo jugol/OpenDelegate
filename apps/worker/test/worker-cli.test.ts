@@ -425,8 +425,12 @@ test("Worker join accepts bounded provider and Claude sandbox bootstrap settings
     "grant.json",
     "--agent",
     "auto",
+    "--codex-executable",
+    "runtime/bin/codex.exe",
     "--codex-home",
     "runtime/codex",
+    "--claude-executable",
+    "runtime/bin/claude.exe",
     "--claude-home",
     "runtime/claude",
     "--claude-network-domain",
@@ -438,12 +442,18 @@ test("Worker join accepts bounded provider and Claude sandbox bootstrap settings
   assert.deepEqual(parsed.agent, {
     provider: "auto",
     allowUntestedVersion: false,
+    codexExecutable: resolve("runtime/bin/codex.exe"),
     codexHome: resolve("runtime/codex"),
+    claudeExecutable: resolve("runtime/bin/claude.exe"),
     claudeHome: resolve("runtime/claude"),
     claudeAllowedNetworkDomains: ["registry.npmjs.org", "*.pypi.org"],
   });
   assert.throws(
     () => parseWorkerArguments(["run", "--claude-network-domain", "registry.npmjs.org"]),
+    WorkerAppError,
+  );
+  assert.throws(
+    () => parseWorkerArguments(["run", "--codex-executable", "runtime/bin/codex.exe"]),
     WorkerAppError,
   );
 });
@@ -1259,7 +1269,10 @@ test("source Worker CLI help, version, and unenrolled status are executable", as
       ["--experimental-strip-types", cli, "version"],
       { cwd: checkout },
     );
-    assert.match(version.stdout, /OpenDelegate Worker 0\.1\.0-alpha\.1/u);
+    const packageDocument = JSON.parse(await readFile(join(checkout, "package.json"), "utf8")) as {
+      readonly version: string;
+    };
+    assert.equal(version.stdout.trim(), `OpenDelegate Worker ${packageDocument.version}`);
     const status = await executeFile(
       process.execPath,
       ["--experimental-strip-types", cli, "status"],

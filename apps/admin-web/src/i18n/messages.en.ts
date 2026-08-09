@@ -207,6 +207,16 @@ export const englishMessages = {
     adapterUpgradeRequested:
       "Update requested. This Device reports the result on its next refresh.",
     adapterUpgradeFailed: "The update could not be requested.",
+    adapterBlockedProviderHome: "This Worker service cannot access the configured provider home.",
+    adapterBlockedExecutable:
+      "This Worker service cannot find or execute this provider. Configure its native executable or install it for the service account.",
+    adapterBlockedAuthentication:
+      "Sign in to this provider in the exact home configured for this Worker service.",
+    adapterBlockedVersion: "This provider version has not passed the adapter compatibility check.",
+    adapterBlockedPlatform:
+      "This adapter cannot enforce its required sandbox on this operating system.",
+    adapterBlockedProbe:
+      "The provider readiness check failed. Run `opendelegate worker diagnose` on this Device.",
     capabilityBlockedSessionHelperAbsent:
       "This Device runs OpenDelegate in the foreground, so it has no user-session helper and cannot reach the desktop. Install the Worker as a native service on this Device to enable it.",
     noAgentAdapters: "No Agent Adapter observation is available.",

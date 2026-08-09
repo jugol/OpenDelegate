@@ -242,6 +242,7 @@ async function startWorkerWorkload(
   };
   const completed = runWorkerDaemon({
     paths,
+    environment: buildWorkerServiceEnvironment(process.env),
     signal: workerController.signal,
     onReady: resolveReady,
     onConnectionDiagnostic: (diagnostic: WorkerConnectionDiagnostic) => {
@@ -287,6 +288,17 @@ async function startWorkerWorkload(
       await completed.catch(() => undefined);
     },
   };
+}
+
+/**
+ * Native service hosts must not look like foreground Workers to Main. Keep the
+ * marker explicit because Windows SCM and launchd do not expose systemd's
+ * INVOCATION_ID convention.
+ */
+export function buildWorkerServiceEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string | undefined>> {
+  return Object.freeze({ ...environment, OPENDELEGATE_SERVICE_MODE: "system-service" });
 }
 
 function writeWorkerServiceEvent(event: string, fields: Readonly<Record<string, unknown>>): void {

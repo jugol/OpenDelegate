@@ -89,6 +89,7 @@ export function mapDeviceOverview(device: DeviceSummary): DeviceOverviewViewMode
             ...(adapter.version === undefined ? {} : { version: adapter.version }),
             readiness: adapter.readiness,
             compatibility: adapter.compatibility,
+            ...(adapter.blockedBy === undefined ? {} : { blockedBy: adapter.blockedBy }),
             ...(adapter.availableUpgrade === undefined
               ? {}
               : { availableUpgrade: Object.freeze({ ...adapter.availableUpgrade }) }),

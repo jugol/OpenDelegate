@@ -1977,7 +1977,7 @@ function readAgentAdapters(
       requireExactInventoryKeys(
         entry,
         ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-        ["version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
+        ["version", "blockedBy", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
       );
       const provider = entry["provider"];
       const readiness = entry["readiness"];
@@ -1993,6 +1993,27 @@ function readAgentAdapters(
         throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker Agent adapters are invalid.");
       }
       const adapterId = readInventoryText(entry["adapterId"], "Agent adapter ID", 160);
+      const blockedBy = entry["blockedBy"];
+      if (
+        blockedBy !== undefined &&
+        blockedBy !== "provider-home-unavailable" &&
+        blockedBy !== "executable-unavailable" &&
+        blockedBy !== "authentication-required" &&
+        blockedBy !== "version-unsupported" &&
+        blockedBy !== "platform-incompatible" &&
+        blockedBy !== "probe-failed"
+      ) {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "Worker Agent adapter blocker is invalid.",
+        );
+      }
+      if (readiness === "ready" && blockedBy !== undefined) {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "A ready Worker Agent adapter cannot report a blocker.",
+        );
+      }
       const identity = `${provider}\0${adapterId}`;
       if (seen.has(identity)) {
         throw new WorkerRuntimeError(
@@ -2025,6 +2046,7 @@ function readAgentAdapters(
         adapterId,
         readiness,
         compatibility,
+        ...(blockedBy === undefined ? {} : { blockedBy }),
         ...(version === undefined ? {} : { version }),
         ...(availableUpgrade === undefined ? {} : { availableUpgrade }),
         observedAtMs: readInventoryTimestamp(

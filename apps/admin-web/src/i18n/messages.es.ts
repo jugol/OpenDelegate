@@ -215,6 +215,18 @@ export const spanishMessages = {
     adapterUpgradeRequested:
       "Actualización solicitada. El Dispositivo informará del resultado en su próxima actualización.",
     adapterUpgradeFailed: "No se pudo solicitar la actualización.",
+    adapterBlockedProviderHome:
+      "Este servicio Worker no puede acceder al directorio del proveedor configurado.",
+    adapterBlockedExecutable:
+      "Este servicio Worker no encuentra o no puede ejecutar este proveedor. Configura su ejecutable nativo o instálalo para la cuenta del servicio.",
+    adapterBlockedAuthentication:
+      "Inicia sesión en este proveedor dentro del directorio exacto configurado para este servicio Worker.",
+    adapterBlockedVersion:
+      "Esta versión del proveedor no ha superado la comprobación de compatibilidad del adaptador.",
+    adapterBlockedPlatform:
+      "Este adaptador no puede aplicar el aislamiento requerido en este sistema operativo.",
+    adapterBlockedProbe:
+      "Falló la comprobación de disponibilidad del proveedor. Ejecuta `opendelegate worker diagnose` en este dispositivo.",
     capabilityBlockedSessionHelperAbsent:
       "Este Dispositivo ejecuta OpenDelegate en primer plano, así que no tiene asistente de sesión de usuario y no puede acceder al escritorio. Instala el nodo de trabajo como servicio nativo en este Dispositivo para habilitarlo.",
     noAgentAdapters: "No hay observaciones de adaptadores de Agent.",

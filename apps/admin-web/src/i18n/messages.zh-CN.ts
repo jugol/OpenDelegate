@@ -193,6 +193,13 @@ export const simplifiedChineseMessages = {
     adapterUpgrading: "正在更新…",
     adapterUpgradeRequested: "已请求更新。该设备将在下次刷新时报告结果。",
     adapterUpgradeFailed: "无法请求更新。",
+    adapterBlockedProviderHome: "此 Worker 服务无法访问已配置的提供商主目录。",
+    adapterBlockedExecutable:
+      "此 Worker 服务无法找到或执行该提供商。请配置其原生可执行文件，或为服务账户安装它。",
+    adapterBlockedAuthentication: "请在为此 Worker 服务配置的确切主目录中登录该提供商。",
+    adapterBlockedVersion: "此提供商版本尚未通过适配器兼容性检查。",
+    adapterBlockedPlatform: "此适配器无法在当前操作系统上强制执行所需的沙箱。",
+    adapterBlockedProbe: "提供商就绪检查失败。请在此设备上运行 `opendelegate worker diagnose`。",
     capabilityBlockedSessionHelperAbsent:
       "该设备在前台运行 OpenDelegate，因此没有用户会话助手，无法访问桌面。在该设备上将工作节点安装为原生服务即可启用。",
     noAgentAdapters: "暂无 Agent 适配器观测信息。",

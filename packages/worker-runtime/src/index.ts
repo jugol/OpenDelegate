@@ -82,6 +82,7 @@ export type {
   WorkerSchedulingInventoryProvider,
   WorkerSchedulingInventoryV1,
   WorkerSchedulingHardwareFactsV1,
+  WorkerAgentAdapterBlockerV1,
   WorkerSchedulingAgentAdapterV1,
   WorkerSchedulingResourceLockV1,
   WorkerWakeOnLanObservationV1,

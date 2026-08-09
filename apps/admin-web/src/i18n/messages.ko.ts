@@ -209,6 +209,15 @@ export const koreanMessages = {
     adapterUpgradeRequested:
       "업데이트를 요청했습니다. 이 장치가 다음 새로고침에 결과를 알려줍니다.",
     adapterUpgradeFailed: "업데이트를 요청하지 못했습니다.",
+    adapterBlockedProviderHome: "이 Worker 서비스가 설정된 프로바이더 홈에 접근할 수 없습니다.",
+    adapterBlockedExecutable:
+      "이 Worker 서비스가 프로바이더 실행 파일을 찾거나 실행할 수 없습니다. 네이티브 실행 파일 경로를 지정하거나 서비스 계정에서 설치하세요.",
+    adapterBlockedAuthentication:
+      "이 Worker 서비스에 설정된 정확한 홈에서 프로바이더 로그인을 완료하세요.",
+    adapterBlockedVersion: "이 프로바이더 버전은 아직 어댑터 호환성 검사를 통과하지 않았습니다.",
+    adapterBlockedPlatform: "이 어댑터는 현재 운영 체제에서 필요한 샌드박스를 강제할 수 없습니다.",
+    adapterBlockedProbe:
+      "프로바이더 준비 상태 검사가 실패했습니다. 이 장치에서 `opendelegate worker diagnose`를 실행하세요.",
     capabilityBlockedSessionHelperAbsent:
       "이 장치는 OpenDelegate를 포그라운드로 실행하고 있어 사용자 세션 헬퍼가 없고 데스크톱에 접근할 수 없습니다. 이 장치에서 작업 노드를 네이티브 서비스로 설치하면 켜집니다.",
     noAgentAdapters: "표시할 Agent 어댑터 관측 정보가 없습니다.",

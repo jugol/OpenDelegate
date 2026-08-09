@@ -2390,6 +2390,13 @@ function sanitizeObservedAgentAdapter(
       value.compatibility !== "compatible" &&
       value.compatibility !== "untested" &&
       value.compatibility !== "incompatible") ||
+    (value.blockedBy !== undefined &&
+      value.blockedBy !== "provider-home-unavailable" &&
+      value.blockedBy !== "executable-unavailable" &&
+      value.blockedBy !== "authentication-required" &&
+      value.blockedBy !== "version-unsupported" &&
+      value.blockedBy !== "platform-incompatible" &&
+      value.blockedBy !== "probe-failed") ||
     typeof value.observedAtMs !== "number" ||
     !Number.isSafeInteger(value.observedAtMs) ||
     value.observedAtMs < 0
@@ -2416,6 +2423,7 @@ function sanitizeObservedAgentAdapter(
     adapterId: value.adapterId,
     readiness: value.readiness,
     compatibility: value.compatibility,
+    ...(value.blockedBy === undefined ? {} : { blockedBy: value.blockedBy }),
     ...(value.version === undefined ? {} : { version: value.version }),
     observedAtMs: value.observedAtMs,
     ...(modelCatalogObservedAtMs === undefined

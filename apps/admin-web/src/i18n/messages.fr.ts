@@ -216,6 +216,18 @@ export const frenchMessages = {
     adapterUpgradeRequested:
       "Mise à jour demandée. L'Appareil signalera le résultat lors de sa prochaine actualisation.",
     adapterUpgradeFailed: "La mise à jour n'a pas pu être demandée.",
+    adapterBlockedProviderHome:
+      "Ce service Worker ne peut pas accéder au dossier du fournisseur configuré.",
+    adapterBlockedExecutable:
+      "Ce service Worker ne trouve pas ou ne peut pas exécuter ce fournisseur. Configurez son exécutable natif ou installez-le pour le compte de service.",
+    adapterBlockedAuthentication:
+      "Connectez-vous à ce fournisseur dans le dossier exact configuré pour ce service Worker.",
+    adapterBlockedVersion:
+      "Cette version du fournisseur n'a pas réussi le contrôle de compatibilité de l'adaptateur.",
+    adapterBlockedPlatform:
+      "Cet adaptateur ne peut pas imposer le bac à sable requis sur ce système d'exploitation.",
+    adapterBlockedProbe:
+      "Le contrôle de disponibilité du fournisseur a échoué. Exécutez `opendelegate worker diagnose` sur cet appareil.",
     capabilityBlockedSessionHelperAbsent:
       "Cet Appareil exécute OpenDelegate au premier plan : il n'a donc pas d'assistant de session utilisateur et ne peut pas atteindre le bureau. Installez le nœud de travail comme service natif sur cet Appareil pour l'activer.",
     noAgentAdapters: "Aucune observation d’adaptateur Agent n’est disponible.",

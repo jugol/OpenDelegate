@@ -166,7 +166,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   let workspaceIsolation: "agent-native-worktree" | "none" | undefined;
   const workspaceCapabilities: string[] = [];
   let agentProvider: WorkerAgentConfiguration["provider"] | undefined;
+  let codexExecutable: string | undefined;
   let codexHome: string | undefined;
+  let claudeExecutable: string | undefined;
   let claudeHome: string | undefined;
   const claudeAllowedNetworkDomains: string[] = [];
   const uniqueOptions = new Set<string>();
@@ -190,7 +192,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       option !== "--isolation" &&
       option !== "--capability" &&
       option !== "--agent" &&
+      option !== "--codex-executable" &&
       option !== "--codex-home" &&
+      option !== "--claude-executable" &&
       option !== "--claude-home" &&
       option !== "--claude-network-domain" &&
       option !== "--output" &&
@@ -330,8 +334,14 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
         }
         agentProvider = target;
         break;
+      case "--codex-executable":
+        codexExecutable = resolve(target);
+        break;
       case "--codex-home":
         codexHome = resolve(target);
+        break;
+      case "--claude-executable":
+        claudeExecutable = resolve(target);
         break;
       case "--claude-home":
         claudeHome = resolve(target);
@@ -359,7 +369,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   }
   const hasAgentOption =
     agentProvider !== undefined ||
+    codexExecutable !== undefined ||
     codexHome !== undefined ||
+    claudeExecutable !== undefined ||
     claudeHome !== undefined ||
     claudeAllowedNetworkDomains.length > 0;
   if (command !== "join" && hasAgentOption) {
@@ -576,7 +588,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
           agent: {
             provider: agentProvider ?? "auto",
             allowUntestedVersion: false,
+            ...(codexExecutable === undefined ? {} : { codexExecutable }),
             ...(codexHome === undefined ? {} : { codexHome }),
+            ...(claudeExecutable === undefined ? {} : { claudeExecutable }),
             ...(claudeHome === undefined ? {} : { claudeHome }),
             ...(claudeAllowedNetworkDomains.length === 0
               ? {}
@@ -1019,8 +1033,9 @@ function printHelp(): void {
 Usage:
   opendelegate worker join --grant-file <absolute-path> [--home <path>]
     [--secret-backend-config <absolute-path>]
-    [--agent auto|codex|claude] [--codex-home <absolute-path>]
-    [--claude-home <absolute-path>]
+    [--agent auto|codex|claude]
+    [--codex-executable <absolute-native-executable>] [--codex-home <absolute-path>]
+    [--claude-executable <absolute-native-executable>] [--claude-home <absolute-path>]
     [--claude-network-domain <dns-name> ...]
   opendelegate worker secret-backend-provision
     --secret-backend-config ABSOLUTE_PATH

@@ -136,6 +136,16 @@ const DeviceAgentAdapterSchema = Type.Object(
       Type.Literal("untested"),
       Type.Literal("incompatible"),
     ]),
+    blockedBy: Type.Optional(
+      Type.Union([
+        Type.Literal("provider-home-unavailable"),
+        Type.Literal("executable-unavailable"),
+        Type.Literal("authentication-required"),
+        Type.Literal("version-unsupported"),
+        Type.Literal("platform-incompatible"),
+        Type.Literal("probe-failed"),
+      ]),
+    ),
     availableUpgrade: Type.Optional(
       Type.Object(
         {

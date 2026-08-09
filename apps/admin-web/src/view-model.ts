@@ -68,6 +68,13 @@ export interface AgentAdapterView {
   readonly version?: string;
   readonly readiness: "ready" | "degraded" | "unavailable";
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
+  readonly blockedBy?:
+    | "provider-home-unavailable"
+    | "executable-unavailable"
+    | "authentication-required"
+    | "version-unsupported"
+    | "platform-incompatible"
+    | "probe-failed";
   /** Present when the Device can bring this adapter to its pinned version. */
   readonly availableUpgrade?: {
     readonly packageName: string;

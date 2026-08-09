@@ -282,6 +282,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
                     adapterId: adapter.adapterId,
                     readiness: adapter.readiness,
                     compatibility: adapter.compatibility,
+                    ...(adapter.blockedBy === undefined ? {} : { blockedBy: adapter.blockedBy }),
                     ...(adapter.version === undefined ? {} : { version: adapter.version }),
                     ...(adapter.availableUpgrade === undefined
                       ? {}

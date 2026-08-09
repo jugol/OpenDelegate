@@ -29,6 +29,7 @@ import {
   formatMessage,
   localizeAdapterCompatibility,
   localizeAdapterReadiness,
+  localizeAgentAdapterBlocker,
   localizeApprovalActionCategory,
   localizeCapabilityState,
   localizeCurrentRunState,
@@ -1036,6 +1037,11 @@ function AgentAdapterList({
                   </small>
                 ) : null}
               </span>
+            )}
+            {adapter.blockedBy === undefined ? null : (
+              <small className="adapter-blocker" role="status">
+                {localizeAgentAdapterBlocker(adapter.blockedBy, messages)}
+              </small>
             )}
           </span>
           <span

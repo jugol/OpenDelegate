@@ -95,6 +95,13 @@ export interface DeviceSummary {
     readonly adapterId: string;
     readonly readiness: "ready" | "degraded" | "unavailable";
     readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
+    readonly blockedBy?:
+      | "provider-home-unavailable"
+      | "executable-unavailable"
+      | "authentication-required"
+      | "version-unsupported"
+      | "platform-incompatible"
+      | "probe-failed";
     readonly version?: string;
     readonly availableUpgrade?: {
       readonly packageName: string;

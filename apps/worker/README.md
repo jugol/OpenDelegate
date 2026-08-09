@@ -13,8 +13,9 @@ Enrollment accepts only a protected local grant file:
 
 ```text
 opendelegate worker join --grant-file ABSOLUTE_LOCAL_PATH \
-  [--agent auto|codex|claude] [--codex-home ABSOLUTE_LOCAL_PATH] \
-  [--claude-home ABSOLUTE_LOCAL_PATH] \
+  [--agent auto|codex|claude] \
+  [--codex-executable ABSOLUTE_NATIVE_EXECUTABLE] [--codex-home ABSOLUTE_LOCAL_PATH] \
+  [--claude-executable ABSOLUTE_NATIVE_EXECUTABLE] [--claude-home ABSOLUTE_LOCAL_PATH] \
   [--claude-network-domain APPROVED_DNS_NAME ...]
 ```
 
@@ -270,6 +271,14 @@ explicitly; an existing login from the user's global provider home is intentiona
 not copied or inherited. Provider credentials are never accepted through a Run
 environment or written into the checkout. Claude network access is limited to the
 DNS names recorded at join.
+
+An always-on service often has a smaller `PATH` than the owner's terminal. Use
+`--codex-executable` or `--claude-executable` at join when the provider is installed
+outside that service path. Windows requires a native `.exe`; `.cmd` and `.bat`
+wrappers stay rejected because Worker never invokes a shell. If an external provider
+home belongs to the owner, grant only the exact OpenDelegate service identity the
+access that provider needs, or keep the provider home service-local and authenticate
+it separately.
 
 The core daemon does not assume a graphical session. Native service and
 user-session helper installation are separate platform operations exposed by the

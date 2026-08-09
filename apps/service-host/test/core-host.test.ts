@@ -6,6 +6,7 @@ import { afterEach, describe, it, mock } from "node:test";
 import { isRunningCoreHealthResponseV1 } from "@opendelegate/platform-services";
 
 import {
+  buildWorkerServiceEnvironment,
   CoreHealthServer,
   resolveWorkerReleaseRoot,
   startCoLocatedMainDeviceWorkload,
@@ -13,6 +14,17 @@ import {
   type CoreWorkloadHandle,
   type ServiceHostConfiguration,
 } from "../src/index.ts";
+
+describe("native Worker service environment", () => {
+  it("marks every native service host as a system service without mutating its input", () => {
+    const input = { PATH: "C:\\tools", OPENDELEGATE_SERVICE_MODE: "foreground" };
+    const environment = buildWorkerServiceEnvironment(input);
+
+    assert.equal(environment["PATH"], "C:\\tools");
+    assert.equal(environment["OPENDELEGATE_SERVICE_MODE"], "system-service");
+    assert.equal(input.OPENDELEGATE_SERVICE_MODE, "foreground");
+  });
+});
 
 const servers: CoreHealthServer[] = [];
 afterEach(async () => {
@@ -140,13 +152,10 @@ describe("Worker release identity", () => {
     const observed: string[] = [];
     const activeRelease = resolve("current");
     const expectedPhysicalRelease = resolve("releases", "0.1.0-alpha.1");
-    const physicalRelease = await resolveWorkerReleaseRoot(
-      activeRelease,
-      async (path) => {
-        observed.push(path);
-        return expectedPhysicalRelease;
-      },
-    );
+    const physicalRelease = await resolveWorkerReleaseRoot(activeRelease, async (path) => {
+      observed.push(path);
+      return expectedPhysicalRelease;
+    });
 
     assert.deepEqual(observed, [activeRelease]);
     assert.equal(physicalRelease, expectedPhysicalRelease);
