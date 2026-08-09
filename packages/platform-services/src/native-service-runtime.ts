@@ -1862,12 +1862,40 @@ async function assertUpgradeConfigurationMatchesInstalled(
         { cause: error },
       );
     }
-    if (!existing.equals(expected)) {
+    if (
+      !existing.equals(expected) &&
+      !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing)
+    ) {
       failPreflight(
         "Upgrade refused a configuration that does not exactly match the installed service definitions.",
       );
     }
   }
+}
+
+function matchesLegacyWindowsRestrictedSidManifest(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "windows" ||
+    installedFile.purpose !== "core-manifest" ||
+    installedFile.encoding !== "utf8"
+  ) {
+    return false;
+  }
+  const declared = '"serviceSidType": "unrestricted"';
+  const legacy = '"serviceSidType": "restricted"';
+  const first = installedFile.content.indexOf(declared);
+  if (first < 0 || installedFile.content.indexOf(declared, first + declared.length) >= 0) {
+    return false;
+  }
+  const legacyFile: RenderedFile = {
+    ...installedFile,
+    content: `${installedFile.content.slice(0, first)}${legacy}${installedFile.content.slice(first + declared.length)}`,
+  };
+  return existing.equals(encodeRenderedFile(legacyFile));
 }
 
 function assertCanonicalPlan(

@@ -34,6 +34,10 @@ independent enforcement layers.
 Install and upgrade plans always set the declared SID type, so an existing
 `RESTRICTED` installation is repaired deterministically during its next privileged
 upgrade. Health checks run only after the service has restarted with the new token.
+Upgrade preflight accepts that predecessor only when the installed core manifest is
+otherwise byte-exact. The repair persists even if later release activation rolls
+back, because both the previous and target releases use the same compatible virtual
+service account; unrelated service-definition drift remains a hard preflight failure.
 
 ## Consequences
 
@@ -43,6 +47,8 @@ upgrade. Health checks run only after the service has restarted with the new tok
   its declared Windows privileges and ACL grants.
 - Operators can still add service-scoped Firewall rules. Firewall, VPN, proxy, and
   route mutations remain protected OpenDelegate actions.
+- A legacy `RESTRICTED` manifest cannot deadlock the very upgrade that is responsible
+  for repairing it, while the exception cannot absorb any second configuration change.
 - A Windows lab gate must exercise provider traffic from the installed service, not
   merely from the installing user's terminal.
 

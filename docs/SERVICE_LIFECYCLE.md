@@ -268,7 +268,11 @@ preflight before creating the command journal or entering a host mutation:
   unoccupied;
 - upgrade configuration must reproduce every installed supervisor, runtime, and
   Secret-reference definition byte for byte; bundle version, source, and checksum
-  may change; Admin auto-open changes use the narrow `reconfigure` operation;
+  may change; the sole legacy exception is an otherwise byte-exact Windows core
+  manifest whose SID type is `RESTRICTED`, which the canonical upgrade stops,
+  changes to `UNRESTRICTED` in SCM, and rewrites before restart; any additional
+  drift still fails before mutation; Admin auto-open changes use the narrow
+  `reconfigure` operation;
 - staging, versioned releases, and `current` must share one volume;
 - install and upgrade select exactly one explicit release track. A legacy
   `INTERNAL_PREVIEW.md` payload must verify its detached Ed25519 preview attestation before

@@ -271,6 +271,55 @@ test("upgrade atomically activates a staged release and rolls back after failed 
   assert.match(report.diagnostic.summary, /rolled back/i);
 });
 
+test("Windows upgrade repairs the declared service SID definition before restarting core", () => {
+  const configuration = windowsConfiguration({
+    bundle: {
+      ...windowsConfiguration().bundle,
+      version: "1.3.0",
+    },
+  });
+  const plan = createServicePlan({
+    operation: "upgrade",
+    configuration,
+    activeVersion: "1.2.3",
+  });
+
+  const stopCoreIndex = plan.steps.findIndex((step) => step.id === "stop-core");
+  const repairIndex = plan.steps.findIndex((step) => step.id === "repair-windows-service-sid");
+  const manifestIndex = plan.steps.findIndex((step) => step.id === "write-windows-core-manifest");
+  const startCoreIndex = plan.steps.findIndex((step) => step.id === "start-core");
+  assert.ok(stopCoreIndex >= 0);
+  assert.ok(stopCoreIndex < repairIndex);
+  assert.ok(repairIndex < manifestIndex);
+  assert.ok(manifestIndex < startCoreIndex);
+
+  const repair = plan.steps[repairIndex];
+  assert.equal(repair?.action.kind, "supervisor.invoke");
+  if (repair?.action.kind === "supervisor.invoke") {
+    assert.deepEqual(repair.action.command.invocations, [
+      {
+        executable: "sc.exe",
+        arguments: ["sidtype", "OpenDelegate-personal", "unrestricted"],
+        plane: "core",
+        verb: "install",
+        privilege: "elevated",
+        availabilityPolicy: "required",
+        timeoutMs: 30_000,
+        expectedExitCodes: [0],
+      },
+    ]);
+  }
+  assert.equal(repair?.rollback, undefined);
+
+  const manifest = plan.steps[manifestIndex];
+  assert.equal(manifest?.action.kind, "file.write");
+  if (manifest?.action.kind === "file.write") {
+    assert.equal(manifest.action.file.purpose, "core-manifest");
+    assert.match(manifest.action.file.content, /"serviceSidType": "unrestricted"/u);
+  }
+  assert.equal(manifest?.rollback, undefined);
+});
+
 test("failed install health removes newly registered supervisor planes", async () => {
   const plan = createServicePlan({
     operation: "install",

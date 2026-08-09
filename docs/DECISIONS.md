@@ -1908,8 +1908,11 @@ the product owns a complete restricted-resource policy.
 
 **Consequence:** Windows Workers retain a distinct least-privilege virtual account
 while Codex and other authenticated providers can run headlessly. Install and
-upgrade repair the SID type deterministically, and the Windows release lab must test
-provider traffic from the installed service rather than only an owner terminal.
+upgrade repair the SID type deterministically. Upgrade preflight recognizes only an
+otherwise byte-exact legacy `RESTRICTED` core manifest, persists the compatible SID
+repair across any later release rollback, and rejects all additional drift. The
+Windows release lab must test provider traffic from the installed service rather
+than only an owner terminal.
 
 ## D-096 — Linux Claude readiness proves the nested sandbox primitive
 

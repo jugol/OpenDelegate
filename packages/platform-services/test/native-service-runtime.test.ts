@@ -821,6 +821,104 @@ test("upgrade accepts an exact installed topology rendered for the active versio
   );
 });
 
+test("Windows upgrade accepts and repairs only the exact legacy restricted SID manifest", async () => {
+  const configuration = windowsConfigurationWithServiceBinding("worker");
+  const installedConfiguration = windowsConfiguration({
+    ...configuration,
+    bundle: {
+      ...configuration.bundle,
+      version: "1.2.2",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    const content =
+      file.purpose === "core-manifest"
+        ? file.content.replace('"serviceSidType": "unrestricted"', '"serviceSidType": "restricted"')
+        : file.content;
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: true,
+    healthRole: "worker",
+  });
+  const legacyCoreManifest = installedArtifacts.files.find(
+    (file) => file.purpose === "core-manifest",
+  );
+  assert.ok(legacyCoreManifest);
+  const exactLegacyCoreBytes = fileSystem.files.get(legacyCoreManifest.path);
+  assert.ok(exactLegacyCoreBytes);
+  fileSystem.files.set(
+    legacyCoreManifest.path,
+    Buffer.concat([exactLegacyCoreBytes, Buffer.from(" ", "utf8")]),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration,
+      plan: createServicePlan({
+        operation: "upgrade",
+        configuration,
+        activeVersion: "1.2.2",
+      }),
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+  fileSystem.files.set(legacyCoreManifest.path, exactLegacyCoreBytes);
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-upgrade-legacy-windows-restricted-sid",
+    configuration,
+    plan: createServicePlan({
+      operation: "upgrade",
+      configuration,
+      activeVersion: "1.2.2",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  const targetCoreManifest = renderPlatformServiceArtifacts(configuration).files.find(
+    (file) => file.purpose === "core-manifest",
+  );
+  assert.ok(targetCoreManifest);
+  assert.deepEqual(
+    fileSystem.files.get(targetCoreManifest.path),
+    renderedFileBytes(targetCoreManifest.encoding, targetCoreManifest.content),
+  );
+  assert.ok(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("sc.exe") &&
+        request.arguments.join(" ") === "sidtype OpenDelegate-personal unrestricted",
+    ),
+  );
+});
+
 test("Admin auto-open reconfiguration atomically replaces only the installed runtime configuration", async () => {
   const previousConfiguration = linuxConfiguration({ role: "main" });
   const configuration = linuxConfiguration({
@@ -2492,6 +2590,12 @@ function payloadEntry(
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function renderedFileBytes(encoding: "utf8" | "utf16le-bom", content: string): Buffer {
+  return encoding === "utf8"
+    ? Buffer.from(content, "utf8")
+    : Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, "utf16le")]);
 }
 
 function processResult(exitCode: number, stdout = "", stderr = ""): NativeProcessResult {

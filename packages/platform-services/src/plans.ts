@@ -485,6 +485,20 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
+    ...(definition.configuration.platform === "windows"
+      ? [
+          windowsServiceSidRepairStep(artifacts),
+          {
+            id: "write-windows-core-manifest",
+            description: "Persist the repaired Windows core service definition.",
+            action: {
+              kind: "file.write" as const,
+              file: requireRenderedFile(artifacts, "core-manifest"),
+              atomic: true as const,
+            },
+          },
+        ]
+      : []),
     {
       id: "write-runtime-configuration",
       description: "Atomically bind the service runtime configuration to the new release.",
@@ -535,6 +549,37 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     ],
     activeVersion,
   );
+}
+
+function windowsServiceSidRepairStep(artifacts: PlatformServiceArtifacts): ServicePlanStep {
+  const invocations = artifacts.installCommands.filter(
+    (invocation) =>
+      invocation.plane === "core" &&
+      invocation.executable === "sc.exe" &&
+      invocation.arguments.length === 3 &&
+      invocation.arguments[0] === "sidtype" &&
+      invocation.arguments[2] === "unrestricted",
+  );
+  if (artifacts.platform !== "windows" || invocations.length !== 1) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Windows upgrade requires exactly one canonical unrestricted service SID repair command.",
+    );
+  }
+  return {
+    id: "repair-windows-service-sid",
+    description: "Repair the Windows core service SID type to the declared unrestricted value.",
+    action: {
+      kind: "supervisor.invoke",
+      command: {
+        platform: "windows",
+        plane: "core",
+        verb: "install",
+        invocations,
+        deferWhenLoggedOut: false,
+      },
+    },
+  };
 }
 
 function uninstallPlan(
