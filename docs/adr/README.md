@@ -63,6 +63,11 @@ approved product specification.
 40. [`0043-current-worker-lease-renewal-is-budget-activity.md`](0043-current-worker-lease-renewal-is-budget-activity.md)
 41. [`0044-resource-waits-resume-on-availability-change.md`](0044-resource-waits-resume-on-availability-change.md)
 42. [`0045-bounded-provider-native-child-agents.md`](0045-bounded-provider-native-child-agents.md)
+43. [`0046-device-scoped-worker-identity.md`](0046-device-scoped-worker-identity.md)
+44. [`0047-windows-virtual-service-sid-network-compatibility.md`](0047-windows-virtual-service-sid-network-compatibility.md)
+45. [`0048-linux-claude-nested-sandbox-readiness.md`](0048-linux-claude-nested-sandbox-readiness.md)
+46. [`0049-native-child-run-capability-fanout.md`](0049-native-child-run-capability-fanout.md)
+47. [`0050-discord-bounded-live-task-activity.md`](0050-discord-bounded-live-task-activity.md)
 
 ## Proposed ADRs
 

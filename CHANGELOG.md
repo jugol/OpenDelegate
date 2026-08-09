@@ -114,6 +114,10 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
+- Replaced noisy per-step Discord replies with one editable live Task-activity surface that
+  aggregates Main planning, multi-Device dispatch, egress-inspected Worker milestones, Work Order
+  completion, and verification. Terminal replies close it through a durable cross-cycle tombstone,
+  so offline or stale outbox work cannot recreate old progress after a result.
 - Routed bundled Worker Run-tool subprocesses through the release launcher so Knowledge, Artifact,
   platform-mutation, and Computer Use MCP bridges execute their CLI command instead of silently
   exiting from a library bundle.

@@ -106,15 +106,28 @@ test("only current leased Worker reports can authorize Task completion", async (
         ...workerEvent(assignment, 1, "worker.run.claimed"),
         createdAt: "2026-07-25T21:00:00+09:00",
       },
-      workerEvent(assignment, 2, "worker.run.succeeded", {
-        artifactIds: ["artifact-release-report"],
-        report: "Build and tests completed on the assigned Worker.",
+      workerEvent(assignment, 2, "worker.run.progress", {
+        report: "The Worker is running the platform build.",
       }),
     ]),
     [
       { disposition: "accepted", messageId: `${assignment.runId}:claimed` },
-      { disposition: "accepted", messageId: `${assignment.runId}:succeeded` },
+      { disposition: "accepted", messageId: `${assignment.runId}:progress` },
     ],
+  );
+  const activity = executor.activity(assignment.taskId);
+  assert.equal(activity?.phase, "working");
+  assert.equal(activity?.totalWorkOrders, 1);
+  assert.equal(activity?.milestones.at(-1)?.deviceId, assignment.deviceId);
+  assert.equal(activity?.milestones.at(-1)?.summary, "The Worker is running the platform build.");
+  assert.deepEqual(
+    await executor.acceptWorkerEvents("device-worker-1", [
+      workerEvent(assignment, 3, "worker.run.succeeded", {
+        artifactIds: ["artifact-release-report"],
+        report: "Build and tests completed on the assigned Worker.",
+      }),
+    ]),
+    [{ disposition: "accepted", messageId: `${assignment.runId}:succeeded` }],
   );
 
   assert.deepEqual(await execution, {

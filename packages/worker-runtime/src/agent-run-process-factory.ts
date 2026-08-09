@@ -34,6 +34,7 @@ import {
   type RunProcessOutcome,
   type WorkerRunAssignmentV1,
   type WorkerRunLeaseAuthority,
+  type WorkerRunProgressKindV1,
 } from "./contracts.ts";
 import type { NativeSessionReferenceStore } from "./native-session-reference-store.ts";
 import type { NativeSessionSteeringInstruction } from "./native-session-reference-store.ts";
@@ -1219,6 +1220,10 @@ class AdapterRunProcess implements RunProcess {
         await this.#persistSession(event.session);
       } else if (event.type === "public_message") {
         this.#collector.add(event.text);
+      } else if (event.type === "progress" && this.#context.reportProgress !== undefined) {
+        await this.#context
+          .reportProgress({ kind: classifyProgress(event.message) })
+          .catch(() => undefined);
       } else if (event.type === "usage") {
         this.#latestUsage = event.usage;
       }
@@ -1237,6 +1242,41 @@ class AdapterRunProcess implements RunProcess {
     this.#agentSession = toWorkerAgentSessionObservation(session);
     this.#nativeSession = structuredClone(session);
   }
+}
+
+function classifyProgress(value: string): WorkerRunProgressKindV1 {
+  const normalized = typeof value === "string" ? value.toLocaleLowerCase("en-US") : "";
+  if (normalized.includes("knowledge")) {
+    return "consulting-knowledge";
+  }
+  if (
+    normalized.includes("child agent") ||
+    normalized.includes("subagent") ||
+    normalized.includes("delegat")
+  ) {
+    return "delegating";
+  }
+  if (
+    normalized.includes("verify") ||
+    normalized.includes("validat") ||
+    normalized.includes("test") ||
+    normalized.includes("check")
+  ) {
+    return "verifying";
+  }
+  if (
+    normalized.includes("tool") ||
+    normalized.includes("command") ||
+    normalized.includes("operation") ||
+    normalized.includes("build") ||
+    normalized.includes("install") ||
+    normalized.includes("deploy") ||
+    normalized.includes("upload") ||
+    normalized.includes("download")
+  ) {
+    return "using-tools";
+  }
+  return "working";
 }
 
 interface SessionBinding {
@@ -2252,13 +2292,9 @@ class BoundedPublicReportCollector {
   }
 
   public add(value: string): void {
-    let redacted = this.#redactor.redact(value).replaceAll("\r\n", "\n").trim();
-    if (redacted.length === 0) {
+    const redacted = this.sanitize(value, this.#maxBytes);
+    if (redacted === undefined) {
       return;
-    }
-    const inspection = this.#egressGuard.inspectText(redacted);
-    if (!inspection.safe) {
-      redacted = withheldReportMarker(inspection.reason);
     }
     if (this.#messages.length >= this.#maxMessages) {
       this.#truncated = true;
@@ -2280,6 +2316,18 @@ class BoundedPublicReportCollector {
     if (selected !== redacted) {
       this.#truncated = true;
     }
+  }
+
+  public sanitize(value: string, maximumBytes: number): string | undefined {
+    let redacted = this.#redactor.redact(value).replaceAll("\r\n", "\n").trim();
+    if (redacted.length === 0) {
+      return undefined;
+    }
+    const inspection = this.#egressGuard.inspectText(redacted);
+    if (!inspection.safe) {
+      redacted = withheldReportMarker(inspection.reason);
+    }
+    return truncateUtf8(redacted, maximumBytes) || undefined;
   }
 
   public finish(finalText: string | undefined, fallback: string): string {

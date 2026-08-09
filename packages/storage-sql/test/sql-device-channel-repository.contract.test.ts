@@ -17,6 +17,7 @@ import { Pool } from "pg";
 
 import { SqlDeviceChannelRepository, type SqlMigrationMode } from "../src/index.ts";
 import { REWIND_DEVICE_RECREDENTIALING_SQL } from "./rewind-device-recredentialing.ts";
+import { REWIND_DISCORD_LIVE_TASK_ACTIVITY_SQL } from "./rewind-discord-live-task-activity.ts";
 
 interface ChannelRepositoryFixture {
   open(mode: SqlMigrationMode): Promise<DeviceChannelRepository>;
@@ -246,6 +247,7 @@ test("SQLite migration backfills the pre-journal Device inbox as handled", async
     const legacy = new Database(filename);
     try {
       legacy.exec(`
+        ${REWIND_DISCORD_LIVE_TASK_ACTIVITY_SQL}
         ${REWIND_DEVICE_RECREDENTIALING_SQL}
         DROP TABLE od_device_observation_latest;
         DROP TABLE od_device_observation_events;

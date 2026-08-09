@@ -454,6 +454,12 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     }
   }
 
+  public async deleteMessage(input: { threadId: string; messageId: string }): Promise<void> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    assertSnowflake(input.messageId, "Discord message ID");
+    await this.#botJson("DELETE", `/channels/${input.threadId}/messages/${input.messageId}`);
+  }
+
   public async acknowledgeMessage(input: { threadId: string; messageId: string }): Promise<{
     readonly reactionVisible: boolean;
     readonly typingVisible: boolean;

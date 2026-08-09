@@ -366,10 +366,23 @@ export interface RunProcess {
   forceTerminate(): Promise<void>;
 }
 
+/**
+ * Closed, owner-safe progress vocabulary. Provider prose is classified on the
+ * Device and must never cross the Worker runtime boundary as progress text.
+ */
+export type WorkerRunProgressKindV1 =
+  "consulting-knowledge" | "delegating" | "using-tools" | "verifying" | "working";
+
 export interface RunExecutionContext {
   readonly assignment: WorkerRunAssignmentV1;
   readonly leaseAuthority: WorkerRunLeaseAuthority;
   isLeaseCurrent(): Promise<boolean>;
+  /**
+   * Emits one presentation-only progress category. The Worker runtime owns the
+   * public wording and applies its lease, deduplication, rate, count, and outbox
+   * bounds before any event can leave this Device.
+   */
+  reportProgress?(input: { readonly kind: WorkerRunProgressKindV1 }): Promise<void>;
 }
 
 export interface WorkerRunLeaseSnapshot {

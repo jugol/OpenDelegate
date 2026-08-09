@@ -1299,6 +1299,10 @@ class TestDiscordApi implements DiscordApiPort {
     this.createdMessages.push(structuredClone(input.payload));
   }
 
+  public async deleteMessage(): Promise<void> {
+    this.#requireOnline();
+  }
+
   public async acknowledgeMessage(input: {
     readonly messageId: string;
   }): Promise<{ readonly reactionVisible: boolean; readonly typingVisible: boolean }> {

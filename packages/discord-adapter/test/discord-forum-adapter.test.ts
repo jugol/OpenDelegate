@@ -120,6 +120,7 @@ class FakeDiscordApi implements DiscordApiPort {
   public readonly operations: Array<Record<string, unknown>> = [];
   public readonly acknowledgedInteractions = new Set<string>();
   public readonly missingStatusPanelMessageIds = new Set<string>();
+  public failTaskActivityUpserts = false;
   readonly #messageByRequestKey = new Map<string, string>();
   #nextMessage = 900;
 
@@ -230,6 +231,12 @@ class FakeDiscordApi implements DiscordApiPort {
     messageId?: string;
   }): Promise<{ messageId: string }> {
     this.#assertOnline();
+    if (this.failTaskActivityUpserts && input.requestKey.startsWith("task-activity:")) {
+      throw new DiscordApiError(
+        "OFFLINE",
+        "The live Task activity surface is temporarily offline.",
+      );
+    }
     if (input.messageId !== undefined && this.missingStatusPanelMessageIds.has(input.messageId)) {
       throw new DiscordApiError("NOT_FOUND", "Discord status panel was not found.");
     }
@@ -267,6 +274,11 @@ class FakeDiscordApi implements DiscordApiPort {
   }): Promise<void> {
     this.#assertOnline();
     this.operations.push({ kind: "message-edit", ...input });
+  }
+
+  public async deleteMessage(input: { threadId: string; messageId: string }): Promise<void> {
+    this.#assertOnline();
+    this.operations.push({ kind: "message-delete", ...input });
   }
 
   public async acknowledgeMessage(input: {
@@ -1070,6 +1082,300 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
   assert.equal(restored?.statusPanelMessageId, restoredPanel?.["messageId"]);
   assert.equal(restored?.externalState, "available");
   assert.equal(restoredPanel?.["requestedMessageId"], undefined);
+});
+
+test("one bounded live activity message is edited and closed for a Task cycle", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000041");
+  const starter = ownerMessage(thread.id, thread.id, "Run the cross-device release.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  const base: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "running",
+    objective: "Run the cross-device release.",
+    summary: "OpenDelegate is coordinating the release.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_cycle_1",
+      revision: 1,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 2,
+      milestones: [
+        {
+          key: "work-order:windows",
+          status: "active",
+          summary: "The Worker is running tests.",
+          deviceId: "device_windows_1",
+          deviceLabel: "Windows build workstation",
+        },
+      ],
+    },
+  };
+  await adapter.publishTaskProjection(base);
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection({
+    ...base,
+    activity: {
+      ...base.activity!,
+      revision: 2,
+      updatedAtMs: 11_000,
+      completedWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:windows",
+          status: "completed",
+          summary: "Windows tests completed.",
+          deviceId: "device_windows_1",
+          deviceLabel: "Windows build workstation",
+        },
+        {
+          key: "work-order:macos",
+          status: "active",
+          summary: "The Worker is building the macOS package.",
+          deviceId: "device_macos_1",
+          deviceLabel: "Mac Studio",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+
+  const activityWrites = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 2);
+  assert.equal(activityWrites[0]?.["messageId"], activityWrites[1]?.["messageId"]);
+  assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Mac Studio/u);
+  assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Pause/u);
+  assert.equal((await repository.getBindingByTask("task-1"))?.activitySurface?.state, "open");
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "completed",
+    objective: "Run the cross-device release.",
+    summary: "The cross-device release completed.",
+    sourceEventId: "event_release_completed",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    1,
+  );
+  const closedActivity = (await repository.getBindingByTask("task-1"))?.activitySurface;
+  assert.equal(closedActivity?.cycleId, "activity_cycle_1");
+  assert.equal(closedActivity?.revision, 3);
+  assert.equal(closedActivity?.updatedAtMs, 11_000);
+  assert.equal(closedActivity?.state, "closed");
+  assert.equal(Number.isSafeInteger(closedActivity?.outboxCreatedAtMs), true);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "completed",
+    objective: "Run the cross-device release.",
+    summary: "The cross-device release completed.",
+    sourceEventId: "event_release_completed",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    1,
+  );
+});
+
+test("live activity never exposes an opaque Device identifier when its label is unavailable", async () => {
+  const { adapter, api } = fixture();
+  const thread = forumThread("300000000000000044");
+  const starter = ownerMessage(thread.id, thread.id, "Run on whichever Device is ready.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Run on whichever Device is ready.",
+    summary: "OpenDelegate selected a Worker.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_private_device_id",
+      revision: 1,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:private-device",
+          status: "active",
+          summary: "Worker Agent is making progress.",
+          deviceId: "device_229781e7-644b-4f0e-bbd4-e881c0d4ee4c",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+
+  const payload = JSON.stringify(
+    api.operations
+      .filter(
+        (operation) =>
+          operation["kind"] === "panel" &&
+          typeof operation["requestKey"] === "string" &&
+          operation["requestKey"].startsWith("task-activity:"),
+      )
+      .at(-1)?.["payload"],
+  );
+  assert.match(payload, /Worker Device/u);
+  assert.doesNotMatch(payload, /device_229781e7/u);
+});
+
+test("terminal delivery tombstones a delayed live activity before it can appear", async () => {
+  const { adapter, api, repository, clock } = fixture();
+  const thread = forumThread("300000000000000042");
+  const starter = ownerMessage(thread.id, thread.id, "Finish before the live card retries.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  api.failTaskActivityUpserts = true;
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Finish before the live card retries.",
+    summary: "The Task is running.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_delayed_cycle",
+      revision: 1,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:delayed",
+          status: "active",
+          summary: "The Worker is completing the Work Order.",
+          deviceId: "Linux Worker",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+  assert.equal((await repository.getBindingByTask("task-1"))?.activitySurface, undefined);
+
+  api.failTaskActivityUpserts = false;
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "completed",
+    objective: "Finish before the live card retries.",
+    summary: "The Task completed.",
+    sourceEventId: "event_fast_completion",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+  const tombstone = (await repository.getBindingByTask("task-1"))?.activitySurface;
+  assert.equal(tombstone?.cycleId, "activity_delayed_cycle");
+  assert.equal(tombstone?.revision, 2);
+  assert.equal(tombstone?.updatedAtMs, 1_000);
+  assert.equal(tombstone?.state, "closed");
+  assert.equal(Number.isSafeInteger(tombstone?.outboxCreatedAtMs), true);
+
+  clock.value = 2_000;
+  await adapter.flushOutbox();
+  assert.equal(
+    api.operations.filter(
+      (operation) =>
+        operation["kind"] === "panel" &&
+        typeof operation["requestKey"] === "string" &&
+        operation["requestKey"].startsWith("task-activity:"),
+    ).length,
+    0,
+  );
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+});
+
+test("a restarted Main replaces an older activity cycle even when its revision resets", async () => {
+  const first = fixture();
+  const thread = forumThread("300000000000000043");
+  const starter = ownerMessage(thread.id, thread.id, "Continue this Task after Main restarts.");
+  first.api.threads.set(thread.id, thread);
+  first.api.messages.set(thread.id, [starter]);
+  await first.adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  const projection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "running",
+    objective: "Continue this Task after Main restarts.",
+    summary: "The Task is running.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_before_restart",
+      revision: 9,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:restart",
+          status: "active",
+          summary: "The first Main process is coordinating the Worker.",
+        },
+      ],
+    },
+  };
+  await first.adapter.publishTaskProjection(projection);
+  await first.adapter.flushOutbox();
+
+  const restarted = fixture({
+    repository: first.repository,
+    api: first.api,
+    tasks: first.tasks,
+    clock: first.clock,
+  });
+  await restarted.adapter.publishTaskProjection({
+    ...projection,
+    activity: {
+      ...projection.activity!,
+      cycleId: "activity_after_restart",
+      revision: 1,
+      milestones: [
+        {
+          key: "work-order:restart",
+          status: "active",
+          summary: "The restarted Main process recovered the active Worker Run.",
+        },
+      ],
+    },
+  });
+  await restarted.adapter.flushOutbox();
+
+  const activityWrites = first.api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 2);
+  assert.notEqual(activityWrites[0]?.["messageId"], activityWrites[1]?.["messageId"]);
+  assert.equal(
+    first.api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    1,
+  );
+  assert.equal(
+    (await first.repository.getBindingByTask("task-1"))?.activitySurface?.cycleId,
+    "activity_after_restart",
+  );
 });
 
 test("a completed Task without links renders valid Components v2 without an empty action row", () => {

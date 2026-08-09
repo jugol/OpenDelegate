@@ -1958,3 +1958,28 @@ root process already holds that exact bearer and tool surface.
 Use, and platform-mutation bridges without stale-descriptor startup failure. A
 non-native Run retains one-use behavior, a sixth simultaneous connection fails
 closed, and no client can widen or outlive the parent Run.
+
+## D-098 — Multi-Device progress uses one bounded live Discord surface
+
+Implementation detail:
+[ADR-0050](adr/0050-discord-bounded-live-task-activity.md).
+
+**Decision:** Each active Discord owner-input cycle may own one mutable live activity
+message. Main planning, dispatch, normalized Worker progress, Work Order completion,
+and verification update a short rolling milestone list in that message. Worker
+bridges map provider activity to a closed owner-safe progress vocabulary, and the
+Worker outbox accepts no free-form progress text. Per-Run deduplication, rate, and
+count bounds still apply. Progress is non-terminal presentation data:
+it does not enter Task conversation or checkpoint context, renew a lease, or reset a
+Budget. The Discord binding persists the activity identity and closed revision so
+delayed outbox work cannot duplicate or resurrect a finished surface.
+
+**Rationale:** A reaction and typing indicator prove that one input was accepted but
+do not explain a long cross-Device execution. Posting every child, token, tool, or
+heartbeat would recreate the message flood the single-turn lifecycle removed. One
+edited aggregate provides useful operational visibility without making Workers look
+like independent Discord participants or exposing Device-local execution details.
+
+**Consequence:** Owners see a concise current picture of Main and subordinate Device
+work near the active turn. Questions, failures, and results remain the only durable
+chronological replies, while stale or overly frequent progress is safely discarded.

@@ -11,6 +11,8 @@ import type {
 export type PersistedRunState =
   "cancelling" | "failed" | "running" | "starting" | "succeeded" | "cancelled";
 
+export const MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN = 1_000_000;
+
 export interface PersistedWorkerRun {
   readonly assignment: WorkerRunAssignmentV1;
   readonly dispatchMessageId: string;
@@ -18,6 +20,10 @@ export interface PersistedWorkerRun {
   readonly state: PersistedRunState;
   readonly acceptedAtMs: number;
   readonly finishedAtMs?: number;
+  /** Backwards-compatible live-presentation bookkeeping for schemaVersion 1. */
+  readonly progressCount?: number;
+  readonly lastProgressAtMs?: number;
+  readonly lastProgressDigest?: string;
 }
 
 export interface PersistedInboxEntry {

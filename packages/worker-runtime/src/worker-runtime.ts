@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { PROTOCOL_VERSION, parseWorkerAgentSessionObservation } from "@opendelegate/protocol";
 import {
   TransportRoutesExhaustedError,
@@ -31,6 +33,7 @@ import {
   type WorkerOutboundEventV1,
   type WorkerRunAssignmentV1,
   type WorkerRunLeaseAuthority,
+  type WorkerRunProgressKindV1,
   type WorkerRunSteeringCommandV1,
   type WorkerRunSteeringReceiptReasonV1,
   type WorkerRunSteeringReceiptV1,
@@ -44,6 +47,7 @@ import {
 import { sanitizeWorkerDiagnostic } from "./diagnostics.ts";
 import { AgentRunBridgeError } from "./agent-run-bridge-error.ts";
 import {
+  MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN,
   type PersistedRunSteeringAttempt,
   type PersistedWorkerRun,
   type PersistedWorkerState,
@@ -56,6 +60,9 @@ export const DEFAULT_MAXIMUM_CONCURRENT_RUNS = 4;
 const MAX_STATE_MUTATION_ATTEMPTS = 64;
 const MAX_JAVASCRIPT_DATE_MS = 8_640_000_000_000_000;
 const MAX_PERSISTED_STEERING_ATTEMPTS = 4_096;
+// Progress is presentation-only and acknowledged events leave the durable outbox.
+// Keep a finite abuse guard without making ordinary multi-day Runs go silent.
+const MINIMUM_PROGRESS_INTERVAL_MS = 30_000;
 
 export interface WorkerRuntimeOptions {
   readonly configuration: WorkerConfiguration;
@@ -710,6 +717,7 @@ export class WorkerRuntime {
         assignment: structuredClone(assignment),
         leaseAuthority,
         isLeaseCurrent: () => this.isLeaseCurrent(assignment, leaseAuthority),
+        reportProgress: (input) => this.reportRunProgress(assignment, leaseAuthority, input),
       });
     } catch (error: unknown) {
       const requirementUnavailable =
@@ -816,6 +824,57 @@ export class WorkerRuntime {
         });
       })
       .catch(() => undefined);
+  }
+
+  private async reportRunProgress(
+    assignment: WorkerRunAssignmentV1,
+    leaseAuthority: WorkerRunLeaseAuthority,
+    input: { readonly kind: WorkerRunProgressKindV1 },
+  ): Promise<void> {
+    if (this.closed || !(await this.isLeaseCurrent(assignment, leaseAuthority))) {
+      return;
+    }
+    const message = progressMessage(input.kind);
+    const messageDigest = createHash("sha256").update(message).digest("hex");
+    const now = this.readNow();
+    await this.mutate((state) => {
+      const touched = touchClock(state, now);
+      const run = touched.runs.find((candidate) => candidate.assignment.runId === assignment.runId);
+      if (
+        run === undefined ||
+        run.state !== "running" ||
+        !sameRunAuthority(run.assignment, assignment)
+      ) {
+        return { nextState: touched, value: undefined };
+      }
+      const progressCount = run.progressCount ?? 0;
+      if (
+        progressCount >= MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN ||
+        run.lastProgressDigest === messageDigest ||
+        (run.lastProgressAtMs !== undefined &&
+          now - run.lastProgressAtMs < MINIMUM_PROGRESS_INTERVAL_MS) ||
+        touched.outbox.length + countActiveRuns(touched) >= touched.configuration.maxOutboxEntries
+      ) {
+        return { nextState: touched, value: undefined };
+      }
+      const nextProgressCount = progressCount + 1;
+      const event = createProgressEvent(
+        this.configuration.deviceId,
+        assignment,
+        now,
+        nextProgressCount,
+        message,
+      );
+      return {
+        nextState: replaceRun(appendOutbox(touched, event), assignment.runId, {
+          ...run,
+          progressCount: nextProgressCount,
+          lastProgressAtMs: now,
+          lastProgressDigest: messageDigest,
+        }),
+        value: undefined,
+      };
+    });
   }
 
   private async steerRunSerialized(
@@ -1342,8 +1401,9 @@ function createRunEvent(
     readonly usage?: WorkerOutboundEventV1["payload"]["usage"];
     readonly agentSession?: WorkerOutboundEventV1["payload"]["agentSession"];
   } = {},
+  identitySuffix?: string,
 ): WorkerOutboundEventV1 {
-  const suffix = type.slice("worker.run.".length);
+  const suffix = identitySuffix ?? type.slice("worker.run.".length);
   const payload: WorkerOutboundEventV1["payload"] = {
     taskId: assignment.taskId,
     workOrderId: assignment.workOrder.workOrderId,
@@ -1369,6 +1429,23 @@ function createRunEvent(
     type,
     payload: Object.freeze(payload),
   });
+}
+
+function createProgressEvent(
+  senderDeviceId: string,
+  assignment: WorkerRunAssignmentV1,
+  now: number,
+  progressCount: number,
+  message: string,
+): WorkerOutboundEventV1 {
+  return createRunEvent(
+    senderDeviceId,
+    assignment,
+    "worker.run.progress",
+    now,
+    { report: message },
+    `progress:${progressCount.toString()}`,
+  );
 }
 
 function appendOutbox(
@@ -1432,6 +1509,39 @@ function exactSteeringRunScope(
     assignment.leaseId === command.leaseId &&
     assignment.fencingToken === command.fencingToken
   );
+}
+
+function sameRunAuthority(left: WorkerRunAssignmentV1, right: WorkerRunAssignmentV1): boolean {
+  return (
+    left.taskId === right.taskId &&
+    left.workOrder.workOrderId === right.workOrder.workOrderId &&
+    left.deviceId === right.deviceId &&
+    left.workerId === right.workerId &&
+    left.routeId === right.routeId &&
+    left.runId === right.runId &&
+    left.leaseId === right.leaseId &&
+    left.fencingToken === right.fencingToken
+  );
+}
+
+function progressMessage(kind: WorkerRunProgressKindV1): string {
+  switch (kind) {
+    case "consulting-knowledge":
+      return "Worker Agent is consulting Device-local Knowledge.";
+    case "delegating":
+      return "Worker Agent is coordinating child Agents.";
+    case "using-tools":
+      return "Worker Agent is using Device-local tools.";
+    case "verifying":
+      return "Worker Agent is verifying its work.";
+    case "working":
+      return "Worker Agent is making progress.";
+    default:
+      throw new WorkerRuntimeError(
+        "INVALID_MESSAGE",
+        "Worker progress is not an owner-safe category.",
+      );
+  }
 }
 
 function steeringRunScopeReason(

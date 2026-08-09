@@ -173,7 +173,12 @@ export class InMemoryDiscordStateRepository implements DiscordStateRepository {
     patch: Partial<
       Pick<
         DiscordTaskBinding,
-        "statusPanelMessageId" | "lastReconciledMessageId" | "externalState" | "archived" | "locked"
+        | "statusPanelMessageId"
+        | "activitySurface"
+        | "lastReconciledMessageId"
+        | "externalState"
+        | "archived"
+        | "locked"
       >
     >,
   ): Promise<DiscordTaskBinding> {

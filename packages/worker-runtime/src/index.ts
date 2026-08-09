@@ -72,6 +72,7 @@ export type {
   WorkerRunIdentityV1,
   WorkerRunLeaseAuthority,
   WorkerRunLeaseSnapshot,
+  WorkerRunProgressKindV1,
   WorkerRouteIncidentAttemptV1,
   WorkerRouteIncidentCode,
   WorkerRouteIncidentOutcome,

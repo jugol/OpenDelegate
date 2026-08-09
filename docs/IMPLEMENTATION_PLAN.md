@@ -610,6 +610,20 @@ Make Discord the complete primary Task interface.
   every copy of that source event from one accepted answer. Chronological failure
   replies must include the owner-safe concrete reason or exhausted resource plus the
   relevant recovery control, including Retry for failed Tasks.
+- Maintain at most one live activity message for each active owner-input cycle.
+  Aggregate Main planning, Device dispatch, bounded normalized Worker progress,
+  Work Order completion, and verification into a short rolling milestone list and
+  edit that message only on meaningful revision. Persist its Discord identity and
+  closed revision with the Task binding so stale outbox work cannot duplicate or
+  resurrect it. Close it when a question, decision, failure, pause, cancellation,
+  review state, or final result becomes authoritative.
+- Map provider activity to a closed owner-safe Worker `progress` vocabulary before
+  the durable outbox boundary; the boundary accepts no free-form progress text.
+  Deduplicate and rate-limit reports per Run with a hard count bound; never forward
+  token deltas, raw tool inputs/results, private provider messages, native session
+  identifiers, local paths, or hidden reasoning. Treat progress as non-terminal
+  presentation evidence, not Task conversation, checkpoint, lease-renewal, or
+  Budget activity.
 - Present interactive Artifacts with a distinct owner action label. Never place a
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.
@@ -635,6 +649,10 @@ Make Discord the complete primary Task interface.
   question cards; typing stays alive, the reaction closes, an answered prompt is
   edited in place, and automatic resource retries reuse that owner turn's durable
   plan across Main restart.
+- A long multi-Device turn creates one live activity message. Concurrent Worker
+  milestones edit that one message under a bounded rate and rolling-size limit;
+  terminal delivery closes it, stale revisions cannot recreate it, and Task context
+  contains none of its presentation-only progress text.
 - A narrowly recognized read-only Device availability question is answered
   deterministically from bounded Main-owned state without an LLM turn or artificial
   Worker Run. Generic supported-locale test placeholders, including Korean-English

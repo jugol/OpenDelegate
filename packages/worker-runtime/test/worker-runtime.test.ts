@@ -22,6 +22,7 @@ import {
   createSqliteWorkerStateRepository,
   parseWorkerAssignmentMessage,
   type RunProcess,
+  type RunExecutionContext,
   type RunProcessFactory,
   type RunProcessOutcome,
   type WorkerAssignmentMessageV1,
@@ -294,6 +295,99 @@ test("the Worker assignment boundary preserves only a valid Task-scoped checkpoi
       () => parseWorkerAssignmentMessage(invalid),
       (error: unknown) => error instanceof WorkerRuntimeError && error.code === "INVALID_MESSAGE",
     );
+  }
+});
+
+test("normalized Run progress is durable, deduplicated, and rate limited", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-worker-progress-"));
+  const repository = createSqliteWorkerStateRepository({
+    filename: join(directory, "worker.sqlite"),
+  });
+  const process = new DeferredRunProcess();
+  let executionContext: RunExecutionContext | undefined;
+  let now = 1_000;
+  const runtime = await WorkerRuntime.create({
+    configuration: configuration(),
+    repository,
+    processFactory: {
+      start(context) {
+        executionContext = context;
+        return Promise.resolve(process);
+      },
+    },
+    clock: { now: () => now },
+  });
+
+  try {
+    assert.equal(
+      (await runtime.acceptAssignment(assignment({ leaseExpiresAtMs: 100_000 }))).disposition,
+      "accepted",
+    );
+    assert.notEqual(executionContext?.reportProgress, undefined);
+    await executionContext!.reportProgress!({ kind: "working" });
+    await executionContext!.reportProgress!({ kind: "working" });
+    now += 15_000;
+    await executionContext!.reportProgress!({ kind: "using-tools" });
+    now += 15_000;
+    await executionContext!.reportProgress!({ kind: "using-tools" });
+
+    const progress = (await runtime.pendingOutbox()).filter(
+      (event) => event.type === "worker.run.progress",
+    );
+    assert.deepEqual(
+      progress.map((event) => event.payload.report),
+      ["Worker Agent is making progress.", "Worker Agent is using Device-local tools."],
+    );
+    assert.deepEqual(
+      progress.map((event) => event.messageId),
+      ["run-1:progress:1", "run-1:progress:2"],
+    );
+  } finally {
+    await runtime.close();
+    repository.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a custom Run process cannot put paths or provider identifiers in progress", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-worker-progress-egress-"));
+  const repository = createSqliteWorkerStateRepository({
+    filename: join(directory, "worker.sqlite"),
+  });
+  const process = new DeferredRunProcess();
+  let executionContext: RunExecutionContext | undefined;
+  const runtime = await WorkerRuntime.create({
+    configuration: configuration(),
+    repository,
+    processFactory: {
+      start(context) {
+        executionContext = context;
+        return Promise.resolve(process);
+      },
+    },
+    clock: { now: () => 1_000 },
+  });
+
+  try {
+    await runtime.acceptAssignment(assignment({ leaseExpiresAtMs: 100_000 }));
+    const unsafe = ["C:\\Users\\owner\\secret.txt", "/home/owner/private", "thread_abc123"];
+    for (const kind of unsafe) {
+      await assert.rejects(
+        () =>
+          executionContext!.reportProgress!({ kind } as unknown as Parameters<
+            NonNullable<RunExecutionContext["reportProgress"]>
+          >[0]),
+        (error: unknown) => error instanceof WorkerRuntimeError && error.code === "INVALID_MESSAGE",
+      );
+    }
+    assert.equal(
+      (await runtime.pendingOutbox()).some((event) => event.type === "worker.run.progress"),
+      false,
+    );
+  } finally {
+    await runtime.close();
+    repository.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 

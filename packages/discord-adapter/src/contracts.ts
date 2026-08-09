@@ -281,6 +281,7 @@ export interface DiscordApiPort {
     messageId: string;
     payload: DiscordMessagePayload;
   }): Promise<void>;
+  deleteMessage(input: { threadId: string; messageId: string }): Promise<void>;
   /**
    * Quietly acknowledges one accepted owner message in place. Implementations
    * should add the bot's 👀 reaction and trigger Discord's transient typing
@@ -384,6 +385,30 @@ export interface TaskChannelProjection {
     readonly url: string;
   };
   readonly inspectUrl?: string;
+  readonly activity?: {
+    readonly cycleId: string;
+    readonly revision: number;
+    readonly updatedAtMs: number;
+    readonly phase: "planning" | "dispatching" | "working" | "verifying";
+    readonly completedWorkOrders: number;
+    readonly totalWorkOrders: number;
+    readonly milestones: readonly {
+      readonly key: string;
+      readonly status: "active" | "completed";
+      readonly summary: string;
+      readonly deviceId?: string;
+      readonly deviceLabel?: string;
+    }[];
+  };
+}
+
+export interface DiscordTaskActivitySurface {
+  readonly cycleId: string;
+  readonly revision: number;
+  readonly updatedAtMs: number;
+  readonly outboxCreatedAtMs: number;
+  readonly state: "open" | "closing" | "closed";
+  readonly messageId?: string;
 }
 
 export interface DiscordTaskBinding {
@@ -393,6 +418,7 @@ export interface DiscordTaskBinding {
   readonly starterMessageId: string;
   readonly taskId: string;
   readonly statusPanelMessageId?: string;
+  readonly activitySurface?: DiscordTaskActivitySurface;
   readonly lastReconciledMessageId?: string;
   readonly externalState: "available" | "deleted" | "inaccessible";
   readonly archived: boolean;
@@ -435,6 +461,19 @@ export type DiscordOutboxAction =
       readonly kind: "post-task-update";
       readonly taskId: string;
       readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "upsert-task-activity";
+      readonly taskId: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "close-task-activity";
+      readonly taskId: string;
+      readonly cycleId: string;
+      readonly revision: number;
+      readonly updatedAtMs: number;
+      readonly afterRequestKey: string;
     }
   | {
       readonly kind: "resolve-owner-prompt";
@@ -513,7 +552,12 @@ export interface DiscordStateRepository {
     patch: Partial<
       Pick<
         DiscordTaskBinding,
-        "statusPanelMessageId" | "lastReconciledMessageId" | "externalState" | "archived" | "locked"
+        | "statusPanelMessageId"
+        | "activitySurface"
+        | "lastReconciledMessageId"
+        | "externalState"
+        | "archived"
+        | "locked"
       >
     >,
   ): Promise<DiscordTaskBinding>;

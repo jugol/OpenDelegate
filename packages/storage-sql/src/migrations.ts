@@ -21,6 +21,7 @@ const MIGRATION_0010_NAME = "0010_artifact_index_state";
 const MIGRATION_0011_NAME = "0011_device_observations";
 const MIGRATION_0012_NAME = "0012_owner_claim_replacement_audit";
 const MIGRATION_0013_NAME = "0013_device_recredentialing";
+const MIGRATION_0014_NAME = "0014_discord_live_task_activity";
 
 const MIGRATION_0001_SQL: Readonly<Record<SqlBackend, readonly string[]>> = {
   sqlite: [
@@ -1592,6 +1593,26 @@ const MIGRATION_0013_CHECKSUM = createHash("sha256")
   )
   .digest("hex");
 
+const MIGRATION_0014_SQL: Readonly<Record<SqlBackend, readonly string[]>> = {
+  sqlite: [
+    `ALTER TABLE od_discord_task_bindings
+      ADD COLUMN activity_surface_json TEXT`,
+  ],
+  postgres: [
+    `ALTER TABLE od_discord_task_bindings
+      ADD COLUMN activity_surface_json TEXT`,
+  ],
+};
+
+const MIGRATION_0014_CHECKSUM = createHash("sha256")
+  .update(
+    JSON.stringify({
+      name: MIGRATION_0014_NAME,
+      sql: MIGRATION_0014_SQL,
+    }),
+  )
+  .digest("hex");
+
 const MIGRATION_MANIFEST = Object.freeze([
   Object.freeze({
     name: MIGRATION_0001_NAME,
@@ -1644,6 +1665,10 @@ const MIGRATION_MANIFEST = Object.freeze([
   Object.freeze({
     name: MIGRATION_0013_NAME,
     checksum: MIGRATION_0013_CHECKSUM,
+  }),
+  Object.freeze({
+    name: MIGRATION_0014_NAME,
+    checksum: MIGRATION_0014_CHECKSUM,
   }),
 ]);
 
@@ -1760,6 +1785,7 @@ function createMigrator(
       [MIGRATION_0011_NAME]: createMigration0011(backend),
       [MIGRATION_0012_NAME]: createMigration0012(backend),
       [MIGRATION_0013_NAME]: createMigration0013(backend),
+      [MIGRATION_0014_NAME]: createMigration0014(backend),
     }),
   };
 
@@ -1988,6 +2014,23 @@ function createMigration0013(backend: SqlBackend): Migration {
         .values({
           checksum_sha256: MIGRATION_0013_CHECKSUM,
           migration_name: MIGRATION_0013_NAME,
+        })
+        .execute();
+    },
+  };
+}
+
+function createMigration0014(backend: SqlBackend): Migration {
+  return {
+    up: async (database) => {
+      for (const statement of MIGRATION_0014_SQL[backend]) {
+        await sql.raw(statement).execute(database);
+      }
+      await database
+        .insertInto("od_migration_manifest")
+        .values({
+          checksum_sha256: MIGRATION_0014_CHECKSUM,
+          migration_name: MIGRATION_0014_NAME,
         })
         .execute();
     },

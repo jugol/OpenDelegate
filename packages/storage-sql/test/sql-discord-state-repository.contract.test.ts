@@ -213,6 +213,40 @@ function registerDiscordRepositoryContract(label: string, createFixture: Fixture
         });
         assert.equal(replacedPanel.statusPanelMessageId, "100000000000000102");
         assert.equal(replacedPanel.revision, panel.revision + 1);
+        const activity = await repository.updateBinding(created.threadId, {
+          activitySurface: {
+            cycleId: "activity_cycle_1",
+            revision: 7,
+            updatedAtMs: 7_000,
+            outboxCreatedAtMs: 7_100,
+            state: "open",
+            messageId: "100000000000000103",
+          },
+        });
+        assert.deepEqual(activity.activitySurface, {
+          cycleId: "activity_cycle_1",
+          revision: 7,
+          updatedAtMs: 7_000,
+          outboxCreatedAtMs: 7_100,
+          state: "open",
+          messageId: "100000000000000103",
+        });
+        const closedActivity = await repository.updateBinding(created.threadId, {
+          activitySurface: {
+            cycleId: "activity_cycle_1",
+            revision: 8,
+            updatedAtMs: 8_000,
+            outboxCreatedAtMs: 8_100,
+            state: "closed",
+          },
+        });
+        assert.deepEqual(closedActivity.activitySurface, {
+          cycleId: "activity_cycle_1",
+          revision: 8,
+          updatedAtMs: 8_000,
+          outboxCreatedAtMs: 8_100,
+          state: "closed",
+        });
         await assert.rejects(
           repository.updateBinding(created.threadId, {
             lastReconciledMessageId: "100000000000000099",

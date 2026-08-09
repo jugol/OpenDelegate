@@ -496,13 +496,21 @@ through a secure handoff and resumes the same Task afterward.
    not repeat the Forum title, the current owner question, or mutable Task controls.
    Each accepted owner message receives one idempotent in-place acknowledgement on
    that exact message: a best-effort `👀` reaction plus Discord's typing indicator.
-    Typing is refreshed while the turn remains active; after a durable question,
-    result, or failure is delivered, the same message transitions to `✅` or `❌`.
-    OpenDelegate does not post a second generic working card for the same input.
-    Durable outbound delivery runs outside the serialized Gateway receipt path, so
-    a slow reaction or reply in one thread cannot delay intake of another Forum
-    post. A live `THREAD_CREATE` payload is reused for its starter message instead
-    of requiring a redundant channel lookup before acknowledgement.
+   Typing is refreshed while the turn remains active; after a durable question,
+   result, or failure is delivered, the same message transitions to `✅` or `❌`.
+   OpenDelegate does not post a second generic working card for the same input.
+   During a long owner-input cycle it may maintain one separate live activity
+   message near that turn. Main planning, dispatch, bounded Worker progress, Work
+   Order completion, and verification update that message in place. Worker progress
+   uses a closed owner-safe vocabulary rather than free-form provider prose; token
+   deltas, raw tool activity, hidden reasoning, native session identifiers, local
+   paths, and heartbeats never enter it. The message retains only a short rolling
+   set of meaningful milestones and closes before a question, failure, or final
+   result becomes the canonical reply.
+   Durable outbound delivery runs outside the serialized Gateway receipt path, so
+   a slow reaction or reply in one thread cannot delay intake of another Forum
+   post. A live `THREAD_CREATE` payload is reused for its starter message instead
+   of requiring a redundant channel lookup before acknowledgement.
 8. Significant decisions, questions, failures, and final results remain ordinary
    replies exactly once in chronological order, keyed by their immutable Task source
    event rather than mutable Artifact or link enrichment. The full owner question
@@ -740,6 +748,10 @@ may request a transition but cannot manufacture a state outside the transition r
     provider messages do not leave the Device. Provider usage is aggregated across
     the root and child native threads before it reaches Run and Task Budget
     accounting.
+    A Worker may forward an egress-inspected, deduplicated, rate-limited normalized
+    progress summary to Main for live presentation. That event is non-terminal and
+    does not renew a Run lease, reset a Budget, enter Task conversation history, or
+    become continuation-checkpoint context.
 21. When a bridged provider starts native child sessions, each Run-scoped local MCP
     capability may authenticate at most the root session plus four simultaneous
     child sessions. All clients share the same immutable Task, Work Order, Run,

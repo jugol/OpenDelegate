@@ -75,6 +75,15 @@ export interface DiscordArtifactPresentationPort {
   forTask(taskId: string): Promise<NonNullable<TaskChannelProjection["artifact"]> | undefined>;
 }
 
+export interface DiscordTaskActivityProjectionPort {
+  activity(
+    taskId: string,
+  ):
+    | NonNullable<TaskChannelProjection["activity"]>
+    | undefined
+    | Promise<NonNullable<TaskChannelProjection["activity"]> | undefined>;
+}
+
 export interface DiscordRuntimeTaskServicePort
   extends DiscordTaskServicePort, DiscordProjectionTaskPort {}
 
@@ -96,6 +105,7 @@ export interface DiscordMainRuntimeOptions {
   readonly repository: Pick<DiscordStateRepository, "getGatewayCursor" | "listBindings">;
   readonly tasks: DiscordProjectionTaskPort;
   readonly artifactPresentation?: DiscordArtifactPresentationPort;
+  readonly taskActivity?: DiscordTaskActivityProjectionPort;
   readonly clock: DiscordClock;
   readonly scheduler?: DiscordRuntimeScheduler;
   readonly synchronizationIntervalMs?: number;
@@ -128,6 +138,7 @@ export interface CreateProductionDiscordRuntimeOptions {
   readonly scheduler?: DiscordRuntimeScheduler;
   readonly synchronizationIntervalMs?: number;
   readonly artifactPresentation?: DiscordArtifactPresentationPort;
+  readonly taskActivity?: DiscordTaskActivityProjectionPort;
   readonly interactionTokenVault?: DiscordInteractionTokenVault;
   readonly api?: DiscordApiPort;
   readonly gateway?: DiscordGatewayPort;
@@ -150,6 +161,7 @@ export class DiscordMainRuntime {
   readonly #repository: DiscordMainRuntimeOptions["repository"];
   readonly #tasks: DiscordProjectionTaskPort;
   readonly #artifactPresentation: DiscordArtifactPresentationPort | undefined;
+  readonly #taskActivity: DiscordTaskActivityProjectionPort | undefined;
   readonly #clock: DiscordClock;
   readonly #scheduler: DiscordRuntimeScheduler;
   readonly #synchronizationIntervalMs: number;
@@ -179,6 +191,7 @@ export class DiscordMainRuntime {
     this.#repository = options.repository;
     this.#tasks = options.tasks;
     this.#artifactPresentation = options.artifactPresentation;
+    this.#taskActivity = options.taskActivity;
     this.#clock = options.clock;
     this.#scheduler = options.scheduler ?? new NodeDiscordRuntimeScheduler();
     this.#synchronizationIntervalMs = synchronizationIntervalMs;
@@ -311,6 +324,7 @@ export class DiscordMainRuntime {
       try {
         const task = await this.#tasks.get(binding.taskId);
         let artifact: NonNullable<TaskChannelProjection["artifact"]> | undefined;
+        const activity = await this.#taskActivity?.activity(task.taskId);
         if (this.#artifactPresentation !== undefined) {
           try {
             artifact = await this.#artifactPresentation.forTask(task.taskId);
@@ -318,7 +332,7 @@ export class DiscordMainRuntime {
             this.#recordDiagnostic("discord.runtime.artifact_projection_failed", errorCode(error));
           }
         }
-        await this.#adapter.publishTaskProjection(projectTask(task, artifact));
+        await this.#adapter.publishTaskProjection(projectTask(task, artifact, activity));
       } catch (error) {
         this.#recordDiagnostic("discord.runtime.task_projection_failed", errorCode(error));
       }
@@ -693,6 +707,7 @@ export async function createProductionDiscordRuntime(
       ...(options.artifactPresentation === undefined
         ? {}
         : { artifactPresentation: options.artifactPresentation }),
+      ...(options.taskActivity === undefined ? {} : { taskActivity: options.taskActivity }),
       clock,
       closeResource: async () => repository.close(),
       ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
@@ -716,6 +731,7 @@ export async function createProductionDiscordRuntime(
 function projectTask(
   task: DiscordProjectionTask,
   artifact?: NonNullable<TaskChannelProjection["artifact"]>,
+  activity?: NonNullable<TaskChannelProjection["activity"]>,
 ): TaskChannelProjection {
   const latestEvent = task.events.at(-1);
   const latestMessage = task.messages.at(-1);
@@ -732,6 +748,7 @@ function projectTask(
     summary: currentAgentMessage ?? stateSummary(task.state),
     significance: executionUpdate ? significanceFor(task.state) : "status",
     ...(artifact === undefined ? {} : { artifact: Object.freeze({ ...artifact }) }),
+    ...(activity === undefined ? {} : { activity: structuredClone(activity) }),
   });
 }
 

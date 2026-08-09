@@ -1387,6 +1387,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     }
     const ownerDiscordStatusObserver = options.discord?.onStatusChange;
     const discordSecretStore = options.discord?.secretStore ?? managedSecretStore;
+    const discordTaskActivityExecutor = authoritativeWorkerExecutor;
     discordBindingController = new DiscordBindingController<DiscordMainRuntime>({
       credentialCapability: async (alias) => {
         if (!secretIngest.hasAliasPurpose(alias, "discord-bot-token")) {
@@ -1413,6 +1414,37 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
               productVersion: options.build.version,
               database,
               tasks,
+              ...(discordTaskActivityExecutor === undefined
+                ? {}
+                : {
+                    taskActivity: {
+                      activity: async (taskId: string) => {
+                        const activity = discordTaskActivityExecutor.activity(taskId);
+                        if (activity === undefined) {
+                          return undefined;
+                        }
+                        const devices = await listMainOwnedDeviceDirectory().catch(() => []);
+                        const labels = new Map(
+                          devices.map((device) => [device.deviceId, device.name]),
+                        );
+                        return Object.freeze({
+                          ...activity,
+                          milestones: Object.freeze(
+                            activity.milestones.map((milestone) => {
+                              const deviceLabel =
+                                milestone.deviceId === undefined
+                                  ? undefined
+                                  : labels.get(milestone.deviceId);
+                              return Object.freeze({
+                                ...milestone,
+                                ...(deviceLabel === undefined ? {} : { deviceLabel }),
+                              });
+                            }),
+                          ),
+                        });
+                      },
+                    },
+                  }),
               ...(artifacts === undefined
                 ? {}
                 : {

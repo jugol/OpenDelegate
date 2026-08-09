@@ -197,11 +197,13 @@ function assignment(
 function executionContext(
   value: WorkerRunAssignmentV1,
   isLeaseCurrent: () => Promise<boolean> = () => Promise.resolve(true),
+  reportProgress?: NonNullable<RunExecutionContext["reportProgress"]>,
 ): RunExecutionContext {
   return {
     assignment: value,
     leaseAuthority: staticLeaseAuthority(value.leaseExpiresAtMs, isLeaseCurrent),
     isLeaseCurrent,
+    ...(reportProgress === undefined ? {} : { reportProgress }),
   };
 }
 
@@ -1898,6 +1900,7 @@ test("public reports are bounded and redact local Secret values and common encod
   const workspacePath = await realpath(workspaceDirectory);
   const secret = "owner-token+/=private";
   const encoded = Buffer.from(secret).toString("base64");
+  const progressKinds: string[] = [];
   const adapter = new RecordingAdapter(workspacePath, (request) => {
     const session = nativeSessionFor(request, workspacePath);
     return {
@@ -1925,6 +1928,12 @@ test("public reports are bounded and redact local Secret values and common encod
         },
         {
           sequence: 4,
+          observedAt: "2026-07-25T00:00:01.000Z",
+          type: "progress",
+          message: `Checking the build with ${secret}`,
+        },
+        {
+          sequence: 5,
           observedAt: "2026-07-25T00:00:01.000Z",
           type: "public_message",
           role: "assistant",
@@ -1971,7 +1980,13 @@ test("public reports are bounded and redact local Secret values and common encod
 
   try {
     const process = await factory.start(
-      executionContext(assignment("run-redact", "work-order-redact")),
+      executionContext(
+        assignment("run-redact", "work-order-redact"),
+        () => Promise.resolve(true),
+        async ({ kind }) => {
+          progressKinds.push(kind);
+        },
+      ),
     );
     const outcome = await process.completion;
     assert.equal(outcome.status, "succeeded");
@@ -1983,6 +1998,7 @@ test("public reports are bounded and redact local Secret values and common encod
     assert.equal(outcome.report.includes("PRIVATE_DELTA"), false);
     assert.equal(outcome.report.includes("PRIVATE_TOOL_INPUT"), false);
     assert.equal(outcome.report.endsWith("[Report truncated by OpenDelegate.]"), true);
+    assert.deepEqual(progressKinds, ["verifying"]);
   } finally {
     sessionStore.close();
     await rm(root, { recursive: true, force: true });

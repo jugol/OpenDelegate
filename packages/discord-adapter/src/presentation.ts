@@ -127,6 +127,53 @@ export function renderTaskUpdate(projection: TaskChannelProjection): DiscordMess
   });
 }
 
+export function renderTaskActivity(projection: TaskChannelProjection): DiscordMessagePayload {
+  validateProjection(projection);
+  const activity = projection.activity;
+  if (activity === undefined) {
+    throw invalidProjection();
+  }
+  const phaseLabel: Readonly<Record<typeof activity.phase, string>> = {
+    planning: "Planning",
+    dispatching: "Dispatching",
+    working: "Working across Devices",
+    verifying: "Verifying results",
+  };
+  const progress =
+    activity.totalWorkOrders === 0
+      ? phaseLabel[activity.phase]
+      : `${phaseLabel[activity.phase]} · ${activity.completedWorkOrders.toString()}/${activity.totalWorkOrders.toString()} Work Orders complete`;
+  const milestoneLines = activity.milestones.map((milestone) => {
+    const marker = milestone.status === "completed" ? "✅" : "↻";
+    const deviceName = milestone.deviceLabel ?? "Worker Device";
+    const device = deviceName === undefined ? "" : ` **${shortDeviceLabel(deviceName)}** —`;
+    return `${marker}${device} ${safeMarkdown(milestone.summary, 500)}`;
+  });
+  const content = [
+    "## OpenDelegate is working",
+    `**${progress}**`,
+    ...milestoneLines,
+    "_This one message updates when meaningful progress changes._",
+  ].join("\n\n");
+  const buttons = controlButtons(projection);
+  return Object.freeze({
+    flags: DISCORD_COMPONENTS_V2_FLAG,
+    components: Object.freeze([
+      Object.freeze({
+        type: 17 as const,
+        accent_color: STATUS_COLORS.running,
+        components: Object.freeze([
+          Object.freeze({ type: 10 as const, content }),
+          ...(buttons.components.length === 0
+            ? []
+            : [Object.freeze({ type: 14 as const, divider: true, spacing: 1 as const }), buttons]),
+        ]),
+      }),
+    ]),
+    allowed_mentions: Object.freeze({ parse: Object.freeze([]) }),
+  });
+}
+
 export function renderResolvedOwnerPrompt(
   projection: TaskChannelProjection,
 ): DiscordMessagePayload {
@@ -302,6 +349,46 @@ function validateProjection(projection: TaskChannelProjection): void {
   ) {
     throw invalidProjection();
   }
+  if (projection.activity !== undefined) {
+    const activity = projection.activity;
+    if (
+      activity.cycleId.length === 0 ||
+      activity.cycleId.length > 160 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(activity.cycleId) ||
+      !Number.isSafeInteger(activity.revision) ||
+      activity.revision < 1 ||
+      !Number.isSafeInteger(activity.updatedAtMs) ||
+      activity.updatedAtMs < 0 ||
+      !["planning", "dispatching", "working", "verifying"].includes(activity.phase) ||
+      !Number.isSafeInteger(activity.completedWorkOrders) ||
+      !Number.isSafeInteger(activity.totalWorkOrders) ||
+      activity.completedWorkOrders < 0 ||
+      activity.totalWorkOrders < 0 ||
+      activity.completedWorkOrders > activity.totalWorkOrders ||
+      activity.milestones.length < 1 ||
+      activity.milestones.length > 4
+    ) {
+      throw invalidProjection();
+    }
+    for (const milestone of activity.milestones) {
+      if (
+        milestone.key.length === 0 ||
+        milestone.key.length > 160 ||
+        milestone.summary.trim().length === 0 ||
+        milestone.summary.length > 1_024 ||
+        milestone.summary.includes("\0") ||
+        (milestone.status !== "active" && milestone.status !== "completed") ||
+        (milestone.deviceId !== undefined &&
+          (milestone.deviceId.length === 0 || milestone.deviceId.length > 160)) ||
+        (milestone.deviceLabel !== undefined &&
+          (milestone.deviceLabel.trim().length === 0 ||
+            milestone.deviceLabel.length > 253 ||
+            milestone.deviceLabel.includes("\0")))
+      ) {
+        throw invalidProjection();
+      }
+    }
+  }
   for (const url of [projection.artifact?.url, projection.inspectUrl]) {
     if (url !== undefined && !isSafeWebUrl(url)) {
       throw invalidProjection();
@@ -322,6 +409,11 @@ function safeCustomIdSegment(value: string): string {
     throw invalidProjection();
   }
   return value;
+}
+
+function shortDeviceLabel(value: string): string {
+  const safe = safeMarkdown(value, 160).replaceAll("`", "");
+  return safe.length <= 28 ? safe : `${safe.slice(0, 27)}…`;
 }
 
 function safeMarkdown(value: string, maximum: number): string {
