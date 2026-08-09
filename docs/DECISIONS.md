@@ -2082,7 +2082,11 @@ durable Task binding. Resolution PATCHes that exact message into a historical ‚Ä
 started‚Äù receipt and removes all buttons. The failure surface and resolution action
 are persisted by SQLite or PostgreSQL. The edit preserves the concrete earlier
 failure explanation and does not delete history. A request nonce remains only a
-short duplicate-send guard and is never treated as durable message identity.
+short duplicate-send guard and is never treated as durable message identity. If a
+fast deterministic retry advances from `running` to a later result between Discord
+projection polls, the first observed queued, waiting, review, completion, or newer
+failure projection performs the same resolution; observing an intermediate
+`running` projection is not required.
 
 **Rationale:** Live alpha.14 QA recovered a failed Device-directory Task and posted
 the correct result, but the older `Task needs attention` card still displayed an

@@ -789,7 +789,11 @@ export class DiscordForumAdapter {
     binding: DiscordTaskBinding,
   ): Promise<void> {
     const surface = binding.failureSurface;
-    if (projection.state !== "running" || surface === undefined || surface.state !== "open") {
+    if (
+      surface === undefined ||
+      surface.state !== "open" ||
+      !supersedesOpenFailure(projection, surface.sourceEventId)
+    ) {
       return;
     }
     const outbox = await this.#repository.listOutbox();
@@ -2030,6 +2034,25 @@ function chronologicalProjection(projection: TaskChannelProjection): TaskChannel
       ? {}
       : { approval: Object.freeze({ ...projection.approval }) }),
   });
+}
+
+function supersedesOpenFailure(
+  projection: TaskChannelProjection,
+  failureSourceEventId: string,
+): boolean {
+  if (projection.state === "failed") {
+    return (
+      projection.sourceEventId !== undefined && projection.sourceEventId !== failureSourceEventId
+    );
+  }
+  return (
+    projection.state === "queued" ||
+    projection.state === "running" ||
+    projection.state === "waiting_user" ||
+    projection.state === "waiting_resource" ||
+    projection.state === "review" ||
+    projection.state === "completed"
+  );
 }
 
 function attachmentReferences(message: DiscordMessage): readonly string[] {

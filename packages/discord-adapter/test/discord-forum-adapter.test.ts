@@ -1503,6 +1503,51 @@ test("a successful retry resolves the prior failure control in place", async () 
   });
 });
 
+test("a fast retry resolves its failure when projection coalescing observes only completion", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000135");
+  const starter = ownerMessage(thread.id, thread.id, "Recover through a fast direct result.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Recover through a fast direct result.",
+    summary: "The previous attempt failed before execution.",
+    sourceEventId: "event_fast_retry_failure",
+    significance: "failure",
+  });
+  await adapter.flushOutbox();
+  const failureMessage = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("od:v1:retry"),
+  );
+  assert.notEqual(failureMessage, undefined);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "completed",
+    objective: "Recover through a fast direct result.",
+    summary: "The retry completed before the next projection poll.",
+    sourceEventId: "event_fast_retry_completed",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+
+  assert.equal(
+    api.operations.filter(
+      (operation) =>
+        operation["kind"] === "message-edit" &&
+        operation["messageId"] === failureMessage?.["messageId"],
+    ).length,
+    1,
+  );
+  assert.equal((await repository.getBindingByTask("task-1"))?.failureSurface?.state, "resolved");
+});
+
 test("a failed turn replaces the newest owner-message acknowledgement with failure", async () => {
   const { adapter, api } = fixture();
   const thread = forumThread("300000000000000034");

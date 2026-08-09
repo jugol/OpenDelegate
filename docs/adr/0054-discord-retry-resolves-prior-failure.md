@@ -30,6 +30,11 @@ canonical JSON in SQLite or PostgreSQL. When that Task projection later enters
 a blue historical receipt containing the prior safe explanation, “Retry started,”
 and no controls, then marks the surface resolved.
 
+Task projection may coalesce a very fast retry so Discord observes completion,
+review, a wait, or even a newer failure without observing the intermediate
+`running` state. Any such later retry lifecycle projection resolves the still-open
+prior failure first. Replaying the same failure source event does not resolve itself.
+
 The surface and action are typed, bounded, and validated identically by SQLite and
 PostgreSQL. Repeated projections, process restart, and transport replay reuse the
 same surface and resolution action. A Discord nonce remains a bounded duplicate-send
@@ -50,6 +55,8 @@ that predate this lifecycle or for edits Discord could not deliver.
 - Publishing the same Task as running creates one durable resolution action, edits
   the original failure message, renders “Retry started,” and removes the custom ID.
 - Replaying the running projection does not create a second resolution or message.
+- A retry that completes between projection polls resolves the prior failure even
+  when Discord never observes its intermediate running state.
 - Expiring the fake Discord nonce cache before Retry still edits the stored original
   message ID and creates no second chronological message.
 - SQLite persists and restores the exact typed failure surface and resolution action
