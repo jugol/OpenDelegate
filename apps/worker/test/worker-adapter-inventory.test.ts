@@ -103,6 +103,18 @@ describe("Worker agent adapter inventory", () => {
             installedVersion: "2.0.0",
           },
         }),
+        stubAdapter("claude-sandbox-dependency", {
+          installed: true,
+          version: "0.3.220",
+          compatibility: "incompatible",
+          auth: { state: "ready" },
+          diagnostics: [
+            {
+              code: "CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE",
+              message: "A Device-local sandbox executable is missing.",
+            },
+          ],
+        }),
       ],
       environment: {},
       workspaceRegistry,
@@ -113,6 +125,7 @@ describe("Worker agent adapter inventory", () => {
 
     assert.deepEqual((snapshot.agentAdapters ?? []).map((adapter) => adapter.adapterId).sort(), [
       "claude-missing",
+      "claude-sandbox-dependency",
       "claude-untested",
     ]);
     assert.deepEqual(
@@ -129,6 +142,12 @@ describe("Worker agent adapter inventory", () => {
       (snapshot.agentAdapters ?? []).find((adapter) => adapter.adapterId === "claude-untested")
         ?.blockedBy,
       "version-unsupported",
+    );
+    assert.equal(
+      (snapshot.agentAdapters ?? []).find(
+        (adapter) => adapter.adapterId === "claude-sandbox-dependency",
+      )?.blockedBy,
+      "executable-unavailable",
     );
   });
 

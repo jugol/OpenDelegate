@@ -114,6 +114,12 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
+- Accepted Claude Agent SDK `command_lifecycle` events during native child-Agent execution,
+  preserved an authoritative terminal result when SDK transport cleanup throws, and reported missing
+  Linux `bubblewrap`/`socat` sandbox prerequisites before dispatch.
+- Kept Windows core services on their exact non-admin virtual account while using SCM SID type
+  `UNRESTRICTED`, so headless provider DNS/HTTPS is available without moving Agent execution into
+  the interactive owner session.
 - Recovered certificate rotation after prior failed rotations and owner-authorized recredentialing
   by selecting the active current-generation certificate, and discarded key-bound rotation requests
   replayed from an earlier Worker process session.

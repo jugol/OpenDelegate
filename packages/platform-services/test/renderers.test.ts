@@ -55,6 +55,18 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
     imagePath ?? "",
     /--stderr-log C:\\ProgramData\\OpenDelegate\\logs\\core\.stderr\.log/u,
   );
+  const coreManifest = JSON.parse(artifacts.core.manifest.content) as {
+    serviceSidType?: string;
+  };
+  assert.equal(coreManifest.serviceSidType, "unrestricted");
+  assert.ok(
+    artifacts.installCommands.some(
+      (command) =>
+        command.executable.toLowerCase() === "sc.exe" &&
+        command.arguments[0] === "sidtype" &&
+        command.arguments.at(-1) === "unrestricted",
+    ),
+  );
   const stopService = artifacts.stopCommands.find(
     (command) => command.executable.toLowerCase() === "sc.exe",
   );

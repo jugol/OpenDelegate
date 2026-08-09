@@ -50,7 +50,7 @@ export function renderWindowsServiceArtifacts(
       account: coreIdentity,
       startup: "automatic",
       delayedAutoStart: false,
-      serviceSidType: "restricted",
+      serviceSidType: "unrestricted",
       requiredPrivileges: ["SeChangeNotifyPrivilege"],
       executable: definition.coreExecutablePath,
       arguments: windowsServiceArguments(definition, "core"),
@@ -101,7 +101,7 @@ export function renderWindowsServiceArtifacts(
       ["description", serviceName, `OpenDelegate ${configuration.role} core service`],
       { plane: "core", verb: "install", privilege: "elevated" },
     ),
-    command("sc.exe", ["sidtype", serviceName, "restricted"], {
+    command("sc.exe", ["sidtype", serviceName, "unrestricted"], {
       plane: "core",
       verb: "install",
       privilege: "elevated",

@@ -1887,3 +1887,26 @@ both identities.
 **Consequence:** A multi-Device fleet can use consistent local service defaults
 without becoming unschedulable. Candidate corruption is reported as invalid state
 rather than being mislabeled as an offline Worker.
+
+## D-095 — Windows core services use a network-compatible virtual-service SID
+
+Implementation detail:
+[ADR-0047](adr/0047-windows-virtual-service-sid-network-compatibility.md).
+
+**Decision:** A Windows OpenDelegate core continues to run as its exact non-admin
+`NT SERVICE\OpenDelegate-<instance>` account, but SCM configures that service SID
+as `UNRESTRICTED` rather than placing it in the token's restricted SID list. The
+explicit required-privilege list, service-scoped filesystem and Secret ACLs,
+Firewall, provider sandbox, and Action Policy remain unchanged.
+
+**Rationale:** Live installed-service testing proved that the restricted token could
+reach Main's fixed Worker endpoint but could not provide ordinary provider DNS/HTTPS
+to a child Agent process; the identical executable and request succeeded in the
+owner token. In SCM terminology `UNRESTRICTED` controls token placement, not network
+or administrator authority, and Microsoft recommends it for service-SID use unless
+the product owns a complete restricted-resource policy.
+
+**Consequence:** Windows Workers retain a distinct least-privilege virtual account
+while Codex and other authenticated providers can run headlessly. Install and
+upgrade repair the SID type deterministically, and the Windows release lab must test
+provider traffic from the installed service rather than only an owner terminal.

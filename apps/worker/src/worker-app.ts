@@ -3301,7 +3301,8 @@ function adapterBlocker(
   if (
     !probe.installed ||
     diagnosticCodes.has("EXECUTABLE_NOT_FOUND") ||
-    diagnosticCodes.has("SDK_PACKAGE_UNAVAILABLE")
+    diagnosticCodes.has("SDK_PACKAGE_UNAVAILABLE") ||
+    diagnosticCodes.has("CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE")
   ) {
     return "executable-unavailable";
   }

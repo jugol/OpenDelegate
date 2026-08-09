@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { access } from "node:fs/promises";
+import { delimiter, join } from "node:path";
 
 import { createProviderToolAuthorizationRequest } from "./action-authorization.ts";
 import {
@@ -43,11 +46,13 @@ export const CLAUDE_AGENT_SDK_VERSION = "0.3.220";
 export const CLAUDE_AGENT_SDK_CLAUDE_CODE_VERSION = "2.1.220";
 const CLAUDE_AGENT_SDK_MODULE = "@anthropic-ai/claude-agent-sdk";
 export const CLAUDE_NATIVE_SUBAGENT_MAX_CHILDREN = 4;
+const CLAUDE_LINUX_SANDBOX_EXECUTABLES = ["bwrap", "socat"] as const;
 
 const ALLOWED_SDK_MESSAGE_TYPES = new Set([
   "assistant",
   "auth_status",
   "background_tasks_changed",
+  "command_lifecycle",
   "conversation_reset",
   "files_persisted",
   "hook_progress",
@@ -125,6 +130,10 @@ export interface ClaudeAgentSdkAdapterOptions {
   readonly leaseStore?: SessionLeaseStore;
   readonly now?: () => number;
   readonly lineageId?: () => string;
+  readonly sandboxDependencyProbe?: (
+    executableNames: readonly string[],
+    environment: NodeJS.ProcessEnv,
+  ) => Promise<readonly string[]>;
 }
 
 export class ClaudeAgentSdkAdapter implements AgentAdapter {
@@ -139,6 +148,10 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
   readonly #leaseStore: SessionLeaseStore;
   readonly #now: () => number;
   readonly #lineageId: () => string;
+  readonly #sandboxDependencyProbe: (
+    executableNames: readonly string[],
+    environment: NodeJS.ProcessEnv,
+  ) => Promise<readonly string[]>;
 
   public constructor(options: ClaudeAgentSdkAdapterOptions) {
     this.#claudeHome = resolveControlledProviderHome(options.claudeHome, "Claude");
@@ -152,6 +165,11 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
     this.#leaseStore = options.leaseStore ?? processSessionLeaseStore;
     this.#now = options.now ?? Date.now;
     this.#lineageId = options.lineageId ?? randomUUID;
+    this.#sandboxDependencyProbe =
+      options.sandboxDependencyProbe ??
+      // An injected SDK is a deterministic test boundary. Production resolves
+      // the package dynamically and probes the real Device PATH.
+      (options.sdk === undefined ? missingExecutablesOnPath : async () => []);
   }
 
   public async probe(input: AgentAdapterProbeInput = {}): Promise<AgentAdapterProbe> {
@@ -185,11 +203,27 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
       });
     }
     const nativeWindows = this.#hostPlatform === "win32";
+    const missingSandboxExecutables =
+      this.#hostPlatform === "linux" && sdkInstalled
+        ? await this.#sandboxDependencyProbe(
+            CLAUDE_LINUX_SANDBOX_EXECUTABLES,
+            buildChildEnvironment(input.environment, input.secretEnvironment),
+          )
+        : [];
     if (nativeWindows) {
       diagnostics.push({
         code: "CLAUDE_SANDBOX_UNAVAILABLE_NATIVE_WINDOWS",
         message:
           "Claude Agent SDK execution is disabled in a native Windows Worker; use Codex, WSL2, or a configured container.",
+      });
+    }
+    if (missingSandboxExecutables.length > 0) {
+      diagnostics.push({
+        code: "CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE",
+        message:
+          `Claude Agent SDK's fail-closed Linux sandbox is missing required ` +
+          `executables: ${missingSandboxExecutables.join(", ")}. Install the ` +
+          "bubblewrap and socat packages from this Device's configured official package sources.",
       });
     }
     let authState: AgentAdapterProbe["auth"]["state"];
@@ -235,7 +269,10 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
       provider: this.provider,
       installed: sdkInstalled,
       version: CLAUDE_AGENT_SDK_VERSION,
-      compatibility: nativeWindows || !sdkInstalled ? "incompatible" : "tested",
+      compatibility:
+        nativeWindows || !sdkInstalled || missingSandboxExecutables.length > 0
+          ? "incompatible"
+          : "tested",
       auth: { state: authState },
       capabilities,
       diagnostics,
@@ -344,6 +381,17 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
         ? {}
         : { secretEnvironment: request.secretEnvironment }),
     });
+    if (
+      probe.diagnostics.some(
+        (diagnostic) => diagnostic.code === "CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE",
+      )
+    ) {
+      throw new AgentAdapterError(
+        "SANDBOX_UNAVAILABLE",
+        "Claude Agent SDK requires the bubblewrap and socat packages for its fail-closed Linux sandbox.",
+        true,
+      );
+    }
     if (probe.compatibility !== "tested") {
       throw new AgentAdapterError(
         "ADAPTER_VERSION_UNSUPPORTED",
@@ -412,6 +460,7 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
     let nativeSessionId: string | undefined;
     let finalText: string | undefined;
     let usage: AgentUsage | undefined;
+    let terminalResult: ProgrammaticProviderResult | undefined;
     const nativeSubagentToolUseIds = new Set<string>();
     const streamingInput = new ClaudeStreamingInput(
       claudeUserMessage(request.prompt, "now", this.#now()),
@@ -593,149 +642,163 @@ export class ClaudeAgentSdkAdapter implements AgentAdapter {
       signal.addEventListener("abort", onAbort, { once: true });
     }
     try {
-      for await (const raw of query) {
-        const message = requireSdkRecord(raw);
-        const type = requiredSdkString(message["type"], "message type");
-        if (!ALLOWED_SDK_MESSAGE_TYPES.has(type)) {
-          throw new AgentAdapterError(
-            "UNKNOWN_PROVIDER_MESSAGE",
-            `Claude Agent SDK emitted unsupported message type ${type}.`,
-          );
-        }
-        const sessionId =
-          typeof message["session_id"] === "string" ? message["session_id"] : undefined;
-        if (sessionId !== undefined) {
-          if (nativeSessionId === undefined) {
-            nativeSessionId = sessionId;
-            await emit({ kind: "session", nativeSessionId });
-            const activeNativeSessionId = nativeSessionId;
-            steering.activate({
-              nativeSessionId: activeNativeSessionId,
-              send: async (steerRequest) => {
-                await streamingInput.enqueue(
-                  claudeUserMessage(
-                    steerRequest.instruction,
-                    "now",
-                    this.#now(),
-                    activeNativeSessionId,
-                  ),
-                );
-                await emit({
-                  kind: "steering_accepted",
-                  requestId: steerRequest.requestId,
-                  requestedBy: steerRequest.requestedBy,
-                });
-                return {};
-              },
-            });
-          } else if (nativeSessionId !== sessionId) {
+      try {
+        for await (const raw of query) {
+          const message = requireSdkRecord(raw);
+          const type = requiredSdkString(message["type"], "message type");
+          if (!ALLOWED_SDK_MESSAGE_TYPES.has(type)) {
             throw new AgentAdapterError(
-              "NATIVE_SESSION_ID_CHANGED",
-              "Claude Agent SDK changed session IDs during one turn.",
+              "UNKNOWN_PROVIDER_MESSAGE",
+              `Claude Agent SDK emitted unsupported message type ${type}.`,
             );
           }
-        }
-        if (type === "stream_event") {
-          const delta = claudeTextDelta(message);
-          if (delta !== undefined) {
-            await emit({ kind: "message_delta", text: delta });
+          const sessionId =
+            typeof message["session_id"] === "string" ? message["session_id"] : undefined;
+          if (sessionId !== undefined) {
+            if (nativeSessionId === undefined) {
+              nativeSessionId = sessionId;
+              await emit({ kind: "session", nativeSessionId });
+              const activeNativeSessionId = nativeSessionId;
+              steering.activate({
+                nativeSessionId: activeNativeSessionId,
+                send: async (steerRequest) => {
+                  await streamingInput.enqueue(
+                    claudeUserMessage(
+                      steerRequest.instruction,
+                      "now",
+                      this.#now(),
+                      activeNativeSessionId,
+                    ),
+                  );
+                  await emit({
+                    kind: "steering_accepted",
+                    requestId: steerRequest.requestId,
+                    requestedBy: steerRequest.requestedBy,
+                  });
+                  return {};
+                },
+              });
+            } else if (nativeSessionId !== sessionId) {
+              throw new AgentAdapterError(
+                "NATIVE_SESSION_ID_CHANGED",
+                "Claude Agent SDK changed session IDs during one turn.",
+              );
+            }
           }
-          continue;
-        }
-        if (type === "assistant") {
-          const assistant = parseClaudeAssistant(message);
-          for (const event of assistant.events) {
-            await emit(event);
+          if (type === "stream_event") {
+            const delta = claudeTextDelta(message);
+            if (delta !== undefined) {
+              await emit({ kind: "message_delta", text: delta });
+            }
+            continue;
           }
-          if (assistant.text !== undefined) {
-            finalText = assistant.text;
-            await emit({ kind: "public_message", text: assistant.text });
+          if (type === "assistant") {
+            const assistant = parseClaudeAssistant(message);
+            for (const event of assistant.events) {
+              await emit(event);
+            }
+            if (assistant.text !== undefined) {
+              finalText = assistant.text;
+              await emit({ kind: "public_message", text: assistant.text });
+            }
+            continue;
           }
-          continue;
-        }
-        if (type === "tool_progress" || type === "task_progress") {
-          const progressTool =
-            typeof message["tool_name"] === "string"
-              ? message["tool_name"]
-              : typeof message["toolName"] === "string"
-                ? message["toolName"]
-                : undefined;
-          await emit({
-            kind: "progress",
-            message:
-              progressTool !== undefined &&
-              isConfiguredDeviceLocalKnowledgeTool(
-                progressTool,
-                request.toolServers,
-                request.permissions.allowedTools,
-              )
-                ? "Device-local Knowledge operation is in progress."
-                : claudeProgressMessage(message),
-          });
-          continue;
-        }
-        if (type === "task_started" || type === "task_updated" || type === "task_notification") {
-          await emit({
-            kind: "progress",
-            message:
-              type === "task_started"
-                ? "A native child Agent started inside this Worker Run."
-                : type === "task_updated"
-                  ? "A native child Agent reported progress inside this Worker Run."
-                  : "A native child Agent reported a lifecycle notification inside this Worker Run.",
-          });
-          continue;
-        }
-        if (type === "permission_denied") {
-          const deniedTool = requiredSdkString(message["tool_name"], "denied tool name");
-          const privateKnowledge = isConfiguredDeviceLocalKnowledgeTool(
-            deniedTool,
-            request.toolServers,
-            request.permissions.allowedTools,
-          );
-          await emit({
-            kind: "tool_result",
-            toolName: deniedTool,
-            status: "failed",
-            ...(privateKnowledge
-              ? {}
-              : {
-                  summary:
-                    typeof message["message"] === "string"
-                      ? message["message"]
-                      : "Claude denied the tool.",
-                }),
-          });
-          continue;
-        }
-        if (type === "result") {
-          steering.complete();
-          nativeSessionId = requiredSdkString(message["session_id"], "result session ID");
-          usage = parseClaudeUsage(message);
-          if (usage !== undefined) {
-            await emit({ kind: "usage", usage });
+          if (type === "tool_progress" || type === "task_progress") {
+            const progressTool =
+              typeof message["tool_name"] === "string"
+                ? message["tool_name"]
+                : typeof message["toolName"] === "string"
+                  ? message["toolName"]
+                  : undefined;
+            await emit({
+              kind: "progress",
+              message:
+                progressTool !== undefined &&
+                isConfiguredDeviceLocalKnowledgeTool(
+                  progressTool,
+                  request.toolServers,
+                  request.permissions.allowedTools,
+                )
+                  ? "Device-local Knowledge operation is in progress."
+                  : claudeProgressMessage(message),
+            });
+            continue;
           }
-          if (message["subtype"] === "success" && message["is_error"] !== true) {
-            finalText = typeof message["result"] === "string" ? message["result"] : finalText;
-            return {
-              status: "succeeded",
-              nativeSessionId,
-              ...(finalText === undefined ? {} : { finalText }),
-              ...(usage === undefined ? {} : { usage }),
-            };
+          if (type === "task_started" || type === "task_updated" || type === "task_notification") {
+            await emit({
+              kind: "progress",
+              message:
+                type === "task_started"
+                  ? "A native child Agent started inside this Worker Run."
+                  : type === "task_updated"
+                    ? "A native child Agent reported progress inside this Worker Run."
+                    : "A native child Agent reported a lifecycle notification inside this Worker Run.",
+            });
+            continue;
           }
-          return {
-            status: "failed",
-            nativeSessionId,
-            ...(finalText === undefined ? {} : { finalText }),
-            ...(usage === undefined ? {} : { usage }),
-            error: {
-              code: "CLAUDE_TURN_FAILED",
-              message: claudeResultError(message),
-              retryable: true,
-            },
-          };
+          if (type === "permission_denied") {
+            const deniedTool = requiredSdkString(message["tool_name"], "denied tool name");
+            const privateKnowledge = isConfiguredDeviceLocalKnowledgeTool(
+              deniedTool,
+              request.toolServers,
+              request.permissions.allowedTools,
+            );
+            await emit({
+              kind: "tool_result",
+              toolName: deniedTool,
+              status: "failed",
+              ...(privateKnowledge
+                ? {}
+                : {
+                    summary:
+                      typeof message["message"] === "string"
+                        ? message["message"]
+                        : "Claude denied the tool.",
+                  }),
+            });
+            continue;
+          }
+          if (type === "result") {
+            steering.complete();
+            nativeSessionId = requiredSdkString(message["session_id"], "result session ID");
+            usage = parseClaudeUsage(message);
+            if (usage !== undefined) {
+              await emit({ kind: "usage", usage });
+            }
+            if (message["subtype"] === "success" && message["is_error"] !== true) {
+              finalText = typeof message["result"] === "string" ? message["result"] : finalText;
+              terminalResult = {
+                status: "succeeded",
+                nativeSessionId,
+                ...(finalText === undefined ? {} : { finalText }),
+                ...(usage === undefined ? {} : { usage }),
+              };
+            } else {
+              terminalResult = {
+                status: "failed",
+                nativeSessionId,
+                ...(finalText === undefined ? {} : { finalText }),
+                ...(usage === undefined ? {} : { usage }),
+                error: {
+                  code: "CLAUDE_TURN_FAILED",
+                  message: claudeResultError(message),
+                  retryable: true,
+                },
+              };
+            }
+            break;
+          }
         }
+      } catch (error) {
+        // Claude Code can close the SDK transport with an exception immediately
+        // after yielding its authoritative terminal result. Preserve that result;
+        // failures before a terminal message still fail closed.
+        if (terminalResult === undefined) {
+          throw error;
+        }
+      }
+      if (terminalResult !== undefined) {
+        return terminalResult;
       }
       throw new AgentAdapterError(
         "INCOMPLETE_PROVIDER_OUTPUT",
@@ -1059,6 +1122,33 @@ function malformedClaude(field: string): AgentAdapterError {
 
 function nonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+async function missingExecutablesOnPath(
+  executableNames: readonly string[],
+  environment: NodeJS.ProcessEnv,
+): Promise<readonly string[]> {
+  const pathEntries = (environment.PATH ?? "")
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const missing: string[] = [];
+  for (const executableName of executableNames) {
+    let found = false;
+    for (const directory of pathEntries) {
+      try {
+        await access(join(directory, executableName), fsConstants.X_OK);
+        found = true;
+        break;
+      } catch {
+        // Continue searching PATH without exposing Device-local paths.
+      }
+    }
+    if (!found) {
+      missing.push(executableName);
+    }
+  }
+  return Object.freeze(missing);
 }
 
 function validateNetworkDomain(value: string): string {
