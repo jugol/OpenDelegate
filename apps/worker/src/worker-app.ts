@@ -1011,17 +1011,15 @@ export async function createWorkerRuntime(
     }
   }
   const configuredDefaultWorkspaceId = configuration.workspaces[0]?.workspaceId;
-  const activeRegisteredWorkspaces =
-    configuredDefaultWorkspaceId === undefined
-      ? (await workspaceRegistry.listSchedulingMetadata()).filter(
-          (workspace) => workspace.state === "active",
-        )
-      : Object.freeze([]);
-  const singletonRegisteredWorkspaceId =
-    activeRegisteredWorkspaces.length === 1
-      ? activeRegisteredWorkspaces[0]?.workspaceId
-      : undefined;
-  const defaultWorkspaceId = configuredDefaultWorkspaceId ?? singletonRegisteredWorkspaceId;
+  const resolveCurrentDefaultWorkspaceId = async (): Promise<string | undefined> => {
+    if (configuredDefaultWorkspaceId !== undefined) {
+      return configuredDefaultWorkspaceId;
+    }
+    const active = (await workspaceRegistry.listSchedulingMetadata()).filter(
+      (workspace) => workspace.state === "active",
+    );
+    return active.length === 1 ? active[0]?.workspaceId : undefined;
+  };
   const knowledge = new LocalKnowledgeService({ root: options.paths.knowledgeDirectory });
   await knowledge.rebuild();
   const runCapabilityBroker = await LocalRunCapabilityBroker.listen({
@@ -1089,7 +1087,9 @@ export async function createWorkerRuntime(
     workspaceResolver: new RegisteredWorkerWorkspaceResolver({
       registry: workspaceRegistry,
       managedWorktreeManager,
-      ...(defaultWorkspaceId === undefined ? {} : { defaultWorkspaceId }),
+      ...(configuredDefaultWorkspaceId === undefined
+        ? { defaultWorkspaceIdProvider: resolveCurrentDefaultWorkspaceId }
+        : { defaultWorkspaceId: configuredDefaultWorkspaceId }),
     }),
     initialContextProvider: new LocalKnowledgeInitialContextProvider({ knowledge }),
     runCapabilityProvider: new CompositeWorkerRunCapabilityProvider([
@@ -1116,7 +1116,7 @@ export async function createWorkerRuntime(
         );
         const workspaceContext = await resolveWorkerPromptWorkspaceContext(
           workspaceRegistry,
-          assignment.workOrder.workspaceId ?? defaultWorkspaceId,
+          assignment.workOrder.workspaceId ?? (await resolveCurrentDefaultWorkspaceId()),
         );
         const actionAuthorization = probe.capabilities.approvalBridge
           ? new WorkerAgentActionAuthorizer({

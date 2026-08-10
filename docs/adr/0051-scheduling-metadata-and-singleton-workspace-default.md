@@ -24,8 +24,10 @@ no useful authority boundary.
 Main preserves model effort support through the Worker candidate projection and
 includes only opaque Workspace IDs in the bounded planning snapshot. Production
 Worker composition resolves a missing configured default to the registry only when
-there is exactly one active registered Workspace. It does not persist or rewrite the
-Device configuration as part of startup.
+there is exactly one active registered Workspace. The composition resolves this
+singleton at Run time so a long-lived Worker observes a newly registered first
+Workspace without restarting. It does not persist or rewrite the Device
+configuration.
 
 The generic Workspace resolver continues to require an explicit or injected default.
 If the registry contains zero or multiple active Workspaces and the Work Order omits
@@ -34,7 +36,8 @@ If the registry contains zero or multiple active Workspaces and the Work Order o
 
 ## Consequences
 
-- Existing single-Workspace installations recover on service restart after upgrade.
+- Existing and newly registered single-Workspace installations recover without a
+  service restart after upgrade.
 - Exact effort-bound Device profiles no longer become false scheduling negatives.
 - Main can name a Workspace explicitly when a Device advertises several.
 - Paths, repository names, credentials, and native provider state do not enter the

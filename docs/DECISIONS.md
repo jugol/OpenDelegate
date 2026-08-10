@@ -2449,3 +2449,52 @@ installed runtime configuration when its only differences are a safe owner-local
 a coherent staged core IPC public identity; unrelated drift and inconsistent peer pins continue to
 fail before mutation. If the release rolls back, that credential migration remains in the runtime
 configuration because the staged old Secret locations are no longer authoritative.
+
+## D-119 — macOS owner and persistent-service Keychains are separate bindings
+
+**Decision:** The foreground macOS Worker targets the signed-in owner's explicit
+default file-based login Keychain through the pinned native helper. It never selects
+the Data Protection Keychain and never treats an SSH or background session as proof
+that interactive writes are available. A persistent macOS Worker must instead use a
+separate System-Keychain core binding prepared at the elevated native-service
+boundary while retaining an owner-login binding for the interactive helper. Service
+document generation remains fail-closed until that two-binding preparation and its
+upgrade-safe access-control lifecycle are implemented and live-proven.
+
+**Rationale:** Live macOS 26.6 validation showed that the ad-hoc release helper could
+read Data Protection Keychain status but every write failed with OSStatus `-34018`
+because a standalone command-line helper has no provisioned application entitlement.
+Apple also documents that a `launchd` daemon runs outside a user login context and
+must use a file-based Keychain; the system context defaults to the System Keychain.
+The same live host proved that an explicit file-based login-Keychain write succeeds
+from Terminal.app and fails with `errSecInteractionNotAllowed` over SSH, matching the
+required owner-session boundary.
+
+**Consequence:** Interactive preview enrollment can use the native encrypted
+Keychain without an application provisioning profile, while remote automation cannot
+silently impersonate the unlocked owner session. The backend remains non-syncing and
+Secret values remain outside argv, configuration, logs, database rows, and Agent
+context. This corrects the macOS storage selection in ADR-0017; it does not claim
+persistent macOS service support until the separate System-Keychain path is shipped
+and accepted on a clean host.
+
+## D-120 — Singleton Workspace defaults are resolved at Run time
+
+**Decision:** When a Worker has no Workspace default in `worker.json`, production
+composition resolves the sole active registered Workspace immediately before each
+Run. The generic resolver still selects nothing unless composition explicitly
+injects this policy, and zero or multiple active registrations still require the
+Work Order to name an opaque Workspace ID.
+
+**Rationale:** Live macOS Discord QA registered the first Workspace while the Worker
+was already running. Its next heartbeat correctly advertised that Workspace and Main
+scheduled the Work Order, but the Run resolver retained the empty singleton snapshot
+captured at process startup and failed before invoking Codex. Requiring a restart
+after a successful local registration made scheduling state and execution state
+temporarily disagree.
+
+**Consequence:** A newly registered first Workspace becomes executable without a
+Worker restart, while ambiguous selection remains fail-closed. The lookup transmits
+no Device-local path or Workspace content, does not rewrite configuration, and keeps
+the existing stable native-session Workspace binding after a Run begins. This
+refines D-099 and ADR-0051.

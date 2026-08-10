@@ -211,6 +211,63 @@ test("Workspace registry rejects checkout state, linked roots, duplicate aliases
   );
 });
 
+test("an injected singleton default sees a Workspace registered after Worker startup", async (t) => {
+  const fixture = await workspaceFixture();
+  const registry = new SqliteWorkspaceRegistry({
+    filename: fixture.database,
+    sourceCheckoutDirectory: fixture.checkout,
+  });
+  t.after(async () => {
+    registry.close();
+    await rm(fixture.root, { recursive: true, force: true });
+  });
+  const resolver = new RegisteredWorkerWorkspaceResolver({
+    registry,
+    defaultWorkspaceIdProvider: async () => {
+      const active = (await registry.listSchedulingMetadata()).filter(
+        (workspace) => workspace.state === "active",
+      );
+      return active.length === 1 ? active[0]?.workspaceId : undefined;
+    },
+  });
+
+  await assert.rejects(
+    resolver.resolve({ assignment: assignment(undefined) }),
+    (error: unknown) =>
+      error instanceof WorkspaceRegistryError && error.code === "WORKSPACE_REQUIRED",
+  );
+
+  await registry.register({
+    workspaceId: "workspace-late",
+    alias: "Late registration",
+    type: "directory",
+    rootPath: fixture.workspace,
+    isolation: "none",
+    capabilities: ["files"],
+  });
+  assert.deepEqual(await resolver.resolve({ assignment: assignment(undefined) }), {
+    workspaceId: "workspace-late",
+    cwd: await realpath(fixture.workspace),
+    isolation: "none",
+  });
+
+  const second = join(fixture.root, "workspace-second");
+  await mkdir(second);
+  await registry.register({
+    workspaceId: "workspace-second",
+    alias: "Second registration",
+    type: "directory",
+    rootPath: second,
+    isolation: "none",
+    capabilities: [],
+  });
+  await assert.rejects(
+    resolver.resolve({ assignment: assignment(undefined) }),
+    (error: unknown) =>
+      error instanceof WorkspaceRegistryError && error.code === "WORKSPACE_REQUIRED",
+  );
+});
+
 test("OpenDelegate-managed isolation resolves a stable Task workstream Git worktree", async (t) => {
   const fixture = await workspaceFixture();
   const worktree = join(fixture.root, "managed-worktree");

@@ -49,13 +49,26 @@ private func readBoundedSecret() -> Data {
   return result
 }
 
-private func baseQuery(service: String, account: String) -> [CFString: Any] {
+private func ownerLoginKeychain() -> SecKeychain {
+  var keychain: SecKeychain?
+  let status = SecKeychainCopyDefault(&keychain)
+  guard status == errSecSuccess, let keychain else {
+    terminate(failureExit)
+  }
+  return keychain
+}
+
+private func baseQuery(
+  keychain: SecKeychain,
+  service: String,
+  account: String
+) -> [CFString: Any] {
   return [
     kSecClass: kSecClassGenericPassword,
     kSecAttrService: service,
     kSecAttrAccount: account,
     kSecAttrSynchronizable: kCFBooleanFalse as Any,
-    kSecUseDataProtectionKeychain: kCFBooleanTrue as Any,
+    kSecUseKeychain: keychain,
   ]
 }
 
@@ -75,19 +88,30 @@ guard arguments.count >= 2 else {
 }
 
 let operation = arguments[1]
+let keychain = ownerLoginKeychain()
 if operation == "status" {
   guard arguments.count == 2 else {
     terminate(invalidExit)
   }
+  let probeAccount = "backend-availability-\(UUID().uuidString)"
   var probe = baseQuery(
+    keychain: keychain,
     service: "io.opendelegate.secret.health-probe",
-    account: "backend-availability"
+    account: probeAccount
   )
-  probe[kSecReturnAttributes] = kCFBooleanTrue
-  probe[kSecMatchLimit] = kSecMatchLimitOne
-  var probeItem: CFTypeRef?
-  let status = SecItemCopyMatching(probe as CFDictionary, &probeItem)
-  guard status == errSecSuccess || status == errSecItemNotFound else {
+  probe[kSecValueData] = Data("write-readiness-probe".utf8)
+  let createStatus = SecItemAdd(probe as CFDictionary, nil)
+  guard createStatus == errSecSuccess else {
+    terminate(failureExit)
+  }
+  let deleteStatus = SecItemDelete(
+    baseQuery(
+      keychain: keychain,
+      service: "io.opendelegate.secret.health-probe",
+      account: probeAccount
+    ) as CFDictionary
+  )
+  guard deleteStatus == errSecSuccess else {
     terminate(failureExit)
   }
   writeReady()
@@ -108,14 +132,13 @@ guard validIdentifier(service), validIdentifier(account) else {
   terminate(invalidExit)
 }
 
-var query = baseQuery(service: service, account: account)
+var query = baseQuery(keychain: keychain, service: service, account: account)
 
 switch operation {
 case "create":
   var secret = readBoundedSecret()
   defer { secret.resetBytes(in: 0..<secret.count) }
   query[kSecValueData] = secret
-  query[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
   let status = SecItemAdd(query as CFDictionary, nil)
   guard status == errSecSuccess else {
     mapStatus(status, conflictIsDistinct: true)
