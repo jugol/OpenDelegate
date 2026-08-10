@@ -57,7 +57,9 @@ class FakeTaskPort implements DiscordTaskPort {
   public readonly calls: Array<Record<string, unknown>> = [];
   public readonly taskByIdempotency = new Map<string, string>();
   public blockCommands: Promise<void> | undefined;
+  public blockAppends: Promise<void> | undefined;
   public commandError: Error | undefined;
+  public beforeAppendTaskInput: (() => void) | undefined;
   public afterAppendTaskInput: (() => void) | undefined;
 
   public async createTask(input: Parameters<DiscordTaskPort["createTask"]>[0]) {
@@ -72,6 +74,8 @@ class FakeTaskPort implements DiscordTaskPort {
   }
 
   public async appendTaskInput(input: Parameters<DiscordTaskPort["appendTaskInput"]>[0]) {
+    this.beforeAppendTaskInput?.();
+    await this.blockAppends;
     this.calls.push({ kind: "append", ...input });
     this.afterAppendTaskInput?.();
   }
@@ -2273,6 +2277,99 @@ test("interactions defer before asynchronous Task controls and replay is idempot
   assert.equal(
     api.operations.filter((operation) => operation["kind"] === "interaction-dismiss").length,
     1,
+  );
+});
+
+test("interactions defer before waiting for earlier work on the same Discord thread", async () => {
+  const { adapter, api, tasks } = fixture();
+  const thread = forumThread("300000000000000052");
+  const starter = ownerMessage(thread.id, thread.id, "Serialize this thread");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Serialize this thread",
+    summary: "The Task is running.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+
+  let releaseAppend!: () => void;
+  let markAppendStarted!: () => void;
+  const appendStarted = new Promise<void>((resolve) => {
+    markAppendStarted = resolve;
+  });
+  tasks.blockAppends = new Promise<void>((resolve) => {
+    releaseAppend = resolve;
+  });
+  tasks.beforeAppendTaskInput = markAppendStarted;
+  const followUp = ownerMessage("300000000000000053", thread.id, "Hold the thread lock.");
+  api.messages.set(thread.id, [starter, followUp]);
+  const blockedMessage = adapter.handleGatewayDispatch(messageDispatch(2, followUp));
+  await appendStarted;
+
+  const interactionId = "400000000000000002";
+  const handlingInteraction = adapter.handleGatewayDispatch(
+    interactionDispatch(3, {
+      id: interactionId,
+      token: "thread-lock-interaction-secret",
+      guildId: GUILD_ID,
+      channelId: thread.id,
+      messageId: "900",
+      customId: "od:v1:pause",
+      author: { id: OWNER_ID, bot: false, roleIds: [] },
+      receivedAtMs: 1_000,
+    }),
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(api.acknowledgedInteractions.has(interactionId), true);
+
+  releaseAppend();
+  await Promise.all([blockedMessage, handlingInteraction]);
+  await adapter.flushOutbox();
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "command").length, 1);
+});
+
+test("an already late unacknowledged interaction is retired without executing its control", async () => {
+  const { adapter, api, tasks, repository, clock } = fixture();
+  const thread = forumThread("300000000000000054");
+  const starter = ownerMessage(thread.id, thread.id, "Retire late interactions");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  clock.value = 4_000;
+  const lateInteraction = interactionDispatch(2, {
+    id: "400000000000000003",
+    token: "expired-interaction-secret",
+    guildId: GUILD_ID,
+    channelId: thread.id,
+    messageId: "900",
+    customId: "od:v1:pause",
+    author: { id: OWNER_ID, bot: false, roleIds: [] },
+    receivedAtMs: 1_000,
+  });
+
+  await adapter.handleGatewayDispatch(lateInteraction);
+  await adapter.handleGatewayDispatch(lateInteraction);
+
+  assert.equal(api.acknowledgedInteractions.has("400000000000000003"), false);
+  assert.equal(
+    tasks.calls.some((call) => call["kind"] === "command"),
+    false,
+  );
+  assert.equal(
+    repository
+      .snapshot()
+      .inbound.find((record) => record.key === "discord-interaction:400000000000000003")?.state,
+    "completed",
+  );
+  assert.equal(
+    (await adapter.getDiagnostics()).some(
+      (diagnostic) => diagnostic.event === "discord.interaction_ack_late",
+    ),
+    true,
   );
 });
 

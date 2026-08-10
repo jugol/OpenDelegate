@@ -246,9 +246,7 @@ export class DiscordForumAdapter {
         }
         break;
       case "INTERACTION_CREATE":
-        await this.#withThread(dispatch.interaction.channelId, async () => {
-          await this.#handleInteraction(dispatch.interaction);
-        });
+        await this.#handleInteraction(dispatch.interaction);
         break;
     }
     if (cursorDurable) {
@@ -928,11 +926,14 @@ export class DiscordForumAdapter {
     }
     let record: DiscordInboundRecord = claim.record;
     if (!record.acknowledged) {
-      if (this.#clock.nowMs() - interaction.receivedAtMs > 2_500) {
+      const acknowledgementLatencyMs = this.#clock.nowMs() - interaction.receivedAtMs;
+      if (acknowledgementLatencyMs > 2_500) {
         this.#recordDiagnostic("discord.interaction_ack_late", {
           interactionId: interaction.id,
-          latencyMs: this.#clock.nowMs() - interaction.receivedAtMs,
+          latencyMs: acknowledgementLatencyMs,
         });
+        await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
+        return;
       }
       const deferred = await this.#api.deferInteraction({
         interactionId: interaction.id,
@@ -951,15 +952,26 @@ export class DiscordForumAdapter {
         "An acknowledged Discord interaction has no response reference.",
       );
     }
+    const responseRef = record.responseRef;
     if (!this.#isAuthorized(interaction.author.id, interaction.author.roleIds)) {
       await this.#finishDeferredInteraction(
-        record.responseRef,
+        responseRef,
         "This Discord identity is not allowed to control OpenDelegate.",
         false,
       );
       await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
       return;
     }
+    await this.#withThread(interaction.channelId, async () => {
+      await this.#handleAcknowledgedInteraction(interaction, key, responseRef);
+    });
+  }
+
+  async #handleAcknowledgedInteraction(
+    interaction: DiscordInteraction,
+    key: string,
+    responseRef: string,
+  ): Promise<void> {
     const binding = await this.#repository.getBindingByThread(interaction.channelId);
     if (
       binding === undefined ||
@@ -967,7 +979,7 @@ export class DiscordForumAdapter {
       interaction.messageAuthorId !== this.#config.botUserId
     ) {
       await this.#finishDeferredInteraction(
-        record.responseRef,
+        responseRef,
         "This Task control is no longer available.",
         false,
       );
@@ -977,7 +989,7 @@ export class DiscordForumAdapter {
     const parsed = parseControl(interaction.customId);
     if (parsed === undefined) {
       await this.#finishDeferredInteraction(
-        record.responseRef,
+        responseRef,
         "This Task control is not recognized.",
         false,
       );
@@ -993,7 +1005,7 @@ export class DiscordForumAdapter {
             principalId,
             command: parsed.command,
             idempotencyKey: key,
-            responseRef: record.responseRef,
+            responseRef,
           }
         : {
             kind: "approval-decision",
@@ -1002,7 +1014,7 @@ export class DiscordForumAdapter {
             approvalId: parsed.approvalId,
             decision: parsed.decision,
             idempotencyKey: key,
-            responseRef: record.responseRef,
+            responseRef,
           };
     await this.#enqueueOutbox(`${digestValue(action)}:interaction`, action);
     await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });

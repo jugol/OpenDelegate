@@ -2542,3 +2542,23 @@ look likely, and gave the owner no concrete inspection or Retry path.
 **Consequence:** Discord and Admin Web expose an actionable, deterministic failure
 cause without unsafe automatic replay. Owner-safe Worker prose remains available as
 secondary context within the existing public-message bound.
+
+## D-123 — Discord interactions acknowledge before thread work
+
+Implementation detail:
+[ADR-0061](adr/0061-discord-interactions-ack-before-thread-work.md).
+
+**Decision:** A Discord interaction is durably claimed and ephemerally deferred
+before it waits behind prior work on the same Forum thread. Binding validation and
+the idempotent Task or Approval operation retain per-thread serialization. An
+unacknowledged interaction already older than 2.5 seconds is completed without
+executing its control.
+
+**Rationale:** Live Approval QA proved that a slow in-place activity edit could hold
+the thread lock long enough for Discord's three-second response deadline to expire,
+even though the later Approval decision itself was still pending and safe.
+
+**Consequence:** Progress delivery no longer head-of-line blocks interaction
+acknowledgement. Expired replays cannot execute after Discord reports failure or
+wedge Gateway cursor progress, while current controls remain available for a fresh
+owner decision.
