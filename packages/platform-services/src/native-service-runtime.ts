@@ -794,6 +794,15 @@ function createNativeSupervisorStateReader(
         if (!loggedIn) {
           return "not-loaded";
         }
+        if (configuration.platform === "windows") {
+          const presenceState = await readWindowsSessionHelperPresenceState(
+            configuration,
+            boundaries,
+          );
+          if (presenceState !== undefined) {
+            return presenceState;
+          }
+        }
       }
       const request = supervisorStatusRequest(configuration, plane, tools);
       if (!(await boundaries.process.isExecutable(request.executable))) {
@@ -1526,9 +1535,46 @@ async function windowsHelperPresenceProcessStopped(
   process: NativeProcessBoundary,
   presencePath: string,
 ): Promise<boolean> {
+  const processId = await readWindowsHelperPresenceProcessId(fileSystem, presencePath);
+  return processId === undefined || !(await process.isProcessAlive(processId));
+}
+
+async function readWindowsSessionHelperPresenceState(
+  configuration: Extract<PlatformServiceConfiguration, { readonly platform: "windows" }>,
+  boundaries: NativeServiceBoundaries,
+): Promise<SupervisorState | undefined> {
+  try {
+    const processId = await readWindowsHelperPresenceProcessId(
+      boundaries.fileSystem,
+      win32.join(configuration.paths.runtimeRoot, "helper-plane-v2.json"),
+      {
+        instanceId: configuration.instanceId,
+        deviceId: configuration.deviceId,
+        releaseVersion: configuration.bundle.version,
+      },
+    );
+    return processId === undefined
+      ? undefined
+      : (await boundaries.process.isProcessAlive(processId))
+        ? "running"
+        : "stopped";
+  } catch {
+    return "unknown";
+  }
+}
+
+async function readWindowsHelperPresenceProcessId(
+  fileSystem: NativeFileSystemBoundary,
+  presencePath: string,
+  expected?: {
+    readonly instanceId: string;
+    readonly deviceId: string;
+    readonly releaseVersion: string;
+  },
+): Promise<number | undefined> {
   const metadata = await fileSystem.inspect(presencePath);
   if (metadata.kind === "missing") {
-    return true;
+    return undefined;
   }
   if (
     metadata.kind !== "regular-file" ||
@@ -1555,7 +1601,18 @@ async function windowsHelperPresenceProcessStopped(
   if (!Number.isSafeInteger(processId) || Number(processId) <= 0) {
     throw new NativeSupervisorError("The Windows helper presence process identity is invalid.");
   }
-  return !(await process.isProcessAlive(Number(processId)));
+  if (expected !== undefined) {
+    const payload = (parsed as { readonly payload: Readonly<Record<string, unknown>> }).payload;
+    if (
+      payload["plane"] !== "session-helper" ||
+      payload["instanceId"] !== expected.instanceId ||
+      payload["deviceId"] !== expected.deviceId ||
+      payload["releaseVersion"] !== expected.releaseVersion
+    ) {
+      throw new NativeSupervisorError("The Windows helper presence identity is invalid.");
+    }
+  }
+  return Number(processId);
 }
 
 async function waitForWindowsServiceStopped(input: {

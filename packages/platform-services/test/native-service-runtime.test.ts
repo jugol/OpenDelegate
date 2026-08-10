@@ -1275,21 +1275,38 @@ test("logged-out helpers defer while the core starts and exact replay does not i
   assert.equal(releaseTrustChecks, 0);
 });
 
-test("logged-in Windows helper health waits for Task Scheduler to report Running", async () => {
+test("logged-in Windows helper health uses live presence when Task Scheduler text is localized", async () => {
   const configuration = windowsConfiguration();
   const journal = new MemoryJournal();
+  const fileSystem = new FakeFileSystem();
   const process = new FakeProcess();
-  let helperStatusReads = 0;
+  const helperPresencePath = String.raw`C:\ProgramData\OpenDelegate\run\helper-plane-v2.json`;
+  fileSystem.kinds.set(helperPresencePath, "regular-file");
+  fileSystem.files.set(
+    helperPresencePath,
+    Buffer.from(
+      JSON.stringify({
+        payload: {
+          plane: "session-helper",
+          instanceId: configuration.instanceId,
+          deviceId: configuration.deviceId,
+          releaseVersion: configuration.bundle.version,
+          processId: 4242,
+        },
+      }),
+      "utf8",
+    ),
+  );
+  let helperProcessReads = 0;
+  process.processAliveHandler = (processId) => {
+    assert.equal(processId, 4242);
+    helperProcessReads += 1;
+    return helperProcessReads >= 3;
+  };
   process.handler = (request) => {
     if (request.executable.toLowerCase().endsWith("schtasks.exe")) {
       if (request.arguments[0]?.toLowerCase() === "/query") {
-        helperStatusReads += 1;
-        return processResult(
-          0,
-          helperStatusReads < 3
-            ? '"\\OpenDelegate-personal-SessionHelper","N/A","Ready"\r\n'
-            : '"\\OpenDelegate-personal-SessionHelper","N/A","Running"\r\n',
-        );
+        return processResult(0, '"\\OpenDelegate-personal-SessionHelper","N/A","���� ��"\r\n');
       }
       return processResult(0);
     }
@@ -1302,6 +1319,7 @@ test("logged-in Windows helper health waits for Task Scheduler to report Running
     platform: "windows",
     elevated: true,
     loggedIn: true,
+    fileSystem,
     process,
     healthy: true,
   });
@@ -1323,7 +1341,7 @@ test("logged-in Windows helper health waits for Task Scheduler to report Running
   });
 
   assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
-  assert.equal(helperStatusReads, 3);
+  assert.equal(helperProcessReads, 3);
 });
 
 test("Windows helper stop waits for Task Scheduler to leave Running", async () => {
