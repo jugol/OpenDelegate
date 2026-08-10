@@ -525,18 +525,29 @@ test("Claude Agent SDK preserves a terminal failure when transport cleanup throw
     sdk: {
       query() {
         return {
-          async *[Symbol.asyncIterator]() {
-            try {
-              yield {
-                type: "result",
-                subtype: "error_during_execution",
-                is_error: true,
-                session_id: sessionId,
-                errors: ["Sandbox required but unavailable."],
-              };
-            } finally {
-              throw new Error("SDK transport closed after the terminal result.");
-            }
+          [Symbol.asyncIterator]() {
+            let emittedTerminalResult = false;
+            return {
+              async next(): Promise<IteratorResult<unknown>> {
+                if (emittedTerminalResult) {
+                  return { done: true, value: undefined };
+                }
+                emittedTerminalResult = true;
+                return {
+                  done: false,
+                  value: {
+                    type: "result",
+                    subtype: "error_during_execution",
+                    is_error: true,
+                    session_id: sessionId,
+                    errors: ["Sandbox required but unavailable."],
+                  },
+                };
+              },
+              async return(): Promise<IteratorResult<unknown>> {
+                throw new Error("SDK transport closed after the terminal result.");
+              },
+            };
           },
         };
       },
