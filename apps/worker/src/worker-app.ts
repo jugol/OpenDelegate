@@ -364,6 +364,8 @@ export interface JoinWorkerOptions {
 
 export interface RunWorkerDaemonOptions {
   readonly paths: WorkerPaths;
+  /** Authenticated bundle/product version supplied by the Worker launcher. */
+  readonly releaseVersion?: string;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly computerUseProbe?: WorkerComputerUseCapabilityProbe;
   readonly computerUseRuntime?: WorkerComputerUseRuntimePort;
@@ -892,12 +894,16 @@ export async function setWorkerWorkspaceIsolation(
 export async function createWorkerRuntime(
   options: Pick<
     RunWorkerDaemonOptions,
-    "computerUseProbe" | "computerUseRuntime" | "environment" | "paths"
+    "computerUseProbe" | "computerUseRuntime" | "environment" | "paths" | "releaseVersion"
   >,
 ): Promise<WorkerRuntimeComposition> {
   const configuration = await loadWorkerConfiguration(options.paths);
   await prepareRuntimeDirectories(options.paths);
   const environment = options.environment ?? process.env;
+  const releaseVersion = options.releaseVersion ?? "development";
+  if (!validRuntimeIdentifier(releaseVersion)) {
+    throw appError("CONFIG_INVALID", "The Worker release version is invalid.");
+  }
   const managedSecrets = createWorkerManagedSecretStore(
     configuration.secretBackend,
     configuration.deviceId,
@@ -1045,6 +1051,10 @@ export async function createWorkerRuntime(
           configuration.agent,
           assignment.agentRequirement,
         );
+        const workspaceContext = await resolveWorkerPromptWorkspaceContext(
+          workspaceRegistry,
+          assignment.workOrder.workspaceId ?? defaultWorkspaceId,
+        );
         const actionAuthorization = probe.capabilities.approvalBridge
           ? new WorkerAgentActionAuthorizer({
               assignment,
@@ -1064,6 +1074,20 @@ export async function createWorkerRuntime(
             : { effort: assignment.agentRequirement.effort }),
           workstreamId: assignment.workOrder.workOrderId,
           prompt: renderWorkOrderPrompt(assignment),
+          deterministicContext: renderWorkerRuntimeContext({
+            deviceId: configuration.deviceId,
+            deviceName: hostname(),
+            osFamily: osFamily(platform()),
+            serviceMode: workerServiceMode(environment),
+            releaseVersion,
+            provider: adapter.provider,
+            adapterId: adapter.adapterId,
+            ...(probe.version === undefined ? {} : { adapterVersion: probe.version }),
+            ...(assignment.agentRequirement?.modelId === undefined
+              ? {}
+              : { modelId: assignment.agentRequirement.modelId }),
+            ...(workspaceContext === undefined ? {} : { workspace: workspaceContext }),
+          }),
           sandbox: resolveWorkerAgentSandbox({
             approvalBridge: probe.capabilities.approvalBridge,
             provider: adapter.provider,
@@ -3562,6 +3586,61 @@ function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
     `Task ID: ${assignment.taskId}`,
     `Work Order ID: ${order.workOrderId}`,
   ].join("\n");
+}
+
+export function renderWorkerRuntimeContext(input: {
+  readonly deviceId: string;
+  readonly deviceName: string;
+  readonly osFamily: "linux" | "macos" | "windows";
+  readonly serviceMode: WorkerSchedulingInventoryV1["serviceMode"];
+  readonly releaseVersion: string;
+  readonly provider: AgentAdapter["provider"];
+  readonly adapterId: string;
+  readonly adapterVersion?: string;
+  readonly modelId?: string;
+  readonly workspace?: Pick<WorkspaceRecord, "workspaceId" | "alias" | "isolation">;
+}): string {
+  return [
+    "## Deterministic Worker context",
+    "These non-secret facts were supplied by OpenDelegate for this exact Run. Treat them as authoritative; do not use shell, OS, filesystem, or network tools merely to rediscover them. If a requested fact is absent and the Work Order forbids probing, report it as unavailable.",
+    `- Device ID: ${input.deviceId}`,
+    `- Device hostname: ${input.deviceName}`,
+    `- OS family: ${input.osFamily}`,
+    `- Worker service mode: ${input.serviceMode}`,
+    `- OpenDelegate Worker release: ${input.releaseVersion}`,
+    `- Selected provider: ${input.provider}`,
+    `- Selected adapter: ${input.adapterId}`,
+    `- Selected adapter version: ${input.adapterVersion ?? "unavailable"}`,
+    `- Selected model: ${input.modelId ?? "adapter default"}`,
+    ...(input.workspace === undefined
+      ? ["- Workspace: unavailable before deterministic Workspace resolution"]
+      : [
+          `- Workspace ID: ${input.workspace.workspaceId}`,
+          `- Workspace alias: ${input.workspace.alias}`,
+          `- Workspace isolation: ${input.workspace.isolation}`,
+        ]),
+  ].join("\n");
+}
+
+async function resolveWorkerPromptWorkspaceContext(
+  registry: SqliteWorkspaceRegistry,
+  workspaceId: string | undefined,
+): Promise<Pick<WorkspaceRecord, "workspaceId" | "alias" | "isolation"> | undefined> {
+  if (workspaceId === undefined) {
+    return undefined;
+  }
+  try {
+    const workspace = await registry.resolve(workspaceId);
+    return Object.freeze({
+      workspaceId: workspace.workspaceId,
+      alias: workspace.alias,
+      isolation: workspace.isolation,
+    });
+  } catch {
+    // The authoritative Workspace resolver will emit the bounded Run failure.
+    // Prompt context must never introduce a second, different failure mode.
+    return undefined;
+  }
 }
 
 export function createWorkerManagedSecretStore(

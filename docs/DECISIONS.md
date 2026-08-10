@@ -2268,3 +2268,24 @@ approval controls produced a second owner prompt instead of editing the first.
 message without relying on Discord's transient deduplication memory. Migration 0016
 adds only this non-secret presentation identity; approval authority and Task state
 remain in their existing durable stores.
+
+## D-111 — Every Worker Agent turn receives bounded deterministic Run facts
+
+**Decision:** Worker composition supplies a small non-secret context block on native
+session start, resume, and checkpoint continuation. It identifies the selected
+Device and OS family, Worker service mode and release, provider/adapter/model
+binding, and registered Workspace alias and isolation when deterministically known.
+The block explicitly forbids tool use merely to rediscover those facts.
+
+**Rationale:** Live read-only Discord QA showed a Worker Agent reaching for service
+manager and shell commands just to learn which Device and release were executing a
+Work Order. That consumed time, obscured ordinary progress behind an unnecessary
+protected-action approval, and could not reliably satisfy a no-mutation request.
+Main already owns fleet selection, while the Worker owns the exact local execution
+binding; both should pass their deterministic knowledge into the relevant Agent
+turn instead of asking an LLM to rediscover it.
+
+**Consequence:** Safe status and routing Work Orders can be completed from supplied
+facts without privilege escalation or local path disclosure. Missing facts remain
+explicitly unavailable, and OpenDelegate still resolves Workspace authority,
+sessions, Policy, and device routing deterministically outside the LLM.

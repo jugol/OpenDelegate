@@ -221,12 +221,13 @@ function staticLeaseAuthority(
   };
 }
 
-function executionPlan(prompt: string): WorkerAgentExecutionPlan {
+function executionPlan(prompt: string, deterministicContext?: string): WorkerAgentExecutionPlan {
   return {
     provider: "codex",
     adapterId: "codex-fixture",
     workstreamId: "repository-inspection",
     prompt,
+    ...(deterministicContext === undefined ? {} : { deterministicContext }),
     sandbox: "read-only",
     permissions: {
       mode: "deny",
@@ -1484,7 +1485,13 @@ test("a related follow-up starts an explicit bounded continuation when native re
     adapters: [adapter],
     sessionStore,
     executionPlanResolver: {
-      resolve: ({ assignment: current }) => Promise.resolve(executionPlan(current.workOrder.brief)),
+      resolve: ({ assignment: current }) =>
+        Promise.resolve(
+          executionPlan(
+            current.workOrder.brief,
+            "## Deterministic Worker context\n- OS family: windows\n- Workspace isolation: opendelegate-worktree",
+          ),
+        ),
     },
     workspaceResolver: {
       resolve: () =>
@@ -1520,6 +1527,8 @@ test("a related follow-up starts an explicit bounded continuation when native re
     assert.match(request?.prompt ?? "", /Durable checkpoint continuation package/u);
     assert.match(request?.prompt ?? "", /"workOrderId":"work-continuation"/u);
     assert.match(request?.prompt ?? "", /Authoritative public continuation message/u);
+    assert.match(request?.prompt ?? "", /Deterministic Worker context/u);
+    assert.match(request?.prompt ?? "", /Workspace isolation: opendelegate-worktree/u);
     assert.match(request?.prompt ?? "", /"checkpointHash":"sha256:[0-9a-f]{64}"/u);
     assert.doesNotMatch(request?.prompt ?? "", /PRIVATE-KNOWLEDGE-SENTINEL/u);
     assert.doesNotMatch(request?.prompt ?? "", /C:\\Users\\worker/u);

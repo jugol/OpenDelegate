@@ -30,6 +30,7 @@ export {
   resolveWorkerAgentPermissions,
   resolveWorkerAgentSandbox,
   resolveWorkerPaths,
+  renderWorkerRuntimeContext,
   runWorkerDaemon,
   type JoinWorkerOptions,
   type ProvisionHeadlessLinuxSecretBackendOptions,

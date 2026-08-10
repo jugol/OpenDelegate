@@ -1018,6 +1018,7 @@ async function runForeground(paths: WorkerPaths): Promise<void> {
     writeJson({ event: "worker.starting", home: paths.home });
     await runWorkerDaemon({
       paths,
+      releaseVersion: await readProductVersion(),
       signal: controller.signal,
       onCertificateRenewal: (outcome: WorkerCertificateRenewalOutcome) => {
         if (outcome.status === "renewed") {

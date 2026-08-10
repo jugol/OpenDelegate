@@ -52,6 +52,13 @@ export interface WorkerAgentExecutionPlan {
   readonly effort?: string;
   readonly workstreamId: string;
   readonly prompt: string;
+  /**
+   * Small, non-secret facts that are authoritative for this exact Worker Run.
+   * They are appended on start, resume, and checkpoint continuation so an Agent
+   * does not spend tools or request privilege merely to rediscover its Device,
+   * release, binding, or Workspace isolation.
+   */
+  readonly deterministicContext?: string;
   readonly sandbox: AgentSandbox;
   readonly permissions: AgentPermissionInput;
   readonly toolServers?: readonly AgentToolServer[];
@@ -342,10 +349,15 @@ export class AgentRunProcessFactory implements RunProcessFactory {
             prepared.plan.environment,
             prepared.plan.secretEnvironment,
           );
-    const basePrompt =
+    const basePromptWithoutContext =
       sessionAction.kind === "continuation"
         ? buildWorkerContinuationPrompt(context.assignment, this.#limits.maxPromptBytes)
         : prepared.plan.prompt;
+    const basePrompt = appendDeterministicRunContext(
+      basePromptWithoutContext,
+      prepared.plan.deterministicContext,
+      this.#limits.maxPromptBytes,
+    );
     const promptWithSteering = appendPendingSteeringInstructions(
       basePrompt,
       prepared.pendingSteering,
@@ -1769,6 +1781,11 @@ function validateExecutionPlan(
     plan.prompt.trim().length === 0 ||
     plan.prompt.includes("\0") ||
     Buffer.byteLength(plan.prompt, "utf8") > maxPromptBytes ||
+    (plan.deterministicContext !== undefined &&
+      (typeof plan.deterministicContext !== "string" ||
+        plan.deterministicContext.trim().length === 0 ||
+        plan.deterministicContext.includes("\0") ||
+        Buffer.byteLength(plan.deterministicContext, "utf8") > 16_384)) ||
     !isSandbox(plan.sandbox)
   ) {
     throw invalidExecutionPlan();
@@ -1778,6 +1795,24 @@ function validateExecutionPlan(
   validateAgentLimits(plan.limits);
   validateEnvironment(plan.environment);
   validateEnvironment(plan.secretEnvironment);
+}
+
+function appendDeterministicRunContext(
+  prompt: string,
+  context: string | undefined,
+  maximumBytes: number,
+): string {
+  if (context === undefined) {
+    return prompt;
+  }
+  const combined = `${prompt}\n\n${context}`;
+  if (Buffer.byteLength(combined, "utf8") > maximumBytes) {
+    throw new AgentRunBridgeError(
+      "INVALID_EXECUTION_PLAN",
+      "The bounded deterministic Worker context exceeds the Agent prompt limit.",
+    );
+  }
+  return combined;
 }
 
 function validateToolServers(toolServers: readonly AgentToolServer[] | undefined): void {
