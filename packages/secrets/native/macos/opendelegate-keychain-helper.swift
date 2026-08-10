@@ -93,16 +93,25 @@ if operation == "status" {
   guard arguments.count == 2 else {
     terminate(invalidExit)
   }
+  let probeAccount = "backend-availability-\(UUID().uuidString)"
   var probe = baseQuery(
     keychain: keychain,
     service: "io.opendelegate.secret.health-probe",
-    account: "backend-availability"
+    account: probeAccount
   )
-  probe[kSecReturnAttributes] = kCFBooleanTrue
-  probe[kSecMatchLimit] = kSecMatchLimitOne
-  var probeItem: CFTypeRef?
-  let status = SecItemCopyMatching(probe as CFDictionary, &probeItem)
-  guard status == errSecSuccess || status == errSecItemNotFound else {
+  probe[kSecValueData] = Data("write-readiness-probe".utf8)
+  let createStatus = SecItemAdd(probe as CFDictionary, nil)
+  guard createStatus == errSecSuccess else {
+    terminate(failureExit)
+  }
+  let deleteStatus = SecItemDelete(
+    baseQuery(
+      keychain: keychain,
+      service: "io.opendelegate.secret.health-probe",
+      account: probeAccount
+    ) as CFDictionary
+  )
+  guard deleteStatus == errSecSuccess else {
     terminate(failureExit)
   }
   writeReady()
