@@ -11,6 +11,28 @@ import {
 } from "./contracts.ts";
 import { DiscordAdapterError } from "./errors.ts";
 
+const APPROVAL_ACTION_CATEGORIES = new Set([
+  "read-only-observation",
+  "opendelegate-process-retry",
+  "opendelegate-process-restart",
+  "project-dependency-install",
+  "configured-official-package-install",
+  "computer-use-input",
+  "sandbox-boundary-escalation",
+  "package-repository-addition",
+  "remote-installer-script",
+  "untrusted-installer",
+  "driver-installation",
+  "kernel-extension-installation",
+  "os-network-change",
+  "vpn-change",
+  "firewall-change",
+  "policy-relaxation",
+  "secret-export",
+  "cross-device-knowledge-transfer",
+  "policy-bypass-attempt",
+] as const);
+
 const STATUS_LABELS: Readonly<
   Record<DiscordPresentationLocale, Readonly<Record<DiscordWorkflowStatus, string>>>
 > = Object.freeze({
@@ -81,7 +103,7 @@ export function renderStatusPanel(
   if (projection.approval !== undefined) {
     detailLines.push(
       `${locale === "ko" ? "승인 필요" : "Approval needed"}: ${safeMarkdown(
-        localizeKnownText(projection.approval.description, locale),
+        approvalDescription(projection.approval, locale),
         500,
       )}`,
     );
@@ -153,7 +175,7 @@ export function renderTaskUpdate(
       ? []
       : [
           `⚠️ **${locale === "ko" ? "승인 필요" : "Approval needed"}** — ${safeMarkdown(
-            localizeKnownText(projection.approval.description, locale),
+            approvalDescription(projection.approval, locale),
             450,
           )}`,
         ]),
@@ -236,7 +258,7 @@ export function renderTaskActivity(
             ? []
             : [
                 `⚠️ **${locale === "ko" ? "승인 필요" : "Approval needed"}** — ${safeMarkdown(
-                  localizeKnownText(projection.approval.description, locale),
+                  approvalDescription(projection.approval, locale),
                   500,
                 )}`,
               ]),
@@ -387,7 +409,7 @@ function controlButtons(
   if (projection.approval !== undefined) {
     buttons.push(
       actionButton(
-        locale === "ko" ? "승인" : "Approve",
+        locale === "ko" ? "이 동작만 승인" : "Approve once",
         3,
         `od:v1:approve:${safeCustomIdSegment(projection.approval.approvalId)}`,
       ),
@@ -529,6 +551,117 @@ function localizeKnownText(value: string, locale: DiscordPresentationLocale): st
   return KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT] ?? value;
 }
 
+function approvalDescription(
+  approval: NonNullable<TaskChannelProjection["approval"]>,
+  locale: DiscordPresentationLocale,
+): string {
+  if (!hasStructuredApprovalPresentation(approval)) {
+    return localizeKnownText(approval.description, locale);
+  }
+  const action = approvalActionLabel(approval.actionCategory, locale);
+  const risk = approvalRiskLabel(approval.risk, locale);
+  if (locale === "ko") {
+    const remaining =
+      approval.remaining === 0
+        ? ""
+        : ` 현재 뒤에 추가 승인 요청 ${approval.remaining.toString()}개가 기다리고 있어요.`;
+    return `이 작업의 ${approval.sequence.toString()}번째 보호 동작입니다. ${approval.deviceLabel}에서 ${action}. 위험도: ${risk}. 이 버튼은 표시된 동작 한 번만 승인하며, 이후의 다른 보호 동작은 별도 승인이 필요할 수 있어요.${remaining}`;
+  }
+  const remaining =
+    approval.remaining === 0
+      ? ""
+      : ` ${approval.remaining.toString()} additional approval request(s) are already waiting.`;
+  return `Protected action ${approval.sequence.toString()} for this Task. ${approval.deviceLabel} wants to ${action}. Risk: ${risk}. This approves only the exact action shown; a later protected action may require a separate decision.${remaining}`;
+}
+
+function hasStructuredApprovalPresentation(
+  approval: NonNullable<TaskChannelProjection["approval"]>,
+): approval is NonNullable<TaskChannelProjection["approval"]> & {
+  readonly sequence: number;
+  readonly remaining: number;
+  readonly deviceLabel: string;
+  readonly actionCategory: NonNullable<
+    NonNullable<TaskChannelProjection["approval"]>["actionCategory"]
+  >;
+  readonly risk: NonNullable<NonNullable<TaskChannelProjection["approval"]>["risk"]>;
+} {
+  return (
+    approval.sequence !== undefined &&
+    approval.remaining !== undefined &&
+    approval.deviceLabel !== undefined &&
+    approval.actionCategory !== undefined &&
+    approval.risk !== undefined
+  );
+}
+
+function approvalActionLabel(
+  action: NonNullable<NonNullable<TaskChannelProjection["approval"]>["actionCategory"]>,
+  locale: DiscordPresentationLocale,
+): string {
+  const labels: Record<typeof action, readonly [english: string, korean: string]> = {
+    "read-only-observation": [
+      "perform a protected observation",
+      "보호된 상태 확인을 수행하려고 해요",
+    ],
+    "opendelegate-process-retry": [
+      "retry an OpenDelegate process",
+      "OpenDelegate 프로세스를 다시 시도하려고 해요",
+    ],
+    "opendelegate-process-restart": [
+      "restart an OpenDelegate process",
+      "OpenDelegate 프로세스를 다시 시작하려고 해요",
+    ],
+    "project-dependency-install": [
+      "install a Task dependency",
+      "작업에 필요한 패키지를 설치하려고 해요",
+    ],
+    "configured-official-package-install": [
+      "install an official package",
+      "공식 패키지를 설치하려고 해요",
+    ],
+    "computer-use-input": [
+      "control the desktop for this Task",
+      "이 작업을 위해 데스크톱을 조작하려고 해요",
+    ],
+    "sandbox-boundary-escalation": [
+      "temporarily expand its sandbox for this Task",
+      "Task 전용 샌드박스 범위를 일시적으로 넓히려고 해요",
+    ],
+    "package-repository-addition": ["add a package repository", "패키지 저장소를 추가하려고 해요"],
+    "remote-installer-script": ["run a remote installer", "원격 설치 스크립트를 실행하려고 해요"],
+    "untrusted-installer": [
+      "run an untrusted installer",
+      "검증되지 않은 설치 프로그램을 실행하려고 해요",
+    ],
+    "driver-installation": ["install a driver", "드라이버를 설치하려고 해요"],
+    "kernel-extension-installation": ["install a kernel extension", "커널 확장을 설치하려고 해요"],
+    "os-network-change": ["change OS networking", "운영 체제 네트워크 설정을 바꾸려고 해요"],
+    "vpn-change": ["change VPN configuration", "VPN 설정을 바꾸려고 해요"],
+    "firewall-change": ["change firewall configuration", "방화벽 설정을 바꾸려고 해요"],
+    "policy-relaxation": ["relax an execution policy", "실행 정책을 완화하려고 해요"],
+    "secret-export": ["export protected Secret material", "보호된 Secret을 내보내려고 해요"],
+    "cross-device-knowledge-transfer": [
+      "transfer Device-local Knowledge",
+      "Device-local Knowledge를 전송하려고 해요",
+    ],
+    "policy-bypass-attempt": [
+      "perform an action blocked by policy",
+      "정책에서 차단된 동작을 수행하려고 해요",
+    ],
+  };
+  return labels[action][locale === "ko" ? 1 : 0];
+}
+
+function approvalRiskLabel(
+  risk: NonNullable<NonNullable<TaskChannelProjection["approval"]>["risk"]>,
+  locale: DiscordPresentationLocale,
+): string {
+  if (locale === "en") {
+    return risk;
+  }
+  return { low: "낮음", medium: "보통", high: "높음", critical: "매우 높음" }[risk];
+}
+
 function validateProjection(projection: TaskChannelProjection): void {
   if (
     projection.taskId.length === 0 ||
@@ -616,10 +749,40 @@ function validateProjection(projection: TaskChannelProjection): void {
     projection.approval !== undefined &&
     (projection.approval.approvalId.length === 0 ||
       projection.approval.approvalId.length > 70 ||
-      !/^[A-Za-z0-9._-]+$/.test(projection.approval.approvalId))
+      !/^[A-Za-z0-9._-]+$/.test(projection.approval.approvalId) ||
+      !validStructuredApprovalPresentation(projection.approval))
   ) {
     throw invalidProjection();
   }
+}
+
+function validStructuredApprovalPresentation(
+  approval: NonNullable<TaskChannelProjection["approval"]>,
+): boolean {
+  const values = [
+    approval.sequence,
+    approval.remaining,
+    approval.deviceLabel,
+    approval.actionCategory,
+    approval.risk,
+  ];
+  if (values.every((value) => value === undefined)) {
+    return true;
+  }
+  return (
+    Number.isSafeInteger(approval.sequence) &&
+    approval.sequence! >= 1 &&
+    Number.isSafeInteger(approval.remaining) &&
+    approval.remaining! >= 0 &&
+    typeof approval.deviceLabel === "string" &&
+    approval.deviceLabel.trim().length > 0 &&
+    approval.deviceLabel.length <= 253 &&
+    !approval.deviceLabel.includes("\0") &&
+    approval.actionCategory !== undefined &&
+    APPROVAL_ACTION_CATEGORIES.has(approval.actionCategory) &&
+    approval.risk !== undefined &&
+    ["low", "medium", "high", "critical"].includes(approval.risk)
+  );
 }
 
 function safeCustomIdSegment(value: string): string {

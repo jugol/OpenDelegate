@@ -646,9 +646,12 @@ Make Discord the complete primary Task interface.
 - Project a pending protected Worker action into that same live activity message
   with an owner-safe Device/action/risk/evidence summary and approve-once/reject
   controls. Resolve the global durable Approval record—not a parallel Task approval—
-  and reveal multiple pending actions one at a time. Provider approval events map to
-  a bounded `waiting-approval` progress category so a long Run remains visibly alive
-  without an arbitrary execution timeout.
+  and reveal multiple pending actions one at a time with a stable Task-local ordinal.
+  Localize the closed Approval vocabulary from structured fields, label the narrow
+  positive control `Approve once`, and dismiss successful private interaction
+  responses so the one durable live surface remains authoritative. Provider approval
+  events map to a bounded `waiting-approval` progress category so a long Run remains
+  visibly alive without an arbitrary execution timeout.
 - Implement system incident and recommendation post creation.
 - Handle archive, lock, reopen, delete, permission loss, rate limit, and reconnect.
 - Implement owner-approved live add, extension, replacement, and disable for the

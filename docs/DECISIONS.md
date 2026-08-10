@@ -2498,3 +2498,24 @@ Worker restart, while ambiguous selection remains fail-closed. The lookup transm
 no Device-local path or Workspace content, does not rewrite configuration, and keeps
 the existing stable native-session Workspace binding after a Run begins. This
 refines D-099 and ADR-0051.
+
+## D-121 — Sequential Discord Approvals stay distinct and quiet
+
+Implementation detail:
+[ADR-0059](adr/0059-discord-sequential-approval-clarity.md).
+
+**Decision:** Discord continues to grant only the exact protected action once, but
+the live Task surface identifies its Task-local ordinal, normalized action, Device,
+risk, and remaining pending count in the binding's deterministic presentation
+locale. The positive control is explicitly labelled `Approve once`. A successful
+approve or reject dismisses its private deferred response; the one durable live Task
+surface advances instead of leaving a chronological stack of success receipts.
+
+**Rationale:** Live Windows file-delivery QA required several distinct provider
+command decisions. Identical English summaries and one private success card per
+click made correct sequential execution look like an ignored Approval loop.
+
+**Consequence:** Owners can tell that OpenDelegate moved to a new exact action
+without widening Discord authority or exposing private command data. Successful
+interaction noise disappears, while stale, unauthorized, and failed decisions keep
+their bounded private diagnostics.

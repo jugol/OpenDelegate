@@ -1875,12 +1875,7 @@ export class DiscordForumAdapter {
           idempotencyKey: action.idempotencyKey,
           decision: action.decision,
         });
-        await this.#finishDeferredInteraction(
-          action.responseRef,
-          action.decision === "approve"
-            ? "The approval was granted for its exact recorded scope."
-            : "The approval was rejected.",
-        );
+        await this.#dismissDeferredInteraction(action.responseRef);
         return;
     }
   }

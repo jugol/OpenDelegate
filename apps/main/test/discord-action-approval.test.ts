@@ -102,3 +102,75 @@ test("Discord projects and resolves one owner-safe Worker action Approval", asyn
   assert.equal(changedTaskId, "task-release");
   assert.equal(await bridge.current("task-release"), undefined);
 });
+
+test("Discord identifies sequential exact-action Approvals with closed presentation metadata", async () => {
+  let nextId = 1;
+  const approvals = new ApprovalService({
+    repository: new InMemoryApprovalRepository(),
+    executor: {
+      execute(input: ApprovalExecutionContext) {
+        return Promise.resolve({ operationId: input.operationId, state: "authorized" });
+      },
+    },
+    clock: { now: () => 1_000 },
+    idSource: { nextId: () => `approval-${String(nextId++).padStart(3, "0")}` },
+  });
+  const request = async (suffix: string) =>
+    await approvals.request({
+      idempotencyKey: `worker-action-${suffix}`,
+      requestedBy: "worker:device-windows",
+      expiresAtMs: 10_000,
+      actionCategory: "sandbox-boundary-escalation",
+      actionType: "shell.command",
+      targetDeviceId: "device-windows",
+      taskId: "task-sequential",
+      resource: "worker-run:run-sequential",
+      descriptor: {
+        kind: "worker-action",
+        operation: "shell.command",
+        target: { actionFingerprint: `sha256:${suffix.repeat(64).slice(0, 64)}` },
+      },
+      presentation: {
+        reason: "Private provider reason must not be projected.",
+        target: "C:\\private\\workspace",
+        risk: "medium",
+        evidence: ["private command"],
+      },
+      execution: {
+        kind: "worker-action.authorize",
+        payload: { actionRequestId: `action-${suffix}`, requestHash: `hash-${suffix}` },
+      },
+    });
+  const first = await request("a");
+  await request("b");
+  const bridge = new DiscordActionApproval({
+    approvals,
+    listDevices: () =>
+      Promise.resolve([{ deviceId: "device-windows", name: "Windows workstation" }]),
+  });
+
+  assert.deepEqual(await bridge.current("task-sequential"), {
+    approvalId: first.approvalId,
+    description:
+      "Windows workstation wants to temporarily expand its sandbox for this Task. Risk: medium. Evidence: a current Worker Run requested this exact protected action. 1 more approval(s) are waiting.",
+    sequence: 1,
+    remaining: 1,
+    deviceLabel: "Windows workstation",
+    actionCategory: "sandbox-boundary-escalation",
+    risk: "medium",
+  });
+
+  await bridge.resolve({
+    taskId: "task-sequential",
+    approvalId: first.approvalId,
+    principalId: "discord:owner",
+    idempotencyKey: "approve-first-sequential",
+    decision: "approve",
+  });
+  const second = await bridge.current("task-sequential");
+  assert.equal(second?.sequence, 2);
+  assert.equal(second?.remaining, 0);
+  assert.equal(second?.deviceLabel, "Windows workstation");
+  assert.equal(second?.actionCategory, "sandbox-boundary-escalation");
+  assert.equal(second?.risk, "medium");
+});

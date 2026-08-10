@@ -18,6 +18,7 @@ import {
   type TaskChannelProjection,
   redactDiscordSecrets,
   renderStatusPanel,
+  renderTaskActivity,
   renderTaskUpdate,
 } from "../src/index.ts";
 
@@ -1604,6 +1605,53 @@ test("a localized Workspace wait does not leak deterministic English into Korean
   assert.match(rendered, /od:v1:cancel/u);
 });
 
+test("sequential Worker Approvals are localized and explicitly approve once", () => {
+  const payload = renderTaskActivity(
+    {
+      taskId: "task-sequential-approval",
+      state: "running",
+      objective: "Windows에서 결과 파일을 만들어 전달해 줘.",
+      summary: "OpenDelegate is working on this Task.",
+      significance: "status",
+      activity: {
+        cycleId: "activity-sequential-approval",
+        revision: 9,
+        updatedAtMs: 9_000,
+        phase: "working",
+        completedWorkOrders: 0,
+        totalWorkOrders: 1,
+        milestones: [
+          {
+            key: "worker:windows",
+            status: "active",
+            summary: "Worker Agent is waiting for owner approval.",
+            deviceLabel: "5090White",
+          },
+        ],
+      },
+      approval: {
+        approvalId: "approval-sequential-9",
+        description: "English fallback must not be shown in Korean.",
+        sequence: 9,
+        remaining: 1,
+        deviceLabel: "5090White",
+        actionCategory: "sandbox-boundary-escalation",
+        risk: "medium",
+      },
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /이 작업의 9번째 보호 동작/u);
+  assert.match(rendered, /5090White/u);
+  assert.match(rendered, /Task 전용 샌드박스 범위를 일시적으로 넓히려고 해요/u);
+  assert.match(rendered, /위험도: 보통/u);
+  assert.match(rendered, /추가 승인 요청 1개/u);
+  assert.match(rendered, /이 동작만 승인/u);
+  assert.doesNotMatch(rendered, /English fallback/u);
+  assert.doesNotMatch(rendered, /"label":"승인"/u);
+});
+
 test("a chronological failure update carries its Retry control", () => {
   const payload = renderTaskUpdate({
     taskId: "task-failed",
@@ -2275,6 +2323,18 @@ test("approve/reject controls use the approval callback and unauthorized control
   assert.equal(
     tasks.calls.some((call) => call["kind"] === "command"),
     false,
+  );
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "interaction-dismiss").length,
+    1,
+  );
+  assert.equal(
+    api.operations.filter(
+      (operation) =>
+        operation["kind"] === "interaction-result" &&
+        String(operation["responseRef"]).includes("400000000000000011"),
+    ).length,
+    0,
   );
 });
 

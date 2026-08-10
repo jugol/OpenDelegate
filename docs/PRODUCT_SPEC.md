@@ -1085,10 +1085,11 @@ may request a transition but cannot manufacture a state outside the transition r
     the action. Stateless preview or evaluation cannot authorize it, and a consumed
     or replayed grant fails closed across process restart.
 11. Discord and Admin Web show the proposed action, reason, target, risk, and
-    evidence. Discord uses an owner-safe summary on the current live Task surface
-    and offers approve-once or reject; Admin Web retains the complete normalized
-    Approval detail and broader grant scopes. Multiple pending Worker actions are
-    serialized visibly rather than collapsed or duplicated.
+    evidence. Discord uses a localized owner-safe summary on the current live Task
+    surface, identifies sequential protected actions by a stable Task-local ordinal,
+    and offers explicitly labelled approve-once or reject; Admin Web retains the
+    complete normalized Approval detail and broader grant scopes. Multiple pending
+    Worker actions are serialized visibly rather than collapsed or duplicated.
 12. The executor rejects actions outside the approved scope even if an Agent claims
     approval exists.
 13. More permissive owner configuration is supported and clearly surfaced.

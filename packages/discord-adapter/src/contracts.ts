@@ -392,6 +392,35 @@ export interface TaskChannelProjection {
   readonly approval?: {
     readonly approvalId: string;
     readonly description: string;
+    /**
+     * Closed owner-safe presentation metadata. Older durable projections may
+     * contain only `description`; current Main projections provide the complete
+     * set so Discord can localize without parsing provider prose.
+     */
+    readonly sequence?: number;
+    readonly remaining?: number;
+    readonly deviceLabel?: string;
+    readonly actionCategory?:
+      | "read-only-observation"
+      | "opendelegate-process-retry"
+      | "opendelegate-process-restart"
+      | "project-dependency-install"
+      | "configured-official-package-install"
+      | "computer-use-input"
+      | "sandbox-boundary-escalation"
+      | "package-repository-addition"
+      | "remote-installer-script"
+      | "untrusted-installer"
+      | "driver-installation"
+      | "kernel-extension-installation"
+      | "os-network-change"
+      | "vpn-change"
+      | "firewall-change"
+      | "policy-relaxation"
+      | "secret-export"
+      | "cross-device-knowledge-transfer"
+      | "policy-bypass-attempt";
+    readonly risk?: "low" | "medium" | "high" | "critical";
   };
   readonly artifact?: {
     readonly label: string;

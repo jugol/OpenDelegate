@@ -42,13 +42,14 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
   }
 
   public async current(taskId: string) {
-    const approvals = (await this.#approvals.list({ state: "pending" }))
+    const taskApprovals = (await this.#approvals.list())
       .filter((approval) => isTaskActionApproval(approval, taskId))
       .sort(
         (left, right) =>
           left.requestedAtMs - right.requestedAtMs ||
           left.approvalId.localeCompare(right.approvalId, "en-US"),
       );
+    const approvals = taskApprovals.filter((approval) => approval.state === "pending");
     const approval = approvals[0];
     if (approval === undefined) {
       return undefined;
@@ -63,6 +64,12 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
       description: `${deviceLabel} wants to ${actionDescription(approval)}. Risk: ${approval.presentation.risk}. Evidence: a current Worker Run requested this exact protected action.${
         remaining === 0 ? "" : ` ${remaining.toString()} more approval(s) are waiting.`
       }`,
+      sequence:
+        taskApprovals.findIndex((candidate) => candidate.approvalId === approval.approvalId) + 1,
+      remaining,
+      deviceLabel,
+      actionCategory: approval.actionCategory,
+      risk: approval.presentation.risk,
     });
   }
 
