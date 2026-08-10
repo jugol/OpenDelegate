@@ -478,6 +478,12 @@ export type DiscordOutboxAction =
       readonly projection: TaskChannelProjection;
     }
   | {
+      readonly kind: "refresh-owner-prompt";
+      readonly taskId: string;
+      readonly promptRequestKey: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
       readonly kind: "upsert-task-activity";
       readonly taskId: string;
       readonly projection: TaskChannelProjection;

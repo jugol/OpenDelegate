@@ -419,6 +419,20 @@ export class DiscordForumAdapter {
           projection: refreshProjection,
         });
         authoritativeRequestKey = refreshRequestKey;
+      } else if (projection.significance === "question") {
+        const refreshProjection = chronologicalProjection(projection);
+        const refreshRequestKey = `${digestValue({
+          taskId: projection.taskId,
+          promptRequestKey: priorUpdateRequestKey,
+          projection: refreshProjection,
+        })}:035-refresh-prompt`;
+        await this.#enqueueOutbox(refreshRequestKey, {
+          kind: "refresh-owner-prompt",
+          taskId: projection.taskId,
+          promptRequestKey: priorUpdateRequestKey,
+          projection: refreshProjection,
+        });
+        authoritativeRequestKey = refreshRequestKey;
       }
       if (authoritativeRequestKey === panelRequestKey) {
         authoritativeRequestKey = updateRequestKey;
@@ -1495,6 +1509,30 @@ export class DiscordForumAdapter {
         }
         return;
       }
+      case "refresh-owner-prompt": {
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const prompt = await this.#api.createMessage({
+          threadId: binding.threadId,
+          requestKey: action.promptRequestKey,
+          payload: renderTaskUpdate(action.projection),
+        });
+        try {
+          await this.#api.editMessage({
+            threadId: binding.threadId,
+            messageId: prompt.messageId,
+            payload: renderTaskUpdate(action.projection),
+          });
+        } catch (error) {
+          if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+            throw error;
+          }
+          this.#recordDiagnostic("discord.owner_prompt_refresh_message_missing", {
+            taskId: action.taskId,
+            requestKey: action.promptRequestKey,
+          });
+        }
+        return;
+      }
       case "upsert-task-activity": {
         const activity = action.projection.activity;
         if (activity === undefined) {
@@ -1995,6 +2033,7 @@ async function bindingForAction(
     case "upsert-status-panel":
     case "post-task-update":
     case "refresh-task-failure":
+    case "refresh-owner-prompt":
     case "upsert-task-activity":
     case "close-task-activity":
     case "resolve-owner-prompt":

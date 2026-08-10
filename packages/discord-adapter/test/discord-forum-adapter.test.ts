@@ -1526,6 +1526,67 @@ test("one failure card follows the current pending approval without creating mes
   );
 });
 
+test("one owner prompt drops stale approval controls in place", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000137");
+  const starter = ownerMessage(thread.id, thread.id, "Inspect two registered Devices.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  const waitingProjection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "waiting_user",
+    objective: "Inspect two registered Devices.",
+    summary: "The automatic retry limit was reached. Extend it only if more work is wanted.",
+    sourceEventId: "event_retry_limit_reached",
+    significance: "question",
+    approval: {
+      approvalId: "approval-stale-control",
+      description: "Allow the NAS Worker to expand its sandbox?",
+    },
+  };
+  await adapter.publishTaskProjection(waitingProjection);
+  await adapter.flushOutbox();
+
+  const promptMessage = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("approval-stale-control"),
+  );
+  assert.notEqual(promptMessage, undefined);
+
+  await adapter.publishTaskProjection({
+    taskId: waitingProjection.taskId,
+    state: waitingProjection.state,
+    objective: waitingProjection.objective,
+    summary: waitingProjection.summary,
+    sourceEventId: "event_retry_limit_reached",
+    significance: waitingProjection.significance,
+  });
+  await adapter.flushOutbox();
+
+  const promptEdit = api.operations
+    .filter(
+      (operation) =>
+        operation["kind"] === "message-edit" &&
+        operation["messageId"] === promptMessage?.["messageId"],
+    )
+    .at(-1);
+  const rendered = JSON.stringify(promptEdit?.["payload"]);
+  assert.match(rendered, /automatic retry limit/u);
+  assert.match(rendered, /od:v1:cancel/u);
+  assert.doesNotMatch(rendered, /Approval needed/u);
+  assert.doesNotMatch(rendered, /approval-stale-control/u);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.equal(
+    (await repository.listOutbox()).filter(
+      (item) => item.action.kind === "refresh-owner-prompt" && item.delivered,
+    ).length,
+    1,
+  );
+});
+
 test("a successful retry resolves the prior failure control in place", async () => {
   const { adapter, api, repository } = fixture();
   const thread = forumThread("300000000000000134");

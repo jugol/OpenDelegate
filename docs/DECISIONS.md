@@ -2235,3 +2235,19 @@ left the owner unable to safely continue or reject a Run from Discord.
 **Consequence:** Every visible pending Worker approval remains actionable without
 creating an unbounded sequence of messages. The fallback grants no authority by
 itself, preserves the exact approval scope, and never changes the decision policy.
+
+## D-109 — Owner-prompt controls track the current durable approval state
+
+**Decision:** A chronological `Owner input needed` message keeps its original
+Discord message identity while its approval controls are refreshed from the current
+Task projection. Resolving or replacing an approval edits that prompt in place; it
+must not leave an actionable-looking button bound to a stale approval ID.
+
+**Rationale:** A budget question and a Worker action approval can become visible in
+the same Task projection. The status panel correctly dropped a rejected approval,
+but the earlier prompt retained obsolete Approve and Reject buttons.
+
+**Consequence:** The owner can trust that controls on the latest prompt represent
+current authority. Durable nonce reconciliation restores an externally missing
+prompt without duplicating a surviving message, and stale interactions still fail
+closed at the Task authority boundary.

@@ -1055,6 +1055,17 @@ function validateOutboxAction(value: unknown): asserts value is DiscordOutboxAct
     }
     return;
   }
+  if (kind === "refresh-owner-prompt") {
+    assertOnlyKeys(action, ["kind", "taskId", "promptRequestKey", "projection"]);
+    requireTaskId(action["taskId"]);
+    requireBoundedString(action["promptRequestKey"], "Discord prompt request key", 512);
+    validateProjection(action["projection"]);
+    const projection = action["projection"] as TaskChannelProjection;
+    if (projection.significance !== "question") {
+      throw persistenceConflict();
+    }
+    return;
+  }
   if (kind === "upsert-task-activity") {
     assertOnlyKeys(action, ["kind", "taskId", "projection"]);
     requireTaskId(action["taskId"]);

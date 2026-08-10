@@ -500,6 +500,34 @@ test("SQLite persists a durable Discord failure-control refresh across restart",
   }
 });
 
+test("SQLite persists a durable Discord owner-prompt refresh across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "refresh-owner-prompt",
+    taskId: "task-1",
+    promptRequestKey: "owner-prompt:03-update",
+    projection: {
+      taskId: "task-1",
+      state: "waiting_user",
+      objective: "Inspect two Devices.",
+      summary: "The approval was resolved; the budget question remains.",
+      sourceEventId: "event_budget_question",
+      significance: "question",
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("refresh-owner-prompt", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
+    await fixture.cleanup();
+  }
+});
+
 test("SQLite rejects noncanonical or credential-shaped Discord outbox data before persistence", async () => {
   const fixture = await createSqliteFixture();
   const repository = await fixture.open("apply");
