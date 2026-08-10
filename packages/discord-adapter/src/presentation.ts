@@ -477,6 +477,8 @@ const KOREAN_CLOSED_TEXT = Object.freeze({
   "This Task is waiting for an eligible resource.": "사용 가능한 기기나 리소스를 기다리고 있어요.",
   "No eligible Worker is online for this Work Order. OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget. Resource code: WORKER_OFFLINE.":
     "이 작업을 맡을 수 있는 Worker가 현재 오프라인입니다. 다시 온라인이 되면 OpenDelegate가 자동으로 계속합니다. 기다리는 동안 자동 재시도 횟수는 차감되지 않습니다. 진단 코드: WORKER_OFFLINE.",
+  "The Worker could not resolve a registered Workspace for this Run. OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget.":
+    "Worker가 이 실행에 사용할 등록된 Workspace를 준비하지 못했어요. Workspace 등록이나 경로 상태가 바뀌면 OpenDelegate가 자동으로 계속합니다. 기다리는 동안 자동 재시도 횟수는 차감되지 않습니다.",
   "This Task is ready for review.": "결과를 검토할 준비가 됐어요.",
   "This Task is complete.": "작업을 완료했어요.",
   "This Task needs attention before it can continue.": "계속하려면 확인이 필요해요.",

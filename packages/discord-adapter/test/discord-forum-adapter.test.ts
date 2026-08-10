@@ -1584,6 +1584,26 @@ test("a localized resource wait keeps the current owner controls on the stable s
   assert.doesNotMatch(rendered, /No eligible Worker is online/u);
 });
 
+test("a localized Workspace wait does not leak deterministic English into Korean Discord", () => {
+  const payload = renderStatusPanel(
+    {
+      taskId: "task-waiting-workspace",
+      state: "waiting_resource",
+      objective: "Mac에서 읽기 전용 점검을 해줘.",
+      summary:
+        "The Worker could not resolve a registered Workspace for this Run. OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget.",
+      significance: "status",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /등록된 Workspace를 준비하지 못했어요/u);
+  assert.match(rendered, /자동 재시도 횟수는 차감되지 않습니다/u);
+  assert.doesNotMatch(rendered, /could not resolve a registered Workspace/u);
+  assert.match(rendered, /od:v1:pause/u);
+  assert.match(rendered, /od:v1:cancel/u);
+});
+
 test("a chronological failure update carries its Retry control", () => {
   const payload = renderTaskUpdate({
     taskId: "task-failed",
