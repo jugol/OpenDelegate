@@ -101,3 +101,96 @@ test("an observed activity revision survives a coalesced executor lookup until p
 
   await runtime.close();
 });
+
+test("a Task executor snapshot is narrowed to the durable Discord activity contract", async () => {
+  const projections: TaskChannelProjection[] = [];
+  const executorSnapshot = {
+    taskId: "task-activity-boundary",
+    cycleId: "activity_cycle_boundary",
+    revision: 3,
+    updatedAtMs: 6_000,
+    phase: "working" as const,
+    completedWorkOrders: 0,
+    totalWorkOrders: 1,
+    milestones: [
+      {
+        key: "work-order:windows",
+        status: "active" as const,
+        summary: "Windows is checking its deterministic context.",
+        deviceId: "device_windows",
+      },
+    ],
+  };
+  const runtime = new DiscordMainRuntime({
+    adapter: {
+      start: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+      createTaskThread: () => Promise.reject(new Error("not used")),
+      flushOutbox: () => Promise.resolve(),
+      reconcilePending: () => Promise.resolve(),
+      publishTaskProjection: (projection) => {
+        projections.push(structuredClone(projection));
+        return Promise.resolve();
+      },
+    },
+    repository: {
+      getGatewayCursor: () => Promise.resolve(undefined),
+      listBindings: () =>
+        Promise.resolve([
+          {
+            guildId: "100000000000000001",
+            forumChannelId: "100000000000000002",
+            threadId: "100000000000000003",
+            starterMessageId: "100000000000000003",
+            taskId: "task-activity-boundary",
+            externalState: "available" as const,
+            archived: false,
+            locked: false,
+            revision: 1,
+          },
+        ]),
+    },
+    tasks: {
+      get: () =>
+        Promise.resolve({
+          taskId: "task-activity-boundary",
+          state: "running" as const,
+          objective: "Coordinate a safe read-only check.",
+          updatedAt: NOW,
+          messages: [],
+          events: [],
+        }),
+    },
+    taskActivity: {
+      activity: () =>
+        Promise.resolve(
+          executorSnapshot as unknown as NonNullable<TaskChannelProjection["activity"]>,
+        ),
+    },
+    clock: { nowMs: () => 6_000 },
+    synchronizationIntervalMs: 60_000,
+  });
+
+  await runtime.start();
+
+  assert.deepEqual(projections.at(-1)?.activity, {
+    cycleId: "activity_cycle_boundary",
+    revision: 3,
+    updatedAtMs: 6_000,
+    phase: "working",
+    completedWorkOrders: 0,
+    totalWorkOrders: 1,
+    milestones: [
+      {
+        key: "work-order:windows",
+        status: "active",
+        summary: "Windows is checking its deterministic context.",
+        deviceId: "device_windows",
+      },
+    ],
+  });
+  assert.equal("taskId" in executorSnapshot, true);
+  assert.equal("taskId" in projections.at(-1)!.activity!, false);
+
+  await runtime.close();
+});

@@ -902,9 +902,22 @@ function cloneTaskActivity(
   activity: NonNullable<TaskChannelProjection["activity"]>,
 ): NonNullable<TaskChannelProjection["activity"]> {
   return Object.freeze({
-    ...activity,
+    cycleId: activity.cycleId,
+    revision: activity.revision,
+    updatedAtMs: activity.updatedAtMs,
+    phase: activity.phase,
+    completedWorkOrders: activity.completedWorkOrders,
+    totalWorkOrders: activity.totalWorkOrders,
     milestones: Object.freeze(
-      activity.milestones.map((milestone) => Object.freeze({ ...milestone })),
+      activity.milestones.map((milestone) =>
+        Object.freeze({
+          key: milestone.key,
+          status: milestone.status,
+          summary: milestone.summary,
+          ...(milestone.deviceId === undefined ? {} : { deviceId: milestone.deviceId }),
+          ...(milestone.deviceLabel === undefined ? {} : { deviceLabel: milestone.deviceLabel }),
+        }),
+      ),
     ),
   });
 }
@@ -913,13 +926,15 @@ function latestTaskActivity(
   projected: NonNullable<TaskChannelProjection["activity"]> | undefined,
   observed: NonNullable<TaskChannelProjection["activity"]> | undefined,
 ): NonNullable<TaskChannelProjection["activity"]> | undefined {
+  let selected: NonNullable<TaskChannelProjection["activity"]> | undefined;
   if (projected === undefined || observed === undefined) {
-    return projected ?? observed;
+    selected = projected ?? observed;
+  } else if (projected.cycleId === observed.cycleId) {
+    selected = projected.revision >= observed.revision ? projected : observed;
+  } else {
+    selected = projected.updatedAtMs >= observed.updatedAtMs ? projected : observed;
   }
-  if (projected.cycleId === observed.cycleId) {
-    return projected.revision >= observed.revision ? projected : observed;
-  }
-  return projected.updatedAtMs >= observed.updatedAtMs ? projected : observed;
+  return selected === undefined ? undefined : cloneTaskActivity(selected);
 }
 
 function significanceFor(state: DiscordTaskState): TaskChannelProjection["significance"] {

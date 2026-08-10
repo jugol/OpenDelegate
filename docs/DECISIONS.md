@@ -1999,7 +1999,10 @@ the runtime retains only the newest bounded snapshot until publication so a
 coalesced refresh cannot lose the whole activity cycle when execution finishes.
 Main composition also keeps one bounded single-consumer handoff across binding
 activation, and a running Task with no richer snapshot receives one stable Planning
-activity so owner controls never disappear merely because presentation raced.
+activity so owner controls never disappear merely because presentation raced. The
+Discord boundary copies only the published activity contract; executor-only fields
+such as the authoritative Task identity never leak into or invalidate durable
+Discord outbox work.
 
 ## D-099 — Scheduling preserves exact execution metadata and repairs singleton Workspace defaults
 
