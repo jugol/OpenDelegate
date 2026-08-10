@@ -174,3 +174,76 @@ test("Discord identifies sequential exact-action Approvals with closed presentat
   assert.equal(second?.actionCategory, "sandbox-boundary-escalation");
   assert.equal(second?.risk, "medium");
 });
+
+test("Discord skips and refuses Approvals whose originating Worker Run is no longer current", async () => {
+  let nextId = 1;
+  const approvals = new ApprovalService({
+    repository: new InMemoryApprovalRepository(),
+    executor: {
+      execute(input: ApprovalExecutionContext) {
+        return Promise.resolve({ operationId: input.operationId, state: "authorized" });
+      },
+    },
+    clock: { now: () => 1_000 },
+    idSource: { nextId: () => `approval-${String(nextId++).padStart(3, "0")}` },
+  });
+  const request = async (suffix: string) =>
+    await approvals.request({
+      idempotencyKey: `worker-action-${suffix}`,
+      requestedBy: "worker:device-windows",
+      expiresAtMs: 10_000,
+      actionCategory: "computer-use-input",
+      actionType: "computer-use.click",
+      targetDeviceId: "device-windows",
+      taskId: "task-current-run",
+      resource: `worker-run:run-${suffix}`,
+      descriptor: {
+        kind: "worker-action",
+        operation: "computer-use.click",
+        target: { actionFingerprint: `sha256:${suffix.repeat(64).slice(0, 64)}` },
+      },
+      presentation: {
+        reason: "A protected desktop input was requested.",
+        target: "Windows desktop",
+        risk: "high",
+        evidence: ["current Run"],
+      },
+      execution: {
+        kind: "worker-action.authorize",
+        payload: { actionRequestId: `action-${suffix}`, requestHash: `hash-${suffix}` },
+      },
+    });
+  const stale = await request("a");
+  const current = await request("b");
+  const bridge = new DiscordActionApproval({
+    approvals,
+    isCurrent: (approval) => approval.approvalId === current.approvalId,
+    listDevices: () =>
+      Promise.resolve([{ deviceId: "device-windows", name: "Windows workstation" }]),
+  });
+
+  assert.deepEqual(await bridge.current("task-current-run"), {
+    approvalId: current.approvalId,
+    description:
+      "Windows workstation wants to control its desktop for this Task. Risk: high. Evidence: a current Worker Run requested this exact protected action.",
+    sequence: 2,
+    remaining: 0,
+    deviceLabel: "Windows workstation",
+    actionCategory: "computer-use-input",
+    risk: "high",
+  });
+  await assert.rejects(
+    bridge.resolve({
+      taskId: "task-current-run",
+      approvalId: stale.approvalId,
+      principalId: "discord:owner",
+      idempotencyKey: "approve-stale-run",
+      decision: "approve",
+    }),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.name === "DiscordTaskPortError" &&
+      error.message.includes("no longer current"),
+  );
+  assert.equal((await approvals.get(stale.approvalId)).state, "pending");
+});

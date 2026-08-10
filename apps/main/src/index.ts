@@ -1398,8 +1398,14 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     const ownerDiscordStatusObserver = options.discord?.onStatusChange;
     const discordSecretStore = options.discord?.secretStore ?? managedSecretStore;
     const discordTaskActivityExecutor = authoritativeWorkerExecutor;
+    const discordActionAuthorization = actionAuthorization;
     const discordActionApproval = new DiscordActionApproval({
       approvals: approvalRuntime.service,
+      ...(discordActionAuthorization === undefined
+        ? {}
+        : {
+            isCurrent: (approval) => discordActionAuthorization.isApprovalCurrent(approval),
+          }),
       listDevices: listMainOwnedDeviceDirectory,
       onChanged: () => {
         void discordBindingController?.runtime?.synchronizeNow().catch(() => undefined);

@@ -164,6 +164,39 @@ export class MainActionAuthorizationRuntime implements ApprovalExecutionPort {
     this.#approvals = service;
   }
 
+  /**
+   * Proves that a projected Worker-action Approval is still bound to the one
+   * current Run that requested it. The durable Approval record remains available
+   * for audit after the Run ends, but stale Discord controls must not imply that
+   * the protected action can still continue that Run.
+   */
+  public async isApprovalCurrent(approval: ApprovalRequest): Promise<boolean> {
+    this.#assertOpen();
+    if (approval.execution.kind !== "worker-action.authorize" || approval.state !== "pending") {
+      return false;
+    }
+    try {
+      const payload = requireRecord(approval.execution.payload);
+      const requestId = requireIdentifier(payload["actionRequestId"], "authorization request ID");
+      const requestDigest = requireIdentifier(payload["requestHash"], "request digest");
+      const stored = await this.#load(requestId);
+      if (
+        stored === undefined ||
+        stored.approvalId !== approval.approvalId ||
+        stored.requestDigest !== requestDigest ||
+        stored.policyFingerprint !== approval.actionFingerprint ||
+        stored.request.taskId !== approval.taskId ||
+        stored.request.deviceId !== approval.targetDeviceId ||
+        approval.resource !== `worker-run:${stored.request.runId}`
+      ) {
+        return false;
+      }
+      return await this.#authorizeRun(stored.request.deviceId, stored.request);
+    } catch {
+      return false;
+    }
+  }
+
   public async authorize(
     input: MainActionAuthorizationRequest,
   ): Promise<MainActionAuthorizationDecision> {

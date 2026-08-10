@@ -2519,3 +2519,26 @@ click made correct sequential execution look like an ignored Approval loop.
 without widening Discord authority or exposing private command data. Successful
 interaction noise disappears, while stale, unauthorized, and failed decisions keep
 their bounded private diagnostics.
+
+Only an Approval whose exact originating Worker Run still passes Main's current
+lease and fencing check is actionable on Discord. A terminal, expired, or replaced
+Run leaves its Approval record available for audit but removes its controls; late
+interactions fail closed.
+
+## D-122 — Worker failures lead with actionable diagnostics
+
+Implementation detail:
+[ADR-0060](adr/0060-worker-failures-lead-with-diagnostics.md).
+
+**Decision:** An authoritative Worker failure message begins with its bounded
+diagnostic stage, code, and retry behavior. The final public Worker report may be
+included only as explicitly labelled, potentially incomplete context and cannot
+replace the failure explanation.
+
+**Rationale:** A provider process can emit a progress sentence immediately before
+failing. Presenting that sentence alone hid `PROCESS_FAILED`, made continued work
+look likely, and gave the owner no concrete inspection or Retry path.
+
+**Consequence:** Discord and Admin Web expose an actionable, deterministic failure
+cause without unsafe automatic replay. Owner-safe Worker prose remains available as
+secondary context within the existing public-message bound.

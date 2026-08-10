@@ -27,6 +27,28 @@ import {
   type SqliteDialectOptions,
 } from "./dialects.ts";
 import { SqlStorageError } from "./errors.ts";
+
+const DISCORD_APPROVAL_ACTION_CATEGORIES = [
+  "read-only-observation",
+  "opendelegate-process-retry",
+  "opendelegate-process-restart",
+  "project-dependency-install",
+  "configured-official-package-install",
+  "computer-use-input",
+  "sandbox-boundary-escalation",
+  "package-repository-addition",
+  "remote-installer-script",
+  "untrusted-installer",
+  "driver-installation",
+  "kernel-extension-installation",
+  "os-network-change",
+  "vpn-change",
+  "firewall-change",
+  "policy-relaxation",
+  "secret-export",
+  "cross-device-knowledge-transfer",
+  "policy-bypass-attempt",
+] as const;
 import { applySqlMigrations, verifySqlMigrations } from "./migrations.ts";
 import type {
   DiscordInboundTable,
@@ -1253,9 +1275,43 @@ function validateProjection(value: unknown): asserts value is TaskChannelProject
   }
   if (projection["approval"] !== undefined) {
     const approval = assertPlainRecord(projection["approval"], "Task approval");
-    assertOnlyKeys(approval, ["approvalId", "description"]);
+    assertOnlyKeys(approval, [
+      "approvalId",
+      "description",
+      "sequence",
+      "remaining",
+      "deviceLabel",
+      "actionCategory",
+      "risk",
+    ]);
     requireBoundedString(approval["approvalId"], "Approval ID", 512);
     requireBoundedString(approval["description"], "Approval description", 16_384);
+    const structuredValues = [
+      approval["sequence"],
+      approval["remaining"],
+      approval["deviceLabel"],
+      approval["actionCategory"],
+      approval["risk"],
+    ];
+    if (structuredValues.some((value) => value !== undefined)) {
+      if (structuredValues.some((value) => value === undefined)) {
+        throw persistenceConflict();
+      }
+      if (requireSafeNonNegative(approval["sequence"], "Approval sequence") < 1) {
+        throw persistenceConflict();
+      }
+      requireSafeNonNegative(approval["remaining"], "Remaining Approvals");
+      const deviceLabel = requireBoundedString(
+        approval["deviceLabel"],
+        "Approval Device label",
+        253,
+      );
+      if (deviceLabel.trim().length === 0) {
+        throw persistenceConflict();
+      }
+      requireOneOf(approval["actionCategory"], DISCORD_APPROVAL_ACTION_CATEGORIES);
+      requireOneOf(approval["risk"], ["low", "medium", "high", "critical"]);
+    }
   }
   if (projection["artifact"] !== undefined) {
     const artifact = assertPlainRecord(projection["artifact"], "Task artifact");

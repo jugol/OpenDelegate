@@ -9,6 +9,7 @@ import type { DiscordTaskApprovalProjectionPort } from "./discord-runtime.ts";
 
 export interface DiscordActionApprovalOptions {
   readonly approvals: ApprovalService;
+  readonly isCurrent?: (approval: ApprovalRequest) => boolean | Promise<boolean>;
   readonly listDevices: () => Promise<
     readonly { readonly deviceId: string; readonly name: string }[]
   >;
@@ -21,6 +22,7 @@ export interface DiscordActionApprovalOptions {
  */
 export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort {
   readonly #approvals: ApprovalService;
+  readonly #isCurrent: DiscordActionApprovalOptions["isCurrent"];
   readonly #listDevices: DiscordActionApprovalOptions["listDevices"];
   readonly #onChanged: DiscordActionApprovalOptions["onChanged"];
 
@@ -31,12 +33,14 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
       typeof options.approvals.list !== "function" ||
       typeof options.approvals.get !== "function" ||
       typeof options.approvals.decide !== "function" ||
+      (options.isCurrent !== undefined && typeof options.isCurrent !== "function") ||
       typeof options.listDevices !== "function" ||
       (options.onChanged !== undefined && typeof options.onChanged !== "function")
     ) {
       throw new TypeError("Discord action Approval projection requires valid ports.");
     }
     this.#approvals = options.approvals;
+    this.#isCurrent = options.isCurrent;
     this.#listDevices = options.listDevices;
     this.#onChanged = options.onChanged;
   }
@@ -49,7 +53,24 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
           left.requestedAtMs - right.requestedAtMs ||
           left.approvalId.localeCompare(right.approvalId, "en-US"),
       );
-    const approvals = taskApprovals.filter((approval) => approval.state === "pending");
+    const approvals: ApprovalRequest[] = [];
+    for (const candidate of taskApprovals) {
+      if (candidate.state !== "pending") {
+        continue;
+      }
+      if (this.#isCurrent !== undefined) {
+        let current = false;
+        try {
+          current = await this.#isCurrent(candidate);
+        } catch {
+          current = false;
+        }
+        if (!current) {
+          continue;
+        }
+      }
+      approvals.push(candidate);
+    }
     const approval = approvals[0];
     if (approval === undefined) {
       return undefined;
@@ -91,6 +112,20 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
     }
     if (!isTaskActionApproval(approval, input.taskId)) {
       return false;
+    }
+    if (this.#isCurrent !== undefined) {
+      let current = false;
+      try {
+        current = await this.#isCurrent(approval);
+      } catch {
+        current = false;
+      }
+      if (!current) {
+        throw new DiscordTaskPortError(
+          "APPROVAL_UNAVAILABLE",
+          "This approval belongs to a Worker Run that is no longer current. The Task status will refresh.",
+        );
+      }
     }
     try {
       await this.#approvals.decide({

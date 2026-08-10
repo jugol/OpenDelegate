@@ -488,6 +488,57 @@ test("SQLite persists a durable Discord failure-resolution action across restart
   }
 });
 
+test("SQLite persists structured sequential Discord Approval presentation across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "upsert-task-activity",
+    taskId: "task-1",
+    projection: {
+      taskId: "task-1",
+      state: "running",
+      objective: "Create and return two files from Windows.",
+      summary: "OpenDelegate is working on this Task.",
+      significance: "status",
+      activity: {
+        cycleId: "activity_sequential_approval",
+        revision: 11,
+        updatedAtMs: 11_000,
+        phase: "working",
+        completedWorkOrders: 0,
+        totalWorkOrders: 1,
+        milestones: [
+          {
+            key: "work-order:windows",
+            status: "active",
+            summary: "The Worker is waiting for owner approval.",
+            deviceLabel: "5090White",
+          },
+        ],
+      },
+      approval: {
+        approvalId: "approval-sequential-11",
+        description: "The Worker requested one exact protected action.",
+        sequence: 11,
+        remaining: 0,
+        deviceLabel: "5090White",
+        actionCategory: "sandbox-boundary-escalation",
+        risk: "medium",
+      },
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("structured-approval", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
+    await fixture.cleanup();
+  }
+});
+
 test("SQLite persists a durable Discord cancellation-resolution action across restart", async () => {
   const fixture = await createSqliteFixture();
   let repository: SqlDiscordStateRepository | undefined;

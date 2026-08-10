@@ -372,7 +372,8 @@ test("retry uses a higher fence and rejects a late completion from the replaced 
   ]);
   assert.deepEqual(await firstExecution, {
     state: "waiting_resource",
-    publicMessage: "The provider process exited before producing the requested result.",
+    publicMessage:
+      "Worker Run encountered a retryable failure during execution (PROCESS_FAILED).\n\nLast Worker report (may be incomplete):\nThe provider process exited before producing the requested result.",
   });
 
   const secondExecution = executor.execute(request("attempt-2", 2));
@@ -439,6 +440,40 @@ test("retry uses a higher fence and rejects a late completion from the replaced 
     ).length,
     1,
   );
+});
+
+test("a non-retryable Worker failure exposes its diagnostic instead of presenting progress as the cause", async () => {
+  const clock = mutableClock(NOW_MS);
+  const dispatch = new RecordingDispatchPort();
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(clock.now()).toISOString() },
+  });
+  const executor = new AuthoritativeWorkerTaskExecutor({
+    clock,
+    eventStore,
+    idSource: sequentialIds(),
+    leaseDurationMs: 60_000,
+    planner: fixedPlanner(),
+    targetResolver: fixedTargetResolver(),
+    dispatch,
+    verifier: fixedVerifier(),
+  });
+
+  const execution = executor.execute(request("non-retryable-failure", 1));
+  const run = await dispatch.nextAssignment();
+  await executor.acceptWorkerEvents("device-worker-1", [
+    workerEvent(run, 1, "worker.run.claimed"),
+    workerEvent(run, 2, "worker.run.failed", {
+      report: "I will continue the same Work Order in the next step.",
+      diagnostic: { code: "PROCESS_FAILED", stage: "execution", retryable: false },
+    }),
+  ]);
+
+  assert.deepEqual(await execution, {
+    state: "failed",
+    publicMessage:
+      "Worker Run failed during execution (PROCESS_FAILED). OpenDelegate did not automatically replay this process because its external outcome may be uncertain. Review Task Runs, then use Retry.\n\nLast Worker report (may be incomplete):\nI will continue the same Work Order in the next step.",
+  });
 });
 
 test("an automatic Worker retry reuses the owner-turn plan instead of asking an old question again", async () => {

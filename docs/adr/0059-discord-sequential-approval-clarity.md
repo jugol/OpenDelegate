@@ -39,6 +39,12 @@ may replace an earlier one while execution progress is otherwise unchanged, so a
 newer outbox item with the same execution revision is allowed to edit the existing
 open activity message. Older or equal delivery order still loses deterministically.
 
+Before projecting or resolving a Worker-action Approval, Main revalidates the exact
+originating Run through the authoritative Run lease and fencing boundary. A pending
+Approval whose Run is terminal, expired, or replaced remains in durable Approval
+history for audit, but it no longer appears as an actionable Discord control and a
+late interaction fails closed.
+
 ## Consequences
 
 Sequential exact-action review remains fail-closed and at-most-once, while the owner
@@ -56,6 +62,10 @@ localization remains deterministic and does not consume Agent context.
   interaction while the durable Task surface remains authoritative.
 - Adapter tests prove that replacing an Approval at the same execution activity
   revision edits the existing message instead of leaving stale controls.
+- SQL restart tests prove that the complete structured Approval projection survives
+  the durable outbox boundary used by production Main.
+- Main tests prove that terminal-Run Approvals remain auditable while Discord skips
+  them and refuses a stale decision.
 
 ## References
 
