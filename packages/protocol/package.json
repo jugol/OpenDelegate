@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "@opendelegate/domain": "workspace:*",
-    "typebox": "1.3.6"
+    "typebox": "1.3.11"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test",
