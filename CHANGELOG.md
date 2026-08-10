@@ -135,6 +135,9 @@ represents a supported release or completed first milestone.
 - Recovered certificate rotation after prior failed rotations and owner-authorized recredentialing
   by selecting the active current-generation certificate, and discarded key-bound rotation requests
   replayed from an earlier Worker process session.
+- Started a fresh durable Main/Worker transport epoch exactly once after owner-authorized Device
+  recredentialing, preventing retained sequence checkpoints from rejecting the replacement identity
+  while routine certificate rotation continues to preserve queued delivery.
 - Allowed native service upgrades to validate the installed topology against the actual active
   version, and atomically advance or roll back the durable runtime configuration with the release
   pointer.
