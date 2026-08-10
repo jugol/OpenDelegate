@@ -1474,6 +1474,23 @@ export class DiscordForumAdapter {
               state: "open" as const,
             }),
           });
+        } else if (action.projection.significance === "question") {
+          const sourceEventId = action.projection.sourceEventId;
+          if (sourceEventId === undefined) {
+            throw new DiscordAdapterError(
+              "PROJECTION_INVALID",
+              "A chronological Discord owner prompt has no source event ID.",
+            );
+          }
+          await this.#repository.updateBinding(binding.threadId, {
+            ownerPromptSurface: Object.freeze({
+              requestKey: item.id,
+              sourceEventId,
+              messageId: result.messageId,
+              outboxCreatedAtMs: item.createdAtMs,
+              state: "open" as const,
+            }),
+          });
         }
         return;
       }
@@ -1511,11 +1528,31 @@ export class DiscordForumAdapter {
       }
       case "refresh-owner-prompt": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        const prompt = await this.#api.createMessage({
-          threadId: binding.threadId,
-          requestKey: action.promptRequestKey,
-          payload: renderTaskUpdate(action.projection),
-        });
+        const sourceEventId = action.projection.sourceEventId;
+        if (sourceEventId === undefined) {
+          throw new DiscordAdapterError(
+            "PROJECTION_INVALID",
+            "A refreshed Discord owner prompt has no source event ID.",
+          );
+        }
+        const current = binding.ownerPromptSurface;
+        if (
+          current !== undefined &&
+          current.requestKey !== action.promptRequestKey &&
+          current.outboxCreatedAtMs >= item.createdAtMs
+        ) {
+          return;
+        }
+        let prompt =
+          current?.requestKey === action.promptRequestKey &&
+          current.sourceEventId === sourceEventId &&
+          current.state === "open"
+            ? { messageId: current.messageId }
+            : await this.#api.createMessage({
+                threadId: binding.threadId,
+                requestKey: action.promptRequestKey,
+                payload: renderTaskUpdate(action.projection),
+              });
         try {
           await this.#api.editMessage({
             threadId: binding.threadId,
@@ -1526,11 +1563,25 @@ export class DiscordForumAdapter {
           if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
             throw error;
           }
-          this.#recordDiagnostic("discord.owner_prompt_refresh_message_missing", {
+          prompt = await this.#api.createMessage({
+            threadId: binding.threadId,
+            requestKey: action.promptRequestKey,
+            payload: renderTaskUpdate(action.projection),
+          });
+          this.#recordDiagnostic("discord.owner_prompt_refresh_message_restored", {
             taskId: action.taskId,
             requestKey: action.promptRequestKey,
           });
         }
+        await this.#repository.updateBinding(binding.threadId, {
+          ownerPromptSurface: Object.freeze({
+            requestKey: action.promptRequestKey,
+            sourceEventId,
+            messageId: prompt.messageId,
+            outboxCreatedAtMs: item.createdAtMs,
+            state: "open" as const,
+          }),
+        });
         return;
       }
       case "upsert-task-activity": {
@@ -1698,11 +1749,15 @@ export class DiscordForumAdapter {
       }
       case "resolve-owner-prompt": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        const prompt = await this.#api.createMessage({
-          threadId: binding.threadId,
-          requestKey: action.promptRequestKey,
-          payload: renderTaskUpdate(action.projection),
-        });
+        const surface = binding.ownerPromptSurface;
+        const prompt =
+          surface?.requestKey === action.promptRequestKey
+            ? { messageId: surface.messageId }
+            : await this.#api.createMessage({
+                threadId: binding.threadId,
+                requestKey: action.promptRequestKey,
+                payload: renderTaskUpdate(action.projection),
+              });
         try {
           await this.#api.editMessage({
             threadId: binding.threadId,
@@ -1716,6 +1771,11 @@ export class DiscordForumAdapter {
           this.#recordDiagnostic("discord.owner_prompt_message_missing", {
             threadId: binding.threadId,
             messageId: prompt.messageId,
+          });
+        }
+        if (surface?.requestKey === action.promptRequestKey && surface.state !== "resolved") {
+          await this.#repository.updateBinding(binding.threadId, {
+            ownerPromptSurface: Object.freeze({ ...surface, state: "resolved" as const }),
           });
         }
         return;

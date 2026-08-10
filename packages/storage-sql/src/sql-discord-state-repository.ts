@@ -319,6 +319,10 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
             binding.failureSurface === undefined
               ? null
               : encodeCanonicalJson(binding.failureSurface),
+          owner_prompt_surface_json:
+            binding.ownerPromptSurface === undefined
+              ? null
+              : encodeCanonicalJson(binding.ownerPromptSurface),
           last_reconciled_message_id: binding.lastReconciledMessageId ?? null,
           external_state: binding.externalState,
           archived: this.#dbBoolean(binding.archived),
@@ -338,6 +342,7 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
         | "statusPanelMessageId"
         | "activitySurface"
         | "failureSurface"
+        | "ownerPromptSurface"
         | "lastReconciledMessageId"
         | "externalState"
         | "archived"
@@ -387,6 +392,10 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
             updated.failureSurface === undefined
               ? null
               : encodeCanonicalJson(updated.failureSurface),
+          owner_prompt_surface_json:
+            updated.ownerPromptSurface === undefined
+              ? null
+              : encodeCanonicalJson(updated.ownerPromptSurface),
           last_reconciled_message_id: updated.lastReconciledMessageId ?? null,
           external_state: updated.externalState,
           archived: this.#dbBoolean(updated.archived),
@@ -742,6 +751,9 @@ function decodeBinding(row: Selectable<DiscordTaskBindingsTable>): DiscordTaskBi
     ...(row.failure_surface_json === null
       ? {}
       : { failureSurface: decodeFailureSurface(row.failure_surface_json) }),
+    ...(row.owner_prompt_surface_json === null
+      ? {}
+      : { ownerPromptSurface: decodeOwnerPromptSurface(row.owner_prompt_surface_json) }),
     ...(row.last_reconciled_message_id === null
       ? {}
       : { lastReconciledMessageId: row.last_reconciled_message_id }),
@@ -772,6 +784,14 @@ function decodeActivitySurface(
 function decodeFailureSurface(encoded: string): NonNullable<DiscordTaskBinding["failureSurface"]> {
   const value = decodeCanonicalJson(encoded);
   validateFailureSurface(value);
+  return deepFreeze(value);
+}
+
+function decodeOwnerPromptSurface(
+  encoded: string,
+): NonNullable<DiscordTaskBinding["ownerPromptSurface"]> {
+  const value = decodeCanonicalJson(encoded);
+  validateOwnerPromptSurface(value);
   return deepFreeze(value);
 }
 
@@ -851,6 +871,9 @@ function validateNewBinding(
   if (binding.failureSurface !== undefined) {
     validateFailureSurface(binding.failureSurface);
   }
+  if (binding.ownerPromptSurface !== undefined) {
+    validateOwnerPromptSurface(binding.ownerPromptSurface);
+  }
   if (binding.lastReconciledMessageId !== undefined) {
     assertSnowflake(binding.lastReconciledMessageId, "Discord reconciled message ID");
   }
@@ -913,6 +936,24 @@ function validateFailureSurface(
   requireOneOf(surface["state"], ["open", "resolved"]);
 }
 
+function validateOwnerPromptSurface(
+  value: unknown,
+): asserts value is NonNullable<DiscordTaskBinding["ownerPromptSurface"]> {
+  const surface = assertPlainRecord(value, "Discord owner prompt surface");
+  assertOnlyKeys(surface, [
+    "requestKey",
+    "sourceEventId",
+    "messageId",
+    "outboxCreatedAtMs",
+    "state",
+  ]);
+  requireBoundedString(surface["requestKey"], "Discord prompt request key", 512);
+  requireBoundedString(surface["sourceEventId"], "Discord prompt source event ID", 160);
+  assertSnowflake(surface["messageId"], "Discord owner prompt message ID");
+  requireSafeNonNegative(surface["outboxCreatedAtMs"], "Discord prompt outbox timestamp");
+  requireOneOf(surface["state"], ["open", "resolved"]);
+}
+
 function validateBindingPatch(
   patch: Partial<
     Pick<
@@ -920,6 +961,7 @@ function validateBindingPatch(
       | "statusPanelMessageId"
       | "activitySurface"
       | "failureSurface"
+      | "ownerPromptSurface"
       | "lastReconciledMessageId"
       | "externalState"
       | "archived"
@@ -932,6 +974,7 @@ function validateBindingPatch(
     "statusPanelMessageId",
     "activitySurface",
     "failureSurface",
+    "ownerPromptSurface",
     "lastReconciledMessageId",
     "externalState",
     "archived",
@@ -945,6 +988,9 @@ function validateBindingPatch(
   }
   if (hasOwn(patch, "failureSurface") && patch.failureSurface !== undefined) {
     validateFailureSurface(patch.failureSurface);
+  }
+  if (hasOwn(patch, "ownerPromptSurface") && patch.ownerPromptSurface !== undefined) {
+    validateOwnerPromptSurface(patch.ownerPromptSurface);
   }
   if (hasOwn(patch, "lastReconciledMessageId")) {
     assertSnowflake(patch.lastReconciledMessageId, "Discord reconciled message ID");
@@ -971,6 +1017,7 @@ function applyBindingPatch(
       | "statusPanelMessageId"
       | "activitySurface"
       | "failureSurface"
+      | "ownerPromptSurface"
       | "lastReconciledMessageId"
       | "externalState"
       | "archived"
@@ -985,6 +1032,9 @@ function applyBindingPatch(
       : {}),
     ...(hasOwn(patch, "activitySurface") ? { activitySurface: patch.activitySurface } : {}),
     ...(hasOwn(patch, "failureSurface") ? { failureSurface: patch.failureSurface } : {}),
+    ...(hasOwn(patch, "ownerPromptSurface")
+      ? { ownerPromptSurface: patch.ownerPromptSurface }
+      : {}),
     ...(hasOwn(patch, "lastReconciledMessageId")
       ? { lastReconciledMessageId: patch.lastReconciledMessageId }
       : {}),

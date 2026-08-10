@@ -664,6 +664,10 @@ test("migration 0002 upgrades the released event-store schema through Device cha
       DROP TABLE od_owner_credential;
       DROP TABLE od_owner_claim;
       DELETE FROM od_migration_manifest
+        WHERE migration_name = '0016_discord_owner_prompt_surface';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0016_discord_owner_prompt_surface';
+      DELETE FROM od_migration_manifest
         WHERE migration_name = '0015_discord_failure_surface';
       DELETE FROM od_kysely_migration
         WHERE name = '0015_discord_failure_surface';
@@ -924,6 +928,18 @@ test(
     const downgradeClient = await postgresAdminPool.connect();
     try {
       await downgradeClient.query("BEGIN");
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_discord_task_bindings
+          DROP COLUMN owner_prompt_surface_json
+      `);
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_migration_manifest
+         WHERE migration_name = '0016_discord_owner_prompt_surface'`,
+      );
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_kysely_migration
+         WHERE name = '0016_discord_owner_prompt_surface'`,
+      );
       await downgradeClient.query(`
         ALTER TABLE "${schema}".od_discord_task_bindings
           DROP COLUMN failure_surface_json

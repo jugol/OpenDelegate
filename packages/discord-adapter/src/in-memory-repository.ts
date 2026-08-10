@@ -176,6 +176,7 @@ export class InMemoryDiscordStateRepository implements DiscordStateRepository {
         | "statusPanelMessageId"
         | "activitySurface"
         | "failureSurface"
+        | "ownerPromptSurface"
         | "lastReconciledMessageId"
         | "externalState"
         | "archived"

@@ -251,6 +251,26 @@ function registerDiscordRepositoryContract(label: string, createFixture: Fixture
           (await repository.getBindingByThread(created.threadId))?.failureSurface,
           failure.failureSurface,
         );
+        const ownerPrompt = await repository.updateBinding(created.threadId, {
+          ownerPromptSurface: {
+            requestKey: "owner-prompt:03-update",
+            sourceEventId: "event_owner_prompt",
+            messageId: "100000000000000105",
+            outboxCreatedAtMs: 7_300,
+            state: "open",
+          },
+        });
+        assert.deepEqual(ownerPrompt.ownerPromptSurface, {
+          requestKey: "owner-prompt:03-update",
+          sourceEventId: "event_owner_prompt",
+          messageId: "100000000000000105",
+          outboxCreatedAtMs: 7_300,
+          state: "open",
+        });
+        assert.deepEqual(
+          (await repository.getBindingByThread(created.threadId))?.ownerPromptSurface,
+          ownerPrompt.ownerPromptSurface,
+        );
         const closedActivity = await repository.updateBinding(created.threadId, {
           activitySurface: {
             cycleId: "activity_cycle_1",

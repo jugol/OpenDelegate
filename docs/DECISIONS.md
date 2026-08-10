@@ -2248,6 +2248,23 @@ the same Task projection. The status panel correctly dropped a rejected approval
 but the earlier prompt retained obsolete Approve and Reject buttons.
 
 **Consequence:** The owner can trust that controls on the latest prompt represent
-current authority. Durable nonce reconciliation restores an externally missing
-prompt without duplicating a surviving message, and stale interactions still fail
-closed at the Task authority boundary.
+current authority. A surviving prompt is edited by its durable message identity,
+an externally missing prompt can be replaced through bounded reconciliation, and
+stale interactions still fail closed at the Task authority boundary.
+
+## D-110 — Owner-prompt Discord message identity is durable Main state
+
+**Decision:** Main persists the request key, source event ID, Discord message ID,
+outbox creation time, and open/resolved state of the latest chronological owner
+prompt in the Discord Task binding. Prompt refresh and resolution address that
+stored message directly. Discord nonce reconciliation is only the recovery path
+when upgrading a legacy binding or replacing an externally deleted message.
+
+**Rationale:** Discord's nonce deduplication window is bounded. A prompt created long
+before a restart could no longer be rediscovered by nonce alone, so repairing stale
+approval controls produced a second owner prompt instead of editing the first.
+
+**Consequence:** Long-running Tasks and Main restarts keep one current owner-prompt
+message without relying on Discord's transient deduplication memory. Migration 0016
+adds only this non-secret presentation identity; approval authority and Task state
+remain in their existing durable stores.

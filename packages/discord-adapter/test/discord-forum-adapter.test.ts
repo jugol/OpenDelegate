@@ -1555,6 +1555,12 @@ test("one owner prompt drops stale approval controls in place", async () => {
       JSON.stringify(operation["payload"]).includes("approval-stale-control"),
   );
   assert.notEqual(promptMessage, undefined);
+  const promptSurface = (await repository.getBindingByTask("task-1"))?.ownerPromptSurface;
+  assert.equal(promptSurface?.requestKey, promptMessage?.["requestKey"]);
+  assert.equal(promptSurface?.sourceEventId, "event_retry_limit_reached");
+  assert.equal(promptSurface?.messageId, promptMessage?.["messageId"]);
+  assert.equal(promptSurface?.state, "open");
+  assert.equal(Number.isSafeInteger(promptSurface?.outboxCreatedAtMs), true);
 
   await adapter.publishTaskProjection({
     taskId: waitingProjection.taskId,
@@ -1579,6 +1585,14 @@ test("one owner prompt drops stale approval controls in place", async () => {
   assert.doesNotMatch(rendered, /Approval needed/u);
   assert.doesNotMatch(rendered, /approval-stale-control/u);
   assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-reconciled").length,
+    0,
+  );
+  assert.equal(
+    (await repository.getBindingByTask("task-1"))?.ownerPromptSurface?.messageId,
+    promptMessage?.["messageId"],
+  );
   assert.equal(
     (await repository.listOutbox()).filter(
       (item) => item.action.kind === "refresh-owner-prompt" && item.delivered,

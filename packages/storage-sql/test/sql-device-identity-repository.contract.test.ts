@@ -378,6 +378,10 @@ test("SQLite schema 0 applies every migration and schema 2 upgrades safely throu
         DROP TABLE od_device_identities;
         DROP TABLE od_device_certificate_authority;
         DELETE FROM od_migration_manifest
+          WHERE migration_name = '0016_discord_owner_prompt_surface';
+        DELETE FROM od_kysely_migration
+          WHERE name = '0016_discord_owner_prompt_surface';
+        DELETE FROM od_migration_manifest
           WHERE migration_name = '0015_discord_failure_surface';
         DELETE FROM od_kysely_migration
           WHERE name = '0015_discord_failure_surface';

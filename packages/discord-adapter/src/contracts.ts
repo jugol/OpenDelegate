@@ -419,6 +419,14 @@ export interface DiscordTaskFailureSurface {
   readonly state: "open" | "resolved";
 }
 
+export interface DiscordOwnerPromptSurface {
+  readonly requestKey: string;
+  readonly sourceEventId: string;
+  readonly messageId: string;
+  readonly outboxCreatedAtMs: number;
+  readonly state: "open" | "resolved";
+}
+
 export interface DiscordTaskBinding {
   readonly guildId: string;
   readonly forumChannelId: string;
@@ -428,6 +436,7 @@ export interface DiscordTaskBinding {
   readonly statusPanelMessageId?: string;
   readonly activitySurface?: DiscordTaskActivitySurface;
   readonly failureSurface?: DiscordTaskFailureSurface;
+  readonly ownerPromptSurface?: DiscordOwnerPromptSurface;
   readonly lastReconciledMessageId?: string;
   readonly externalState: "available" | "deleted" | "inaccessible";
   readonly archived: boolean;
@@ -582,6 +591,7 @@ export interface DiscordStateRepository {
         | "statusPanelMessageId"
         | "activitySurface"
         | "failureSurface"
+        | "ownerPromptSurface"
         | "lastReconciledMessageId"
         | "externalState"
         | "archived"
