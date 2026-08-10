@@ -34,6 +34,7 @@ export {
   type IssuedMainServerCertificate,
   type IssuedPendingDeviceIdentity,
   type RevokeDevice,
+  type RecredentialedDeviceGeneration,
   type RevokedDeviceIdentity,
   type ValidatePeerIdentity,
 } from "./device-identity-authority.ts";

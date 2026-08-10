@@ -208,7 +208,8 @@ export interface CreateMainDeviceChannelServerOptions extends MainDeviceChannelC
   readonly authority: Pick<
     DeviceIdentityAuthority,
     "confirmCertificateRotation" | "issueCertificateRotation" | "validatePeerIdentity"
-  >;
+  > &
+    Partial<Pick<DeviceIdentityAuthority, "generationWasRecredentialed">>;
   readonly repository: DeviceChannelRepository;
   readonly tls: MainDeviceChannelTlsOptions;
   readonly host?: string;
@@ -671,9 +672,15 @@ export class MainDeviceChannelServer {
         "The Worker clock is outside the bounded scheduling calibration window.",
       );
     }
+    const resetForRecredential =
+      (await this.options.authority.generationWasRecredentialed?.({
+        deviceId: peer.deviceId,
+        certificateGeneration: peer.certificateGeneration,
+      })) ?? false;
     await this.options.repository.observeConnection({
       deviceId: peer.deviceId,
       certificateGeneration: peer.certificateGeneration,
+      ...(resetForRecredential ? { resetForRecredential: true } : {}),
     });
     const prior = this.connections.get(peer.deviceId);
     if (prior !== undefined) {

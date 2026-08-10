@@ -158,6 +158,58 @@ test("SQLite channel state durably replays, acknowledges, and rejects gaps or ch
   await repository.close();
 });
 
+test("SQLite Main channel starts one fresh epoch only for a newer re-credentialed generation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-main-recredential-"));
+  roots.push(root);
+  const repository = await SqliteDeviceChannelRepository.open({
+    filename: join(root, "channel.sqlite3"),
+    sourceCheckoutRoot: process.cwd(),
+  });
+  try {
+    await repository.observeConnection({ certificateGeneration: 1, deviceId: "device-worker-1" });
+    await repository.commitInbound(workerPong(1));
+    await repository.enqueueOutbound("device-worker-1", (sequence) =>
+      mainPing(sequence, "before-recredential"),
+    );
+
+    await repository.observeConnection({ certificateGeneration: 2, deviceId: "device-worker-1" });
+    assert.equal(
+      (await repository.resume("device-worker-1")).nextMainSequence,
+      2,
+      "routine rotation preserves transport durability",
+    );
+
+    await repository.observeConnection({
+      certificateGeneration: 3,
+      deviceId: "device-worker-1",
+      resetForRecredential: true,
+    });
+    assert.deepEqual(await repository.resume("device-worker-1"), {
+      acknowledgedWorkerSequence: 0,
+      acknowledgedMainSequence: 0,
+      nextMainSequence: 1,
+      pendingOutbound: [],
+    });
+    await repository.commitInbound(workerPong(1));
+    await repository.enqueueOutbound("device-worker-1", (sequence) =>
+      mainPing(sequence, "after-recredential"),
+    );
+
+    await repository.observeConnection({
+      certificateGeneration: 3,
+      deviceId: "device-worker-1",
+      resetForRecredential: true,
+    });
+    assert.deepEqual(
+      (await repository.resume("device-worker-1")).pendingOutbound.map((frame) => frame.messageId),
+      ["main-after-recredential"],
+      "the durable audit flag must not reset an already-established generation twice",
+    );
+  } finally {
+    await repository.close();
+  }
+});
+
 test("SQLite channel effect claims recover interrupted processing after restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-channel-effect-"));
   roots.push(root);

@@ -2421,4 +2421,8 @@ Device's scheduling or execution personality. On an installed Windows Worker, th
 owner stops the service, joins with the one-use re-credential Grant, stages the new
 owner-bound Secrets to the existing virtual service identity, and restarts it. The
 generation change resets only per-generation channel state; durable Task, Knowledge,
-Workspace registry, and Device history remain intact.
+Workspace registry, and Device history remain intact. Both Worker and Main clear
+their transport inbox, outbox, effect journal, acknowledgements, and sequence
+checkpoint exactly once when the newer generation is durably identified by the
+`device.recredentialed` audit event. Routine authenticated certificate rotation
+preserves those queues and checkpoints.

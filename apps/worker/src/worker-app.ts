@@ -711,6 +711,7 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
               configuration,
               managedSecrets,
               paths: options.paths,
+              resetForRecredential: currentConfiguration !== undefined,
             });
             return { channelVerified, configuration };
           },
@@ -2821,6 +2822,7 @@ async function verifyInitialWorkerChannel(input: {
   readonly configuration: WorkerConfigurationDocument;
   readonly managedSecrets: ManagedSecretStore;
   readonly paths: WorkerPaths;
+  readonly resetForRecredential: boolean;
 }): Promise<boolean> {
   let channelState: SqliteWorkerChannelState | undefined;
   try {
@@ -2830,6 +2832,7 @@ async function verifyInitialWorkerChannel(input: {
       deviceId: input.configuration.deviceId,
       mainDeviceId: input.configuration.mainDeviceId,
       certificateGeneration: input.configuration.certificateGeneration,
+      ...(input.resetForRecredential ? { resetForRecredential: true } : {}),
     });
     for (const endpoint of input.configuration.transportProfile.endpoints) {
       let client: WorkerDeviceChannelClient | undefined;

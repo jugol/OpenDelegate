@@ -23,6 +23,8 @@ export interface OpenSqliteWorkerChannelStateOptions {
   readonly deviceId: string;
   readonly mainDeviceId: string;
   readonly certificateGeneration: number;
+  /** Clears only transport durability when owner-approved re-credentialing advances generation. */
+  readonly resetForRecredential?: boolean;
   readonly busyTimeoutMs?: number;
 }
 
@@ -111,7 +113,7 @@ export class SqliteWorkerChannelState {
       database.pragma(`busy_timeout = ${String(busyTimeoutMs)}`);
       database.exec(WORKER_CHANNEL_SCHEMA);
       const state = new SqliteWorkerChannelState(database, deviceId, mainDeviceId);
-      state.initialize(generation);
+      state.initialize(generation, options.resetForRecredential === true);
       if (process.platform !== "win32") {
         await chmod(filename, 0o600);
       }
@@ -555,7 +557,7 @@ export class SqliteWorkerChannelState {
     this.database.close();
   }
 
-  private initialize(certificateGeneration: number): void {
+  private initialize(certificateGeneration: number, resetForRecredential: boolean): void {
     this.transaction(() => {
       const existing = this.database
         .prepare(
@@ -591,6 +593,25 @@ export class SqliteWorkerChannelState {
         );
       }
       if (certificateGeneration > existing.certificate_generation) {
+        if (resetForRecredential) {
+          this.database
+            .prepare("DELETE FROM od_worker_channel_inbound_effect WHERE singleton_id = 1")
+            .run();
+          this.database.prepare("DELETE FROM od_worker_channel_inbox WHERE singleton_id = 1").run();
+          this.database
+            .prepare("DELETE FROM od_worker_channel_outbox WHERE singleton_id = 1")
+            .run();
+          this.database
+            .prepare(
+              `UPDATE od_worker_channel_state
+               SET certificate_generation = ?, last_main_sequence = 0,
+                   last_main_acknowledgment_sequence = 0,
+                   acknowledged_worker_sequence = 0, next_worker_sequence = 1
+               WHERE singleton_id = 1`,
+            )
+            .run(certificateGeneration);
+          return;
+        }
         this.database
           .prepare(
             `UPDATE od_worker_channel_state

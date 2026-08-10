@@ -222,6 +222,58 @@ function registerDeviceChannelRepositoryContract(
         hasChannelCode("CHANNEL_REPOSITORY_CLOSED"),
       );
     });
+
+    test("re-credentialing resets transport durability once without changing rotation semantics", async () => {
+      const fixture = await createFixture();
+      const repository = await fixture.open("apply");
+      try {
+        await repository.observeConnection({
+          certificateGeneration: 1,
+          deviceId: "device-worker-recredential",
+        });
+        await repository.commitInbound(
+          workerPong(1, "device-worker-recredential", "before-recredential"),
+        );
+        await repository.enqueueOutbound("device-worker-recredential", (sequence) =>
+          mainPing(sequence, "before-recredential"),
+        );
+
+        await repository.observeConnection({
+          certificateGeneration: 2,
+          deviceId: "device-worker-recredential",
+        });
+        assert.equal((await repository.resume("device-worker-recredential")).nextMainSequence, 2);
+
+        await repository.observeConnection({
+          certificateGeneration: 3,
+          deviceId: "device-worker-recredential",
+          resetForRecredential: true,
+        });
+        assert.deepEqual(await repository.resume("device-worker-recredential"), {
+          acknowledgedWorkerSequence: 0,
+          acknowledgedMainSequence: 0,
+          nextMainSequence: 1,
+          pendingOutbound: [],
+        });
+        await repository.enqueueOutbound("device-worker-recredential", (sequence) =>
+          mainPing(sequence, "after-recredential"),
+        );
+        await repository.observeConnection({
+          certificateGeneration: 3,
+          deviceId: "device-worker-recredential",
+          resetForRecredential: true,
+        });
+        assert.deepEqual(
+          (await repository.resume("device-worker-recredential")).pendingOutbound.map(
+            (frame) => frame.messageId,
+          ),
+          ["main-after-recredential"],
+        );
+      } finally {
+        await repository.close();
+        await fixture.cleanup();
+      }
+    });
   });
 }
 
@@ -343,14 +395,18 @@ async function createSqliteFixture(): Promise<ChannelRepositoryFixture> {
   };
 }
 
-function workerPong(sequence: number): WorkerPongFrameV1 {
+function workerPong(
+  sequence: number,
+  senderDeviceId = "device-worker-1",
+  identity = String(sequence),
+): WorkerPongFrameV1 {
   return {
     protocolVersion: "v1",
-    messageId: `worker-pong-${String(sequence)}`,
-    senderDeviceId: "device-worker-1",
+    messageId: `worker-pong-${identity}`,
+    senderDeviceId,
     correlationId: "connection-1",
     createdAt: "2026-07-25T00:00:00.000Z",
-    idempotencyKey: `worker-pong-${String(sequence)}`,
+    idempotencyKey: `worker-pong-${identity}`,
     sequence,
     type: "worker.pong",
     payload: {
