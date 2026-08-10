@@ -617,7 +617,9 @@ Make Discord the complete primary Task interface.
   legacy projection key during upgrade; if duplicate copies already exist, resolve
   every copy of that source event from one accepted answer. Chronological failure
   replies must include the owner-safe concrete reason or exhausted resource plus the
-  relevant recovery control, including Retry for failed Tasks.
+  relevant recovery control, including Retry for failed Tasks. Project cancellation
+  once at the latest chronological position as a final update with Retry available;
+  do not rely only on the starter status panel.
 - Maintain at most one live activity message for each active owner-input cycle.
   Aggregate Main planning, Device dispatch, bounded normalized Worker progress,
   Work Order completion, and verification into a short rolling milestone list and

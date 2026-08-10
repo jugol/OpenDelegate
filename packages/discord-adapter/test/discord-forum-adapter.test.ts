@@ -1917,6 +1917,38 @@ test("pause, resume, cancel, and retry controls map to channel-neutral idempoten
   );
 });
 
+test("a cancelled Task leaves one chronological final update with Retry", async () => {
+  const { adapter, api } = fixture();
+  const thread = forumThread("300000000000000037");
+  const starter = ownerMessage(thread.id, thread.id, "Cancel active multi-Device work.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  const cancelled = {
+    taskId: "task-1",
+    sourceEventId: "event-task-cancelled",
+    state: "cancelled" as const,
+    objective: "Cancel active multi-Device work.",
+    summary: "This Task was cancelled.",
+    significance: "final" as const,
+  };
+  await adapter.publishTaskProjection(cancelled);
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection(cancelled);
+  await adapter.flushOutbox();
+
+  const finalMessages = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("This Task was cancelled."),
+  );
+  assert.equal(finalMessages.length, 1);
+  const rendered = JSON.stringify(finalMessages[0]?.["payload"]);
+  assert.match(rendered, /## Result/u);
+  assert.match(rendered, /od:v1:retry/u);
+});
+
 test("a stale Task control resolves once instead of retrying forever", async () => {
   const { adapter, api, tasks, repository, clock } = fixture();
   const thread = forumThread("300000000000000036");

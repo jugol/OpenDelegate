@@ -2338,3 +2338,19 @@ message deleted” beside otherwise successful Pause and Resume flows.
 while failure feedback remains explicit. Durable command idempotency and Discord's
 three-second acknowledgement boundary are unchanged; deletion uses only the opaque
 Device-local interaction reference.
+
+## D-114 — Cancellation is a chronological final Task update
+
+**Decision:** A durable `cancel` transition publishes one final Discord reply at the
+latest conversation position, with the concrete cancelled state and a Retry control.
+The stable starter panel is still updated, but it is not the only owner-visible
+confirmation of cancellation.
+
+**Rationale:** Dismissing successful interaction receipts removed orphaned ephemeral
+noise, but exposed that cancellation only edited the starter status panel. In a long
+Forum conversation the owner could click Cancel at the bottom and receive no nearby
+confirmation or recovery control.
+
+**Consequence:** Cancellation reads like every other terminal Task outcome, remains
+idempotent by the immutable command event, and keeps recovery near the latest turn.
+The final reply is presentation only; the Task command journal remains authority.

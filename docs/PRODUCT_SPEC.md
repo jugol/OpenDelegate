@@ -527,7 +527,9 @@ through a secure handoff and resumes the same Task afterward.
    recovery control, such as Retry; the owner is never left with only a generic
    attention notice. When that Task enters a new running attempt, the prior failure
    reply is edited in place into a historical “Retry started” receipt and its stale
-   controls are removed; the current status or result remains below it.
+   controls are removed; the current status or result remains below it. Cancellation
+   is a final chronological reply with an optional Retry control, not only an edit to
+   the starter status panel.
 9. Buttons and menus offer pause, cancel, retry, approve once, reject, inspect Runs,
    and open Artifact actions where Discord permits. A Discord Approval decision
    resolves the exact same durable Approval service record shown in Admin Web; it

@@ -195,6 +195,73 @@ test("Main Discord runtime adds a Task Artifact link without making status proje
   await runtime.close();
 });
 
+test("Main Discord runtime publishes cancellation as one chronological final update", async () => {
+  const projections: TaskChannelProjection[] = [];
+  const runtime = new DiscordMainRuntime({
+    adapter: {
+      start: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+      createTaskThread: () => Promise.reject(new Error("not used")),
+      flushOutbox: () => Promise.resolve(),
+      reconcilePending: () => Promise.resolve(),
+      publishTaskProjection: (projection) => {
+        projections.push(structuredClone(projection));
+        return Promise.resolve();
+      },
+    },
+    repository: {
+      getGatewayCursor: () => Promise.resolve(undefined),
+      listBindings: () =>
+        Promise.resolve([
+          {
+            guildId: GUILD_ID,
+            forumChannelId: FORUM_ID,
+            threadId: THREAD_ID,
+            starterMessageId: THREAD_ID,
+            taskId: "task-cancelled",
+            externalState: "available" as const,
+            archived: false,
+            locked: false,
+            revision: 1,
+          },
+        ]),
+    },
+    tasks: {
+      get: () =>
+        Promise.resolve({
+          taskId: "task-cancelled",
+          state: "cancelled" as const,
+          objective: "Stop the active multi-Device work.",
+          updatedAt: NOW,
+          messages: [],
+          events: [
+            {
+              eventId: "event-cancelled",
+              type: "task.commanded",
+              occurredAt: NOW,
+              streamVersion: 2,
+            },
+          ],
+        }),
+    },
+    clock: new TestClock(),
+    synchronizationIntervalMs: 60_000,
+  });
+
+  await runtime.start();
+  assert.deepEqual(projections.at(-1), {
+    taskId: "task-cancelled",
+    sourceEventId: "event-cancelled",
+    state: "cancelled",
+    objective: "Stop the active multi-Device work.",
+    summary: "This Task was cancelled.",
+    significance: "final",
+  });
+  await runtime.synchronizeNow();
+  assert.deepEqual(projections.at(-1), projections.at(-2));
+  await runtime.close();
+});
+
 test("Main Discord runtime keeps a pending Worker approval actionable without an activity snapshot", async () => {
   const projections: TaskChannelProjection[] = [];
   let approvalAvailable = true;

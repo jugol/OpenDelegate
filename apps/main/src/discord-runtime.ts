@@ -836,14 +836,16 @@ function projectTask(
     latestMessage?.role === "agent" && latestMessage.messageId === latestEvent?.eventId
       ? latestMessage.content
       : undefined;
-  const executionUpdate = latestEvent?.type === "task.execution-recorded";
+  const significantTransition =
+    latestEvent?.type === "task.execution-recorded" ||
+    (latestEvent?.type === "task.commanded" && task.state === "cancelled");
   return Object.freeze({
     taskId: task.taskId,
     ...(latestEvent === undefined ? {} : { sourceEventId: latestEvent.eventId }),
     state: task.state,
     objective: task.objective,
     summary: currentAgentMessage ?? stateSummary(task.state),
-    significance: executionUpdate ? significanceFor(task.state) : "status",
+    significance: significantTransition ? significanceFor(task.state) : "status",
     ...(artifact === undefined ? {} : { artifact: Object.freeze({ ...artifact }) }),
     ...(activity === undefined ? {} : { activity: structuredClone(activity) }),
     ...(approval === undefined ? {} : { approval: Object.freeze({ ...approval }) }),
@@ -971,6 +973,7 @@ function significanceFor(state: DiscordTaskState): TaskChannelProjection["signif
     case "failed":
       return "failure";
     case "completed":
+    case "cancelled":
       return "final";
     case "review":
       return "decision";
