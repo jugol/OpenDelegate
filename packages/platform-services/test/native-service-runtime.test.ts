@@ -1269,6 +1269,57 @@ test("logged-out helpers defer while the core starts and exact replay does not i
   assert.equal(releaseTrustChecks, 0);
 });
 
+test("logged-in Windows helper health waits for Task Scheduler to report Running", async () => {
+  const configuration = windowsConfiguration();
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  let helperStatusReads = 0;
+  process.handler = (request) => {
+    if (request.executable.toLowerCase().endsWith("schtasks.exe")) {
+      if (request.arguments[0]?.toLowerCase() === "/query") {
+        helperStatusReads += 1;
+        return processResult(
+          0,
+          helperStatusReads < 3
+            ? '"\\OpenDelegate-personal-SessionHelper","N/A","Ready"\r\n'
+            : '"\\OpenDelegate-personal-SessionHelper","N/A","Running"\r\n',
+        );
+      }
+      return processResult(0);
+    }
+    if (request.executable.toLowerCase().endsWith("sc.exe")) {
+      return processResult(0);
+    }
+    throw new Error(`unexpected process ${request.executable}`);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: true,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-start-waits-for-helper",
+    configuration,
+    plan: createServicePlan({
+      operation: "start",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  assert.equal(helperStatusReads, 3);
+});
+
 test("a partial Windows SCM install is compensated without invoking a shell", async () => {
   const configuration = windowsConfigurationWithServiceBinding("main");
   const journal = new MemoryJournal();

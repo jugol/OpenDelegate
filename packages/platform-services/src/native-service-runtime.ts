@@ -739,13 +739,19 @@ function createNativeHealthAdapter(
         if (!loggedIn && action.policy === "defer-if-logged-out") {
           return { disposition: "unchanged" };
         }
-        const state = await supervisorState.read("session-helper");
-        if (state !== "running") {
-          throw new NativeHealthError(
-            "The logged-in user-session helper did not reach a running supervisor state.",
-          );
+        const deadline = boundaries.clock.now().getTime() + action.timeoutMs;
+        for (;;) {
+          const state = await supervisorState.read("session-helper");
+          if (state === "running") {
+            return { disposition: "unchanged" };
+          }
+          if (boundaries.clock.now().getTime() >= deadline) {
+            throw new NativeHealthError(
+              "The logged-in user-session helper did not reach a running supervisor state.",
+            );
+          }
+          await boundaries.clock.sleep(250);
         }
-        return { disposition: "unchanged" };
       }
       const deadline = boundaries.clock.now().getTime() + action.timeoutMs;
       for (;;) {
