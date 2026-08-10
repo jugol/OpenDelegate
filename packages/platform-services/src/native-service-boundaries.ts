@@ -74,6 +74,7 @@ export interface NativeProcessResult {
 
 export interface NativeProcessBoundary {
   isExecutable(path: string): Promise<boolean>;
+  isProcessAlive(processId: number): Promise<boolean>;
   run(request: NativeProcessRequest): Promise<NativeProcessResult>;
 }
 
@@ -426,6 +427,29 @@ class NodeNativeProcessBoundary implements NativeProcessBoundary {
     }
   }
 
+  public async isProcessAlive(processId: number): Promise<boolean> {
+    if (!Number.isSafeInteger(processId) || processId <= 0) {
+      return false;
+    }
+    try {
+      globalThis.process.kill(processId, 0);
+      return true;
+    } catch (error: unknown) {
+      const code = safeErrorCode(error);
+      if (code === "ESRCH") {
+        return false;
+      }
+      if (code === "EPERM") {
+        return true;
+      }
+      throw new NativeBoundaryError(
+        "NATIVE_PROCESS_FAILED",
+        "A native process lifetime could not be inspected.",
+        { cause: error },
+      );
+    }
+  }
+
   public async run(request: NativeProcessRequest): Promise<NativeProcessResult> {
     assertProcessRequest(request);
     return await new Promise<NativeProcessResult>((resolveRun, rejectRun) => {
@@ -570,8 +594,35 @@ class NodeNativeSessionBoundary implements NativeSessionBoundary {
       return false;
     }
     const result = await this.processBoundary.run(invocation);
-    return result.exitCode === 0;
+    return input.platform === "windows"
+      ? windowsOwnerSessionProbeSucceeded(input.userName, result)
+      : result.exitCode === 0;
   }
+}
+
+/**
+ * `query.exe user <name>` can return exit code 1 on localized Windows builds
+ * even while stdout contains the matching interactive session row. Treat that
+ * narrow, observable result as logged in without accepting the command's
+ * similarly worded "No User exists" diagnostic.
+ */
+export function windowsOwnerSessionProbeSucceeded(
+  userName: string,
+  result: Pick<NativeProcessResult, "exitCode" | "stdout" | "timedOut">,
+): boolean {
+  if (result.timedOut) {
+    return false;
+  }
+  if (result.exitCode === 0) {
+    return true;
+  }
+  if (result.exitCode !== 1) {
+    return false;
+  }
+  const queryUserName = userName.slice(userName.lastIndexOf("\\") + 1);
+  const escapedUserName = queryUserName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const sessionRow = new RegExp(`^\\s*>?\\s*${escapedUserName}(?:\\s{2,}|\\t|$)`, "iu");
+  return result.stdout.split(/\r?\n/u).some((line) => sessionRow.test(line));
 }
 
 function windowsLoginProbe(userName: string): NativeProcessRequest {

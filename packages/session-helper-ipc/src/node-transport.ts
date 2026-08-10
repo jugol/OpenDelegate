@@ -60,7 +60,7 @@ export function createNodeSessionHelperIpcTransport(
           connection.close();
         });
       });
-      await listenServer(server, path);
+      await listenServer(server, path, endpoint.kind);
       return createListener(server);
     },
   });
@@ -135,7 +135,11 @@ async function waitForConnection(
   });
 }
 
-async function listenServer(server: Server, path: string): Promise<void> {
+async function listenServer(
+  server: Server,
+  path: string,
+  transport: "unix-domain-socket" | "windows-named-pipe",
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const cleanup = () => {
@@ -162,7 +166,17 @@ async function listenServer(server: Server, path: string): Promise<void> {
     };
     server.once("listening", onListening);
     server.once("error", onError);
-    server.listen(path);
+    // The Windows helper runs in the interactive owner session while the core
+    // connects as a virtual-service account. Node's default named-pipe DACL is
+    // scoped to the creating user and otherwise makes that required cross-plane
+    // connection read-only. The pipe carries no ambient authority: both peers
+    // still have to complete the pinned Ed25519 mutual-signature handshake
+    // before any frame is accepted.
+    server.listen(
+      transport === "windows-named-pipe"
+        ? { path, readableAll: true, writableAll: true }
+        : { path },
+    );
   });
 }
 

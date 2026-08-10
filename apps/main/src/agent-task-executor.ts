@@ -774,6 +774,7 @@ function buildPlanningPrompt(
         'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
         'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"plan-local unique label","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["plan-local workOrderId"],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":[],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}.',
         "Every Work Order must include requiredSecretRefs. Use [] when no credential is needed; OpenDelegate never infers credential authority.",
+        'requiredCapabilities is an execution-authority gate, not descriptive metadata. If a Work Order must invoke Computer Use, include the exact capability "computer-use" even when no current Device advertises it; never hide a required capability to make a Device eligible.',
         "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
         "A continuation checkpoint never carries Secret references. If a Work Order needs one, return waiting_user so deterministic configuration can bind it without exposing a credential.",
         "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -791,6 +792,7 @@ function buildPlanningPrompt(
     'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
     'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"plan-local unique label","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["plan-local workOrderId"],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":["..."],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}. Omit requiredAgent when the Device profile may choose any ready binding; when present, use only an outcome-relevant hard requirement and tested-only is the default if allowedCompatibilities is omitted.',
     "Every Work Order must include requiredSecretRefs. Use [] when no credential is needed; OpenDelegate never infers credential authority.",
+    'requiredCapabilities is an execution-authority gate, not descriptive metadata. If a Work Order must invoke Computer Use, include the exact capability "computer-use" even when no current Device advertises it; never hide a required capability to make a Device eligible.',
     "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
     "Use unique plan-local Work Order labels and explicit completion criteria. OpenDelegate assigns durable owner-cycle-scoped IDs and remaps dependencies deterministically. Keep independent work parallel by leaving dependsOn empty; add dependencies only when evidence must flow between Work Orders.",
     "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -1090,12 +1092,54 @@ function parsePlanningResult(
     const plan = structuredClone(
       applyAuthorityReducingPlanningDefaults(parsed["plan"]),
     ) as unknown as ReadyPlan;
+    requireDeclaredComputerUseAuthority(plan);
     return {
       state: "ready",
       plan: scopePlanningWorkOrderIds(plan, planningKey),
     };
   }
   throw invalidWorkPlan();
+}
+
+/**
+ * Computer Use is exposed to a Worker only when the immutable Work Order asks
+ * for its exact capability. A semantic planner may describe the action while
+ * accidentally omitting that authority gate; accepting such a plan would run
+ * an Agent without the requested tool and can leave the Run waiting for an
+ * impossible action. Reject the inconsistent plan instead of silently adding
+ * authority or dispatching a misleading Work Order.
+ */
+function requireDeclaredComputerUseAuthority(
+  plan: Extract<TaskWorkPlanDecision, { readonly state: "ready" }>["plan"],
+): void {
+  for (const workOrder of plan.workOrders) {
+    if (
+      workOrderRequiresComputerUse(workOrder) &&
+      !workOrder.requiredCapabilities.includes("computer-use")
+    ) {
+      throw invalidWorkPlan();
+    }
+  }
+}
+
+function workOrderRequiresComputerUse(
+  workOrder: Extract<
+    TaskWorkPlanDecision,
+    { readonly state: "ready" }
+  >["plan"]["workOrders"][number],
+): boolean {
+  const statements = [workOrder.brief, ...workOrder.completionCriteria, ...workOrder.constraints];
+  return statements.some((statement) => {
+    const normalized = statement.normalize("NFKC");
+    return (
+      /(?:\b(?:invoke|use|execute|perform|run|require)\b.{0,48}\bcomputer[ -]use\b|\bcomputer[ -]use\b.{0,48}\b(?:is\s+)?(?:invoked|used|executed|required|performed)\b)/iu.test(
+        normalized,
+      ) ||
+      /(?:computer[ -]use.{0,48}(?:사용|실행|호출|조작)|(?:사용|실행|호출|조작).{0,48}computer[ -]use)/iu.test(
+        normalized,
+      )
+    );
+  });
 }
 
 function applyAuthorityReducingPlanningDefaults(plan: Record<string, unknown>): unknown {

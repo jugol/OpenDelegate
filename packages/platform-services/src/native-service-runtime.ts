@@ -698,6 +698,7 @@ function createNativeSupervisorAdapter(
             invocation,
             boundaries.process,
             boundaries.clock,
+            boundaries.fileSystem,
             tools,
           );
           if (result.timedOut || !invocation.expectedExitCodes.includes(result.exitCode)) {
@@ -715,6 +716,7 @@ function createNativeSupervisorAdapter(
             : [...completed, { invocation: activeLifecycleInvocation, exitCode: 0 }],
           boundaries.process,
           boundaries.clock,
+          boundaries.fileSystem,
           tools,
         );
         throw error;
@@ -739,13 +741,19 @@ function createNativeHealthAdapter(
         if (!loggedIn && action.policy === "defer-if-logged-out") {
           return { disposition: "unchanged" };
         }
-        const state = await supervisorState.read("session-helper");
-        if (state !== "running") {
-          throw new NativeHealthError(
-            "The logged-in user-session helper did not reach a running supervisor state.",
-          );
+        const deadline = boundaries.clock.now().getTime() + action.timeoutMs;
+        for (;;) {
+          const state = await supervisorState.read("session-helper");
+          if (state === "running") {
+            return { disposition: "unchanged" };
+          }
+          if (boundaries.clock.now().getTime() >= deadline) {
+            throw new NativeHealthError(
+              "The logged-in user-session helper did not reach a running supervisor state.",
+            );
+          }
+          await boundaries.clock.sleep(250);
         }
-        return { disposition: "unchanged" };
       }
       const deadline = boundaries.clock.now().getTime() + action.timeoutMs;
       for (;;) {
@@ -785,6 +793,15 @@ function createNativeSupervisorStateReader(
         const loggedIn = await boundaries.session.isOwnerLoggedIn(ownerSessionProbe(configuration));
         if (!loggedIn) {
           return "not-loaded";
+        }
+        if (configuration.platform === "windows") {
+          const presenceState = await readWindowsSessionHelperPresenceState(
+            configuration,
+            boundaries,
+          );
+          if (presenceState !== undefined) {
+            return presenceState;
+          }
         }
       }
       const request = supervisorStatusRequest(configuration, plane, tools);
@@ -1264,6 +1281,7 @@ async function rollbackPartialSupervisorOperation(
   }[],
   process: NativeProcessBoundary,
   clock: NativeClockBoundary,
+  fileSystem: NativeFileSystemBoundary,
   tools: NativeTools,
 ): Promise<void> {
   for (const entry of [...completed].reverse()) {
@@ -1274,7 +1292,14 @@ async function rollbackPartialSupervisorOperation(
     if (inverse === undefined) {
       continue;
     }
-    const result = await runSupervisorInvocation(configuration, inverse, process, clock, tools);
+    const result = await runSupervisorInvocation(
+      configuration,
+      inverse,
+      process,
+      clock,
+      fileSystem,
+      tools,
+    );
     if (result.timedOut || !inverse.expectedExitCodes.includes(result.exitCode)) {
       throw uncertain(`A partial ${operation.plane} supervisor mutation could not be rolled back.`);
     }
@@ -1370,6 +1395,7 @@ async function runSupervisorInvocation(
   invocation: CommandInvocation,
   process: NativeProcessBoundary,
   clock: NativeClockBoundary,
+  fileSystem: NativeFileSystemBoundary,
   tools: NativeTools,
 ): Promise<NativeProcessResult> {
   const executable = resolveSupervisorExecutable(invocation.executable, tools);
@@ -1396,6 +1422,28 @@ async function runSupervisorInvocation(
         timeoutMs: invocation.timeoutMs,
         process,
         clock,
+      });
+    }
+    if (
+      configuration.platform === "windows" &&
+      invocation.executable.toLowerCase() === "schtasks.exe" &&
+      invocation.arguments[0]?.toLowerCase() === "/end" &&
+      result.exitCode === 0 &&
+      !result.timedOut
+    ) {
+      const taskIndex = invocation.arguments.findIndex((value) => value.toLowerCase() === "/tn");
+      const taskName = invocation.arguments[taskIndex + 1];
+      if (taskName === undefined) {
+        throw new NativeSupervisorError("A Windows scheduled-task stop command has no task name.");
+      }
+      await waitForWindowsScheduledTaskStopped({
+        executable,
+        taskName,
+        timeoutMs: invocation.timeoutMs,
+        process,
+        clock,
+        fileSystem,
+        helperPresencePath: win32.join(configuration.paths.runtimeRoot, "helper-plane-v2.json"),
       });
     }
     return result;
@@ -1425,6 +1473,140 @@ async function runSupervisorInvocation(
     timeoutMs: invocation.timeoutMs,
     environment: ownerEnvironment(configuration),
   });
+}
+
+export async function waitForWindowsScheduledTaskStopped(input: {
+  readonly executable: string;
+  readonly taskName: string;
+  readonly timeoutMs: number;
+  readonly process: NativeProcessBoundary;
+  readonly clock: NativeClockBoundary;
+  readonly fileSystem: NativeFileSystemBoundary;
+  readonly helperPresencePath: string;
+}): Promise<void> {
+  const deadline = input.clock.now().getTime() + input.timeoutMs;
+  for (;;) {
+    const remainingMs = deadline - input.clock.now().getTime();
+    if (remainingMs <= 0) {
+      throw new NativeSupervisorError("The Windows scheduled task did not stop before timeout.");
+    }
+    const status = await input.process.run({
+      executable: input.executable,
+      arguments: ["/Query", "/TN", input.taskName, "/FO", "CSV", "/NH"],
+      timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
+    });
+    let supervisorStopped = !status.timedOut && status.exitCode === 1;
+    if (!status.timedOut && status.exitCode === 0) {
+      const state = parseSupervisorState("windows", "session-helper", status);
+      supervisorStopped = state !== "running";
+    } else if (!status.timedOut) {
+      if (status.exitCode !== 1) {
+        throw new NativeSupervisorError(
+          "The Windows scheduled-task stop state could not be inspected.",
+        );
+      }
+    }
+    if (
+      supervisorStopped &&
+      (await windowsHelperPresenceProcessStopped(
+        input.fileSystem,
+        input.process,
+        input.helperPresencePath,
+      ))
+    ) {
+      return;
+    }
+    const sleepMs = Math.min(500, deadline - input.clock.now().getTime());
+    if (sleepMs <= 0) {
+      throw new NativeSupervisorError("The Windows scheduled task did not stop before timeout.");
+    }
+    await input.clock.sleep(sleepMs);
+  }
+}
+
+async function windowsHelperPresenceProcessStopped(
+  fileSystem: NativeFileSystemBoundary,
+  process: NativeProcessBoundary,
+  presencePath: string,
+): Promise<boolean> {
+  const processId = await readWindowsHelperPresenceProcessId(fileSystem, presencePath);
+  return processId === undefined || !(await process.isProcessAlive(processId));
+}
+
+async function readWindowsSessionHelperPresenceState(
+  configuration: Extract<PlatformServiceConfiguration, { readonly platform: "windows" }>,
+  boundaries: NativeServiceBoundaries,
+): Promise<SupervisorState | undefined> {
+  try {
+    const processId = await readWindowsHelperPresenceProcessId(
+      boundaries.fileSystem,
+      win32.join(configuration.paths.runtimeRoot, "helper-plane-v2.json"),
+      {
+        instanceId: configuration.instanceId,
+        deviceId: configuration.deviceId,
+        releaseVersion: configuration.bundle.version,
+      },
+    );
+    return processId === undefined
+      ? undefined
+      : (await boundaries.process.isProcessAlive(processId))
+        ? "running"
+        : "stopped";
+  } catch {
+    return "unknown";
+  }
+}
+
+async function readWindowsHelperPresenceProcessId(
+  fileSystem: NativeFileSystemBoundary,
+  presencePath: string,
+  expected?: {
+    readonly instanceId: string;
+    readonly deviceId: string;
+    readonly releaseVersion: string;
+  },
+): Promise<number | undefined> {
+  const metadata = await fileSystem.inspect(presencePath);
+  if (metadata.kind === "missing") {
+    return undefined;
+  }
+  if (
+    metadata.kind !== "regular-file" ||
+    typeof metadata.size !== "number" ||
+    metadata.size > 4_096
+  ) {
+    throw new NativeSupervisorError("The Windows helper presence record is invalid.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse((await fileSystem.read(presencePath, 4_096)).toString("utf8"));
+  } catch {
+    throw new NativeSupervisorError("The Windows helper presence record could not be read.");
+  }
+  const processId =
+    parsed !== null &&
+    typeof parsed === "object" &&
+    "payload" in parsed &&
+    parsed.payload !== null &&
+    typeof parsed.payload === "object" &&
+    "processId" in parsed.payload
+      ? parsed.payload.processId
+      : undefined;
+  if (!Number.isSafeInteger(processId) || Number(processId) <= 0) {
+    throw new NativeSupervisorError("The Windows helper presence process identity is invalid.");
+  }
+  if (expected !== undefined) {
+    const payload = (parsed as { readonly payload: Readonly<Record<string, unknown>> }).payload;
+    if (
+      payload["plane"] !== "session-helper" ||
+      payload["instanceId"] !== expected.instanceId ||
+      payload["deviceId"] !== expected.deviceId ||
+      payload["releaseVersion"] !== expected.releaseVersion
+    ) {
+      throw new NativeSupervisorError("The Windows helper presence identity is invalid.");
+    }
+  }
+  return Number(processId);
 }
 
 async function waitForWindowsServiceStopped(input: {

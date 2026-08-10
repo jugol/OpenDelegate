@@ -98,9 +98,14 @@ class SecureContainerWipe final {
   Container& value_;
 };
 
+struct WindowLookup {
+  std::wstring_view title;
+  HWND result = nullptr;
+  std::size_t matches = 0;
+};
+
 BOOL CALLBACK find_window_callback(HWND window, LPARAM context) {
-  auto* pair =
-      reinterpret_cast<std::pair<std::wstring_view, HWND*>*>(static_cast<INT_PTR>(context));
+  auto* lookup = reinterpret_cast<WindowLookup*>(static_cast<INT_PTR>(context));
   if (!IsWindowVisible(window)) {
     return TRUE;
   }
@@ -113,18 +118,33 @@ BOOL CALLBACK find_window_callback(HWND window, LPARAM context) {
     return TRUE;
   }
   title.resize(static_cast<std::size_t>(length));
-  if (title == pair->first) {
-    *pair->second = window;
-    return FALSE;
+  if (title == lookup->title) {
+    lookup->result = window;
+    ++lookup->matches;
   }
   return TRUE;
 }
 
-HWND find_window(std::wstring_view title) {
-  HWND result = nullptr;
-  std::pair<std::wstring_view, HWND*> context{title, &result};
-  EnumWindows(find_window_callback, reinterpret_cast<LPARAM>(&context));
-  return result;
+HWND find_unique_window(std::wstring_view title) {
+  WindowLookup lookup{title};
+  EnumWindows(find_window_callback, reinterpret_cast<LPARAM>(&lookup));
+  return lookup.matches == 1 ? lookup.result : nullptr;
+}
+
+bool window_title_matches(HWND window, std::wstring_view expected) {
+  if (window == nullptr || IsWindow(window) == FALSE || IsWindowVisible(window) == FALSE) {
+    return false;
+  }
+  const int length = GetWindowTextLengthW(window);
+  if (length <= 0 || length > 4096 || static_cast<std::size_t>(length) != expected.size()) {
+    return false;
+  }
+  std::wstring title(static_cast<std::size_t>(length) + 1, L'\0');
+  if (GetWindowTextW(window, title.data(), length + 1) != length) {
+    return false;
+  }
+  title.resize(static_cast<std::size_t>(length));
+  return title == expected;
 }
 
 DWORD process_session_id(DWORD process_id) {
@@ -670,17 +690,18 @@ WindowsAutomation::WindowsAutomation(const Configuration& configuration)
     : configuration_(configuration) {}
 
 void WindowsAutomation::initialize_capture_target() {
-  HWND target = target_window();
   if (configuration_.capture_mode == L"fixture-window") {
+    HWND target = target_window();
     auto interop =
         winrt::get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
     require_hresult(interop->CreateForWindow(
         target, winrt::guid_of<GraphicsCaptureItem>(),
         winrt::put_abi(capture_item_)));
+    selected_target_window_ = target;
     return;
   }
 
-  HWND owner = target;
+  HWND owner = GetForegroundWindow();
   bool destroy_owner = false;
   if (owner == nullptr) {
     owner = CreateWindowExW(0, L"STATIC", L"OpenDelegate screen capture selection",
@@ -701,21 +722,24 @@ void WindowsAutomation::initialize_capture_target() {
   if (!capture_item_) {
     throw HelperFailure();
   }
-  if (!configuration_.fixture_window_title.empty() &&
-      capture_item_.DisplayName() != configuration_.fixture_window_title) {
+  const std::wstring selected_title = capture_item_.DisplayName().c_str();
+  selected_target_window_ = find_unique_window(selected_title);
+  if (selected_target_window_ == nullptr) {
     capture_item_ = nullptr;
     throw HelperFailure();
   }
 }
 
 HWND WindowsAutomation::target_window() const {
-  HWND target = nullptr;
-  if (!configuration_.fixture_window_title.empty()) {
-    target = find_window(configuration_.fixture_window_title);
-  } else {
-    target = GetForegroundWindow();
+  HWND target = selected_target_window_;
+  std::wstring expected_title;
+  if (capture_item_) {
+    expected_title = capture_item_.DisplayName().c_str();
+  } else if (!configuration_.fixture_window_title.empty()) {
+    expected_title = configuration_.fixture_window_title;
+    target = find_unique_window(expected_title);
   }
-  if (target == nullptr) {
+  if (target == nullptr || expected_title.empty() || !window_title_matches(target, expected_title)) {
     throw HelperFailure();
   }
   return target;

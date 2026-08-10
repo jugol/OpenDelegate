@@ -125,6 +125,7 @@ async function main() {
       },
       helper,
       helperErrors,
+      options.useOwnerPicker ? 5 * 60_000 : 10_000,
     );
     requireRunning(helper, "The native Windows user-session helper did not stay running.");
 
@@ -282,9 +283,10 @@ async function resolvePhysicalCandidate(candidate) {
   }
 }
 
-async function waitForHelper(port, command, helper, helperErrors) {
+async function waitForHelper(port, command, helper, helperErrors, readinessTimeoutMs) {
+  const deadline = Date.now() + readinessTimeoutMs;
   let lastError;
-  for (let attempt = 0; attempt < 30; ++attempt) {
+  while (Date.now() < deadline) {
     if (helper.exitCode !== null || helper.signalCode !== null) {
       throw new Error(
         `The native helper exited before readiness (exit ${helper.exitCode ?? "signal"}).`,
@@ -294,7 +296,7 @@ async function waitForHelper(port, command, helper, helperErrors) {
       return await port.execute(command);
     } catch (error) {
       lastError = error;
-      await wait(250);
+      await wait(Math.min(250, Math.max(0, deadline - Date.now())));
     }
   }
   throw new Error(
