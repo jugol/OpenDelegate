@@ -1404,6 +1404,28 @@ async function runSupervisorInvocation(
         clock,
       });
     }
+    if (
+      configuration.platform === "windows" &&
+      invocation.executable.toLowerCase() === "schtasks.exe" &&
+      invocation.arguments[0]?.toLowerCase() === "/end" &&
+      result.exitCode === 0 &&
+      !result.timedOut
+    ) {
+      const taskIndex = invocation.arguments.findIndex(
+        (value) => value.toLowerCase() === "/tn",
+      );
+      const taskName = invocation.arguments[taskIndex + 1];
+      if (taskName === undefined) {
+        throw new NativeSupervisorError("A Windows scheduled-task stop command has no task name.");
+      }
+      await waitForWindowsScheduledTaskStopped({
+        executable,
+        taskName,
+        timeoutMs: invocation.timeoutMs,
+        process,
+        clock,
+      });
+    }
     return result;
   }
   if (configuration.platform === "macos") {
@@ -1431,6 +1453,49 @@ async function runSupervisorInvocation(
     timeoutMs: invocation.timeoutMs,
     environment: ownerEnvironment(configuration),
   });
+}
+
+export async function waitForWindowsScheduledTaskStopped(input: {
+  readonly executable: string;
+  readonly taskName: string;
+  readonly timeoutMs: number;
+  readonly process: NativeProcessBoundary;
+  readonly clock: NativeClockBoundary;
+}): Promise<void> {
+  const deadline = input.clock.now().getTime() + input.timeoutMs;
+  for (;;) {
+    const remainingMs = deadline - input.clock.now().getTime();
+    if (remainingMs <= 0) {
+      throw new NativeSupervisorError(
+        "The Windows scheduled task did not stop before timeout.",
+      );
+    }
+    const status = await input.process.run({
+      executable: input.executable,
+      arguments: ["/Query", "/TN", input.taskName, "/FO", "CSV", "/NH"],
+      timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
+    });
+    if (!status.timedOut && status.exitCode === 1) {
+      return;
+    }
+    if (!status.timedOut && status.exitCode === 0) {
+      const state = parseSupervisorState("windows", "session-helper", status);
+      if (state !== "running") {
+        return;
+      }
+    } else if (!status.timedOut) {
+      throw new NativeSupervisorError(
+        "The Windows scheduled-task stop state could not be inspected.",
+      );
+    }
+    const sleepMs = Math.min(500, deadline - input.clock.now().getTime());
+    if (sleepMs <= 0) {
+      throw new NativeSupervisorError(
+        "The Windows scheduled task did not stop before timeout.",
+      );
+    }
+    await input.clock.sleep(sleepMs);
+  }
 }
 
 async function waitForWindowsServiceStopped(input: {

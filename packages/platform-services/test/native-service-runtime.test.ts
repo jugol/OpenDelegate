@@ -25,6 +25,7 @@ import {
   type ServiceCommandJournalEntry,
   type ServicePlanExecutionReport,
 } from "../src/index.ts";
+import { waitForWindowsScheduledTaskStopped } from "../src/native-service-runtime.ts";
 import { linuxConfiguration, macOsConfiguration, windowsConfiguration } from "./fixtures.ts";
 
 class MemoryJournal implements ServiceCommandJournal {
@@ -1318,6 +1319,47 @@ test("logged-in Windows helper health waits for Task Scheduler to report Running
 
   assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
   assert.equal(helperStatusReads, 3);
+});
+
+test("Windows helper stop waits for Task Scheduler to leave Running", async () => {
+  const process = new FakeProcess();
+  let statusReads = 0;
+  process.handler = (request) => {
+    assert.deepEqual(request.arguments, [
+      "/Query",
+      "/TN",
+      "\\OpenDelegate-personal-SessionHelper",
+      "/FO",
+      "CSV",
+      "/NH",
+    ]);
+    statusReads += 1;
+    return processResult(
+      0,
+      statusReads < 3
+        ? '"\\OpenDelegate-personal-SessionHelper","N/A","Running"\r\n'
+        : '"\\OpenDelegate-personal-SessionHelper","N/A","Ready"\r\n',
+    );
+  };
+  let now = 0;
+  const sleeps: number[] = [];
+
+  await waitForWindowsScheduledTaskStopped({
+    executable: String.raw`C:\Windows\System32\schtasks.exe`,
+    taskName: "\\OpenDelegate-personal-SessionHelper",
+    timeoutMs: 30_000,
+    process,
+    clock: {
+      now: () => new Date(now),
+      async sleep(milliseconds) {
+        sleeps.push(milliseconds);
+        now += milliseconds;
+      },
+    },
+  });
+
+  assert.equal(statusReads, 3);
+  assert.deepEqual(sleeps, [500, 500]);
 });
 
 test("a partial Windows SCM install is compensated without invoking a shell", async () => {
