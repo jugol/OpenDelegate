@@ -2198,3 +2198,40 @@ not perform the authoritative action from the visible control surface.
 card without stale IDs or message noise. The original failure explanation and exact
 Discord message identity remain durable, and stale or externally deleted surfaces
 still fail safely with bounded diagnostics.
+
+## D-107 — Managed Git trusts only the exact registered root per invocation
+
+**Decision:** The production Worktree runner supplies Git's `safe.directory` only
+for the exact absolute path that is also bound to the command's fixed `-C` slot.
+This trust is process-local: OpenDelegate never writes a global or system Git
+exception. The existing fixed command grammar, disabled hooks and fsmonitor,
+ignored system attributes, external checkout-filter rejection, no-checkout
+provisioning, and noninteractive environment remain mandatory.
+
+**Rationale:** A Windows Worker service runs under its virtual service identity,
+while an explicitly registered repository is normally owned by the interactive
+owner. Git correctly rejects that ownership mismatch unless the caller records its
+intent. The earlier production composition therefore failed before it could create
+the isolated Worktree, even though the repository was owner-registered.
+
+**Consequence:** Windows services can materialize an owner-registered Git Workspace
+without weakening Git for unrelated repositories or mutating owner configuration.
+A forged or mismatched safe-directory argument remains outside the runner grammar,
+and repositories with executable checkout filters still fail closed.
+
+## D-108 — A pending Worker approval always has one actionable Discord surface
+
+**Decision:** When a Task is running and has a pending Worker action approval, Main
+must project one live Discord activity message with Approve and Reject controls. If
+the in-memory execution activity snapshot is temporarily unavailable, Main creates
+a deterministic, approval-scoped fallback activity projection. The normal activity
+projection replaces that fallback when available, and resolving the approval closes
+the fallback through the existing durable activity lifecycle.
+
+**Rationale:** The durable approval can outlive or temporarily race the best-effort
+progress snapshot. Showing the approval only in the non-interactive status panel
+left the owner unable to safely continue or reject a Run from Discord.
+
+**Consequence:** Every visible pending Worker approval remains actionable without
+creating an unbounded sequence of messages. The fallback grants no authority by
+itself, preserves the exact approval scope, and never changes the decision policy.

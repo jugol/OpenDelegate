@@ -361,7 +361,14 @@ export class DiscordMainRuntime {
             this.#recordDiagnostic("discord.runtime.artifact_projection_failed", errorCode(error));
           }
         }
-        await this.#adapter.publishTaskProjection(projectTask(task, artifact, activity, approval));
+        const effectiveActivity =
+          activity ??
+          (task.state === "running" && approval !== undefined
+            ? approvalFallbackActivity(task.taskId, approval, this.#clock.nowMs())
+            : undefined);
+        await this.#adapter.publishTaskProjection(
+          projectTask(task, artifact, effectiveActivity, approval),
+        );
       } catch (error) {
         this.#recordDiagnostic("discord.runtime.task_projection_failed", errorCode(error));
       }
@@ -792,6 +799,29 @@ function projectTask(
     ...(artifact === undefined ? {} : { artifact: Object.freeze({ ...artifact }) }),
     ...(activity === undefined ? {} : { activity: structuredClone(activity) }),
     ...(approval === undefined ? {} : { approval: Object.freeze({ ...approval }) }),
+  });
+}
+
+function approvalFallbackActivity(
+  taskId: string,
+  approval: NonNullable<TaskChannelProjection["approval"]>,
+  updatedAtMs: number,
+): NonNullable<TaskChannelProjection["activity"]> {
+  assertBoundedInteger(updatedAtMs, 0, Number.MAX_SAFE_INTEGER, "Discord activity timestamp");
+  return Object.freeze({
+    cycleId: `approval_${approval.approvalId}`,
+    revision: 1,
+    updatedAtMs,
+    phase: "working" as const,
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: Object.freeze([
+      Object.freeze({
+        key: `owner-approval:${taskId}`,
+        status: "active" as const,
+        summary: "A Worker is waiting for owner approval before it can continue.",
+      }),
+    ]),
   });
 }
 

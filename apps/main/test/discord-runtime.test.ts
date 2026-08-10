@@ -195,6 +195,92 @@ test("Main Discord runtime adds a Task Artifact link without making status proje
   await runtime.close();
 });
 
+test("Main Discord runtime keeps a pending Worker approval actionable without an activity snapshot", async () => {
+  const projections: TaskChannelProjection[] = [];
+  let approvalAvailable = true;
+  const clock = new TestClock();
+  clock.value = 4_200;
+  const runtime = new DiscordMainRuntime({
+    adapter: {
+      start: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+      createTaskThread: () => Promise.reject(new Error("not used")),
+      flushOutbox: () => Promise.resolve(),
+      reconcilePending: () => Promise.resolve(),
+      publishTaskProjection: (projection) => {
+        projections.push(structuredClone(projection));
+        return Promise.resolve();
+      },
+    },
+    repository: {
+      getGatewayCursor: () => Promise.resolve(undefined),
+      listBindings: () =>
+        Promise.resolve([
+          {
+            guildId: GUILD_ID,
+            forumChannelId: FORUM_ID,
+            threadId: THREAD_ID,
+            starterMessageId: THREAD_ID,
+            taskId: "task-running-approval",
+            externalState: "available",
+            archived: false,
+            locked: false,
+            revision: 1,
+          },
+        ]),
+    },
+    tasks: {
+      get: () =>
+        Promise.resolve({
+          taskId: "task-running-approval",
+          state: "running",
+          objective: "Inspect a registered Device without changing it.",
+          updatedAt: NOW,
+          messages: [],
+          events: [],
+        }),
+    },
+    taskActivity: { activity: () => Promise.resolve(undefined) },
+    taskApproval: {
+      current: () =>
+        Promise.resolve(
+          approvalAvailable
+            ? {
+                approvalId: "approval-read-only-escalation",
+                description: "NAS wants to expand its sandbox for one command.",
+              }
+            : undefined,
+        ),
+      resolve: () => Promise.resolve(false),
+    },
+    clock,
+    synchronizationIntervalMs: 60_000,
+  });
+
+  await runtime.start();
+  assert.deepEqual(projections.at(-1)?.activity, {
+    cycleId: "approval_approval-read-only-escalation",
+    revision: 1,
+    updatedAtMs: 4_200,
+    phase: "working",
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: [
+      {
+        key: "owner-approval:task-running-approval",
+        status: "active",
+        summary: "A Worker is waiting for owner approval before it can continue.",
+      },
+    ],
+  });
+  assert.equal(projections.at(-1)?.approval?.approvalId, "approval-read-only-escalation");
+
+  approvalAvailable = false;
+  await runtime.synchronizeNow();
+  assert.equal(projections.at(-1)?.activity, undefined);
+  await runtime.close();
+});
+
 test("Main Discord runtime keeps one Forum Task across replies and publishes its public result", async () => {
   const clock = new TestClock();
   const repository = new InMemoryDiscordStateRepository();

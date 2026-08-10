@@ -740,12 +740,20 @@ function remainingCommandTime(deadlineMs: number): number {
 }
 
 function withTrustedGitConfiguration(arguments_: readonly string[]): readonly string[] {
-  return Object.freeze([...TRUSTED_GIT_CONFIGURATION_ARGUMENTS, ...arguments_]);
+  if (arguments_[0] !== "-C" || !safeAbsoluteGitPath(arguments_[1]) || arguments_.length < 3) {
+    throw commandFailed();
+  }
+  const repositoryRoot = arguments_[1];
+  return Object.freeze([
+    ...TRUSTED_GIT_CONFIGURATION_ARGUMENTS,
+    "-c",
+    `safe.directory=${repositoryRoot}`,
+    ...arguments_,
+  ]);
 }
 
 function filterInspectionArguments(repositoryRoot: string): readonly string[] {
-  return Object.freeze([
-    ...TRUSTED_GIT_CONFIGURATION_ARGUMENTS,
+  return withTrustedGitConfiguration([
     "-C",
     repositoryRoot,
     "config",
@@ -761,18 +769,11 @@ function isTrustedGitInvocation(arguments_: readonly string[]): boolean {
 }
 
 function isManagedGitCommand(arguments_: readonly string[]): boolean {
-  if (!hasTrustedGitConfiguration(arguments_)) {
+  const context = trustedGitInvocationContext(arguments_);
+  if (context === undefined) {
     return false;
   }
-  const offset = TRUSTED_GIT_CONFIGURATION_ARGUMENTS.length;
-  if (
-    arguments_.length < offset + 4 ||
-    arguments_[offset] !== "-C" ||
-    !safeAbsoluteGitPath(arguments_[offset + 1])
-  ) {
-    return false;
-  }
-  const command = arguments_.slice(offset + 2);
+  const command = arguments_.slice(context.commandOffset);
   if (
     sameArguments(command, ["worktree", "prune", "--expire", "now"]) ||
     sameArguments(command, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]) ||
@@ -818,29 +819,50 @@ function isManagedGitCommand(arguments_: readonly string[]): boolean {
 }
 
 function isFilterInspectionCommand(arguments_: readonly string[]): boolean {
-  if (!hasTrustedGitConfiguration(arguments_)) {
+  const context = trustedGitInvocationContext(arguments_);
+  if (context === undefined) {
     return false;
   }
-  const offset = TRUSTED_GIT_CONFIGURATION_ARGUMENTS.length;
-  return (
-    arguments_.length === offset + 7 &&
-    arguments_[offset] === "-C" &&
-    safeAbsoluteGitPath(arguments_[offset + 1]) &&
-    sameArguments(arguments_.slice(offset + 2), [
-      "config",
-      "--null",
-      "--includes",
-      "--get-regexp",
-      EXTERNAL_CHECKOUT_FILTER_PATTERN,
-    ])
-  );
+  return sameArguments(arguments_.slice(context.commandOffset), [
+    "config",
+    "--null",
+    "--includes",
+    "--get-regexp",
+    EXTERNAL_CHECKOUT_FILTER_PATTERN,
+  ]);
 }
 
-function hasTrustedGitConfiguration(arguments_: readonly string[]): boolean {
-  return (
-    arguments_.length >= TRUSTED_GIT_CONFIGURATION_ARGUMENTS.length &&
-    TRUSTED_GIT_CONFIGURATION_ARGUMENTS.every((argument, index) => arguments_[index] === argument)
-  );
+function trustedGitInvocationContext(
+  arguments_: readonly string[],
+): { readonly commandOffset: number; readonly repositoryRoot: string } | undefined {
+  if (
+    arguments_.length < TRUSTED_GIT_CONFIGURATION_ARGUMENTS.length + 5 ||
+    !TRUSTED_GIT_CONFIGURATION_ARGUMENTS.every((argument, index) => arguments_[index] === argument)
+  ) {
+    return undefined;
+  }
+  const dynamicOffset = TRUSTED_GIT_CONFIGURATION_ARGUMENTS.length;
+  const safeDirectory = arguments_[dynamicOffset + 1];
+  const safeDirectoryPrefix = "safe.directory=";
+  if (
+    arguments_[dynamicOffset] !== "-c" ||
+    safeDirectory === undefined ||
+    !safeDirectory.startsWith(safeDirectoryPrefix)
+  ) {
+    return undefined;
+  }
+  const trustedPath = safeDirectory.slice(safeDirectoryPrefix.length);
+  if (
+    !safeAbsoluteGitPath(trustedPath) ||
+    arguments_[dynamicOffset + 2] !== "-C" ||
+    arguments_[dynamicOffset + 3] !== trustedPath
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    commandOffset: dynamicOffset + 4,
+    repositoryRoot: trustedPath,
+  });
 }
 
 function sameArguments(actual: readonly string[], expected: readonly string[]): boolean {
