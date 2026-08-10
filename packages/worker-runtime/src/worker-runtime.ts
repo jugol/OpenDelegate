@@ -534,6 +534,7 @@ export class WorkerRuntime {
           left.assignment.runId.localeCompare(right.assignment.runId, "en"),
       )
       .map((run) => {
+        const leaseAuthority = this.leaseAuthorities.get(run.assignment.runId);
         const agentSession = this.processes
           .get(run.assignment.runId)
           ?.process.currentAgentSession?.();
@@ -543,7 +544,8 @@ export class WorkerRuntime {
           runId: run.assignment.runId,
           state: run.state as "starting" | "running" | "cancelling",
           acceptedAtMs: run.acceptedAtMs,
-          leaseExpiresAtMs: run.assignment.leaseExpiresAtMs,
+          leaseExpiresAtMs:
+            leaseAuthority?.snapshot().leaseExpiresAtMs ?? run.assignment.leaseExpiresAtMs,
           ...(agentSession === undefined ? {} : { agentSession }),
         });
       });
@@ -656,13 +658,21 @@ export class WorkerRuntime {
 
     const pending = this.processes.get(runId);
     if (pending !== undefined) {
-      await pending.process.requestCancel();
+      // A provider cancellation RPC is advisory and may itself stall. Do not
+      // let that RPC block lease sweeping, heartbeats, or every unrelated Run.
+      void pending.process.requestCancel().catch(() => undefined);
       const completedCooperatively = await Promise.race([
-        pending.process.completion.then(() => true),
+        pending.process.completion.then(
+          () => true,
+          () => true,
+        ),
         this.delay.wait(this.configuration.cancelGraceMs).then(() => false),
       ]);
       if (!completedCooperatively) {
-        await pending.process.forceTerminate();
+        await Promise.race([
+          pending.process.forceTerminate().catch(() => undefined),
+          this.delay.wait(this.configuration.cancelGraceMs),
+        ]);
       }
     }
     await this.finalizeCancelledRun(runId, terminalType);

@@ -933,6 +933,43 @@ test("Main planning exposes only verified capabilities and never Device instruct
   assert.doesNotMatch(prompt, /PRIVATE_DEVICE_INSTRUCTION_SENTINEL/u);
 });
 
+test("Main planning rejects Computer Use work that omits its exact authority capability", async () => {
+  const adapter = new FakeAgentAdapter("orchestration-missing-computer-use");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  await assert.rejects(
+    reasoner.plan({
+      task: {
+        ...request(1).task,
+        objective: "Use Computer Use to enter a marker in Notepad.",
+      },
+      attempt: 1,
+      executionKey: "computer-use-authority-gate",
+      signal: new AbortController().signal,
+    }),
+    (error: unknown) => error instanceof TaskExecutorError && error.code === "WORK_PLAN_INVALID",
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /requiredCapabilities is an execution-authority gate/u,
+  );
+});
+
 test("Main Device queries fail closed when their directory is unavailable or already cancelled", async () => {
   let directoryCalls = 0;
   const createReasoner = (list: () => Promise<readonly DeviceSummaryV1[]>) =>
@@ -1163,6 +1200,7 @@ type FakeAgentMode =
   | "placement-question"
   | "outcome-platform-question"
   | "orchestration"
+  | "orchestration-missing-computer-use"
   | "orchestration-omitted-secret-refs"
   | "orchestration-dependencies"
   | "device-directory-answer"
@@ -1247,6 +1285,24 @@ class FakeAgentAdapter implements AgentAdapter {
               workOrderId: "work_release_report",
               title: "Report the release",
               dependsOn: ["work_release_build"],
+            },
+          ],
+        },
+      });
+    }
+    if (this.#mode === "orchestration-missing-computer-use") {
+      return handle(session(input), {
+        schemaVersion: 1,
+        state: "ready",
+        plan: {
+          protocolVersion: "v1",
+          taskId: input.taskId,
+          workOrders: [
+            {
+              ...releaseWorkOrder(),
+              brief: "Invoke Computer Use to type a marker in Notepad.",
+              completionCriteria: ["Computer Use is invoked and the marker is visible."],
+              requiredCapabilities: ["codex"],
             },
           ],
         },

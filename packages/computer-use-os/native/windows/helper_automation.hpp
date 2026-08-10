@@ -35,6 +35,7 @@ class WindowsAutomation final {
  private:
   const Configuration& configuration_;
   winrt::Windows::Graphics::Capture::GraphicsCaptureItem capture_item_{nullptr};
+  HWND selected_target_window_ = nullptr;
   std::mutex input_mutex_;
   std::mutex state_mutex_;
   std::unordered_set<std::string> cancelled_handles_;

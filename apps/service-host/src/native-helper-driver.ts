@@ -174,7 +174,11 @@ async function loadComputerUseHelperComponent(
   configuration: ServiceHostConfiguration,
 ): Promise<NativeComponent> {
   const manifestPath = join(configuration.releaseRoot, "native-components.json");
-  const manifest = await readStableJson(manifestPath, MAX_NATIVE_MANIFEST_BYTES);
+  const manifest = await readReleaseOwnedStableJson(
+    configuration.releaseRoot,
+    manifestPath,
+    MAX_NATIVE_MANIFEST_BYTES,
+  );
   const record = requireRecord(manifest);
   if (
     !hasExactKeys(record, ["schemaVersion", "platform", "architecture", "components"]) ||
@@ -225,13 +229,39 @@ async function loadComputerUseHelperComponent(
   });
 }
 
-async function readStableJson(path: string, maximumBytes: number): Promise<unknown> {
+/**
+ * Reads one immutable release file while allowing the supported `current` release
+ * indirection. The indirection may exist only at the release-root boundary; a
+ * linked manifest below that boundary, or a path that escapes it, remains invalid.
+ */
+export async function readReleaseOwnedStableJson(
+  releaseRoot: string,
+  path: string,
+  maximumBytes: number,
+): Promise<unknown> {
   let handle;
   try {
-    if ((await realpath(path)) !== resolve(path)) {
+    const logicalRoot = resolve(releaseRoot);
+    const logicalPath = resolve(path);
+    const relationship = relative(logicalRoot, logicalPath);
+    if (
+      relationship === "" ||
+      isAbsolute(relationship) ||
+      relationship === ".." ||
+      relationship.startsWith(`..\\`) ||
+      relationship.startsWith("../")
+    ) {
+      throw new Error("escaped");
+    }
+    const [canonicalRoot, canonicalPath] = await Promise.all([
+      realpath(logicalRoot),
+      realpath(logicalPath),
+    ]);
+    const expectedCanonicalPath = resolve(canonicalRoot, relationship);
+    if (pathIdentity(canonicalPath) !== pathIdentity(expectedCanonicalPath)) {
       throw new Error("linked");
     }
-    handle = await open(path, "r");
+    handle = await open(canonicalPath, "r");
     const before = await handle.stat();
     if (!before.isFile() || before.size <= 0 || before.size > maximumBytes) {
       throw new Error("invalid");
@@ -257,6 +287,10 @@ async function readStableJson(path: string, maximumBytes: number): Promise<unkno
   } finally {
     await handle?.close().catch(() => undefined);
   }
+}
+
+function pathIdentity(path: string): string {
+  return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
 }
 
 async function verifyPinnedFile(

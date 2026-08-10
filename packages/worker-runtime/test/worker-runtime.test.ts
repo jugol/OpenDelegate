@@ -185,6 +185,13 @@ class DeferredRunProcess implements RunProcess {
   }
 }
 
+class HangingCancellationRunProcess extends DeferredRunProcess {
+  public override requestCancel(): Promise<void> {
+    this.cancelRequests += 1;
+    return new Promise(() => undefined);
+  }
+}
+
 const ACTIVE_AGENT_SESSION = Object.freeze({
   provider: "codex" as const,
   adapterId: "codex-app-server",
@@ -758,6 +765,7 @@ test("online maintenance crosses two renewal windows while disconnect cannot ext
     monotonicNowMs = 480_000;
     assert.equal(await runtime.pulse(), true);
     assert.equal(renewals, 2);
+    assert.equal((await runtime.heartbeat()).currentRuns?.[0]?.leaseExpiresAtMs, leaseExpiresAtMs);
 
     await runtime.markOffline();
     monotonicNowMs = 610_000;
@@ -773,6 +781,36 @@ test("online maintenance crosses two renewal windows while disconnect cannot ext
     assert.deepEqual(
       (await runtime.pendingOutbox()).map((event) => event.type),
       ["worker.run.failed"],
+    );
+  } finally {
+    await runtime.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a stalled provider cancellation cannot block expired-Run cleanup", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-worker-cancel-bound-"));
+  const repository = createSqliteWorkerStateRepository({
+    filename: join(directory, "worker.sqlite"),
+  });
+  const process = new HangingCancellationRunProcess();
+  let now = 1_000;
+  const runtime = await WorkerRuntime.create({
+    configuration: configuration(),
+    repository,
+    processFactory: { start: () => Promise.resolve(process) },
+    clock: { now: () => now },
+  });
+
+  try {
+    assert.equal((await runtime.acceptAssignment(assignment())).disposition, "accepted");
+    now = 2_001;
+    assert.deepEqual(await runtime.sweepExpiredRuns(), ["run-1"]);
+    assert.equal(process.cancelRequests, 1);
+    assert.equal(process.forcedTerminations, 1);
+    assert.deepEqual(
+      (await runtime.pendingOutbox()).map((event) => event.type),
+      ["worker.run.claimed", "worker.run.progress", "worker.run.failed"],
     );
   } finally {
     await runtime.close();
