@@ -535,6 +535,8 @@ const KOREAN_CLOSED_TEXT = Object.freeze({
     "현재 작업 상태에서는 이 버튼을 사용할 수 없어요. 최신 작업 업데이트를 확인하거나 새 메시지를 보내 주세요.",
   "This approval is no longer available in the Task's current state. Use the latest Task update.":
     "현재 작업 상태에서는 이 승인을 처리할 수 없어요. 최신 작업 업데이트를 확인해 주세요.",
+  "OpenDelegate could not safely record this control. Nothing was changed; use the current Task control again.":
+    "이 요청을 안전하게 기록하지 못해 아무것도 변경하지 않았어요. 현재 작업 버튼을 다시 사용해 주세요.",
   "This Task control conflicts with an already processed request. Use the latest Task update.":
     "이미 처리된 요청과 충돌하는 버튼이에요. 최신 작업 업데이트를 확인해 주세요.",
   "This Task is no longer available.": "이 작업은 더 이상 사용할 수 없어요.",
@@ -547,6 +549,22 @@ function localizeKnownText(value: string, locale: DiscordPresentationLocale): st
   const preparedWorkOrders = /^Main prepared ([1-9][0-9]*) Work Orders?\.$/u.exec(value);
   if (preparedWorkOrders !== null) {
     return `Main이 Worker에 배정할 작업 ${preparedWorkOrders[1]}개를 준비했어요.`;
+  }
+  const terminalWorkerFailure =
+    /^Worker Run failed during ([^\n()]{1,80}) \(([A-Z0-9_]{1,80})\)\. OpenDelegate did not automatically replay this process because its external outcome may be uncertain\. Review Task Runs, then use Retry\.\n\nLast Worker report \(may be incomplete\):\n([\s\S]+)$/u.exec(
+      value,
+    );
+  if (terminalWorkerFailure !== null) {
+    const stage = terminalWorkerFailure[1] === "execution" ? "실행" : terminalWorkerFailure[1];
+    return `Worker Run이 ${stage} 단계에서 실패했습니다 (${terminalWorkerFailure[2]}). 외부 작업이 실제로 어디까지 실행됐는지 확실하지 않아 OpenDelegate가 자동으로 다시 실행하지 않았습니다. 실행 내역을 확인한 뒤 다시 시도해 주세요.\n\n마지막 Worker 보고(불완전할 수 있음):\n${terminalWorkerFailure[3]}`;
+  }
+  const retryableWorkerFailure =
+    /^Worker Run encountered a retryable failure during ([^\n()]{1,80}) \(([A-Z0-9_]{1,80})\)\.\n\nLast Worker report \(may be incomplete\):\n([\s\S]+)$/u.exec(
+      value,
+    );
+  if (retryableWorkerFailure !== null) {
+    const stage = retryableWorkerFailure[1] === "execution" ? "실행" : retryableWorkerFailure[1];
+    return `Worker Run에서 다시 시도할 수 있는 오류가 발생했습니다. 단계: ${stage} · 코드: ${retryableWorkerFailure[2]}.\n\n마지막 Worker 보고(불완전할 수 있음):\n${retryableWorkerFailure[3]}`;
   }
   return KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT] ?? value;
 }

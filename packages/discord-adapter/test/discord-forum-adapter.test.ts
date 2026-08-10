@@ -321,6 +321,9 @@ class FakeDiscordApi implements DiscordApiPort {
     ephemeral: boolean;
   }): Promise<{ responseRef: string }> {
     this.#assertOnline();
+    if (this.acknowledgedInteractions.has(input.interactionId)) {
+      throw new DiscordApiError("NOT_FOUND", "Discord already acknowledged this interaction.");
+    }
     this.acknowledgedInteractions.add(input.interactionId);
     this.operations.push({
       kind: "defer",
@@ -1686,6 +1689,29 @@ test("a chronological failure update carries its Retry control", () => {
   assert.match(rendered, /od:v1:retry/);
 });
 
+test("a Korean failure update localizes deterministic diagnostics without rewriting the Worker report", () => {
+  const payload = renderTaskUpdate(
+    {
+      taskId: "task-localized-worker-failure",
+      state: "failed",
+      objective: "Windows에서 결과 파일을 만들어 전달해 줘.",
+      summary:
+        "Worker Run failed during execution (PROCESS_FAILED). OpenDelegate did not automatically replay this process because its external outcome may be uncertain. Review Task Runs, then use Retry.\n\nLast Worker report (may be incomplete):\n파일을 만들기 전에 안전한 경로를 확인했습니다.",
+      sourceEventId: "event_localized_worker_failure",
+      significance: "failure",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /실행 단계에서 실패했습니다 \(PROCESS_FAILED\)/u);
+  assert.match(rendered, /자동으로 다시 실행하지 않았습니다/u);
+  assert.match(rendered, /마지막 Worker 보고\(불완전할 수 있음\)/u);
+  assert.match(rendered, /파일을 만들기 전에 안전한 경로를 확인했습니다/u);
+  assert.doesNotMatch(rendered, /Worker Run failed during/u);
+  assert.doesNotMatch(rendered, /Last Worker report/u);
+  assert.match(rendered, /다시 시도/u);
+});
+
 test("one failure card follows the current pending approval without creating message noise", async () => {
   const { adapter, api, repository } = fixture();
   const thread = forumThread("300000000000000136");
@@ -2280,8 +2306,8 @@ test("interactions defer before asynchronous Task controls and replay is idempot
   );
 });
 
-test("interactions defer before waiting for earlier work on the same Discord thread", async () => {
-  const { adapter, api, tasks } = fixture();
+test("interactions defer before durable ingress and earlier work on the same Discord thread", async () => {
+  const { adapter, api, tasks, repository } = fixture();
   const thread = forumThread("300000000000000052");
   const starter = ownerMessage(thread.id, thread.id, "Serialize this thread");
   api.threads.set(thread.id, thread);
@@ -2310,6 +2336,24 @@ test("interactions defer before waiting for earlier work on the same Discord thr
   const blockedMessage = adapter.handleGatewayDispatch(messageDispatch(2, followUp));
   await appendStarted;
 
+  const originalClaimInbound = repository.claimInbound.bind(repository);
+  let releaseInboundClaim!: () => void;
+  let markInboundClaimStarted!: () => void;
+  const inboundClaimStarted = new Promise<void>((resolve) => {
+    markInboundClaimStarted = resolve;
+  });
+  const blockedInboundClaim = new Promise<void>((resolve) => {
+    releaseInboundClaim = resolve;
+  });
+  Object.defineProperty(repository, "claimInbound", {
+    configurable: true,
+    value: async (input: Parameters<typeof originalClaimInbound>[0]) => {
+      markInboundClaimStarted();
+      await blockedInboundClaim;
+      return originalClaimInbound(input);
+    },
+  });
+
   const interactionId = "400000000000000002";
   const handlingInteraction = adapter.handleGatewayDispatch(
     interactionDispatch(3, {
@@ -2323,9 +2367,10 @@ test("interactions defer before waiting for earlier work on the same Discord thr
       receivedAtMs: 1_000,
     }),
   );
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await inboundClaimStarted;
   assert.equal(api.acknowledgedInteractions.has(interactionId), true);
 
+  releaseInboundClaim();
   releaseAppend();
   await Promise.all([blockedMessage, handlingInteraction]);
   await adapter.flushOutbox();

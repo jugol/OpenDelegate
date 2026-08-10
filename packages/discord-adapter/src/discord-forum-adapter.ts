@@ -908,7 +908,7 @@ export class DiscordForumAdapter {
       return;
     }
     const key = `discord-interaction:${interaction.id}`;
-    const claim = await this.#repository.claimInbound({
+    const inbound = {
       key,
       digest: digestValue({
         id: interaction.id,
@@ -920,31 +920,79 @@ export class DiscordForumAdapter {
         authorId: interaction.author.id,
       }),
       nowMs: this.#clock.nowMs(),
-    });
+    };
+    const acknowledgementLatencyMs = this.#clock.nowMs() - interaction.receivedAtMs;
+    if (acknowledgementLatencyMs > 2_500) {
+      this.#recordDiagnostic("discord.interaction_ack_late", {
+        interactionId: interaction.id,
+        latencyMs: acknowledgementLatencyMs,
+      });
+      const lateClaim = await this.#repository.claimInbound(inbound);
+      if (lateClaim.outcome !== "completed") {
+        await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
+      }
+      return;
+    }
+
+    // Discord's three-second response deadline is an external liveness boundary,
+    // not authority to execute the control. Start the ephemeral acknowledgement
+    // before a contended SQL write can delay it; the Task/Approval mutation still
+    // waits for the durable inbound claim and response reference below.
+    const deferredPromise = this.#api
+      .deferInteraction({
+        interactionId: interaction.id,
+        interactionToken: interaction.token,
+        ephemeral: true,
+      })
+      .then(
+        (deferred) => ({ outcome: "acknowledged" as const, deferred }),
+        (error: unknown) => ({ outcome: "failed" as const, error }),
+      );
+    const claimPromise = this.#repository.claimInbound(inbound);
+    let claim: Awaited<typeof claimPromise>;
+    try {
+      claim = await claimPromise;
+    } catch (error) {
+      const deferred = await deferredPromise;
+      if (deferred.outcome === "acknowledged") {
+        try {
+          await this.#finishDeferredInteraction(
+            deferred.deferred.responseRef,
+            "OpenDelegate could not safely record this control. Nothing was changed; use the current Task control again.",
+            false,
+          );
+        } catch (responseError) {
+          this.#recordDiagnostic("discord.interaction_claim_result_unavailable", {
+            responseError: errorText(responseError),
+          });
+        }
+      }
+      throw error;
+    }
+    const deferred = await deferredPromise;
     if (claim.outcome === "completed") {
+      if (deferred.outcome === "acknowledged") {
+        await this.#dismissDeferredInteraction(deferred.deferred.responseRef);
+      }
       return;
     }
     let record: DiscordInboundRecord = claim.record;
     if (!record.acknowledged) {
-      const acknowledgementLatencyMs = this.#clock.nowMs() - interaction.receivedAtMs;
-      if (acknowledgementLatencyMs > 2_500) {
-        this.#recordDiagnostic("discord.interaction_ack_late", {
+      if (deferred.outcome === "failed") {
+        this.#recordDiagnostic("discord.interaction_ack_failed", {
           interactionId: interaction.id,
-          latencyMs: acknowledgementLatencyMs,
+          error: errorText(deferred.error),
         });
         await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
         return;
       }
-      const deferred = await this.#api.deferInteraction({
-        interactionId: interaction.id,
-        interactionToken: interaction.token,
-        ephemeral: true,
-      });
       record = await this.#repository.acknowledgeInbound({
         key,
-        responseRef: deferred.responseRef,
+        responseRef: deferred.deferred.responseRef,
         nowMs: this.#clock.nowMs(),
       });
+    } else if (deferred.outcome === "acknowledged") {
+      await this.#dismissDeferredInteraction(deferred.deferred.responseRef);
     }
     if (record.responseRef === undefined) {
       throw new DiscordAdapterError(

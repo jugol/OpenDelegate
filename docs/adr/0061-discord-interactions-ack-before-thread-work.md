@@ -17,11 +17,18 @@ three-second acknowledgement deadline.
 
 ## Decision
 
-Main claims and ephemerally defers an authorized-looking Discord interaction before
-it waits for earlier work on that Forum thread. Only after the acknowledgement and
-its opaque response reference are durable does the handler enter the existing
-per-thread serialization boundary to validate the binding, parse the control, and
-enqueue the idempotent Task command or Approval decision.
+Main starts the ephemeral defer request before it waits for the durable inbound
+claim or earlier work on that Forum thread. The durable claim begins concurrently,
+but no Task command or Approval decision can execute until both the claim and the
+opaque acknowledgement response reference are durable. This separates Discord's
+external liveness deadline from OpenDelegate's authority boundary: acknowledgement
+is not permission to execute the control.
+
+If the defer fails, Main completes a newly claimed inbound identity without
+executing its control. A replay that is already durably completed remains inert; an
+already acknowledged pending replay continues only from its durable response
+reference. Binding validation, control parsing, and idempotent action enqueueing
+remain inside the per-thread serialization boundary.
 
 If an unacknowledged interaction is already more than 2.5 seconds old when Main can
 inspect it, Main records a bounded late-ack diagnostic, completes that inbound
@@ -31,15 +38,16 @@ never performs a control whose acknowledgement outcome is unknown.
 
 ## Consequences
 
-Slow progress-card edits can no longer consume the interaction response window.
-Task and Approval mutation remains serialized, durable, idempotent, and fail-closed.
-A replayed expired interaction cannot wedge Gateway progress or unexpectedly execute
-after Discord has told the owner it failed.
+Slow progress-card edits or a contended SQL write cannot consume the interaction
+response window before the network acknowledgement has started. Task and Approval
+mutation remains serialized, durable, idempotent, and fail-closed. A replayed
+expired interaction cannot wedge Gateway progress or unexpectedly execute after
+Discord has told the owner it failed.
 
 ## Verification
 
-- Adapter tests hold earlier work on one thread and prove a later interaction is
-  deferred before that lock is released.
+- Adapter tests hold both durable inbound claiming and earlier work on one thread,
+  and prove a later interaction is deferred before either wait is released.
 - Adapter tests prove an already-late interaction is completed without acknowledgement
   or Task command execution, and exact replay remains inert.
 

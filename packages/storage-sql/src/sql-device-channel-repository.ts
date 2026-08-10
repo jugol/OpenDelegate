@@ -14,7 +14,7 @@ import {
   type ObserveDeviceChannelConnection,
   type WorkerToMainFrameV1,
 } from "@opendelegate/device-channel";
-import type { Selectable, Transaction } from "kysely";
+import { sql, type Selectable, type Transaction } from "kysely";
 
 import { parseSafeNonNegativeInteger } from "./codecs.ts";
 import {
@@ -707,34 +707,59 @@ async function readAcknowledgedWorkerSequence(
   deviceId: string,
   lastWorkerSequence: number,
 ): Promise<number> {
-  const rows = await transaction
-    .selectFrom("od_device_channel_inbox as inbox")
-    .leftJoin("od_device_channel_inbound_effect as effect", (join) =>
-      join
-        .onRef("effect.device_id", "=", "inbox.device_id")
-        .onRef("effect.sequence", "=", "inbox.sequence"),
-    )
-    .select(["inbox.sequence as sequence", "effect.status as status"])
-    .where("inbox.device_id", "=", deviceId)
-    .orderBy("inbox.sequence")
-    .execute();
+  const summary = await sql<{
+    readonly effect_count: number | string | bigint;
+    readonly first_unhandled_sequence: number | string | bigint;
+    readonly maximum_sequence: number | string | bigint;
+    readonly minimum_sequence: number | string | bigint;
+    readonly row_count: number | string | bigint;
+  }>`
+    SELECT
+      COUNT(*) AS row_count,
+      COUNT(effect.sequence) AS effect_count,
+      COALESCE(MIN(inbox.sequence), 0) AS minimum_sequence,
+      COALESCE(MAX(inbox.sequence), 0) AS maximum_sequence,
+      COALESCE(
+        MIN(CASE WHEN effect.status <> 'handled' THEN inbox.sequence END),
+        0
+      ) AS first_unhandled_sequence
+    FROM od_device_channel_inbox AS inbox
+    LEFT JOIN od_device_channel_inbound_effect AS effect
+      ON effect.device_id = inbox.device_id
+      AND effect.sequence = inbox.sequence
+    WHERE inbox.device_id = ${deviceId}
+  `.execute(transaction);
+  const row = summary.rows[0];
+  if (row === undefined || summary.rows.length !== 1) {
+    throw corruptState();
+  }
+  const rowCount = parseSafeNonNegativeInteger(row.row_count, "Device channel inbox size");
+  const effectCount = parseSafeNonNegativeInteger(
+    row.effect_count,
+    "Device channel effect journal size",
+  );
+  const minimumSequence = parseSafeNonNegativeInteger(
+    row.minimum_sequence,
+    "Device channel minimum sequence",
+  );
+  const maximumSequence = parseSafeNonNegativeInteger(
+    row.maximum_sequence,
+    "Device channel maximum sequence",
+  );
+  const firstUnhandledSequence = parseSafeNonNegativeInteger(
+    row.first_unhandled_sequence,
+    "Device channel first unhandled sequence",
+  );
   if (
-    rows.length !== lastWorkerSequence ||
-    rows.some(
-      (row, index) =>
-        parseSafeSequence(row.sequence) !== index + 1 || !isInboundEffectStatus(row.status),
-    )
+    rowCount !== lastWorkerSequence ||
+    effectCount !== lastWorkerSequence ||
+    minimumSequence !== (lastWorkerSequence === 0 ? 0 : 1) ||
+    maximumSequence !== lastWorkerSequence ||
+    firstUnhandledSequence > lastWorkerSequence
   ) {
     throw corruptState();
   }
-  let acknowledgedSequence = 0;
-  for (const row of rows) {
-    if (row.status !== "handled") {
-      break;
-    }
-    acknowledgedSequence = parseSafeSequence(row.sequence);
-  }
-  return acknowledgedSequence;
+  return firstUnhandledSequence === 0 ? lastWorkerSequence : firstUnhandledSequence - 1;
 }
 
 function decodeState(row: StateRow): DecodedState {

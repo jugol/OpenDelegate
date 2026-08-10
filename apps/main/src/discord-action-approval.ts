@@ -59,12 +59,7 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
         continue;
       }
       if (this.#isCurrent !== undefined) {
-        let current = false;
-        try {
-          current = await this.#isCurrent(candidate);
-        } catch {
-          current = false;
-        }
+        const current = await this.#isCurrent(candidate).catch(() => false);
         if (!current) {
           continue;
         }
@@ -114,12 +109,7 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
       return false;
     }
     if (this.#isCurrent !== undefined) {
-      let current = false;
-      try {
-        current = await this.#isCurrent(approval);
-      } catch {
-        current = false;
-      }
+      const current = await this.#isCurrent(approval).catch(() => false);
       if (!current) {
         throw new DiscordTaskPortError(
           "APPROVAL_UNAVAILABLE",

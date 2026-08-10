@@ -2541,24 +2541,51 @@ look likely, and gave the owner no concrete inspection or Retry path.
 
 **Consequence:** Discord and Admin Web expose an actionable, deterministic failure
 cause without unsafe automatic replay. Owner-safe Worker prose remains available as
-secondary context within the existing public-message bound.
+secondary context within the existing public-message bound. Discord localizes the
+closed diagnostic wrapper in the binding's presentation locale while preserving the
+Agent-authored Worker report and diagnostic code verbatim.
 
 ## D-123 — Discord interactions acknowledge before thread work
 
 Implementation detail:
 [ADR-0061](adr/0061-discord-interactions-ack-before-thread-work.md).
 
-**Decision:** A Discord interaction is durably claimed and ephemerally deferred
-before it waits behind prior work on the same Forum thread. Binding validation and
-the idempotent Task or Approval operation retain per-thread serialization. An
-unacknowledged interaction already older than 2.5 seconds is completed without
+**Decision:** Main starts a Discord interaction's ephemeral defer request before a
+durable inbound claim or prior work on the same Forum thread can delay it. The
+durable claim begins concurrently, and no Task or Approval operation can execute
+until the acknowledgement response reference is durable. Binding validation and the
+idempotent operation retain per-thread serialization. An unacknowledged interaction
+already older than 2.5 seconds, or one whose defer fails, is completed without
 executing its control.
 
-**Rationale:** Live Approval QA proved that a slow in-place activity edit could hold
-the thread lock long enough for Discord's three-second response deadline to expire,
-even though the later Approval decision itself was still pending and safe.
+**Rationale:** Live Approval QA first proved that a slow in-place activity edit could
+hold the thread lock long enough for Discord's three-second response deadline to
+expire. A later retained-history run proved that a contended SQL claim could do the
+same before the thread lock, even though the Approval decision itself remained
+pending and safe.
 
-**Consequence:** Progress delivery no longer head-of-line blocks interaction
-acknowledgement. Expired replays cannot execute after Discord reports failure or
+**Consequence:** Progress delivery and durable-ingress contention no longer
+head-of-line block the acknowledgement request. Acknowledgement alone never grants
+authority. Expired or failed replays cannot execute after Discord reports failure or
 wedge Gateway cursor progress, while current controls remain available for a fresh
 owner decision.
+
+## D-124 — Device-channel cumulative acknowledgement stays bounded
+
+Implementation detail:
+[ADR-0062](adr/0062-device-channel-prefix-acknowledgement-is-bounded.md).
+
+**Decision:** Main derives each Worker's cumulative handled prefix with one SQL
+aggregate result that verifies inbox/effect counts and sequence bounds, then returns
+the first unhandled sequence. It does not materialize the full per-generation frame
+history in JavaScript on every channel operation.
+
+**Rationale:** A live personal Main retained more than fifty thousand normal
+heartbeat frames. Re-reading that entire history for every subsequent frame caused
+quadratic CPU and allocation growth, multi-second health responses, and missed
+Discord interaction deadlines.
+
+**Consequence:** Protocol semantics from D-081 remain unchanged and corruption still
+fails closed at the durable prefix boundary, while old heartbeat history no longer
+slows unrelated owner controls. Retention or deletion of handled history is a
+separate audited lifecycle decision.
