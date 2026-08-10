@@ -346,12 +346,20 @@ export class SqliteWorkspaceRegistry {
 export interface RegisteredWorkerWorkspaceResolverOptions {
   readonly registry: Pick<SqliteWorkspaceRegistry, "resolve">;
   readonly defaultWorkspaceId?: string;
+  /**
+   * Resolves an installation-owned default at Run time. This keeps a long-lived
+   * Worker aware of a Workspace registered after the Worker started without
+   * making the generic resolver guess between multiple registrations.
+   */
+  readonly defaultWorkspaceIdProvider?: () => string | undefined | Promise<string | undefined>;
   readonly managedWorktreeManager?: Pick<ManagedGitWorktreeManager, "create">;
 }
 
 export class RegisteredWorkerWorkspaceResolver implements WorkerWorkspaceResolver {
   readonly #registry: RegisteredWorkerWorkspaceResolverOptions["registry"];
   readonly #defaultWorkspaceId: string | undefined;
+  readonly #defaultWorkspaceIdProvider:
+    RegisteredWorkerWorkspaceResolverOptions["defaultWorkspaceIdProvider"] | undefined;
   readonly #managedWorktreeManager:
     RegisteredWorkerWorkspaceResolverOptions["managedWorktreeManager"] | undefined;
 
@@ -361,6 +369,7 @@ export class RegisteredWorkerWorkspaceResolver implements WorkerWorkspaceResolve
       assertIdentifier(options.defaultWorkspaceId, "Default Workspace ID");
     }
     this.#defaultWorkspaceId = options.defaultWorkspaceId;
+    this.#defaultWorkspaceIdProvider = options.defaultWorkspaceIdProvider;
     this.#managedWorktreeManager = options.managedWorktreeManager;
   }
 
@@ -380,7 +389,23 @@ export class RegisteredWorkerWorkspaceResolver implements WorkerWorkspaceResolve
         "The assigned Workspace references do not match.",
       );
     }
-    const workspaceId = input.workspaceId ?? assignedWorkspaceId ?? this.#defaultWorkspaceId;
+    let workspaceId = input.workspaceId ?? assignedWorkspaceId ?? this.#defaultWorkspaceId;
+    if (workspaceId === undefined && this.#defaultWorkspaceIdProvider !== undefined) {
+      try {
+        workspaceId = await this.#defaultWorkspaceIdProvider();
+        if (workspaceId !== undefined) {
+          assertIdentifier(workspaceId, "Default Workspace ID");
+        }
+      } catch (error) {
+        if (error instanceof WorkspaceRegistryError) {
+          throw error;
+        }
+        throw new WorkspaceRegistryError(
+          "WORKSPACE_REQUIRED",
+          "The Worker could not resolve its current default Workspace.",
+        );
+      }
+    }
     if (workspaceId === undefined) {
       throw new WorkspaceRegistryError(
         "WORKSPACE_REQUIRED",

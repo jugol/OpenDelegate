@@ -2477,3 +2477,24 @@ Secret values remain outside argv, configuration, logs, database rows, and Agent
 context. This corrects the macOS storage selection in ADR-0017; it does not claim
 persistent macOS service support until the separate System-Keychain path is shipped
 and accepted on a clean host.
+
+## D-120 — Singleton Workspace defaults are resolved at Run time
+
+**Decision:** When a Worker has no Workspace default in `worker.json`, production
+composition resolves the sole active registered Workspace immediately before each
+Run. The generic resolver still selects nothing unless composition explicitly
+injects this policy, and zero or multiple active registrations still require the
+Work Order to name an opaque Workspace ID.
+
+**Rationale:** Live macOS Discord QA registered the first Workspace while the Worker
+was already running. Its next heartbeat correctly advertised that Workspace and Main
+scheduled the Work Order, but the Run resolver retained the empty singleton snapshot
+captured at process startup and failed before invoking Codex. Requiring a restart
+after a successful local registration made scheduling state and execution state
+temporarily disagree.
+
+**Consequence:** A newly registered first Workspace becomes executable without a
+Worker restart, while ambiguous selection remains fail-closed. The lookup transmits
+no Device-local path or Workspace content, does not rewrite configuration, and keeps
+the existing stable native-session Workspace binding after a Run begins. This
+refines D-099 and ADR-0051.

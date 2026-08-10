@@ -94,9 +94,10 @@ a stable, opaque worktree identity from Task, workstream, and Workspace. Follow-
 Runs therefore reuse the same worktree while unrelated workstreams remain isolated.
 Production Worker composition uses the configured first Workspace as its default.
 For installations created before that configuration link existed, exactly one
-active registered Workspace is also an unambiguous default. Zero or multiple
-registered Workspaces still require an explicit Work Order `workspaceId` and fail
-closed instead of guessing.
+active registered Workspace is also an unambiguous default. The singleton is
+resolved at Run time, so registering the first Workspace does not require a Worker
+restart. Zero or multiple registered Workspaces still require an explicit Work Order
+`workspaceId` and fail closed instead of guessing.
 
 The production Worker stores its managed-worktree journal and roots under Worker
 state, outside both the installed bundle and registered repository. Changing
