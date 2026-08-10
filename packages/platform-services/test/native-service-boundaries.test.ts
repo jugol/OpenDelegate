@@ -5,6 +5,31 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { NativeBoundaryError, createNodeNativeServiceBoundaries } from "../src/index.ts";
+import { windowsOwnerSessionProbeSucceeded } from "../src/native-service-boundaries.ts";
+
+test("localized Windows query output recognizes the matching owner session", () => {
+  assert.equal(
+    windowsOwnerSessionProbeSucceeded(String.raw`WORKSTATION\solom`, {
+      exitCode: 1,
+      stdout:
+        " USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME\r\n" +
+        ">solom                 console             1  Active      none   2026-08-07 1:04\r\n",
+      timedOut: false,
+    }),
+    true,
+  );
+});
+
+test("localized Windows missing-user output is not a logged-in session", () => {
+  assert.equal(
+    windowsOwnerSessionProbeSucceeded(String.raw`WORKSTATION\solom`, {
+      exitCode: 1,
+      stdout: "No User exists for solom\r\n",
+      timedOut: false,
+    }),
+    false,
+  );
+});
 
 test("the Node native filesystem boundary reads only bounded regular files", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-native-boundary-"));

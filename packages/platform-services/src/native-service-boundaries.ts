@@ -570,8 +570,35 @@ class NodeNativeSessionBoundary implements NativeSessionBoundary {
       return false;
     }
     const result = await this.processBoundary.run(invocation);
-    return result.exitCode === 0;
+    return input.platform === "windows"
+      ? windowsOwnerSessionProbeSucceeded(input.userName, result)
+      : result.exitCode === 0;
   }
+}
+
+/**
+ * `query.exe user <name>` can return exit code 1 on localized Windows builds
+ * even while stdout contains the matching interactive session row. Treat that
+ * narrow, observable result as logged in without accepting the command's
+ * similarly worded "No User exists" diagnostic.
+ */
+export function windowsOwnerSessionProbeSucceeded(
+  userName: string,
+  result: Pick<NativeProcessResult, "exitCode" | "stdout" | "timedOut">,
+): boolean {
+  if (result.timedOut) {
+    return false;
+  }
+  if (result.exitCode === 0) {
+    return true;
+  }
+  if (result.exitCode !== 1) {
+    return false;
+  }
+  const queryUserName = userName.slice(userName.lastIndexOf("\\") + 1);
+  const escapedUserName = queryUserName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const sessionRow = new RegExp(`^\\s*>?\\s*${escapedUserName}(?:\\s{2,}|\\t|$)`, "iu");
+  return result.stdout.split(/\r?\n/u).some((line) => sessionRow.test(line));
 }
 
 function windowsLoginProbe(userName: string): NativeProcessRequest {

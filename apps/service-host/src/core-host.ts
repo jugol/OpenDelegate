@@ -425,15 +425,26 @@ async function tryStartWorkerComputerUseRuntime(
       process.env,
     );
     if ((await store.health()).status !== "ready") {
+      writeWorkerServiceEvent("worker.computer-use-runtime-unavailable", {
+        reason: "secret-store-unavailable",
+      });
       return undefined;
     }
     const coreKey = await readWorkerComputerUseCoreKeyBinding(store);
     if (
       coreKey.alias !== WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS ||
       coreKey.keyId !== configuration.localIpc.core.keyId ||
-      coreKey.publicKeySpkiBase64Url !== configuration.localIpc.core.publicKeySpkiBase64Url ||
-      !(await store.availability(WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS)).ready
+      coreKey.publicKeySpkiBase64Url !== configuration.localIpc.core.publicKeySpkiBase64Url
     ) {
+      writeWorkerServiceEvent("worker.computer-use-runtime-unavailable", {
+        reason: "core-signing-key-mismatch",
+      });
+      return undefined;
+    }
+    if (!(await store.availability(WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS)).ready) {
+      writeWorkerServiceEvent("worker.computer-use-runtime-unavailable", {
+        reason: "desktop-authority-secret-unavailable",
+      });
       return undefined;
     }
     const signing = new ManagedSecretEd25519SigningKeyProvider({
@@ -479,7 +490,15 @@ async function tryStartWorkerComputerUseRuntime(
       authority,
       signal,
     });
-  } catch {
+  } catch (error: unknown) {
+    writeWorkerServiceEvent("worker.computer-use-runtime-unavailable", {
+      reason: "initialization-failed",
+      errorType: error instanceof Error ? error.name : "UnknownError",
+      detail:
+        error instanceof Error && error.message.length > 0
+          ? error.message.slice(0, 512)
+          : "The Computer Use runtime could not be initialized.",
+    });
     await authority?.close().catch(() => undefined);
     return undefined;
   }
