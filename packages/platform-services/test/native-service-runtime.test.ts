@@ -929,6 +929,131 @@ test("Windows upgrade accepts and repairs only the exact legacy restricted SID m
   );
 });
 
+test("Windows Worker upgrade accepts only a coherent staged credential migration", async () => {
+  const targetConfiguration = windowsConfigurationWithServiceBinding("worker");
+  const previousCore = {
+    keyId: "sha256:e7235c4d3fcae8c6cab1363028a6b65beff1226696f02793f36f8bbe2ed51797",
+    publicKeySpkiBase64Url: "MCowBQYDK2VwAyEA1FwCTlBzsp5Dmtumo472upeCAh6Kic4zJmDPtm0N8go",
+  } as const;
+  const installedConfiguration = windowsConfiguration({
+    ...targetConfiguration,
+    bundle: {
+      ...targetConfiguration.bundle,
+      version: "1.2.2",
+    },
+    helperSecretBinding: {
+      backend: "windows-dpapi",
+      vaultRoot: "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
+    },
+    ipcTrust: {
+      ...targetConfiguration.ipcTrust,
+      core: previousCore,
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, file.content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: true,
+    healthRole: "worker",
+  });
+  const runtimeFile = installedArtifacts.files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtimeFile);
+  const exactPreviousRuntime = fileSystem.files.get(runtimeFile.path);
+  assert.ok(exactPreviousRuntime);
+  const incoherent = JSON.parse(exactPreviousRuntime.toString("utf8")) as {
+    localIpc: { helper: { peerKeyId: string } };
+  };
+  incoherent.localIpc.helper.peerKeyId = `sha256:${"d".repeat(64)}`;
+  fileSystem.files.set(
+    runtimeFile.path,
+    Buffer.from(`${JSON.stringify(incoherent, undefined, 2)}\n`),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration: targetConfiguration,
+      plan: createServicePlan({
+        operation: "upgrade",
+        configuration: targetConfiguration,
+        activeVersion: "1.2.2",
+      }),
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+  const unrelatedDrift = JSON.parse(exactPreviousRuntime.toString("utf8")) as {
+    health: { timeoutMs: number };
+  };
+  unrelatedDrift.health.timeoutMs += 1;
+  fileSystem.files.set(
+    runtimeFile.path,
+    Buffer.from(`${JSON.stringify(unrelatedDrift, undefined, 2)}\n`),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration: targetConfiguration,
+      plan: createServicePlan({
+        operation: "upgrade",
+        configuration: targetConfiguration,
+        activeVersion: "1.2.2",
+      }),
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+  fileSystem.files.set(runtimeFile.path, exactPreviousRuntime);
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-upgrade-worker-credential-migration",
+    configuration: targetConfiguration,
+    plan: createServicePlan({
+      operation: "upgrade",
+      configuration: targetConfiguration,
+      activeVersion: "1.2.2",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  const targetRuntime = renderPlatformServiceArtifacts(targetConfiguration).files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(targetRuntime);
+  assert.deepEqual(
+    fileSystem.files.get(targetRuntime.path),
+    renderedFileBytes(targetRuntime.encoding, targetRuntime.content),
+  );
+});
+
 test("Admin auto-open reconfiguration atomically replaces only the installed runtime configuration", async () => {
   const previousConfiguration = linuxConfiguration({ role: "main" });
   const configuration = linuxConfiguration({

@@ -141,7 +141,8 @@ represents a supported release or completed first milestone.
 - Migrated the Windows owner-session helper signing Secret into an owner-local DPAPI vault outside
   native service state during service staging, including crash-safe replay for Workers already
   staged by an older build, so secure service-document composition can complete without weakening
-  the core/owner runtime boundary.
+  the core/owner runtime boundary, and taught the elevated Worker upgrade to accept only that safe
+  vault move plus a coherent staged core IPC public-key transition while rejecting unrelated drift.
 - Allowed native service upgrades to validate the installed topology against the actual active
   version, and atomically advance or roll back the durable runtime configuration with the release
   pointer.

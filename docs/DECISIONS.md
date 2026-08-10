@@ -2444,4 +2444,8 @@ agent-guided Windows installation path impossible to finish.
 **Consequence:** Default Windows staging remains conversational and requires no extra path choice.
 The owner/helper and core/service planes are structurally disjoint, interrupted migration is
 idempotent, a conflicting helper identity fails closed, and the service-document validator keeps
-its existing strict boundary.
+its existing strict boundary. A subsequent elevated Windows Worker upgrade may replace the exact
+installed runtime configuration when its only differences are a safe owner-local helper vault and
+a coherent staged core IPC public identity; unrelated drift and inconsistent peer pins continue to
+fail before mutation. If the release rolls back, that credential migration remains in the runtime
+configuration because the staged old Secret locations are no longer authoritative.

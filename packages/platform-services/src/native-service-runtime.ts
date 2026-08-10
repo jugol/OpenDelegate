@@ -27,6 +27,7 @@ import {
   type SupervisorOperation,
 } from "./plans.ts";
 import { evaluateSessionHelperReadiness } from "./readiness.ts";
+import { stableJson } from "./render-common.ts";
 import {
   assertMatchingNativeReleaseVerification,
   createNativeReleaseVerifier,
@@ -1864,13 +1865,160 @@ async function assertUpgradeConfigurationMatchesInstalled(
     }
     if (
       !existing.equals(expected) &&
-      !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing)
+      !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing) &&
+      !matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
+        configuration,
+        installedFile,
+        existing,
+      )
     ) {
       failPreflight(
         "Upgrade refused a configuration that does not exactly match the installed service definitions.",
       );
     }
   }
+}
+
+function matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "windows" ||
+    configuration.role !== "worker" ||
+    installedFile.purpose !== "runtime-configuration" ||
+    installedFile.encoding !== "utf8"
+  ) {
+    return false;
+  }
+  let previous: Record<string, unknown>;
+  let expected: Record<string, unknown>;
+  try {
+    previous = requireJsonRecord(JSON.parse(existing.toString("utf8")) as unknown);
+    expected = requireJsonRecord(JSON.parse(installedFile.content) as unknown);
+  } catch {
+    return false;
+  }
+  const previousHelperBinding = nestedRecord(previous, "helperSecretBinding");
+  const expectedHelperBinding = nestedRecord(expected, "helperSecretBinding");
+  const previousIpc = nestedRecord(previous, "localIpc");
+  const expectedIpc = nestedRecord(expected, "localIpc");
+  if (previousIpc === undefined || expectedIpc === undefined) {
+    return false;
+  }
+  const previousCore = nestedRecord(previousIpc, "core");
+  const expectedCore = nestedRecord(expectedIpc, "core");
+  const previousHelper = nestedRecord(previousIpc, "helper");
+  const expectedHelper = nestedRecord(expectedIpc, "helper");
+  if (
+    previousHelperBinding === undefined ||
+    expectedHelperBinding === undefined ||
+    previousCore === undefined ||
+    expectedCore === undefined ||
+    previousHelper === undefined ||
+    expectedHelper === undefined ||
+    previousHelperBinding["backend"] !== "windows-dpapi" ||
+    expectedHelperBinding["backend"] !== "windows-dpapi"
+  ) {
+    return false;
+  }
+  const previousVaultRoot = previousHelperBinding["vaultRoot"];
+  const expectedVaultRoot = expectedHelperBinding["vaultRoot"];
+  if (
+    typeof previousVaultRoot !== "string" ||
+    typeof expectedVaultRoot !== "string" ||
+    !safeWindowsOwnerVault(configuration, previousVaultRoot) ||
+    !safeWindowsOwnerVault(configuration, expectedVaultRoot) ||
+    !coherentIpcCredentialPair(previousCore, previousHelper) ||
+    !coherentIpcCredentialPair(expectedCore, expectedHelper)
+  ) {
+    return false;
+  }
+  const changed =
+    previousVaultRoot !== expectedVaultRoot ||
+    previousCore["keyId"] !== expectedCore["keyId"] ||
+    previousCore["publicKeySpkiBase64Url"] !== expectedCore["publicKeySpkiBase64Url"];
+  if (!changed) {
+    return false;
+  }
+
+  // The elevated upgrade target is authoritative for the staged owner vault
+  // and core IPC identity. Normalize only those mutually redundant fields;
+  // stable equality below still rejects every unrelated installed drift.
+  previousHelperBinding["vaultRoot"] = expectedVaultRoot;
+  previousCore["keyId"] = expectedCore["keyId"];
+  previousCore["publicKeySpkiBase64Url"] = expectedCore["publicKeySpkiBase64Url"];
+  previousHelper["peerKeyId"] = expectedHelper["peerKeyId"];
+  previousHelper["peerPublicKeySpkiBase64Url"] = expectedHelper["peerPublicKeySpkiBase64Url"];
+  return stableJson(previous) === stableJson(expected);
+}
+
+function requireJsonRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Expected a JSON object.");
+  }
+  return value as Record<string, unknown>;
+}
+
+function nestedRecord(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  try {
+    return requireJsonRecord(value[key]);
+  } catch {
+    return undefined;
+  }
+}
+
+function coherentIpcCredentialPair(
+  core: Record<string, unknown>,
+  helper: Record<string, unknown>,
+): boolean {
+  const keyId = core["keyId"];
+  const publicKey = core["publicKeySpkiBase64Url"];
+  return (
+    typeof keyId === "string" &&
+    /^sha256:[0-9a-f]{64}$/u.test(keyId) &&
+    typeof publicKey === "string" &&
+    /^[A-Za-z0-9_-]{40,256}$/u.test(publicKey) &&
+    helper["peerKeyId"] === keyId &&
+    helper["peerPublicKeySpkiBase64Url"] === publicKey
+  );
+}
+
+function safeWindowsOwnerVault(
+  configuration: PlatformServiceConfiguration,
+  vaultRoot: string,
+): boolean {
+  if (!win32.isAbsolute(vaultRoot)) {
+    return false;
+  }
+  return [
+    configuration.paths.installRoot,
+    configuration.paths.stateRoot,
+    configuration.paths.authorityRoot,
+    configuration.paths.runtimeRoot,
+    configuration.paths.logRoot,
+  ].every((controlledRoot) => !windowsPathsOverlap(controlledRoot, vaultRoot));
+}
+
+function windowsPathsOverlap(left: string, right: string): boolean {
+  const normalizedLeft = win32.resolve(left).toLocaleLowerCase("en-US");
+  const normalizedRight = win32.resolve(right).toLocaleLowerCase("en-US");
+  const leftToRight = win32.relative(normalizedLeft, normalizedRight);
+  const rightToLeft = win32.relative(normalizedRight, normalizedLeft);
+  return pathRelationshipIsWithin(leftToRight) || pathRelationshipIsWithin(rightToLeft);
+}
+
+function pathRelationshipIsWithin(relationship: string): boolean {
+  return (
+    relationship === "" ||
+    (!relationship.startsWith(`..${win32.sep}`) &&
+      relationship !== ".." &&
+      !win32.isAbsolute(relationship))
+  );
 }
 
 function matchesLegacyWindowsRestrictedSidManifest(
