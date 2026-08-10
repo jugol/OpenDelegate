@@ -10,6 +10,7 @@ import {
 } from "@opendelegate/platform-services";
 
 import {
+  defaultProviderHome,
   loadWorkerConfiguration,
   readStableWorkerFile,
   WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
@@ -31,6 +32,7 @@ export interface BuildWorkerServiceDocumentOptions {
   readonly healthPort: number;
   readonly sourceCheckoutRoot: string;
   readonly hostPlatform?: NodeJS.Platform;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly ownerSession?: {
     readonly userName: string;
     readonly stableUserId: string;
@@ -165,6 +167,9 @@ export async function buildWorkerServiceDocument(
   }
 
   const ownerSession = options.ownerSession ?? (await resolveWindowsOwnerSession());
+  const codexHome =
+    configuration.agent.codexHome ??
+    defaultProviderHome("codex", options.paths, options.environment ?? process.env);
 
   return composeServiceConfiguration({
     platform: family,
@@ -201,6 +206,13 @@ export async function buildWorkerServiceDocument(
       serviceSid: configuration.secretBackend.serviceSid,
       vaultRoot: platformPath(family, configuration.secretBackend.vaultRoot),
     },
+    ...(configuration.agent.provider === "claude"
+      ? {}
+      : {
+          windowsAgentSandbox: {
+            codexSandboxBinDirectory: win32.join(platformPath(family, codexHome), ".sandbox-bin"),
+          },
+        }),
   });
 }
 

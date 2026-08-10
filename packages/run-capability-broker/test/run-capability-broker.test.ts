@@ -101,6 +101,57 @@ test("one protected file claims one exact Run capability and carries bounded req
   }
 });
 
+test("one exact Run capability supports bounded provider-native child connections", async () => {
+  const root = await canonicalTemporaryDirectory("opendelegate-capability-team-");
+  const broker = await LocalRunCapabilityBroker.listen({
+    runtimeDirectory: root,
+    sourceCheckoutDirectory: process.cwd(),
+  });
+  try {
+    const lease = await broker.register({
+      capability: "fixture",
+      binding,
+      metadata: { mode: "native-agent-team" },
+      expiresAtMs: Date.now() + 60_000,
+      maxConcurrentConnections: 2,
+      currentBinding: () => binding,
+      isExecutionCurrent: async () => true,
+      handler: async (request) => request.payload,
+    });
+    const parent = await consumeRunCapabilityFile({
+      filename: lease.capabilityFile,
+      expectedCapability: "fixture",
+    });
+    const child = await consumeRunCapabilityFile({
+      filename: lease.capabilityFile,
+      expectedCapability: "fixture",
+    });
+    await access(lease.capabilityFile);
+    await assert.rejects(
+      consumeRunCapabilityFile({
+        filename: lease.capabilityFile,
+        expectedCapability: "fixture",
+      }),
+      hasCode("CAPABILITY_CONSUMED"),
+    );
+    assert.deepEqual(await child.request({ method: "fixture.echo", payload: { child: true } }), {
+      child: true,
+    });
+    await child.close();
+    const replacementChild = await consumeRunCapabilityFile({
+      filename: lease.capabilityFile,
+      expectedCapability: "fixture",
+    });
+    await replacementChild.close();
+    await parent.close();
+    await lease.dispose();
+    await assert.rejects(access(lease.capabilityFile));
+  } finally {
+    await broker.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a claimed capability follows renewed binding expiry and exact Run revocation", async () => {
   const root = await canonicalTemporaryDirectory("opendelegate-capability-expiry-");
   let now = 100;

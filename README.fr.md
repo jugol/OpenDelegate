@@ -123,6 +123,9 @@ déploiement sous Linux ; le planificateur choisit les Devices et les Routes.
   accès direct à la base de données.
 - Codex, Claude et les runners personnalisés se trouvent derrière les contrats Agent Adapter, tout
   en conservant la possibilité de reprendre les sessions natives utiles des fournisseurs.
+- Un Worker Codex ou Claude prêt et relié peut utiliser jusqu’à quatre Agents enfants locaux pour un
+  Work Order. Ils restent dans le Workspace et la Policy du même Run ; seul Main délègue entre les
+  Devices.
 - Chaque Device conserve son propre Knowledge Markdown sélectif et relié. Le Main ne reçoit jamais
   ses noms de fichiers, titres, liens, graphe, index, extraits ou contenu.
 - Le résultat peut être une réponse ou pièce jointe Discord, un fichier, un Artifact, une vue

@@ -18,6 +18,7 @@ import { Pool } from "pg";
 
 import { SqlOwnerAuthRepository, type SqlMigrationMode } from "../src/index.ts";
 import { REWIND_DEVICE_RECREDENTIALING_SQL } from "./rewind-device-recredentialing.ts";
+import { REWIND_DISCORD_LIVE_TASK_ACTIVITY_SQL } from "./rewind-discord-live-task-activity.ts";
 
 interface OwnerAuthFixture {
   open(mode: SqlMigrationMode): Promise<SqlOwnerAuthRepository>;
@@ -538,6 +539,7 @@ test("migration 0012 preserves existing auth audit while enabling claim-replacem
   const legacy = new Database(filename);
   try {
     legacy.exec(`
+      ${REWIND_DISCORD_LIVE_TASK_ACTIVITY_SQL}
       ${REWIND_DEVICE_RECREDENTIALING_SQL}
       DROP TRIGGER od_owner_auth_audit_no_update;
       DROP TRIGGER od_owner_auth_audit_no_delete;
@@ -661,6 +663,18 @@ test("migration 0002 upgrades the released event-store schema through Device cha
       DROP TABLE od_owner_auth_audit;
       DROP TABLE od_owner_credential;
       DROP TABLE od_owner_claim;
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0016_discord_owner_prompt_surface';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0016_discord_owner_prompt_surface';
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0015_discord_failure_surface';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0015_discord_failure_surface';
+      DELETE FROM od_migration_manifest
+        WHERE migration_name = '0014_discord_live_task_activity';
+      DELETE FROM od_kysely_migration
+        WHERE name = '0014_discord_live_task_activity';
       DELETE FROM od_migration_manifest
         WHERE migration_name = '0013_device_recredentialing';
       DELETE FROM od_kysely_migration
@@ -914,6 +928,72 @@ test(
     const downgradeClient = await postgresAdminPool.connect();
     try {
       await downgradeClient.query("BEGIN");
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_discord_task_bindings
+          DROP COLUMN owner_prompt_surface_json
+      `);
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_migration_manifest
+         WHERE migration_name = '0016_discord_owner_prompt_surface'`,
+      );
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_kysely_migration
+         WHERE name = '0016_discord_owner_prompt_surface'`,
+      );
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_discord_task_bindings
+          DROP COLUMN failure_surface_json
+      `);
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_migration_manifest
+         WHERE migration_name = '0015_discord_failure_surface'`,
+      );
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_kysely_migration
+         WHERE name = '0015_discord_failure_surface'`,
+      );
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_discord_task_bindings
+          DROP COLUMN activity_surface_json
+      `);
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_migration_manifest
+         WHERE migration_name = '0014_discord_live_task_activity'`,
+      );
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_kysely_migration
+         WHERE name = '0014_discord_live_task_activity'`,
+      );
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_device_enrollment_grants
+          DROP CONSTRAINT od_device_enrollment_grants_intent_check,
+          DROP COLUMN intent
+      `);
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_device_identity_audit
+          DROP CONSTRAINT od_device_identity_audit_event_name_check
+      `);
+      await downgradeClient.query(`
+        ALTER TABLE "${schema}".od_device_identity_audit
+          ADD CONSTRAINT od_device_identity_audit_event_name_check CHECK (
+            event_name IN (
+              'device.enrolled',
+              'device.enrollment-grant-issued',
+              'device.enrollment-rejected',
+              'device.revoked',
+              'device.rotation-confirmed',
+              'device.rotation-issued'
+            )
+          )
+      `);
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_migration_manifest
+         WHERE migration_name = '0013_device_recredentialing'`,
+      );
+      await downgradeClient.query(
+        `DELETE FROM "${schema}".od_kysely_migration
+         WHERE name = '0013_device_recredentialing'`,
+      );
       await downgradeClient.query(`
         ALTER TABLE "${schema}".od_owner_auth_audit
           DROP CONSTRAINT od_owner_auth_audit_event_name_check

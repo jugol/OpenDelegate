@@ -149,6 +149,21 @@ test("a Device whose certificate expired offline is re-credentialed under its ow
   assert.equal(renewed.status, "active");
   assert.equal(renewed.notAfter, afterExpiry + CERTIFICATE_VALIDITY_MS);
   assert.notEqual(renewed.serialNumber, context.originalSerial);
+  assert.equal(
+    await context.authority.generationWasRecredentialed({
+      deviceId: DEVICE_ID,
+      certificateGeneration: 2,
+    }),
+    true,
+  );
+  assert.equal(
+    await context.authority.generationWasRecredentialed({
+      deviceId: DEVICE_ID,
+      certificateGeneration: 1,
+    }),
+    false,
+    "initial enrollment and routine generations must not request a channel reset",
+  );
 
   const snapshot = await context.repository.snapshot();
   const device = snapshot.devices.find((candidate) => candidate.deviceId === DEVICE_ID);

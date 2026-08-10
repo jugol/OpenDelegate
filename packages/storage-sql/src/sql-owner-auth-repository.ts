@@ -60,6 +60,7 @@ export class SqlOwnerAuthRepository implements OwnerAuthRepository {
       context.database,
       context.backend,
       retryPolicy,
+      context.writeCoordinator,
     );
   }
 

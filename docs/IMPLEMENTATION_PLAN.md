@@ -441,6 +441,11 @@ Make Main and Worker roles truly persistent on all target operating systems.
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
+- On Windows, prepare only the active owner's exact Codex `.sandbox-bin` helper
+  directory for the virtual-service identity. Install, start, restart, and upgrade
+  reassert an inheritance-free ACL granting Full Control to Administrators, SYSTEM,
+  the owner SID, and the exact OpenDelegate service SID; no broader provider home or
+  source checkout is opened.
 - Implement a Device-local service-preparation boundary for every persistent shape.
   A graphical Device migrates core-owned Secrets to the native service identity,
   leaves the owner-session key in its separate store, and durably exports only the
@@ -469,6 +474,9 @@ Make Main and Worker roles truly persistent on all target operating systems.
 - User-session helper loss removes graphical Capabilities without dropping headless
   work.
 - Failed upgrades roll back to a healthy version.
+- A Windows Codex Run can initialize its sandbox helper from the installed service
+  identity, while an ACL probe proves that sibling provider-home content was not
+  widened.
 - A bundle build completes while an existing Main remains healthy on its configured
   listeners, without changing its process, service definition, or active version.
 
@@ -533,6 +541,15 @@ Replace fake agents with resumable, observable first-class providers.
   requirement.
 - Map provider events into normalized public messages, tool/action requests, progress,
   usage, and completion.
+- Enable provider-native child Agents only for bridged Codex App Server and Claude
+  Agent SDK Runs whose allow-list explicitly contains Agent delegation. Bound each
+  Run to four children and one nesting level, preserve the parent Workspace,
+  sandbox, Task, and Policy callback, and normalize only privacy-safe lifecycle
+  evidence. Main remains the only cross-Device Work Order scheduler.
+- Keep local MCP capability descriptors single-connection by default. For an exact
+  bridged native-Agent Run, permit no more than five simultaneous authenticated
+  connections (one root plus four children), rechecking the same lease, fence, and
+  current-execution authority before every request and revoking them as one unit.
 - Route provider approval mechanisms through OpenDelegate Policy.
 - Implement native-session registry with Device, provider, session ID, Workspace,
   working directory/worktree, adapter version, single-writer lease, and lineage.
@@ -556,6 +573,13 @@ Replace fake agents with resumable, observable first-class providers.
   retains the binding recorded for the existing session it replaces.
 - Main replay preserves the actual safe provider, adapter, native-session, and
   lineage observation reported by the Worker.
+- A bridged Worker can complete bounded local parallel work with native child
+  Agents; a fifth child fails closed, CLI fallbacks never claim the Capability, and
+  no child prompt or provider-native identity reaches Main.
+- Parent and child provider sessions can initialize the same Run-scoped Artifact,
+  Knowledge, Computer Use, and platform-mutation MCP capabilities without a stale
+  one-use descriptor failure; a sixth simultaneous claim fails closed and Run
+  disposal closes all clients.
 - Simulated session deletion continues from checkpoint with an explicit lineage
   change.
 
@@ -593,11 +617,38 @@ Make Discord the complete primary Task interface.
   legacy projection key during upgrade; if duplicate copies already exist, resolve
   every copy of that source event from one accepted answer. Chronological failure
   replies must include the owner-safe concrete reason or exhausted resource plus the
-  relevant recovery control, including Retry for failed Tasks.
+  relevant recovery control, including Retry for failed Tasks. Project cancellation
+  once at the latest chronological position as a final update with Retry available;
+  do not rely only on the starter status panel.
+- Maintain at most one live activity message for each active owner-input cycle.
+  Aggregate Main planning, Device dispatch, bounded normalized Worker progress,
+  Work Order completion, and verification into a short rolling milestone list and
+  edit that message only on meaningful revision. Persist its Discord identity and
+  closed revision with the Task binding so stale outbox work cannot duplicate or
+  resurrect it. Replace the running cycle with one bounded paused recovery surface
+  containing Resume and Cancel controls when pause becomes authoritative. Close the
+  current surface when a question, decision, failure, cancellation, review state,
+  or final result becomes authoritative.
+- Map provider activity to a closed owner-safe Worker `progress` vocabulary before
+  the durable outbox boundary; the boundary accepts no free-form progress text.
+  Deduplicate and rate-limit reports per Run with a hard count bound; never forward
+  token deltas, raw tool inputs/results, private provider messages, native session
+  identifiers, local paths, or hidden reasoning. Treat progress as non-terminal
+  presentation evidence, not Task conversation, checkpoint, lease-renewal, or
+  Budget activity.
 - Present interactive Artifacts with a distinct owner action label. Never place a
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.
 - Implement pause, resume, cancel, retry, approval, denial, and inspect interactions.
+  After a Task command succeeds, delete its deferred ephemeral response and let the
+  resulting durable Task surface confirm the transition. Keep owner-safe ephemeral
+  text for rejected, unauthorized, or stale controls.
+- Project a pending protected Worker action into that same live activity message
+  with an owner-safe Device/action/risk/evidence summary and approve-once/reject
+  controls. Resolve the global durable Approval record—not a parallel Task approval—
+  and reveal multiple pending actions one at a time. Provider approval events map to
+  a bounded `waiting-approval` progress category so a long Run remains visibly alive
+  without an arbitrary execution timeout.
 - Implement system incident and recommendation post creation.
 - Handle archive, lock, reopen, delete, permission loss, rate limit, and reconnect.
 - Implement owner-approved live add, extension, replacement, and disable for the
@@ -619,6 +670,13 @@ Make Discord the complete primary Task interface.
   question cards; typing stays alive, the reaction closes, an answered prompt is
   edited in place, and automatic resource retries reuse that owner turn's durable
   plan across Main restart.
+- A long multi-Device turn creates one live activity message. Concurrent Worker
+  milestones edit that one message under a bounded rate and rolling-size limit;
+  terminal delivery closes it, stale revisions cannot recreate it, and Task context
+  contains none of its presentation-only progress text.
+- A protected Worker action edits that one message to show an approve-once/reject
+  decision; the exact durable Approval can be resolved from Discord or Admin Web,
+  executes once under replay, and disappears after the waiting Run continues.
 - A narrowly recognized read-only Device availability question is answered
   deterministically from bounded Main-owned state without an LLM turn or artificial
   Worker Run. Generic supported-locale test placeholders, including Korean-English

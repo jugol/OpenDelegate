@@ -140,11 +140,25 @@ export type WorkerCapabilityEvidenceSource =
  */
 export type WorkerCapabilityBlockerV1 = "session-helper-absent";
 
+/**
+ * A bounded, owner-actionable explanation for an Agent Adapter that is not
+ * ready. Raw provider diagnostics stay on the Device because they can contain
+ * local paths or provider output; this enum is safe to project through Main.
+ */
+export type WorkerAgentAdapterBlockerV1 =
+  | "provider-home-unavailable"
+  | "executable-unavailable"
+  | "authentication-required"
+  | "version-unsupported"
+  | "platform-incompatible"
+  | "probe-failed";
+
 export interface WorkerSchedulingAgentAdapterV1 {
   readonly provider: "codex" | "claude" | "generic-command";
   readonly adapterId: string;
   readonly readiness: "ready" | "degraded" | "unavailable";
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
+  readonly blockedBy?: WorkerAgentAdapterBlockerV1;
   readonly version?: string;
   /**
    * The upgrade that would make this adapter usable, when the Device has one.
@@ -352,10 +366,28 @@ export interface RunProcess {
   forceTerminate(): Promise<void>;
 }
 
+/**
+ * Closed, owner-safe progress vocabulary. Provider prose is classified on the
+ * Device and must never cross the Worker runtime boundary as progress text.
+ */
+export type WorkerRunProgressKindV1 =
+  | "consulting-knowledge"
+  | "delegating"
+  | "using-tools"
+  | "verifying"
+  | "waiting-approval"
+  | "working";
+
 export interface RunExecutionContext {
   readonly assignment: WorkerRunAssignmentV1;
   readonly leaseAuthority: WorkerRunLeaseAuthority;
   isLeaseCurrent(): Promise<boolean>;
+  /**
+   * Emits one presentation-only progress category. The Worker runtime owns the
+   * public wording and applies its lease, deduplication, rate, count, and outbox
+   * bounds before any event can leave this Device.
+   */
+  reportProgress?(input: { readonly kind: WorkerRunProgressKindV1 }): Promise<void>;
 }
 
 export interface WorkerRunLeaseSnapshot {

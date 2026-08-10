@@ -228,6 +228,28 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       "0750",
       directoryAccess(configuration, "state"),
     ),
+    ...(configuration.platform === "windows" && configuration.serviceSecretBinding !== undefined
+      ? [
+          directoryStep(
+            "ensure-service-secret-vault",
+            configuration.serviceSecretBinding.vaultRoot,
+            "0700",
+            directoryAccess(configuration, "service-secret"),
+          ),
+        ]
+      : []),
+    directoryStep(
+      "ensure-config-root",
+      pathJoin(configuration.platform, configuration.paths.stateRoot, "config"),
+      "0750",
+      directoryAccess(configuration, "state"),
+    ),
+    directoryStep(
+      "ensure-manifest-root",
+      pathJoin(configuration.platform, configuration.paths.stateRoot, "manifests"),
+      "0750",
+      directoryAccess(configuration, "state"),
+    ),
     directoryStep(
       "ensure-authority-root",
       configuration.paths.authorityRoot,
@@ -258,6 +280,7 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       "0700",
       directoryAccess(configuration, "installer-only"),
     ),
+    ...windowsAgentSandboxSteps(configuration),
     ...releaseInstallSteps(artifacts),
     ...artifacts.files.map((file): ServicePlanStep => ({
       id: `write-${file.purpose}`,
@@ -297,6 +320,7 @@ function lifecyclePlan(
   const steps =
     operation === "start"
       ? [
+          ...windowsAgentSandboxSteps(artifacts.definition.configuration),
           supervisorStep("start-core", artifacts, "core", "start", "stop"),
           ...(hasSessionHelper(artifacts)
             ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
@@ -324,6 +348,7 @@ function restartPlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
         : []),
       supervisorStep("stop-core", artifacts, "core", "stop", "start"),
+      ...windowsAgentSandboxSteps(artifacts.definition.configuration),
       supervisorStep("start-core", artifacts, "core", "start", "stop"),
       ...(hasSessionHelper(artifacts)
         ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
@@ -398,6 +423,17 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     "releases",
     activeVersion,
   );
+  const targetRuntimeConfiguration = requireRenderedFile(artifacts, "runtime-configuration");
+  const previousRuntimeConfiguration = requireRenderedFile(
+    renderPlatformServiceArtifacts({
+      ...definition.configuration,
+      bundle: {
+        ...definition.configuration.bundle,
+        version: activeVersion,
+      },
+    }),
+    "runtime-configuration",
+  );
   const steps: ServicePlanStep[] = [
     {
       id: "stage-release",
@@ -438,10 +474,49 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         releaseDirectory: definition.releaseDirectory,
       },
     },
+    ...(definition.configuration.platform === "windows"
+      ? [
+          directoryStep(
+            "secure-release-root",
+            definition.releaseDirectory,
+            "0750",
+            directoryAccess(definition.configuration, "read-execute"),
+          ),
+        ]
+      : []),
     ...(hasSessionHelper(artifacts)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
+    ...windowsAgentSandboxSteps(definition.configuration),
+    ...(definition.configuration.platform === "windows"
+      ? [
+          windowsServiceSidRepairStep(artifacts),
+          {
+            id: "write-windows-core-manifest",
+            description: "Persist the repaired Windows core service definition.",
+            action: {
+              kind: "file.write" as const,
+              file: requireRenderedFile(artifacts, "core-manifest"),
+              atomic: true as const,
+            },
+          },
+        ]
+      : []),
+    {
+      id: "write-runtime-configuration",
+      description: "Atomically bind the service runtime configuration to the new release.",
+      action: {
+        kind: "file.write",
+        file: targetRuntimeConfiguration,
+        atomic: true,
+      },
+      rollback: {
+        kind: "file.write",
+        file: previousRuntimeConfiguration,
+        atomic: true,
+      },
+    },
     {
       id: "activate-release",
       description: "Atomically switch the stable current pointer to the new release.",
@@ -478,6 +553,37 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     ],
     activeVersion,
   );
+}
+
+function windowsServiceSidRepairStep(artifacts: PlatformServiceArtifacts): ServicePlanStep {
+  const invocations = artifacts.installCommands.filter(
+    (invocation) =>
+      invocation.plane === "core" &&
+      invocation.executable === "sc.exe" &&
+      invocation.arguments.length === 3 &&
+      invocation.arguments[0] === "sidtype" &&
+      invocation.arguments[2] === "unrestricted",
+  );
+  if (artifacts.platform !== "windows" || invocations.length !== 1) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Windows upgrade requires exactly one canonical unrestricted service SID repair command.",
+    );
+  }
+  return {
+    id: "repair-windows-service-sid",
+    description: "Repair the Windows core service SID type to the declared unrestricted value.",
+    action: {
+      kind: "supervisor.invoke",
+      command: {
+        platform: "windows",
+        plane: "core",
+        verb: "install",
+        invocations,
+        deferWhenLoggedOut: false,
+      },
+    },
+  };
 }
 
 function uninstallPlan(
@@ -649,6 +755,16 @@ function releaseInstallSteps(artifacts: PlatformServiceArtifacts): readonly Serv
         releaseDirectory: definition.releaseDirectory,
       },
     },
+    ...(definition.configuration.platform === "windows"
+      ? [
+          directoryStep(
+            "secure-release-root",
+            definition.releaseDirectory,
+            "0750",
+            directoryAccess(definition.configuration, "read-execute"),
+          ),
+        ]
+      : []),
     {
       id: "activate-release",
       description: "Atomically activate the installed release through current.",
@@ -808,7 +924,8 @@ function directoryStep(
 
 function directoryAccess(
   configuration: PlatformServiceConfiguration,
-  profile: "installer-only" | "read-execute" | "shared" | "state",
+  profile:
+    "installer-only" | "provider-sandbox" | "read-execute" | "service-secret" | "shared" | "state",
 ): DirectoryAccessPolicy {
   const installer =
     configuration.platform === "windows" ? "BUILTIN\\Administrators" : "platform-installer";
@@ -821,6 +938,32 @@ function directoryAccess(
       ? configuration.ownerSession.stableUserId
       : configuration.ownerSession.userName;
   const grants: DirectoryAccessGrant[] = [{ principal: installer, permission: "full-control" }];
+  if (profile === "provider-sandbox") {
+    if (configuration.platform !== "windows") {
+      throw new PlatformServiceError(
+        "INVALID_CONFIGURATION",
+        "Provider sandbox access is available only for Windows services.",
+      );
+    }
+    grants.push(
+      { principal: "S-1-5-18", permission: "full-control" },
+      { principal: owner, permission: "full-control" },
+      { principal: core, permission: "full-control" },
+    );
+    return {
+      owner,
+      grants,
+      denyUnlisted: true,
+    };
+  }
+  if (profile === "service-secret") {
+    grants.push({ principal: core, permission: "full-control" });
+    return {
+      owner: core,
+      grants,
+      denyUnlisted: true,
+    };
+  }
   if (profile !== "installer-only") {
     grants.push({
       principal: core,
@@ -836,6 +979,22 @@ function directoryAccess(
     grants,
     denyUnlisted: true,
   };
+}
+
+function windowsAgentSandboxSteps(
+  configuration: PlatformServiceConfiguration,
+): readonly ServicePlanStep[] {
+  if (configuration.platform !== "windows" || configuration.agentSandbox === undefined) {
+    return [];
+  }
+  return [
+    directoryStep(
+      "ensure-codex-sandbox-helper",
+      configuration.agentSandbox.codexSandboxBinDirectory,
+      "0700",
+      directoryAccess(configuration, "provider-sandbox"),
+    ),
+  ];
 }
 
 function plan(

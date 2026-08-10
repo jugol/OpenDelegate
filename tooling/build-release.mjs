@@ -1597,6 +1597,18 @@ async function assembleRelease({
     "better-sqlite3",
     "pg",
   ];
+  await Promise.all([
+    assertRuntimeExternalDependencies(
+      mainDirectory,
+      serviceHostExternalDependencies,
+      "Main service host",
+    ),
+    assertRuntimeExternalDependencies(
+      workerDirectory,
+      serviceHostExternalDependencies,
+      "Worker service host",
+    ),
+  ]);
   for (const directory of [mainDirectory, workerDirectory]) {
     const coreServiceBundle = await bundle({
       absWorkingDir: assemblySourceRoot,
@@ -2207,6 +2219,28 @@ export async function assertPortableTree(root) {
     if (!metadata.isDirectory() && !metadata.isFile()) {
       throw new Error(
         `The release payload contains an unsupported special file: ${relative(root, path)}.`,
+      );
+    }
+  }
+}
+
+export async function assertRuntimeExternalDependencies(directory, dependencies, label) {
+  const nodeModulesRoot = await realpath(join(directory, "node_modules"));
+  const resolveFromApplication = createRequire(join(directory, "runtime-resolution.cjs"));
+  const concreteDependencies = [...new Set(dependencies.filter((name) => !name.includes("*")))];
+  for (const dependency of concreteDependencies) {
+    let resolved;
+    try {
+      resolved = await realpath(resolveFromApplication.resolve(dependency));
+    } catch (error) {
+      throw new Error(
+        `The deployed ${label} cannot resolve runtime dependency ${dependency} from its own node_modules tree.`,
+        { cause: error },
+      );
+    }
+    if (!isStrictPathDescendant(nodeModulesRoot, resolved)) {
+      throw new Error(
+        `The deployed ${label} resolved runtime dependency ${dependency} outside its own node_modules tree.`,
       );
     }
   }

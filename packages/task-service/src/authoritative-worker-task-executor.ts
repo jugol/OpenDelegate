@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import { EventStoreError, type EventStore, type StoredEvent } from "@opendelegate/event-store";
@@ -180,6 +180,37 @@ export interface AuthoritativeWorkerTaskExecutorOptions {
   readonly budget?: TaskBudgetEnforcementPort;
   readonly checkpoints?: TaskContinuationCheckpointPort;
   readonly directCompletionAuthorizer?: DirectPlanningCompletionAuthorizer;
+  /**
+   * Best-effort presentation handoff. The immutable snapshot lets a projector
+   * retain the latest bounded revision even when its refresh coalesces with the
+   * execution that produced it. Durable Task and Worker state never depend on
+   * this callback, and callers must coalesce or throttle their own refreshes.
+   */
+  readonly onActivityChange?: (taskId: string, activity: TaskExecutionActivitySnapshot) => void;
+}
+
+export type TaskExecutionActivityPhase = "planning" | "dispatching" | "working" | "verifying";
+
+export interface TaskExecutionActivityMilestone {
+  readonly key: string;
+  readonly status: "active" | "completed";
+  readonly summary: string;
+  readonly deviceId?: string;
+}
+
+export interface TaskExecutionActivitySnapshot {
+  readonly taskId: string;
+  readonly cycleId: string;
+  readonly revision: number;
+  readonly updatedAtMs: number;
+  readonly phase: TaskExecutionActivityPhase;
+  readonly completedWorkOrders: number;
+  readonly totalWorkOrders: number;
+  readonly milestones: readonly TaskExecutionActivityMilestone[];
+}
+
+export interface TaskExecutionActivityPort {
+  activity(taskId: string): TaskExecutionActivitySnapshot | undefined;
 }
 
 export interface WorkerEventAcceptance {
@@ -243,6 +274,17 @@ interface ActiveTaskExecution {
   readonly controller: AbortController;
   readonly taskId: string;
   readonly assignments: Map<string, WorkerRunAssignmentV1>;
+  readonly activity: MutableTaskExecutionActivity;
+}
+
+interface MutableTaskExecutionActivity {
+  readonly cycleId: string;
+  revision: number;
+  updatedAtMs: number;
+  phase: TaskExecutionActivityPhase;
+  completedWorkOrders: number;
+  totalWorkOrders: number;
+  readonly milestones: Map<string, TaskExecutionActivityMilestone>;
 }
 
 interface PersistedRunAssignment {
@@ -365,10 +407,13 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
   readonly #budget: TaskBudgetEnforcementPort | undefined;
   readonly #checkpoints: TaskContinuationCheckpointPort | undefined;
   readonly #directCompletionAuthorizer: DirectPlanningCompletionAuthorizer | undefined;
+  readonly #onActivityChange:
+    ((taskId: string, activity: TaskExecutionActivitySnapshot) => void) | undefined;
   readonly #leaseDurationMs: number;
   readonly #active = new Map<string, ActiveTaskExecution>();
   readonly #runWaiters = new Map<string, Set<() => void>>();
   readonly #streamLocks = new Map<string, Promise<void>>();
+  #lastActivityTimestampMs = -1;
 
   public constructor(options: AuthoritativeWorkerTaskExecutorOptions) {
     assertOptions(options);
@@ -390,6 +435,7 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     this.#budget = options.budget;
     this.#checkpoints = options.checkpoints;
     this.#directCompletionAuthorizer = options.directCompletionAuthorizer;
+    this.#onActivityChange = options.onActivityChange;
     this.#leaseDurationMs = leaseDurationMs;
   }
 
@@ -405,8 +451,29 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       controller: new AbortController(),
       taskId: request.task.taskId,
       assignments: new Map(),
+      activity: {
+        // This surface is deliberately replaceable after Main restart. Reusing
+        // the durable planning key would reset its revision inside an old cycle.
+        cycleId: `activity_${randomUUID()}`,
+        revision: 1,
+        updatedAtMs: this.#nextActivityTimestamp(),
+        phase: "planning",
+        completedWorkOrders: 0,
+        totalWorkOrders: 0,
+        milestones: new Map([
+          [
+            "main:planning",
+            Object.freeze({
+              key: "main:planning",
+              status: "active" as const,
+              summary: "Main is planning the work.",
+            }),
+          ],
+        ]),
+      },
     };
     this.#active.set(request.executionKey, active);
+    this.#notifyActivityChanged(active.taskId);
     const abortFromRequest = (): void => {
       active.controller.abort(request.signal.reason);
     };
@@ -433,6 +500,15 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
         };
       }
       const workOrders = planned.plan.workOrders;
+      this.#updateActivity(active, {
+        phase: "dispatching",
+        totalWorkOrders: workOrders.length,
+        milestone: {
+          key: "main:planning",
+          status: "completed",
+          summary: `Main prepared ${workOrders.length.toString()} Work Order${workOrders.length === 1 ? "" : "s"}.`,
+        },
+      });
       await this.#budget?.registerWorkOrders({
         taskId: request.task.taskId,
         operationId: `authoritative-plan:${request.planningKey}`,
@@ -451,6 +527,14 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
         };
       }
       assertNotAborted(active.controller.signal);
+      this.#updateActivity(active, {
+        phase: "verifying",
+        milestone: {
+          key: "main:verification",
+          status: "active",
+          summary: "Main is verifying the combined results.",
+        },
+      });
       await this.#budget?.beginNativeTurn({
         taskId: request.task.taskId,
         operationId: `authoritative-verifier:${request.executionKey}`,
@@ -482,6 +566,139 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     } finally {
       request.signal.removeEventListener("abort", abortFromRequest);
       this.#active.delete(request.executionKey);
+    }
+  }
+
+  public activity(taskId: string): TaskExecutionActivitySnapshot | undefined {
+    assertIdentifier(taskId, "Task ID");
+    const active = [...this.#active.values()].find((candidate) => candidate.taskId === taskId);
+    if (active === undefined) {
+      return undefined;
+    }
+    const activity = active.activity;
+    return deepFreeze({
+      taskId,
+      cycleId: activity.cycleId,
+      revision: activity.revision,
+      updatedAtMs: activity.updatedAtMs,
+      phase: activity.phase,
+      completedWorkOrders: activity.completedWorkOrders,
+      totalWorkOrders: activity.totalWorkOrders,
+      milestones: [...activity.milestones.values()].slice(-4),
+    });
+  }
+
+  #updateActivity(
+    active: ActiveTaskExecution,
+    input: {
+      readonly phase?: TaskExecutionActivityPhase;
+      readonly completedWorkOrders?: number;
+      readonly totalWorkOrders?: number;
+      readonly milestone?: TaskExecutionActivityMilestone;
+    },
+  ): void {
+    const activity = active.activity;
+    if (input.phase !== undefined) {
+      activity.phase = input.phase;
+    }
+    if (input.completedWorkOrders !== undefined) {
+      activity.completedWorkOrders = input.completedWorkOrders;
+    }
+    if (input.totalWorkOrders !== undefined) {
+      activity.totalWorkOrders = input.totalWorkOrders;
+    }
+    if (input.milestone !== undefined) {
+      const milestone = normalizeActivityMilestone(input.milestone);
+      activity.milestones.delete(milestone.key);
+      activity.milestones.set(milestone.key, milestone);
+      while (activity.milestones.size > 12) {
+        const first = activity.milestones.keys().next().value as string | undefined;
+        if (first === undefined) {
+          break;
+        }
+        activity.milestones.delete(first);
+      }
+    }
+    activity.revision += 1;
+    if (!Number.isSafeInteger(activity.revision)) {
+      throw corruptState();
+    }
+    activity.updatedAtMs = this.#nextActivityTimestamp();
+    this.#notifyActivityChanged(active.taskId);
+  }
+
+  #notifyActivityChanged(taskId: string): void {
+    try {
+      const activity = this.activity(taskId);
+      if (activity !== undefined) {
+        this.#onActivityChange?.(taskId, activity);
+      }
+    } catch {
+      // Presentation wake-ups are explicitly best effort. The periodic Discord
+      // reconciler remains the repair path and orchestration must never fail here.
+    }
+  }
+
+  #updateActivityForWorkerEvent(event: SequencedWorkerEventV1): void {
+    const active = [...this.#active.values()].find(
+      (candidate) =>
+        candidate.taskId === event.payload.taskId && candidate.assignments.has(event.payload.runId),
+    );
+    if (active === undefined) {
+      return;
+    }
+    const assignment = active.assignments.get(event.payload.runId);
+    if (assignment === undefined) {
+      return;
+    }
+    const key = `work-order:${event.payload.workOrderId}`;
+    const deviceId = event.payload.deviceId;
+    if (event.type === "worker.run.claimed") {
+      this.#updateActivity(active, {
+        phase: "working",
+        milestone: {
+          key,
+          status: "active",
+          summary: "The Worker accepted its Work Order.",
+          deviceId,
+        },
+      });
+      return;
+    }
+    if (event.type === "worker.run.progress") {
+      this.#updateActivity(active, {
+        phase: "working",
+        milestone: {
+          key,
+          status: "active",
+          summary: event.payload.report ?? "The Worker is making progress.",
+          deviceId,
+        },
+      });
+      return;
+    }
+    if (event.type === "worker.run.succeeded") {
+      this.#updateActivity(active, {
+        phase: "working",
+        milestone: {
+          key,
+          status: "active",
+          summary: "The Worker reported completion; Main is checking its result.",
+          deviceId,
+        },
+      });
+      return;
+    }
+    if (event.type === "worker.run.failed" || event.type === "worker.run.rejected") {
+      this.#updateActivity(active, {
+        phase: "working",
+        milestone: {
+          key,
+          status: "active",
+          summary: "The Worker reported a problem; Main is deciding the next step.",
+          deviceId,
+        },
+      });
     }
   }
 
@@ -635,8 +852,11 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
             operationId: `worker-event:${event.messageId}`,
             source: "worker-run-claimed",
           });
-        } else {
+        } else if (event.type !== "worker.run.progress") {
           await this.#finishBudgetForEvent(event);
+        }
+        if (disposition === "accepted") {
+          this.#updateActivityForWorkerEvent(event);
         }
         this.#notifyRun(event.payload.runId);
       }
@@ -1028,6 +1248,16 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
         if (settlement.value.state === "succeeded") {
           reports.set(workOrder.workOrderId, settlement.value.report);
           pending.delete(workOrder.workOrderId);
+          this.#updateActivity(active, {
+            phase: "working",
+            completedWorkOrders: reports.size,
+            milestone: {
+              key: `work-order:${workOrder.workOrderId}`,
+              status: "completed",
+              summary: "Work Order completed.",
+              deviceId: settlement.value.report.deviceId,
+            },
+          });
         } else {
           failed ??= settlement.value;
         }
@@ -1076,10 +1306,12 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
         report: reportFrom(current),
       };
     }
+    const resumesPausedRun = current?.status === "retired" && current.retirementReason === "paused";
     if (
       current !== undefined &&
       isTerminal(current.status) &&
-      current.executionKeyDigest === executionKeyDigest
+      current.executionKeyDigest === executionKeyDigest &&
+      !resumesPausedRun
     ) {
       await this.#finishBudgetForPersistedRun(current);
       return failureFrom(current);
@@ -1119,6 +1351,15 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
       );
     }
     active.assignments.set(current.assignment.runId, current.assignment);
+    this.#updateActivity(active, {
+      phase: "working",
+      milestone: {
+        key: `work-order:${workOrder.workOrderId}`,
+        status: "active",
+        summary: "Main dispatched this Work Order.",
+        deviceId: current.assignment.deviceId,
+      },
+    });
     assertNotAborted(signal);
     try {
       await this.#budget?.beginWorkerRun({
@@ -1552,7 +1793,9 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
         }
         assertAgentSessionMatchesAssignment(payload.event, current.assignment, true);
         assertWorkerEventTransition(current, payload.event, true);
-        current.status = runStatusFor(payload.event.type);
+        if (payload.event.type !== "worker.run.progress") {
+          current.status = runStatusFor(payload.event.type);
+        }
         const accepted = {
           acceptedAtMs: payload.acceptedAtMs,
           event: payload.event,
@@ -1720,6 +1963,15 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
     if (!Number.isSafeInteger(value) || value < 0 || value > MAXIMUM_DATE_MS) {
       throw new TaskExecutorError("CLOCK_VALUE_INVALID", "The Run authority clock is invalid.");
     }
+    return value;
+  }
+
+  #nextActivityTimestamp(): number {
+    const value = Math.max(this.#now(), this.#lastActivityTimestampMs + 1);
+    if (!Number.isSafeInteger(value) || value > MAXIMUM_DATE_MS) {
+      throw new TaskExecutorError("CLOCK_VALUE_INVALID", "The Task activity clock is exhausted.");
+    }
+    this.#lastActivityTimestampMs = value;
     return value;
   }
 
@@ -1917,6 +2169,19 @@ function normalizeWorkerEvent(
   if (value.type === "worker.run.claimed") {
     if (
       payload.report !== undefined ||
+      payload.artifactIds !== undefined ||
+      payload.diagnostic !== undefined ||
+      payload.usage !== undefined ||
+      payload.agentSession !== undefined
+    ) {
+      throw invalidWorkerEvent();
+    }
+  } else if (value.type === "worker.run.progress") {
+    if (
+      typeof payload.report !== "string" ||
+      payload.report.trim().length === 0 ||
+      Buffer.byteLength(payload.report, "utf8") > 1_024 ||
+      payload.report.includes("\0") ||
       payload.artifactIds !== undefined ||
       payload.diagnostic !== undefined ||
       payload.usage !== undefined ||
@@ -2683,6 +2948,28 @@ function validatePublicMessage(value: string): string {
   return value;
 }
 
+function normalizeActivityMilestone(
+  value: TaskExecutionActivityMilestone,
+): TaskExecutionActivityMilestone {
+  assertIdentifier(value.key, "activity milestone key");
+  if (
+    (value.status !== "active" && value.status !== "completed") ||
+    typeof value.summary !== "string" ||
+    value.summary.trim().length === 0 ||
+    value.summary.includes("\0") ||
+    Buffer.byteLength(value.summary, "utf8") > 1_024
+  ) {
+    throw new TaskExecutorError(
+      "EXECUTOR_RESULT_INVALID",
+      "The Task activity milestone is invalid.",
+    );
+  }
+  if (value.deviceId !== undefined) {
+    assertIdentifier(value.deviceId, "activity Device ID");
+  }
+  return deepFreeze(structuredClone(value));
+}
+
 function assertOptions(options: AuthoritativeWorkerTaskExecutorOptions): void {
   if (
     !isRecord(options) ||
@@ -2698,6 +2985,7 @@ function assertOptions(options: AuthoritativeWorkerTaskExecutorOptions): void {
     (options.checkpoints !== undefined && !hasMethods(options.checkpoints, ["build"])) ||
     (options.directCompletionAuthorizer !== undefined &&
       !hasMethods(options.directCompletionAuthorizer, ["authorize"])) ||
+    (options.onActivityChange !== undefined && typeof options.onActivityChange !== "function") ||
     (options.budget !== undefined &&
       !hasMethods(options.budget, [
         "ensureTask",
@@ -2791,6 +3079,8 @@ function runStatusFor(type: SequencedWorkerEventV1["type"]): RunStatus {
       return "cancelled";
     case "worker.run.failed":
       return "failed";
+    case "worker.run.progress":
+      return "claimed";
     case "worker.run.rejected":
       return "rejected";
     case "worker.run.succeeded":
@@ -2803,6 +3093,7 @@ function isWorkerEventType(value: unknown): value is SequencedWorkerEventV1["typ
     value === "worker.run.claimed" ||
     value === "worker.run.cancelled" ||
     value === "worker.run.failed" ||
+    value === "worker.run.progress" ||
     value === "worker.run.rejected" ||
     value === "worker.run.succeeded"
   );

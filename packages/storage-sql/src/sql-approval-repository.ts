@@ -51,6 +51,7 @@ export class SqlApprovalRepository implements ApprovalRepository {
       context.database,
       context.backend,
       retryPolicy,
+      context.writeCoordinator,
     );
   }
 

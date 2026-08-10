@@ -572,7 +572,8 @@ test("idle exhaustion explains that owner continuation restarts the window", asy
   const paused = await coordinator.get(task.taskId);
   const message = paused.messages.at(-1)?.content ?? "";
   assert.match(message, /without verified activity/iu);
-  assert.match(message, /new message.*Retry\/Resume/iu);
+  assert.match(message, /new message such as "Continue".*restart the idle window/iu);
+  assert.doesNotMatch(message, /Retry\/Resume/iu);
   assert.match(message, /does not require a Budget extension/iu);
   assert.doesNotMatch(message, /idleTimeMs/u);
   await coordinator.close();

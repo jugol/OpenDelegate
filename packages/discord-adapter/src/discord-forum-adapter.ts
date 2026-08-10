@@ -27,7 +27,9 @@ import { DiscordAdapterError, DiscordApiError, DiscordTaskPortError } from "./er
 import {
   renderInteractionResult,
   renderResolvedOwnerPrompt,
+  renderResolvedTaskFailure,
   renderStatusPanel,
+  renderTaskActivity,
   renderTaskUpdate,
   workflowStatusForTaskState,
 } from "./presentation.ts";
@@ -69,6 +71,7 @@ export class DiscordForumAdapter {
   #closePromise: Promise<void> | undefined;
   #connection: DiscordGatewayConnection | undefined;
   #reconciliationPending = false;
+  #lastOutboxCreatedAtMs: number | undefined;
 
   constructor(options: DiscordForumAdapterOptions) {
     validateConfig(options.config);
@@ -344,15 +347,21 @@ export class DiscordForumAdapter {
 
   async publishTaskProjection(projection: TaskChannelProjection): Promise<void> {
     // Rendering validates all owner-visible fields and URLs before durable work is queued.
-    renderStatusPanel(projection);
+    renderStatusPanel(projection, this.#config.presentationLocale);
+    if (projection.activity !== undefined) {
+      renderTaskActivity(projection, this.#config.presentationLocale);
+    }
     const binding = await this.#repository.getBindingByTask(projection.taskId);
     if (binding === undefined) {
       throw new DiscordAdapterError("PROJECTION_INVALID", "The Task has no Discord Forum binding.");
     }
+    await this.#enqueueFailureResolutions(projection, binding);
     await this.#refreshOwnerActivity(projection, binding);
-    const projectionDigest = digestValue(projection);
+    const projectionDigest = digestValue(panelProjection(projection));
     const ownerMessageCompletion = await this.#ownerMessageCompletion(projection, binding);
-    const panelRequestKey = `${projectionDigest}:02-panel`;
+    // Version the projection identity so an upgrade replays the one-time retirement
+    // for status panels created by the former persistent-panel lifecycle.
+    const panelRequestKey = `${projectionDigest}:02-panel-v2`;
     await this.#enqueueOutbox(`${projectionDigest}:01-tags`, {
       kind: "sync-tags",
       taskId: projection.taskId,
@@ -361,8 +370,21 @@ export class DiscordForumAdapter {
     await this.#enqueueOutbox(panelRequestKey, {
       kind: "upsert-status-panel",
       taskId: projection.taskId,
-      projection: frozenClone(projection),
+      projection: panelProjection(projection),
     });
+    let authoritativeRequestKey = panelRequestKey;
+    if (projection.activity !== undefined && keepsLiveActivityOpen(projection.state)) {
+      const activityRequestKey = `${digestValue({
+        taskId: projection.taskId,
+        cycleId: projection.activity.cycleId,
+        revision: projection.activity.revision,
+      })}:025-activity`;
+      await this.#enqueueOutbox(activityRequestKey, {
+        kind: "upsert-task-activity",
+        taskId: projection.taskId,
+        projection: activityProjection(projection),
+      });
+    }
     if (projection.significance !== "status") {
       const sourceEventId = projection.sourceEventId;
       if (sourceEventId === undefined) {
@@ -371,7 +393,8 @@ export class DiscordForumAdapter {
           "A significant chronological Task update requires a stable source event ID.",
         );
       }
-      const priorUpdateRequestKey = await this.#significantUpdateRequestKey(projection);
+      const priorUpdate = await this.#significantUpdate(projection);
+      const priorUpdateRequestKey = priorUpdate?.id;
       const updateRequestKey =
         priorUpdateRequestKey ??
         `${digestValue({
@@ -385,6 +408,45 @@ export class DiscordForumAdapter {
           taskId: projection.taskId,
           projection: chronologicalProjection(projection),
         });
+      } else if (projection.significance === "failure") {
+        const refreshProjection = chronologicalProjection(projection);
+        if (sameProjection(priorUpdate, refreshProjection)) {
+          authoritativeRequestKey = updateRequestKey;
+        } else {
+          const refreshRequestKey = `${digestValue({
+            taskId: projection.taskId,
+            failureRequestKey: priorUpdateRequestKey,
+            projection: refreshProjection,
+          })}:035-refresh-failure`;
+          await this.#enqueueOutbox(refreshRequestKey, {
+            kind: "refresh-task-failure",
+            taskId: projection.taskId,
+            failureRequestKey: priorUpdateRequestKey,
+            projection: refreshProjection,
+          });
+          authoritativeRequestKey = refreshRequestKey;
+        }
+      } else if (projection.significance === "question") {
+        const refreshProjection = chronologicalProjection(projection);
+        if (sameProjection(priorUpdate, refreshProjection)) {
+          authoritativeRequestKey = updateRequestKey;
+        } else {
+          const refreshRequestKey = `${digestValue({
+            taskId: projection.taskId,
+            promptRequestKey: priorUpdateRequestKey,
+            projection: refreshProjection,
+          })}:035-refresh-prompt`;
+          await this.#enqueueOutbox(refreshRequestKey, {
+            kind: "refresh-owner-prompt",
+            taskId: projection.taskId,
+            promptRequestKey: priorUpdateRequestKey,
+            projection: refreshProjection,
+          });
+          authoritativeRequestKey = refreshRequestKey;
+        }
+      }
+      if (authoritativeRequestKey === panelRequestKey) {
+        authoritativeRequestKey = updateRequestKey;
       }
       if (ownerMessageCompletion !== undefined) {
         await this.#enqueueOwnerMessageCompletion(
@@ -400,11 +462,40 @@ export class DiscordForumAdapter {
         panelRequestKey,
       );
     }
+    const activityToClose =
+      projection.activity !== undefined && keepsLiveActivityOpen(projection.state)
+        ? undefined
+        : await this.#activityToClose(binding);
+    if (activityToClose !== undefined) {
+      const closeRevision = activityToClose.revision + 1;
+      if (!Number.isSafeInteger(closeRevision)) {
+        throw new DiscordAdapterError(
+          "PROJECTION_INVALID",
+          "The Discord Task activity revision is exhausted.",
+        );
+      }
+      await this.#enqueueOutbox(
+        `${digestValue({
+          taskId: projection.taskId,
+          cycleId: activityToClose.cycleId,
+          revision: closeRevision,
+          updatedAtMs: activityToClose.updatedAtMs,
+        })}:05-close-activity`,
+        {
+          kind: "close-task-activity",
+          taskId: projection.taskId,
+          cycleId: activityToClose.cycleId,
+          revision: closeRevision,
+          updatedAtMs: activityToClose.updatedAtMs,
+          afterRequestKey: authoritativeRequestKey,
+        },
+      );
+    }
     this.#flushOutboxInBackground();
   }
 
   async createTaskThread(projection: TaskChannelProjection): Promise<DiscordTaskBinding> {
-    renderStatusPanel(projection);
+    renderStatusPanel(projection, this.#config.presentationLocale);
     let result: DiscordTaskBinding | undefined;
     await this.#withThread(`outbound-task:${projection.taskId}`, async () => {
       const existing = await this.#repository.getBindingByTask(projection.taskId);
@@ -735,9 +826,62 @@ export class DiscordForumAdapter {
     }
   }
 
-  async #significantUpdateRequestKey(
+  async #enqueueFailureResolutions(
     projection: TaskChannelProjection,
-  ): Promise<string | undefined> {
+    binding: DiscordTaskBinding,
+  ): Promise<void> {
+    const surface = binding.failureSurface;
+    if (
+      surface === undefined ||
+      surface.state !== "open" ||
+      !supersedesOpenFailure(projection, surface.sourceEventId)
+    ) {
+      return;
+    }
+    const outbox = await this.#repository.listOutbox();
+    if (
+      outbox.some(
+        (item) =>
+          item.action.kind === "resolve-task-failure" &&
+          item.action.taskId === projection.taskId &&
+          item.action.failureRequestKey === surface.requestKey,
+      )
+    ) {
+      return;
+    }
+    const failure = outbox.find(
+      (item) =>
+        item.id === surface.requestKey &&
+        item.delivered &&
+        item.action.kind === "post-task-update" &&
+        item.action.taskId === projection.taskId &&
+        isRetrySurfaceProjection(item.action.projection) &&
+        item.action.projection.sourceEventId === surface.sourceEventId,
+    );
+    if (failure?.action.kind !== "post-task-update") {
+      this.#recordDiagnostic("discord.task_failure_surface_orphaned", {
+        taskId: projection.taskId,
+        requestKey: surface.requestKey,
+      });
+      return;
+    }
+    await this.#enqueueOutbox(
+      `${digestValue({
+        taskId: projection.taskId,
+        failureRequestKey: failure.id,
+      })}:01-resolve-failure`,
+      {
+        kind: "resolve-task-failure",
+        taskId: projection.taskId,
+        failureRequestKey: failure.id,
+        projection: frozenClone(failure.action.projection),
+      },
+    );
+  }
+
+  async #significantUpdate(
+    projection: TaskChannelProjection,
+  ): Promise<DiscordOutboxItem | undefined> {
     const sourceEventId = projection.sourceEventId;
     if (sourceEventId === undefined) {
       return undefined;
@@ -748,7 +892,7 @@ export class DiscordForumAdapter {
         item.action.taskId === projection.taskId &&
         item.action.projection.sourceEventId === sourceEventId &&
         item.action.projection.significance === projection.significance,
-    )?.id;
+    );
   }
 
   async #ensureBinding(thread: DiscordThread): Promise<DiscordTaskBinding | undefined> {
@@ -1057,13 +1201,81 @@ export class DiscordForumAdapter {
   }
 
   async #enqueueOutbox(id: string, action: DiscordOutboxAction): Promise<void> {
+    if (this.#lastOutboxCreatedAtMs === undefined) {
+      const persisted = await this.#repository.listOutbox();
+      if (this.#lastOutboxCreatedAtMs === undefined) {
+        this.#lastOutboxCreatedAtMs = persisted.reduce(
+          (maximum, item) => Math.max(maximum, item.createdAtMs),
+          -1,
+        );
+      }
+    }
     const nowMs = this.#clock.nowMs();
+    const createdAtMs = Math.max(nowMs, this.#lastOutboxCreatedAtMs + 1);
+    this.#lastOutboxCreatedAtMs = createdAtMs;
     await this.#repository.enqueueOutbox({
       id,
       action,
-      createdAtMs: nowMs,
+      createdAtMs,
       notBeforeMs: nowMs,
     });
+  }
+
+  async #activityToClose(
+    binding: DiscordTaskBinding,
+  ): Promise<
+    | { readonly cycleId: string; readonly revision: number; readonly updatedAtMs: number }
+    | undefined
+  > {
+    let selected =
+      binding.activitySurface?.state === "open"
+        ? {
+            cycleId: binding.activitySurface.cycleId,
+            revision: binding.activitySurface.revision,
+            updatedAtMs: binding.activitySurface.updatedAtMs,
+            createdAtMs: binding.activitySurface.outboxCreatedAtMs,
+          }
+        : undefined;
+    for (const item of await this.#repository.listOutbox()) {
+      if (
+        item.delivered ||
+        item.action.kind !== "upsert-task-activity" ||
+        item.action.taskId !== binding.taskId ||
+        item.action.projection.activity === undefined
+      ) {
+        continue;
+      }
+      const activity = item.action.projection.activity;
+      const current = binding.activitySurface;
+      if (
+        current?.cycleId === activity.cycleId
+          ? current.revision >= activity.revision
+          : current !== undefined && current.outboxCreatedAtMs >= item.createdAtMs
+      ) {
+        continue;
+      }
+      if (
+        selected === undefined ||
+        activity.updatedAtMs > selected.updatedAtMs ||
+        (activity.updatedAtMs === selected.updatedAtMs &&
+          item.createdAtMs > selected.createdAtMs) ||
+        (activity.cycleId === selected.cycleId && activity.revision > selected.revision)
+      ) {
+        selected = {
+          cycleId: activity.cycleId,
+          revision: activity.revision,
+          updatedAtMs: activity.updatedAtMs,
+          createdAtMs: item.createdAtMs,
+        };
+      }
+    }
+    return selected === undefined
+      ? undefined
+      : Object.freeze({
+          cycleId: selected.cycleId,
+          revision: selected.revision,
+          updatedAtMs: selected.updatedAtMs,
+        });
   }
 
   async #drainOutbox(): Promise<void> {
@@ -1216,7 +1428,22 @@ export class DiscordForumAdapter {
       }
       case "upsert-status-panel": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        const payload = renderStatusPanel(action.projection);
+        if (retiresStableStatusPanel(action.projection)) {
+          if (binding.statusPanelMessageId !== undefined) {
+            try {
+              await this.#api.deleteMessage({
+                threadId: binding.threadId,
+                messageId: binding.statusPanelMessageId,
+              });
+            } catch (error) {
+              if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+                throw error;
+              }
+            }
+          }
+          return;
+        }
+        const payload = renderStatusPanel(action.projection, this.#config.presentationLocale);
         let result: { readonly messageId: string };
         try {
           result = await this.#api.upsertStatusPanel({
@@ -1249,25 +1476,320 @@ export class DiscordForumAdapter {
       }
       case "post-task-update": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        await this.#api.createMessage({
+        if (binding.failureSurface?.requestKey === item.id) {
+          return;
+        }
+        const result = await this.#api.createMessage({
           threadId: binding.threadId,
           requestKey: item.id,
-          payload: renderTaskUpdate(action.projection),
+          payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
+        });
+        if (isRetrySurfaceProjection(action.projection)) {
+          const sourceEventId = action.projection.sourceEventId;
+          if (sourceEventId === undefined) {
+            throw new DiscordAdapterError(
+              "PROJECTION_INVALID",
+              "A chronological Discord retry surface has no source event ID.",
+            );
+          }
+          await this.#repository.updateBinding(binding.threadId, {
+            failureSurface: Object.freeze({
+              requestKey: item.id,
+              sourceEventId,
+              messageId: result.messageId,
+              outboxCreatedAtMs: item.createdAtMs,
+              state: "open" as const,
+            }),
+          });
+        } else if (action.projection.significance === "question") {
+          const sourceEventId = action.projection.sourceEventId;
+          if (sourceEventId === undefined) {
+            throw new DiscordAdapterError(
+              "PROJECTION_INVALID",
+              "A chronological Discord owner prompt has no source event ID.",
+            );
+          }
+          await this.#repository.updateBinding(binding.threadId, {
+            ownerPromptSurface: Object.freeze({
+              requestKey: item.id,
+              sourceEventId,
+              messageId: result.messageId,
+              outboxCreatedAtMs: item.createdAtMs,
+              state: "open" as const,
+            }),
+          });
+        }
+        return;
+      }
+      case "refresh-task-failure": {
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const surface = binding.failureSurface;
+        if (
+          surface === undefined ||
+          surface.state !== "open" ||
+          surface.requestKey !== action.failureRequestKey ||
+          surface.sourceEventId !== action.projection.sourceEventId
+        ) {
+          this.#recordDiagnostic("discord.task_failure_refresh_unavailable", {
+            taskId: action.taskId,
+            requestKey: action.failureRequestKey,
+          });
+          return;
+        }
+        try {
+          await this.#api.editMessage({
+            threadId: binding.threadId,
+            messageId: surface.messageId,
+            payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
+          });
+        } catch (error) {
+          if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+            throw error;
+          }
+          this.#recordDiagnostic("discord.task_failure_message_missing", {
+            threadId: binding.threadId,
+            messageId: surface.messageId,
+          });
+        }
+        return;
+      }
+      case "refresh-owner-prompt": {
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const sourceEventId = action.projection.sourceEventId;
+        if (sourceEventId === undefined) {
+          throw new DiscordAdapterError(
+            "PROJECTION_INVALID",
+            "A refreshed Discord owner prompt has no source event ID.",
+          );
+        }
+        const current = binding.ownerPromptSurface;
+        if (
+          current !== undefined &&
+          current.requestKey !== action.promptRequestKey &&
+          current.outboxCreatedAtMs >= item.createdAtMs
+        ) {
+          return;
+        }
+        let prompt =
+          current?.requestKey === action.promptRequestKey &&
+          current.sourceEventId === sourceEventId &&
+          current.state === "open"
+            ? { messageId: current.messageId }
+            : await this.#api.createMessage({
+                threadId: binding.threadId,
+                requestKey: action.promptRequestKey,
+                payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
+              });
+        try {
+          await this.#api.editMessage({
+            threadId: binding.threadId,
+            messageId: prompt.messageId,
+            payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
+          });
+        } catch (error) {
+          if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+            throw error;
+          }
+          prompt = await this.#api.createMessage({
+            threadId: binding.threadId,
+            requestKey: action.promptRequestKey,
+            payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
+          });
+          this.#recordDiagnostic("discord.owner_prompt_refresh_message_restored", {
+            taskId: action.taskId,
+            requestKey: action.promptRequestKey,
+          });
+        }
+        await this.#repository.updateBinding(binding.threadId, {
+          ownerPromptSurface: Object.freeze({
+            requestKey: action.promptRequestKey,
+            sourceEventId,
+            messageId: prompt.messageId,
+            outboxCreatedAtMs: item.createdAtMs,
+            state: "open" as const,
+          }),
+        });
+        return;
+      }
+      case "upsert-task-activity": {
+        const activity = action.projection.activity;
+        if (activity === undefined) {
+          throw new DiscordAdapterError(
+            "PROJECTION_INVALID",
+            "Discord Task activity work has no activity projection.",
+          );
+        }
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const current = binding.activitySurface;
+        if (current?.cycleId === activity.cycleId) {
+          if (current.state !== "open" || current.revision >= activity.revision) {
+            return;
+          }
+        } else if (current !== undefined && current.outboxCreatedAtMs >= item.createdAtMs) {
+          return;
+        } else if (current?.messageId !== undefined) {
+          try {
+            await this.#api.deleteMessage({
+              threadId: binding.threadId,
+              messageId: current.messageId,
+            });
+          } catch (error) {
+            if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+              throw error;
+            }
+          }
+        }
+        const requestKey = `task-activity:${action.taskId}:${activity.cycleId}`;
+        const payload = renderTaskActivity(action.projection, this.#config.presentationLocale);
+        let result: { readonly messageId: string };
+        const messageId =
+          current?.cycleId === activity.cycleId && current.state === "open"
+            ? current.messageId
+            : undefined;
+        try {
+          result = await this.#api.upsertStatusPanel({
+            threadId: binding.threadId,
+            requestKey,
+            payload,
+            ...(messageId === undefined ? {} : { messageId }),
+          });
+        } catch (error) {
+          if (
+            !(error instanceof DiscordApiError) ||
+            error.code !== "NOT_FOUND" ||
+            messageId === undefined
+          ) {
+            throw error;
+          }
+          result = await this.#api.upsertStatusPanel({
+            threadId: binding.threadId,
+            requestKey,
+            payload,
+          });
+        }
+        await this.#repository.updateBinding(binding.threadId, {
+          activitySurface: Object.freeze({
+            cycleId: activity.cycleId,
+            revision: activity.revision,
+            updatedAtMs: activity.updatedAtMs,
+            outboxCreatedAtMs: item.createdAtMs,
+            state: "open" as const,
+            messageId: result.messageId,
+          }),
+          externalState: "available",
+        });
+        return;
+      }
+      case "close-task-activity": {
+        const dependency = (await this.#repository.listOutbox()).find(
+          (candidate) => candidate.id === action.afterRequestKey,
+        );
+        if (dependency?.delivered !== true) {
+          throw new DiscordApiError(
+            "OFFLINE",
+            "Task activity closure is waiting for its authoritative Discord projection.",
+          );
+        }
+        let binding = await requiredBinding(this.#repository, action.taskId);
+        const current = binding.activitySurface;
+        if (
+          current !== undefined &&
+          current.cycleId !== action.cycleId &&
+          current.outboxCreatedAtMs >= item.createdAtMs
+        ) {
+          return;
+        }
+        if (
+          current?.cycleId === action.cycleId &&
+          current.state === "closed" &&
+          current.revision >= action.revision
+        ) {
+          return;
+        }
+        const closingRevision =
+          current?.cycleId === action.cycleId
+            ? Math.max(current.revision, action.revision)
+            : action.revision;
+        if (current === undefined) {
+          await this.#repository.updateBinding(binding.threadId, {
+            activitySurface: Object.freeze({
+              cycleId: action.cycleId,
+              revision: closingRevision,
+              updatedAtMs: action.updatedAtMs,
+              outboxCreatedAtMs: item.createdAtMs,
+              state: "closed" as const,
+            }),
+          });
+          return;
+        }
+        if (current.messageId === undefined) {
+          await this.#repository.updateBinding(binding.threadId, {
+            activitySurface: Object.freeze({
+              cycleId: action.cycleId,
+              revision: closingRevision,
+              updatedAtMs: action.updatedAtMs,
+              outboxCreatedAtMs: item.createdAtMs,
+              state: "closed" as const,
+            }),
+          });
+          return;
+        }
+        if (
+          current.cycleId !== action.cycleId ||
+          current.state !== "closing" ||
+          current.revision !== closingRevision
+        ) {
+          binding = await this.#repository.updateBinding(binding.threadId, {
+            activitySurface: Object.freeze({
+              cycleId: action.cycleId,
+              revision: closingRevision,
+              updatedAtMs: action.updatedAtMs,
+              outboxCreatedAtMs: item.createdAtMs,
+              state: "closing" as const,
+              messageId: current.messageId,
+            }),
+          });
+        }
+        const closing = binding.activitySurface;
+        if (closing?.messageId !== undefined) {
+          try {
+            await this.#api.deleteMessage({
+              threadId: binding.threadId,
+              messageId: closing.messageId,
+            });
+          } catch (error) {
+            if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+              throw error;
+            }
+          }
+        }
+        await this.#repository.updateBinding(binding.threadId, {
+          activitySurface: Object.freeze({
+            cycleId: action.cycleId,
+            revision: closingRevision,
+            updatedAtMs: action.updatedAtMs,
+            outboxCreatedAtMs: item.createdAtMs,
+            state: "closed" as const,
+          }),
         });
         return;
       }
       case "resolve-owner-prompt": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        const prompt = await this.#api.createMessage({
-          threadId: binding.threadId,
-          requestKey: action.promptRequestKey,
-          payload: renderTaskUpdate(action.projection),
-        });
+        const surface = binding.ownerPromptSurface;
+        const prompt =
+          surface?.requestKey === action.promptRequestKey
+            ? { messageId: surface.messageId }
+            : await this.#api.createMessage({
+                threadId: binding.threadId,
+                requestKey: action.promptRequestKey,
+                payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
+              });
         try {
           await this.#api.editMessage({
             threadId: binding.threadId,
             messageId: prompt.messageId,
-            payload: renderResolvedOwnerPrompt(action.projection),
+            payload: renderResolvedOwnerPrompt(action.projection, this.#config.presentationLocale),
           });
         } catch (error) {
           if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
@@ -1278,6 +1800,48 @@ export class DiscordForumAdapter {
             messageId: prompt.messageId,
           });
         }
+        if (surface?.requestKey === action.promptRequestKey && surface.state !== "resolved") {
+          await this.#repository.updateBinding(binding.threadId, {
+            ownerPromptSurface: Object.freeze({ ...surface, state: "resolved" as const }),
+          });
+        }
+        return;
+      }
+      case "resolve-task-failure": {
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const surface = binding.failureSurface;
+        if (
+          surface === undefined ||
+          surface.requestKey !== action.failureRequestKey ||
+          surface.sourceEventId !== action.projection.sourceEventId
+        ) {
+          this.#recordDiagnostic("discord.task_failure_surface_unavailable", {
+            taskId: action.taskId,
+            requestKey: action.failureRequestKey,
+          });
+          return;
+        }
+        if (surface.state === "resolved") {
+          return;
+        }
+        try {
+          await this.#api.editMessage({
+            threadId: binding.threadId,
+            messageId: surface.messageId,
+            payload: renderResolvedTaskFailure(action.projection, this.#config.presentationLocale),
+          });
+        } catch (error) {
+          if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+            throw error;
+          }
+          this.#recordDiagnostic("discord.task_failure_message_missing", {
+            threadId: binding.threadId,
+            messageId: surface.messageId,
+          });
+        }
+        await this.#repository.updateBinding(binding.threadId, {
+          failureSurface: Object.freeze({ ...surface, state: "resolved" as const }),
+        });
         return;
       }
       case "complete-owner-message": {
@@ -1301,10 +1865,7 @@ export class DiscordForumAdapter {
           idempotencyKey: action.idempotencyKey,
           command: action.command,
         });
-        await this.#finishDeferredInteraction(
-          action.responseRef,
-          `${capitalize(action.command)} was accepted for this Task.`,
-        );
+        await this.#dismissDeferredInteraction(action.responseRef);
         return;
       case "approval-decision":
         await this.#tasks.resolveApproval({
@@ -1332,7 +1893,7 @@ export class DiscordForumAdapter {
     try {
       await this.#api.editDeferredInteraction({
         responseRef,
-        payload: renderInteractionResult(message, success),
+        payload: renderInteractionResult(message, success, this.#config.presentationLocale),
       });
     } catch (error) {
       if (
@@ -1340,6 +1901,23 @@ export class DiscordForumAdapter {
         (error.code === "NOT_FOUND" || error.code === "FORBIDDEN")
       ) {
         this.#recordDiagnostic("discord.interaction_followup_unavailable", {
+          errorCode: error.code,
+        });
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async #dismissDeferredInteraction(responseRef: string): Promise<void> {
+    try {
+      await this.#api.deleteDeferredInteraction({ responseRef });
+    } catch (error) {
+      if (
+        error instanceof DiscordApiError &&
+        (error.code === "NOT_FOUND" || error.code === "FORBIDDEN")
+      ) {
+        this.#recordDiagnostic("discord.interaction_dismiss_unavailable", {
           errorCode: error.code,
         });
         return;
@@ -1458,10 +2036,21 @@ function validateConfig(config: DiscordForumAdapterConfig): void {
     throw configInvalid();
   }
   const keys = Object.keys(config);
+  const expectedKeys = [
+    "allowedRoleIds",
+    "applicationId",
+    "botUserId",
+    "forumBindings",
+    "guildId",
+    "ownerUserIds",
+    ...(config.presentationLocale === undefined ? [] : ["presentationLocale"]),
+  ].sort();
   if (
     keys.some((key) => /token|secret|credential/iu.test(key)) ||
-    keys.sort().join(",") !==
-      "allowedRoleIds,applicationId,botUserId,forumBindings,guildId,ownerUserIds"
+    keys.sort().join(",") !== expectedKeys.join(",") ||
+    (config.presentationLocale !== undefined &&
+      config.presentationLocale !== "en" &&
+      config.presentationLocale !== "ko")
   ) {
     throw configInvalid();
   }
@@ -1555,7 +2144,12 @@ async function bindingForAction(
     case "sync-tags":
     case "upsert-status-panel":
     case "post-task-update":
+    case "refresh-task-failure":
+    case "refresh-owner-prompt":
+    case "upsert-task-activity":
+    case "close-task-activity":
     case "resolve-owner-prompt":
+    case "resolve-task-failure":
     case "complete-owner-message":
       return repository.getBindingByTask(action.taskId);
     case "task-command":
@@ -1579,6 +2173,80 @@ function keepsOwnerActivityOpen(state: TaskChannelProjection["state"]): boolean 
   return state === "intake" || state === "queued" || state === "running";
 }
 
+function keepsLiveActivityOpen(state: TaskChannelProjection["state"]): boolean {
+  return state === "running" || state === "paused";
+}
+
+function retiresStableStatusPanel(projection: TaskChannelProjection): boolean {
+  return (
+    projection.significance !== "status" ||
+    projection.state === "running" ||
+    projection.state === "paused"
+  );
+}
+
+function isRetrySurfaceProjection(projection: TaskChannelProjection): boolean {
+  return (
+    projection.significance === "failure" ||
+    (projection.significance === "final" && projection.state === "cancelled")
+  );
+}
+
+function sameProjection(
+  item: DiscordOutboxItem | undefined,
+  projection: TaskChannelProjection,
+): boolean {
+  return (
+    item?.action.kind === "post-task-update" &&
+    canonicalJson(item.action.projection) === canonicalJson(projection)
+  );
+}
+
+function panelProjection(projection: TaskChannelProjection): TaskChannelProjection {
+  return Object.freeze({
+    taskId: projection.taskId,
+    ...(projection.sourceEventId === undefined ? {} : { sourceEventId: projection.sourceEventId }),
+    state: projection.state,
+    objective: projection.objective,
+    summary: projection.summary,
+    significance: projection.significance,
+    ...(projection.progress === undefined
+      ? {}
+      : { progress: Object.freeze({ ...projection.progress }) }),
+    ...(projection.approval === undefined
+      ? {}
+      : { approval: Object.freeze({ ...projection.approval }) }),
+    ...(projection.artifact === undefined
+      ? {}
+      : { artifact: Object.freeze({ ...projection.artifact }) }),
+    ...(projection.inspectUrl === undefined ? {} : { inspectUrl: projection.inspectUrl }),
+  });
+}
+
+function activityProjection(projection: TaskChannelProjection): TaskChannelProjection {
+  if (projection.activity === undefined) {
+    throw new DiscordAdapterError(
+      "PROJECTION_INVALID",
+      "A live Discord activity projection requires activity state.",
+    );
+  }
+  return Object.freeze({
+    taskId: projection.taskId,
+    state: projection.state,
+    objective: projection.objective,
+    summary: projection.summary,
+    significance: "status" as const,
+    activity: frozenClone(projection.activity),
+    ...(projection.approval === undefined
+      ? {}
+      : { approval: Object.freeze({ ...projection.approval }) }),
+    ...(projection.artifact === undefined
+      ? {}
+      : { artifact: Object.freeze({ ...projection.artifact }) }),
+    ...(projection.inspectUrl === undefined ? {} : { inspectUrl: projection.inspectUrl }),
+  });
+}
+
 function chronologicalProjection(projection: TaskChannelProjection): TaskChannelProjection {
   return Object.freeze({
     taskId: projection.taskId,
@@ -1590,7 +2258,35 @@ function chronologicalProjection(projection: TaskChannelProjection): TaskChannel
     ...(projection.approval === undefined
       ? {}
       : { approval: Object.freeze({ ...projection.approval }) }),
+    ...(projection.artifact === undefined
+      ? {}
+      : { artifact: Object.freeze({ ...projection.artifact }) }),
+    ...(projection.inspectUrl === undefined ? {} : { inspectUrl: projection.inspectUrl }),
   });
+}
+
+function supersedesOpenFailure(
+  projection: TaskChannelProjection,
+  failureSourceEventId: string,
+): boolean {
+  if (projection.state === "failed") {
+    return (
+      projection.sourceEventId !== undefined && projection.sourceEventId !== failureSourceEventId
+    );
+  }
+  if (projection.state === "cancelled") {
+    return (
+      projection.sourceEventId !== undefined && projection.sourceEventId !== failureSourceEventId
+    );
+  }
+  return (
+    projection.state === "queued" ||
+    projection.state === "running" ||
+    projection.state === "waiting_user" ||
+    projection.state === "waiting_resource" ||
+    projection.state === "review" ||
+    projection.state === "completed"
+  );
 }
 
 function attachmentReferences(message: DiscordMessage): readonly string[] {
@@ -1661,10 +2357,6 @@ function laterSnowflake(current: string | undefined, candidate: string): string 
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown Discord adapter failure.";
-}
-
-function capitalize(value: string): string {
-  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }
 
 function cryptoRandomSuffix(): string {

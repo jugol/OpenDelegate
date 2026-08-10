@@ -88,19 +88,24 @@ Inspect the packaged launcher help first. Use its supported equivalent of:
 
 ```text
 opendelegate worker join --grant-file ABSOLUTE_LOCAL_PATH \
-  [--agent auto|codex|claude] [--codex-home ABSOLUTE_LOCAL_PATH] \
-  [--claude-home ABSOLUTE_LOCAL_PATH] \
+  [--agent auto|codex|claude] \
+  [--codex-executable ABSOLUTE_NATIVE_EXECUTABLE] [--codex-home ABSOLUTE_LOCAL_PATH] \
+  [--claude-executable ABSOLUTE_NATIVE_EXECUTABLE] [--claude-home ABSOLUTE_LOCAL_PATH] \
   [--claude-network-domain APPROVED_DNS_NAME ...]
 ```
 
 `Auto` is the provider default. Codex and Claude each use a separate OpenDelegate-controlled home
 below Worker state unless an external absolute home is supplied. Authenticate those exact homes
-through the provider's normal owner-interactive login before expecting a probe to become ready.
-Never copy a global provider home, credential file, or login token into the controlled home, chat,
-argv, environment, checkout, or configuration. Claude SDK ignores ambient settings and starts with
-no extra network domains. Add only domains already required by owner-approved, configured package
-sources. Native Windows Claude SDK is unavailable until its required sandbox can be enforced; select
-Codex or use an explicitly configured WSL2/container Worker there.
+through the provider's normal owner-interactive login before expecting a probe to become ready. When
+the always-on service cannot discover the provider on its reduced `PATH`, pass its exact native
+executable with `--codex-executable` or `--claude-executable`. Windows must use a native `.exe`,
+never a `.cmd` or `.bat` shell wrapper. An external owner home must be accessible only to the owner
+and the exact OpenDelegate service identity that needs it. Never copy a global provider home,
+credential file, or login token into the controlled home, chat, argv, environment, checkout, or
+configuration. Claude SDK ignores ambient settings and starts with no extra network domains. Add
+only domains already required by owner-approved, configured package sources. Native Windows Claude
+SDK is unavailable until its required sandbox can be enforced; select Codex or use an explicitly
+configured WSL2/container Worker there.
 
 On a headless systemd Linux Device, do not rely on `Auto` and do not create a plaintext key file.
 First use the packaged deterministic boundary:
@@ -167,7 +172,10 @@ Use the packaged deterministic boundary rather than editing Worker configuration
 ```text
 opendelegate worker workspace-register --workspace-id ID --alias NAME \
   --type directory|git|mounted-storage --path ABSOLUTE_PATH \
-  --isolation none|agent-native-worktree [--capability NAME ...]
+  --isolation none|agent-native-worktree|opendelegate-worktree \
+  [--capability NAME ...]
+opendelegate worker workspace-set-isolation --workspace-id ID \
+  --isolation none|agent-native-worktree|opendelegate-worktree
 opendelegate worker workspace-list
 ```
 

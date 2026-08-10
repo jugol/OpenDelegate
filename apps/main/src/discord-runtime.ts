@@ -75,6 +75,31 @@ export interface DiscordArtifactPresentationPort {
   forTask(taskId: string): Promise<NonNullable<TaskChannelProjection["artifact"]> | undefined>;
 }
 
+export interface DiscordTaskActivityProjectionPort {
+  activity(
+    taskId: string,
+  ):
+    | NonNullable<TaskChannelProjection["activity"]>
+    | undefined
+    | Promise<NonNullable<TaskChannelProjection["activity"]> | undefined>;
+}
+
+export interface DiscordTaskApprovalProjectionPort {
+  current(
+    taskId: string,
+  ):
+    | NonNullable<TaskChannelProjection["approval"]>
+    | undefined
+    | Promise<NonNullable<TaskChannelProjection["approval"]> | undefined>;
+  resolve(input: {
+    readonly taskId: string;
+    readonly approvalId: string;
+    readonly principalId: string;
+    readonly idempotencyKey: string;
+    readonly decision: "approve" | "reject";
+  }): Promise<boolean>;
+}
+
 export interface DiscordRuntimeTaskServicePort
   extends DiscordTaskServicePort, DiscordProjectionTaskPort {}
 
@@ -96,6 +121,8 @@ export interface DiscordMainRuntimeOptions {
   readonly repository: Pick<DiscordStateRepository, "getGatewayCursor" | "listBindings">;
   readonly tasks: DiscordProjectionTaskPort;
   readonly artifactPresentation?: DiscordArtifactPresentationPort;
+  readonly taskActivity?: DiscordTaskActivityProjectionPort;
+  readonly taskApproval?: DiscordTaskApprovalProjectionPort;
   readonly clock: DiscordClock;
   readonly scheduler?: DiscordRuntimeScheduler;
   readonly synchronizationIntervalMs?: number;
@@ -128,6 +155,8 @@ export interface CreateProductionDiscordRuntimeOptions {
   readonly scheduler?: DiscordRuntimeScheduler;
   readonly synchronizationIntervalMs?: number;
   readonly artifactPresentation?: DiscordArtifactPresentationPort;
+  readonly taskActivity?: DiscordTaskActivityProjectionPort;
+  readonly taskApproval?: DiscordTaskApprovalProjectionPort;
   readonly interactionTokenVault?: DiscordInteractionTokenVault;
   readonly api?: DiscordApiPort;
   readonly gateway?: DiscordGatewayPort;
@@ -150,12 +179,18 @@ export class DiscordMainRuntime {
   readonly #repository: DiscordMainRuntimeOptions["repository"];
   readonly #tasks: DiscordProjectionTaskPort;
   readonly #artifactPresentation: DiscordArtifactPresentationPort | undefined;
+  readonly #taskActivity: DiscordTaskActivityProjectionPort | undefined;
+  readonly #taskApproval: DiscordTaskApprovalProjectionPort | undefined;
   readonly #clock: DiscordClock;
   readonly #scheduler: DiscordRuntimeScheduler;
   readonly #synchronizationIntervalMs: number;
   readonly #closeResource: (() => Promise<void>) | undefined;
   readonly #onStatusChange: ((status: DiscordRuntimeStatus) => void) | undefined;
   readonly #diagnostics: DiscordRuntimeDiagnostic[] = [];
+  readonly #observedTaskActivity = new Map<
+    string,
+    NonNullable<TaskChannelProjection["activity"]>
+  >();
   #status: DiscordRuntimeStatus = frozenStatus("unavailable", "DISCORD_STOPPED");
   #adapterStarted = false;
   #started = false;
@@ -179,6 +214,8 @@ export class DiscordMainRuntime {
     this.#repository = options.repository;
     this.#tasks = options.tasks;
     this.#artifactPresentation = options.artifactPresentation;
+    this.#taskActivity = options.taskActivity;
+    this.#taskApproval = options.taskApproval;
     this.#clock = options.clock;
     this.#scheduler = options.scheduler ?? new NodeDiscordRuntimeScheduler();
     this.#synchronizationIntervalMs = synchronizationIntervalMs;
@@ -194,6 +231,32 @@ export class DiscordMainRuntime {
     return Object.freeze(this.#diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
   }
 
+  /**
+   * Retains the latest bounded presentation snapshot until synchronization
+   * publishes it. This closes the race where several activity wake-ups coalesce
+   * and the executor finishes before the projector performs its next lookup.
+   */
+  public observeTaskActivity(
+    taskId: string,
+    activity: NonNullable<TaskChannelProjection["activity"]>,
+  ): void {
+    assertOpaqueIdentifier(taskId, "Discord activity Task ID");
+    if (this.#closed) {
+      return;
+    }
+    const current = this.#observedTaskActivity.get(taskId);
+    if (
+      current !== undefined &&
+      (current.cycleId === activity.cycleId
+        ? current.revision >= activity.revision
+        : current.updatedAtMs >= activity.updatedAtMs)
+    ) {
+      return;
+    }
+    this.#observedTaskActivity.set(taskId, cloneTaskActivity(activity));
+    void this.synchronizeNow().catch(() => undefined);
+  }
+
   public async presentTask(taskId: string): Promise<void> {
     if (this.#status.code !== "DISCORD_READY") {
       throw new DiscordApiError("OFFLINE", "Discord is not ready to present a new Task.");
@@ -203,7 +266,8 @@ export class DiscordMainRuntime {
     if (this.#artifactPresentation !== undefined) {
       artifact = await this.#artifactPresentation.forTask(task.taskId);
     }
-    await this.#adapter.createTaskThread(projectTask(task, artifact));
+    const approval = await this.#taskApproval?.current(task.taskId);
+    await this.#adapter.createTaskThread(projectTask(task, artifact, undefined, approval));
     await this.#adapter.flushOutbox();
   }
 
@@ -304,13 +368,32 @@ export class DiscordMainRuntime {
   }
 
   async #publishCurrentTaskState(): Promise<void> {
-    for (const binding of await this.#repository.listBindings()) {
+    const bindings = await this.#repository.listBindings();
+    const boundTaskIds = new Set(bindings.map((binding) => binding.taskId));
+    for (const taskId of this.#observedTaskActivity.keys()) {
+      if (!boundTaskIds.has(taskId)) {
+        this.#observedTaskActivity.delete(taskId);
+      }
+    }
+    for (const binding of bindings) {
       if (binding.externalState !== "available") {
         continue;
       }
       try {
         const task = await this.#tasks.get(binding.taskId);
         let artifact: NonNullable<TaskChannelProjection["artifact"]> | undefined;
+        const activity = latestTaskActivity(
+          await this.#taskActivity?.activity(task.taskId),
+          this.#observedTaskActivity.get(task.taskId),
+        );
+        let approval: NonNullable<TaskChannelProjection["approval"]> | undefined;
+        if (this.#taskApproval !== undefined) {
+          try {
+            approval = await this.#taskApproval.current(task.taskId);
+          } catch (error) {
+            this.#recordDiagnostic("discord.runtime.approval_projection_failed", errorCode(error));
+          }
+        }
         if (this.#artifactPresentation !== undefined) {
           try {
             artifact = await this.#artifactPresentation.forTask(task.taskId);
@@ -318,7 +401,21 @@ export class DiscordMainRuntime {
             this.#recordDiagnostic("discord.runtime.artifact_projection_failed", errorCode(error));
           }
         }
-        await this.#adapter.publishTaskProjection(projectTask(task, artifact));
+        const effectiveActivity =
+          task.state === "paused"
+            ? pausedFallbackActivity(task)
+            : (activity ??
+              (task.state === "running" && approval !== undefined
+                ? approvalFallbackActivity(task, approval)
+                : task.state === "running"
+                  ? runningFallbackActivity(task)
+                  : undefined));
+        await this.#adapter.publishTaskProjection(
+          projectTask(task, artifact, effectiveActivity, approval),
+        );
+        if (task.state !== "running") {
+          this.#observedTaskActivity.delete(task.taskId);
+        }
       } catch (error) {
         this.#recordDiagnostic("discord.runtime.task_projection_failed", errorCode(error));
       }
@@ -339,6 +436,7 @@ export class DiscordMainRuntime {
 
   async #close(): Promise<void> {
     this.#closed = true;
+    this.#observedTaskActivity.clear();
     if (this.#timer !== undefined) {
       this.#scheduler.clearTimeout(this.#timer);
       this.#timer = undefined;
@@ -678,11 +776,22 @@ export async function createProductionDiscordRuntime(
     const gateway = new ObservedDiscordGatewayPort(gatewayDriver, () => {
       runtimeReference.current?.observeGatewaySessionEstablished();
     });
+    const taskService: DiscordTaskServicePort = {
+      create: (input) => options.tasks.create(input),
+      appendInput: (input) => options.tasks.appendInput(input),
+      command: (input) => options.tasks.command(input),
+      resolveApproval: async (input) => {
+        if (await options.taskApproval?.resolve(input)) {
+          return Object.freeze({ taskId: input.taskId });
+        }
+        return await options.tasks.resolveApproval(input);
+      },
+    };
     const adapter = new DiscordForumAdapter({
       config: options.config,
       repository,
       api,
-      tasks: createDiscordTaskPort(options.tasks),
+      tasks: createDiscordTaskPort(taskService),
       clock,
       gateway,
     });
@@ -693,6 +802,8 @@ export async function createProductionDiscordRuntime(
       ...(options.artifactPresentation === undefined
         ? {}
         : { artifactPresentation: options.artifactPresentation }),
+      ...(options.taskActivity === undefined ? {} : { taskActivity: options.taskActivity }),
+      ...(options.taskApproval === undefined ? {} : { taskApproval: options.taskApproval }),
       clock,
       closeResource: async () => repository.close(),
       ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
@@ -716,6 +827,8 @@ export async function createProductionDiscordRuntime(
 function projectTask(
   task: DiscordProjectionTask,
   artifact?: NonNullable<TaskChannelProjection["artifact"]>,
+  activity?: NonNullable<TaskChannelProjection["activity"]>,
+  approval?: NonNullable<TaskChannelProjection["approval"]>,
 ): TaskChannelProjection {
   const latestEvent = task.events.at(-1);
   const latestMessage = task.messages.at(-1);
@@ -723,16 +836,134 @@ function projectTask(
     latestMessage?.role === "agent" && latestMessage.messageId === latestEvent?.eventId
       ? latestMessage.content
       : undefined;
-  const executionUpdate = latestEvent?.type === "task.execution-recorded";
+  const significantTransition =
+    latestEvent?.type === "task.execution-recorded" ||
+    (latestEvent?.type === "task.commanded" && task.state === "cancelled");
   return Object.freeze({
     taskId: task.taskId,
     ...(latestEvent === undefined ? {} : { sourceEventId: latestEvent.eventId }),
     state: task.state,
     objective: task.objective,
     summary: currentAgentMessage ?? stateSummary(task.state),
-    significance: executionUpdate ? significanceFor(task.state) : "status",
+    significance: significantTransition ? significanceFor(task.state) : "status",
     ...(artifact === undefined ? {} : { artifact: Object.freeze({ ...artifact }) }),
+    ...(activity === undefined ? {} : { activity: structuredClone(activity) }),
+    ...(approval === undefined ? {} : { approval: Object.freeze({ ...approval }) }),
   });
+}
+
+function approvalFallbackActivity(
+  task: DiscordProjectionTask,
+  approval: NonNullable<TaskChannelProjection["approval"]>,
+): NonNullable<TaskChannelProjection["activity"]> {
+  return Object.freeze({
+    cycleId: `approval_${approval.approvalId}`,
+    revision: 1,
+    updatedAtMs: stableTaskActivityTimestamp(task),
+    phase: "working" as const,
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: Object.freeze([
+      Object.freeze({
+        key: `owner-approval:${task.taskId}`,
+        status: "active" as const,
+        summary: "A Worker is waiting for owner approval before it can continue.",
+      }),
+    ]),
+  });
+}
+
+function runningFallbackActivity(
+  task: DiscordProjectionTask,
+): NonNullable<TaskChannelProjection["activity"]> {
+  const executionEvent = [...task.events]
+    .reverse()
+    .find((event) => event.type === "task.execution-recorded");
+  const cycleSource = executionEvent?.eventId ?? task.taskId;
+  assertOpaqueIdentifier(cycleSource, "Discord activity cycle source");
+  return Object.freeze({
+    cycleId: `running_${cycleSource}`.slice(0, 160),
+    revision: 1,
+    updatedAtMs: stableTaskActivityTimestamp(task),
+    phase: "planning" as const,
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: Object.freeze([
+      Object.freeze({
+        key: `main:${task.taskId}`.slice(0, 160),
+        status: "active" as const,
+        summary: "Main is preparing or coordinating the current work.",
+      }),
+    ]),
+  });
+}
+
+function pausedFallbackActivity(
+  task: DiscordProjectionTask,
+): NonNullable<TaskChannelProjection["activity"]> {
+  const pauseEvent = [...task.events].reverse().find((event) => event.type === "task.commanded");
+  const cycleSource = pauseEvent?.eventId ?? task.events.at(-1)?.eventId ?? task.taskId;
+  assertOpaqueIdentifier(cycleSource, "Discord paused activity cycle source");
+  return Object.freeze({
+    cycleId: `paused_${cycleSource}`.slice(0, 160),
+    revision: 1,
+    updatedAtMs: stableTaskActivityTimestamp(task),
+    phase: "planning" as const,
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: Object.freeze([
+      Object.freeze({
+        key: `paused:${task.taskId}`.slice(0, 160),
+        status: "active" as const,
+        summary: "Execution is paused until the owner resumes this Task.",
+      }),
+    ]),
+  });
+}
+
+function stableTaskActivityTimestamp(task: DiscordProjectionTask): number {
+  const updatedAtMs = Date.parse(task.updatedAt);
+  assertBoundedInteger(updatedAtMs, 0, Number.MAX_SAFE_INTEGER, "Discord activity timestamp");
+  return updatedAtMs;
+}
+
+function cloneTaskActivity(
+  activity: NonNullable<TaskChannelProjection["activity"]>,
+): NonNullable<TaskChannelProjection["activity"]> {
+  return Object.freeze({
+    cycleId: activity.cycleId,
+    revision: activity.revision,
+    updatedAtMs: activity.updatedAtMs,
+    phase: activity.phase,
+    completedWorkOrders: activity.completedWorkOrders,
+    totalWorkOrders: activity.totalWorkOrders,
+    milestones: Object.freeze(
+      activity.milestones.map((milestone) =>
+        Object.freeze({
+          key: milestone.key,
+          status: milestone.status,
+          summary: milestone.summary,
+          ...(milestone.deviceId === undefined ? {} : { deviceId: milestone.deviceId }),
+          ...(milestone.deviceLabel === undefined ? {} : { deviceLabel: milestone.deviceLabel }),
+        }),
+      ),
+    ),
+  });
+}
+
+function latestTaskActivity(
+  projected: NonNullable<TaskChannelProjection["activity"]> | undefined,
+  observed: NonNullable<TaskChannelProjection["activity"]> | undefined,
+): NonNullable<TaskChannelProjection["activity"]> | undefined {
+  let selected: NonNullable<TaskChannelProjection["activity"]> | undefined;
+  if (projected === undefined || observed === undefined) {
+    selected = projected ?? observed;
+  } else if (projected.cycleId === observed.cycleId) {
+    selected = projected.revision >= observed.revision ? projected : observed;
+  } else {
+    selected = projected.updatedAtMs >= observed.updatedAtMs ? projected : observed;
+  }
+  return selected === undefined ? undefined : cloneTaskActivity(selected);
 }
 
 function significanceFor(state: DiscordTaskState): TaskChannelProjection["significance"] {
@@ -742,6 +973,7 @@ function significanceFor(state: DiscordTaskState): TaskChannelProjection["signif
     case "failed":
       return "failure";
     case "completed":
+    case "cancelled":
       return "final";
     case "review":
       return "decision";

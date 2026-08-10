@@ -401,7 +401,8 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
     assert.fail("Expected a ready Work Order plan.");
   }
   assert.equal(planned.plan.taskId, task.taskId);
-  assert.equal(planned.plan.workOrders[0]?.workOrderId, "work_release_build");
+  const plannedWorkOrderId = planned.plan.workOrders[0]?.workOrderId;
+  assert.match(plannedWorkOrderId ?? "", /^work_[0-9a-f]{16}_001$/u);
   assert.match(adapter.starts[0]?.prompt ?? "", /Return a bounded Work Order plan/u);
   assert.match(
     adapter.starts[0]?.prompt ?? "",
@@ -421,7 +422,7 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   const verified = await reasoner.verify({
     task,
     workOrders: planned.plan.workOrders,
-    reports: [releaseWorkerReport()],
+    reports: [{ ...releaseWorkerReport(), workOrderId: plannedWorkOrderId ?? "missing" }],
     signal: controller.signal,
   });
   assert.deepEqual(verified, {
@@ -442,6 +443,112 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   assert.match(
     adapter.resumes[0]?.prompt ?? "",
     /Discord summary, file, Artifact, hosted result, or Git reference/u,
+  );
+});
+
+test("Main Agent scopes repeated plan-local Work Order labels to the owner-input cycle", async () => {
+  const planId = async (planningKey: string): Promise<string> => {
+    const reasoner = new AgentBackedTaskExecutor({
+      adapter: new FakeAgentAdapter("orchestration"),
+      sessionRepository: new EventStoreMainNativeSessionRepository(
+        new InMemoryEventStore({ clock: { now: () => NOW } }),
+      ),
+      checkpoints: checkpointProvider(),
+      deviceId: "device_main",
+      workspace: {
+        workspaceId: "workspace_main_coordinator",
+        cwd: await realpath("."),
+        isolation: "none",
+      },
+      sandbox: "read-only",
+      permissions: { mode: "deny" },
+      limits,
+    });
+    const decision = await reasoner.plan({
+      task: request(1).task,
+      attempt: 1,
+      executionKey: planningKey,
+      signal: new AbortController().signal,
+    });
+    assert.equal(decision.state, "ready");
+    if (decision.state !== "ready") {
+      assert.fail("Expected a ready Work Order plan.");
+    }
+    return decision.plan.workOrders[0]?.workOrderId ?? "missing";
+  };
+
+  const firstCycle = await planId("task-execution:task_release:cycle:cycle_1:attempt:1");
+  const repeatedFirstCycle = await planId("task-execution:task_release:cycle:cycle_1:attempt:1");
+  const secondCycle = await planId("task-execution:task_release:cycle:cycle_2:attempt:1");
+
+  assert.equal(repeatedFirstCycle, firstCycle);
+  assert.notEqual(secondCycle, firstCycle);
+
+  const dependencyReasoner = new AgentBackedTaskExecutor({
+    adapter: new FakeAgentAdapter("orchestration-dependencies"),
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+  const dependencyPlan = await dependencyReasoner.plan({
+    task: request(1).task,
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_dependencies:attempt:1",
+    signal: new AbortController().signal,
+  });
+  assert.equal(dependencyPlan.state, "ready");
+  if (dependencyPlan.state !== "ready") {
+    assert.fail("Expected a ready dependency plan.");
+  }
+  assert.deepEqual(dependencyPlan.plan.workOrders[1]?.dependsOn, [
+    dependencyPlan.plan.workOrders[0]?.workOrderId,
+  ]);
+});
+
+test("Main Agent safely defaults an omitted Secret requirement to no credential authority", async () => {
+  const adapter = new FakeAgentAdapter("orchestration-omitted-secret-refs");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  const decision = await reasoner.plan({
+    task: request(1).task,
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_no_secrets:attempt:1",
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(decision.state, "ready");
+  if (decision.state !== "ready") {
+    assert.fail("Expected a ready Work Order plan.");
+  }
+  assert.deepEqual(decision.plan.workOrders[0]?.requiredSecretRefs, []);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /Every Work Order must include requiredSecretRefs\. Use \[\] when no credential is needed/u,
   );
 });
 
@@ -475,6 +582,10 @@ test("Main Agent answers read-only Device questions from the bounded Main-owned 
           runtime: "healthy",
           serviceMode: "system-service",
           roles: ["main-coordinator"],
+          capabilities: [
+            { name: "codex", verification: "verified" },
+            { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
+          ],
           instructions: ["PRIVATE_DEVICE_INSTRUCTION_SENTINEL"],
           routes: [
             {
@@ -546,6 +657,91 @@ test("Main Agent answers read-only Device questions from the bounded Main-owned 
     }),
     true,
   );
+
+  const liveForumResult = await reasoner.plan({
+    task: {
+      ...task,
+      objective:
+        "현재 온라인이고 작업을 받을 수 있는 장치들을 OS와 검증된 주요 capability만 간단히 알려줘. 파일, 서비스, 계정, 권한, 설정, 네트워크 또는 외부 시스템은 변경하지 마.",
+      completionCriteria: ["Complete the requested work and report the observable result."],
+      messages: [],
+    },
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_live_forum:attempt:1",
+    signal: controller.signal,
+  });
+
+  assert.equal(liveForumResult.state, "completed");
+  assert.match(
+    liveForumResult.state === "completed" ? liveForumResult.publicMessage : "",
+    /현재 등록된 기기 2대 중 1대/u,
+  );
+  assert.match(
+    liveForumResult.state === "completed" ? liveForumResult.publicMessage : "",
+    /codex/u,
+  );
+  assert.doesNotMatch(
+    liveForumResult.state === "completed" ? liveForumResult.publicMessage : "",
+    /UNVERIFIED_CAPABILITY_SENTINEL/u,
+  );
+  assert.equal(adapter.starts.length, 0);
+
+  const liveForumFollowUp = await reasoner.plan({
+    task: {
+      ...task,
+      objective:
+        "현재 온라인이고 작업을 받을 수 있는 장치들을 OS와 검증된 주요 capability만 간단히 알려줘. 파일, 서비스, 계정, 권한, 설정, 네트워크 또는 외부 시스템은 변경하지 마.",
+      completionCriteria: ["Complete the requested work and report the observable result."],
+      messages: [
+        {
+          messageId: "message_live_forum_starter",
+          role: "owner" as const,
+          content:
+            "현재 온라인이고 작업을 받을 수 있는 장치들을 OS와 검증된 주요 capability만 간단히 알려줘. 파일, 서비스, 계정, 권한, 설정, 네트워크 또는 외부 시스템은 변경하지 마.",
+          occurredAt: NOW,
+        },
+        {
+          messageId: "message_live_forum_first_follow_up",
+          role: "owner" as const,
+          content: "지금 접속 가능한 장치 목록을 다시 알려줘.",
+          occurredAt: NOW,
+        },
+        {
+          messageId: "message_live_forum_latest_follow_up",
+          role: "owner" as const,
+          content:
+            "지금 접속 가능한 장치 목록을 다시 알려줘. 파일, 서비스, 계정, 권한, 설정, 네트워크 또는 외부 시스템은 변경하지 마.",
+          occurredAt: NOW,
+        },
+      ],
+    },
+    attempt: 1,
+    executionKey: "task-execution:task_release:cycle:cycle_live_forum_follow_up:attempt:1",
+    signal: controller.signal,
+  });
+
+  assert.equal(liveForumFollowUp.state, "completed");
+  assert.match(
+    liveForumFollowUp.state === "completed" ? liveForumFollowUp.publicMessage : "",
+    /현재 등록된 기기 2대 중 1대/u,
+  );
+  assert.equal(adapter.starts.length, 0);
+
+  await assert.rejects(
+    reasoner.plan({
+      task: {
+        ...task,
+        objective: "현재 온라인이고 작업을 받을 수 있는 장치들을 알려줘. 그리고 파일을 삭제해줘.",
+        completionCriteria: ["Complete the requested work and report the observable result."],
+        messages: [],
+      },
+      attempt: 1,
+      executionKey: "task-execution:task_release:cycle:cycle_compound_forum:attempt:1",
+      signal: controller.signal,
+    }),
+    (error: unknown) => error instanceof TaskExecutorError && error.code === "WORK_PLAN_INVALID",
+  );
+  assert.equal(adapter.starts.length, 1);
 });
 
 test("Main Agent answers a named Device reachability question without spending an Agent turn", async () => {
@@ -702,6 +898,7 @@ test("Main planning exposes only verified capabilities and never Device instruct
             { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
             { name: "DEGRADED_CAPABILITY_SENTINEL", verification: "degraded" },
           ],
+          workspaceIds: ["workspace-build"],
           wakeOnLan: {
             targetState: "enabled",
             automaticWakeState: "relay-required",
@@ -724,6 +921,8 @@ test("Main planning exposes only verified capabilities and never Device instruct
   assert.equal(planned.state, "ready");
   const prompt = adapter.starts[0]?.prompt ?? "";
   assert.match(prompt, /"capabilities":\["codex"\]/u);
+  assert.match(prompt, /"workspaceIds":\["workspace-build"\]/u);
+  assert.match(prompt, /multiple Workspaces require an explicit choice/u);
   assert.match(
     prompt,
     /"wakeOnLan":\{"targetState":"enabled","automaticWakeState":"relay-required","observedAtMs":9900\}/u,
@@ -964,6 +1163,8 @@ type FakeAgentMode =
   | "placement-question"
   | "outcome-platform-question"
   | "orchestration"
+  | "orchestration-omitted-secret-refs"
+  | "orchestration-dependencies"
   | "device-directory-answer"
   | "outcome-continuation";
 
@@ -1019,6 +1220,38 @@ class FakeAgentAdapter implements AgentAdapter {
 
   async start(input: AgentStartRequest): Promise<AgentRunHandle> {
     this.starts.push(structuredClone(input));
+    if (this.#mode === "orchestration-omitted-secret-refs") {
+      const workOrder = structuredClone(releaseWorkOrder()) as unknown as Record<string, unknown>;
+      delete workOrder["requiredSecretRefs"];
+      return handle(session(input), {
+        schemaVersion: 1,
+        state: "ready",
+        plan: {
+          protocolVersion: "v1",
+          taskId: input.taskId,
+          workOrders: [workOrder],
+        },
+      });
+    }
+    if (this.#mode === "orchestration-dependencies") {
+      return handle(session(input), {
+        schemaVersion: 1,
+        state: "ready",
+        plan: {
+          protocolVersion: "v1",
+          taskId: input.taskId,
+          workOrders: [
+            releaseWorkOrder(),
+            {
+              ...releaseWorkOrder(),
+              workOrderId: "work_release_report",
+              title: "Report the release",
+              dependsOn: ["work_release_build"],
+            },
+          ],
+        },
+      });
+    }
     if (this.#mode === "outcome-continuation") {
       const result = input.prompt.includes("continuing planning")
         ? {

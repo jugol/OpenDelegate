@@ -10,8 +10,13 @@ import { Pool } from "pg";
 
 import { createPostgresDatabase, createSqliteDatabase } from "../src/dialects.ts";
 import { SqlStorageError } from "../src/errors.ts";
+import { applySqlMigrations, verifySqlMigrations } from "../src/migrations.ts";
 import { SqlEventStore } from "../src/sql-event-store.ts";
-import { executeWithSqlRetry } from "../src/transactions.ts";
+import {
+  DEFAULT_SQL_RETRY_POLICY,
+  executeWithSqlRetry,
+  SqlTransactionRunner,
+} from "../src/transactions.ts";
 
 const clock = {
   now: () => "2026-07-24T05:00:00.000Z",
@@ -72,6 +77,61 @@ test("two independent SQLite connections serialize the same expected-version rac
     assert.equal(results.filter((result) => result.status === "rejected").length, 1);
     assert.equal((await first.readAll()).length, 1);
   } finally {
+    await Promise.all([first.close(), second.close()]);
+    await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("SQLite repositories sharing one file coordinate writes without blocking the event loop", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-sql-coordinator-"));
+  const filename = join(directory, "main.sqlite3");
+  const first = await createSqliteDatabase({ busyTimeoutMs: 25, filename });
+  await applySqlMigrations(first.database, first.backend, first.migrationTableSchema);
+  const second = await createSqliteDatabase({ busyTimeoutMs: 25, filename });
+  await verifySqlMigrations(second.database);
+  const firstRunner = new SqlTransactionRunner(
+    first.database,
+    first.backend,
+    DEFAULT_SQL_RETRY_POLICY,
+    first.writeCoordinator,
+  );
+  const secondRunner = new SqlTransactionRunner(
+    second.database,
+    second.backend,
+    DEFAULT_SQL_RETRY_POLICY,
+    second.writeCoordinator,
+  );
+  let releaseFirst: (() => void) | undefined;
+  let markFirstEntered: (() => void) | undefined;
+  const firstEntered = new Promise<void>((resolve) => {
+    markFirstEntered = resolve;
+  });
+  const holdFirst = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  try {
+    const firstWrite = firstRunner.write(async () => {
+      markFirstEntered?.();
+      await holdFirst;
+      return "first";
+    });
+    await firstEntered;
+    const secondWrite = secondRunner.write(async () => "second");
+    const eventLoopWinner = await Promise.race([
+      secondWrite.then(
+        () => "second" as const,
+        () => "rejected" as const,
+      ),
+      new Promise<"timer">((resolve) => {
+        setTimeout(() => resolve("timer"), 10);
+      }),
+    ]);
+    assert.equal(eventLoopWinner, "timer");
+    releaseFirst?.();
+    assert.deepEqual(await Promise.all([firstWrite, secondWrite]), ["first", "second"]);
+  } finally {
+    releaseFirst?.();
     await Promise.all([first.close(), second.close()]);
     await rm(directory, { force: true, recursive: true });
   }

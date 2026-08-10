@@ -104,6 +104,7 @@ import {
   CompositeWorkerRunCapabilityProvider,
   DEFAULT_MAXIMUM_CONCURRENT_RUNS,
   LocalKnowledgeInitialContextProvider,
+  ManagedGitWorktreeManager,
   RegisteredWorkerWorkspaceResolver,
   SqliteNativeSessionReferenceStore,
   SqliteWorkerStateRepository,
@@ -236,6 +237,8 @@ export interface WorkerPaths {
   readonly sessionStateFile: string;
   readonly nativeSessionLeaseStateFile: string;
   readonly workspaceStateFile: string;
+  readonly managedWorktreeStateFile: string;
+  readonly managedWorktreeDirectory: string;
   readonly desktopLeaseStateFile: string;
   readonly computerUseStartStateFile: string;
   readonly runCapabilityDirectory: string;
@@ -325,7 +328,7 @@ export interface WorkerWorkspaceConfiguration {
   readonly alias: string;
   readonly type: "directory" | "git" | "mounted-storage";
   readonly rootPath: string;
-  readonly isolation: "agent-native-worktree" | "none";
+  readonly isolation: "agent-native-worktree" | "opendelegate-worktree" | "none";
   readonly capabilities: readonly string[];
 }
 
@@ -361,6 +364,8 @@ export interface JoinWorkerOptions {
 
 export interface RunWorkerDaemonOptions {
   readonly paths: WorkerPaths;
+  /** Authenticated bundle/product version supplied by the Worker launcher. */
+  readonly releaseVersion: string;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly computerUseProbe?: WorkerComputerUseCapabilityProbe;
   readonly computerUseRuntime?: WorkerComputerUseRuntimePort;
@@ -418,6 +423,12 @@ export interface RegisterWorkerWorkspaceOptions {
   readonly workspace: WorkerWorkspaceConfiguration;
 }
 
+export interface SetWorkerWorkspaceIsolationOptions {
+  readonly paths: WorkerPaths;
+  readonly workspaceId: string;
+  readonly isolation: WorkerWorkspaceConfiguration["isolation"];
+}
+
 export interface ProvisionHeadlessLinuxSecretBackendOptions {
   readonly configurationFile: string;
   readonly credentialName?: string;
@@ -431,9 +442,12 @@ export interface ProvisionHeadlessLinuxSecretBackendOptions {
 }
 
 export interface PrepareWindowsServiceSecretBackendOptions {
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly handoffRoot: string;
   readonly hostPlatform?: NodeJS.Platform;
   readonly instanceId: string;
+  /** Defaults to an owner-local vault outside the native service state root. */
+  readonly ownerHelperVaultRoot?: string;
   readonly paths: WorkerPaths;
   readonly powershellPath?: string;
   readonly runner?: NativeSecretCommandRunner;
@@ -527,6 +541,8 @@ export function resolveWorkerPaths(input: {
     sessionStateFile: join(stateDirectory, "sessions.sqlite3"),
     nativeSessionLeaseStateFile: join(stateDirectory, "native-session-leases.json"),
     workspaceStateFile: join(stateDirectory, "workspaces.sqlite3"),
+    managedWorktreeStateFile: join(stateDirectory, "managed-worktrees.sqlite3"),
+    managedWorktreeDirectory: join(stateDirectory, "worktrees"),
     desktopLeaseStateFile: join(stateDirectory, "desktop-leases.sqlite3"),
     computerUseStartStateFile: join(stateDirectory, "computer-use-starts.sqlite3"),
     runCapabilityDirectory: join(stateDirectory, "run-capabilities"),
@@ -539,6 +555,7 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
   await prepareRuntimeDirectories(options.paths);
   const grantPath = requireAbsolutePath(options.grantFile, "Enrollment Grant file");
   const environment = options.environment ?? process.env;
+  const currentConfiguration = await loadExistingWorkerConfigurationForJoin(options.paths);
   let result: {
     readonly channelVerified: boolean;
     readonly configuration: WorkerConfigurationDocument;
@@ -557,6 +574,16 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
               throw appError(
                 "CONFIG_INVALID",
                 "The Enrollment Grant does not contain a mutual-TLS WSS Worker endpoint.",
+              );
+            }
+            if (
+              currentConfiguration !== undefined &&
+              (currentConfiguration.deviceId !== grant.deviceId ||
+                currentConfiguration.mainDeviceId !== grant.mainDeviceId)
+            ) {
+              throw appError(
+                "CONFIG_INVALID",
+                "The Enrollment Grant does not match this enrolled Worker and cannot replace its identity.",
               );
             }
             return { channelEndpoints };
@@ -630,7 +657,7 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
                     },
                   }
                 : options.secretBackend;
-            const configuration = validateWorkerConfigurationDocument({
+            const replacement = validateWorkerConfigurationDocument({
               schemaVersion: CONFIG_SCHEMA_VERSION,
               deviceId: enrolled.deviceId,
               workerId: "worker-primary",
@@ -678,11 +705,16 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
               workspaces: [],
               createdAt: new Date().toISOString(),
             });
+            const configuration =
+              currentConfiguration === undefined
+                ? replacement
+                : preserveRecredentialedWorkerConfiguration(replacement, currentConfiguration);
             await writeConfiguration(options.paths.configFile, configuration);
             const channelVerified = await verifyInitialWorkerChannel({
               configuration,
               managedSecrets,
               paths: options.paths,
+              resetForRecredential: currentConfiguration !== undefined,
             });
             return { channelVerified, configuration };
           },
@@ -699,6 +731,50 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
     );
   }
   return result.configuration;
+}
+
+export function preserveRecredentialedWorkerConfiguration(
+  replacement: WorkerConfigurationDocument,
+  current: WorkerConfigurationDocument,
+): WorkerConfigurationDocument {
+  if (
+    replacement.deviceId !== current.deviceId ||
+    replacement.mainDeviceId !== current.mainDeviceId
+  ) {
+    throw appError(
+      "CONFIG_INVALID",
+      "A replacement Worker identity must retain the existing Device and fixed Main identity.",
+    );
+  }
+  if (replacement.certificateGeneration <= current.certificateGeneration) {
+    throw appError(
+      "CONFIG_INVALID",
+      "A replacement Worker identity must use a newer certificate generation.",
+    );
+  }
+  return validateWorkerConfigurationDocument({
+    ...replacement,
+    workerId: current.workerId,
+    agent: current.agent,
+    ...(current.platformMutation === undefined
+      ? {}
+      : { platformMutation: current.platformMutation }),
+    workspaces: current.workspaces,
+    createdAt: current.createdAt,
+  });
+}
+
+async function loadExistingWorkerConfigurationForJoin(
+  paths: WorkerPaths,
+): Promise<WorkerConfigurationDocument | undefined> {
+  try {
+    return await loadWorkerConfiguration(paths);
+  } catch (error) {
+    if (error instanceof WorkerAppError && error.code === "CONFIG_MISSING") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function createWorkerEnrollmentIdentity(
@@ -851,15 +927,46 @@ export async function listWorkerWorkspaces(
   }
 }
 
+export async function setWorkerWorkspaceIsolation(
+  options: SetWorkerWorkspaceIsolationOptions,
+): Promise<WorkspaceRecord> {
+  await loadWorkerConfiguration(options.paths);
+  await prepareRuntimeDirectories(options.paths);
+  const registry = new SqliteWorkspaceRegistry({
+    filename: options.paths.workspaceStateFile,
+    sourceCheckoutDirectory: options.paths.sourceCheckoutRoot,
+  });
+  try {
+    const current = await registry.resolve(options.workspaceId);
+    if (current.isolation === options.isolation) {
+      return current;
+    }
+    return await registry.updateMetadata({
+      workspaceId: current.workspaceId,
+      expectedRevision: current.revision,
+      alias: current.alias,
+      isolation: options.isolation,
+      capabilities: current.capabilities,
+      state: current.state,
+    });
+  } finally {
+    registry.close();
+  }
+}
+
 export async function createWorkerRuntime(
   options: Pick<
     RunWorkerDaemonOptions,
-    "computerUseProbe" | "computerUseRuntime" | "environment" | "paths"
+    "computerUseProbe" | "computerUseRuntime" | "environment" | "paths" | "releaseVersion"
   >,
 ): Promise<WorkerRuntimeComposition> {
   const configuration = await loadWorkerConfiguration(options.paths);
   await prepareRuntimeDirectories(options.paths);
   const environment = options.environment ?? process.env;
+  const releaseVersion = options.releaseVersion;
+  if (!validRuntimeIdentifier(releaseVersion)) {
+    throw appError("CONFIG_INVALID", "The Worker release version is invalid.");
+  }
   const managedSecrets = createWorkerManagedSecretStore(
     configuration.secretBackend,
     configuration.deviceId,
@@ -891,6 +998,11 @@ export async function createWorkerRuntime(
     filename: options.paths.workspaceStateFile,
     sourceCheckoutDirectory: options.paths.sourceCheckoutRoot,
   });
+  const managedWorktreeManager = new ManagedGitWorktreeManager({
+    filename: options.paths.managedWorktreeStateFile,
+    managedRootDirectory: options.paths.managedWorktreeDirectory,
+    sourceCheckoutDirectory: options.paths.sourceCheckoutRoot,
+  });
   for (const workspace of configuration.workspaces) {
     try {
       await workspaceRegistry.resolve(workspace.workspaceId);
@@ -898,6 +1010,18 @@ export async function createWorkerRuntime(
       await workspaceRegistry.register(workspace);
     }
   }
+  const configuredDefaultWorkspaceId = configuration.workspaces[0]?.workspaceId;
+  const activeRegisteredWorkspaces =
+    configuredDefaultWorkspaceId === undefined
+      ? (await workspaceRegistry.listSchedulingMetadata()).filter(
+          (workspace) => workspace.state === "active",
+        )
+      : Object.freeze([]);
+  const singletonRegisteredWorkspaceId =
+    activeRegisteredWorkspaces.length === 1
+      ? activeRegisteredWorkspaces[0]?.workspaceId
+      : undefined;
+  const defaultWorkspaceId = configuredDefaultWorkspaceId ?? singletonRegisteredWorkspaceId;
   const knowledge = new LocalKnowledgeService({ root: options.paths.knowledgeDirectory });
   await knowledge.rebuild();
   const runCapabilityBroker = await LocalRunCapabilityBroker.listen({
@@ -905,7 +1029,7 @@ export async function createWorkerRuntime(
     sourceCheckoutDirectory: options.paths.sourceCheckoutRoot,
     maxFrameBytes: 8 * 1024 * 1024,
   });
-  const toolServerLaunch = workerToolServerLaunch();
+  const toolServerLaunch = resolveWorkerToolServerLaunch();
   const nativeSessionLeaseStore = createWorkerNativeSessionLeaseStore(options.paths);
   const adapters = createWorkerAgentAdapters(
     configuration.agent,
@@ -964,9 +1088,8 @@ export async function createWorkerRuntime(
     artifactLifecycle,
     workspaceResolver: new RegisteredWorkerWorkspaceResolver({
       registry: workspaceRegistry,
-      ...(configuration.workspaces[0] === undefined
-        ? {}
-        : { defaultWorkspaceId: configuration.workspaces[0].workspaceId }),
+      managedWorktreeManager,
+      ...(defaultWorkspaceId === undefined ? {} : { defaultWorkspaceId }),
     }),
     initialContextProvider: new LocalKnowledgeInitialContextProvider({ knowledge }),
     runCapabilityProvider: new CompositeWorkerRunCapabilityProvider([
@@ -991,6 +1114,10 @@ export async function createWorkerRuntime(
           configuration.agent,
           assignment.agentRequirement,
         );
+        const workspaceContext = await resolveWorkerPromptWorkspaceContext(
+          workspaceRegistry,
+          assignment.workOrder.workspaceId ?? defaultWorkspaceId,
+        );
         const actionAuthorization = probe.capabilities.approvalBridge
           ? new WorkerAgentActionAuthorizer({
               assignment,
@@ -1010,6 +1137,20 @@ export async function createWorkerRuntime(
             : { effort: assignment.agentRequirement.effort }),
           workstreamId: assignment.workOrder.workOrderId,
           prompt: renderWorkOrderPrompt(assignment),
+          deterministicContext: renderWorkerRuntimeContext({
+            deviceId: configuration.deviceId,
+            deviceName: hostname(),
+            osFamily: osFamily(platform()),
+            serviceMode: workerServiceMode(environment),
+            releaseVersion,
+            provider: adapter.provider,
+            adapterId: adapter.adapterId,
+            ...(probe.version === undefined ? {} : { adapterVersion: probe.version }),
+            ...(assignment.agentRequirement?.modelId === undefined
+              ? {}
+              : { modelId: assignment.agentRequirement.modelId }),
+            ...(workspaceContext === undefined ? {} : { workspace: workspaceContext }),
+          }),
           sandbox: resolveWorkerAgentSandbox({
             approvalBridge: probe.capabilities.approvalBridge,
             provider: adapter.provider,
@@ -1098,6 +1239,7 @@ export async function createWorkerRuntime(
       await computerUse?.close().catch(() => undefined);
       await channelState.close().catch(() => undefined);
       sessionStore.close();
+      managedWorktreeManager.close();
       workspaceRegistry.close();
     },
   };
@@ -1457,11 +1599,10 @@ async function createWorkerPlatformMutationProvider(input: {
   }
 }
 
-function workerToolServerLaunch(): {
+export function resolveWorkerToolServerLaunch(modulePath = fileURLToPath(import.meta.url)): {
   readonly command: string;
   readonly argsPrefix: readonly string[];
 } {
-  const modulePath = fileURLToPath(import.meta.url);
   if (extname(modulePath).toLowerCase() === ".ts") {
     return Object.freeze({
       command: process.execPath,
@@ -1473,7 +1614,10 @@ function workerToolServerLaunch(): {
   }
   return Object.freeze({
     command: process.execPath,
-    argsPrefix: Object.freeze([modulePath]),
+    argsPrefix: Object.freeze([
+      resolve(dirname(modulePath), "../launcher/opendelegate.mjs"),
+      "worker",
+    ]),
   });
 }
 
@@ -1561,23 +1705,38 @@ export async function runWorkerDaemon(options: RunWorkerDaemonOptions): Promise<
   if (reconnectMinimumMs > reconnectMaximumMs) {
     throw appError("CONFIG_INVALID", "Worker reconnect intervals are invalid.");
   }
-  const composition = await createWorkerRuntime(options);
-  try {
-    await runWorkerConnectionLoop(composition, {
-      reconnectMinimumMs,
-      reconnectMaximumMs,
-      heartbeatIntervalMs,
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-      ...(options.onReady === undefined ? {} : { onReady: options.onReady }),
-      ...(options.onConnectionDiagnostic === undefined
-        ? {}
-        : { onConnectionDiagnostic: options.onConnectionDiagnostic }),
-      ...(options.onCertificateRenewal === undefined
-        ? {}
-        : { onCertificateRenewal: options.onCertificateRenewal }),
-    });
-  } finally {
-    await composition.close();
+  let readyReported = false;
+  while (!isAborted(options.signal)) {
+    const composition = await createWorkerRuntime(options);
+    try {
+      const outcome = await runWorkerConnectionLoop(composition, {
+        reconnectMinimumMs,
+        reconnectMaximumMs,
+        heartbeatIntervalMs,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.onReady === undefined
+          ? {}
+          : {
+              onReady: async () => {
+                if (!readyReported) {
+                  readyReported = true;
+                  await options.onReady?.();
+                }
+              },
+            }),
+        ...(options.onConnectionDiagnostic === undefined
+          ? {}
+          : { onConnectionDiagnostic: options.onConnectionDiagnostic }),
+        ...(options.onCertificateRenewal === undefined
+          ? {}
+          : { onCertificateRenewal: options.onCertificateRenewal }),
+      });
+      if (outcome !== "configuration-reload") {
+        return;
+      }
+    } finally {
+      await composition.close();
+    }
   }
 }
 
@@ -1596,19 +1755,37 @@ export async function runWorkerConnectionLoop(
       outcome: WorkerCertificateRenewalOutcome,
     ) => void | Promise<void>;
   },
-): Promise<void> {
+): Promise<"configuration-reload" | "stopped"> {
   let backoff = options.reconnectMinimumMs;
   let readyReported = false;
   let reportedCode: WorkerRouteIncidentCode | undefined;
+  let renewalRetryDelayMs = CERTIFICATE_RENEWAL_RETRY_MINIMUM_MS;
+  let renewalNotBeforeMs = 0;
+  const renewWhenDue = async (): Promise<WorkerCertificateRenewalOutcome | undefined> => {
+    const now = Date.now();
+    if (now < renewalNotBeforeMs) {
+      return undefined;
+    }
+    const outcome = await renewCertificateIfDue(composition, options.onCertificateRenewal);
+    if (outcome.status === "not-due") {
+      renewalNotBeforeMs = Math.max(now, outcome.renewAfter);
+      renewalRetryDelayMs = CERTIFICATE_RENEWAL_RETRY_MINIMUM_MS;
+    } else if (outcome.status === "unavailable") {
+      renewalNotBeforeMs = now + renewalRetryDelayMs;
+      renewalRetryDelayMs = Math.min(CERTIFICATE_RENEWAL_RETRY_MAXIMUM_MS, renewalRetryDelayMs * 2);
+    }
+    return outcome;
+  };
   while (!isAborted(options.signal)) {
     const result = await composition.runtime.connect();
     if (!result.connected) {
-      // Retrying cannot repair a lapsed credential, so the reason is reported once
-      // per distinct cause rather than buried under an endless backoff.
-      const code = blockingConnectionCode(result.diagnostics);
-      if (code !== undefined && code !== reportedCode) {
-        reportedCode = code;
-        await options.onConnectionDiagnostic?.({ code, retryable: false });
+      // Surface one bounded, redacted diagnostic per distinct cause. Retryable
+      // routes keep their backoff, while credential failures remain actionable
+      // instead of being buried under an endless reconnect loop.
+      const diagnostic = connectionDiagnostic(result.diagnostics);
+      if (diagnostic !== undefined && diagnostic.code !== reportedCode) {
+        reportedCode = diagnostic.code;
+        await options.onConnectionDiagnostic?.(diagnostic);
       }
       await abortableDelay(backoff, options.signal);
       backoff = Math.min(options.reconnectMaximumMs, backoff * 2);
@@ -1620,24 +1797,32 @@ export async function runWorkerConnectionLoop(
       await options.onReady?.();
       readyReported = true;
     }
-    await renewCertificateIfDue(composition, options.onCertificateRenewal);
+    if ((await renewWhenDue())?.status === "renewed") {
+      // The replacement key and certificate are durable, but this Runtime was
+      // composed with the superseded identity. Close it and rebuild from the
+      // rewritten configuration before accepting any more work.
+      return "configuration-reload";
+    }
     while (!isAborted(options.signal)) {
       await abortableDelay(options.heartbeatIntervalMs, options.signal);
       // The Device certificate outlives most heartbeats but not most uptimes, so
       // the renewal deadline is checked on the same beat that proves the channel
       // is still usable for the exchange.
-      await renewCertificateIfDue(composition, options.onCertificateRenewal);
+      if ((await renewWhenDue())?.status === "renewed") {
+        return "configuration-reload";
+      }
       if (isAborted(options.signal) || !(await composition.pulse())) {
         break;
       }
     }
   }
+  return "stopped";
 }
 
 async function renewCertificateIfDue(
   composition: Pick<WorkerRuntimeComposition, "renewCertificate">,
   report: ((outcome: WorkerCertificateRenewalOutcome) => void | Promise<void>) | undefined,
-): Promise<void> {
+): Promise<WorkerCertificateRenewalOutcome> {
   let outcome: WorkerCertificateRenewalOutcome;
   try {
     outcome = await composition.renewCertificate();
@@ -1652,7 +1837,11 @@ async function renewCertificateIfDue(
   if (outcome.status !== "not-due") {
     await report?.(outcome);
   }
+  return outcome;
 }
+
+const CERTIFICATE_RENEWAL_RETRY_MINIMUM_MS = 60_000;
+const CERTIFICATE_RENEWAL_RETRY_MAXIMUM_MS = 15 * 60_000;
 
 export interface WorkerConnectionDiagnostic {
   readonly code: WorkerRouteIncidentCode;
@@ -1664,13 +1853,24 @@ const BLOCKING_CONNECTION_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Set(
   "PEER_IDENTITY_MISMATCH",
 ]);
 
-function blockingConnectionCode(
+const CONNECTION_DIAGNOSTIC_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Set([
+  "CERTIFICATE_EXPIRED",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "PEER_IDENTITY_MISMATCH",
+  "TLS_HANDSHAKE_FAILED",
+  "TRANSPORT_BOUNDARY_ERROR",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+
+function connectionDiagnostic(
   diagnostics: readonly TransportAttemptTrace[] | undefined,
-): WorkerRouteIncidentCode | undefined {
+): WorkerConnectionDiagnostic | undefined {
   for (const attempt of diagnostics ?? []) {
-    if (attempt.outcome !== "authentication-rejected") {
-      continue;
-    }
     const diagnostic = attempt.diagnostic;
     if (typeof diagnostic !== "object" || diagnostic === null || Array.isArray(diagnostic)) {
       continue;
@@ -1678,9 +1878,13 @@ function blockingConnectionCode(
     const code = (diagnostic as { readonly [key: string]: unknown })["code"];
     if (
       typeof code === "string" &&
-      BLOCKING_CONNECTION_CODES.has(code as WorkerRouteIncidentCode)
+      CONNECTION_DIAGNOSTIC_CODES.has(code as WorkerRouteIncidentCode)
     ) {
-      return code as WorkerRouteIncidentCode;
+      const recognized = code as WorkerRouteIncidentCode;
+      return {
+        code: recognized,
+        retryable: !BLOCKING_CONNECTION_CODES.has(recognized),
+      };
     }
   }
   return undefined;
@@ -1926,6 +2130,24 @@ export async function prepareWindowsServiceSecretBackend(
         vaultRoot:
           configuration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot,
       });
+      const ownerHelper = await prepareWindowsOwnerHelperSecret({
+        allowCreate: false,
+        configuration,
+        options,
+        sourceStore: ownerStore,
+        sourceVaultRoot:
+          configuration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot,
+      });
+      const persistedHelper = configuration.secretBackend.servicePreparation.ipcTrust.helper;
+      if (
+        ownerHelper.binding.keyId !== persistedHelper.keyId ||
+        ownerHelper.binding.publicKeySpkiBase64Url !== persistedHelper.publicKeySpkiBase64Url
+      ) {
+        throw appError(
+          "CONFIG_INVALID",
+          "The owner-session helper Secret does not match its durable public binding.",
+        );
+      }
       const handoff = new WindowsServiceDpapiSecretHandoff({
         deviceId: configuration.deviceId,
         handoffRoot,
@@ -1948,6 +2170,33 @@ export async function prepareWindowsServiceSecretBackend(
           );
         }
       }
+      const migratedBackend = Object.freeze({
+        ...configuration.secretBackend,
+        servicePreparation: Object.freeze({
+          ...configuration.secretBackend.servicePreparation,
+          ownerHelperSecretBinding: Object.freeze({
+            backend: "windows-dpapi" as const,
+            vaultRoot: ownerHelper.vaultRoot,
+          }),
+        }),
+      });
+      if (
+        !pathsEqualForCurrentHost(
+          ownerHelper.vaultRoot,
+          configuration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot,
+        )
+      ) {
+        await writeConfiguration(
+          options.paths.configFile,
+          validateWorkerConfigurationDocument({
+            ...configuration,
+            secretBackend: migratedBackend,
+          }),
+        );
+      }
+      if (ownerHelper.deleteSourceAfterPersistence) {
+        await ownerStore.delete(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
+      }
       // A crash after the durable configuration switch but before owner-vault
       // cleanup resumes here. The handoff is complete, so removing only the
       // core-owned duplicates left in the owner vault is safe and idempotent.
@@ -1957,7 +2206,7 @@ export async function prepareWindowsServiceSecretBackend(
         }
       }
       return {
-        backend: configuration.secretBackend,
+        backend: migratedBackend,
         sealing: configuration.secretBackend.servicePreparation.sealing,
       };
     } catch (error) {
@@ -2000,6 +2249,13 @@ export async function prepareWindowsServiceSecretBackend(
     sourceCheckoutRoot: options.paths.sourceCheckoutRoot,
     vaultRoot: configuration.secretBackend.vaultRoot,
   });
+  const ownerHelper = await prepareWindowsOwnerHelperSecret({
+    allowCreate: true,
+    configuration,
+    options,
+    sourceStore: ownerStore,
+    sourceVaultRoot: configuration.secretBackend.vaultRoot,
+  });
   const handoff = new WindowsServiceDpapiSecretHandoff({
     deviceId: configuration.deviceId,
     handoffRoot,
@@ -2020,7 +2276,7 @@ export async function prepareWindowsServiceSecretBackend(
   try {
     // The logged-in session helper owns this key. It intentionally remains in
     // the owner DPAPI vault and is never staged for or opened by the service.
-    const helperIpc = await provisionWorkerSessionHelperOwnerSigningSecret(ownerStore);
+    const helperIpc = ownerHelper.binding;
     const coreIpc = await readWorkerComputerUseCoreKeyBinding(ownerStore);
     // Phase one is copy-only. A failure leaves every source Secret intact, so a
     // later invocation can safely resume even if some handoff entries exist.
@@ -2057,7 +2313,7 @@ export async function prepareWindowsServiceSecretBackend(
       sealing,
       ownerHelperSecretBinding: Object.freeze({
         backend: "windows-dpapi" as const,
-        vaultRoot: configuration.secretBackend.vaultRoot,
+        vaultRoot: ownerHelper.vaultRoot,
       }),
       ipcTrust: Object.freeze({
         core: Object.freeze({
@@ -2088,6 +2344,10 @@ export async function prepareWindowsServiceSecretBackend(
     });
     await writeConfiguration(options.paths.configFile, updated);
 
+    if (ownerHelper.deleteSourceAfterPersistence) {
+      await ownerStore.delete(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
+    }
+
     // Phase two removes only core-owned source copies after both the handoff and
     // its public recovery binding are durable. The owner helper key is deliberately
     // not in this collection.
@@ -2110,6 +2370,115 @@ export async function prepareWindowsServiceSecretBackend(
         : "The Windows service Secret handoff did not complete.",
     );
   }
+}
+
+async function prepareWindowsOwnerHelperSecret(input: {
+  readonly allowCreate: boolean;
+  readonly configuration: WorkerConfigurationDocument;
+  readonly options: PrepareWindowsServiceSecretBackendOptions;
+  readonly sourceStore: WindowsDpapiSecretStore;
+  readonly sourceVaultRoot: string;
+}): Promise<{
+  readonly binding: WorkerSessionHelperOwnerKeyBinding;
+  readonly deleteSourceAfterPersistence: boolean;
+  readonly vaultRoot: string;
+}> {
+  const targetVaultRoot = resolveWindowsOwnerHelperVaultRoot(input.options, input.sourceVaultRoot);
+  const sameVault = pathsEqualForCurrentHost(input.sourceVaultRoot, targetVaultRoot);
+  const targetStore = sameVault
+    ? input.sourceStore
+    : new WindowsDpapiSecretStore({
+        deviceId: input.configuration.deviceId,
+        hostPlatform: "win32",
+        ...(input.options.powershellPath === undefined
+          ? {}
+          : { powershellPath: input.options.powershellPath }),
+        ...(input.options.runner === undefined ? {} : { runner: input.options.runner }),
+        sourceCheckoutRoot: input.options.paths.sourceCheckoutRoot,
+        vaultRoot: targetVaultRoot,
+      });
+  const sourceReady = (
+    await input.sourceStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)
+  ).ready;
+  let targetReady = (
+    await targetStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)
+  ).ready;
+  if (!sameVault && sourceReady && !targetReady) {
+    await input.sourceStore.executeWithSecretBytes(
+      WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS,
+      async (value) => {
+        await targetStore.store(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS, value);
+      },
+    );
+    targetReady = true;
+  }
+  if (!targetReady && !input.allowCreate) {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "The retained owner-session helper Secret is unavailable.",
+    );
+  }
+  const binding = input.allowCreate
+    ? await provisionWorkerSessionHelperOwnerSigningSecret(targetStore)
+    : await readWorkerSessionHelperOwnerKeyBinding(targetStore);
+  if (!sameVault && sourceReady) {
+    const sourceBinding = await readWorkerSessionHelperOwnerKeyBinding(input.sourceStore);
+    if (
+      sourceBinding.keyId !== binding.keyId ||
+      sourceBinding.publicKeySpkiBase64Url !== binding.publicKeySpkiBase64Url
+    ) {
+      throw appError(
+        "CONFIG_INVALID",
+        "The owner-session helper Secret migration target contains another identity.",
+      );
+    }
+  }
+  return Object.freeze({
+    binding,
+    deleteSourceAfterPersistence: !sameVault && sourceReady,
+    vaultRoot: targetVaultRoot,
+  });
+}
+
+function resolveWindowsOwnerHelperVaultRoot(
+  options: PrepareWindowsServiceSecretBackendOptions,
+  currentVaultRoot: string,
+): string {
+  const requestedRoot =
+    options.ownerHelperVaultRoot ??
+    (isWithin(options.paths.home, currentVaultRoot)
+      ? join(
+          requireEnvironmentPath(
+            (options.environment ?? process.env)["LOCALAPPDATA"],
+            "LOCALAPPDATA",
+          ),
+          "OpenDelegate",
+          "owner-session",
+          options.instanceId,
+          "secrets",
+          "dpapi",
+        )
+      : currentVaultRoot);
+  const targetVaultRoot = requireExternalProvisioningPath(
+    requestedRoot,
+    options.paths.sourceCheckoutRoot,
+    "Windows owner-session helper Secret vault root",
+  );
+  if (
+    isWithin(options.paths.home, targetVaultRoot) ||
+    pathsEqualForCurrentHost(targetVaultRoot, options.handoffRoot) ||
+    pathsEqualForCurrentHost(targetVaultRoot, options.vaultRoot) ||
+    isWithin(targetVaultRoot, options.handoffRoot) ||
+    isWithin(targetVaultRoot, options.vaultRoot) ||
+    isWithin(options.handoffRoot, targetVaultRoot) ||
+    isWithin(options.vaultRoot, targetVaultRoot)
+  ) {
+    throw appError(
+      "CONFIG_PATH_UNSAFE",
+      "The owner-session helper Secret vault must remain outside and disjoint from service state.",
+    );
+  }
+  return targetVaultRoot;
 }
 
 export interface RestoreWindowsServiceSecretBackendOptions {
@@ -2621,6 +2990,7 @@ async function verifyInitialWorkerChannel(input: {
   readonly configuration: WorkerConfigurationDocument;
   readonly managedSecrets: ManagedSecretStore;
   readonly paths: WorkerPaths;
+  readonly resetForRecredential: boolean;
 }): Promise<boolean> {
   let channelState: SqliteWorkerChannelState | undefined;
   try {
@@ -2630,6 +3000,7 @@ async function verifyInitialWorkerChannel(input: {
       deviceId: input.configuration.deviceId,
       mainDeviceId: input.configuration.mainDeviceId,
       certificateGeneration: input.configuration.certificateGeneration,
+      ...(input.resetForRecredential ? { resetForRecredential: true } : {}),
     });
     for (const endpoint of input.configuration.transportProfile.endpoints) {
       let client: WorkerDeviceChannelClient | undefined;
@@ -2943,6 +3314,19 @@ export function createWorkerSchedulingInventoryProvider(input: {
           ...(probe.version === undefined ? {} : { version: probe.version }),
         });
       }
+      const nativeSubagentAdapters = cached.probes.filter(supportsNativeSubagents);
+      if (nativeSubagentAdapters.length > 0) {
+        const verified = nativeSubagentAdapters.some(
+          (probe) => adapterReadiness(probe) === "ready",
+        );
+        const detected = nativeSubagentAdapters.some((probe) => probe.installed);
+        capabilityMap.set("native-subagents", {
+          name: "native-subagents",
+          verification: verified ? "verified" : detected ? "degraded" : "unavailable",
+          observedAtMs: cached.observedAtMs,
+          evidenceSource: "agent-adapter",
+        });
+      }
       for (const workspace of workspaces) {
         for (const capability of workspace.capabilities) {
           setStrongestCapability(capabilityMap, capability, {
@@ -2978,11 +3362,13 @@ export function createWorkerSchedulingInventoryProvider(input: {
           const catalog = cached!.modelCatalogs.get(
             agentAdapterIdentity(probe.provider, probe.adapterId),
           );
+          const blockedBy = adapterBlocker(probe);
           return Object.freeze({
             provider: schedulingProvider(probe.provider),
             adapterId: probe.adapterId,
             readiness: adapterReadiness(probe),
             compatibility: probe.compatibility,
+            ...(blockedBy === undefined ? {} : { blockedBy }),
             ...(probe.version === undefined ? {} : { version: probe.version }),
             ...(probe.remediation === undefined
               ? {}
@@ -3018,6 +3404,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
             adapterId: adapter.adapterId,
             readiness: "unavailable" as const,
             compatibility: "untested" as const,
+            blockedBy: "probe-failed" as const,
             observedAtMs: cached!.observedAtMs,
           }),
         ),
@@ -3212,6 +3599,57 @@ function adapterReadiness(
     : "degraded";
 }
 
+function adapterBlocker(
+  probe: AgentAdapterProbe,
+): NonNullable<WorkerSchedulingInventoryV1["agentAdapters"]>[number]["blockedBy"] {
+  if (adapterReadiness(probe) === "ready") {
+    return undefined;
+  }
+  const diagnosticCodes = new Set(probe.diagnostics.map((diagnostic) => diagnostic.code));
+  if (diagnosticCodes.has("CONTROLLED_PROVIDER_HOME_UNSAFE")) {
+    return "provider-home-unavailable";
+  }
+  if (
+    !probe.installed ||
+    diagnosticCodes.has("EXECUTABLE_NOT_FOUND") ||
+    diagnosticCodes.has("SDK_PACKAGE_UNAVAILABLE") ||
+    diagnosticCodes.has("CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE")
+  ) {
+    return "executable-unavailable";
+  }
+  if (
+    probe.auth.state === "not_ready" ||
+    diagnosticCodes.has("AUTH_NOT_READY") ||
+    diagnosticCodes.has("AUTH_PROBE_FAILED") ||
+    diagnosticCodes.has("AUTH_PROBE_TIMEOUT")
+  ) {
+    return "authentication-required";
+  }
+  if (
+    diagnosticCodes.has("CLAUDE_SANDBOX_UNAVAILABLE_NATIVE_WINDOWS") ||
+    diagnosticCodes.has("CLAUDE_SANDBOX_RUNTIME_UNAVAILABLE") ||
+    probe.unsupportedOnDevice === true
+  ) {
+    return "platform-incompatible";
+  }
+  if (
+    probe.compatibility === "untested" ||
+    diagnosticCodes.has("UNRECOGNIZED_PROVIDER_VERSION") ||
+    diagnosticCodes.has("UNTESTED_PROVIDER_VERSION")
+  ) {
+    return "version-unsupported";
+  }
+  return "probe-failed";
+}
+
+function supportsNativeSubagents(probe: AgentAdapterProbe): boolean {
+  return (
+    probe.capabilities.approvalBridge &&
+    ((probe.provider === "codex" && probe.adapterId === "codex-app-server") ||
+      (probe.provider === "claude" && probe.adapterId === "claude-agent-sdk"))
+  );
+}
+
 function workerServiceMode(
   environment: Readonly<Record<string, string | undefined>>,
 ): WorkerSchedulingInventoryV1["serviceMode"] {
@@ -3368,9 +3806,71 @@ function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
           `- Model: ${assignment.agentRequirement.modelId ?? "adapter default"}`,
         ]),
     "",
+    "## Local child-Agent delegation",
+    "- If the selected provider exposes Agent or Task delegation, you may use it only when independent local work benefits from parallelism.",
+    "- Create at most four native child Agents in this Run and only one nesting level.",
+    "- Every child stays inside this exact Task, Work Order, Workspace, sandbox, and OpenDelegate Policy boundary. Do not use a child to reach another Device.",
+    "- Main owns cross-Device decomposition. If this Work Order needs another Device, report the missing dependency instead of pretending a local child can route it.",
+    "- You remain responsible for collecting child results, resolving conflicts, and satisfying every completion criterion before reporting success.",
+    "",
     `Task ID: ${assignment.taskId}`,
     `Work Order ID: ${order.workOrderId}`,
   ].join("\n");
+}
+
+export function renderWorkerRuntimeContext(input: {
+  readonly deviceId: string;
+  readonly deviceName: string;
+  readonly osFamily: "linux" | "macos" | "windows";
+  readonly serviceMode: WorkerSchedulingInventoryV1["serviceMode"];
+  readonly releaseVersion: string;
+  readonly provider: AgentAdapter["provider"];
+  readonly adapterId: string;
+  readonly adapterVersion?: string;
+  readonly modelId?: string;
+  readonly workspace?: Pick<WorkspaceRecord, "workspaceId" | "alias" | "isolation">;
+}): string {
+  return [
+    "## Deterministic Worker context",
+    "These non-secret facts were supplied by OpenDelegate for this exact Run. Treat them as authoritative; do not use shell, OS, filesystem, or network tools merely to rediscover them. If a requested fact is absent and the Work Order forbids probing, report it as unavailable.",
+    `- Device ID: ${input.deviceId}`,
+    `- Device hostname: ${input.deviceName}`,
+    `- OS family: ${input.osFamily}`,
+    `- Worker service mode: ${input.serviceMode}`,
+    `- OpenDelegate Worker release: ${input.releaseVersion}`,
+    `- Selected provider: ${input.provider}`,
+    `- Selected adapter: ${input.adapterId}`,
+    `- Selected adapter version: ${input.adapterVersion ?? "unavailable"}`,
+    `- Selected model: ${input.modelId ?? "adapter default"}`,
+    ...(input.workspace === undefined
+      ? ["- Workspace: unavailable before deterministic Workspace resolution"]
+      : [
+          `- Workspace ID: ${input.workspace.workspaceId}`,
+          `- Workspace alias: ${input.workspace.alias}`,
+          `- Workspace isolation: ${input.workspace.isolation}`,
+        ]),
+  ].join("\n");
+}
+
+async function resolveWorkerPromptWorkspaceContext(
+  registry: SqliteWorkspaceRegistry,
+  workspaceId: string | undefined,
+): Promise<Pick<WorkspaceRecord, "workspaceId" | "alias" | "isolation"> | undefined> {
+  if (workspaceId === undefined) {
+    return undefined;
+  }
+  try {
+    const workspace = await registry.resolve(workspaceId);
+    return Object.freeze({
+      workspaceId: workspace.workspaceId,
+      alias: workspace.alias,
+      isolation: workspace.isolation,
+    });
+  } catch {
+    // The authoritative Workspace resolver will emit the bounded Run failure.
+    // Prompt context must never introduce a second, different failure mode.
+    return undefined;
+  }
 }
 
 export function createWorkerManagedSecretStore(
@@ -4094,7 +4594,11 @@ function validateWorkspace(value: unknown): WorkerWorkspaceConfiguration {
   ) {
     throw appError("CONFIG_INVALID", "Worker Workspace type is invalid.");
   }
-  if (record["isolation"] !== "none" && record["isolation"] !== "agent-native-worktree") {
+  if (
+    record["isolation"] !== "none" &&
+    record["isolation"] !== "agent-native-worktree" &&
+    record["isolation"] !== "opendelegate-worktree"
+  ) {
     throw appError("CONFIG_INVALID", "Worker Workspace isolation is invalid.");
   }
   if (!Array.isArray(record["capabilities"])) {
@@ -4137,6 +4641,7 @@ async function prepareRuntimeDirectories(paths: WorkerPaths): Promise<void> {
     paths.stateDirectory,
     paths.knowledgeDirectory,
     paths.runCapabilityDirectory,
+    paths.managedWorktreeDirectory,
   ]) {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const metadata = await lstat(directory);

@@ -114,6 +114,38 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
+- Replaced noisy per-step Discord replies with one editable live Task-activity surface that
+  aggregates Main planning, multi-Device dispatch, egress-inspected Worker milestones, Work Order
+  completion, and verification. Terminal replies close it through a durable cross-cycle tombstone,
+  so offline or stale outbox work cannot recreate old progress after a result.
+- Routed bundled Worker Run-tool subprocesses through the release launcher so Knowledge, Artifact,
+  platform-mutation, and Computer Use MCP bridges execute their CLI command instead of silently
+  exiting from a library bundle.
+- Accepted Claude Agent SDK `command_lifecycle` events during native child-Agent execution,
+  preserved an authoritative terminal result when SDK transport cleanup throws, and reported missing
+  Linux `bubblewrap`/`socat` sandbox prerequisites before dispatch. Linux readiness now also proves
+  bounded nested user-namespace creation, so AppArmor, container, or kernel incompatibility routes
+  to an explicitly configured Prefer fallback instead of hanging the first native child Agent.
+- Kept Windows core services on their exact non-admin virtual account while using SCM SID type
+  `UNRESTRICTED`, so headless provider DNS/HTTPS is available without moving Agent execution into
+  the interactive owner session.
+- Preserved an exact Agent model and optional effort through Worker session validation, durable
+  session keying, storage, resume checks, and owner-safe Run observations, so a successful pinned or
+  Prefer-selected provider turn is not discarded after completion.
+- Recovered certificate rotation after prior failed rotations and owner-authorized recredentialing
+  by selecting the active current-generation certificate, and discarded key-bound rotation requests
+  replayed from an earlier Worker process session.
+- Started a fresh durable Main/Worker transport epoch exactly once after owner-authorized Device
+  recredentialing, preventing retained sequence checkpoints from rejecting the replacement identity
+  while routine certificate rotation continues to preserve queued delivery.
+- Migrated the Windows owner-session helper signing Secret into an owner-local DPAPI vault outside
+  native service state during service staging, including crash-safe replay for Workers already
+  staged by an older build, so secure service-document composition can complete without weakening
+  the core/owner runtime boundary, and taught the elevated Worker upgrade to accept only that safe
+  vault move plus a coherent staged core IPC public-key transition while rejecting unrelated drift.
+- Allowed native service upgrades to validate the installed topology against the actual active
+  version, and atomically advance or roll back the durable runtime configuration with the release
+  pointer.
 - Accepted the exact private `0550` directory and `0440` file modes emitted by current systemd
   credential mounts, allowing headless Linux vaults to become ready without permitting general
   group-readable credential paths.

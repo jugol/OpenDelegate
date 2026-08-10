@@ -855,11 +855,14 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
           }));
           await this.send(pong);
         }
+        await this.options.state.completeInboundEffect(frame, claimId);
       } catch (error) {
-        await this.options.state.releaseInboundEffect(frame, claimId);
+        // A failed completion must not strand this sequence in `processing`.
+        // If the completion actually committed before surfacing an error, the
+        // best-effort release is expected to refuse and replay will see handled.
+        await this.options.state.releaseInboundEffect(frame, claimId).catch(() => undefined);
         throw error;
       }
-      await this.options.state.completeInboundEffect(frame, claimId);
     } else if (frame.type === "main.dispatch") {
       if (
         frame.payload.deviceId !== this.options.deviceId ||

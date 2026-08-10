@@ -274,6 +274,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
               ...(capability.blockedBy === undefined ? {} : { blockedBy: capability.blockedBy }),
             })),
             policies: [...(profile?.policies ?? [])],
+            workspaceIds: [...(inventory?.workspaceIds ?? [])],
             ...(inventory?.agentAdapters === undefined
               ? {}
               : {
@@ -282,6 +283,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
                     adapterId: adapter.adapterId,
                     readiness: adapter.readiness,
                     compatibility: adapter.compatibility,
+                    ...(adapter.blockedBy === undefined ? {} : { blockedBy: adapter.blockedBy }),
                     ...(adapter.version === undefined ? {} : { version: adapter.version }),
                     ...(adapter.availableUpgrade === undefined
                       ? {}
@@ -449,6 +451,9 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
                 Object.freeze({
                   modelId: model.modelId,
                   isDefault: model.isDefault === true,
+                  ...(model.supportedEfforts === undefined
+                    ? {}
+                    : { supportedEfforts: Object.freeze([...model.supportedEfforts]) }),
                 }),
               ),
             ),

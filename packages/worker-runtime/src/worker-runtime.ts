@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { PROTOCOL_VERSION, parseWorkerAgentSessionObservation } from "@opendelegate/protocol";
 import {
   TransportRoutesExhaustedError,
@@ -31,6 +33,7 @@ import {
   type WorkerOutboundEventV1,
   type WorkerRunAssignmentV1,
   type WorkerRunLeaseAuthority,
+  type WorkerRunProgressKindV1,
   type WorkerRunSteeringCommandV1,
   type WorkerRunSteeringReceiptReasonV1,
   type WorkerRunSteeringReceiptV1,
@@ -44,6 +47,7 @@ import {
 import { sanitizeWorkerDiagnostic } from "./diagnostics.ts";
 import { AgentRunBridgeError } from "./agent-run-bridge-error.ts";
 import {
+  MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN,
   type PersistedRunSteeringAttempt,
   type PersistedWorkerRun,
   type PersistedWorkerState,
@@ -56,6 +60,9 @@ export const DEFAULT_MAXIMUM_CONCURRENT_RUNS = 4;
 const MAX_STATE_MUTATION_ATTEMPTS = 64;
 const MAX_JAVASCRIPT_DATE_MS = 8_640_000_000_000_000;
 const MAX_PERSISTED_STEERING_ATTEMPTS = 4_096;
+// Progress is presentation-only and acknowledged events leave the durable outbox.
+// Keep a finite abuse guard without making ordinary multi-day Runs go silent.
+const MINIMUM_PROGRESS_INTERVAL_MS = 30_000;
 
 export interface WorkerRuntimeOptions {
   readonly configuration: WorkerConfiguration;
@@ -710,17 +717,26 @@ export class WorkerRuntime {
         assignment: structuredClone(assignment),
         leaseAuthority,
         isLeaseCurrent: () => this.isLeaseCurrent(assignment, leaseAuthority),
+        reportProgress: (input) => this.reportRunProgress(assignment, leaseAuthority, input),
       });
     } catch (error: unknown) {
       const requirementUnavailable =
         error instanceof AgentRunBridgeError && error.code === "AGENT_REQUIREMENT_UNAVAILABLE";
+      const workspaceUnavailable =
+        error instanceof AgentRunBridgeError && error.code === "WORKSPACE_RESOLUTION_FAILED";
       await this.finalizeRun(assignment.runId, {
         type: "worker.run.failed",
         report: requirementUnavailable
           ? "The Worker could not satisfy the immutable Agent requirement for this Run."
-          : "The Worker could not start the Run.",
+          : workspaceUnavailable
+            ? "The Worker could not resolve a registered Workspace for this Run."
+            : "The Worker could not start the Run.",
         diagnostic: sanitizeWorkerDiagnostic({
-          code: requirementUnavailable ? "AGENT_REQUIREMENT_UNAVAILABLE" : "PROCESS_START_FAILED",
+          code: requirementUnavailable
+            ? "AGENT_REQUIREMENT_UNAVAILABLE"
+            : workspaceUnavailable
+              ? "WORKSPACE_RESOLUTION_FAILED"
+              : "PROCESS_START_FAILED",
           stage: "startup",
           retryable: error instanceof AgentRunBridgeError ? error.retryable : true,
           cause: error,
@@ -730,13 +746,40 @@ export class WorkerRuntime {
       return;
     }
     this.processes.set(assignment.runId, { process, leaseAuthority });
+    const startedAtMs = this.readNow();
+    const startedMessage = progressMessage("working");
+    const startedMessageDigest = createHash("sha256").update(startedMessage).digest("hex");
     const transition = await this.mutate<boolean>((state) => {
-      const run = state.runs.find((candidate) => candidate.assignment.runId === assignment.runId);
+      const touched = touchClock(state, startedAtMs);
+      const run = touched.runs.find((candidate) => candidate.assignment.runId === assignment.runId);
       if (run === undefined || run.state !== "starting") {
-        return { value: false };
+        return { nextState: touched, value: false };
+      }
+      const canReportStart =
+        (run.progressCount ?? 0) < MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN &&
+        touched.outbox.length + countActiveRuns(touched) < touched.configuration.maxOutboxEntries;
+      if (canReportStart) {
+        const nextProgressCount = (run.progressCount ?? 0) + 1;
+        const event = createProgressEvent(
+          this.configuration.deviceId,
+          assignment,
+          startedAtMs,
+          nextProgressCount,
+          startedMessage,
+        );
+        return {
+          nextState: replaceRun(appendOutbox(touched, event), assignment.runId, {
+            ...run,
+            state: "running",
+            progressCount: nextProgressCount,
+            lastProgressAtMs: startedAtMs,
+            lastProgressDigest: startedMessageDigest,
+          }),
+          value: true,
+        };
       }
       return {
-        nextState: replaceRun(state, assignment.runId, { ...run, state: "running" }),
+        nextState: replaceRun(touched, assignment.runId, { ...run, state: "running" }),
         value: true,
       };
     });
@@ -816,6 +859,57 @@ export class WorkerRuntime {
         });
       })
       .catch(() => undefined);
+  }
+
+  private async reportRunProgress(
+    assignment: WorkerRunAssignmentV1,
+    leaseAuthority: WorkerRunLeaseAuthority,
+    input: { readonly kind: WorkerRunProgressKindV1 },
+  ): Promise<void> {
+    if (this.closed || !(await this.isLeaseCurrent(assignment, leaseAuthority))) {
+      return;
+    }
+    const message = progressMessage(input.kind);
+    const messageDigest = createHash("sha256").update(message).digest("hex");
+    const now = this.readNow();
+    await this.mutate((state) => {
+      const touched = touchClock(state, now);
+      const run = touched.runs.find((candidate) => candidate.assignment.runId === assignment.runId);
+      if (
+        run === undefined ||
+        run.state !== "running" ||
+        !sameRunAuthority(run.assignment, assignment)
+      ) {
+        return { nextState: touched, value: undefined };
+      }
+      const progressCount = run.progressCount ?? 0;
+      if (
+        progressCount >= MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN ||
+        run.lastProgressDigest === messageDigest ||
+        (run.lastProgressAtMs !== undefined &&
+          now - run.lastProgressAtMs < MINIMUM_PROGRESS_INTERVAL_MS) ||
+        touched.outbox.length + countActiveRuns(touched) >= touched.configuration.maxOutboxEntries
+      ) {
+        return { nextState: touched, value: undefined };
+      }
+      const nextProgressCount = progressCount + 1;
+      const event = createProgressEvent(
+        this.configuration.deviceId,
+        assignment,
+        now,
+        nextProgressCount,
+        message,
+      );
+      return {
+        nextState: replaceRun(appendOutbox(touched, event), assignment.runId, {
+          ...run,
+          progressCount: nextProgressCount,
+          lastProgressAtMs: now,
+          lastProgressDigest: messageDigest,
+        }),
+        value: undefined,
+      };
+    });
   }
 
   private async steerRunSerialized(
@@ -1342,8 +1436,9 @@ function createRunEvent(
     readonly usage?: WorkerOutboundEventV1["payload"]["usage"];
     readonly agentSession?: WorkerOutboundEventV1["payload"]["agentSession"];
   } = {},
+  identitySuffix?: string,
 ): WorkerOutboundEventV1 {
-  const suffix = type.slice("worker.run.".length);
+  const suffix = identitySuffix ?? type.slice("worker.run.".length);
   const payload: WorkerOutboundEventV1["payload"] = {
     taskId: assignment.taskId,
     workOrderId: assignment.workOrder.workOrderId,
@@ -1369,6 +1464,23 @@ function createRunEvent(
     type,
     payload: Object.freeze(payload),
   });
+}
+
+function createProgressEvent(
+  senderDeviceId: string,
+  assignment: WorkerRunAssignmentV1,
+  now: number,
+  progressCount: number,
+  message: string,
+): WorkerOutboundEventV1 {
+  return createRunEvent(
+    senderDeviceId,
+    assignment,
+    "worker.run.progress",
+    now,
+    { report: message },
+    `progress:${progressCount.toString()}`,
+  );
 }
 
 function appendOutbox(
@@ -1432,6 +1544,41 @@ function exactSteeringRunScope(
     assignment.leaseId === command.leaseId &&
     assignment.fencingToken === command.fencingToken
   );
+}
+
+function sameRunAuthority(left: WorkerRunAssignmentV1, right: WorkerRunAssignmentV1): boolean {
+  return (
+    left.taskId === right.taskId &&
+    left.workOrder.workOrderId === right.workOrder.workOrderId &&
+    left.deviceId === right.deviceId &&
+    left.workerId === right.workerId &&
+    left.routeId === right.routeId &&
+    left.runId === right.runId &&
+    left.leaseId === right.leaseId &&
+    left.fencingToken === right.fencingToken
+  );
+}
+
+function progressMessage(kind: WorkerRunProgressKindV1): string {
+  switch (kind) {
+    case "consulting-knowledge":
+      return "Worker Agent is consulting Device-local Knowledge.";
+    case "delegating":
+      return "Worker Agent is coordinating child Agents.";
+    case "using-tools":
+      return "Worker Agent is using Device-local tools.";
+    case "verifying":
+      return "Worker Agent is verifying its work.";
+    case "waiting-approval":
+      return "Worker Agent is waiting for owner approval.";
+    case "working":
+      return "Worker Agent is making progress.";
+    default:
+      throw new WorkerRuntimeError(
+        "INVALID_MESSAGE",
+        "Worker progress is not an owner-safe category.",
+      );
+  }
 }
 
 function steeringRunScopeReason(
@@ -1977,7 +2124,7 @@ function readAgentAdapters(
       requireExactInventoryKeys(
         entry,
         ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-        ["version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
+        ["version", "blockedBy", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
       );
       const provider = entry["provider"];
       const readiness = entry["readiness"];
@@ -1993,6 +2140,27 @@ function readAgentAdapters(
         throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker Agent adapters are invalid.");
       }
       const adapterId = readInventoryText(entry["adapterId"], "Agent adapter ID", 160);
+      const blockedBy = entry["blockedBy"];
+      if (
+        blockedBy !== undefined &&
+        blockedBy !== "provider-home-unavailable" &&
+        blockedBy !== "executable-unavailable" &&
+        blockedBy !== "authentication-required" &&
+        blockedBy !== "version-unsupported" &&
+        blockedBy !== "platform-incompatible" &&
+        blockedBy !== "probe-failed"
+      ) {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "Worker Agent adapter blocker is invalid.",
+        );
+      }
+      if (readiness === "ready" && blockedBy !== undefined) {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "A ready Worker Agent adapter cannot report a blocker.",
+        );
+      }
       const identity = `${provider}\0${adapterId}`;
       if (seen.has(identity)) {
         throw new WorkerRuntimeError(
@@ -2025,6 +2193,7 @@ function readAgentAdapters(
         adapterId,
         readiness,
         compatibility,
+        ...(blockedBy === undefined ? {} : { blockedBy }),
         ...(version === undefined ? {} : { version }),
         ...(availableUpgrade === undefined ? {} : { availableUpgrade }),
         observedAtMs: readInventoryTimestamp(

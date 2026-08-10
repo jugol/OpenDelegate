@@ -1124,7 +1124,7 @@ function parseWorkerAgentAdapters(
     assertExactKeys(
       adapter,
       ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-      ["version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
+      ["blockedBy", "version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
     );
     const provider = readEnum(
       adapter["provider"],
@@ -1149,19 +1149,39 @@ function parseWorkerAgentAdapters(
     if ((modelCatalogObservedAtMs === undefined) !== (models === undefined)) {
       throw protocolError("FRAME_INVALID", "Worker Agent model catalog metadata is incomplete.");
     }
+    const readiness = readEnum(
+      adapter["readiness"],
+      ["ready", "degraded", "unavailable"] as const,
+      "Agent adapter readiness",
+    );
+    const blockedBy =
+      adapter["blockedBy"] === undefined
+        ? undefined
+        : readEnum(
+            adapter["blockedBy"],
+            [
+              "provider-home-unavailable",
+              "executable-unavailable",
+              "authentication-required",
+              "version-unsupported",
+              "platform-incompatible",
+              "probe-failed",
+            ] as const,
+            "Agent adapter blocker",
+          );
+    if (readiness === "ready" && blockedBy !== undefined) {
+      throw protocolError("FRAME_INVALID", "A ready Agent adapter cannot declare a blocker.");
+    }
     return {
       provider,
       adapterId,
-      readiness: readEnum(
-        adapter["readiness"],
-        ["ready", "degraded", "unavailable"] as const,
-        "Agent adapter readiness",
-      ),
+      readiness,
       compatibility: readEnum(
         adapter["compatibility"],
         ["tested", "compatible", "untested", "incompatible"] as const,
         "Agent adapter compatibility",
       ),
+      ...(blockedBy === undefined ? {} : { blockedBy }),
       ...(adapter["version"] === undefined
         ? {}
         : { version: readIdentifier(adapter["version"], "Agent adapter version") }),
@@ -1446,6 +1466,7 @@ function parseWorkerEvent(input: unknown): SequencedWorkerEventV1 {
       "worker.run.cancelled",
       "worker.run.claimed",
       "worker.run.failed",
+      "worker.run.progress",
       "worker.run.rejected",
       "worker.run.succeeded",
     ] as const,

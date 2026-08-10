@@ -87,6 +87,7 @@ export class WorkerKnowledgeRunCapabilityProvider implements WorkerRunCapability
   public async prepare(context: {
     readonly assignment: WorkerRunAssignmentV1;
     readonly egressGuard: WorkerEgressGuard;
+    readonly maxConcurrentConnections?: number;
     readonly leaseAuthority?: WorkerRunLeaseAuthority;
     isExecutionCurrent(): Promise<boolean>;
   }): Promise<WorkerRunCapabilityLease | undefined> {
@@ -111,6 +112,7 @@ export class WorkerKnowledgeRunCapabilityProvider implements WorkerRunCapability
     try {
       brokerLease = await this.#options.broker.register({
         capability: KNOWLEDGE_CAPABILITY,
+        maxConcurrentConnections: context.maxConcurrentConnections ?? 1,
         binding,
         metadata: knowledgeCapabilityMetadata(this.#budgets) as unknown as RunCapabilityJsonValue,
         expiresAtMs: binding.leaseExpiresAtMs,

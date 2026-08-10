@@ -35,11 +35,17 @@ import {
   restoreWindowsServiceSecretBackend,
   readWorkerSessionHelperOwnerKeyBinding,
   registerWorkerWorkspace,
+  setWorkerWorkspaceIsolation,
   resolveWorkerAgentPermissions,
   resolveWorkerAgentSandbox,
   resolveWorkerPaths,
+  type WorkerConfigurationDocument,
 } from "../src/index.ts";
-import { executeWorkerJoinPhases, normalizeWorkerJoinFailure } from "../src/worker-app.ts";
+import {
+  executeWorkerJoinPhases,
+  normalizeWorkerJoinFailure,
+  preserveRecredentialedWorkerConfiguration,
+} from "../src/worker-app.ts";
 
 const executeFile = promisify(execFile);
 const checkout = resolve(import.meta.dirname, "../../..");
@@ -163,6 +169,103 @@ test("Worker join phase boundary marks local failures after accepted enrollment"
       error instanceof EnrollmentGrantExecutorFailure && error.kind === "post-enrollment",
   );
   assert.deepEqual(observed, ["prepare", "enroll", "finalize"]);
+});
+
+test("Worker re-credentialing replaces identity material without resetting local configuration", () => {
+  const current = {
+    schemaVersion: 1,
+    deviceId: "Windows_5090",
+    workerId: "worker-primary",
+    mainDeviceId: "device-main-test",
+    keyId: "device-key-current",
+    certificateGeneration: 9,
+    certificatePem: "-----BEGIN CERTIFICATE-----\ncurrent\n-----END CERTIFICATE-----",
+    certificateAuthorityPem: "-----BEGIN CERTIFICATE-----\nauthority\n-----END CERTIFICATE-----",
+    expectedMainSpkiSha256: `sha256:${"A".repeat(43)}`,
+    transportProfile: {
+      deviceId: "device-main-test",
+      endpoints: [
+        {
+          endpointId: "main-private",
+          label: "Main private route",
+          kind: "wss",
+          url: "wss://main.example.test/api/v1/device/channel",
+          credentialRef: "device-identity",
+        },
+      ],
+    },
+    secretBackend: {
+      backend: "windows-dpapi",
+      vaultRoot: resolve("current-owner-vault"),
+    },
+    agent: {
+      provider: "claude",
+      allowUntestedVersion: false,
+      claudeExecutable: resolve("claude.exe"),
+      claudeHome: resolve("claude-home"),
+    },
+    platformMutation: { executables: { npm: resolve("npm.exe") } },
+    workspaces: [
+      {
+        workspaceId: "workspace-open-delegate",
+        alias: "OpenDelegate",
+        type: "git",
+        rootPath: resolve("workspace-root"),
+        isolation: "agent-native-worktree",
+        capabilities: ["typescript", "git"],
+      },
+    ],
+    createdAt: "2026-07-25T00:00:00.000Z",
+  } satisfies WorkerConfigurationDocument;
+  const replacement = {
+    schemaVersion: 1,
+    deviceId: "Windows_5090",
+    workerId: "worker-primary",
+    mainDeviceId: "device-main-test",
+    keyId: "device-key-recredentialed",
+    certificateGeneration: 10,
+    certificatePem: "-----BEGIN CERTIFICATE-----\nreplacement\n-----END CERTIFICATE-----",
+    certificateAuthorityPem: "-----BEGIN CERTIFICATE-----\nauthority\n-----END CERTIFICATE-----",
+    expectedMainSpkiSha256: `sha256:${"C".repeat(43)}`,
+    transportProfile: {
+      deviceId: "device-main-test",
+      endpoints: [
+        {
+          endpointId: "main-recredentialed",
+          label: "Main current route",
+          kind: "wss",
+          url: "wss://main-current.example.test/api/v1/device/channel",
+          credentialRef: "device-identity",
+        },
+      ],
+    },
+    secretBackend: {
+      backend: "windows-dpapi",
+      vaultRoot: resolve("replacement-owner-vault"),
+    },
+    agent: { provider: "auto", allowUntestedVersion: false },
+    workspaces: [],
+    createdAt: "2026-08-10T00:00:00.000Z",
+  } satisfies WorkerConfigurationDocument;
+
+  const preserved = preserveRecredentialedWorkerConfiguration(replacement, current);
+  assert.equal(preserved.keyId, replacement.keyId);
+  assert.equal(preserved.certificateGeneration, 10);
+  assert.equal(preserved.expectedMainSpkiSha256, replacement.expectedMainSpkiSha256);
+  assert.deepEqual(preserved.transportProfile, replacement.transportProfile);
+  assert.deepEqual(preserved.secretBackend, replacement.secretBackend);
+  assert.deepEqual(preserved.agent, current.agent);
+  assert.deepEqual(preserved.platformMutation, current.platformMutation);
+  assert.deepEqual(preserved.workspaces, current.workspaces);
+  assert.equal(preserved.createdAt, current.createdAt);
+  assert.throws(
+    () =>
+      preserveRecredentialedWorkerConfiguration(
+        { ...replacement, certificateGeneration: current.certificateGeneration },
+        current,
+      ),
+    /newer certificate generation/u,
+  );
 });
 
 test("macOS Worker join gives retry guidance only for pre-enrollment failures", () => {
@@ -425,8 +528,12 @@ test("Worker join accepts bounded provider and Claude sandbox bootstrap settings
     "grant.json",
     "--agent",
     "auto",
+    "--codex-executable",
+    "runtime/bin/codex.exe",
     "--codex-home",
     "runtime/codex",
+    "--claude-executable",
+    "runtime/bin/claude.exe",
     "--claude-home",
     "runtime/claude",
     "--claude-network-domain",
@@ -438,12 +545,18 @@ test("Worker join accepts bounded provider and Claude sandbox bootstrap settings
   assert.deepEqual(parsed.agent, {
     provider: "auto",
     allowUntestedVersion: false,
+    codexExecutable: resolve("runtime/bin/codex.exe"),
     codexHome: resolve("runtime/codex"),
+    claudeExecutable: resolve("runtime/bin/claude.exe"),
     claudeHome: resolve("runtime/claude"),
     claudeAllowedNetworkDomains: ["registry.npmjs.org", "*.pypi.org"],
   });
   assert.throws(
     () => parseWorkerArguments(["run", "--claude-network-domain", "registry.npmjs.org"]),
+    WorkerAppError,
+  );
+  assert.throws(
+    () => parseWorkerArguments(["run", "--codex-executable", "runtime/bin/codex.exe"]),
     WorkerAppError,
   );
 });
@@ -652,7 +765,16 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     sourceCheckoutRoot: checkout,
     home: join(fixtureRoot, "worker"),
   });
-  const ownerVaultRoot = join(fixtureRoot, "owner-secrets");
+  const ownerVaultRoot = join(paths.home, "secrets", "dpapi");
+  const localAppData = join(fixtureRoot, "local-app-data");
+  const ownerHelperVaultRoot = join(
+    localAppData,
+    "OpenDelegate",
+    "owner-session",
+    "personal",
+    "secrets",
+    "dpapi",
+  );
   const handoffRoot = join(fixtureRoot, "service-handoff");
   const serviceVaultRoot = join(fixtureRoot, "service-secrets");
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
@@ -723,6 +845,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     }
 
     const input = {
+      environment: { LOCALAPPDATA: localAppData },
       handoffRoot,
       hostPlatform: "win32" as const,
       instanceId: "personal",
@@ -733,12 +856,54 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
       vaultRoot: serviceVaultRoot,
     };
     const first = await prepareWindowsServiceSecretBackend(input);
+    const helperStore = new WindowsDpapiSecretStore({
+      deviceId: "device-worker-service",
+      hostPlatform: "win32",
+      powershellPath,
+      runner,
+      sourceCheckoutRoot: checkout,
+      vaultRoot: ownerHelperVaultRoot,
+    });
+    // Recreate the durable shape emitted by older builds: the helper key and
+    // its public binding still point inside DATA_ROOT/state. An exact replay of
+    // staging must migrate that same identity before service-document runs.
+    await helperStore.executeWithSecretBytes(
+      WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS,
+      async (value) => {
+        await ownerStore.store(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS, value);
+      },
+    );
+    await helperStore.delete(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
+    const legacyConfiguration = JSON.parse(await readFile(paths.configFile, "utf8")) as {
+      secretBackend: {
+        servicePreparation: { ownerHelperSecretBinding: { vaultRoot: string } };
+      };
+    };
+    legacyConfiguration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot =
+      ownerVaultRoot;
+    await writeFile(paths.configFile, `${JSON.stringify(legacyConfiguration)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    const migratedReplay = await prepareWindowsServiceSecretBackend(input);
+    assert.deepEqual(migratedReplay.backend, first.backend);
+    assert.equal(
+      (await ownerStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
+      false,
+    );
+    assert.equal(
+      (await helperStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
+      true,
+    );
     // Simulate a crash after the durable service binding was written but before
     // the owner-vault duplicates were deleted. Replay must finish that cleanup
     // without reopening the service-account-sealed handoff for public-key data.
-    await ownerStore.store(alias, secret);
-    await ownerStore.store(WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS, Buffer.alloc(32, 0xa5));
-    await ownerStore.store(WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS, Buffer.alloc(48, 0x5a));
+    await helperStore.store(alias, secret);
+    await helperStore.store(WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS, Buffer.alloc(32, 0xa5));
+    await helperStore.store(
+      WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
+      Buffer.alloc(48, 0x5a),
+    );
     const replay = await prepareWindowsServiceSecretBackend(input);
     const exactReplay = await prepareWindowsServiceSecretBackend(input);
     // The durable backend is idempotent across every repetition.
@@ -751,7 +916,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     assert.equal(first.backend.vaultRoot, serviceVaultRoot);
     assert.equal(
       first.backend.servicePreparation?.ownerHelperSecretBinding.vaultRoot,
-      ownerVaultRoot,
+      ownerHelperVaultRoot,
     );
     assert.equal(first.backend.servicePreparation?.sealing, "service-account");
     assert.match(
@@ -768,6 +933,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     assert.equal(replay.sealing, "service-account");
     assert.equal(exactReplay.sealing, "service-account");
     assert.equal((await ownerStore.availability(alias)).ready, false);
+    assert.equal((await helperStore.availability(alias)).ready, false);
     const handoff = new WindowsServiceDpapiSecretHandoff({
       deviceId: "device-worker-service",
       handoffRoot,
@@ -782,18 +948,22 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
       WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
       WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
     ]) {
-      assert.equal((await ownerStore.availability(coreAlias)).ready, false);
+      assert.equal((await helperStore.availability(coreAlias)).ready, false);
       assert.equal((await handoff.availability(coreAlias)).ready, true);
     }
     assert.equal(
       (await ownerStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
+      false,
+    );
+    assert.equal(
+      (await helperStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
       true,
     );
     assert.equal(
       (await handoff.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
       false,
     );
-    const ownerBinding = await readWorkerSessionHelperOwnerKeyBinding(ownerStore);
+    const ownerBinding = await readWorkerSessionHelperOwnerKeyBinding(helperStore);
     assert.equal(ownerBinding.alias, WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
     assert.match(ownerBinding.keyId, /^sha256:[0-9a-f]{64}$/u);
     assert.ok(ownerBinding.publicKeySpkiBase64Url.length > 0);
@@ -805,7 +975,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
         paths,
         powershellPath,
         runner,
-        vaultRoot: ownerVaultRoot,
+        vaultRoot: ownerHelperVaultRoot,
       }),
       (error: unknown) =>
         error instanceof WorkerAppError && error.code === "SECRET_BACKEND_UNAVAILABLE",
@@ -834,12 +1004,12 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
       paths,
       powershellPath,
       runner,
-      vaultRoot: ownerVaultRoot,
+      vaultRoot: ownerHelperVaultRoot,
     });
     assert.equal(restored.backend.backend, "windows-dpapi");
-    assert.equal(restored.backend.vaultRoot, ownerVaultRoot);
+    assert.equal(restored.backend.vaultRoot, ownerHelperVaultRoot);
     assert.equal(restored.restoredAliases, 3);
-    assert.equal((await ownerStore.availability(alias)).ready, true);
+    assert.equal((await helperStore.availability(alias)).ready, true);
     assert.equal((await loadWorkerConfiguration(paths)).secretBackend.backend, "windows-dpapi");
     // A Worker that was never staged is refused rather than silently rebound.
     await assert.rejects(
@@ -848,7 +1018,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
         paths,
         powershellPath,
         runner,
-        vaultRoot: ownerVaultRoot,
+        vaultRoot: ownerHelperVaultRoot,
       }),
       (error: unknown) => error instanceof WorkerAppError && error.code === "CONFIG_INVALID",
     );
@@ -1032,6 +1202,25 @@ test("Worker CLI registers and lists explicit Device-local Workspaces without an
     command: "workspace-list",
     home: resolve("worker-home"),
   });
+  assert.deepEqual(
+    parseWorkerArguments([
+      "workspace-set-isolation",
+      "--workspace-id",
+      "workspace-open-delegate",
+      "--isolation",
+      "opendelegate-worktree",
+      "--home",
+      "worker-home",
+    ]),
+    {
+      command: "workspace-set-isolation",
+      home: resolve("worker-home"),
+      workspaceIsolationUpdate: {
+        workspaceId: "workspace-open-delegate",
+        isolation: "opendelegate-worktree",
+      },
+    },
+  );
   assert.throws(
     () =>
       parseWorkerArguments([
@@ -1061,6 +1250,8 @@ test("Worker paths and Auto backend keep persistent state outside the checkout",
   });
   assert.equal(paths.home, home);
   assert.equal(paths.configFile.startsWith(checkout), false);
+  assert.equal(paths.managedWorktreeStateFile, join(home, "state", "managed-worktrees.sqlite3"));
+  assert.equal(paths.managedWorktreeDirectory, join(home, "state", "worktrees"));
   assert.deepEqual(
     await defaultSecretBackend({
       paths,
@@ -1240,6 +1431,24 @@ test("Workspace registration is durable, idempotent, and lists no Device-local p
         revision: 1,
       },
     ]);
+    const isolated = await setWorkerWorkspaceIsolation({
+      paths,
+      workspaceId: "workspace-open-delegate",
+      isolation: "opendelegate-worktree",
+    });
+    assert.equal(isolated.isolation, "opendelegate-worktree");
+    assert.equal(isolated.revision, 2);
+    assert.deepEqual(await listWorkerWorkspaces(paths), [
+      {
+        workspaceId: "workspace-open-delegate",
+        alias: "OpenDelegate",
+        type: "git",
+        isolation: "opendelegate-worktree",
+        capabilities: ["git", "typescript"],
+        state: "active",
+        revision: 2,
+      },
+    ]);
     assert.equal(JSON.stringify(await listWorkerWorkspaces(paths)).includes(workspaceRoot), false);
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -1259,7 +1468,10 @@ test("source Worker CLI help, version, and unenrolled status are executable", as
       ["--experimental-strip-types", cli, "version"],
       { cwd: checkout },
     );
-    assert.match(version.stdout, /OpenDelegate Worker 0\.1\.0-alpha\.1/u);
+    const packageDocument = JSON.parse(await readFile(join(checkout, "package.json"), "utf8")) as {
+      readonly version: string;
+    };
+    assert.equal(version.stdout.trim(), `OpenDelegate Worker ${packageDocument.version}`);
     const status = await executeFile(
       process.execPath,
       ["--experimental-strip-types", cli, "status"],

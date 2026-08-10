@@ -166,7 +166,9 @@ describe("Task Budget owner surface", () => {
     renderBudget(api);
 
     expect(await screen.findByText("Hard Budget stop")).toBeTruthy();
-    expect(screen.getByText(/new Owner message or Retry\/Resume/iu)).toBeTruthy();
+    expect(
+      screen.getByText(/Send a new Owner message.*Continue.*restart the idle window/iu),
+    ).toBeTruthy();
     expect(screen.getByText(/inactivity alone does not require/iu)).toBeTruthy();
     expect(document.body.textContent).not.toContain(
       "New work stays stopped until the Owner explicitly extends",

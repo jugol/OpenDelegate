@@ -79,6 +79,7 @@ export class SqlConfigurationRepository implements ConfigurationRepository {
       context.database,
       context.backend,
       retryPolicy,
+      context.writeCoordinator,
     );
   }
 

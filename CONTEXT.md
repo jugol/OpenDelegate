@@ -115,6 +115,16 @@ Knowledge files used only as selective context for agents running on that Device
     offline. OpenDelegate reports automatic wake as ready only when a separately
     verified, online wake relay can reach the target broadcast domain; a Tailscale or
     ordinary routed endpoint alone is not a wake path.
+30. **Native child Agents do not create new authority.** A bridged Codex or Claude
+    Worker Run may delegate bounded local parallel work to provider-native child
+    Agents. They remain inside the parent Task, Work Order, Device, Workspace,
+    sandbox, provider session, and Policy callback. Main alone creates cross-Device
+    Work Orders. One Run may create at most four native children with one nesting
+    level, and OpenDelegate observes their lifecycle without exporting private
+    prompts or provider thread identities. Run-scoped local tool capabilities may
+    accept only the parent plus those four simultaneous provider sessions; every
+    connection retains the same exact Run binding and creates no additional
+    authority.
 
 ## Core domain terms
 
@@ -201,8 +211,9 @@ owns isolation.
 ### Worker Run
 
 One execution attempt of a Work Order on one Device through one Agent Adapter. A
-retry is a new Run. A related follow-up may resume that Device and adapter's existing
-Worker Session.
+retry is a new Run. Worker IDs are Device-scoped, so durable references pair the
+Device ID and Worker ID. A related follow-up may resume that Device and adapter's
+existing Worker Session.
 
 ### Agent Adapter
 

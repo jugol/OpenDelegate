@@ -416,6 +416,172 @@ test("Claude Agent SDK uses isolated settings, fail-closed sandbox, exact author
   assert.equal(capturedOptions[1]?.["resume"], sessionId);
 });
 
+test("Claude Agent SDK bounds local child Agents without granting their actions extra authority", async () => {
+  const claudeHome = await createClaudeHome();
+  const decisions: string[] = [];
+  const sdk: ClaudeAgentSdkPort = {
+    query(input) {
+      return {
+        async *[Symbol.asyncIterator]() {
+          const canUseTool = input.options["canUseTool"] as (
+            name: string,
+            toolInput: Readonly<Record<string, unknown>>,
+            options: Readonly<Record<string, unknown>>,
+          ) => Promise<{ readonly behavior: string }>;
+          for (let index = 0; index < 5; index += 1) {
+            const decision = await canUseTool(
+              index % 2 === 0 ? "Agent" : "Task",
+              { description: `private-child-${index + 1}` },
+              {
+                signal: new AbortController().signal,
+                toolUseID: `native-child-${index + 1}`,
+              },
+            );
+            decisions.push(decision.behavior);
+          }
+          yield { type: "system", subtype: "init", session_id: sessionId };
+          yield {
+            type: "command_lifecycle",
+            session_id: sessionId,
+            command_id: "private-provider-command-id",
+            status: "started",
+          };
+          yield {
+            type: "task_started",
+            session_id: sessionId,
+            task_id: "private-provider-task-id",
+            description: "private child description",
+          };
+          yield {
+            type: "task_updated",
+            session_id: sessionId,
+            task_id: "private-provider-task-id",
+          };
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            session_id: sessionId,
+            result: "Finished bounded delegation.",
+          };
+        },
+      };
+    },
+  };
+  const adapter = new ClaudeAgentSdkAdapter({
+    claudeHome,
+    sdk,
+    hostPlatform: "linux",
+    authExecutable: process.execPath,
+    authPrefixArgs: [fixturePath, "claude"],
+  });
+  const cwd = await realpath(process.cwd());
+  const handle = await adapter.start({
+    operation: "start",
+    requestId: "request-claude-native-subagents",
+    runId: "run-claude-native-subagents",
+    taskId: "task-claude-native-subagents",
+    workstreamId: "implementation",
+    sessionKey: "task-claude-native-subagents/implementation",
+    deviceId: "device-linux",
+    prompt: "Delegate independent local checks.",
+    workspace: {
+      workspaceId: "workspace-claude-native-subagents",
+      cwd,
+      isolation: "none",
+    },
+    sandbox: "workspace-write",
+    permissions: {
+      mode: "allow-listed",
+      allowedTools: ["Agent", "Task"],
+      actionAuthorization: {
+        authorizeAndConsume: async () => {
+          throw new Error("Delegation itself must not request expanded authority.");
+        },
+      },
+    },
+    limits,
+  });
+  const events: NormalizedAgentEvent[] = [];
+  for await (const event of handle.events) {
+    events.push(event);
+  }
+  const result = await handle.result;
+
+  assert.equal(result.status, "succeeded");
+  assert.deepEqual(decisions, ["allow", "allow", "allow", "allow", "deny"]);
+  assert.ok(events.some((event) => event.type === "progress" && event.message.includes("(4/4)")));
+  assert.equal(JSON.stringify(events).includes("private child description"), false);
+  assert.equal(JSON.stringify(events).includes("private-provider-task-id"), false);
+});
+
+test("Claude Agent SDK preserves a terminal failure when transport cleanup throws", async () => {
+  const claudeHome = await createClaudeHome();
+  const adapter = new ClaudeAgentSdkAdapter({
+    claudeHome,
+    hostPlatform: "linux",
+    authExecutable: process.execPath,
+    authPrefixArgs: [fixturePath, "claude"],
+    sdk: {
+      query() {
+        return {
+          [Symbol.asyncIterator]() {
+            let emittedTerminalResult = false;
+            return {
+              async next(): Promise<IteratorResult<unknown>> {
+                if (emittedTerminalResult) {
+                  return { done: true, value: undefined };
+                }
+                emittedTerminalResult = true;
+                return {
+                  done: false,
+                  value: {
+                    type: "result",
+                    subtype: "error_during_execution",
+                    is_error: true,
+                    session_id: sessionId,
+                    errors: ["Sandbox required but unavailable."],
+                  },
+                };
+              },
+              async return(): Promise<IteratorResult<unknown>> {
+                throw new Error("SDK transport closed after the terminal result.");
+              },
+            };
+          },
+        };
+      },
+    },
+  });
+  const cwd = await realpath(process.cwd());
+  const handle = await adapter.start({
+    operation: "start",
+    requestId: "request-claude-terminal-cleanup",
+    runId: "run-claude-terminal-cleanup",
+    taskId: "task-claude-terminal-cleanup",
+    workstreamId: "implementation",
+    sessionKey: "task-claude-terminal-cleanup/implementation",
+    deviceId: "device-linux",
+    prompt: "Check runtime readiness.",
+    workspace: {
+      workspaceId: "workspace-claude-terminal-cleanup",
+      cwd,
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+  for await (const event of handle.events) {
+    void event;
+  }
+  const result = await handle.result;
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.error?.code, "CLAUDE_TURN_FAILED");
+  assert.equal(result.error?.message, "Sandbox required but unavailable.");
+});
+
 test("Claude Agent SDK supports reasoning-only turns by denying every native tool", async () => {
   const claudeHome = await createClaudeHome();
   let observedTools: unknown;
@@ -507,6 +673,57 @@ test("Claude Agent SDK refuses native Windows because its required sandbox canno
   // No version and no sign-in changes this, so the adapter asks not to be advertised
   // rather than occupy a row that can only ever read "incompatible".
   assert.equal(probe.unsupportedOnDevice, true);
+});
+
+test("Claude Agent SDK reports missing Linux sandbox executables before a Run starts", async () => {
+  const adapter = new ClaudeAgentSdkAdapter({
+    claudeHome: await createClaudeHome(),
+    hostPlatform: "linux",
+    sdk: { query: () => ({ async *[Symbol.asyncIterator]() {} }) },
+    authExecutable: process.execPath,
+    authPrefixArgs: [fixturePath, "claude"],
+    sandboxDependencyProbe: async () => ["socat"],
+  });
+  const probe = await adapter.probe();
+
+  assert.equal(probe.installed, true);
+  assert.equal(probe.compatibility, "incompatible");
+  assert.ok(
+    probe.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === "CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE" &&
+        diagnostic.message.includes("bubblewrap and socat"),
+    ),
+  );
+});
+
+test("Claude Agent SDK rejects a Linux sandbox whose nested user namespace is blocked", async () => {
+  const adapter = new ClaudeAgentSdkAdapter({
+    claudeHome: await createClaudeHome(),
+    hostPlatform: "linux",
+    sdk: {
+      query() {
+        throw new Error("query must not start");
+      },
+    },
+    authExecutable: process.execPath,
+    authPrefixArgs: [fixturePath, "claude"],
+    sandboxDependencyProbe: async () => [],
+    sandboxRuntimeProbe: async () => false,
+  });
+
+  const probe = await adapter.probe({
+    secretEnvironment: { ANTHROPIC_API_KEY: "fixture-api-key" },
+  });
+
+  assert.equal(probe.compatibility, "incompatible");
+  assert.ok(
+    probe.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.code === "CLAUDE_SANDBOX_RUNTIME_UNAVAILABLE" &&
+        diagnostic.message.includes("nested user namespace"),
+    ),
+  );
 });
 
 test("Claude Agent SDK stays advertisable off native Windows even when the package is missing", async () => {

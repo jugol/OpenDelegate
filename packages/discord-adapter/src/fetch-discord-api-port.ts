@@ -454,6 +454,12 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     }
   }
 
+  public async deleteMessage(input: { threadId: string; messageId: string }): Promise<void> {
+    assertSnowflake(input.threadId, "Discord thread ID");
+    assertSnowflake(input.messageId, "Discord message ID");
+    await this.#botJson("DELETE", `/channels/${input.threadId}/messages/${input.messageId}`);
+  }
+
   public async acknowledgeMessage(input: { threadId: string; messageId: string }): Promise<{
     readonly reactionVisible: boolean;
     readonly typingVisible: boolean;
@@ -548,6 +554,33 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
             entry.interactionToken,
           )}/messages/@original`,
           body: payload,
+          authenticated: false,
+        });
+      });
+    } catch (error) {
+      if (error instanceof DiscordApiError) {
+        throw error;
+      }
+      throw invalidResponse("The interaction token vault could not resolve a follow-up reference.");
+    }
+    if (!result.found) {
+      throw new DiscordApiError(
+        "NOT_FOUND",
+        "The deferred Discord interaction is no longer available.",
+      );
+    }
+  }
+
+  public async deleteDeferredInteraction(input: { responseRef: string }): Promise<void> {
+    assertResponseReference(input.responseRef);
+    let result: { readonly found: false } | { readonly found: true; readonly value: unknown };
+    try {
+      result = await this.#interactionTokenVault.use(input.responseRef, async (entry) => {
+        await this.#json({
+          method: "DELETE",
+          path: `/webhooks/${entry.applicationId}/${encodeURIComponent(
+            entry.interactionToken,
+          )}/messages/@original`,
           authenticated: false,
         });
       });

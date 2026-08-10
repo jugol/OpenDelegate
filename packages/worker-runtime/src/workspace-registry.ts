@@ -228,6 +228,9 @@ export class SqliteWorkspaceRegistry {
           "The Workspace metadata changed concurrently.",
         );
       }
+      if (isolation === "opendelegate-worktree" && current.type !== "git") {
+        throw invalidWorkspace();
+      }
       assertCurrentPath(row);
       const updated = freezeRecord({
         ...current,

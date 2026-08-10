@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   type AgentAdapter,
   type AgentAdapterProbe,
+  type AgentModelCatalog,
   type AgentResumeRequest,
   type AgentRunHandle,
   type AgentRunLimits,
@@ -196,11 +197,13 @@ function assignment(
 function executionContext(
   value: WorkerRunAssignmentV1,
   isLeaseCurrent: () => Promise<boolean> = () => Promise.resolve(true),
+  reportProgress?: NonNullable<RunExecutionContext["reportProgress"]>,
 ): RunExecutionContext {
   return {
     assignment: value,
     leaseAuthority: staticLeaseAuthority(value.leaseExpiresAtMs, isLeaseCurrent),
     isLeaseCurrent,
+    ...(reportProgress === undefined ? {} : { reportProgress }),
   };
 }
 
@@ -218,12 +221,13 @@ function staticLeaseAuthority(
   };
 }
 
-function executionPlan(prompt: string): WorkerAgentExecutionPlan {
+function executionPlan(prompt: string, deterministicContext?: string): WorkerAgentExecutionPlan {
   return {
     provider: "codex",
     adapterId: "codex-fixture",
     workstreamId: "repository-inspection",
     prompt,
+    ...(deterministicContext === undefined ? {} : { deterministicContext }),
     sandbox: "read-only",
     permissions: {
       mode: "deny",
@@ -233,7 +237,7 @@ function executionPlan(prompt: string): WorkerAgentExecutionPlan {
 }
 
 class RecordingAdapter implements AgentAdapter {
-  public readonly adapterId = "codex-fixture";
+  public readonly adapterId: string;
   public readonly provider = "codex" as const;
   public readonly starts: AgentStartRequest[] = [];
   public readonly resumes: AgentResumeRequest[] = [];
@@ -245,7 +249,9 @@ class RecordingAdapter implements AgentAdapter {
   public constructor(
     workspacePath: string,
     handleFactory?: (request: AgentStartRequest | AgentResumeRequest) => AgentRunHandle,
+    adapterId = "codex-fixture",
   ) {
+    this.adapterId = adapterId;
     this.#workspacePath = workspacePath;
     this.#handleFactory = handleFactory;
   }
@@ -270,6 +276,20 @@ class RecordingAdapter implements AgentAdapter {
         workspaceIsolation: ["none"],
       },
       diagnostics: [],
+    });
+  }
+
+  public listModels(): Promise<AgentModelCatalog> {
+    return Promise.resolve({
+      observedAt: "2026-07-25T00:00:00.000Z",
+      models: [
+        {
+          modelId: "gpt-fixture",
+          displayName: "GPT Fixture",
+          isDefault: true,
+          supportedEfforts: ["high"],
+        },
+      ],
     });
   }
 
@@ -298,7 +318,7 @@ class RecordingAdapter implements AgentAdapter {
     request: AgentStartRequest | AgentResumeRequest,
     nativeSessionId: string,
   ): AgentRunHandle {
-    const session = nativeSessionFor(request, this.#workspacePath, nativeSessionId);
+    const session = nativeSessionFor(request, this.#workspacePath, nativeSessionId, this.adapterId);
     return {
       events: events([
         {
@@ -348,6 +368,7 @@ function nativeSessionFor(
   request: AgentStartRequest | AgentResumeRequest,
   workspacePath: string,
   nativeSessionId = "native-session-release",
+  adapterId = "codex-fixture",
 ): NativeSessionReference {
   const continuation = request.operation === "start" ? request.continuationOf : undefined;
   const continuationReason = request.operation === "start" ? request.continuationReason : undefined;
@@ -357,8 +378,10 @@ function nativeSessionFor(
   return {
     schemaVersion: 1,
     provider: "codex",
-    adapterId: "codex-fixture",
+    adapterId,
     adapterVersion: "1.2.3",
+    ...(request.modelId === undefined ? {} : { modelId: request.modelId }),
+    ...(request.effort === undefined ? {} : { effort: request.effort }),
     nativeSessionId,
     sessionKey: request.sessionKey,
     taskId: request.taskId,
@@ -515,6 +538,74 @@ test("an assignment Agent requirement cannot be silently substituted and reports
     assert.equal(JSON.stringify(outcome.agentSession).includes("sessionKey"), false);
     assert.equal(JSON.stringify(outcome.agentSession).includes("cwd"), false);
     assert.equal(JSON.stringify(outcome.agentSession).includes("worktreePath"), false);
+  } finally {
+    sessionStore.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an explicit model and effort survive Worker session validation and persistence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-agent-model-"));
+  const checkout = join(root, "checkout");
+  const runtimeDirectory = join(root, "runtime");
+  const workspaceDirectory = join(root, "workspace");
+  await Promise.all([
+    mkdir(checkout, { recursive: true }),
+    mkdir(runtimeDirectory, { recursive: true }),
+    mkdir(workspaceDirectory, { recursive: true }),
+  ]);
+  const workspacePath = await realpath(workspaceDirectory);
+  const adapter = new RecordingAdapter(workspacePath);
+  const sessionStore = new SqliteNativeSessionReferenceStore({
+    filename: join(runtimeDirectory, "worker.sqlite"),
+    sourceCheckoutDirectory: checkout,
+  });
+  const factory = new AgentRunProcessFactory({
+    adapters: [adapter],
+    sessionStore,
+    executionPlanResolver: {
+      resolve: ({ assignment: current }) =>
+        Promise.resolve({
+          ...executionPlan(current.workOrder.brief),
+          modelId: "gpt-fixture",
+          effort: "high",
+        }),
+    },
+    workspaceResolver: {
+      resolve: () =>
+        Promise.resolve({
+          workspaceId: "workspace-repository",
+          cwd: workspacePath,
+          isolation: "none",
+        }),
+    },
+  });
+
+  try {
+    const process = await factory.start(
+      executionContext(
+        assignment("run-model-bound", "work-order-model-bound", {
+          agentRequirement: {
+            provider: "codex",
+            adapterId: "codex-fixture",
+            modelId: "gpt-fixture",
+            effort: "high",
+            allowedCompatibilities: ["tested"],
+          },
+        }),
+      ),
+    );
+    const outcome = await process.completion;
+
+    assert.equal(outcome.status, "succeeded");
+    assert.equal(outcome.agentSession?.modelId, "gpt-fixture");
+    assert.equal(outcome.agentSession?.effort, "high");
+    const request = adapter.starts[0]!;
+    assert.equal(request.modelId, "gpt-fixture");
+    assert.equal(request.effort, "high");
+    const stored = await sessionStore.load(request.sessionKey);
+    assert.equal(stored?.modelId, "gpt-fixture");
+    assert.equal(stored?.effort, "high");
   } finally {
     sessionStore.close();
     await rm(root, { recursive: true, force: true });
@@ -801,7 +892,7 @@ test("ephemeral Run capability servers are disposed after the exact Agent turn",
     mkdir(workspaceDirectory, { recursive: true }),
   ]);
   const workspacePath = await realpath(workspaceDirectory);
-  const adapter = new RecordingAdapter(workspacePath);
+  const adapter = new RecordingAdapter(workspacePath, undefined, "codex-app-server");
   const sessionStore = new SqliteNativeSessionReferenceStore({
     filename: join(runtimeDirectory, "worker.sqlite"),
     sourceCheckoutDirectory: checkout,
@@ -824,39 +915,43 @@ test("ephemeral Run capability servers are disposed after the exact Agent turn",
         planAuthorityCurrent = await isExecutionCurrent();
         return {
           ...executionPlan(current.workOrder.brief),
+          adapterId: "codex-app-server",
           permissions: {
             mode: "allow-listed",
-            allowedTools: ["Read"],
+            allowedTools: ["Read", "Agent"],
             actionAuthorization,
           },
         };
       },
     },
-    runCapabilityProvider: {
-      prepare(context) {
-        prepared += 1;
-        assert.equal(context.assignment.runId, "run-capability");
-        return Promise.resolve({
-          toolServers: [
-            {
-              serverName: "opendelegate_computer_use",
-              command: process.execPath,
-              args: [
-                "opendelegate-worker-tools.mjs",
-                "--capability-file",
-                join(runtimeDirectory, "capability.json"),
-              ],
-              enabledTools: ["computer_use_capture"],
-              startupTimeoutMs: 5_000,
-              toolTimeoutMs: 30_000,
+    runCapabilityProvider: new CompositeWorkerRunCapabilityProvider([
+      {
+        prepare(context) {
+          prepared += 1;
+          assert.equal(context.assignment.runId, "run-capability");
+          assert.equal(context.maxConcurrentConnections, 5);
+          return Promise.resolve({
+            toolServers: [
+              {
+                serverName: "opendelegate_computer_use",
+                command: process.execPath,
+                args: [
+                  "opendelegate-worker-tools.mjs",
+                  "--capability-file",
+                  join(runtimeDirectory, "capability.json"),
+                ],
+                enabledTools: ["computer_use_capture"],
+                startupTimeoutMs: 5_000,
+                toolTimeoutMs: 30_000,
+              },
+            ],
+            async dispose() {
+              disposed += 1;
             },
-          ],
-          async dispose() {
-            disposed += 1;
-          },
-        });
+          });
+        },
       },
-    },
+    ]),
     workspaceResolver: {
       resolve: () =>
         Promise.resolve({
@@ -880,6 +975,7 @@ test("ephemeral Run capability servers are disposed after the exact Agent turn",
     );
     assert.deepEqual(adapter.starts[0]?.permissions.allowedTools, [
       "Read",
+      "Agent",
       "mcp__opendelegate_computer_use__computer_use_capture",
     ]);
     assert.equal(adapter.starts[0]?.permissions.actionAuthorization, actionAuthorization);
@@ -1389,7 +1485,13 @@ test("a related follow-up starts an explicit bounded continuation when native re
     adapters: [adapter],
     sessionStore,
     executionPlanResolver: {
-      resolve: ({ assignment: current }) => Promise.resolve(executionPlan(current.workOrder.brief)),
+      resolve: ({ assignment: current }) =>
+        Promise.resolve(
+          executionPlan(
+            current.workOrder.brief,
+            "## Deterministic Worker context\n- OS family: windows\n- Workspace isolation: opendelegate-worktree",
+          ),
+        ),
     },
     workspaceResolver: {
       resolve: () =>
@@ -1425,6 +1527,8 @@ test("a related follow-up starts an explicit bounded continuation when native re
     assert.match(request?.prompt ?? "", /Durable checkpoint continuation package/u);
     assert.match(request?.prompt ?? "", /"workOrderId":"work-continuation"/u);
     assert.match(request?.prompt ?? "", /Authoritative public continuation message/u);
+    assert.match(request?.prompt ?? "", /Deterministic Worker context/u);
+    assert.match(request?.prompt ?? "", /Workspace isolation: opendelegate-worktree/u);
     assert.match(request?.prompt ?? "", /"checkpointHash":"sha256:[0-9a-f]{64}"/u);
     assert.doesNotMatch(request?.prompt ?? "", /PRIVATE-KNOWLEDGE-SENTINEL/u);
     assert.doesNotMatch(request?.prompt ?? "", /C:\\Users\\worker/u);
@@ -1805,6 +1909,7 @@ test("public reports are bounded and redact local Secret values and common encod
   const workspacePath = await realpath(workspaceDirectory);
   const secret = "owner-token+/=private";
   const encoded = Buffer.from(secret).toString("base64");
+  const progressKinds: string[] = [];
   const adapter = new RecordingAdapter(workspacePath, (request) => {
     const session = nativeSessionFor(request, workspacePath);
     return {
@@ -1832,6 +1937,20 @@ test("public reports are bounded and redact local Secret values and common encod
         },
         {
           sequence: 4,
+          observedAt: "2026-07-25T00:00:01.000Z",
+          type: "approval_request",
+          requestId: "approval-safe-progress",
+          actionType: "package.install",
+          summary: "PRIVATE_APPROVAL_SUMMARY",
+        },
+        {
+          sequence: 5,
+          observedAt: "2026-07-25T00:00:01.000Z",
+          type: "progress",
+          message: `Checking the build with ${secret}`,
+        },
+        {
+          sequence: 6,
           observedAt: "2026-07-25T00:00:01.000Z",
           type: "public_message",
           role: "assistant",
@@ -1878,7 +1997,13 @@ test("public reports are bounded and redact local Secret values and common encod
 
   try {
     const process = await factory.start(
-      executionContext(assignment("run-redact", "work-order-redact")),
+      executionContext(
+        assignment("run-redact", "work-order-redact"),
+        () => Promise.resolve(true),
+        async ({ kind }) => {
+          progressKinds.push(kind);
+        },
+      ),
     );
     const outcome = await process.completion;
     assert.equal(outcome.status, "succeeded");
@@ -1890,6 +2015,7 @@ test("public reports are bounded and redact local Secret values and common encod
     assert.equal(outcome.report.includes("PRIVATE_DELTA"), false);
     assert.equal(outcome.report.includes("PRIVATE_TOOL_INPUT"), false);
     assert.equal(outcome.report.endsWith("[Report truncated by OpenDelegate.]"), true);
+    assert.deepEqual(progressKinds, ["using-tools", "waiting-approval", "verifying"]);
   } finally {
     sessionStore.close();
     await rm(root, { recursive: true, force: true });

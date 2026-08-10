@@ -67,7 +67,12 @@ export class SqlDeviceChannelRepository implements DeviceChannelRepository {
 
   private constructor(context: SqlDatabaseContext, retryPolicy: SqlRetryPolicy) {
     this.#context = context;
-    this.#transactions = new SqlTransactionRunner(context.database, context.backend, retryPolicy);
+    this.#transactions = new SqlTransactionRunner(
+      context.database,
+      context.backend,
+      retryPolicy,
+      context.writeCoordinator,
+    );
   }
 
   public static async openSqlite(
@@ -111,6 +116,35 @@ export class SqlDeviceChannelRepository implements DeviceChannelRepository {
         );
       }
       if (generation > state.certificateGeneration) {
+        if (input.resetForRecredential === true) {
+          await transaction
+            .deleteFrom("od_device_channel_inbound_effect")
+            .where("device_id", "=", deviceId)
+            .execute();
+          await transaction
+            .deleteFrom("od_device_channel_inbox")
+            .where("device_id", "=", deviceId)
+            .execute();
+          await transaction
+            .deleteFrom("od_device_channel_outbox")
+            .where("device_id", "=", deviceId)
+            .execute();
+          const reset = await transaction
+            .updateTable("od_device_channel_state")
+            .set({
+              certificate_generation: generation,
+              last_worker_sequence: 0,
+              acknowledged_main_sequence: 0,
+              next_main_sequence: 1,
+            })
+            .where("device_id", "=", deviceId)
+            .where("certificate_generation", "=", state.certificateGeneration)
+            .executeTakeFirst();
+          if (reset.numUpdatedRows !== 1n) {
+            throw corruptState();
+          }
+          return;
+        }
         const result = await transaction
           .updateTable("od_device_channel_state")
           .set({ certificate_generation: generation })

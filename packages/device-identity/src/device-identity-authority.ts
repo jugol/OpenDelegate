@@ -124,6 +124,11 @@ export interface ValidatePeerIdentity {
   readonly claimedDeviceId: string;
 }
 
+export interface RecredentialedDeviceGeneration {
+  readonly deviceId: string;
+  readonly certificateGeneration: number;
+}
+
 export interface AuthenticatedDevicePeer {
   readonly deviceId: string;
   readonly serialNumber: string;
@@ -997,9 +1002,10 @@ export class DeviceIdentityAuthority {
       }
       const certificates = await transaction.listDeviceCertificates(deviceId);
       const previous = certificates.find(
-        (candidate) => candidate.generation === device.identityGeneration,
+        (candidate) =>
+          candidate.generation === device.identityGeneration && candidate.status === "active",
       );
-      if (previous === undefined || previous.status !== "active" || now >= previous.notAfter) {
+      if (previous === undefined || now >= previous.notAfter) {
         throw rotationInvalid();
       }
       const overlapEndsAt = Math.min(
@@ -1241,6 +1247,26 @@ export class DeviceIdentityAuthority {
         publicKeySpkiSha256: persisted.publicKeySpkiSha256,
       });
     });
+  }
+
+  /**
+   * Distinguishes an owner-approved replacement identity from routine certificate
+   * rotation. Channel transports use this durable audit fact to start a fresh
+   * per-credential epoch only for re-credentialing.
+   */
+  public async generationWasRecredentialed(
+    request: RecredentialedDeviceGeneration,
+  ): Promise<boolean> {
+    const deviceId = validateDeviceId(request.deviceId);
+    const certificateGeneration = validateCertificateGeneration(request.certificateGeneration);
+    return this.repository.transaction(async (transaction) =>
+      (await transaction.listAuditRecords()).some(
+        (record) =>
+          record.event === "device.recredentialed" &&
+          record.deviceId === deviceId &&
+          record.certificateGeneration === certificateGeneration,
+      ),
+    );
   }
 }
 
@@ -1501,6 +1527,16 @@ function validateProtocolVersion(value: number): number {
     throw new DeviceIdentityError(
       "IDENTITY_CONFIGURATION_INVALID",
       "Protocol versions must be positive 16-bit integers.",
+    );
+  }
+  return value;
+}
+
+function validateCertificateGeneration(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new DeviceIdentityError(
+      "IDENTITY_CONFIGURATION_INVALID",
+      "Certificate generations must be positive safe integers.",
     );
   }
   return value;

@@ -34,6 +34,7 @@ import {
   type RunProcessOutcome,
   type WorkerRunAssignmentV1,
   type WorkerRunLeaseAuthority,
+  type WorkerRunProgressKindV1,
 } from "./contracts.ts";
 import type { NativeSessionReferenceStore } from "./native-session-reference-store.ts";
 import type { NativeSessionSteeringInstruction } from "./native-session-reference-store.ts";
@@ -51,6 +52,13 @@ export interface WorkerAgentExecutionPlan {
   readonly effort?: string;
   readonly workstreamId: string;
   readonly prompt: string;
+  /**
+   * Small, non-secret facts that are authoritative for this exact Worker Run.
+   * They are appended on start, resume, and checkpoint continuation so an Agent
+   * does not spend tools or request privilege merely to rediscover its Device,
+   * release, binding, or Workspace isolation.
+   */
+  readonly deterministicContext?: string;
   readonly sandbox: AgentSandbox;
   readonly permissions: AgentPermissionInput;
   readonly toolServers?: readonly AgentToolServer[];
@@ -102,6 +110,8 @@ export interface WorkerRunCapabilityProvider {
      * before returning them to the native Agent.
      */
     readonly egressGuard: WorkerEgressGuard;
+    /** Parent plus bounded provider-native child sessions, or one otherwise. */
+    readonly maxConcurrentConnections?: number;
     readonly leaseAuthority: WorkerRunLeaseAuthority;
     readonly artifact?: {
       readonly plan: WorkerArtifactOutputPlan;
@@ -140,6 +150,7 @@ export class CompositeWorkerRunCapabilityProvider implements WorkerRunCapability
     readonly assignment: WorkerRunAssignmentV1;
     readonly workspace: WorkspaceBinding;
     readonly egressGuard: WorkerEgressGuard;
+    readonly maxConcurrentConnections?: number;
     readonly leaseAuthority: WorkerRunLeaseAuthority;
     readonly artifact?: {
       readonly plan: WorkerArtifactOutputPlan;
@@ -154,6 +165,9 @@ export class CompositeWorkerRunCapabilityProvider implements WorkerRunCapability
           assignment: structuredClone(context.assignment),
           workspace: cloneWorkspace(context.workspace),
           egressGuard: context.egressGuard,
+          ...(context.maxConcurrentConnections === undefined
+            ? {}
+            : { maxConcurrentConnections: context.maxConcurrentConnections }),
           leaseAuthority: context.leaseAuthority,
           ...(context.artifact === undefined
             ? {}
@@ -335,10 +349,15 @@ export class AgentRunProcessFactory implements RunProcessFactory {
             prepared.plan.environment,
             prepared.plan.secretEnvironment,
           );
-    const basePrompt =
+    const basePromptWithoutContext =
       sessionAction.kind === "continuation"
         ? buildWorkerContinuationPrompt(context.assignment, this.#limits.maxPromptBytes)
         : prepared.plan.prompt;
+    const basePrompt = appendDeterministicRunContext(
+      basePromptWithoutContext,
+      prepared.plan.deterministicContext,
+      this.#limits.maxPromptBytes,
+    );
     const promptWithSteering = appendPendingSteeringInstructions(
       basePrompt,
       prepared.pendingSteering,
@@ -351,6 +370,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
     const environment = prepared.plan.environment;
     const capabilityLease = await this.#prepareRunCapabilities(
       context,
+      prepared.plan,
       prepared.workspace,
       prepared.egressGuard,
       artifactPlan,
@@ -454,6 +474,8 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       expected: {
         provider: prepared.plan.provider,
         adapterId: prepared.plan.adapterId,
+        ...(prepared.plan.modelId === undefined ? {} : { modelId: prepared.plan.modelId }),
+        ...(prepared.plan.effort === undefined ? {} : { effort: prepared.plan.effort }),
         sessionKey: prepared.sessionKey,
         taskId: context.assignment.taskId,
         workstreamId: prepared.plan.workstreamId,
@@ -482,6 +504,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
 
   async #prepareRunCapabilities(
     context: RunExecutionContext,
+    plan: WorkerAgentExecutionPlan,
     workspace: WorkspaceBinding,
     egressGuard: WorkerEgressGuard,
     artifactPlan: WorkerArtifactOutputPlan | undefined,
@@ -495,6 +518,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
         assignment: structuredClone(context.assignment),
         workspace: cloneWorkspace(workspace),
         egressGuard,
+        maxConcurrentConnections: runCapabilityConnectionLimit(plan),
         leaseAuthority: context.leaseAuthority,
         ...(artifactPlan === undefined
           ? {}
@@ -609,6 +633,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       adapter,
       immutableAssignment.agentRequirement,
       plan.modelId,
+      plan.effort,
       plan.environment,
       plan.secretEnvironment,
     );
@@ -619,6 +644,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       provider: plan.provider,
       adapterId: plan.adapterId,
       ...(plan.modelId === undefined ? {} : { modelId: plan.modelId }),
+      ...(plan.effort === undefined ? {} : { effort: plan.effort }),
       workspaceId: workspace.workspaceId,
     });
     let session: NativeSessionReference | undefined;
@@ -656,6 +682,7 @@ export class AgentRunProcessFactory implements RunProcessFactory {
         provider: plan.provider,
         adapterId: plan.adapterId,
         ...(plan.modelId === undefined ? {} : { modelId: plan.modelId }),
+        ...(plan.effort === undefined ? {} : { effort: plan.effort }),
         sessionKey,
         taskId: assignment.taskId,
         workstreamId: plan.workstreamId,
@@ -1205,6 +1232,16 @@ class AdapterRunProcess implements RunProcess {
         await this.#persistSession(event.session);
       } else if (event.type === "public_message") {
         this.#collector.add(event.text);
+      } else if (event.type === "tool_request" && this.#context.reportProgress !== undefined) {
+        await this.#context
+          .reportProgress({ kind: classifyToolProgress(event.toolName) })
+          .catch(() => undefined);
+      } else if (event.type === "approval_request" && this.#context.reportProgress !== undefined) {
+        await this.#context.reportProgress({ kind: "waiting-approval" }).catch(() => undefined);
+      } else if (event.type === "progress" && this.#context.reportProgress !== undefined) {
+        await this.#context
+          .reportProgress({ kind: classifyProgress(event.message) })
+          .catch(() => undefined);
       } else if (event.type === "usage") {
         this.#latestUsage = event.usage;
       }
@@ -1225,10 +1262,70 @@ class AdapterRunProcess implements RunProcess {
   }
 }
 
+function classifyProgress(value: string): WorkerRunProgressKindV1 {
+  const normalized = typeof value === "string" ? value.toLocaleLowerCase("en-US") : "";
+  if (normalized.includes("knowledge")) {
+    return "consulting-knowledge";
+  }
+  if (
+    normalized.includes("child agent") ||
+    normalized.includes("subagent") ||
+    normalized.includes("delegat")
+  ) {
+    return "delegating";
+  }
+  if (
+    normalized.includes("verify") ||
+    normalized.includes("validat") ||
+    normalized.includes("test") ||
+    normalized.includes("check")
+  ) {
+    return "verifying";
+  }
+  if (
+    normalized.includes("tool") ||
+    normalized.includes("command") ||
+    normalized.includes("operation") ||
+    normalized.includes("build") ||
+    normalized.includes("install") ||
+    normalized.includes("deploy") ||
+    normalized.includes("upload") ||
+    normalized.includes("download")
+  ) {
+    return "using-tools";
+  }
+  return "working";
+}
+
+function classifyToolProgress(toolName: string): WorkerRunProgressKindV1 {
+  const normalized = toolName.toLocaleLowerCase("en-US");
+  if (normalized.includes("knowledge")) {
+    return "consulting-knowledge";
+  }
+  if (
+    normalized.includes("subagent") ||
+    normalized.includes("child_agent") ||
+    normalized.includes("delegate") ||
+    normalized.includes("spawn_agent")
+  ) {
+    return "delegating";
+  }
+  if (
+    normalized.includes("verify") ||
+    normalized.includes("validate") ||
+    normalized.includes("test") ||
+    normalized.includes("check")
+  ) {
+    return "verifying";
+  }
+  return "using-tools";
+}
+
 interface SessionBinding {
   readonly provider: AgentProvider;
   readonly adapterId: string;
   readonly modelId?: string;
+  readonly effort?: string;
   readonly sessionKey: string;
   readonly taskId: string;
   readonly workstreamId: string;
@@ -1242,6 +1339,7 @@ function assertSessionBinding(session: NativeSessionReference, expected: Session
     session.provider !== expected.provider ||
     session.adapterId !== expected.adapterId ||
     session.modelId !== expected.modelId ||
+    session.effort !== expected.effort ||
     session.sessionKey !== expected.sessionKey ||
     session.taskId !== expected.taskId ||
     session.workstreamId !== expected.workstreamId ||
@@ -1327,6 +1425,7 @@ async function assertAgentRequirementAvailable(
   adapter: AgentAdapter,
   requirement: WorkerAgentRequirementV1 | undefined,
   modelId?: string,
+  effort?: string,
   environment?: Readonly<Record<string, string>>,
   secretEnvironment?: Readonly<Record<string, string>>,
 ): Promise<void> {
@@ -1336,7 +1435,8 @@ async function assertAgentRequirementAvailable(
   if (
     adapter.provider !== requirement.provider ||
     (requirement.adapterId !== undefined && adapter.adapterId !== requirement.adapterId) ||
-    (requirement.modelId !== undefined && modelId !== requirement.modelId)
+    (requirement.modelId !== undefined && modelId !== requirement.modelId) ||
+    (requirement.effort !== undefined && effort !== requirement.effort)
   ) {
     throw agentRequirementUnavailable();
   }
@@ -1377,9 +1477,16 @@ async function assertAgentRequirementAvailable(
     } catch {
       throw agentRequirementUnavailable();
     }
-    if (!catalog.models.some((model) => model.modelId === requirement.modelId)) {
+    const model = catalog.models.find((candidate) => candidate.modelId === requirement.modelId);
+    if (
+      model === undefined ||
+      (requirement.effort !== undefined &&
+        !(model.supportedEfforts ?? []).includes(requirement.effort))
+    ) {
       throw agentRequirementUnavailable();
     }
+  } else if (requirement.effort !== undefined) {
+    throw agentRequirementUnavailable();
   }
 }
 
@@ -1399,6 +1506,7 @@ function toWorkerAgentSessionObservation(
     adapterId: session.adapterId,
     adapterVersion: session.adapterVersion,
     ...(session.modelId === undefined ? {} : { modelId: session.modelId }),
+    ...(session.effort === undefined ? {} : { effort: session.effort }),
     nativeSessionId: session.nativeSessionId,
     workstreamId: session.workstreamId,
     workspaceId: session.workspaceId,
@@ -1673,6 +1781,11 @@ function validateExecutionPlan(
     plan.prompt.trim().length === 0 ||
     plan.prompt.includes("\0") ||
     Buffer.byteLength(plan.prompt, "utf8") > maxPromptBytes ||
+    (plan.deterministicContext !== undefined &&
+      (typeof plan.deterministicContext !== "string" ||
+        plan.deterministicContext.trim().length === 0 ||
+        plan.deterministicContext.includes("\0") ||
+        Buffer.byteLength(plan.deterministicContext, "utf8") > 16_384)) ||
     !isSandbox(plan.sandbox)
   ) {
     throw invalidExecutionPlan();
@@ -1682,6 +1795,24 @@ function validateExecutionPlan(
   validateAgentLimits(plan.limits);
   validateEnvironment(plan.environment);
   validateEnvironment(plan.secretEnvironment);
+}
+
+function appendDeterministicRunContext(
+  prompt: string,
+  context: string | undefined,
+  maximumBytes: number,
+): string {
+  if (context === undefined) {
+    return prompt;
+  }
+  const combined = `${prompt}\n\n${context}`;
+  if (Buffer.byteLength(combined, "utf8") > maximumBytes) {
+    throw new AgentRunBridgeError(
+      "INVALID_EXECUTION_PLAN",
+      "The bounded deterministic Worker context exceeds the Agent prompt limit.",
+    );
+  }
+  return combined;
 }
 
 function validateToolServers(toolServers: readonly AgentToolServer[] | undefined): void {
@@ -1925,9 +2056,10 @@ function createSessionKey(input: {
   readonly provider: AgentProvider;
   readonly adapterId: string;
   readonly modelId?: string;
+  readonly effort?: string;
   readonly workspaceId: string;
 }): string {
-  const version = input.modelId === undefined ? "v1" : "v2";
+  const version = input.effort !== undefined ? "v3" : input.modelId === undefined ? "v1" : "v2";
   const digest = createHash("sha256")
     .update(
       JSON.stringify([
@@ -1938,6 +2070,7 @@ function createSessionKey(input: {
         input.provider,
         input.adapterId,
         ...(input.modelId === undefined ? [] : [input.modelId]),
+        ...(input.effort === undefined ? [] : [input.effort]),
         input.workspaceId,
       ]),
     )
@@ -1952,6 +2085,17 @@ function cloneWorkspace(workspace: WorkspaceBinding): WorkspaceBinding {
     ...(workspace.worktreePath === undefined ? {} : { worktreePath: workspace.worktreePath }),
     isolation: workspace.isolation,
   };
+}
+
+function runCapabilityConnectionLimit(plan: WorkerAgentExecutionPlan): number {
+  const nativeAgentAdapter =
+    (plan.provider === "codex" && plan.adapterId === "codex-app-server") ||
+    (plan.provider === "claude" && plan.adapterId === "claude-agent-sdk");
+  const nativeAgentToolsAllowed =
+    plan.permissions.mode === "allow-listed" &&
+    (plan.permissions.allowedTools ?? []).some((tool) => tool === "Agent" || tool === "Task");
+  // The provider limit is one parent plus at most four native child Agents.
+  return nativeAgentAdapter && nativeAgentToolsAllowed ? 5 : 1;
 }
 
 function permissionsForRun(
@@ -2213,13 +2357,9 @@ class BoundedPublicReportCollector {
   }
 
   public add(value: string): void {
-    let redacted = this.#redactor.redact(value).replaceAll("\r\n", "\n").trim();
-    if (redacted.length === 0) {
+    const redacted = this.sanitize(value, this.#maxBytes);
+    if (redacted === undefined) {
       return;
-    }
-    const inspection = this.#egressGuard.inspectText(redacted);
-    if (!inspection.safe) {
-      redacted = withheldReportMarker(inspection.reason);
     }
     if (this.#messages.length >= this.#maxMessages) {
       this.#truncated = true;
@@ -2241,6 +2381,18 @@ class BoundedPublicReportCollector {
     if (selected !== redacted) {
       this.#truncated = true;
     }
+  }
+
+  public sanitize(value: string, maximumBytes: number): string | undefined {
+    let redacted = this.#redactor.redact(value).replaceAll("\r\n", "\n").trim();
+    if (redacted.length === 0) {
+      return undefined;
+    }
+    const inspection = this.#egressGuard.inspectText(redacted);
+    if (!inspection.safe) {
+      redacted = withheldReportMarker(inspection.reason);
+    }
+    return truncateUtf8(redacted, maximumBytes) || undefined;
   }
 
   public finish(finalText: string | undefined, fallback: string): string {

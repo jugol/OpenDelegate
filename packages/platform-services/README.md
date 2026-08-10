@@ -113,7 +113,10 @@ explicit.
 
 ## Security boundaries
 
-- Windows does not use `LocalSystem`; the core uses its restricted service SID.
+- Windows does not use `LocalSystem`; the core uses its non-admin virtual-service
+  SID with SCM SID type `UNRESTRICTED`. In SCM terminology this keeps the exact
+  service identity in the normal token so provider HTTPS and OS services remain
+  usable; it does not bypass Windows Firewall or grant administrative privileges.
 - Every Windows install/upgrade requires and verifies the local Worker's staged
   virtual-service Secret binding before the command journal is claimed or any host
   mutation occurs, including a Main with its co-located Worker.

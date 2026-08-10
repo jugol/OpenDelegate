@@ -35,6 +35,7 @@ interface CapabilityDescriptor {
   readonly token: string;
   readonly expiresAtMs: number;
   readonly maxFrameBytes: number;
+  readonly maxConcurrentConnections: number;
 }
 
 interface PendingRequest {
@@ -91,8 +92,10 @@ export async function consumeRunCapabilityFile(input: {
     }
     await handle.close();
     handle = undefined;
-    await unlink(input.filename);
     const descriptor = parseDescriptor(JSON.parse(bytes.toString("utf8")));
+    if (descriptor.maxConcurrentConnections === 1) {
+      await unlink(input.filename);
+    }
     if (descriptor.capability !== expectedCapability) {
       throw new RunCapabilityBrokerError("CAPABILITY_FILE_INVALID");
     }
@@ -340,6 +343,7 @@ function parseDescriptor(value: unknown): CapabilityDescriptor {
     "token",
     "expiresAtMs",
     "maxFrameBytes",
+    "maxConcurrentConnections",
   ]);
   if (record["schemaVersion"] !== RUN_CAPABILITY_PROTOCOL_VERSION) {
     throw new RunCapabilityBrokerError("CAPABILITY_FILE_INVALID");
@@ -363,7 +367,16 @@ function parseDescriptor(value: unknown): CapabilityDescriptor {
     token,
     expiresAtMs: requireTimestamp(record["expiresAtMs"]),
     maxFrameBytes: requireBoundedFrameBytes(record["maxFrameBytes"]),
+    maxConcurrentConnections: requireBoundedConnections(record["maxConcurrentConnections"]),
   };
+}
+
+function requireBoundedConnections(value: unknown): number {
+  const connections = requirePositiveInteger(value);
+  if (connections > 16) {
+    throw new RunCapabilityBrokerError("CAPABILITY_FILE_INVALID");
+  }
+  return connections;
 }
 
 function requireBoundedFrameBytes(value: unknown): number {

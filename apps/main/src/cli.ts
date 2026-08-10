@@ -1367,7 +1367,9 @@ export async function waitForShutdown(
   closeClaim?: () => Promise<void>,
 ): Promise<void> {
   await new Promise<void>((resolvePromise) => {
-    const watchStdin = process.env["OPENDELEGATE_TEST_EXIT_ON_STDIN_END"] === "1";
+    const watchStdin =
+      process.env["OPENDELEGATE_NATIVE_SERVICE"] === "1" ||
+      process.env["OPENDELEGATE_TEST_EXIT_ON_STDIN_END"] === "1";
     const stdinWasFlowing = process.stdin.readableFlowing === true;
     let triggered = false;
     const stop = (): void => {

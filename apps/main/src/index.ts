@@ -47,6 +47,7 @@ import {
   TaskExecutionCoordinator,
   TaskService,
   type TaskBudgetAdministrationPort,
+  type TaskExecutionActivitySnapshot,
   type TaskExecutionCoordinatorOptions,
   type TaskExecutor,
 } from "@opendelegate/task-service";
@@ -79,6 +80,7 @@ import {
   type MainArtifactRuntime,
 } from "./artifact-runtime.ts";
 import { DiscordArtifactPresentation } from "./discord-artifact-presentation.ts";
+import { DiscordActionApproval } from "./discord-action-approval.ts";
 import { DiscordBindingConfigurationLifecycle } from "./discord-binding-configuration-lifecycle.ts";
 import {
   DiscordBindingController,
@@ -831,6 +833,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
   let deviceChannel: ProductionMainDeviceChannelRuntime | undefined;
   let fleet: MainWorkerFleetProjection | undefined;
   let authoritativeWorkerExecutor: AuthoritativeWorkerTaskExecutor | undefined;
+  const pendingDiscordTaskActivity = new Map<string, TaskExecutionActivitySnapshot>();
   let mainSingletonOwnership: MainSingletonOwnership | undefined;
   let ownershipLossUnsubscribe: (() => void) | undefined;
   let closeAfterOwnershipLoss: (() => Promise<void>) | undefined;
@@ -999,6 +1002,9 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
         runAuthority: actionRunAuthority,
         clock,
         configuredPolicy: createConfigurationMainActionPolicy(runtimePolicy),
+        onApprovalChange: () => {
+          void discordBindingController?.runtime?.synchronizeNow().catch(() => undefined);
+        },
       });
       actionAuthorization.attachApprovalService(approvalRuntime.service);
       actionApprovalExecutor.bind(actionAuthorization);
@@ -1290,6 +1296,10 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             nextId: (kind) => `${kind}_${randomUUID()}`,
           },
           budget,
+          onActivityChange: (taskId, activity) => {
+            rememberDiscordTaskActivity(pendingDiscordTaskActivity, taskId, activity);
+            discordBindingController?.runtime?.observeTaskActivity(taskId, activity);
+          },
         });
         actionRunAuthority.bind(authoritativeWorkerExecutor);
         configuredTaskExecution = {
@@ -1387,6 +1397,14 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
     }
     const ownerDiscordStatusObserver = options.discord?.onStatusChange;
     const discordSecretStore = options.discord?.secretStore ?? managedSecretStore;
+    const discordTaskActivityExecutor = authoritativeWorkerExecutor;
+    const discordActionApproval = new DiscordActionApproval({
+      approvals: approvalRuntime.service,
+      listDevices: listMainOwnedDeviceDirectory,
+      onChanged: () => {
+        void discordBindingController?.runtime?.synchronizeNow().catch(() => undefined);
+      },
+    });
     discordBindingController = new DiscordBindingController<DiscordMainRuntime>({
       credentialCapability: async (alias) => {
         if (!secretIngest.hasAliasPurpose(alias, "discord-bot-token")) {
@@ -1413,6 +1431,41 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
               productVersion: options.build.version,
               database,
               tasks,
+              taskApproval: discordActionApproval,
+              ...(discordTaskActivityExecutor === undefined
+                ? {}
+                : {
+                    taskActivity: {
+                      activity: async (taskId: string) => {
+                        const bufferedActivity = pendingDiscordTaskActivity.get(taskId);
+                        pendingDiscordTaskActivity.delete(taskId);
+                        const activity =
+                          discordTaskActivityExecutor.activity(taskId) ?? bufferedActivity;
+                        if (activity === undefined) {
+                          return undefined;
+                        }
+                        const devices = await listMainOwnedDeviceDirectory().catch(() => []);
+                        const labels = new Map(
+                          devices.map((device) => [device.deviceId, device.name]),
+                        );
+                        return Object.freeze({
+                          ...activity,
+                          milestones: Object.freeze(
+                            activity.milestones.map((milestone) => {
+                              const deviceLabel =
+                                milestone.deviceId === undefined
+                                  ? undefined
+                                  : labels.get(milestone.deviceId);
+                              return Object.freeze({
+                                ...milestone,
+                                ...(deviceLabel === undefined ? {} : { deviceLabel }),
+                              });
+                            }),
+                          ),
+                        });
+                      },
+                    },
+                  }),
               ...(artifacts === undefined
                 ? {}
                 : {
@@ -3214,6 +3267,22 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+function rememberDiscordTaskActivity(
+  pending: Map<string, TaskExecutionActivitySnapshot>,
+  taskId: string,
+  activity: TaskExecutionActivitySnapshot,
+): void {
+  pending.delete(taskId);
+  pending.set(taskId, activity);
+  while (pending.size > 64) {
+    const oldestTaskId = pending.keys().next().value as string | undefined;
+    if (oldestTaskId === undefined) {
+      return;
+    }
+    pending.delete(oldestTaskId);
+  }
+}
+
 class SystemClock implements OwnerAuthClock {
   now(): number {
     return Date.now();
@@ -3292,3 +3361,7 @@ export {
   type MainActionAuthorizationRuntimeOptions,
   type MainActionRunAuthorityPort,
 } from "./action-authorization-runtime.ts";
+export {
+  DiscordActionApproval,
+  type DiscordActionApprovalOptions,
+} from "./discord-action-approval.ts";

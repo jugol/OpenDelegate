@@ -67,6 +67,9 @@ export function mergeMainDeviceSummary(
                 }),
           })),
         }),
+    ...(coLocatedWorker.workspaceIds === undefined
+      ? {}
+      : { workspaceIds: [...coLocatedWorker.workspaceIds] }),
     routes: mergeRoutes(main.routes ?? [], coLocatedWorker.routes ?? []),
     ...(coLocatedWorker.resourceLocks === undefined
       ? {}

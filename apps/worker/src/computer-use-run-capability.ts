@@ -130,6 +130,7 @@ export class WorkerComputerUseRunCapabilityProvider implements WorkerRunCapabili
 
   public async prepare(context: {
     readonly assignment: WorkerRunAssignmentV1;
+    readonly maxConcurrentConnections?: number;
     readonly leaseAuthority?: WorkerRunLeaseAuthority;
     isExecutionCurrent(): Promise<boolean>;
   }): Promise<WorkerRunCapabilityLease | undefined> {
@@ -214,6 +215,7 @@ export class WorkerComputerUseRunCapabilityProvider implements WorkerRunCapabili
       });
       brokerLease = await this.#options.broker.register({
         capability: COMPUTER_USE_CAPABILITY,
+        maxConcurrentConnections: context.maxConcurrentConnections ?? 1,
         binding: runCapabilityBinding(
           context.assignment,
           leaseAuthority.snapshot().leaseExpiresAtMs,

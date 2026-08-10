@@ -87,6 +87,7 @@ const AGENT_LIMITS = {
 test("Main Discord runtime adds a Task Artifact link without making status projection depend on it", async () => {
   const projections: TaskChannelProjection[] = [];
   let artifactAvailable = true;
+  let approvalAvailable = true;
   const runtime = new DiscordMainRuntime({
     adapter: {
       start: () => Promise.resolve(),
@@ -161,6 +162,16 @@ test("Main Discord runtime adds a Task Artifact link without making status proje
             })
           : Promise.reject(new Error("Artifact metadata is offline.")),
     },
+    taskApproval: {
+      current: () =>
+        approvalAvailable
+          ? Promise.resolve({
+              approvalId: "approval-worker-action",
+              description: "Windows Worker wants to install a required package.",
+            })
+          : Promise.resolve(undefined),
+      resolve: () => Promise.resolve(false),
+    },
     clock: new TestClock(),
     synchronizationIntervalMs: 60_000,
   });
@@ -170,11 +181,176 @@ test("Main Discord runtime adds a Task Artifact link without making status proje
     label: "Open report",
     url: "https://reports.example.test/artifacts/artifact-report",
   });
+  assert.deepEqual(projections.at(-1)?.approval, {
+    approvalId: "approval-worker-action",
+    description: "Windows Worker wants to install a required package.",
+  });
 
   artifactAvailable = false;
+  approvalAvailable = false;
   await runtime.synchronizeNow();
   assert.equal(projections.at(-1)?.artifact, undefined);
+  assert.equal(projections.at(-1)?.approval, undefined);
   assert.equal(runtime.diagnostics.at(-1)?.event, "discord.runtime.artifact_projection_failed");
+  await runtime.close();
+});
+
+test("Main Discord runtime publishes cancellation as one chronological final update", async () => {
+  const projections: TaskChannelProjection[] = [];
+  const runtime = new DiscordMainRuntime({
+    adapter: {
+      start: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+      createTaskThread: () => Promise.reject(new Error("not used")),
+      flushOutbox: () => Promise.resolve(),
+      reconcilePending: () => Promise.resolve(),
+      publishTaskProjection: (projection) => {
+        projections.push(structuredClone(projection));
+        return Promise.resolve();
+      },
+    },
+    repository: {
+      getGatewayCursor: () => Promise.resolve(undefined),
+      listBindings: () =>
+        Promise.resolve([
+          {
+            guildId: GUILD_ID,
+            forumChannelId: FORUM_ID,
+            threadId: THREAD_ID,
+            starterMessageId: THREAD_ID,
+            taskId: "task-cancelled",
+            externalState: "available" as const,
+            archived: false,
+            locked: false,
+            revision: 1,
+          },
+        ]),
+    },
+    tasks: {
+      get: () =>
+        Promise.resolve({
+          taskId: "task-cancelled",
+          state: "cancelled" as const,
+          objective: "Stop the active multi-Device work.",
+          updatedAt: NOW,
+          messages: [],
+          events: [
+            {
+              eventId: "event-cancelled",
+              type: "task.commanded",
+              occurredAt: NOW,
+              streamVersion: 2,
+            },
+          ],
+        }),
+    },
+    clock: new TestClock(),
+    synchronizationIntervalMs: 60_000,
+  });
+
+  await runtime.start();
+  assert.deepEqual(projections.at(-1), {
+    taskId: "task-cancelled",
+    sourceEventId: "event-cancelled",
+    state: "cancelled",
+    objective: "Stop the active multi-Device work.",
+    summary: "This Task was cancelled.",
+    significance: "final",
+  });
+  await runtime.synchronizeNow();
+  assert.deepEqual(projections.at(-1), projections.at(-2));
+  await runtime.close();
+});
+
+test("Main Discord runtime keeps a pending Worker approval actionable without an activity snapshot", async () => {
+  const projections: TaskChannelProjection[] = [];
+  let approvalAvailable = true;
+  const clock = new TestClock();
+  clock.value = 4_200;
+  const runtime = new DiscordMainRuntime({
+    adapter: {
+      start: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+      createTaskThread: () => Promise.reject(new Error("not used")),
+      flushOutbox: () => Promise.resolve(),
+      reconcilePending: () => Promise.resolve(),
+      publishTaskProjection: (projection) => {
+        projections.push(structuredClone(projection));
+        return Promise.resolve();
+      },
+    },
+    repository: {
+      getGatewayCursor: () => Promise.resolve(undefined),
+      listBindings: () =>
+        Promise.resolve([
+          {
+            guildId: GUILD_ID,
+            forumChannelId: FORUM_ID,
+            threadId: THREAD_ID,
+            starterMessageId: THREAD_ID,
+            taskId: "task-running-approval",
+            externalState: "available",
+            archived: false,
+            locked: false,
+            revision: 1,
+          },
+        ]),
+    },
+    tasks: {
+      get: () =>
+        Promise.resolve({
+          taskId: "task-running-approval",
+          state: "running",
+          objective: "Inspect a registered Device without changing it.",
+          updatedAt: NOW,
+          messages: [],
+          events: [],
+        }),
+    },
+    taskActivity: { activity: () => Promise.resolve(undefined) },
+    taskApproval: {
+      current: () =>
+        Promise.resolve(
+          approvalAvailable
+            ? {
+                approvalId: "approval-read-only-escalation",
+                description: "NAS wants to expand its sandbox for one command.",
+              }
+            : undefined,
+        ),
+      resolve: () => Promise.resolve(false),
+    },
+    clock,
+    synchronizationIntervalMs: 60_000,
+  });
+
+  await runtime.start();
+  assert.deepEqual(projections.at(-1)?.activity, {
+    cycleId: "approval_approval-read-only-escalation",
+    revision: 1,
+    updatedAtMs: Date.parse(NOW),
+    phase: "working",
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: [
+      {
+        key: "owner-approval:task-running-approval",
+        status: "active",
+        summary: "A Worker is waiting for owner approval before it can continue.",
+      },
+    ],
+  });
+  assert.equal(projections.at(-1)?.approval?.approvalId, "approval-read-only-escalation");
+
+  clock.value = 9_000;
+  await runtime.synchronizeNow();
+  assert.equal(projections.at(-1)?.activity?.updatedAtMs, Date.parse(NOW));
+
+  approvalAvailable = false;
+  await runtime.synchronizeNow();
+  assert.equal(projections.at(-1)?.approval, undefined);
+  assert.equal(projections.at(-1)?.activity?.phase, "planning");
+  assert.equal(projections.at(-1)?.activity?.cycleId, "running_task-running-approval");
   await runtime.close();
 });
 
@@ -1299,6 +1475,10 @@ class TestDiscordApi implements DiscordApiPort {
     this.createdMessages.push(structuredClone(input.payload));
   }
 
+  public async deleteMessage(): Promise<void> {
+    this.#requireOnline();
+  }
+
   public async acknowledgeMessage(input: {
     readonly messageId: string;
   }): Promise<{ readonly reactionVisible: boolean; readonly typingVisible: boolean }> {
@@ -1329,6 +1509,10 @@ class TestDiscordApi implements DiscordApiPort {
   }
 
   public async editDeferredInteraction(): Promise<void> {
+    throw new Error("No interaction is expected in this test.");
+  }
+
+  public async deleteDeferredInteraction(): Promise<void> {
     throw new Error("No interaction is expected in this test.");
   }
 

@@ -7,6 +7,7 @@ import { createWorkerRouteIncident } from "@opendelegate/worker-runtime";
 import {
   DeviceChannelProtocolError,
   decodeDeviceChannelFrame,
+  encodeDeviceChannelFrame,
   type DeviceChannelFrameV1,
 } from "../src/index.ts";
 
@@ -393,6 +394,31 @@ describe("Device channel protocol", () => {
       throw new Error("Expected a Worker heartbeat.");
     }
     assert.equal(uncertainDecoded.payload.inventory?.wakeOnLan?.state, "unknown");
+  });
+
+  test("round-trips an actionable Agent adapter blocker", () => {
+    const blockedHeartbeat = {
+      ...heartbeat,
+      payload: {
+        ...heartbeat.payload,
+        inventory: {
+          ...heartbeat.payload.inventory,
+          agentAdapters: [
+            {
+              ...heartbeat.payload.inventory.agentAdapters[0],
+              readiness: "degraded",
+              blockedBy: "authentication-required",
+            },
+          ],
+        },
+      },
+    } as const;
+
+    const encoded = encodeDeviceChannelFrame(blockedHeartbeat);
+    assert.deepEqual(
+      decodeDeviceChannelFrame(encoded, "worker-1", "worker-to-main"),
+      blockedHeartbeat,
+    );
   });
 
   test("accepts only the dedicated fingerprint-bound route incident contract", () => {

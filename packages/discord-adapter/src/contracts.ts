@@ -16,6 +16,8 @@ export type DiscordPermission =
 
 export type DiscordWorkflowStatus = "intake" | "running" | "waiting" | "review" | "done" | "failed";
 
+export type DiscordPresentationLocale = "en" | "ko";
+
 export type DiscordTaskState =
   | "intake"
   | "queued"
@@ -40,6 +42,11 @@ export interface DiscordForumAdapterConfig {
   readonly forumBindings: readonly DiscordForumBindingConfig[];
   readonly ownerUserIds: readonly string[];
   readonly allowedRoleIds: readonly string[];
+  /**
+   * Owner-visible deterministic Discord chrome. Agent-authored prose is kept as
+   * authored; only OpenDelegate's closed presentation vocabulary is localized.
+   */
+  readonly presentationLocale?: DiscordPresentationLocale;
 }
 
 export interface DiscordAuthor {
@@ -281,6 +288,7 @@ export interface DiscordApiPort {
     messageId: string;
     payload: DiscordMessagePayload;
   }): Promise<void>;
+  deleteMessage(input: { threadId: string; messageId: string }): Promise<void>;
   /**
    * Quietly acknowledges one accepted owner message in place. Implementations
    * should add the bot's 👀 reaction and trigger Discord's transient typing
@@ -312,6 +320,12 @@ export interface DiscordApiPort {
     responseRef: string;
     payload: DiscordMessagePayload;
   }): Promise<void>;
+  /**
+   * Removes a successfully completed deferred response. Task state surfaces are
+   * the durable confirmation; retaining an ephemeral reply to a superseded live
+   * activity message would leave Discord showing an orphaned reply reference.
+   */
+  deleteDeferredInteraction(input: { responseRef: string }): Promise<void>;
 }
 
 export interface DiscordTaskSource {
@@ -384,6 +398,50 @@ export interface TaskChannelProjection {
     readonly url: string;
   };
   readonly inspectUrl?: string;
+  readonly activity?: {
+    readonly cycleId: string;
+    readonly revision: number;
+    readonly updatedAtMs: number;
+    readonly phase: "planning" | "dispatching" | "working" | "verifying";
+    readonly completedWorkOrders: number;
+    readonly totalWorkOrders: number;
+    readonly milestones: readonly {
+      readonly key: string;
+      readonly status: "active" | "completed";
+      readonly summary: string;
+      readonly deviceId?: string;
+      readonly deviceLabel?: string;
+    }[];
+  };
+}
+
+export interface DiscordTaskActivitySurface {
+  readonly cycleId: string;
+  readonly revision: number;
+  readonly updatedAtMs: number;
+  readonly outboxCreatedAtMs: number;
+  readonly state: "open" | "closing" | "closed";
+  readonly messageId?: string;
+}
+
+export interface DiscordTaskFailureSurface {
+  /**
+   * Historical name retained for durable compatibility. This surface tracks any
+   * terminal Discord card that exposes Retry, including cancellation results.
+   */
+  readonly requestKey: string;
+  readonly sourceEventId: string;
+  readonly messageId: string;
+  readonly outboxCreatedAtMs: number;
+  readonly state: "open" | "resolved";
+}
+
+export interface DiscordOwnerPromptSurface {
+  readonly requestKey: string;
+  readonly sourceEventId: string;
+  readonly messageId: string;
+  readonly outboxCreatedAtMs: number;
+  readonly state: "open" | "resolved";
 }
 
 export interface DiscordTaskBinding {
@@ -393,6 +451,9 @@ export interface DiscordTaskBinding {
   readonly starterMessageId: string;
   readonly taskId: string;
   readonly statusPanelMessageId?: string;
+  readonly activitySurface?: DiscordTaskActivitySurface;
+  readonly failureSurface?: DiscordTaskFailureSurface;
+  readonly ownerPromptSurface?: DiscordOwnerPromptSurface;
   readonly lastReconciledMessageId?: string;
   readonly externalState: "available" | "deleted" | "inaccessible";
   readonly archived: boolean;
@@ -437,9 +498,40 @@ export type DiscordOutboxAction =
       readonly projection: TaskChannelProjection;
     }
   | {
+      readonly kind: "refresh-task-failure";
+      readonly taskId: string;
+      readonly failureRequestKey: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "refresh-owner-prompt";
+      readonly taskId: string;
+      readonly promptRequestKey: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "upsert-task-activity";
+      readonly taskId: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "close-task-activity";
+      readonly taskId: string;
+      readonly cycleId: string;
+      readonly revision: number;
+      readonly updatedAtMs: number;
+      readonly afterRequestKey: string;
+    }
+  | {
       readonly kind: "resolve-owner-prompt";
       readonly taskId: string;
       readonly promptRequestKey: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
+      readonly kind: "resolve-task-failure";
+      readonly taskId: string;
+      readonly failureRequestKey: string;
       readonly projection: TaskChannelProjection;
     }
   | {
@@ -513,7 +605,14 @@ export interface DiscordStateRepository {
     patch: Partial<
       Pick<
         DiscordTaskBinding,
-        "statusPanelMessageId" | "lastReconciledMessageId" | "externalState" | "archived" | "locked"
+        | "statusPanelMessageId"
+        | "activitySurface"
+        | "failureSurface"
+        | "ownerPromptSurface"
+        | "lastReconciledMessageId"
+        | "externalState"
+        | "archived"
+        | "locked"
       >
     >,
   ): Promise<DiscordTaskBinding>;

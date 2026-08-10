@@ -23,6 +23,7 @@ export interface ExecutablePolicyDecision {
 
 export interface DeviceCandidate {
   readonly deviceId: string;
+  /** Device-scoped Worker identity; different Devices may use the same local ID. */
   readonly workerId: string;
   readonly enabled: boolean;
   readonly status: "online" | "offline";

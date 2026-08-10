@@ -168,6 +168,7 @@ export class WorkerArtifactRunCapabilityProvider implements WorkerRunCapabilityP
         "none" | "agent-native-worktree" | "opendelegate-worktree" | "container" | "custom";
     };
     readonly egressGuard: WorkerEgressGuard;
+    readonly maxConcurrentConnections?: number;
     readonly leaseAuthority: WorkerRunLeaseAuthority;
     readonly artifact?: {
       readonly plan: WorkerArtifactOutputPlan;
@@ -200,6 +201,7 @@ export class WorkerArtifactRunCapabilityProvider implements WorkerRunCapabilityP
     try {
       brokerLease = await this.#options.broker.register({
         capability: ARTIFACT_CAPABILITY,
+        maxConcurrentConnections: context.maxConcurrentConnections ?? 1,
         binding,
         metadata: capabilityMetadata(),
         expiresAtMs: context.assignment.leaseExpiresAtMs,

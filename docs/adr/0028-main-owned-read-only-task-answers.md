@@ -33,6 +33,15 @@ the Device named by the Task objective. A target alias must resolve to exactly o
 Device; an absent or ambiguous match falls through to semantic planning rather than
 guessing.
 
+Fleet-list questions may ask for bounded owner-safe details already present in the
+projection, including OS family, verified capability names, current capacity, and
+whether a Device is accepting work. A separate trailing sentence that only forbids
+file, service, account, permission, configuration, network, or external-system
+mutation may be discarded as a safety guard before classification. A trailing
+affirmative action is never discarded, so a compound query still requires Worker
+planning and evidence. A bounded repeat modifier such as Korean `다시` does not turn
+an otherwise exact fleet-list follow-up into semantic planning.
+
 The authoritative executor rejects `completed` from a planner unless the injected
 direct-completion authorizer recognizes that exact deterministic decision. Copying
 completion criteria or returning the right JSON shape is not authority. Queries with
@@ -69,11 +78,19 @@ It does not require another owner message merely to invalidate that stale plan.
 - Ordinary planning context includes online/offline Device facts and verified
   capability names but excludes Device Instructions and unverified capabilities.
 - A context-backed read-only answer completes with the exact Task criteria and
-  creates no Agent turn, Worker target resolution, dispatch, or verification call.
+  creates no Agent turn, Worker target resolution, dispatch, or verification call;
+  its visible rows include only verified capability names and bounded current
+  capacity.
 - A named-Device answer reports current connection/runtime, service mode, last
   observation, and registered route health without exposing Device Instructions.
 - A forged `completed` planner decision and a compound side-effect request fail
   closed without Worker evidence.
+- A natural Forum starter that asks which online Devices can accept work, requests
+  OS and verified capabilities, and adds a non-mutation guard completes directly;
+  replacing the guard with an affirmative file action falls through to semantic
+  planning.
+- A same-Task owner follow-up asking for the Device list `다시` completes from the
+  authoritative directory without resuming a native Agent session.
 - A code-switched generic test objective plus one exact Device question completes
   directly, and the same trusted decision supersedes a stale cached Work Order on
   Retry without semantic replanning or Worker selection.

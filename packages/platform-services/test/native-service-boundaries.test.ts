@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import { NativeBoundaryError, createNodeNativeServiceBoundaries } from "../src/index.ts";
@@ -45,3 +45,26 @@ test("native subprocess timeout terminates a stuck argv-only process", async () 
   assert.equal(result.timedOut, true);
   assert.ok(Date.now() - startedAt < 7_000);
 });
+
+test(
+  "the Windows native filesystem boundary replaces an existing activation junction",
+  { skip: process.platform !== "win32" },
+  async (context) => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-native-junction-"));
+    context.after(async () => {
+      await rm(root, { force: true, recursive: true });
+    });
+    const previous = join(root, "previous");
+    const next = join(root, "next");
+    const current = join(root, "current");
+    await mkdir(previous);
+    await mkdir(next);
+    await symlink(previous, current, "junction");
+    const fileSystem = createNodeNativeServiceBoundaries().fileSystem;
+
+    assert.equal(await fileSystem.createDirectoryLinkAtomic(next, current, "windows"), "changed");
+    assert.equal(resolve(root, await readlink(current)), resolve(next));
+    assert.deepEqual((await readdir(root)).sort(), ["current", "next", "previous"]);
+    assert.equal(await fileSystem.createDirectoryLinkAtomic(next, current, "windows"), "unchanged");
+  },
+);

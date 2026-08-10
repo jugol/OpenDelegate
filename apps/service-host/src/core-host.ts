@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { arch, platform } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { isMainServiceReadyMessage, loadMainConfiguration } from "@opendelegate/main";
 import {
@@ -22,6 +22,8 @@ import {
   readWorkerComputerUseCoreKeyBinding,
   resolveWorkerPaths,
   runWorkerDaemon,
+  type WorkerCertificateRenewalOutcome,
+  type WorkerConnectionDiagnostic,
   type WorkerComputerUseRuntimePort,
 } from "@opendelegate/worker";
 
@@ -210,8 +212,9 @@ async function startWorkerWorkload(
   } else {
     signal.addEventListener("abort", stopWorker, { once: true });
   }
+  const workerReleaseRoot = await resolveWorkerReleaseRoot(configuration.releaseRoot);
   const paths = resolveWorkerPaths({
-    sourceCheckoutRoot: configuration.releaseRoot,
+    sourceCheckoutRoot: workerReleaseRoot,
     home: configuration.stateRoot,
   });
   const computerUseRuntime = await tryStartWorkerComputerUseRuntime(
@@ -239,8 +242,35 @@ async function startWorkerWorkload(
   };
   const completed = runWorkerDaemon({
     paths,
+    releaseVersion: configuration.releaseVersion,
+    environment: buildWorkerServiceEnvironment(process.env),
     signal: workerController.signal,
     onReady: resolveReady,
+    onConnectionDiagnostic: (diagnostic: WorkerConnectionDiagnostic) => {
+      writeWorkerServiceEvent("worker.connection-diagnostic", {
+        code: diagnostic.code,
+        retryable: diagnostic.retryable,
+      });
+      if (!diagnostic.retryable) {
+        rejectReady(new ServiceHostError(`The Worker connection is blocked (${diagnostic.code}).`));
+      }
+    },
+    onCertificateRenewal: (outcome: WorkerCertificateRenewalOutcome) => {
+      if (outcome.status === "not-due") {
+        return;
+      }
+      writeWorkerServiceEvent(
+        outcome.status === "renewed"
+          ? "worker.certificate-renewed"
+          : "worker.certificate-renewal-deferred",
+        outcome.status === "renewed"
+          ? {
+              certificateGeneration: outcome.generation,
+              expiresAt: new Date(outcome.notAfter).toISOString(),
+            }
+          : { reason: outcome.reason },
+      );
+    },
     ...(computerUseRuntime === undefined ? {} : { computerUseRuntime }),
   }).finally(async () => {
     signal.removeEventListener("abort", stopWorker);
@@ -259,6 +289,28 @@ async function startWorkerWorkload(
       await completed.catch(() => undefined);
     },
   };
+}
+
+/**
+ * Native service hosts must not look like foreground Workers to Main. Keep the
+ * marker explicit because Windows SCM and launchd do not expose systemd's
+ * INVOCATION_ID convention.
+ */
+export function buildWorkerServiceEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string | undefined>> {
+  return Object.freeze({ ...environment, OPENDELEGATE_SERVICE_MODE: "system-service" });
+}
+
+function writeWorkerServiceEvent(event: string, fields: Readonly<Record<string, unknown>>): void {
+  process.stderr.write(
+    `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "info",
+      event,
+      ...fields,
+    })}\n`,
+  );
 }
 
 export async function waitForCoreWorkloadReadiness(
@@ -393,7 +445,7 @@ async function tryStartWorkerComputerUseRuntime(
     });
     authority = await PersistentDesktopAuthorityStore.openCore({
       authorityRoot: configuration.authorityRoot,
-      sourceCheckoutRoot: configuration.releaseRoot,
+      sourceCheckoutRoot: paths.sourceCheckoutRoot,
       deviceId: configuration.deviceId,
       instanceId: configuration.instanceId,
       releaseVersion: configuration.releaseVersion,
@@ -431,6 +483,13 @@ async function tryStartWorkerComputerUseRuntime(
     await authority?.close().catch(() => undefined);
     return undefined;
   }
+}
+
+export async function resolveWorkerReleaseRoot(
+  releaseRoot: string,
+  canonicalize: (path: string) => Promise<string> = realpath,
+): Promise<string> {
+  return resolve(await canonicalize(releaseRoot));
 }
 
 function sessionHelperEndpoint(configuration: ServiceHostConfiguration): SessionHelperIpcEndpoint {

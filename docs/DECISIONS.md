@@ -1118,9 +1118,14 @@ Main-owned Device state containing identity, display name, OS family,
 runtime/connection state, service supervision mode, last observation time, Roles,
 verified capability names, route health, and bounded capacity. The narrow grammar
 includes fleet-list questions, uniquely matched named-Device reachability questions,
-and a registered-route follow-up for that named Device. It excludes Secrets, Device
-Instructions, Knowledge, private
-transcripts, local paths, Policy internals, and unverified capability claims.
+common fleet-list detail qualifiers such as OS, verified capabilities, or whether a
+Device is accepting work, a bounded repeat modifier such as Korean `다시`, an
+explicit non-mutation guard sentence, and a self-contained latest fleet query even
+after earlier owner messages in the same Device-directory Task, plus a
+registered-route follow-up for that named Device. An affirmative action joined to
+the query never qualifies for direct completion. The projection excludes Secrets,
+Device Instructions, Knowledge, private transcripts, local paths, Policy internals,
+and unverified capability claims.
 
 The deterministic path formats the answer without an LLM and mints authority for
 that exact decision, Task, and planning key. The authoritative executor rejects a
@@ -1674,7 +1679,9 @@ the same impossible command indefinitely without telling the owner.
 **Consequence:** Clicking an older control is harmless and receives a clear “no
 longer available” response directing the owner to the latest Task update or a new
 message. The durable outbox does not accumulate deterministic failures, while true
-delivery or concurrency failures remain recoverable.
+delivery or concurrency failures remain recoverable. D-102 additionally removes a
+successfully superseded failure control in place; this refusal remains the fallback
+for legacy messages or a missed Discord edit.
 
 ## D-086 — Wall Budget measures active execution, not Task age
 
@@ -1843,3 +1850,602 @@ changed, and strand the Task after the Worker returned.
 resource becomes eligible, without an owner message or retry-Budget extension.
 Eligibility, Policy, locks, Budgets, leases, and fencing are still revalidated at
 dispatch; older already-terminal Tasks require one explicit owner Retry.
+
+## D-093 — Native child Agents are bounded inside one Worker Run
+
+Implementation detail:
+[ADR-0045](adr/0045-bounded-provider-native-child-agents.md).
+
+**Decision:** A bridged Codex App Server or Claude Agent SDK Worker Run may use
+provider-native child Agents for independent local work. One Run is limited to four
+children and one nesting level. Children inherit the exact parent Task, Work Order,
+Device, Workspace, sandbox, provider session, and Policy callback. Main remains the
+only component that creates cross-Device Work Orders. OpenDelegate advertises a
+verified `native-subagents` Capability only when a supported bridged adapter is
+ready, observes bounded lifecycle and aggregate status, and withholds child prompts,
+provider thread IDs, and native paths.
+
+**Rationale:** Provider-native delegation can reduce completion time and context
+pressure on a capable Device, but treating it as a second scheduler would bypass
+Main's durable placement, leases, Budgets, and audit model. Leaving provider defaults
+unbounded also recreates the runaway child-session behavior the owner observed.
+
+**Consequence:** Workers can safely parallelize local investigation and editing while
+all consequential child actions still cross executable Policy. CLI fallbacks remain
+tool-less, a fifth observable child fails the Run closed, and a child cannot pretend
+to use another Device; it reports that dependency to Main for an ordinary Work
+Order.
+
+## D-094 — Worker identity is scoped by Device
+
+Implementation detail:
+[ADR-0046](adr/0046-device-scoped-worker-identity.md).
+
+**Decision:** A Worker ID identifies a Worker within one Device. Durable Run,
+dispatch, authorization, lease, and audit references use the `(Device ID, Worker
+ID)` pair. Different Devices may use the same local Worker ID, including the default
+`worker-primary`. Scheduler input still rejects duplicate Device candidates.
+
+**Rationale:** Each Device owns its Worker runtime and local configuration. Requiring
+an Instance-global Worker name adds no authority boundary, makes ordinary generated
+defaults collide across Devices, and contradicts protocol records that already carry
+both identities.
+
+**Consequence:** A multi-Device fleet can use consistent local service defaults
+without becoming unschedulable. Candidate corruption is reported as invalid state
+rather than being mislabeled as an offline Worker.
+
+## D-095 — Windows core services use a network-compatible virtual-service SID
+
+Implementation detail:
+[ADR-0047](adr/0047-windows-virtual-service-sid-network-compatibility.md).
+
+**Decision:** A Windows OpenDelegate core continues to run as its exact non-admin
+`NT SERVICE\OpenDelegate-<instance>` account, but SCM configures that service SID
+as `UNRESTRICTED` rather than placing it in the token's restricted SID list. The
+explicit required-privilege list, service-scoped filesystem and Secret ACLs,
+Firewall, provider sandbox, and Action Policy remain unchanged.
+
+**Rationale:** Live installed-service testing proved that the restricted token could
+reach Main's fixed Worker endpoint but could not provide ordinary provider DNS/HTTPS
+to a child Agent process; the identical executable and request succeeded in the
+owner token. In SCM terminology `UNRESTRICTED` controls token placement, not network
+or administrator authority, and Microsoft recommends it for service-SID use unless
+the product owns a complete restricted-resource policy.
+
+**Consequence:** Windows Workers retain a distinct least-privilege virtual account
+while Codex and other authenticated providers can run headlessly. Install and
+upgrade repair the SID type deterministically. Upgrade preflight recognizes only an
+otherwise byte-exact legacy `RESTRICTED` core manifest, persists the compatible SID
+repair across any later release rollback, and rejects all additional drift. The
+Windows release lab must test provider traffic from the installed service rather
+than only an owner terminal.
+
+## D-096 — Linux Claude readiness proves the nested sandbox primitive
+
+Implementation detail:
+[ADR-0048](adr/0048-linux-claude-nested-sandbox-readiness.md).
+
+**Decision:** A Linux Claude Agent SDK adapter is ready only when its required
+`bubblewrap` and `socat` executables exist and a bounded, read-only nested
+user-namespace smoke test succeeds. Failure marks the adapter incompatible before a
+Run starts. A Prefer profile may then use only its explicitly configured fallback;
+OpenDelegate never enables Claude's weaker nested sandbox or modifies host security
+policy implicitly.
+
+**Rationale:** Live native-child-Agent testing on Ubuntu showed that the packaged
+AppArmor profile allowed the first `bubblewrap` namespace but removed the capability
+needed by the nested sandbox. Executable-only probing advertised Claude as ready,
+then left the provider turn alive after its child tool failed.
+
+**Consequence:** Tasks fail closed or route through an explicit fallback without
+waiting for the first Bash tool to expose host incompatibility. Owners may still
+make an audited Device-policy change separately, but adapter selection never treats
+that security weakening as installation repair.
+
+## D-097 — Native child sessions share one bounded Run-capability authority
+
+Implementation detail:
+[ADR-0049](adr/0049-native-child-run-capability-fanout.md).
+
+**Decision:** Local Run capabilities remain single-connection by default. When the
+exact execution plan enables provider-native child Agents through Codex App Server
+or Claude Agent SDK, the descriptor may authenticate at most five simultaneous
+clients: the root provider session and four children. Every client is bound to the
+same Task, Work Order, Run, Device, lease, fence, expiry, Workspace, tool allow-list,
+and Policy callback. Revocation or disposal closes them together.
+
+**Rationale:** Live NAS testing proved that Codex initializes inherited MCP servers
+inside every child session. Deleting the descriptor after the root MCP claim caused
+all child starts to fail before their first turn, even though provider delegation
+itself was correctly enabled. A bounded shared bearer adds no authority because the
+root process already holds that exact bearer and tool surface.
+
+**Consequence:** Native children can use inherited Artifact, Knowledge, Computer
+Use, and platform-mutation bridges without stale-descriptor startup failure. A
+non-native Run retains one-use behavior, a sixth simultaneous connection fails
+closed, and no client can widen or outlive the parent Run.
+
+## D-098 — Multi-Device progress uses one bounded live Discord surface
+
+Implementation detail:
+[ADR-0050](adr/0050-discord-bounded-live-task-activity.md).
+
+**Decision:** Each active Discord owner-input cycle may own one mutable live activity
+message. Main planning, dispatch, normalized Worker progress, Work Order completion,
+and verification update a short rolling milestone list in that message. Worker
+bridges map provider activity to a closed owner-safe progress vocabulary, and the
+Worker outbox accepts no free-form progress text. Per-Run deduplication, rate, and
+count bounds still apply. Every Run records one owner-safe start milestone after its
+durable `running` transition; later provider tool requests and explicit progress are
+reduced to meaningful category changes. Activity changes wake the Discord projector
+immediately, while its periodic reconciliation remains the repair path. Progress is
+non-terminal presentation data:
+it does not enter Task conversation or checkpoint context, renew a lease, or reset a
+Budget. The Discord binding persists the activity identity and closed revision so
+delayed outbox work cannot duplicate or resurrect a finished surface.
+
+**Rationale:** A reaction and typing indicator prove that one input was accepted but
+do not explain a long cross-Device execution. Posting every child, token, tool, or
+heartbeat would recreate the message flood the single-turn lifecycle removed. One
+edited aggregate provides useful operational visibility without making Workers look
+like independent Discord participants or exposing Device-local execution details.
+
+**Consequence:** Owners see a concise current picture of Main and subordinate Device
+work near the active turn. Questions, failures, and results remain the only durable
+chronological replies, while stale or overly frequent progress is safely discarded.
+Main hands each immutable activity revision to the Discord runtime at change time;
+the runtime retains only the newest bounded snapshot until publication so a
+coalesced refresh cannot lose the whole activity cycle when execution finishes.
+Main composition also keeps one bounded single-consumer handoff across binding
+activation, and a running Task with no richer snapshot receives one stable Planning
+activity so owner controls never disappear merely because presentation raced. The
+Discord boundary copies only the published activity contract; executor-only fields
+such as the authoritative Task identity never leak into or invalidate durable
+Discord outbox work.
+
+## D-099 — Scheduling preserves exact execution metadata and repairs singleton Workspace defaults
+
+Implementation detail:
+[ADR-0051](adr/0051-scheduling-metadata-and-singleton-workspace-default.md).
+
+**Decision:** Every Main-owned Worker projection used for deterministic Agent
+selection preserves the provider model's supported effort values. Owner-safe Device
+planning context also includes opaque registered Workspace IDs. A Worker uses its
+configured first Workspace as the default; when an older or CLI-created installation
+has no configured default and exactly one active registered Workspace, production
+composition selects that singleton deterministically. Zero or multiple registered
+Workspaces still require an explicit Work Order `workspaceId`.
+
+**Rationale:** Dropping model effort metadata can falsely exclude a ready Device,
+while advertising a registered Workspace without giving the Run bridge any default
+causes dispatch to succeed and process startup to fail. Both defects appeared as an
+incorrect offline wait during live multi-Device QA even though the authenticated
+Workers were online and ready.
+
+**Consequence:** Exact Device Agent profiles remain schedulable through all
+projections, one-Workspace upgrades work without editing Device-local configuration,
+and multi-Workspace Devices remain fail-closed and explicit. Workspace startup
+failures use a stable owner-safe diagnostic rather than the generic process-start
+code.
+
+## D-100 — Windows Codex service sandbox access is exact and lifecycle-repaired
+
+Implementation detail:
+[ADR-0052](adr/0052-windows-codex-service-sandbox-directory.md).
+
+**Decision:** A persistent Windows Worker that can select Codex declares the exact
+owner-provider `.sandbox-bin` directory in its validated service configuration.
+Install, start, restart, and upgrade create or repair only that directory with an
+inheritance-free ACL: Administrators, SYSTEM, the owner SID, and the exact
+`NT SERVICE\OpenDelegate-<instance>` identity receive Full Control. The source
+checkout and the remainder of the owner provider home are never widened. After
+Codex starts, its exact local `CodexSandboxUsers` group may additionally receive
+only Read & Execute plus Synchronize for provider-created child sandbox identities;
+that provider-managed ACE may never receive write, ownership, or ACL-control rights.
+
+**Rationale:** Live installed-service QA proved that Codex initializes its helper by
+changing the `.sandbox-bin` security descriptor. Ordinary inherited Modify access
+was sufficient to read the owner-authenticated provider home but not to perform that
+bounded `WRITE_DAC` operation, causing a read-only Task to request an unrelated
+sandbox escalation and wait indefinitely.
+
+**Consequence:** The native service can start Codex without running OpenDelegate as
+the owner or administrator and without sharing the entire provider home. Lifecycle
+repair handles directories recreated between releases. A malformed, checkout-local,
+or broader path fails service-document validation before mutation. Post-start
+verification accepts only the exact bounded provider group grant and rejects every
+other identity or broader right.
+
+## D-101 — Worker action Approval stays on the one live Discord Task surface
+
+Implementation detail:
+[ADR-0053](adr/0053-discord-worker-action-approval.md).
+
+**Decision:** A provider action-approval event becomes the closed
+`waiting-approval` Worker progress category. Main projects the oldest pending
+`worker-action.authorize` record for that exact Task into its existing mutable
+Discord activity message with a friendly Device/action/risk/evidence summary and
+approve-once/reject controls. The Discord callback resolves the same global durable
+Approval Service record used by Admin Web. Additional pending actions appear one at
+a time. The Worker may wait for the owner for the Approval TTL; no arbitrary short
+execution timeout converts a healthy long Task into failure.
+
+**Rationale:** Previously the Worker waited correctly but Discord showed only generic
+activity, so the Task looked frozen. A second chronological attention card would
+repeat controls and recreate the message noise removed by D-065 and D-098. A
+Task-local Approval path would also disagree with Admin Web and could execute the
+same protected effect twice.
+
+**Consequence:** Long multi-Device work remains concise and actionable. Approval
+creation and decisions wake Discord immediately, while periodic reconciliation
+repairs missed presentation. Provider prose, action arguments, local paths, native
+IDs, and Secrets never enter the Discord summary; replay executes an approved action
+at most once.
+
+## D-102 — A successful retry resolves its prior Discord failure control in place
+
+Implementation detail:
+[ADR-0054](adr/0054-discord-retry-resolves-prior-failure.md).
+
+**Decision:** When a Task with a delivered chronological failure update enters a new
+`running` attempt, the Discord Adapter durably resolves the currently open failure
+update for that Task. Successful failure delivery stores the exact Discord
+message ID, request key, source event, outbox time, and open/resolved state on the
+durable Task binding. Resolution PATCHes that exact message into a historical “Retry
+started” receipt and removes all buttons. The failure surface and resolution action
+are persisted by SQLite or PostgreSQL. The edit preserves the concrete earlier
+failure explanation and does not delete history. A request nonce remains only a
+short duplicate-send guard and is never treated as durable message identity. If a
+fast deterministic retry advances from `running` to a later result between Discord
+projection polls, the first observed queued, waiting, review, completion, or newer
+failure projection performs the same resolution; observing an intermediate
+`running` projection is not required.
+
+**Rationale:** Live alpha.14 QA recovered a failed Device-directory Task and posted
+the correct result, but the older `Task needs attention` card still displayed an
+active Retry button above it. The status panel correctly showed Done, yet two
+simultaneously actionable-looking states forced the owner to infer which control was
+current. A first alpha.15 repair attempted to recover the old message from Discord's
+request nonce; live QA proved that an aged nonce could create a second message
+instead, so durable message identity is required.
+
+**Consequence:** A successful retry leaves one clear current control surface while
+retaining useful failure history. Restart and Discord outage replay cannot duplicate
+the edit, and nonce expiry cannot create a replacement card. If the old message was
+externally deleted, OpenDelegate records a bounded diagnostic and continues
+projecting the authoritative current Task; D-085 still handles clicks on legacy
+stale controls safely.
+
+## D-103 — Agent Work Order labels become durable owner-cycle-scoped IDs
+
+Implementation detail:
+[ADR-0055](adr/0055-owner-cycle-scoped-work-order-ids.md).
+
+**Decision:** A Main Agent supplies unique plan-local Work Order labels only. Before
+the plan reaches the authoritative executor, deterministic Main code replaces every
+label with an opaque ID derived from the stable semantic planning key and ordinal,
+then remaps every `dependsOn` edge through the same bijection. The same owner-input
+cycle and retry-stable planning key always produce the same durable IDs. A later
+owner-input cycle produces a different ID namespace even when the native Agent
+reuses labels such as `wo-01`.
+
+**Rationale:** Live Discord follow-up QA showed a native Agent reasonably reusing
+`wo-01` for a new owner turn. The orchestration journal correctly rejected the new
+content under the old durable ID as `WORK_ORDER_ID_CONFLICT`, but that made an
+ordinary long-lived Task fail because model-authored naming leaked across owner
+cycles. Prompt advice alone cannot make global identity reliable.
+
+**Consequence:** Retry idempotency and journal conflict detection remain strict,
+dependency graphs preserve their meaning, and long-running Discord Tasks may accept
+many distinct owner turns without relying on a model to remember every historical
+identifier. Invalid duplicate labels or unknown dependency labels still fail closed
+during ordinary plan validation.
+
+## D-104 — Omitted Work Order Secret references default to zero authority
+
+Implementation detail:
+[ADR-0056](adr/0056-authority-reducing-work-order-default.md).
+
+**Decision:** Every planning prompt explicitly requires `requiredSecretRefs` on
+every Work Order. If a Main Agent nevertheless omits that one field, deterministic
+Main code inserts `requiredSecretRefs: []` before durable ID scoping and
+authoritative protocol validation. An explicit value is never replaced, and no
+other missing Work Order field receives an inferred default.
+
+**Rationale:** Live alpha.18 multi-Device Discord QA produced an otherwise valid,
+correctly bounded two-Work-Order plan but omitted the empty Secret array. Rejecting
+the whole owner turn as `WORK_PLAN_INVALID` added no safety: an empty array grants no
+credential and prevents Secret injection. Defaults for dependencies, constraints,
+Capabilities, placement, or non-empty Secret needs could widen authority or alter
+execution and therefore remain forbidden.
+
+**Consequence:** Harmless schema omission no longer strands a Task, while malformed
+or authority-bearing plans still fail closed. The authoritative protocol remains
+strict because it receives a complete canonical Work Order, and Workers can never
+gain an inferred credential.
+
+## D-105 — OpenDelegate-managed Git Workspaces are materialized by the production Worker
+
+Implementation detail:
+[ADR-0057](adr/0057-production-managed-worktree-composition.md).
+
+**Decision:** A Git Workspace explicitly registered with `opendelegate-worktree`
+is resolved through the production Worker's durable `ManagedGitWorktreeManager`.
+The manager stores its journal and materialized roots under Device-local Worker
+state, outside the source checkout and installed bundle, and derives one stable
+worktree from Task, workstream, and Workspace identity. Changing an existing
+Workspace isolation mode uses a revisioned deterministic local command.
+
+**Rationale:** Live Windows service QA showed that a Workspace advertised as
+`agent-native-worktree` still reached Codex App Server as the owner-owned repository
+root. A harmless read then failed provider sandbox setup and incorrectly requested
+medium-risk sandbox escalation. The managed-worktree implementation already
+existed, but production composition and the packaged configuration surface did not
+instantiate or expose it.
+
+**Consequence:** Service-hosted providers receive an exact service-managed working
+directory on Windows, macOS, and Linux without broadening permissions on the
+owner's original checkout. Related retries and follow-ups reuse the same worktree;
+unrelated workstreams remain isolated. `agent-native-worktree` retains its explicit
+meaning and is never silently migrated.
+
+## D-106 — One open Discord failure card follows the current pending approval
+
+**Decision:** While a Task remains on the same failure event, OpenDelegate edits the
+exact persisted failure message whenever its current pending approval changes. The
+card names the current approval scope and replaces its controls atomically; after no
+pending approval remains, the same card exposes Retry. Refreshes are durable,
+idempotent outbox actions and never create an additional chronological failure card.
+
+**Rationale:** Live multi-Device QA showed the stable status panel moving to the
+next pending approval while the chronological failure card retained buttons for an
+older, already denied approval. The owner could see that action was needed but could
+not perform the authoritative action from the visible control surface.
+
+**Consequence:** Sequential Worker approvals can be reviewed from one nearby Discord
+card without stale IDs or message noise. The original failure explanation and exact
+Discord message identity remain durable, and stale or externally deleted surfaces
+still fail safely with bounded diagnostics.
+
+## D-107 — Managed Git trusts only the exact registered root per invocation
+
+**Decision:** The production Worktree runner supplies Git's `safe.directory` only
+for the exact absolute path that is also bound to the command's fixed `-C` slot.
+This trust is process-local: OpenDelegate never writes a global or system Git
+exception. The existing fixed command grammar, disabled hooks and fsmonitor,
+ignored system attributes, external checkout-filter rejection, no-checkout
+provisioning, and noninteractive environment remain mandatory.
+
+**Rationale:** A Windows Worker service runs under its virtual service identity,
+while an explicitly registered repository is normally owned by the interactive
+owner. Git correctly rejects that ownership mismatch unless the caller records its
+intent. The earlier production composition therefore failed before it could create
+the isolated Worktree, even though the repository was owner-registered.
+
+**Consequence:** Windows services can materialize an owner-registered Git Workspace
+without weakening Git for unrelated repositories or mutating owner configuration.
+A forged or mismatched safe-directory argument remains outside the runner grammar,
+and repositories with executable checkout filters still fail closed.
+
+## D-108 — A pending Worker approval always has one actionable Discord surface
+
+**Decision:** When a Task is running and has a pending Worker action approval, Main
+must project one live Discord activity message with Approve and Reject controls. If
+the in-memory execution activity snapshot is temporarily unavailable, Main creates
+a deterministic, approval-scoped fallback activity projection. The normal activity
+projection replaces that fallback when available, and resolving the approval closes
+the fallback through the existing durable activity lifecycle.
+
+**Rationale:** The durable approval can outlive or temporarily race the best-effort
+progress snapshot. Showing the approval only in the non-interactive status panel
+left the owner unable to safely continue or reject a Run from Discord.
+
+**Consequence:** Every visible pending Worker approval remains actionable without
+creating an unbounded sequence of messages. The fallback grants no authority by
+itself, preserves the exact approval scope, and never changes the decision policy.
+
+## D-109 — Owner-prompt controls track the current durable approval state
+
+**Decision:** A chronological `Owner input needed` message keeps its original
+Discord message identity while its approval controls are refreshed from the current
+Task projection. Resolving or replacing an approval edits that prompt in place; it
+must not leave an actionable-looking button bound to a stale approval ID.
+
+**Rationale:** A budget question and a Worker action approval can become visible in
+the same Task projection. The status panel correctly dropped a rejected approval,
+but the earlier prompt retained obsolete Approve and Reject buttons.
+
+**Consequence:** The owner can trust that controls on the latest prompt represent
+current authority. A surviving prompt is edited by its durable message identity,
+an externally missing prompt can be replaced through bounded reconciliation, and
+stale interactions still fail closed at the Task authority boundary.
+
+## D-110 — Owner-prompt Discord message identity is durable Main state
+
+**Decision:** Main persists the request key, source event ID, Discord message ID,
+outbox creation time, and open/resolved state of the latest chronological owner
+prompt in the Discord Task binding. Prompt refresh and resolution address that
+stored message directly. Discord nonce reconciliation is only the recovery path
+when upgrading a legacy binding or replacing an externally deleted message.
+
+**Rationale:** Discord's nonce deduplication window is bounded. A prompt created long
+before a restart could no longer be rediscovered by nonce alone, so repairing stale
+approval controls produced a second owner prompt instead of editing the first.
+
+**Consequence:** Long-running Tasks and Main restarts keep one current owner-prompt
+message without relying on Discord's transient deduplication memory. Migration 0016
+adds only this non-secret presentation identity; approval authority and Task state
+remain in their existing durable stores.
+
+## D-111 — Every Worker Agent turn receives bounded deterministic Run facts
+
+**Decision:** Worker composition supplies a small non-secret context block on native
+session start, resume, and checkpoint continuation. It identifies the selected
+Device and OS family, Worker service mode and release, provider/adapter/model
+binding, and registered Workspace alias and isolation when deterministically known.
+The block explicitly forbids tool use merely to rediscover those facts.
+
+**Rationale:** Live read-only Discord QA showed a Worker Agent reaching for service
+manager and shell commands just to learn which Device and release were executing a
+Work Order. That consumed time, obscured ordinary progress behind an unnecessary
+protected-action approval, and could not reliably satisfy a no-mutation request.
+Main already owns fleet selection, while the Worker owns the exact local execution
+binding; both should pass their deterministic knowledge into the relevant Agent
+turn instead of asking an LLM to rediscover it.
+
+**Consequence:** Safe status and routing Work Orders can be completed from supplied
+facts without privilege escalation or local path disclosure. Missing facts remain
+explicitly unavailable, and OpenDelegate still resolves Workspace authority,
+sessions, Policy, and device routing deterministically outside the LLM.
+The Worker daemon contract requires an authenticated release version from every
+launcher, including the native service host; it cannot silently identify a packaged
+service as a development build.
+
+## D-112 — A paused Discord Task keeps one nearby recovery surface
+
+**Decision:** Pausing a running Discord Task supersedes its live progress cycle with
+one bounded paused recovery surface at the latest conversation position. The surface
+contains Resume and Cancel controls, starts no work, and is reconstructed
+idempotently from durable Task state after Main restart. Resume continues the same
+Task and replaces the paused surface with the next running activity cycle.
+
+**Rationale:** Deleting the live activity on pause left only a non-interactive status
+panel near the Forum starter. The owner received confirmation that Pause succeeded
+but had no visible way to resume, precisely when a recovery control was needed.
+
+**Consequence:** Pause remains a durable execution boundary while recovery stays
+obvious and chronological. There is still at most one current activity or recovery
+surface, delayed running revisions cannot resurrect after pause, and no Discord
+message becomes execution authority. An owner-authorized Resume does not reinterpret
+the deliberately retired Run as a Task failure: Main creates a new higher-fenced Run
+for each unfinished Work Order, while late events from the paused Run remain stale.
+
+## D-113 — Successful Discord Task controls leave no orphaned ephemeral receipt
+
+**Decision:** Discord still defers every Task-control interaction immediately, but
+after Pause, Resume, Cancel, or Retry is durably accepted it deletes that deferred
+ephemeral response. The resulting durable Task activity, recovery, failure, or final
+surface confirms the transition. Rejected, unauthorized, and stale controls retain
+their owner-safe ephemeral explanation.
+
+**Rationale:** A successful interaction response is visually attached to the bot
+message containing the clicked button. Bounded activity cycles deliberately delete
+superseded running and paused messages, so retained success receipts showed “original
+message deleted” beside otherwise successful Pause and Resume flows.
+
+**Consequence:** Successful controls produce no chronological or owner-only debris,
+while failure feedback remains explicit. Durable command idempotency and Discord's
+three-second acknowledgement boundary are unchanged; deletion uses only the opaque
+Device-local interaction reference.
+
+## D-114 — Cancellation is a chronological final Task update
+
+**Decision:** A durable `cancel` transition publishes one final Discord reply at the
+latest conversation position, with the concrete cancelled state and a Retry control.
+The stable starter panel is still updated, but it is not the only owner-visible
+confirmation of cancellation.
+
+**Rationale:** Dismissing successful interaction receipts removed orphaned ephemeral
+noise, but exposed that cancellation only edited the starter status panel. In a long
+Forum conversation the owner could click Cancel at the bottom and receive no nearby
+confirmation or recovery control.
+
+**Consequence:** Cancellation reads like every other terminal Task outcome, remains
+idempotent by the immutable command event, and keeps recovery near the latest turn.
+The final reply is presentation only; the Task command journal remains authority.
+
+## D-115 — Discord exposes one current surface in the owner's presentation locale
+
+Implementation detail:
+[ADR-0058](adr/0058-discord-single-current-localized-surface.md).
+
+**Decision:** The starter-adjacent status panel is only a bootstrap fallback. The
+first live activity or chronological question, decision, failure, cancellation, or
+result durably retires it, leaving one obvious current surface near the latest owner
+turn. A cancellation result is persisted as a Retry-bearing recovery surface; when
+a retry supersedes it, OpenDelegate edits that exact message into a control-free
+historical receipt before presenting the new current activity. Repeated cancellation
+cycles may create a new recovery surface only after the prior one is resolved.
+Deterministic Discord chrome uses the binding's bounded presentation locale, with
+English as the default. Closed OpenDelegate vocabulary may be translated, while
+Agent-authored prose and durable identifiers remain unchanged.
+
+**Rationale:** Live Korean Forum QA showed three visually competing truths in one
+screen: an old fixed `Running` panel, a cancellation `Retry` that remained active
+after retry, and a newer working card. All static chrome was English despite the
+owner operating in Korean. Event delivery and execution safety were correct, but the
+conversation was not legible as one lifecycle.
+
+**Consequence:** Owners no longer have to infer which card is authoritative. Retry
+history remains visible without stale controls, active work has one nearby mutable
+surface, and deterministic UI language follows the explicit Discord binding rather
+than consuming LLM context. This supersedes the persistent-panel portion of D-065,
+extends D-102 to cancellation recovery surfaces, and removes D-114's requirement to
+keep updating the starter panel after a chronological cancellation reply exists.
+
+## D-116 — A current deterministic status surface remains actionable
+
+**Decision:** When Discord's one current surface is a stable `status` projection,
+it includes every Task control valid for that state. A resource wait therefore keeps
+Pause and Cancel next to the current explanation. Question, failure, decision, and
+final fallback panels do not copy controls from their chronological surface. Closed
+resource-wait explanations use the binding's deterministic presentation locale.
+
+**Rationale:** Live Korean Forum QA reached `waiting_resource` after a Worker went
+offline. The sole current card changed to an English diagnostic and dropped every
+control, so the owner could neither read the state naturally nor cancel the Task from
+the point where OpenDelegate said it was waiting.
+
+**Consequence:** A long-running Task remains controllable while it waits for a Device
+or route, without reintroducing competing current cards. Deterministic diagnostics
+are localized without spending Agent context, while Agent-authored text and durable
+identifiers remain unchanged under D-115.
+
+## D-117 — Worker re-credentialing is an identity-only recovery
+
+**Decision:** When `worker join` receives a replacement identity for the same Device
+and fixed Main, it requires a strictly newer certificate generation. It replaces the
+Device key, certificate, Main trust material, route profile, and selected Secret
+backend while preserving the Worker ID, Agent configuration, platform-mutation
+allowlist, Workspace metadata, and original creation time. A Grant for another Device
+or Main fails before local Secret preparation or enrollment submission.
+
+**Rationale:** Re-credentialing is the supported recovery when a certificate expires
+or per-generation channel state can no longer reconcile. Treating it as a fresh join
+reset Device-local operating configuration and made a safe channel repair capable of
+silently changing which Agent or Workspace the Worker used.
+
+**Consequence:** Recovery advances the identity generation without changing the
+Device's scheduling or execution personality. On an installed Windows Worker, the
+owner stops the service, joins with the one-use re-credential Grant, stages the new
+owner-bound Secrets to the existing virtual service identity, and restarts it. The
+generation change resets only per-generation channel state; durable Task, Knowledge,
+Workspace registry, and Device history remain intact. Both Worker and Main clear
+their transport inbox, outbox, effect journal, acknowledgements, and sequence
+checkpoint exactly once when the newer generation is durably identified by the
+`device.recredentialed` audit event. Routine authenticated certificate rotation
+preserves those queues and checkpoints.
+
+## D-118 — Windows staging separates owner-session Secrets from service state
+
+**Decision:** Windows Worker service staging keeps core identity and core IPC Secrets in the
+service-only handoff/vault, while the owner-session helper signing Secret is durably retained in an
+owner-local DPAPI vault outside the native service data root. When an older staged Worker records
+that owner binding inside service state, an exact replay of the staging command copies the same
+helper identity to the canonical owner-local vault, verifies its public pin, persists the new
+binding, and only then deletes the obsolete source copy.
+
+**Rationale:** A Worker joined directly under `DATA_ROOT/state` previously inherited its temporary
+foreground DPAPI vault beneath the future service state root. The native service document correctly
+rejected that overlap, but staging did not relocate the owner-only helper Secret, making the default
+agent-guided Windows installation path impossible to finish.
+
+**Consequence:** Default Windows staging remains conversational and requires no extra path choice.
+The owner/helper and core/service planes are structurally disjoint, interrupted migration is
+idempotent, a conflicting helper identity fails closed, and the service-document validator keeps
+its existing strict boundary. A subsequent elevated Windows Worker upgrade may replace the exact
+installed runtime configuration when its only differences are a safe owner-local helper vault and
+a coherent staged core IPC public identity; unrelated drift and inconsistent peer pins continue to
+fail before mutation. If the release rolls back, that credential migration remains in the runtime
+configuration because the staged old Secret locations are no longer authoritative.

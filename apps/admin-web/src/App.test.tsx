@@ -1257,8 +1257,9 @@ describe("first-run Device overview", () => {
           provider: "codex" as const,
           adapterId: "codex-cli",
           version: "0.145.0",
-          readiness: "ready" as const,
+          readiness: "degraded" as const,
           compatibility: "untested" as const,
+          blockedBy: "version-unsupported" as const,
           availableUpgrade: { packageName: "@openai/codex", targetVersion: "0.146.0" },
           observedAtMs: Date.parse("2026-08-01T00:00:00.000Z"),
           models: [],
@@ -1291,6 +1292,9 @@ describe("first-run Device overview", () => {
     // version rather than leaving "untested" as a status nobody can act on.
     const upgrade = screen.getByRole("button", { name: "Update to 0.146.0" });
     expect(screen.queryAllByRole("button", { name: /^Update to/u })).toHaveLength(1);
+    expect(
+      screen.getByText("This provider version has not passed the adapter compatibility check."),
+    ).toBeTruthy();
 
     await user.click(upgrade);
 

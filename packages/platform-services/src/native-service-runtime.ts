@@ -11,12 +11,14 @@ import {
   type ServiceDiagnostic,
   type SupervisorState,
 } from "./diagnostics.ts";
-import type {
-  NativeFileSystemBoundary,
-  NativeProcessBoundary,
-  NativeProcessRequest,
-  NativeProcessResult,
-  NativeServiceBoundaries,
+import {
+  NativeBoundaryError,
+  type NativeClockBoundary,
+  type NativeFileSystemBoundary,
+  type NativeProcessBoundary,
+  type NativeProcessRequest,
+  type NativeProcessResult,
+  type NativeServiceBoundaries,
 } from "./native-service-boundaries.ts";
 import {
   createServicePlan,
@@ -25,6 +27,7 @@ import {
   type SupervisorOperation,
 } from "./plans.ts";
 import { evaluateSessionHelperReadiness } from "./readiness.ts";
+import { stableJson } from "./render-common.ts";
 import {
   assertMatchingNativeReleaseVerification,
   createNativeReleaseVerifier,
@@ -253,7 +256,15 @@ export async function preflightNativeServiceOperation(input: {
     configuration.platform,
   );
   if (input.plan.operation === "upgrade") {
-    await assertUpgradeConfigurationMatchesInstalled(configuration, input.boundaries.fileSystem);
+    const activeVersion = input.plan.fromVersion;
+    if (activeVersion === undefined) {
+      failPreflight("Upgrade requires the exact active service version.");
+    }
+    await assertUpgradeConfigurationMatchesInstalled(
+      configuration,
+      activeVersion,
+      input.boundaries.fileSystem,
+    );
   }
   if (input.plan.operation === "reconfigure") {
     await assertReconfigurationMatchesInstalled(
@@ -349,6 +360,26 @@ function createNativeFilesystemAdapter(
       assertFilesystemActionAllowed(configuration, action);
       switch (action.kind) {
         case "directory.ensure": {
+          const existing = await fileSystem.inspect(action.path);
+          if (configuration.platform === "windows" && existing.kind === "directory") {
+            // A running service-owned Secret Store intentionally removes the
+            // interactive administrator from its DACL. Reinstallation must let
+            // elevated icacls restore the canonical ACL before any Node chmod or
+            // mkdir call tries to open that already-existing directory.
+            await applyDirectoryAccess(
+              configuration,
+              action.path,
+              Number.parseInt(action.mode, 8),
+              action.access.owner,
+              boundaries,
+              tools,
+              true,
+            );
+            if ((await fileSystem.inspect(action.path)).kind !== "directory") {
+              throw uncertain("A native service directory changed during access repair.");
+            }
+            return { disposition: "unchanged" };
+          }
           const disposition = await fileSystem.ensureDirectory(
             action.path,
             Number.parseInt(action.mode, 8),
@@ -650,6 +681,7 @@ function createNativeSupervisorAdapter(
         readonly invocation: CommandInvocation;
         readonly exitCode: number;
       }> = [];
+      let activeLifecycleInvocation: CommandInvocation | undefined;
       try {
         for (const invocation of operation.invocations) {
           if (
@@ -659,23 +691,30 @@ function createNativeSupervisorAdapter(
           ) {
             continue;
           }
+          activeLifecycleInvocation =
+            invocation.verb === "start" || invocation.verb === "stop" ? invocation : undefined;
           const result = await runSupervisorInvocation(
             configuration,
             invocation,
             boundaries.process,
+            boundaries.clock,
             tools,
           );
           if (result.timedOut || !invocation.expectedExitCodes.includes(result.exitCode)) {
             throw new NativeSupervisorError("A native supervisor command failed or timed out.");
           }
           completed.push({ invocation, exitCode: result.exitCode });
+          activeLifecycleInvocation = undefined;
         }
       } catch (error) {
         await rollbackPartialSupervisorOperation(
           configuration,
           operation,
-          completed,
+          activeLifecycleInvocation === undefined
+            ? completed
+            : [...completed, { invocation: activeLifecycleInvocation, exitCode: 0 }],
           boundaries.process,
+          boundaries.clock,
           tools,
         );
         throw error;
@@ -1025,9 +1064,42 @@ async function applyDirectoryAccess(
   owner: string,
   boundaries: NativeServiceBoundaries,
   tools: NativeTools,
+  recoverProtectedOwner = false,
 ): Promise<void> {
   if (configuration.platform === "windows") {
     const action = findDirectoryAccess(configuration, path);
+    const releaseDirectory = pathJoin(
+      configuration.platform,
+      configuration.paths.installRoot,
+      "releases",
+      configuration.bundle.version,
+    );
+    const resetReleaseTree = equalPath(configuration.platform, path, releaseDirectory);
+    // icacls treats /setowner as a separate operation. Combining it with
+    // /inheritance and /grant exits with ERROR_INVALID_PARAMETER (87) on a
+    // real Windows host even though mocked process boundaries accept it.
+    const ownerRequest: NativeProcessRequest = {
+      executable: tools.icacls,
+      arguments: [path, "/setowner", windowsPrincipal(action.owner)],
+      timeoutMs: 30_000,
+    };
+    let ownerNeedsFinalTransfer = false;
+    if (recoverProtectedOwner) {
+      const ownerResult = await boundaries.process.run(ownerRequest);
+      if (ownerResult.timedOut) {
+        throw new NativeSupervisorError("A protected Windows directory owner repair timed out.");
+      }
+      if (ownerResult.exitCode !== 0) {
+        await runRequired(boundaries.process, {
+          executable: tools.takeown,
+          arguments: ["/F", path, "/A"],
+          timeoutMs: 30_000,
+        });
+        ownerNeedsFinalTransfer = true;
+      }
+    } else {
+      await runRequired(boundaries.process, ownerRequest);
+    }
     const arguments_: string[] = [path, "/inheritance:r"];
     for (const grant of action.grants) {
       arguments_.push(
@@ -1035,12 +1107,21 @@ async function applyDirectoryAccess(
         `${windowsPrincipal(grant.principal)}:${windowsPermission(grant.permission)}`,
       );
     }
-    arguments_.push("/setowner", windowsPrincipal(action.owner));
     await runRequired(boundaries.process, {
       executable: tools.icacls,
       arguments: arguments_,
       timeoutMs: 30_000,
     });
+    if (ownerNeedsFinalTransfer) {
+      await runRequired(boundaries.process, ownerRequest);
+    }
+    if (resetReleaseTree) {
+      await runRequired(boundaries.process, {
+        executable: tools.icacls,
+        arguments: [path, "/reset", "/T", "/C", "/Q"],
+        timeoutMs: 30_000,
+      });
+    }
     return;
   }
   const serviceUid = await resolveUnixId(
@@ -1182,6 +1263,7 @@ async function rollbackPartialSupervisorOperation(
     readonly exitCode: number;
   }[],
   process: NativeProcessBoundary,
+  clock: NativeClockBoundary,
   tools: NativeTools,
 ): Promise<void> {
   for (const entry of [...completed].reverse()) {
@@ -1192,7 +1274,7 @@ async function rollbackPartialSupervisorOperation(
     if (inverse === undefined) {
       continue;
     }
-    const result = await runSupervisorInvocation(configuration, inverse, process, tools);
+    const result = await runSupervisorInvocation(configuration, inverse, process, clock, tools);
     if (result.timedOut || !inverse.expectedExitCodes.includes(result.exitCode)) {
       throw uncertain(`A partial ${operation.plane} supervisor mutation could not be rolled back.`);
     }
@@ -1201,6 +1283,22 @@ async function rollbackPartialSupervisorOperation(
 
 function inverseSupervisorInvocation(invocation: CommandInvocation): CommandInvocation | undefined {
   const args = invocation.arguments;
+  if (invocation.executable === "sc.exe" && args[0] === "start" && args[1] !== undefined) {
+    return {
+      ...invocation,
+      arguments: ["stop", args[1]],
+      verb: "stop",
+      expectedExitCodes: [0, 1060, 1062],
+    };
+  }
+  if (invocation.executable === "sc.exe" && args[0] === "stop" && args[1] !== undefined) {
+    return {
+      ...invocation,
+      arguments: ["start", args[1]],
+      verb: "start",
+      expectedExitCodes: [0, 1056, 1060],
+    };
+  }
   if (invocation.executable === "sc.exe" && args[0] === "create" && args[1] !== undefined) {
     return {
       ...invocation,
@@ -1271,15 +1369,36 @@ async function runSupervisorInvocation(
   configuration: PlatformServiceConfiguration,
   invocation: CommandInvocation,
   process: NativeProcessBoundary,
+  clock: NativeClockBoundary,
   tools: NativeTools,
 ): Promise<NativeProcessResult> {
   const executable = resolveSupervisorExecutable(invocation.executable, tools);
   if (invocation.privilege !== "owner-session" || configuration.platform === "windows") {
-    return await process.run({
+    const result = await process.run({
       executable,
       arguments: invocation.arguments,
       timeoutMs: invocation.timeoutMs,
     });
+    if (
+      configuration.platform === "windows" &&
+      invocation.executable.toLowerCase() === "sc.exe" &&
+      invocation.arguments[0]?.toLowerCase() === "stop" &&
+      result.exitCode === 0 &&
+      !result.timedOut
+    ) {
+      const serviceName = invocation.arguments[1];
+      if (serviceName === undefined) {
+        throw new NativeSupervisorError("A Windows service stop command has no service name.");
+      }
+      await waitForWindowsServiceStopped({
+        executable,
+        serviceName,
+        timeoutMs: invocation.timeoutMs,
+        process,
+        clock,
+      });
+    }
+    return result;
   }
   if (configuration.platform === "macos") {
     return await process.run({
@@ -1306,6 +1425,65 @@ async function runSupervisorInvocation(
     timeoutMs: invocation.timeoutMs,
     environment: ownerEnvironment(configuration),
   });
+}
+
+async function waitForWindowsServiceStopped(input: {
+  readonly executable: string;
+  readonly serviceName: string;
+  readonly timeoutMs: number;
+  readonly process: NativeProcessBoundary;
+  readonly clock: NativeClockBoundary;
+}): Promise<void> {
+  const deadline = input.clock.now().getTime() + input.timeoutMs;
+  let transientInspectionFailures = 0;
+  for (;;) {
+    const remainingMs = deadline - input.clock.now().getTime();
+    if (remainingMs <= 0) {
+      throw new NativeSupervisorError(
+        "The Windows service did not reach a terminal stopped state before timeout.",
+      );
+    }
+    let status: NativeProcessResult;
+    try {
+      status = await input.process.run({
+        executable: input.executable,
+        arguments: ["query", input.serviceName],
+        timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
+      });
+      transientInspectionFailures = 0;
+    } catch (error) {
+      if (!(error instanceof NativeBoundaryError) || transientInspectionFailures >= 2) {
+        throw error;
+      }
+      transientInspectionFailures += 1;
+      const retryDelayMs = Math.min(500, deadline - input.clock.now().getTime());
+      if (retryDelayMs <= 0) {
+        throw error;
+      }
+      await input.clock.sleep(retryDelayMs);
+      continue;
+    }
+    if (!status.timedOut && status.exitCode === 1060) {
+      return;
+    }
+    if (
+      !status.timedOut &&
+      status.exitCode === 0 &&
+      windowsServiceStateCode(status.stdout) === "1"
+    ) {
+      return;
+    }
+    if (!status.timedOut && status.exitCode !== 0) {
+      throw new NativeSupervisorError("The Windows service stop state could not be inspected.");
+    }
+    const sleepMs = Math.min(500, deadline - input.clock.now().getTime());
+    if (sleepMs <= 0) {
+      throw new NativeSupervisorError(
+        "The Windows service did not reach a terminal stopped state before timeout.",
+      );
+    }
+    await input.clock.sleep(sleepMs);
+  }
 }
 
 function supervisorStatusRequest(
@@ -1383,7 +1561,7 @@ function parseSupervisorState(
       if (result.exitCode === 1060) {
         return "not-installed";
       }
-      const numeric = /\bSTATE\s*:\s*(\d+)\b/u.exec(result.stdout)?.[1];
+      const numeric = windowsServiceStateCode(result.stdout);
       return numeric === "4"
         ? "running"
         : numeric === "2"
@@ -1423,6 +1601,25 @@ function parseSupervisorState(
     return "stopped";
   }
   return result.exitCode === 4 ? "not-installed" : "unknown";
+}
+
+function windowsServiceStateCode(output: string): string | undefined {
+  const named =
+    /\b(STOPPED|START_PENDING|STOP_PENDING|RUNNING|CONTINUE_PENDING|PAUSE_PENDING|PAUSED)\b/iu
+      .exec(output)?.[1]
+      ?.toUpperCase();
+  if (named !== undefined) {
+    return {
+      STOPPED: "1",
+      START_PENDING: "2",
+      STOP_PENDING: "3",
+      RUNNING: "4",
+      CONTINUE_PENDING: "5",
+      PAUSE_PENDING: "6",
+      PAUSED: "7",
+    }[named];
+  }
+  return /^\s*[^:\r\n]+:\s*([1-7])(?:\s|$)/mu.exec(output)?.[1];
 }
 
 async function probeCoreOnce(
@@ -1572,7 +1769,7 @@ async function assertRenderedFilePreconditions(
   fileSystem: NativeFileSystemBoundary,
   platform: PlatformFamily,
 ): Promise<void> {
-  if (plan.operation === "reconfigure") {
+  if (plan.operation === "reconfigure" || plan.operation === "upgrade") {
     return;
   }
   for (const step of plan.steps) {
@@ -1636,13 +1833,28 @@ async function assertReconfigurationMatchesInstalled(
 
 async function assertUpgradeConfigurationMatchesInstalled(
   configuration: PlatformServiceConfiguration,
+  activeVersion: string,
   fileSystem: NativeFileSystemBoundary,
 ): Promise<void> {
-  for (const file of renderPlatformServiceArtifacts(configuration).files) {
-    const expected = encodeRenderedFile(file);
+  const installedConfiguration = parsePlatformServiceConfiguration({
+    ...configuration,
+    bundle: {
+      ...configuration.bundle,
+      version: activeVersion,
+    },
+  });
+  const installedFiles = new Map(
+    renderPlatformServiceArtifacts(installedConfiguration).files.map((file) => [file.path, file]),
+  );
+  for (const targetFile of renderPlatformServiceArtifacts(configuration).files) {
+    const installedFile = installedFiles.get(targetFile.path);
+    if (installedFile === undefined || installedFile.purpose !== targetFile.purpose) {
+      failPreflight("Upgrade requires the installed service topology to match the target version.");
+    }
+    const expected = encodeRenderedFile(installedFile);
     let existing: Buffer;
     try {
-      existing = await fileSystem.read(file.path, MAXIMUM_RENDERED_FILE_BYTES);
+      existing = await fileSystem.read(targetFile.path, MAXIMUM_RENDERED_FILE_BYTES);
     } catch (error) {
       throw new ServiceCommandExecutionError(
         "SERVICE_COMMAND_PREFLIGHT_FAILED",
@@ -1651,12 +1863,187 @@ async function assertUpgradeConfigurationMatchesInstalled(
         { cause: error },
       );
     }
-    if (!existing.equals(expected)) {
+    if (
+      !existing.equals(expected) &&
+      !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing) &&
+      !matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
+        configuration,
+        installedFile,
+        existing,
+      )
+    ) {
       failPreflight(
         "Upgrade refused a configuration that does not exactly match the installed service definitions.",
       );
     }
   }
+}
+
+function matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "windows" ||
+    configuration.role !== "worker" ||
+    installedFile.purpose !== "runtime-configuration" ||
+    installedFile.encoding !== "utf8"
+  ) {
+    return false;
+  }
+  let previous: Record<string, unknown>;
+  let expected: Record<string, unknown>;
+  try {
+    previous = requireJsonRecord(JSON.parse(existing.toString("utf8")) as unknown);
+    expected = requireJsonRecord(JSON.parse(installedFile.content) as unknown);
+  } catch {
+    return false;
+  }
+  const previousHelperBinding = nestedRecord(previous, "helperSecretBinding");
+  const expectedHelperBinding = nestedRecord(expected, "helperSecretBinding");
+  const previousIpc = nestedRecord(previous, "localIpc");
+  const expectedIpc = nestedRecord(expected, "localIpc");
+  if (previousIpc === undefined || expectedIpc === undefined) {
+    return false;
+  }
+  const previousCore = nestedRecord(previousIpc, "core");
+  const expectedCore = nestedRecord(expectedIpc, "core");
+  const previousHelper = nestedRecord(previousIpc, "helper");
+  const expectedHelper = nestedRecord(expectedIpc, "helper");
+  if (
+    previousHelperBinding === undefined ||
+    expectedHelperBinding === undefined ||
+    previousCore === undefined ||
+    expectedCore === undefined ||
+    previousHelper === undefined ||
+    expectedHelper === undefined ||
+    previousHelperBinding["backend"] !== "windows-dpapi" ||
+    expectedHelperBinding["backend"] !== "windows-dpapi"
+  ) {
+    return false;
+  }
+  const previousVaultRoot = previousHelperBinding["vaultRoot"];
+  const expectedVaultRoot = expectedHelperBinding["vaultRoot"];
+  if (
+    typeof previousVaultRoot !== "string" ||
+    typeof expectedVaultRoot !== "string" ||
+    !safeWindowsOwnerVault(configuration, previousVaultRoot) ||
+    !safeWindowsOwnerVault(configuration, expectedVaultRoot) ||
+    !coherentIpcCredentialPair(previousCore, previousHelper) ||
+    !coherentIpcCredentialPair(expectedCore, expectedHelper)
+  ) {
+    return false;
+  }
+  const changed =
+    previousVaultRoot !== expectedVaultRoot ||
+    previousCore["keyId"] !== expectedCore["keyId"] ||
+    previousCore["publicKeySpkiBase64Url"] !== expectedCore["publicKeySpkiBase64Url"];
+  if (!changed) {
+    return false;
+  }
+
+  // The elevated upgrade target is authoritative for the staged owner vault
+  // and core IPC identity. Normalize only those mutually redundant fields;
+  // stable equality below still rejects every unrelated installed drift.
+  previousHelperBinding["vaultRoot"] = expectedVaultRoot;
+  previousCore["keyId"] = expectedCore["keyId"];
+  previousCore["publicKeySpkiBase64Url"] = expectedCore["publicKeySpkiBase64Url"];
+  previousHelper["peerKeyId"] = expectedHelper["peerKeyId"];
+  previousHelper["peerPublicKeySpkiBase64Url"] = expectedHelper["peerPublicKeySpkiBase64Url"];
+  return stableJson(previous) === stableJson(expected);
+}
+
+function requireJsonRecord(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Expected a JSON object.");
+  }
+  return value as Record<string, unknown>;
+}
+
+function nestedRecord(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  try {
+    return requireJsonRecord(value[key]);
+  } catch {
+    return undefined;
+  }
+}
+
+function coherentIpcCredentialPair(
+  core: Record<string, unknown>,
+  helper: Record<string, unknown>,
+): boolean {
+  const keyId = core["keyId"];
+  const publicKey = core["publicKeySpkiBase64Url"];
+  return (
+    typeof keyId === "string" &&
+    /^sha256:[0-9a-f]{64}$/u.test(keyId) &&
+    typeof publicKey === "string" &&
+    /^[A-Za-z0-9_-]{40,256}$/u.test(publicKey) &&
+    helper["peerKeyId"] === keyId &&
+    helper["peerPublicKeySpkiBase64Url"] === publicKey
+  );
+}
+
+function safeWindowsOwnerVault(
+  configuration: PlatformServiceConfiguration,
+  vaultRoot: string,
+): boolean {
+  if (!win32.isAbsolute(vaultRoot)) {
+    return false;
+  }
+  return [
+    configuration.paths.installRoot,
+    configuration.paths.stateRoot,
+    configuration.paths.authorityRoot,
+    configuration.paths.runtimeRoot,
+    configuration.paths.logRoot,
+  ].every((controlledRoot) => !windowsPathsOverlap(controlledRoot, vaultRoot));
+}
+
+function windowsPathsOverlap(left: string, right: string): boolean {
+  const normalizedLeft = win32.resolve(left).toLocaleLowerCase("en-US");
+  const normalizedRight = win32.resolve(right).toLocaleLowerCase("en-US");
+  const leftToRight = win32.relative(normalizedLeft, normalizedRight);
+  const rightToLeft = win32.relative(normalizedRight, normalizedLeft);
+  return pathRelationshipIsWithin(leftToRight) || pathRelationshipIsWithin(rightToLeft);
+}
+
+function pathRelationshipIsWithin(relationship: string): boolean {
+  return (
+    relationship === "" ||
+    (!relationship.startsWith(`..${win32.sep}`) &&
+      relationship !== ".." &&
+      !win32.isAbsolute(relationship))
+  );
+}
+
+function matchesLegacyWindowsRestrictedSidManifest(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "windows" ||
+    installedFile.purpose !== "core-manifest" ||
+    installedFile.encoding !== "utf8"
+  ) {
+    return false;
+  }
+  const declared = '"serviceSidType": "unrestricted"';
+  const legacy = '"serviceSidType": "restricted"';
+  const first = installedFile.content.indexOf(declared);
+  if (first < 0 || installedFile.content.indexOf(declared, first + declared.length) >= 0) {
+    return false;
+  }
+  const legacyFile: RenderedFile = {
+    ...installedFile,
+    content: `${installedFile.content.slice(0, first)}${legacy}${installedFile.content.slice(first + declared.length)}`,
+  };
+  return existing.equals(encodeRenderedFile(legacyFile));
 }
 
 function assertCanonicalPlan(
@@ -1759,7 +2146,9 @@ function assertFilesystemActionAllowed(
     configuration,
   }).steps;
   for (const step of artifacts) {
-    if (step.action.kind === "file.write") {
+    if (step.action.kind === "directory.ensure") {
+      allowedExact.add(step.action.path);
+    } else if (step.action.kind === "file.write") {
       allowedExact.add(step.action.file.path);
     }
   }
@@ -1836,6 +2225,7 @@ interface NativeTools {
   readonly sc: string;
   readonly schtasks: string;
   readonly icacls: string;
+  readonly takeown: string;
   readonly launchctl: string;
   readonly systemctl: string;
   readonly runuser: string;
@@ -1857,6 +2247,7 @@ function nativeTools(): NativeTools {
     sc: win32.join(systemRoot, "System32", "sc.exe"),
     schtasks: win32.join(systemRoot, "System32", "schtasks.exe"),
     icacls: win32.join(systemRoot, "System32", "icacls.exe"),
+    takeown: win32.join(systemRoot, "System32", "takeown.exe"),
     launchctl: "/bin/launchctl",
     systemctl: "/usr/bin/systemctl",
     runuser: "/usr/sbin/runuser",
@@ -1891,6 +2282,7 @@ function requiredNativeTools(
     if (step.action.kind === "directory.ensure") {
       if (configuration.platform === "windows") {
         required.add(tools.icacls);
+        required.add(tools.takeown);
       } else {
         required.add(tools.id);
       }

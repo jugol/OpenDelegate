@@ -58,7 +58,12 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
 
   private constructor(context: SqlDatabaseContext, retryPolicy: SqlRetryPolicy) {
     this.#context = context;
-    this.#transactions = new SqlTransactionRunner(context.database, context.backend, retryPolicy);
+    this.#transactions = new SqlTransactionRunner(
+      context.database,
+      context.backend,
+      retryPolicy,
+      context.writeCoordinator,
+    );
   }
 
   public static async openSqlite(
@@ -306,6 +311,18 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
           starter_message_id: binding.starterMessageId,
           task_id: binding.taskId,
           status_panel_message_id: binding.statusPanelMessageId ?? null,
+          activity_surface_json:
+            binding.activitySurface === undefined
+              ? null
+              : encodeCanonicalJson(binding.activitySurface),
+          failure_surface_json:
+            binding.failureSurface === undefined
+              ? null
+              : encodeCanonicalJson(binding.failureSurface),
+          owner_prompt_surface_json:
+            binding.ownerPromptSurface === undefined
+              ? null
+              : encodeCanonicalJson(binding.ownerPromptSurface),
           last_reconciled_message_id: binding.lastReconciledMessageId ?? null,
           external_state: binding.externalState,
           archived: this.#dbBoolean(binding.archived),
@@ -322,7 +339,14 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
     patch: Partial<
       Pick<
         DiscordTaskBinding,
-        "statusPanelMessageId" | "lastReconciledMessageId" | "externalState" | "archived" | "locked"
+        | "statusPanelMessageId"
+        | "activitySurface"
+        | "failureSurface"
+        | "ownerPromptSurface"
+        | "lastReconciledMessageId"
+        | "externalState"
+        | "archived"
+        | "locked"
       >
     >,
   ): Promise<DiscordTaskBinding> {
@@ -360,6 +384,18 @@ export class SqlDiscordStateRepository implements DiscordStateRepository {
         .updateTable("od_discord_task_bindings")
         .set({
           status_panel_message_id: updated.statusPanelMessageId ?? null,
+          activity_surface_json:
+            updated.activitySurface === undefined
+              ? null
+              : encodeCanonicalJson(updated.activitySurface),
+          failure_surface_json:
+            updated.failureSurface === undefined
+              ? null
+              : encodeCanonicalJson(updated.failureSurface),
+          owner_prompt_surface_json:
+            updated.ownerPromptSurface === undefined
+              ? null
+              : encodeCanonicalJson(updated.ownerPromptSurface),
           last_reconciled_message_id: updated.lastReconciledMessageId ?? null,
           external_state: updated.externalState,
           archived: this.#dbBoolean(updated.archived),
@@ -709,6 +745,15 @@ function decodeBinding(row: Selectable<DiscordTaskBindingsTable>): DiscordTaskBi
     ...(row.status_panel_message_id === null
       ? {}
       : { statusPanelMessageId: row.status_panel_message_id }),
+    ...(row.activity_surface_json === null
+      ? {}
+      : { activitySurface: decodeActivitySurface(row.activity_surface_json) }),
+    ...(row.failure_surface_json === null
+      ? {}
+      : { failureSurface: decodeFailureSurface(row.failure_surface_json) }),
+    ...(row.owner_prompt_surface_json === null
+      ? {}
+      : { ownerPromptSurface: decodeOwnerPromptSurface(row.owner_prompt_surface_json) }),
     ...(row.last_reconciled_message_id === null
       ? {}
       : { lastReconciledMessageId: row.last_reconciled_message_id }),
@@ -726,6 +771,28 @@ function decodeBinding(row: Selectable<DiscordTaskBindingsTable>): DiscordTaskBi
     throw dataCorrupt("A Discord Task binding revision must be positive.");
   }
   return deepFreeze(binding);
+}
+
+function decodeActivitySurface(
+  encoded: string,
+): NonNullable<DiscordTaskBinding["activitySurface"]> {
+  const value = decodeCanonicalJson(encoded);
+  validateActivitySurface(value);
+  return deepFreeze(value);
+}
+
+function decodeFailureSurface(encoded: string): NonNullable<DiscordTaskBinding["failureSurface"]> {
+  const value = decodeCanonicalJson(encoded);
+  validateFailureSurface(value);
+  return deepFreeze(value);
+}
+
+function decodeOwnerPromptSurface(
+  encoded: string,
+): NonNullable<DiscordTaskBinding["ownerPromptSurface"]> {
+  const value = decodeCanonicalJson(encoded);
+  validateOwnerPromptSurface(value);
+  return deepFreeze(value);
 }
 
 function decodeOutbox(row: Selectable<DiscordOutboxTable>): DiscordOutboxItem {
@@ -798,6 +865,15 @@ function validateNewBinding(
   if (binding.statusPanelMessageId !== undefined) {
     assertSnowflake(binding.statusPanelMessageId, "Discord status panel message ID");
   }
+  if (binding.activitySurface !== undefined) {
+    validateActivitySurface(binding.activitySurface);
+  }
+  if (binding.failureSurface !== undefined) {
+    validateFailureSurface(binding.failureSurface);
+  }
+  if (binding.ownerPromptSurface !== undefined) {
+    validateOwnerPromptSurface(binding.ownerPromptSurface);
+  }
   if (binding.lastReconciledMessageId !== undefined) {
     assertSnowflake(binding.lastReconciledMessageId, "Discord reconciled message ID");
   }
@@ -810,17 +886,95 @@ function validateNewBinding(
   }
 }
 
+function validateActivitySurface(
+  value: unknown,
+): asserts value is NonNullable<DiscordTaskBinding["activitySurface"]> {
+  const surface = assertPlainRecord(value, "Discord Task activity surface");
+  assertOnlyKeys(surface, [
+    "cycleId",
+    "revision",
+    "updatedAtMs",
+    "outboxCreatedAtMs",
+    "state",
+    "messageId",
+  ]);
+  const cycleId = requireBoundedString(surface["cycleId"], "Task activity cycle ID", 160);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(cycleId)) {
+    throw persistenceConflict();
+  }
+  const revision = requireSafeNonNegative(surface["revision"], "Task activity revision");
+  if (revision < 1) {
+    throw persistenceConflict();
+  }
+  requireSafeNonNegative(surface["updatedAtMs"], "Task activity update timestamp");
+  requireSafeNonNegative(surface["outboxCreatedAtMs"], "Task activity outbox timestamp");
+  const state = requireOneOf(surface["state"], ["open", "closing", "closed"]);
+  if (state === "closed") {
+    if (surface["messageId"] !== undefined) {
+      throw persistenceConflict();
+    }
+  } else {
+    assertSnowflake(surface["messageId"], "Discord Task activity message ID");
+  }
+}
+
+function validateFailureSurface(
+  value: unknown,
+): asserts value is NonNullable<DiscordTaskBinding["failureSurface"]> {
+  const surface = assertPlainRecord(value, "Discord Task failure surface");
+  assertOnlyKeys(surface, [
+    "requestKey",
+    "sourceEventId",
+    "messageId",
+    "outboxCreatedAtMs",
+    "state",
+  ]);
+  requireBoundedString(surface["requestKey"], "Discord failure request key", 512);
+  requireBoundedString(surface["sourceEventId"], "Discord failure source event ID", 160);
+  assertSnowflake(surface["messageId"], "Discord Task failure message ID");
+  requireSafeNonNegative(surface["outboxCreatedAtMs"], "Task failure outbox timestamp");
+  requireOneOf(surface["state"], ["open", "resolved"]);
+}
+
+function validateOwnerPromptSurface(
+  value: unknown,
+): asserts value is NonNullable<DiscordTaskBinding["ownerPromptSurface"]> {
+  const surface = assertPlainRecord(value, "Discord owner prompt surface");
+  assertOnlyKeys(surface, [
+    "requestKey",
+    "sourceEventId",
+    "messageId",
+    "outboxCreatedAtMs",
+    "state",
+  ]);
+  requireBoundedString(surface["requestKey"], "Discord prompt request key", 512);
+  requireBoundedString(surface["sourceEventId"], "Discord prompt source event ID", 160);
+  assertSnowflake(surface["messageId"], "Discord owner prompt message ID");
+  requireSafeNonNegative(surface["outboxCreatedAtMs"], "Discord prompt outbox timestamp");
+  requireOneOf(surface["state"], ["open", "resolved"]);
+}
+
 function validateBindingPatch(
   patch: Partial<
     Pick<
       DiscordTaskBinding,
-      "statusPanelMessageId" | "lastReconciledMessageId" | "externalState" | "archived" | "locked"
+      | "statusPanelMessageId"
+      | "activitySurface"
+      | "failureSurface"
+      | "ownerPromptSurface"
+      | "lastReconciledMessageId"
+      | "externalState"
+      | "archived"
+      | "locked"
     >
   >,
 ): void {
   assertPlainRecord(patch, "Discord Task binding patch");
   assertOnlyKeys(patch, [
     "statusPanelMessageId",
+    "activitySurface",
+    "failureSurface",
+    "ownerPromptSurface",
     "lastReconciledMessageId",
     "externalState",
     "archived",
@@ -828,6 +982,15 @@ function validateBindingPatch(
   ]);
   if (hasOwn(patch, "statusPanelMessageId")) {
     assertSnowflake(patch.statusPanelMessageId, "Discord status panel message ID");
+  }
+  if (hasOwn(patch, "activitySurface") && patch.activitySurface !== undefined) {
+    validateActivitySurface(patch.activitySurface);
+  }
+  if (hasOwn(patch, "failureSurface") && patch.failureSurface !== undefined) {
+    validateFailureSurface(patch.failureSurface);
+  }
+  if (hasOwn(patch, "ownerPromptSurface") && patch.ownerPromptSurface !== undefined) {
+    validateOwnerPromptSurface(patch.ownerPromptSurface);
   }
   if (hasOwn(patch, "lastReconciledMessageId")) {
     assertSnowflake(patch.lastReconciledMessageId, "Discord reconciled message ID");
@@ -851,7 +1014,14 @@ function applyBindingPatch(
   patch: Partial<
     Pick<
       DiscordTaskBinding,
-      "statusPanelMessageId" | "lastReconciledMessageId" | "externalState" | "archived" | "locked"
+      | "statusPanelMessageId"
+      | "activitySurface"
+      | "failureSurface"
+      | "ownerPromptSurface"
+      | "lastReconciledMessageId"
+      | "externalState"
+      | "archived"
+      | "locked"
     >
   >,
 ): DiscordTaskBinding {
@@ -859,6 +1029,11 @@ function applyBindingPatch(
     ...current,
     ...(hasOwn(patch, "statusPanelMessageId")
       ? { statusPanelMessageId: patch.statusPanelMessageId }
+      : {}),
+    ...(hasOwn(patch, "activitySurface") ? { activitySurface: patch.activitySurface } : {}),
+    ...(hasOwn(patch, "failureSurface") ? { failureSurface: patch.failureSurface } : {}),
+    ...(hasOwn(patch, "ownerPromptSurface")
+      ? { ownerPromptSurface: patch.ownerPromptSurface }
       : {}),
     ...(hasOwn(patch, "lastReconciledMessageId")
       ? { lastReconciledMessageId: patch.lastReconciledMessageId }
@@ -919,11 +1094,75 @@ function validateOutboxAction(value: unknown): asserts value is DiscordOutboxAct
     validateProjection(action["projection"]);
     return;
   }
+  if (kind === "refresh-task-failure") {
+    assertOnlyKeys(action, ["kind", "taskId", "failureRequestKey", "projection"]);
+    requireTaskId(action["taskId"]);
+    requireBoundedString(action["failureRequestKey"], "Discord failure request key", 512);
+    validateProjection(action["projection"]);
+    const projection = action["projection"] as TaskChannelProjection;
+    if (projection.significance !== "failure") {
+      throw persistenceConflict();
+    }
+    return;
+  }
+  if (kind === "refresh-owner-prompt") {
+    assertOnlyKeys(action, ["kind", "taskId", "promptRequestKey", "projection"]);
+    requireTaskId(action["taskId"]);
+    requireBoundedString(action["promptRequestKey"], "Discord prompt request key", 512);
+    validateProjection(action["projection"]);
+    const projection = action["projection"] as TaskChannelProjection;
+    if (projection.significance !== "question") {
+      throw persistenceConflict();
+    }
+    return;
+  }
+  if (kind === "upsert-task-activity") {
+    assertOnlyKeys(action, ["kind", "taskId", "projection"]);
+    requireTaskId(action["taskId"]);
+    validateProjection(action["projection"]);
+    const projection = action["projection"] as TaskChannelProjection;
+    if (projection.activity === undefined) {
+      throw persistenceConflict();
+    }
+    return;
+  }
+  if (kind === "close-task-activity") {
+    assertOnlyKeys(action, [
+      "kind",
+      "taskId",
+      "cycleId",
+      "revision",
+      "updatedAtMs",
+      "afterRequestKey",
+    ]);
+    requireTaskId(action["taskId"]);
+    requireBoundedString(action["cycleId"], "Task activity cycle ID", 160);
+    if (requireSafeNonNegative(action["revision"], "Task activity revision") < 1) {
+      throw persistenceConflict();
+    }
+    requireSafeNonNegative(action["updatedAtMs"], "Task activity update timestamp");
+    requireBoundedString(action["afterRequestKey"], "Discord prerequisite request key", 512);
+    return;
+  }
   if (kind === "resolve-owner-prompt") {
     assertOnlyKeys(action, ["kind", "taskId", "promptRequestKey", "projection"]);
     requireTaskId(action["taskId"]);
     requireBoundedString(action["promptRequestKey"], "Discord prompt request key", 512);
     validateProjection(action["projection"]);
+    return;
+  }
+  if (kind === "resolve-task-failure") {
+    assertOnlyKeys(action, ["kind", "taskId", "failureRequestKey", "projection"]);
+    requireTaskId(action["taskId"]);
+    requireBoundedString(action["failureRequestKey"], "Discord failure request key", 512);
+    validateProjection(action["projection"]);
+    const projection = action["projection"] as TaskChannelProjection;
+    if (
+      projection.significance !== "failure" &&
+      !(projection.significance === "final" && projection.state === "cancelled")
+    ) {
+      throw persistenceConflict();
+    }
     return;
   }
   if (kind === "complete-owner-message") {
@@ -990,6 +1229,7 @@ function validateProjection(value: unknown): asserts value is TaskChannelProject
     "approval",
     "artifact",
     "inspectUrl",
+    "activity",
   ]);
   requireTaskId(projection["taskId"]);
   if (projection["sourceEventId"] !== undefined) {
@@ -1025,6 +1265,55 @@ function validateProjection(value: unknown): asserts value is TaskChannelProject
   }
   if (projection["inspectUrl"] !== undefined) {
     requireSafeHttpUrl(projection["inspectUrl"], "Task inspection URL");
+  }
+  if (projection["activity"] !== undefined) {
+    validateActivityProjection(projection["activity"]);
+  }
+}
+
+function validateActivityProjection(value: unknown): void {
+  const activity = assertPlainRecord(value, "Discord Task activity projection");
+  assertOnlyKeys(activity, [
+    "cycleId",
+    "revision",
+    "updatedAtMs",
+    "phase",
+    "completedWorkOrders",
+    "totalWorkOrders",
+    "milestones",
+  ]);
+  const cycleId = requireBoundedString(activity["cycleId"], "Task activity cycle ID", 160);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(cycleId)) {
+    throw persistenceConflict();
+  }
+  if (requireSafeNonNegative(activity["revision"], "Task activity revision") < 1) {
+    throw persistenceConflict();
+  }
+  requireSafeNonNegative(activity["updatedAtMs"], "Task activity update timestamp");
+  requireOneOf(activity["phase"], ["planning", "dispatching", "working", "verifying"]);
+  const completed = requireSafeNonNegative(
+    activity["completedWorkOrders"],
+    "Completed Work Orders",
+  );
+  const total = requireSafeNonNegative(activity["totalWorkOrders"], "Total Work Orders");
+  if (completed > total || !Array.isArray(activity["milestones"])) {
+    throw persistenceConflict();
+  }
+  if (activity["milestones"].length < 1 || activity["milestones"].length > 4) {
+    throw persistenceConflict();
+  }
+  for (const value of activity["milestones"]) {
+    const milestone = assertPlainRecord(value, "Task activity milestone");
+    assertOnlyKeys(milestone, ["key", "status", "summary", "deviceId", "deviceLabel"]);
+    requireBoundedString(milestone["key"], "Task activity milestone key", 160);
+    requireOneOf(milestone["status"], ["active", "completed"]);
+    requireBoundedString(milestone["summary"], "Task activity milestone summary", 1_024);
+    if (milestone["deviceId"] !== undefined) {
+      requireBoundedString(milestone["deviceId"], "Task activity Device ID", 160);
+    }
+    if (milestone["deviceLabel"] !== undefined) {
+      requireBoundedString(milestone["deviceLabel"], "Task activity Device label", 253);
+    }
   }
 }
 

@@ -52,7 +52,7 @@ describe("Worker connection diagnostics", () => {
     assert.deepEqual(diagnostics, [{ code: "CERTIFICATE_EXPIRED", retryable: false }]);
   });
 
-  it("stays quiet for ordinary transport failures that retrying can still resolve", async () => {
+  it("reports an ordinary transport failure once while continuing to retry it", async () => {
     const controller = new AbortController();
     let connectionCount = 0;
     const onConnectionDiagnostic = mock.fn((_diagnostic: WorkerConnectionDiagnostic) => undefined);
@@ -78,7 +78,10 @@ describe("Worker connection diagnostics", () => {
       },
     );
 
-    assert.equal(onConnectionDiagnostic.mock.callCount(), 0);
+    assert.equal(onConnectionDiagnostic.mock.callCount(), 1);
+    assert.deepEqual(onConnectionDiagnostic.mock.calls[0]?.arguments, [
+      { code: "TRANSPORT_BOUNDARY_ERROR", retryable: true },
+    ]);
   });
 
   it("reports a blocking cause again only after a successful connection cleared it", async () => {

@@ -24,6 +24,7 @@ import {
   provisionHeadlessLinuxSecretBackend,
   restoreWindowsServiceSecretBackend,
   registerWorkerWorkspace,
+  setWorkerWorkspaceIsolation,
   resolveWorkerPaths,
   runPlatformMutationMcpStdioServer,
   runWorkerDaemon,
@@ -59,7 +60,8 @@ export type WorkerCliCommand =
   | "windows-service-secret-restore"
   | "windows-service-secret-stage"
   | "workspace-list"
-  | "workspace-register";
+  | "workspace-register"
+  | "workspace-set-isolation";
 
 export interface ParsedWorkerArguments {
   readonly command: WorkerCliCommand;
@@ -105,8 +107,12 @@ export interface ParsedWorkerArguments {
     readonly alias: string;
     readonly type: "directory" | "git" | "mounted-storage";
     readonly rootPath: string;
-    readonly isolation: "agent-native-worktree" | "none";
+    readonly isolation: "agent-native-worktree" | "opendelegate-worktree" | "none";
     readonly capabilities: readonly string[];
+  };
+  readonly workspaceIsolationUpdate?: {
+    readonly workspaceId: string;
+    readonly isolation: "agent-native-worktree" | "opendelegate-worktree" | "none";
   };
 }
 
@@ -135,7 +141,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "windows-service-secret-restore" &&
     command !== "windows-service-secret-stage" &&
     command !== "workspace-list" &&
-    command !== "workspace-register"
+    command !== "workspace-register" &&
+    command !== "workspace-set-isolation"
   ) {
     throw new WorkerAppError("CONFIG_INVALID", `Unknown Worker command: ${rawCommand}.`);
   }
@@ -163,10 +170,12 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   let workspaceAlias: string | undefined;
   let workspaceType: "directory" | "git" | "mounted-storage" | undefined;
   let workspacePath: string | undefined;
-  let workspaceIsolation: "agent-native-worktree" | "none" | undefined;
+  let workspaceIsolation: "agent-native-worktree" | "opendelegate-worktree" | "none" | undefined;
   const workspaceCapabilities: string[] = [];
   let agentProvider: WorkerAgentConfiguration["provider"] | undefined;
+  let codexExecutable: string | undefined;
   let codexHome: string | undefined;
+  let claudeExecutable: string | undefined;
   let claudeHome: string | undefined;
   const claudeAllowedNetworkDomains: string[] = [];
   const uniqueOptions = new Set<string>();
@@ -190,7 +199,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       option !== "--isolation" &&
       option !== "--capability" &&
       option !== "--agent" &&
+      option !== "--codex-executable" &&
       option !== "--codex-home" &&
+      option !== "--claude-executable" &&
       option !== "--claude-home" &&
       option !== "--claude-network-domain" &&
       option !== "--output" &&
@@ -307,10 +318,14 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
         workspacePath = resolve(target);
         break;
       case "--isolation":
-        if (target !== "none" && target !== "agent-native-worktree") {
+        if (
+          target !== "none" &&
+          target !== "agent-native-worktree" &&
+          target !== "opendelegate-worktree"
+        ) {
           throw new WorkerAppError(
             "CONFIG_INVALID",
-            "--isolation must be none or agent-native-worktree.",
+            "--isolation must be none, agent-native-worktree, or opendelegate-worktree.",
           );
         }
         workspaceIsolation = target;
@@ -330,8 +345,14 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
         }
         agentProvider = target;
         break;
+      case "--codex-executable":
+        codexExecutable = resolve(target);
+        break;
       case "--codex-home":
         codexHome = resolve(target);
+        break;
+      case "--claude-executable":
+        claudeExecutable = resolve(target);
         break;
       case "--claude-home":
         claudeHome = resolve(target);
@@ -359,7 +380,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   }
   const hasAgentOption =
     agentProvider !== undefined ||
+    codexExecutable !== undefined ||
     codexHome !== undefined ||
+    claudeExecutable !== undefined ||
     claudeHome !== undefined ||
     claudeAllowedNetworkDomains.length > 0;
   if (command !== "join" && hasAgentOption) {
@@ -543,10 +566,28 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     workspacePath !== undefined ||
     workspaceIsolation !== undefined ||
     workspaceCapabilities.length > 0;
-  if (command !== "workspace-register" && hasWorkspaceOption) {
+  if (
+    command !== "workspace-register" &&
+    command !== "workspace-set-isolation" &&
+    hasWorkspaceOption
+  ) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
       "Workspace options are accepted only by worker workspace-register.",
+    );
+  }
+  if (
+    command === "workspace-set-isolation" &&
+    (workspaceId === undefined ||
+      workspaceIsolation === undefined ||
+      workspaceAlias !== undefined ||
+      workspaceType !== undefined ||
+      workspacePath !== undefined ||
+      workspaceCapabilities.length > 0)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "workspace-set-isolation requires only --workspace-id and --isolation.",
     );
   }
   if (
@@ -576,7 +617,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
           agent: {
             provider: agentProvider ?? "auto",
             allowUntestedVersion: false,
+            ...(codexExecutable === undefined ? {} : { codexExecutable }),
             ...(codexHome === undefined ? {} : { codexHome }),
+            ...(claudeExecutable === undefined ? {} : { claudeExecutable }),
             ...(claudeHome === undefined ? {} : { claudeHome }),
             ...(claudeAllowedNetworkDomains.length === 0
               ? {}
@@ -648,6 +691,14 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
             rootPath: workspacePath!,
             isolation: workspaceIsolation!,
             capabilities: workspaceCapabilities,
+          },
+        }),
+    ...(command !== "workspace-set-isolation"
+      ? {}
+      : {
+          workspaceIsolationUpdate: {
+            workspaceId: workspaceId!,
+            isolation: workspaceIsolation!,
           },
         }),
   };
@@ -873,6 +924,21 @@ async function run(arguments_: readonly string[]): Promise<void> {
     });
     return;
   }
+  if (parsed.command === "workspace-set-isolation") {
+    const workspace = await setWorkerWorkspaceIsolation({
+      paths,
+      ...parsed.workspaceIsolationUpdate!,
+    });
+    writeJson({
+      event: "worker.workspace.isolation-set",
+      workspace: {
+        workspaceId: workspace.workspaceId,
+        isolation: workspace.isolation,
+        revision: workspace.revision,
+      },
+    });
+    return;
+  }
   await runForeground(paths);
 }
 
@@ -938,12 +1004,21 @@ function isInternalMcpBridge(command: WorkerCliCommand): boolean {
 async function runForeground(paths: WorkerPaths): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => controller.abort();
+  const watchStdin =
+    process.env["OPENDELEGATE_NATIVE_SERVICE"] === "1" ||
+    process.env["OPENDELEGATE_TEST_EXIT_ON_STDIN_END"] === "1";
+  const stdinWasFlowing = process.stdin.readableFlowing === true;
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  if (watchStdin) {
+    process.stdin.once("end", stop);
+    process.stdin.resume();
+  }
   try {
     writeJson({ event: "worker.starting", home: paths.home });
     await runWorkerDaemon({
       paths,
+      releaseVersion: await readProductVersion(),
       signal: controller.signal,
       onCertificateRenewal: (outcome: WorkerCertificateRenewalOutcome) => {
         if (outcome.status === "renewed") {
@@ -974,6 +1049,12 @@ async function runForeground(paths: WorkerPaths): Promise<void> {
   } finally {
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
+    if (watchStdin) {
+      process.stdin.off("end", stop);
+      if (!stdinWasFlowing) {
+        process.stdin.pause();
+      }
+    }
   }
 }
 
@@ -1005,8 +1086,9 @@ function printHelp(): void {
 Usage:
   opendelegate worker join --grant-file <absolute-path> [--home <path>]
     [--secret-backend-config <absolute-path>]
-    [--agent auto|codex|claude] [--codex-home <absolute-path>]
-    [--claude-home <absolute-path>]
+    [--agent auto|codex|claude]
+    [--codex-executable <absolute-native-executable>] [--codex-home <absolute-path>]
+    [--claude-executable <absolute-native-executable>] [--claude-home <absolute-path>]
     [--claude-network-domain <dns-name> ...]
   opendelegate worker secret-backend-provision
     --secret-backend-config ABSOLUTE_PATH
@@ -1028,7 +1110,10 @@ Usage:
   opendelegate worker diagnose [--home <path>]
   opendelegate worker workspace-register --workspace-id ID --alias NAME
     --type directory|git|mounted-storage --path ABSOLUTE_PATH
-    --isolation none|agent-native-worktree [--capability NAME ...] [--home <path>]
+    --isolation none|agent-native-worktree|opendelegate-worktree
+    [--capability NAME ...] [--home <path>]
+  opendelegate worker workspace-set-isolation --workspace-id ID
+    --isolation none|agent-native-worktree|opendelegate-worktree [--home <path>]
   opendelegate worker workspace-list [--home <path>]
   opendelegate worker version
 

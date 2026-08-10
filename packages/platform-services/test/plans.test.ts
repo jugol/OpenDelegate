@@ -58,6 +58,26 @@ test("install/start/stop/restart plans are deterministic and supervise both plan
       ),
       true,
     );
+    const configRootIndex = install.steps.findIndex((step) => step.id === "ensure-config-root");
+    const manifestRootIndex = install.steps.findIndex((step) => step.id === "ensure-manifest-root");
+    const firstRenderedFileIndex = install.steps.findIndex(
+      (step) => step.action.kind === "file.write",
+    );
+    assert.ok(configRootIndex >= 0 && configRootIndex < firstRenderedFileIndex);
+    assert.ok(manifestRootIndex >= 0 && manifestRootIndex < firstRenderedFileIndex);
+    if (configuration.platform === "windows") {
+      const promoteIndex = install.steps.findIndex((step) => step.id === "promote-release");
+      const secureReleaseIndex = install.steps.findIndex(
+        (step) => step.id === "secure-release-root",
+      );
+      const activateIndex = install.steps.findIndex((step) => step.id === "activate-release");
+      assert.ok(promoteIndex < secureReleaseIndex && secureReleaseIndex < activateIndex);
+    } else {
+      assert.equal(
+        install.steps.some((step) => step.id === "secure-release-root"),
+        false,
+      );
+    }
     assert.ok(install.steps.some((step) => step.action.kind === "release.stage"));
     assert.ok(install.steps.some((step) => step.action.kind === "health.check"));
     assert.ok(
@@ -77,6 +97,69 @@ test("install/start/stop/restart plans are deterministic and supervise both plan
       step.action.kind === "supervisor.invoke" ? [step.action.command.verb] : [],
     );
     assert.deepEqual(supervisorVerbs, ["stop", "stop", "start", "start"]);
+  }
+});
+
+test("Windows install grants the virtual service temporary full control of its DPAPI vault", () => {
+  const configuration = windowsConfiguration({
+    serviceSecretBinding: {
+      backend: "windows-service-dpapi",
+      handoffRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\handoff",
+      serviceName: "OpenDelegate-personal",
+      serviceSid: "S-1-5-80-1-2-3-4-5",
+      vaultRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service",
+    },
+  });
+  const install = createServicePlan({ operation: "install", configuration });
+  const vault = install.steps.find((step) => step.id === "ensure-service-secret-vault");
+  assert.ok(vault);
+  assert.equal(vault.action.kind, "directory.ensure");
+  assert.equal(vault.action.path, configuration.serviceSecretBinding?.vaultRoot);
+  assert.equal(vault.action.access.owner, "NT SERVICE\\OpenDelegate-personal");
+  assert.deepEqual(vault.action.access.grants, [
+    { principal: "BUILTIN\\Administrators", permission: "full-control" },
+    { principal: "NT SERVICE\\OpenDelegate-personal", permission: "full-control" },
+  ]);
+  assert.ok(
+    install.steps.findIndex((step) => step.id === "ensure-service-secret-vault") <
+      install.steps.findIndex((step) => step.id === "start-core"),
+  );
+});
+
+test("Windows lifecycle plans repair only the Codex sandbox helper ACL before start", () => {
+  const sandboxDirectory = "C:\\Users\\owner\\.codex\\.sandbox-bin";
+  const configuration = windowsConfiguration({
+    agentSandbox: { codexSandboxBinDirectory: sandboxDirectory },
+  });
+  for (const input of [
+    { operation: "install" as const, configuration },
+    { operation: "start" as const, configuration, activeVersion: "1.2.3" },
+    { operation: "restart" as const, configuration, activeVersion: "1.2.3" },
+    {
+      operation: "upgrade" as const,
+      configuration: windowsConfiguration({
+        agentSandbox: { codexSandboxBinDirectory: sandboxDirectory },
+        bundle: { ...configuration.bundle, version: "1.2.4" },
+      }),
+      activeVersion: "1.2.3",
+    },
+  ]) {
+    const plan = createServicePlan(input);
+    const sandbox = plan.steps.find((step) => step.id === "ensure-codex-sandbox-helper");
+    assert.ok(sandbox);
+    assert.equal(sandbox.action.kind, "directory.ensure");
+    assert.equal(sandbox.action.path, sandboxDirectory);
+    assert.equal(sandbox.action.access.owner, "S-1-5-21-1000");
+    assert.deepEqual(sandbox.action.access.grants, [
+      { principal: "BUILTIN\\Administrators", permission: "full-control" },
+      { principal: "S-1-5-18", permission: "full-control" },
+      { principal: "S-1-5-21-1000", permission: "full-control" },
+      { principal: "NT SERVICE\\OpenDelegate-personal", permission: "full-control" },
+    ]);
+    assert.ok(
+      plan.steps.findIndex((step) => step.id === "ensure-codex-sandbox-helper") <
+        plan.steps.findIndex((step) => step.id === "start-core"),
+    );
   }
 });
 
@@ -191,6 +274,20 @@ test("upgrade atomically activates a staged release and rolls back after failed 
   if (activation.rollback?.kind === "activation.switch") {
     assert.match(activation.rollback.targetReleaseDirectory, /1\.2\.3$/);
   }
+  const secureReleaseIndex = plan.steps.findIndex((step) => step.id === "secure-release-root");
+  const stopCoreIndex = plan.steps.findIndex((step) => step.id === "stop-core");
+  assert.ok(secureReleaseIndex > plan.steps.findIndex((step) => step.id === "promote-release"));
+  assert.ok(secureReleaseIndex < stopCoreIndex);
+  const secureRelease = plan.steps[secureReleaseIndex];
+  assert.equal(secureRelease?.action.kind, "directory.ensure");
+  if (secureRelease?.action.kind === "directory.ensure") {
+    assert.ok(
+      secureRelease.action.access.grants.some(
+        (grant) =>
+          grant.principal.startsWith("NT SERVICE\\") && grant.permission === "read-execute",
+      ),
+    );
+  }
 
   const adapter = new RecordingAdapter("health.check");
   const report = await executeServicePlan(plan, adapter);
@@ -209,6 +306,55 @@ test("upgrade atomically activates a staged release and rolls back after failed 
     ),
   );
   assert.match(report.diagnostic.summary, /rolled back/i);
+});
+
+test("Windows upgrade repairs the declared service SID definition before restarting core", () => {
+  const configuration = windowsConfiguration({
+    bundle: {
+      ...windowsConfiguration().bundle,
+      version: "1.3.0",
+    },
+  });
+  const plan = createServicePlan({
+    operation: "upgrade",
+    configuration,
+    activeVersion: "1.2.3",
+  });
+
+  const stopCoreIndex = plan.steps.findIndex((step) => step.id === "stop-core");
+  const repairIndex = plan.steps.findIndex((step) => step.id === "repair-windows-service-sid");
+  const manifestIndex = plan.steps.findIndex((step) => step.id === "write-windows-core-manifest");
+  const startCoreIndex = plan.steps.findIndex((step) => step.id === "start-core");
+  assert.ok(stopCoreIndex >= 0);
+  assert.ok(stopCoreIndex < repairIndex);
+  assert.ok(repairIndex < manifestIndex);
+  assert.ok(manifestIndex < startCoreIndex);
+
+  const repair = plan.steps[repairIndex];
+  assert.equal(repair?.action.kind, "supervisor.invoke");
+  if (repair?.action.kind === "supervisor.invoke") {
+    assert.deepEqual(repair.action.command.invocations, [
+      {
+        executable: "sc.exe",
+        arguments: ["sidtype", "OpenDelegate-personal", "unrestricted"],
+        plane: "core",
+        verb: "install",
+        privilege: "elevated",
+        availabilityPolicy: "required",
+        timeoutMs: 30_000,
+        expectedExitCodes: [0],
+      },
+    ]);
+  }
+  assert.equal(repair?.rollback, undefined);
+
+  const manifest = plan.steps[manifestIndex];
+  assert.equal(manifest?.action.kind, "file.write");
+  if (manifest?.action.kind === "file.write") {
+    assert.equal(manifest.action.file.purpose, "core-manifest");
+    assert.match(manifest.action.file.content, /"serviceSidType": "unrestricted"/u);
+  }
+  assert.equal(manifest?.rollback, undefined);
 });
 
 test("failed install health removes newly registered supervisor planes", async () => {

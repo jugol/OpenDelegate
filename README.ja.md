@@ -109,6 +109,9 @@ Windows 開発、macOS ビルドや署名、Linux 配備へ分割し、実際の
 - Worker は Main にのみ接続します。NxN SSH Mesh も、データベースへの直接アクセスも必要ありません。
 - Codex、Claude、およびカスタム Runner は Agent Adapter
   Contract の背後に配置され、有用な Provider-native Session は再開できます。
+- 準備済みの Codex または Claude Worker は、1つの Work Order 内で最大4つのローカル子 Agentを
+  利用できます。子 Agent は同じ Run の Workspace と Policy 内に留まり、Device 間の委任は
+  Main だけが行います。
 - 各 Device は、選択的に使用するリンク済み Markdown
   Knowledge をローカルに保持します。Main がそのファイル名、タイトル、リンク、グラフ、インデックス、スニペット、内容を受け取ることはありません。
 - 結果は Discord の返信や添付、ファイル、Artifact、ホストされた画面、検証済み Git 参照として返せます。

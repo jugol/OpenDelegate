@@ -213,6 +213,80 @@ function registerDiscordRepositoryContract(label: string, createFixture: Fixture
         });
         assert.equal(replacedPanel.statusPanelMessageId, "100000000000000102");
         assert.equal(replacedPanel.revision, panel.revision + 1);
+        const activity = await repository.updateBinding(created.threadId, {
+          activitySurface: {
+            cycleId: "activity_cycle_1",
+            revision: 7,
+            updatedAtMs: 7_000,
+            outboxCreatedAtMs: 7_100,
+            state: "open",
+            messageId: "100000000000000103",
+          },
+        });
+        assert.deepEqual(activity.activitySurface, {
+          cycleId: "activity_cycle_1",
+          revision: 7,
+          updatedAtMs: 7_000,
+          outboxCreatedAtMs: 7_100,
+          state: "open",
+          messageId: "100000000000000103",
+        });
+        const failure = await repository.updateBinding(created.threadId, {
+          failureSurface: {
+            requestKey: "failure-projection:03-update",
+            sourceEventId: "event_failure_before_retry",
+            messageId: "100000000000000104",
+            outboxCreatedAtMs: 7_200,
+            state: "open",
+          },
+        });
+        assert.deepEqual(failure.failureSurface, {
+          requestKey: "failure-projection:03-update",
+          sourceEventId: "event_failure_before_retry",
+          messageId: "100000000000000104",
+          outboxCreatedAtMs: 7_200,
+          state: "open",
+        });
+        assert.deepEqual(
+          (await repository.getBindingByThread(created.threadId))?.failureSurface,
+          failure.failureSurface,
+        );
+        const ownerPrompt = await repository.updateBinding(created.threadId, {
+          ownerPromptSurface: {
+            requestKey: "owner-prompt:03-update",
+            sourceEventId: "event_owner_prompt",
+            messageId: "100000000000000105",
+            outboxCreatedAtMs: 7_300,
+            state: "open",
+          },
+        });
+        assert.deepEqual(ownerPrompt.ownerPromptSurface, {
+          requestKey: "owner-prompt:03-update",
+          sourceEventId: "event_owner_prompt",
+          messageId: "100000000000000105",
+          outboxCreatedAtMs: 7_300,
+          state: "open",
+        });
+        assert.deepEqual(
+          (await repository.getBindingByThread(created.threadId))?.ownerPromptSurface,
+          ownerPrompt.ownerPromptSurface,
+        );
+        const closedActivity = await repository.updateBinding(created.threadId, {
+          activitySurface: {
+            cycleId: "activity_cycle_1",
+            revision: 8,
+            updatedAtMs: 8_000,
+            outboxCreatedAtMs: 8_100,
+            state: "closed",
+          },
+        });
+        assert.deepEqual(closedActivity.activitySurface, {
+          cycleId: "activity_cycle_1",
+          revision: 8,
+          updatedAtMs: 8_000,
+          outboxCreatedAtMs: 8_100,
+          state: "closed",
+        });
         await assert.rejects(
           repository.updateBinding(created.threadId, {
             lastReconciledMessageId: "100000000000000099",
@@ -382,6 +456,122 @@ test("SQLite Discord schema has no credential column and stores only the opaque 
     }
   } finally {
     await repository.close();
+    await fixture.cleanup();
+  }
+});
+
+test("SQLite persists a durable Discord failure-resolution action across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "resolve-task-failure",
+    taskId: "task-1",
+    failureRequestKey: "failure-projection:03-update",
+    projection: {
+      taskId: "task-1",
+      state: "failed",
+      objective: "Recover the Task.",
+      summary: "The previous attempt stopped safely.",
+      sourceEventId: "event_failure_before_retry",
+      significance: "failure",
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("resolve-failure", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
+    await fixture.cleanup();
+  }
+});
+
+test("SQLite persists a durable Discord cancellation-resolution action across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "resolve-task-failure",
+    taskId: "task-1",
+    failureRequestKey: "cancelled-projection:03-update",
+    projection: {
+      taskId: "task-1",
+      state: "cancelled",
+      objective: "Stop and optionally retry the Task.",
+      summary: "This Task was cancelled.",
+      sourceEventId: "event_cancelled_before_retry",
+      significance: "final",
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("resolve-cancellation", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
+    await fixture.cleanup();
+  }
+});
+
+test("SQLite persists a durable Discord failure-control refresh across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "refresh-task-failure",
+    taskId: "task-1",
+    failureRequestKey: "failure-projection:03-update",
+    projection: {
+      taskId: "task-1",
+      state: "failed",
+      objective: "Recover the Task.",
+      summary: "The previous attempt stopped safely.",
+      sourceEventId: "event_failure_before_retry",
+      significance: "failure",
+      approval: {
+        approvalId: "approval-current",
+        description: "Allow the exact bounded retry?",
+      },
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("refresh-failure", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
+    await fixture.cleanup();
+  }
+});
+
+test("SQLite persists a durable Discord owner-prompt refresh across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "refresh-owner-prompt",
+    taskId: "task-1",
+    promptRequestKey: "owner-prompt:03-update",
+    projection: {
+      taskId: "task-1",
+      state: "waiting_user",
+      objective: "Inspect two Devices.",
+      summary: "The approval was resolved; the budget question remains.",
+      sourceEventId: "event_budget_question",
+      significance: "question",
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("refresh-owner-prompt", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
     await fixture.cleanup();
   }
 });

@@ -14,6 +14,7 @@ import {
   workerRunSteeringCommandFingerprint,
 } from "./contracts.ts";
 import {
+  MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN,
   cloneWorkerState,
   type PersistedRunSteeringAttempt,
   type PersistedWorkerState,
@@ -248,6 +249,10 @@ function decodeState(row: StateRow): PersistedWorkerState {
     throw corruptState();
   }
 
+  for (const run of record["runs"]) {
+    validatePersistedRunProgress(run, record["lastObservedAtMs"] as number);
+  }
+
   const rawRouteIncidents = record["routeIncidents"];
   if (
     rawRouteIncidents !== undefined &&
@@ -345,6 +350,44 @@ function decodeState(row: StateRow): PersistedWorkerState {
     routeIncidents,
     steeringAttempts,
   };
+}
+
+function validatePersistedRunProgress(input: unknown, lastObservedAtMs: number): void {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw corruptState();
+  }
+  const run = input as Record<string, unknown>;
+  const progressCount = run["progressCount"];
+  const lastProgressAtMs = run["lastProgressAtMs"];
+  const lastProgressDigest = run["lastProgressDigest"];
+  if (progressCount === undefined) {
+    if (lastProgressAtMs !== undefined || lastProgressDigest !== undefined) {
+      throw corruptState();
+    }
+    return;
+  }
+  if (
+    !Number.isSafeInteger(progressCount) ||
+    Number(progressCount) < 0 ||
+    Number(progressCount) > MAXIMUM_DURABLE_PROGRESS_EVENTS_PER_RUN
+  ) {
+    throw corruptState();
+  }
+  if (Number(progressCount) === 0) {
+    if (lastProgressAtMs !== undefined || lastProgressDigest !== undefined) {
+      throw corruptState();
+    }
+    return;
+  }
+  if (
+    !Number.isSafeInteger(lastProgressAtMs) ||
+    Number(lastProgressAtMs) < 0 ||
+    Number(lastProgressAtMs) > lastObservedAtMs ||
+    typeof lastProgressDigest !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(lastProgressDigest)
+  ) {
+    throw corruptState();
+  }
 }
 
 function validatePersistedSteeringReceipt(

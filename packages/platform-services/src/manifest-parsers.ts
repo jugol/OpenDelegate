@@ -132,7 +132,7 @@ const WINDOWS_TASK_FIXED_TEXT = new Map<string, string>([
   ["AllowHardTerminate", "true"],
   ["StartWhenAvailable", "true"],
   ["ExecutionTimeLimit", "PT0S"],
-  ["Interval", "PT15S"],
+  ["Interval", "PT1M"],
   ["Count", "3"],
 ]);
 const WINDOWS_TASK_DYNAMIC_TEXT = new Set(["Arguments", "Command", "UserId"]);

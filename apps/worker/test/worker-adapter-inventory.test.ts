@@ -10,6 +10,7 @@ const workspaceRegistry = { listSchedulingMetadata: async () => [] };
 function stubAdapter(
   adapterId: string,
   probe: Omit<AgentAdapterProbe, "contractVersion" | "adapterId" | "provider" | "capabilities">,
+  capabilityOverrides: Partial<AgentAdapterProbe["capabilities"]> = {},
 ): AgentAdapter {
   return {
     adapterId,
@@ -28,6 +29,7 @@ function stubAdapter(
           steering: false,
           checkpointContinuation: true,
           workspaceIsolation: ["none"],
+          ...capabilityOverrides,
         },
         ...probe,
       } satisfies AgentAdapterProbe;
@@ -101,6 +103,30 @@ describe("Worker agent adapter inventory", () => {
             installedVersion: "2.0.0",
           },
         }),
+        stubAdapter("claude-sandbox-dependency", {
+          installed: true,
+          version: "0.3.220",
+          compatibility: "incompatible",
+          auth: { state: "ready" },
+          diagnostics: [
+            {
+              code: "CLAUDE_SANDBOX_DEPENDENCY_UNAVAILABLE",
+              message: "A Device-local sandbox executable is missing.",
+            },
+          ],
+        }),
+        stubAdapter("claude-sandbox-runtime", {
+          installed: true,
+          version: "0.3.220",
+          compatibility: "incompatible",
+          auth: { state: "ready" },
+          diagnostics: [
+            {
+              code: "CLAUDE_SANDBOX_RUNTIME_UNAVAILABLE",
+              message: "A Device policy blocks nested sandbox creation.",
+            },
+          ],
+        }),
       ],
       environment: {},
       workspaceRegistry,
@@ -111,6 +137,8 @@ describe("Worker agent adapter inventory", () => {
 
     assert.deepEqual((snapshot.agentAdapters ?? []).map((adapter) => adapter.adapterId).sort(), [
       "claude-missing",
+      "claude-sandbox-dependency",
+      "claude-sandbox-runtime",
       "claude-untested",
     ]);
     assert.deepEqual(
@@ -118,6 +146,54 @@ describe("Worker agent adapter inventory", () => {
         ?.availableUpgrade,
       { packageName: "@anthropic-ai/claude-code", targetVersion: "2.1.220" },
     );
+    assert.equal(
+      (snapshot.agentAdapters ?? []).find((adapter) => adapter.adapterId === "claude-missing")
+        ?.blockedBy,
+      "executable-unavailable",
+    );
+    assert.equal(
+      (snapshot.agentAdapters ?? []).find((adapter) => adapter.adapterId === "claude-untested")
+        ?.blockedBy,
+      "version-unsupported",
+    );
+    assert.equal(
+      (snapshot.agentAdapters ?? []).find(
+        (adapter) => adapter.adapterId === "claude-sandbox-dependency",
+      )?.blockedBy,
+      "executable-unavailable",
+    );
+    assert.equal(
+      (snapshot.agentAdapters ?? []).find(
+        (adapter) => adapter.adapterId === "claude-sandbox-runtime",
+      )?.blockedBy,
+      "platform-incompatible",
+    );
+  });
+
+  it("projects an actionable authentication blocker without provider diagnostics", async () => {
+    const inventory = createWorkerSchedulingInventoryProvider({
+      adapters: [
+        stubAdapter("claude-signed-out", {
+          installed: true,
+          version: "2.1.220",
+          compatibility: "tested",
+          auth: { state: "not_ready" },
+          diagnostics: [
+            {
+              code: "AUTH_NOT_READY",
+              message: "Sensitive provider output and a local path stay on this Device.",
+            },
+          ],
+        }),
+      ],
+      environment: {},
+      workspaceRegistry,
+      probeCacheMs: 0,
+    });
+
+    const adapter = (await inventory.snapshot()).agentAdapters?.[0];
+    assert.equal(adapter?.blockedBy, "authentication-required");
+    assert.equal(JSON.stringify(adapter).includes("Sensitive provider output"), false);
   });
 
   it("stops claiming a provider Capability that only an unsupported adapter backed", async () => {
@@ -144,6 +220,47 @@ describe("Worker agent adapter inventory", () => {
     assert.equal(
       snapshot.capabilities.some((capability) => capability.name === "claude-code"),
       false,
+    );
+  });
+
+  it("advertises native child Agents only from a ready bridged SDK adapter", async () => {
+    const inventory = createWorkerSchedulingInventoryProvider({
+      adapters: [
+        stubAdapter(
+          "claude-agent-sdk",
+          {
+            installed: true,
+            version: "0.3.220",
+            compatibility: "tested",
+            auth: { state: "ready" },
+            diagnostics: [],
+          },
+          { approvalBridge: true },
+        ),
+        stubAdapter("claude-cli", {
+          installed: true,
+          version: "2.1.220",
+          compatibility: "tested",
+          auth: { state: "ready" },
+          diagnostics: [],
+        }),
+      ],
+      environment: {},
+      workspaceRegistry,
+      probeCacheMs: 0,
+    });
+
+    const snapshot = await inventory.snapshot();
+    assert.deepEqual(
+      snapshot.capabilities.find((capability) => capability.name === "native-subagents"),
+      {
+        name: "native-subagents",
+        verification: "verified",
+        observedAtMs: snapshot.capabilities.find(
+          (capability) => capability.name === "native-subagents",
+        )?.observedAtMs,
+        evidenceSource: "agent-adapter",
+      },
     );
   });
 });

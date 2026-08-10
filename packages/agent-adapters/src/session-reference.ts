@@ -72,6 +72,18 @@ export function validateAgentRequest(request: AgentStartRequest | AgentResumeReq
       "Agent model ID must be a bounded provider-native identifier.",
     );
   }
+  if (
+    request.effort !== undefined &&
+    (request.effort.length === 0 ||
+      request.effort.length > 64 ||
+      request.effort !== request.effort.trim() ||
+      hasControlCharacter(request.effort))
+  ) {
+    throw new AgentAdapterError(
+      "INVALID_REQUEST",
+      "Agent effort must be a bounded provider-native identifier.",
+    );
+  }
   for (const [name, value] of Object.entries(request.limits)) {
     if (!Number.isSafeInteger(value) || value < 1) {
       throw new AgentAdapterError("INVALID_LIMIT", `${name} must be a positive integer.`);
@@ -187,6 +199,7 @@ export function validateResumeReference(
     session.provider !== provider ||
     session.adapterId !== adapterId ||
     session.modelId !== request.modelId ||
+    session.effort !== request.effort ||
     session.sessionKey !== request.sessionKey ||
     session.taskId !== request.taskId ||
     session.workstreamId !== request.workstreamId ||

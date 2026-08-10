@@ -41,6 +41,20 @@ test("dynamic Discord binding values contain no platform backend or raw credenti
     }),
     false,
   );
+  assert.equal(
+    isMainDiscordBindingConfiguration({
+      ...FIRST_BINDING,
+      forum: { ...FIRST_BINDING.forum, presentationLocale: "ko" },
+    }),
+    true,
+  );
+  assert.equal(
+    isMainDiscordBindingConfiguration({
+      ...FIRST_BINDING,
+      forum: { ...FIRST_BINDING.forum, presentationLocale: "unsupported" },
+    }),
+    false,
+  );
 });
 
 test("a prepared Discord replacement can be rolled back before durable commit", async () => {

@@ -270,6 +270,7 @@ export class AgentBackedTaskExecutor
             ),
         }),
         input.task,
+        input.executionKey,
       ),
     );
   }
@@ -771,7 +772,8 @@ function buildPlanningPrompt(
         ...planningContextInstructions(deviceContext),
         "Return one exact JSON object and no Markdown fence.",
         'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
-        'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":[],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}.',
+        'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"plan-local unique label","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["plan-local workOrderId"],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":[],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}.',
+        "Every Work Order must include requiredSecretRefs. Use [] when no credential is needed; OpenDelegate never infers credential authority.",
         "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
         "A continuation checkpoint never carries Secret references. If a Work Order needs one, return waiting_user so deterministic configuration can bind it without exposing a credential.",
         "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
@@ -787,9 +789,10 @@ function buildPlanningPrompt(
     ...planningContextInstructions(deviceContext),
     "Return one exact JSON object and no Markdown fence.",
     'Either {"schemaVersion":1,"state":"waiting_user","ownerQuestion":"one targeted question ending in ?"}, {"schemaVersion":1,"state":"waiting_resource|failed","publicMessage":"owner-visible text"},',
-    'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"...","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["..."],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":["..."],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}. Omit requiredAgent when the Device profile may choose any ready binding; when present, use only an outcome-relevant hard requirement and tested-only is the default if allowedCompatibilities is omitted.',
+    'or {"schemaVersion":1,"state":"ready","plan":{"protocolVersion":"v1","taskId":"...","workOrders":[{"protocolVersion":"v1","workOrderId":"plan-local unique label","title":"...","brief":"...","completionCriteria":["..."],"constraints":["..."],"selectedInputIds":["..."],"dependsOn":["plan-local workOrderId"],"schedulingHints":{"preferredDeviceIds":["..."],"preferredRoles":["..."]},"requiredCapabilities":["..."],"requiredSecretRefs":["..."],"requiredAgent":{"provider":"codex|claude|generic","adapterId":"optional exact adapter","modelId":"optional exact provider-native model","allowedCompatibilities":["tested|compatible|untested"]},"requiredOsFamily":"macos|windows|linux (optional)","workspaceId":"optional"}]}}. Omit requiredAgent when the Device profile may choose any ready binding; when present, use only an outcome-relevant hard requirement and tested-only is the default if allowedCompatibilities is omitted.',
+    "Every Work Order must include requiredSecretRefs. Use [] when no credential is needed; OpenDelegate never infers credential authority.",
     "Never return completed from semantic planning. Deterministic OpenDelegate code handles the narrow Main-owned read-only query path before this turn. Every remaining completion requires a Work Order and authoritative Worker evidence.",
-    "Use stable Task-scoped Work Order IDs and explicit completion criteria. Keep independent work parallel by leaving dependsOn empty; add dependencies only when evidence must flow between Work Orders.",
+    "Use unique plan-local Work Order labels and explicit completion criteria. OpenDelegate assigns durable owner-cycle-scoped IDs and remaps dependencies deterministically. Keep independent work parallel by leaving dependsOn empty; add dependencies only when evidence must flow between Work Orders.",
     "waiting_user must contain exactly one concise question, not a checklist or multiple questions.",
     "",
     `Task ID: ${task.taskId}`,
@@ -1051,6 +1054,7 @@ async function resolveNativeSessionAction(
 function parsePlanningResult(
   value: string | undefined,
   task: TaskExecutionRequest["task"],
+  planningKey: string,
 ): TaskWorkPlanDecision {
   const parsed = parseAgentJson(value, "WORK_PLAN_INVALID");
   if (parsed["schemaVersion"] !== 1 || typeof parsed["state"] !== "string") {
@@ -1083,12 +1087,68 @@ function parsePlanningResult(
     Array.isArray(parsed["plan"]["workOrders"])
   ) {
     type ReadyPlan = Extract<TaskWorkPlanDecision, { readonly state: "ready" }>["plan"];
+    const plan = structuredClone(
+      applyAuthorityReducingPlanningDefaults(parsed["plan"]),
+    ) as unknown as ReadyPlan;
     return {
       state: "ready",
-      plan: structuredClone(parsed["plan"]) as unknown as ReadyPlan,
+      plan: scopePlanningWorkOrderIds(plan, planningKey),
     };
   }
   throw invalidWorkPlan();
+}
+
+function applyAuthorityReducingPlanningDefaults(plan: Record<string, unknown>): unknown {
+  const workOrders = plan["workOrders"];
+  if (!Array.isArray(workOrders)) {
+    return plan;
+  }
+  return {
+    ...plan,
+    workOrders: workOrders.map((workOrder) => {
+      if (!isRecord(workOrder) || workOrder["requiredSecretRefs"] !== undefined) {
+        return workOrder;
+      }
+      return {
+        ...workOrder,
+        requiredSecretRefs: [],
+      };
+    }),
+  };
+}
+
+function scopePlanningWorkOrderIds<
+  T extends Extract<TaskWorkPlanDecision, { readonly state: "ready" }>["plan"],
+>(plan: T, planningKey: string): T {
+  const rawIds: string[] = [];
+  for (const workOrder of plan.workOrders) {
+    if (
+      !isRecord(workOrder) ||
+      typeof workOrder["workOrderId"] !== "string" ||
+      !Array.isArray(workOrder["dependsOn"]) ||
+      !workOrder["dependsOn"].every((dependency) => typeof dependency === "string")
+    ) {
+      return plan;
+    }
+    rawIds.push(workOrder["workOrderId"]);
+  }
+  if (new Set(rawIds).size !== rawIds.length) {
+    return plan;
+  }
+  const scope = digest(`work-order-cycle-v1\0${planningKey}`).slice(7, 23);
+  const scopedByRawId = new Map(
+    rawIds.map((rawId, index) => [rawId, `work_${scope}_${String(index + 1).padStart(3, "0")}`]),
+  );
+  return {
+    ...plan,
+    workOrders: plan.workOrders.map((workOrder) => ({
+      ...workOrder,
+      workOrderId: scopedByRawId.get(workOrder.workOrderId) ?? workOrder.workOrderId,
+      dependsOn: workOrder.dependsOn.map(
+        (dependency) => scopedByRawId.get(dependency) ?? dependency,
+      ),
+    })),
+  };
 }
 
 interface PlanningDeviceObservation {
@@ -1102,6 +1162,7 @@ interface PlanningDeviceObservation {
   readonly lastObservation?: DeviceSummaryV1["lastObservation"];
   readonly roles: readonly string[];
   readonly capabilities: readonly string[];
+  readonly workspaceIds: readonly string[];
   readonly readyAgentAdapters: readonly {
     readonly provider: string;
     readonly adapterId: string;
@@ -1118,6 +1179,7 @@ interface PlanningDeviceObservation {
   }[];
   readonly activeRuns: number;
   readonly maximumConcurrentRuns?: number;
+  readonly acceptingWork?: boolean;
 }
 
 function projectPlanningDeviceContext(
@@ -1166,6 +1228,7 @@ function projectPlanningDeviceContext(
             (capability: NonNullable<DeviceSummaryV1["capabilities"]>[number]) => capability.name,
           ),
       ),
+      workspaceIds: Object.freeze([...(device.workspaceIds ?? [])]),
       readyAgentAdapters: Object.freeze(
         (device.agentAdapters ?? [])
           .filter(
@@ -1199,7 +1262,10 @@ function projectPlanningDeviceContext(
       activeRuns: device.capacity?.activeRuns ?? device.currentRuns?.length ?? 0,
       ...(device.capacity === undefined
         ? {}
-        : { maximumConcurrentRuns: device.capacity.maximumConcurrentRuns }),
+        : {
+            maximumConcurrentRuns: device.capacity.maximumConcurrentRuns,
+            acceptingWork: device.capacity.acceptingWork,
+          }),
     });
   });
   return Object.freeze(projected);
@@ -1215,6 +1281,7 @@ function planningContextInstructions(
   }
   return Object.freeze([
     "The following JSON is a current, bounded, Main-owned, owner-safe Device snapshot for planning target preferences. Only verified capability names are included:",
+    "Workspace IDs are opaque registered execution roots. Set workspaceId when an outcome requires a specific Workspace. When a Device has exactly one registered Workspace, OpenDelegate can select that singleton deterministically if workspaceId is omitted; multiple Workspaces require an explicit choice.",
     "For an offline Worker, wakeOnLan is its last authenticated target observation. relay-required means the target reported magic-packet wake enabled, but OpenDelegate has no verified online relay and must not claim that it can wake the Device.",
     JSON.stringify({ schemaVersion: 1, devices }),
   ]);
@@ -1244,7 +1311,8 @@ const DEVICE_DIRECTORY_QUERY_PATTERNS: Readonly<
   ]),
   ko: Object.freeze([
     /^(?:(?:지금|현재)\s*)?(?:(?:접속|연결|사용)\s*)?(?:(?:가능한|가능|된|되어\s*있는|중인|온라인인)\s*)?(?:디바이스|기기|장치|컴퓨터)(?:가|는|들이|들은)?\s*(?:뭐뭐가?|뭐가|무엇(?:이|인가요?)?|어떤(?:\s*것들이?|\s*게)?|몇\s*대)(?:\s*(?:있어(?:요)?|있나(?:요)?|있습니까|인가요?|야))?[?!.~]*$/u,
-    /^(?:(?:지금|현재)\s*)?(?:(?:접속\s*가능한|연결된|온라인인|등록된)\s*)?(?:디바이스|기기|장치|컴퓨터)(?:들)?(?:의|을|를)?\s*(?:목록|상태)?(?:을|를)?\s*(?:알려\s*줘|보여\s*줘|말해\s*줘|나열해\s*줘)(?:요)?[?!.~]*$/u,
+    /^(?:(?:지금|현재)\s*)?(?:(?:접속\s*가능한|연결된|온라인인|등록된)\s*)?(?:디바이스|기기|장치|컴퓨터)(?:들)?(?:의|을|를)?\s*(?:목록|상태)?(?:을|를)?\s*(?:다시\s*)?(?:알려\s*줘|보여\s*줘|말해\s*줘|나열해\s*줘)(?:요)?[?!.~]*$/u,
+    /^(?:(?:지금|현재)\s*)?(?:(?:접속|연결|사용)\s*가능(?:하고|하며)?\s*|온라인(?:이고|이며)\s*)?(?:작업(?:을)?\s*(?:받을|수행할)\s*수\s*있는\s*)?(?:디바이스|기기|장치|컴퓨터)(?:들)?(?:의|을|를)?\s*(?:(?:os|운영\s*체제)(?:와|과|,)?\s*)?(?:(?:검증된\s*)?(?:주요\s*)?(?:capabilit(?:y|ies)|기능|역할)(?:만)?\s*)?(?:간단히\s*)?(?:다시\s*)?(?:알려\s*줘|보여\s*줘|말해\s*줘|나열해\s*줘)(?:요)?[?!.~]*$/iu,
   ]),
   es: Object.freeze([
     /^(?:qu[eé]|cu[aá]les)\s+(?:dispositivos?|ordenadores?|computadoras?|m[aá]quinas?)\s+(?:est[aá]n\s+)?(?:actualmente\s+)?(?:disponibles?|en\s+l[ií]nea|accesibles?|conectados?)[ ?!.]*$/iu,
@@ -1304,6 +1372,13 @@ const VAGUE_TASK_OBJECTIVE_PATTERNS = Object.freeze([
   /^(?:测试任务|新任务|未命名任务)[？?！!.]*$/u,
 ]);
 
+const KOREAN_DIRECTORY_SAFETY_QUALIFIER = new RegExp(
+  "^(?:(?:파일|서비스|계정|권한|설정|네트워크|외부\\s*시스템))" +
+    "(?:(?:\\s*,\\s*|\\s+(?:또는|및|과|와)\\s+)(?:파일|서비스|계정|권한|설정|네트워크|외부\\s*시스템))*" +
+    "(?:은|는|을|를)?\\s*(?:변경|수정|삭제|생성|재시작|호출|접근)\\s*하지\\s*(?:마|말아\\s*줘)(?:요)?[.!?~]*$",
+  "u",
+);
+
 function answerDeviceDirectoryQuestion(
   task: TaskExecutionRequest["task"],
   devices: readonly PlanningDeviceObservation[] | undefined,
@@ -1347,7 +1422,7 @@ function deviceDirectoryQuestionForTask(
   }
   const query = normalizeNaturalLanguage(latestOwnerMessage);
   const selfContainedQuestion = classifyDeviceDirectoryQuestion(query);
-  if (selfContainedQuestion?.target !== undefined && objectiveAllowsDirectDirectoryAnswer) {
+  if (selfContainedQuestion !== undefined && objectiveAllowsDirectDirectoryAnswer) {
     return selfContainedQuestion;
   }
   const routeQuestion = classifyDeviceRouteQuestion(query);
@@ -1358,23 +1433,18 @@ function deviceDirectoryQuestionForTask(
       route: routeQuestion.route,
     });
   }
-  if (ownerMessages.length > 1 || selfContainedQuestion === undefined) {
-    return undefined;
-  }
-  if (!objectiveAllowsDirectDirectoryAnswer) {
-    return undefined;
-  }
-  return selfContainedQuestion;
+  return undefined;
 }
 
 function classifyDeviceDirectoryQuestion(query: string): DeviceDirectoryQuestion | undefined {
-  const genericLocale = deviceDirectoryQueryLocale(query);
+  const boundedQuery = stripDirectorySafetyQualifier(query);
+  const genericLocale = deviceDirectoryQueryLocale(boundedQuery);
   if (genericLocale !== undefined) {
     return Object.freeze({ locale: genericLocale });
   }
   for (const locale of ["ko", "en", "ja", "fr", "es", "zh"] as const) {
     for (const pattern of NAMED_DEVICE_QUERY_PATTERNS[locale]) {
-      const match = pattern.exec(query);
+      const match = pattern.exec(boundedQuery);
       const target = match?.[1]?.trim().replace(/^["'`]+|["'`]+$/gu, "");
       if (target !== undefined && target.length > 0) {
         return Object.freeze({ locale, target });
@@ -1382,6 +1452,14 @@ function classifyDeviceDirectoryQuestion(query: string): DeviceDirectoryQuestion
     }
   }
   return undefined;
+}
+
+function stripDirectorySafetyQualifier(query: string): string {
+  const sentence = /^(.{1,512}?[.!?。！？])\s+(.{1,512})$/u.exec(query);
+  if (sentence?.[1] === undefined || sentence[2] === undefined) {
+    return query;
+  }
+  return KOREAN_DIRECTORY_SAFETY_QUALIFIER.test(sentence[2]) ? sentence[1] : query;
 }
 
 function classifyDeviceRouteQuestion(
@@ -1553,7 +1631,39 @@ function renderDeviceDirectoryAnswer(
                 : device.connection === "online"
                   ? "reachable"
                   : "offline";
-    return `- ${device.name} — ${connection} · ${device.osFamily} · ${device.role} · runtime ${device.runtime}`;
+    const acceptingWork =
+      device.acceptingWork === undefined
+        ? undefined
+        : locale === "ko"
+          ? device.acceptingWork
+            ? "작업 가능"
+            : "작업 대기 불가"
+          : device.acceptingWork
+            ? "accepting work"
+            : "not accepting work";
+    const capabilities =
+      device.capabilities.length === 0
+        ? locale === "ko"
+          ? "검증 기능 없음"
+          : "no verified capabilities"
+        : `${locale === "ko" ? "검증 기능" : "verified capabilities"}: ${device.capabilities
+            .slice(0, 12)
+            .join(", ")}`;
+    const capacity =
+      device.maximumConcurrentRuns === undefined
+        ? undefined
+        : `${locale === "ko" ? "작업" : "Runs"} ${device.activeRuns.toString()}/${device.maximumConcurrentRuns.toString()}`;
+    return [
+      `- ${device.name} — ${connection}`,
+      device.osFamily,
+      device.role,
+      `runtime ${device.runtime}`,
+      acceptingWork,
+      capacity,
+      capabilities,
+    ]
+      .filter((part): part is string => part !== undefined)
+      .join(" · ");
   });
   if (visible.length < devices.length) {
     const omitted = devices.length - visible.length;

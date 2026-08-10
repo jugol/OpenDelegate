@@ -217,6 +217,9 @@ export interface DiscordTaskBindingsTable {
   readonly starter_message_id: string;
   readonly task_id: string;
   readonly status_panel_message_id: string | null;
+  readonly activity_surface_json: string | null;
+  readonly failure_surface_json: string | null;
+  readonly owner_prompt_surface_json: string | null;
   readonly last_reconciled_message_id: string | null;
   readonly external_state: string;
   readonly archived: boolean | number;

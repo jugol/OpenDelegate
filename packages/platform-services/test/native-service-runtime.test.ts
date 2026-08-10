@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync, sign as signPayload } from "node:crypt
 import test from "node:test";
 
 import {
+  NativeBoundaryError,
   ServiceCommandExecutionError,
   createNativeReleaseVerifier,
   createNativeServiceExecutor,
@@ -183,7 +184,14 @@ class FakeProcess {
 
   public async run(request: NativeProcessRequest): Promise<NativeProcessResult> {
     this.requests.push(request);
-    return this.handler(request);
+    const result = this.handler(request);
+    return request.executable.toLowerCase().endsWith("sc.exe") &&
+      request.arguments[0]?.toLowerCase() === "query" &&
+      result.exitCode === 0 &&
+      result.stdout.length === 0 &&
+      result.stderr.length === 0
+      ? processResult(0, "STATE              : 1  STOPPED\r\n")
+      : result;
   }
 }
 
@@ -421,6 +429,9 @@ test("Windows Worker install accepts the release and staging root actions after 
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
   const configuration = windowsConfiguration({
     role: "worker",
+    agentSandbox: {
+      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    },
     serviceSecretBinding: {
       backend: "windows-service-dpapi",
       handoffRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\handoff",
@@ -431,6 +442,7 @@ test("Windows Worker install accepts the release and staging root actions after 
   });
   const journal = new MemoryJournal();
   const process = new FakeProcess();
+  let protectedVaultOwnerAttempts = 0;
   process.handler = (request) => {
     if (request.arguments[0] === "showsid") {
       return processResult(0, `SERVICE SID: ${serviceSid}`);
@@ -441,11 +453,29 @@ test("Windows Worker install accepts the release and staging root actions after 
     if (request.arguments[0]?.toLowerCase() === "/query") {
       return processResult(0, '"OpenDelegate","Ready","Running"');
     }
+    if (
+      request.executable.toLowerCase().endsWith("icacls.exe") &&
+      request.arguments[0] === "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service" &&
+      request.arguments.includes("/setowner")
+    ) {
+      protectedVaultOwnerAttempts += 1;
+      return processResult(protectedVaultOwnerAttempts === 1 ? 5 : 0);
+    }
     return processResult(0);
   };
   const fileSystem = new FakeFileSystem();
   const releasesRoot = "C:\\Program Files\\OpenDelegate\\releases";
   const stagingRoot = "C:\\Program Files\\OpenDelegate\\.staging";
+  const protectedServiceVault = "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service";
+  let protectedVaultEnsureAttempts = 0;
+  const ensureDirectory = fileSystem.ensureDirectory.bind(fileSystem);
+  fileSystem.ensureDirectory = async (path, mode) => {
+    if (path === protectedServiceVault) {
+      protectedVaultEnsureAttempts += 1;
+      throw new Error("service-only DACL blocks Node directory open");
+    }
+    return await ensureDirectory(path, mode);
+  };
   fileSystem.kinds.set(releasesRoot, "missing");
   fileSystem.kinds.set(stagingRoot, "missing");
   fileSystem.directories.set(releasesRoot, [{ name: "1.2.3", kind: "directory" }]);
@@ -470,9 +500,64 @@ test("Windows Worker install accepts the release and staging root actions after 
     plan: createServicePlan({ operation: "install", configuration }),
   });
 
-  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  assert.equal(
+    result.report.outcome,
+    "succeeded",
+    JSON.stringify({ report: result.report, requests: process.requests }),
+  );
   assert.equal(fileSystem.kinds.get(releasesRoot), "directory");
   assert.equal(fileSystem.kinds.get(stagingRoot), "directory");
+  assert.equal(protectedVaultEnsureAttempts, 0);
+  assert.equal(protectedVaultOwnerAttempts, 2);
+  const protectedVaultRepair = process.requests
+    .filter(
+      (request) =>
+        request.arguments.includes(protectedServiceVault) &&
+        (request.executable.toLowerCase().endsWith("icacls.exe") ||
+          request.executable.toLowerCase().endsWith("takeown.exe")),
+    )
+    .map((request) => [request.executable.split("\\").at(-1), request.arguments[1]]);
+  assert.deepEqual(protectedVaultRepair, [
+    ["icacls.exe", "/setowner"],
+    ["takeown.exe", protectedServiceVault],
+    ["icacls.exe", "/inheritance:r"],
+    ["icacls.exe", "/setowner"],
+  ]);
+  const icaclsRequests = process.requests.filter((request) =>
+    request.executable.toLowerCase().endsWith("icacls.exe"),
+  );
+  assert.ok(icaclsRequests.some((request) => request.arguments.includes("/setowner")));
+  assert.ok(icaclsRequests.some((request) => request.arguments.includes("/grant:r")));
+  assert.ok(
+    icaclsRequests.some(
+      (request) =>
+        request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin" &&
+        request.arguments.includes("NT SERVICE\\OpenDelegate-personal:(OI)(CI)F"),
+    ),
+  );
+  assert.equal(
+    icaclsRequests.some(
+      (request) =>
+        request.arguments.includes("/setowner") && request.arguments.includes("/grant:r"),
+    ),
+    false,
+  );
+  assert.ok(
+    icaclsRequests.some(
+      (request) =>
+        request.arguments[0] === "C:\\Program Files\\OpenDelegate\\releases\\1.2.3" &&
+        request.arguments.includes("/reset") &&
+        request.arguments.includes("/T") &&
+        request.arguments.includes("/C") &&
+        request.arguments.includes("/Q"),
+    ),
+  );
+  assert.equal(
+    icaclsRequests.some(
+      (request) => request.arguments.includes("/grant:r") && request.arguments.includes("/T"),
+    ),
+    false,
+  );
 });
 
 test("preflight checks every native tool and publisher trust before mutation", async () => {
@@ -680,6 +765,293 @@ test("upgrade refuses a configuration that does not match installed service defi
   );
   assert.equal(journal.claims, 0);
   assert.equal(mutations(), 0);
+});
+
+test("upgrade accepts an exact installed topology rendered for the active version", async () => {
+  const configuration = linuxConfiguration();
+  const installedConfiguration = linuxConfiguration({
+    bundle: {
+      ...configuration.bundle,
+      version: "1.2.2",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  for (const file of renderPlatformServiceArtifacts(installedConfiguration).files) {
+    fileSystem.files.set(file.path, Buffer.from(file.content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("/opt/opendelegate/releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (request.executable === "/usr/bin/id") {
+      return processResult(0, "400\n");
+    }
+    if (request.arguments.includes("is-active")) {
+      return processResult(0, "active\n");
+    }
+    return processResult(0);
+  };
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "linux",
+    elevated: true,
+    loggedIn: true,
+    fileSystem,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "linux",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-upgrade-exact-active-version",
+    configuration,
+    plan: createServicePlan({
+      operation: "upgrade",
+      configuration,
+      activeVersion: "1.2.2",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  const runtimeConfiguration = renderPlatformServiceArtifacts(configuration).files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtimeConfiguration);
+  assert.deepEqual(
+    fileSystem.files.get(runtimeConfiguration.path),
+    Buffer.from(runtimeConfiguration.content),
+  );
+});
+
+test("Windows upgrade accepts and repairs only the exact legacy restricted SID manifest", async () => {
+  const configuration = windowsConfigurationWithServiceBinding("worker");
+  const installedConfiguration = windowsConfiguration({
+    ...configuration,
+    bundle: {
+      ...configuration.bundle,
+      version: "1.2.2",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    const content =
+      file.purpose === "core-manifest"
+        ? file.content.replace('"serviceSidType": "unrestricted"', '"serviceSidType": "restricted"')
+        : file.content;
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: true,
+    healthRole: "worker",
+  });
+  const legacyCoreManifest = installedArtifacts.files.find(
+    (file) => file.purpose === "core-manifest",
+  );
+  assert.ok(legacyCoreManifest);
+  const exactLegacyCoreBytes = fileSystem.files.get(legacyCoreManifest.path);
+  assert.ok(exactLegacyCoreBytes);
+  fileSystem.files.set(
+    legacyCoreManifest.path,
+    Buffer.concat([exactLegacyCoreBytes, Buffer.from(" ", "utf8")]),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration,
+      plan: createServicePlan({
+        operation: "upgrade",
+        configuration,
+        activeVersion: "1.2.2",
+      }),
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+  fileSystem.files.set(legacyCoreManifest.path, exactLegacyCoreBytes);
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-upgrade-legacy-windows-restricted-sid",
+    configuration,
+    plan: createServicePlan({
+      operation: "upgrade",
+      configuration,
+      activeVersion: "1.2.2",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  const targetCoreManifest = renderPlatformServiceArtifacts(configuration).files.find(
+    (file) => file.purpose === "core-manifest",
+  );
+  assert.ok(targetCoreManifest);
+  assert.deepEqual(
+    fileSystem.files.get(targetCoreManifest.path),
+    renderedFileBytes(targetCoreManifest.encoding, targetCoreManifest.content),
+  );
+  assert.ok(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("sc.exe") &&
+        request.arguments.join(" ") === "sidtype OpenDelegate-personal unrestricted",
+    ),
+  );
+});
+
+test("Windows Worker upgrade accepts only a coherent staged credential migration", async () => {
+  const targetConfiguration = windowsConfigurationWithServiceBinding("worker");
+  const previousCore = {
+    keyId: "sha256:e7235c4d3fcae8c6cab1363028a6b65beff1226696f02793f36f8bbe2ed51797",
+    publicKeySpkiBase64Url: "MCowBQYDK2VwAyEA1FwCTlBzsp5Dmtumo472upeCAh6Kic4zJmDPtm0N8go",
+  } as const;
+  const installedConfiguration = windowsConfiguration({
+    ...targetConfiguration,
+    bundle: {
+      ...targetConfiguration.bundle,
+      version: "1.2.2",
+    },
+    helperSecretBinding: {
+      backend: "windows-dpapi",
+      vaultRoot: "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
+    },
+    ipcTrust: {
+      ...targetConfiguration.ipcTrust,
+      core: previousCore,
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, file.content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: true,
+    healthRole: "worker",
+  });
+  const runtimeFile = installedArtifacts.files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtimeFile);
+  const exactPreviousRuntime = fileSystem.files.get(runtimeFile.path);
+  assert.ok(exactPreviousRuntime);
+  const incoherent = JSON.parse(exactPreviousRuntime.toString("utf8")) as {
+    localIpc: { helper: { peerKeyId: string } };
+  };
+  incoherent.localIpc.helper.peerKeyId = `sha256:${"d".repeat(64)}`;
+  fileSystem.files.set(
+    runtimeFile.path,
+    Buffer.from(`${JSON.stringify(incoherent, undefined, 2)}\n`),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration: targetConfiguration,
+      plan: createServicePlan({
+        operation: "upgrade",
+        configuration: targetConfiguration,
+        activeVersion: "1.2.2",
+      }),
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+  const unrelatedDrift = JSON.parse(exactPreviousRuntime.toString("utf8")) as {
+    health: { timeoutMs: number };
+  };
+  unrelatedDrift.health.timeoutMs += 1;
+  fileSystem.files.set(
+    runtimeFile.path,
+    Buffer.from(`${JSON.stringify(unrelatedDrift, undefined, 2)}\n`),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration: targetConfiguration,
+      plan: createServicePlan({
+        operation: "upgrade",
+        configuration: targetConfiguration,
+        activeVersion: "1.2.2",
+      }),
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+  fileSystem.files.set(runtimeFile.path, exactPreviousRuntime);
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-upgrade-worker-credential-migration",
+    configuration: targetConfiguration,
+    plan: createServicePlan({
+      operation: "upgrade",
+      configuration: targetConfiguration,
+      activeVersion: "1.2.2",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  const targetRuntime = renderPlatformServiceArtifacts(targetConfiguration).files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(targetRuntime);
+  assert.deepEqual(
+    fileSystem.files.get(targetRuntime.path),
+    renderedFileBytes(targetRuntime.encoding, targetRuntime.content),
+  );
 });
 
 test("Admin auto-open reconfiguration atomically replaces only the installed runtime configuration", async () => {
@@ -1100,7 +1472,173 @@ test("core health failure rolls a restart back through structured supervisor com
   const serviceVerbs = process.requests
     .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))
     .map((request) => request.arguments[0]);
-  assert.deepEqual(serviceVerbs, ["stop", "start", "stop", "start"]);
+  assert.deepEqual(serviceVerbs, ["stop", "query", "start", "stop", "query", "start"]);
+});
+
+test("Windows restart reads localized service states before starting the replacement", async () => {
+  const configuration = windowsConfiguration({
+    health: {
+      endpoint: "http://127.0.0.1:43190/health/live",
+      timeoutMs: 1_000,
+    },
+  });
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  let statusQueries = 0;
+  process.handler = (request) => {
+    const verb = request.arguments[0]?.toLowerCase();
+    if (request.executable.toLowerCase().endsWith("sc.exe") && verb === "query") {
+      statusQueries += 1;
+      return processResult(
+        0,
+        statusQueries < 3
+          ? "상태               : 3  중지_대기\r\n"
+          : "상태               : 1  중지됨\r\n",
+      );
+    }
+    if (request.executable.toLowerCase().endsWith("sc.exe") && verb === "start") {
+      assert.equal(statusQueries, 3);
+    }
+    return processResult(0);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-restart-stop-pending",
+    configuration,
+    plan: createServicePlan({
+      operation: "restart",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded");
+  assert.deepEqual(
+    process.requests
+      .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))
+      .map((request) => request.arguments[0]),
+    ["stop", "query", "query", "query", "start"],
+  );
+});
+
+test("Windows restart tolerates a transient service status process failure", async () => {
+  const configuration = windowsConfiguration({
+    health: {
+      endpoint: "http://127.0.0.1:43190/health/live",
+      timeoutMs: 1_000,
+    },
+  });
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  let statusQueries = 0;
+  process.handler = (request) => {
+    const verb = request.arguments[0]?.toLowerCase();
+    if (request.executable.toLowerCase().endsWith("sc.exe") && verb === "query") {
+      statusQueries += 1;
+      if (statusQueries === 1) {
+        throw new NativeBoundaryError(
+          "NATIVE_PROCESS_FAILED",
+          "A transient Windows service status process failed to start.",
+        );
+      }
+      return processResult(0, "STATE              : 1  STOPPED\r\n");
+    }
+    return processResult(0);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-restart-transient-query-failure",
+    configuration,
+    plan: createServicePlan({
+      operation: "restart",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded");
+  assert.deepEqual(
+    process.requests
+      .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))
+      .map((request) => request.arguments[0]),
+    ["stop", "query", "query", "start"],
+  );
+});
+
+test("Windows restart compensates an uncertain service stop before reporting failure", async () => {
+  const configuration = windowsConfiguration();
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (
+      request.executable.toLowerCase().endsWith("sc.exe") &&
+      request.arguments[0]?.toLowerCase() === "query"
+    ) {
+      throw new NativeBoundaryError(
+        "NATIVE_PROCESS_FAILED",
+        "The Windows service status process remained unavailable.",
+      );
+    }
+    return processResult(0);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-restart-compensate-uncertain-stop",
+    configuration,
+    plan: createServicePlan({
+      operation: "restart",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "failed");
+  assert.equal(result.report.failedStepId, "stop-core");
+  assert.deepEqual(
+    process.requests
+      .filter((request) => request.executable.toLowerCase().endsWith("sc.exe"))
+      .map((request) => request.arguments[0]),
+    ["stop", "query", "query", "query", "start"],
+  );
 });
 
 test("native inspection keeps core health, helper presence, and Computer Use readiness separate", async () => {
@@ -1108,7 +1646,7 @@ test("native inspection keeps core health, helper presence, and Computer Use rea
   const process = new FakeProcess();
   process.handler = (request) =>
     request.executable.toLowerCase().endsWith("sc.exe")
-      ? processResult(0, "STATE              : 4  RUNNING\r\n")
+      ? processResult(0, "상태               : 4  실행_중\r\n")
       : processResult(1);
   const { boundaries } = fakeBoundaries({
     platform: "windows",
@@ -2187,6 +2725,12 @@ function payloadEntry(
 
 function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function renderedFileBytes(encoding: "utf8" | "utf16le-bom", content: string): Buffer {
+  return encoding === "utf8"
+    ? Buffer.from(content, "utf8")
+    : Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(content, "utf16le")]);
 }
 
 function processResult(exitCode: number, stdout = "", stderr = ""): NativeProcessResult {

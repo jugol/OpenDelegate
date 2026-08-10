@@ -596,6 +596,8 @@ test("interaction deferral keeps the token only in the injected vault and persis
       new Response(null, { status: 204 }),
     "PATCH /api/v10/webhooks/100000000000000001/raw-interaction-token-must-not-be-returned/messages/@original":
       json({ id: "100000000000000071" }),
+    "DELETE /api/v10/webhooks/100000000000000001/raw-interaction-token-must-not-be-returned/messages/@original":
+      new Response(null, { status: 204 }),
   });
   const api = new FetchDiscordApiPort({
     applicationId: APPLICATION_ID,
@@ -617,6 +619,13 @@ test("interaction deferral keeps the token only in the injected vault and persis
     responseRef: deferred.responseRef,
     payload: componentsPayload(),
   });
+  await api.deleteDeferredInteraction({ responseRef: deferred.responseRef });
+  assert.equal(
+    requests.some(
+      (request) => request.method === "DELETE" && request.pathname.endsWith("/messages/@original"),
+    ),
+    true,
+  );
   assert.equal(
     requests.some((request) => request.pathname.includes(rawInteractionToken)),
     true,

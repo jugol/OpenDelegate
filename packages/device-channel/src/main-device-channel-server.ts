@@ -208,7 +208,8 @@ export interface CreateMainDeviceChannelServerOptions extends MainDeviceChannelC
   readonly authority: Pick<
     DeviceIdentityAuthority,
     "confirmCertificateRotation" | "issueCertificateRotation" | "validatePeerIdentity"
-  >;
+  > &
+    Partial<Pick<DeviceIdentityAuthority, "generationWasRecredentialed">>;
   readonly repository: DeviceChannelRepository;
   readonly tls: MainDeviceChannelTlsOptions;
   readonly host?: string;
@@ -246,6 +247,7 @@ interface ActiveConnection {
   readonly socket: WebSocket;
   readonly certificatePem: string;
   readonly peer: AuthenticatedDevicePeer;
+  readonly workerSessionSequenceFloor: number;
   lastObservedAtMs: number;
   queue: Promise<void>;
   closed: boolean;
@@ -670,9 +672,15 @@ export class MainDeviceChannelServer {
         "The Worker clock is outside the bounded scheduling calibration window.",
       );
     }
+    const resetForRecredential =
+      (await this.options.authority.generationWasRecredentialed?.({
+        deviceId: peer.deviceId,
+        certificateGeneration: peer.certificateGeneration,
+      })) ?? false;
     await this.options.repository.observeConnection({
       deviceId: peer.deviceId,
       certificateGeneration: peer.certificateGeneration,
+      ...(resetForRecredential ? { resetForRecredential: true } : {}),
     });
     const prior = this.connections.get(peer.deviceId);
     if (prior !== undefined) {
@@ -682,6 +690,7 @@ export class MainDeviceChannelServer {
       socket,
       certificatePem,
       peer,
+      workerSessionSequenceFloor: hello.sequence,
       lastObservedAtMs: this.now(),
       queue: Promise.resolve(),
       closed: false,
@@ -816,13 +825,18 @@ export class MainDeviceChannelServer {
         } else if (frame.type === "worker.pong") {
           // The durable commit and last-observed timestamp are the entire pong side effect.
         }
+        acknowledgedWorkerSequence = (
+          await this.options.repository.completeInboundEffect(frame, claimId)
+        ).acknowledgedSequence;
       } catch (error) {
-        await this.options.repository.releaseInboundEffect(frame, claimId);
+        // Completion is part of the effect boundary. If its durable write is
+        // interrupted (for example by a transient SQLite writer), leaving the
+        // claim in `processing` would make every reconnect reject the same
+        // frame forever. A successful completion can make this release invalid,
+        // so preserve the original failure and let replay observe `handled`.
+        await this.options.repository.releaseInboundEffect(frame, claimId).catch(() => undefined);
         throw error;
       }
-      acknowledgedWorkerSequence = (
-        await this.options.repository.completeInboundEffect(frame, claimId)
-      ).acknowledgedSequence;
     } else if (frame.type === "worker.artifact.prepare") {
       artifactResponse = await this.findArtifactResponse(connection.peer.deviceId, frame);
     } else if (
@@ -1036,6 +1050,18 @@ export class MainDeviceChannelServer {
         readonly retryable: boolean;
       }
   > {
+    // A rotation request is coupled to an in-memory private key and response
+    // waiter. After a Worker restart neither can safely resume, so replaying an
+    // older session's request could create an orphan pending certificate. The
+    // hello sequence is the durable outbox cursor at this connection boundary;
+    // fresh requests use that sequence or a later one.
+    if (frame.sequence < connection.workerSessionSequenceFloor) {
+      return {
+        status: "rejected",
+        code: "ROTATION_INVALID",
+        retryable: false,
+      };
+    }
     try {
       if (frame.type === "worker.identity.rotate") {
         return {

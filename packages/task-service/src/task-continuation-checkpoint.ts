@@ -341,6 +341,9 @@ function acceptedWorkerEventsForTask(
     ) {
       throw sourceInvalid();
     }
+    if (envelope["type"] === "worker.run.progress") {
+      continue;
+    }
     const artifacts = readArtifactIds(payload["artifactIds"]).map((artifactId) => ({
       artifactId,
       source: "worker-report" as const,

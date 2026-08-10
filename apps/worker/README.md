@@ -13,8 +13,9 @@ Enrollment accepts only a protected local grant file:
 
 ```text
 opendelegate worker join --grant-file ABSOLUTE_LOCAL_PATH \
-  [--agent auto|codex|claude] [--codex-home ABSOLUTE_LOCAL_PATH] \
-  [--claude-home ABSOLUTE_LOCAL_PATH] \
+  [--agent auto|codex|claude] \
+  [--codex-executable ABSOLUTE_NATIVE_EXECUTABLE] [--codex-home ABSOLUTE_LOCAL_PATH] \
+  [--claude-executable ABSOLUTE_NATIVE_EXECUTABLE] [--claude-home ABSOLUTE_LOCAL_PATH] \
   [--claude-network-domain APPROVED_DNS_NAME ...]
 ```
 
@@ -30,6 +31,22 @@ Worker.
 Service when the current session can actually use it. A headless Linux host must
 select the systemd credential-backed vault explicitly; `Auto` never invents or
 persists a plaintext fallback key.
+
+### Re-credential an existing Worker
+
+Use re-credentialing only to recover the same Device from an expired credential or
+an unrecoverable per-generation channel mismatch. On Main, issue a short-lived grant
+with the existing Device ID and `--recredential`. Never open or paste that file.
+
+Stop an installed Worker service before running `worker join` with the same Worker
+home. A successful replacement must have a newer certificate generation and keeps
+the existing Agent, platform-mutation, Workspace, and creation metadata. On Windows,
+`join` first binds the new Secrets to the owner account; run
+`windows-service-secret-stage` with the existing instance, handoff root, vault root,
+and Worker home before restarting the service. The staging command replaces the old
+handoff only after the new owner-bound records are durable. If any step after Main
+accepts the grant is uncertain, do not replay it—inspect `worker status` and Main's
+Device record before issuing another grant.
 
 On macOS, prefer to execute `worker join` from Terminal.app in the signed-in desktop
 session. An SSH or background process can pass a read-only Keychain health check while
@@ -270,6 +287,25 @@ explicitly; an existing login from the user's global provider home is intentiona
 not copied or inherited. Provider credentials are never accepted through a Run
 environment or written into the checkout. Claude network access is limited to the
 DNS names recorded at join.
+
+On Linux, a present `bubblewrap` executable is not sufficient readiness evidence.
+The Worker also proves that the nested user namespace required by Claude's fail-closed
+sandbox can start. If AppArmor, a container policy, or the kernel blocks it, the
+adapter is reported `platform-incompatible` so a declared Prefer fallback can be
+selected. OpenDelegate does not weaken the Device sandbox automatically.
+
+The effective provider, adapter, model, and optional effort are part of the native
+session binding. Worker validation, durable session keys, resume, and owner-safe Run
+observations preserve that exact binding; a later turn cannot silently inherit a
+different model or tuning value.
+
+An always-on service often has a smaller `PATH` than the owner's terminal. Use
+`--codex-executable` or `--claude-executable` at join when the provider is installed
+outside that service path. Windows requires a native `.exe`; `.cmd` and `.bat`
+wrappers stay rejected because Worker never invokes a shell. If an external provider
+home belongs to the owner, grant only the exact OpenDelegate service identity the
+access that provider needs, or keep the provider home service-local and authenticate
+it separately.
 
 The core daemon does not assume a graphical session. Native service and
 user-session helper installation are separate platform operations exposed by the

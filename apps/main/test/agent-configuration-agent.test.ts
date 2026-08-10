@@ -90,6 +90,10 @@ test("Configuration Agent resumes one native session per target Device", async (
   assert.match(adapter.starts[0]?.prompt ?? "", /Developer Mode.*Copy ID.*non-secret/isu);
   assert.match(
     adapter.starts[0]?.prompt ?? "",
+    /presentationLocale.*en\|ko.*deterministic OpenDelegate Discord/isu,
+  );
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
     /SQLite is the default and needs no database URI/isu,
   );
   assert.match(adapter.resumes[0]?.prompt ?? "", /Propose a safer route\./);

@@ -47,6 +47,26 @@ if (
 }
 
 if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app-server")) {
+  const hasFeatureArgument = (verb, feature) =>
+    args.some((argument, index) => argument === verb && args[index + 1] === feature);
+  if (process.env.FIXTURE_EXPECT_NATIVE_SUBAGENTS === "enabled") {
+    if (
+      !hasFeatureArgument("--enable", "multi_agent") ||
+      hasFeatureArgument("--disable", "multi_agent")
+    ) {
+      process.stderr.write("Codex native child Agents were not enabled exactly\n");
+      process.exit(31);
+    }
+  }
+  if (process.env.FIXTURE_EXPECT_NATIVE_SUBAGENTS === "disabled") {
+    if (
+      hasFeatureArgument("--enable", "multi_agent") ||
+      !hasFeatureArgument("--disable", "multi_agent")
+    ) {
+      process.stderr.write("Codex native child Agents were not disabled exactly\n");
+      process.exit(32);
+    }
+  }
   const protocol = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
   let threadId = "019abcdef-app-server-thread";
@@ -102,10 +122,36 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
     }
     if (message.method === "thread/start" || message.method === "thread/resume") {
       if (
+        process.env.FIXTURE_EXPECT_APPROVAL_POLICY &&
+        message.params.approvalPolicy !== process.env.FIXTURE_EXPECT_APPROVAL_POLICY
+      ) {
+        send({ id: message.id, error: { code: -32602, message: "approval policy mismatch" } });
+        continue;
+      }
+      if (
         process.env.FIXTURE_EXPECT_MODEL &&
         message.params.model !== process.env.FIXTURE_EXPECT_MODEL
       ) {
         send({ id: message.id, error: { code: -32602, message: "model mismatch" } });
+        continue;
+      }
+      if (process.env.FIXTURE_EXPECT_NATIVE_SUBAGENTS === "enabled") {
+        const agents = message.params.config?.agents;
+        if (
+          agents?.enabled !== true ||
+          agents?.max_concurrent_threads_per_session !== 5 ||
+          agents?.max_depth !== 1 ||
+          agents?.interrupt_message !== true
+        ) {
+          send({ id: message.id, error: { code: -32602, message: "agent limits mismatch" } });
+          continue;
+        }
+      }
+      if (
+        process.env.FIXTURE_EXPECT_NATIVE_SUBAGENTS === "disabled" &&
+        message.params.config?.agents !== undefined
+      ) {
+        send({ id: message.id, error: { code: -32602, message: "unexpected agents config" } });
         continue;
       }
       if (message.method === "thread/resume") {
@@ -156,6 +202,13 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
     }
     if (message.method === "turn/start") {
       if (
+        process.env.FIXTURE_EXPECT_APPROVAL_POLICY &&
+        message.params.approvalPolicy !== process.env.FIXTURE_EXPECT_APPROVAL_POLICY
+      ) {
+        send({ id: message.id, error: { code: -32602, message: "approval policy mismatch" } });
+        continue;
+      }
+      if (
         process.env.FIXTURE_EXPECT_MODEL &&
         message.params.model !== process.env.FIXTURE_EXPECT_MODEL
       ) {
@@ -186,6 +239,12 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
           turn: { id: turnId, status: "inProgress", items: [], error: null },
         },
       });
+      if (process.env.FIXTURE_CODEX_EMIT_SKILLS_CHANGED === "1") {
+        send({
+          method: "skills/changed",
+          params: { threadId },
+        });
+      }
       if (process.env.FIXTURE_CODEX_EMIT_UNSUPPORTED_AFTER_TURN_STARTED === "1") {
         send({
           method: "fixture/unsupported",
@@ -197,8 +256,123 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         method: "item/agentMessage/delta",
         params: { threadId, turnId, itemId: "message-1", delta: "Working" },
       });
+      if (process.env.FIXTURE_COMPLETE_WITHOUT_APPROVAL === "1") {
+        send({
+          method: "item/completed",
+          params: {
+            threadId,
+            turnId,
+            completedAtMs: Date.now(),
+            item: {
+              type: "agentMessage",
+              id: "message-1",
+              text: "Finished without tools",
+            },
+          },
+        });
+        send({
+          method: "turn/completed",
+          params: {
+            threadId,
+            turn: { id: turnId, status: "completed", items: [], error: null },
+          },
+        });
+        continue;
+      }
       if (process.env.FIXTURE_CODEX_WAIT_FOR_STEER === "1") {
         continue;
+      }
+      if (process.env.FIXTURE_EMIT_NATIVE_SUBAGENTS === "1") {
+        const childCount = Number(process.env.FIXTURE_NATIVE_SUBAGENT_COUNT ?? "1");
+        for (let index = 0; index < childCount; index += 1) {
+          const childThreadId = `019abcdef-child-${index + 1}`;
+          const item = {
+            type: "collabAgentToolCall",
+            id: `collab-${index + 1}`,
+            senderThreadId: threadId,
+            receiverThreadIds: [childThreadId],
+            agentsStates: { [childThreadId]: { status: "completed", message: null } },
+            tool: "spawnAgent",
+            status: "completed",
+            prompt: "private child prompt",
+            model: null,
+            reasoningEffort: null,
+          };
+          send({ method: "item/started", params: { threadId, turnId, item } });
+          send({ method: "item/completed", params: { threadId, turnId, item } });
+          send({
+            method: "item/completed",
+            params: {
+              threadId,
+              turnId,
+              item: {
+                type: "subAgentActivity",
+                id: `activity-${index + 1}`,
+                agentThreadId: childThreadId,
+                agentPath: `/root/child-${index + 1}`,
+                kind: "interacted",
+              },
+            },
+          });
+          send({
+            method: "turn/started",
+            params: {
+              threadId: childThreadId,
+              turn: {
+                id: `child-turn-${index + 1}`,
+                status: "inProgress",
+                items: [],
+                error: null,
+              },
+            },
+          });
+          send({
+            method: "item/agentMessage/delta",
+            params: {
+              threadId: childThreadId,
+              turnId: `child-turn-${index + 1}`,
+              itemId: `child-message-${index + 1}`,
+              delta: "private child delta",
+            },
+          });
+          send({
+            method: "item/completed",
+            params: {
+              threadId: childThreadId,
+              turnId: `child-turn-${index + 1}`,
+              item: {
+                type: "agentMessage",
+                id: `child-message-${index + 1}`,
+                text: "private child answer",
+                phase: "final_answer",
+              },
+            },
+          });
+          send({
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId: childThreadId,
+              turnId: `child-turn-${index + 1}`,
+              tokenUsage: {
+                inputTokens: 2,
+                outputTokens: 1,
+                cachedInputTokens: 0,
+              },
+            },
+          });
+          send({
+            method: "turn/completed",
+            params: {
+              threadId: childThreadId,
+              turn: {
+                id: `child-turn-${index + 1}`,
+                status: "completed",
+                items: [],
+                error: null,
+              },
+            },
+          });
+        }
       }
       send({
         method: "item/commandExecution/requestApproval",

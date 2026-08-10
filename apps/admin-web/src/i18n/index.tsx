@@ -245,6 +245,20 @@ export function localizeAdapterCompatibility(
   }[compatibility];
 }
 
+export function localizeAgentAdapterBlocker(
+  blocker: NonNullable<AgentAdapterView["blockedBy"]>,
+  messages: Messages,
+): string {
+  return {
+    "provider-home-unavailable": messages.device.adapterBlockedProviderHome,
+    "executable-unavailable": messages.device.adapterBlockedExecutable,
+    "authentication-required": messages.device.adapterBlockedAuthentication,
+    "version-unsupported": messages.device.adapterBlockedVersion,
+    "platform-incompatible": messages.device.adapterBlockedPlatform,
+    "probe-failed": messages.device.adapterBlockedProbe,
+  }[blocker];
+}
+
 export function localizeArtifactExposure(
   exposure: ArtifactExposureMode,
   messages: Messages,

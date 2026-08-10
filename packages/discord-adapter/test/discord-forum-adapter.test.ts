@@ -120,8 +120,13 @@ class FakeDiscordApi implements DiscordApiPort {
   public readonly operations: Array<Record<string, unknown>> = [];
   public readonly acknowledgedInteractions = new Set<string>();
   public readonly missingStatusPanelMessageIds = new Set<string>();
+  public failTaskActivityUpserts = false;
   readonly #messageByRequestKey = new Map<string, string>();
   #nextMessage = 900;
+
+  public forgetMessageRequestKeys(): void {
+    this.#messageByRequestKey.clear();
+  }
 
   public async probeInstallation(): Promise<DiscordInstallationProbe> {
     return this.probe;
@@ -230,6 +235,12 @@ class FakeDiscordApi implements DiscordApiPort {
     messageId?: string;
   }): Promise<{ messageId: string }> {
     this.#assertOnline();
+    if (this.failTaskActivityUpserts && input.requestKey.startsWith("task-activity:")) {
+      throw new DiscordApiError(
+        "OFFLINE",
+        "The live Task activity surface is temporarily offline.",
+      );
+    }
     if (input.messageId !== undefined && this.missingStatusPanelMessageIds.has(input.messageId)) {
       throw new DiscordApiError("NOT_FOUND", "Discord status panel was not found.");
     }
@@ -267,6 +278,11 @@ class FakeDiscordApi implements DiscordApiPort {
   }): Promise<void> {
     this.#assertOnline();
     this.operations.push({ kind: "message-edit", ...input });
+  }
+
+  public async deleteMessage(input: { threadId: string; messageId: string }): Promise<void> {
+    this.#assertOnline();
+    this.operations.push({ kind: "message-delete", ...input });
   }
 
   public async acknowledgeMessage(input: {
@@ -320,6 +336,11 @@ class FakeDiscordApi implements DiscordApiPort {
     this.operations.push({ kind: "interaction-result", ...input });
   }
 
+  public async deleteDeferredInteraction(input: { responseRef: string }): Promise<void> {
+    this.#assertOnline();
+    this.operations.push({ kind: "interaction-dismiss", ...input });
+  }
+
   #assertOnline(): void {
     if (!this.online) {
       throw new DiscordApiError("OFFLINE", "Bot token abc.def.secret could not connect.");
@@ -359,6 +380,7 @@ function fixture(options?: {
   tasks?: FakeTaskPort;
   clock?: FakeClock;
   gateway?: FakeGateway;
+  presentationLocale?: "en" | "ko";
 }) {
   const repository = options?.repository ?? new InMemoryDiscordStateRepository();
   const api = options?.api ?? new FakeDiscordApi();
@@ -372,6 +394,9 @@ function fixture(options?: {
       forumBindings: [{ channelId: FORUM_ID, workflowTagIds: STATUS_TAGS }],
       ownerUserIds: [OWNER_ID],
       allowedRoleIds: [OWNER_ROLE_ID],
+      ...(options?.presentationLocale === undefined
+        ? {}
+        : { presentationLocale: options.presentationLocale }),
     },
     repository,
     api,
@@ -786,7 +811,7 @@ test("one owner answer resolves the one durable question in place and resumes on
   assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
   assert.equal(
     api.operations.filter((operation) => operation["kind"] === "message-reconciled").length,
-    1,
+    0,
   );
   const edit = api.operations.find((operation) => operation["kind"] === "message-edit");
   const rendered = JSON.stringify(edit?.["payload"]);
@@ -992,8 +1017,8 @@ test("restart reconciliation scans active and paged archived posts without dupli
   assert.equal((await restartedRepository.getBindingByThread(archived.id))?.archived, true);
 });
 
-test("Task projection keeps one workflow tag, a stable panel, and concise Artifact presentation", async () => {
-  const { adapter, api, repository, clock } = fixture();
+test("Task projection retires its bootstrap panel when chronological work begins", async () => {
+  const { adapter, api, repository } = fixture();
   const thread = {
     ...forumThread("300000000000000031"),
     appliedTagIds: [
@@ -1009,6 +1034,17 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
   api.messages.set(thread.id, [starter]);
   await adapter.handleGatewayDispatch(messageDispatch(1, starter));
 
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "intake",
+    objective: "Render the report",
+    summary: "OpenDelegate is reading this Task.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+  const bootstrapPanel = api.operations.find((operation) => operation["kind"] === "panel");
+  assert.notEqual(bootstrapPanel, undefined);
+
   const projection: TaskChannelProjection = {
     taskId: "task-1",
     state: "completed",
@@ -1016,18 +1052,15 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
     summary: "The report is ready with all checks passing.",
     sourceEventId: "event_report_completed",
     significance: "final",
-  };
-  await adapter.publishTaskProjection(projection);
-  await adapter.flushOutbox();
-  clock.value += 5_000;
-  await adapter.publishTaskProjection({
-    ...projection,
     artifact: {
       label: "Open report",
       url: "https://artifacts.example.test/reports/release",
     },
     inspectUrl: "https://admin.example.test/tasks/task-1",
-  });
+  };
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection(projection);
   await adapter.flushOutbox();
 
   const tagOperations = api.operations.filter((operation) => operation["kind"] === "tags");
@@ -1039,37 +1072,457 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
     STATUS_TAGS.done,
   ]);
   const panels = api.operations.filter((operation) => operation["kind"] === "panel");
-  assert.equal(panels.length, 2);
-  const panelPayload = panels.at(-1)?.["payload"];
-  assert.match(JSON.stringify(panelPayload), /Open report/);
-  assert.match(JSON.stringify(panelPayload), /32768/);
-  const statusPanelMessageId = panels.at(-1)?.["messageId"];
-  assert.equal(
-    (await repository.getBindingByTask("task-1"))?.statusPanelMessageId,
-    statusPanelMessageId,
+  assert.equal(panels.length, 1);
+  assert.deepEqual(
+    api.operations
+      .filter((operation) => operation["kind"] === "message-delete")
+      .map((operation) => operation["messageId"]),
+    [bootstrapPanel?.["messageId"]],
   );
   assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  const resultPayload = api.operations.find((operation) => operation["kind"] === "message")?.[
+    "payload"
+  ];
+  assert.match(JSON.stringify(resultPayload), /Open report/u);
+  assert.match(JSON.stringify(resultPayload), /Inspect runs/u);
   assert.deepEqual(
     api.operations
       .filter((operation) => operation["kind"] === "message-acknowledgement-completed")
       .map((operation) => operation["outcome"]),
     ["success"],
   );
+  assert.equal((await repository.getBindingByTask("task-1"))?.externalState, "available");
+});
 
-  assert.equal(typeof statusPanelMessageId, "string");
-  api.missingStatusPanelMessageIds.add(statusPanelMessageId as string);
-  await adapter.publishTaskProjection({
-    ...projection,
+test("one bounded live activity message is edited and closed for a Task cycle", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000041");
+  const starter = ownerMessage(thread.id, thread.id, "Run the cross-device release.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  const base: TaskChannelProjection = {
+    taskId: "task-1",
     state: "running",
-    summary: "The deleted status panel is being restored.",
+    objective: "Run the cross-device release.",
+    summary: "OpenDelegate is coordinating the release.",
     significance: "status",
+    activity: {
+      cycleId: "activity_cycle_1",
+      revision: 1,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 2,
+      milestones: [
+        {
+          key: "work-order:windows",
+          status: "active",
+          summary: "The Worker is running tests.",
+          deviceId: "device_windows_1",
+          deviceLabel: "Windows build workstation",
+        },
+      ],
+    },
+  };
+  await adapter.publishTaskProjection(base);
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection({
+    ...base,
+    approval: {
+      approvalId: "approval-worker-action",
+      description: "Mac Studio wants to temporarily expand its sandbox for this Task.",
+    },
+    activity: {
+      ...base.activity!,
+      revision: 2,
+      updatedAtMs: 11_000,
+      completedWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:windows",
+          status: "completed",
+          summary: "Windows tests completed.",
+          deviceId: "device_windows_1",
+          deviceLabel: "Windows build workstation",
+        },
+        {
+          key: "work-order:macos",
+          status: "active",
+          summary: "The Worker is building the macOS package.",
+          deviceId: "device_macos_1",
+          deviceLabel: "Mac Studio",
+        },
+      ],
+    },
   });
   await adapter.flushOutbox();
-  const restored = await repository.getBindingByTask("task-1");
-  const restoredPanel = api.operations.filter((operation) => operation["kind"] === "panel").at(-1);
-  assert.equal(restored?.statusPanelMessageId, restoredPanel?.["messageId"]);
-  assert.equal(restored?.externalState, "available");
-  assert.equal(restoredPanel?.["requestedMessageId"], undefined);
+
+  const activityWrites = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 2);
+  assert.equal(activityWrites[0]?.["messageId"], activityWrites[1]?.["messageId"]);
+  assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Mac Studio/u);
+  assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Approval needed/u);
+  assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Approve/u);
+  assert.doesNotMatch(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Pause/u);
+  assert.equal((await repository.getBindingByTask("task-1"))?.activitySurface?.state, "open");
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "completed",
+    objective: "Run the cross-device release.",
+    summary: "The cross-device release completed.",
+    sourceEventId: "event_release_completed",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    1,
+  );
+  const closedActivity = (await repository.getBindingByTask("task-1"))?.activitySurface;
+  assert.equal(closedActivity?.cycleId, "activity_cycle_1");
+  assert.equal(closedActivity?.revision, 3);
+  assert.equal(closedActivity?.updatedAtMs, 11_000);
+  assert.equal(closedActivity?.state, "closed");
+  assert.equal(Number.isSafeInteger(closedActivity?.outboxCreatedAtMs), true);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "completed",
+    objective: "Run the cross-device release.",
+    summary: "The cross-device release completed.",
+    sourceEventId: "event_release_completed",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    1,
+  );
+});
+
+test("pause replaces live progress with one idempotent recovery surface", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000046");
+  const starter = ownerMessage(thread.id, thread.id, "Pause and resume this Task safely.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Pause and resume this Task safely.",
+    summary: "The Task is running.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_running_before_pause",
+      revision: 1,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:safe-check",
+          status: "active",
+          summary: "The Worker is performing a read-only check.",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+
+  const paused: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "paused",
+    objective: "Pause and resume this Task safely.",
+    summary: "This Task is paused.",
+    significance: "status",
+    activity: {
+      cycleId: "paused_event_pause_1",
+      revision: 1,
+      updatedAtMs: 2_000,
+      phase: "planning",
+      completedWorkOrders: 0,
+      totalWorkOrders: 0,
+      milestones: [
+        {
+          key: "paused:task-1",
+          status: "active",
+          summary: "Execution is paused until the owner resumes this Task.",
+        },
+      ],
+    },
+  };
+  await adapter.publishTaskProjection(paused);
+  await adapter.flushOutbox();
+
+  let activityWrites = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 2);
+  const pausedPayload = JSON.stringify(activityWrites.at(-1)?.["payload"]);
+  assert.match(pausedPayload, /OpenDelegate is paused/u);
+  assert.match(pausedPayload, /Resume/u);
+  assert.match(pausedPayload, /Cancel/u);
+  assert.doesNotMatch(pausedPayload, /Pause/u);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    1,
+  );
+  const pausedSurface = (await repository.getBindingByTask("task-1"))?.activitySurface;
+  assert.equal(pausedSurface?.cycleId, "paused_event_pause_1");
+  assert.equal(pausedSurface?.revision, 1);
+  assert.equal(pausedSurface?.updatedAtMs, 2_000);
+  assert.equal(pausedSurface?.state, "open");
+  assert.equal(Number.isSafeInteger(pausedSurface?.outboxCreatedAtMs), true);
+  assert.equal(typeof pausedSurface?.messageId, "string");
+
+  await adapter.publishTaskProjection(paused);
+  await adapter.flushOutbox();
+  activityWrites = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 2);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Pause and resume this Task safely.",
+    summary: "The same Task resumed.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_running_after_resume",
+      revision: 1,
+      updatedAtMs: 3_000,
+      phase: "planning",
+      completedWorkOrders: 0,
+      totalWorkOrders: 0,
+      milestones: [
+        {
+          key: "main:planning",
+          status: "active",
+          summary: "Main resumed the same Task.",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+  activityWrites = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 3);
+  const resumedPayload = JSON.stringify(activityWrites.at(-1)?.["payload"]);
+  assert.match(resumedPayload, /OpenDelegate is working/u);
+  assert.match(resumedPayload, /Pause/u);
+  assert.doesNotMatch(resumedPayload, /Resume/u);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    2,
+  );
+});
+
+test("live activity never exposes an opaque Device identifier when its label is unavailable", async () => {
+  const { adapter, api } = fixture();
+  const thread = forumThread("300000000000000044");
+  const starter = ownerMessage(thread.id, thread.id, "Run on whichever Device is ready.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Run on whichever Device is ready.",
+    summary: "OpenDelegate selected a Worker.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_private_device_id",
+      revision: 1,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:private-device",
+          status: "active",
+          summary: "Worker Agent is making progress.",
+          deviceId: "device_229781e7-644b-4f0e-bbd4-e881c0d4ee4c",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+
+  const payload = JSON.stringify(
+    api.operations
+      .filter(
+        (operation) =>
+          operation["kind"] === "panel" &&
+          typeof operation["requestKey"] === "string" &&
+          operation["requestKey"].startsWith("task-activity:"),
+      )
+      .at(-1)?.["payload"],
+  );
+  assert.match(payload, /Worker Device/u);
+  assert.doesNotMatch(payload, /device_229781e7/u);
+});
+
+test("terminal delivery tombstones a delayed live activity before it can appear", async () => {
+  const { adapter, api, repository, clock } = fixture();
+  const thread = forumThread("300000000000000042");
+  const starter = ownerMessage(thread.id, thread.id, "Finish before the live card retries.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  api.failTaskActivityUpserts = true;
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Finish before the live card retries.",
+    summary: "The Task is running.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_delayed_cycle",
+      revision: 1,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:delayed",
+          status: "active",
+          summary: "The Worker is completing the Work Order.",
+          deviceId: "Linux Worker",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+  assert.equal((await repository.getBindingByTask("task-1"))?.activitySurface, undefined);
+
+  api.failTaskActivityUpserts = false;
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "completed",
+    objective: "Finish before the live card retries.",
+    summary: "The Task completed.",
+    sourceEventId: "event_fast_completion",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+  const tombstone = (await repository.getBindingByTask("task-1"))?.activitySurface;
+  assert.equal(tombstone?.cycleId, "activity_delayed_cycle");
+  assert.equal(tombstone?.revision, 2);
+  assert.equal(tombstone?.updatedAtMs, 1_000);
+  assert.equal(tombstone?.state, "closed");
+  assert.equal(Number.isSafeInteger(tombstone?.outboxCreatedAtMs), true);
+
+  clock.value = 2_000;
+  await adapter.flushOutbox();
+  assert.equal(
+    api.operations.filter(
+      (operation) =>
+        operation["kind"] === "panel" &&
+        typeof operation["requestKey"] === "string" &&
+        operation["requestKey"].startsWith("task-activity:"),
+    ).length,
+    0,
+  );
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+});
+
+test("a restarted Main replaces an older activity cycle even when its revision resets", async () => {
+  const first = fixture();
+  const thread = forumThread("300000000000000043");
+  const starter = ownerMessage(thread.id, thread.id, "Continue this Task after Main restarts.");
+  first.api.threads.set(thread.id, thread);
+  first.api.messages.set(thread.id, [starter]);
+  await first.adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  const projection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "running",
+    objective: "Continue this Task after Main restarts.",
+    summary: "The Task is running.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_before_restart",
+      revision: 9,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:restart",
+          status: "active",
+          summary: "The first Main process is coordinating the Worker.",
+        },
+      ],
+    },
+  };
+  await first.adapter.publishTaskProjection(projection);
+  await first.adapter.flushOutbox();
+
+  const restarted = fixture({
+    repository: first.repository,
+    api: first.api,
+    tasks: first.tasks,
+    clock: first.clock,
+  });
+  await restarted.adapter.publishTaskProjection({
+    ...projection,
+    activity: {
+      ...projection.activity!,
+      cycleId: "activity_after_restart",
+      revision: 1,
+      milestones: [
+        {
+          key: "work-order:restart",
+          status: "active",
+          summary: "The restarted Main process recovered the active Worker Run.",
+        },
+      ],
+    },
+  });
+  await restarted.adapter.flushOutbox();
+
+  const activityWrites = first.api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 2);
+  assert.notEqual(activityWrites[0]?.["messageId"], activityWrites[1]?.["messageId"]);
+  assert.equal(
+    first.api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    1,
+  );
+  assert.equal(
+    (await first.repository.getBindingByTask("task-1"))?.activitySurface?.cycleId,
+    "activity_after_restart",
+  );
 });
 
 test("a completed Task without links renders valid Components v2 without an empty action row", () => {
@@ -1107,6 +1560,30 @@ test("the stable status panel does not repeat the Forum title or chronological o
   assert.doesNotMatch(rendered, /od:v1:/u);
 });
 
+test("a localized resource wait keeps the current owner controls on the stable status panel", () => {
+  const payload = renderStatusPanel(
+    {
+      taskId: "task-waiting-resource",
+      state: "waiting_resource",
+      objective: "두 기기에서 안전한 읽기 전용 점검을 해줘.",
+      summary:
+        "No eligible Worker is online for this Work Order. OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget. Resource code: WORKER_OFFLINE.",
+      significance: "status",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /작업 상태/u);
+  assert.match(rendered, /대기 중/u);
+  assert.match(rendered, /이 작업을 맡을 수 있는 Worker가 현재 오프라인입니다/u);
+  assert.match(rendered, /다시 온라인이 되면 OpenDelegate가 자동으로 계속합니다/u);
+  assert.match(rendered, /일시정지/u);
+  assert.match(rendered, /취소/u);
+  assert.match(rendered, /od:v1:pause/u);
+  assert.match(rendered, /od:v1:cancel/u);
+  assert.doesNotMatch(rendered, /No eligible Worker is online/u);
+});
+
 test("a chronological failure update carries its Retry control", () => {
   const payload = renderTaskUpdate({
     taskId: "task-failed",
@@ -1121,6 +1598,365 @@ test("a chronological failure update carries its Retry control", () => {
   assert.match(rendered, /No eligible Worker is online/);
   assert.match(rendered, /Retry/);
   assert.match(rendered, /od:v1:retry/);
+});
+
+test("one failure card follows the current pending approval without creating message noise", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000136");
+  const starter = ownerMessage(thread.id, thread.id, "Run bounded work across two Devices.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Run bounded work across two Devices.",
+    summary: "The read-only Worker attempt needs owner attention.",
+    sourceEventId: "event_multi_device_failure",
+    significance: "failure",
+    approval: {
+      approvalId: "approval-first",
+      description: "Allow the first exact read-only retry?",
+    },
+  });
+  await adapter.flushOutbox();
+
+  const failureMessage = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("approval-first"),
+  );
+  assert.notEqual(failureMessage, undefined);
+  const originalSurface = (await repository.getBindingByTask("task-1"))?.failureSurface;
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Run bounded work across two Devices.",
+    summary: "The read-only Worker attempt needs owner attention.",
+    sourceEventId: "event_multi_device_failure",
+    significance: "failure",
+    approval: {
+      approvalId: "approval-second",
+      description: "Allow the second exact read-only retry?",
+    },
+  });
+  await adapter.flushOutbox();
+
+  const approvalEdit = api.operations
+    .filter(
+      (operation) =>
+        operation["kind"] === "message-edit" &&
+        operation["messageId"] === failureMessage?.["messageId"],
+    )
+    .at(-1);
+  const approvalRendered = JSON.stringify(approvalEdit?.["payload"]);
+  assert.match(approvalRendered, /Approval needed/u);
+  assert.match(approvalRendered, /second exact read-only retry/u);
+  assert.match(approvalRendered, /approval-second/u);
+  assert.doesNotMatch(approvalRendered, /approval-first/u);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Run bounded work across two Devices.",
+    summary: "The read-only Worker attempt needs owner attention.",
+    sourceEventId: "event_multi_device_failure",
+    significance: "failure",
+  });
+  await adapter.flushOutbox();
+
+  const retryEdit = api.operations
+    .filter(
+      (operation) =>
+        operation["kind"] === "message-edit" &&
+        operation["messageId"] === failureMessage?.["messageId"],
+    )
+    .at(-1);
+  const retryRendered = JSON.stringify(retryEdit?.["payload"]);
+  assert.match(retryRendered, /od:v1:retry/u);
+  assert.doesNotMatch(retryRendered, /Approval needed/u);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.deepEqual((await repository.getBindingByTask("task-1"))?.failureSurface, originalSurface);
+  assert.equal(
+    (await repository.listOutbox()).filter(
+      (item) => item.action.kind === "refresh-task-failure" && item.delivered,
+    ).length,
+    2,
+  );
+});
+
+test("one owner prompt drops stale approval controls in place", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000137");
+  const starter = ownerMessage(thread.id, thread.id, "Inspect two registered Devices.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  const waitingProjection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "waiting_user",
+    objective: "Inspect two registered Devices.",
+    summary: "The automatic retry limit was reached. Extend it only if more work is wanted.",
+    sourceEventId: "event_retry_limit_reached",
+    significance: "question",
+    approval: {
+      approvalId: "approval-stale-control",
+      description: "Allow the NAS Worker to expand its sandbox?",
+    },
+  };
+  await adapter.publishTaskProjection(waitingProjection);
+  await adapter.flushOutbox();
+
+  const promptMessage = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("approval-stale-control"),
+  );
+  assert.notEqual(promptMessage, undefined);
+  const promptSurface = (await repository.getBindingByTask("task-1"))?.ownerPromptSurface;
+  assert.equal(promptSurface?.requestKey, promptMessage?.["requestKey"]);
+  assert.equal(promptSurface?.sourceEventId, "event_retry_limit_reached");
+  assert.equal(promptSurface?.messageId, promptMessage?.["messageId"]);
+  assert.equal(promptSurface?.state, "open");
+  assert.equal(Number.isSafeInteger(promptSurface?.outboxCreatedAtMs), true);
+
+  await adapter.publishTaskProjection({
+    taskId: waitingProjection.taskId,
+    state: waitingProjection.state,
+    objective: waitingProjection.objective,
+    summary: waitingProjection.summary,
+    sourceEventId: "event_retry_limit_reached",
+    significance: waitingProjection.significance,
+  });
+  await adapter.flushOutbox();
+
+  const promptEdit = api.operations
+    .filter(
+      (operation) =>
+        operation["kind"] === "message-edit" &&
+        operation["messageId"] === promptMessage?.["messageId"],
+    )
+    .at(-1);
+  const rendered = JSON.stringify(promptEdit?.["payload"]);
+  assert.match(rendered, /automatic retry limit/u);
+  assert.match(rendered, /od:v1:cancel/u);
+  assert.doesNotMatch(rendered, /Approval needed/u);
+  assert.doesNotMatch(rendered, /approval-stale-control/u);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-reconciled").length,
+    0,
+  );
+  assert.equal(
+    (await repository.getBindingByTask("task-1"))?.ownerPromptSurface?.messageId,
+    promptMessage?.["messageId"],
+  );
+  assert.equal(
+    (await repository.listOutbox()).filter(
+      (item) => item.action.kind === "refresh-owner-prompt" && item.delivered,
+    ).length,
+    1,
+  );
+});
+
+test("a successful retry resolves the prior failure control in place", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000134");
+  const starter = ownerMessage(thread.id, thread.id, "Recover after a bounded failure.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Recover after a bounded failure.",
+    summary: "The first attempt could not produce a valid plan.",
+    sourceEventId: "event_retryable_failure",
+    significance: "failure",
+  });
+  await adapter.flushOutbox();
+
+  const failureMessage = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("od:v1:retry"),
+  );
+  assert.notEqual(failureMessage, undefined);
+  api.forgetMessageRequestKeys();
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Recover after a bounded failure.",
+    summary: "The retry is now running.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Recover after a bounded failure.",
+    summary: "The retry is now running.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+
+  const resolvedFailures = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "message-edit" &&
+      operation["messageId"] === failureMessage?.["messageId"],
+  );
+  assert.equal(resolvedFailures.length, 1);
+  const resolvedFailure = resolvedFailures[0];
+  assert.notEqual(resolvedFailure, undefined);
+  const rendered = JSON.stringify(resolvedFailure?.["payload"]);
+  assert.match(rendered, /Retry started/u);
+  assert.doesNotMatch(rendered, /od:v1:retry/u);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.deepEqual((await repository.getBindingByTask("task-1"))?.failureSurface, {
+    requestKey: failureMessage?.["requestKey"],
+    sourceEventId: "event_retryable_failure",
+    messageId: failureMessage?.["messageId"],
+    outboxCreatedAtMs: 1_003,
+    state: "resolved",
+  });
+});
+
+test("retrying a cancellation resolves its old button and keeps one localized current surface", async () => {
+  const { adapter, api, repository } = fixture({ presentationLocale: "ko" });
+  const thread = forumThread("300000000000000145");
+  const starter = ownerMessage(thread.id, thread.id, "두 기기에서 안전한 읽기 전용 점검을 해줘.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "cancelled",
+    objective: "두 기기에서 안전한 읽기 전용 점검을 해줘.",
+    summary: "This Task was cancelled.",
+    sourceEventId: "event_cancelled_first",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+
+  const cancelled = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("od:v1:retry"),
+  );
+  assert.notEqual(cancelled, undefined);
+  assert.match(JSON.stringify(cancelled?.["payload"]), /작업을 취소했어요/u);
+  assert.match(JSON.stringify(cancelled?.["payload"]), /다시 시도/u);
+  assert.equal((await repository.getBindingByTask("task-1"))?.failureSurface?.state, "open");
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "두 기기에서 안전한 읽기 전용 점검을 해줘.",
+    summary: "OpenDelegate is working on this Task.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_retry_after_cancel",
+      revision: 1,
+      updatedAtMs: 2_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 2,
+      milestones: [
+        {
+          key: "main:planning",
+          status: "active",
+          summary: "Main is planning the work.",
+        },
+        {
+          key: "main:prepared",
+          status: "completed",
+          summary: "Main prepared 2 Work Orders.",
+        },
+        {
+          key: "worker:progress",
+          status: "active",
+          summary: "Worker Agent is making progress.",
+          deviceLabel: "5090White",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+
+  const resolved = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message-edit" && operation["messageId"] === cancelled?.["messageId"],
+  );
+  assert.match(JSON.stringify(resolved?.["payload"]), /다시 시작했어요/u);
+  assert.doesNotMatch(JSON.stringify(resolved?.["payload"]), /od:v1:retry/u);
+  assert.equal((await repository.getBindingByTask("task-1"))?.failureSurface?.state, "resolved");
+
+  const liveActivity = api.operations.find(
+    (operation) =>
+      operation["kind"] === "panel" && String(operation["requestKey"]).startsWith("task-activity:"),
+  );
+  const liveRendered = JSON.stringify(liveActivity?.["payload"]);
+  assert.match(liveRendered, /OpenDelegate가 작업 중이에요/u);
+  assert.match(liveRendered, /Main이 작업을 계획하고 있어요/u);
+  assert.match(liveRendered, /Main이 Worker에 배정할 작업 2개를 준비했어요/u);
+  assert.match(liveRendered, /Worker가 작업을 진행하고 있어요/u);
+  assert.match(liveRendered, /일시정지/u);
+  assert.match(liveRendered, /취소/u);
+  assert.doesNotMatch(liveRendered, /OpenDelegate is working/u);
+  assert.doesNotMatch(liveRendered, /Main prepared 2 Work Orders/u);
+  assert.doesNotMatch(liveRendered, /Worker Agent is making progress/u);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+});
+
+test("a fast retry resolves its failure when projection coalescing observes only completion", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000135");
+  const starter = ownerMessage(thread.id, thread.id, "Recover through a fast direct result.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Recover through a fast direct result.",
+    summary: "The previous attempt failed before execution.",
+    sourceEventId: "event_fast_retry_failure",
+    significance: "failure",
+  });
+  await adapter.flushOutbox();
+  const failureMessage = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("od:v1:retry"),
+  );
+  assert.notEqual(failureMessage, undefined);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "completed",
+    objective: "Recover through a fast direct result.",
+    summary: "The retry completed before the next projection poll.",
+    sourceEventId: "event_fast_retry_completed",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+
+  assert.equal(
+    api.operations.filter(
+      (operation) =>
+        operation["kind"] === "message-edit" &&
+        operation["messageId"] === failureMessage?.["messageId"],
+    ).length,
+    1,
+  );
+  assert.equal((await repository.getBindingByTask("task-1"))?.failureSurface?.state, "resolved");
 });
 
 test("a failed turn replaces the newest owner-message acknowledgement with failure", async () => {
@@ -1184,6 +2020,46 @@ test("pause, resume, cancel, and retry controls map to channel-neutral idempoten
     tasks.calls.filter((call) => call["kind"] === "command").map((call) => call["command"]),
     ["pause", "resume", "cancel", "retry"],
   );
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "interaction-dismiss").length,
+    4,
+  );
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "interaction-result").length,
+    0,
+  );
+});
+
+test("a cancelled Task leaves one chronological final update with Retry", async () => {
+  const { adapter, api } = fixture();
+  const thread = forumThread("300000000000000037");
+  const starter = ownerMessage(thread.id, thread.id, "Cancel active multi-Device work.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  const cancelled = {
+    taskId: "task-1",
+    sourceEventId: "event-task-cancelled",
+    state: "cancelled" as const,
+    objective: "Cancel active multi-Device work.",
+    summary: "This Task was cancelled.",
+    significance: "final" as const,
+  };
+  await adapter.publishTaskProjection(cancelled);
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection(cancelled);
+  await adapter.flushOutbox();
+
+  const finalMessages = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("This Task was cancelled."),
+  );
+  assert.equal(finalMessages.length, 1);
+  const rendered = JSON.stringify(finalMessages[0]?.["payload"]);
+  assert.match(rendered, /## Result/u);
+  assert.match(rendered, /od:v1:retry/u);
 });
 
 test("a stale Task control resolves once instead of retrying forever", async () => {
@@ -1240,7 +2116,7 @@ test("Discord outage leaves an idempotent durable outbox that drains after resta
     significance: "status",
   });
   await initial.adapter.flushOutbox();
-  assert.equal((await initial.repository.listOutbox()).filter((item) => !item.delivered).length, 2);
+  assert.equal((await initial.repository.listOutbox()).filter((item) => !item.delivered).length, 1);
 
   const restartedRepository = new InMemoryDiscordStateRepository(initial.repository.snapshot());
   initial.api.online = true;
@@ -1313,7 +2189,7 @@ test("interactions defer before asynchronous Task controls and replay is idempot
     false,
   );
   assert.equal(
-    api.operations.filter((operation) => operation["kind"] === "interaction-result").length,
+    api.operations.filter((operation) => operation["kind"] === "interaction-dismiss").length,
     1,
   );
 });

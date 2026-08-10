@@ -62,6 +62,19 @@ approved product specification.
 39. [`0042-headless-linux-main-service-composition.md`](0042-headless-linux-main-service-composition.md)
 40. [`0043-current-worker-lease-renewal-is-budget-activity.md`](0043-current-worker-lease-renewal-is-budget-activity.md)
 41. [`0044-resource-waits-resume-on-availability-change.md`](0044-resource-waits-resume-on-availability-change.md)
+42. [`0045-bounded-provider-native-child-agents.md`](0045-bounded-provider-native-child-agents.md)
+43. [`0046-device-scoped-worker-identity.md`](0046-device-scoped-worker-identity.md)
+44. [`0047-windows-virtual-service-sid-network-compatibility.md`](0047-windows-virtual-service-sid-network-compatibility.md)
+45. [`0048-linux-claude-nested-sandbox-readiness.md`](0048-linux-claude-nested-sandbox-readiness.md)
+46. [`0049-native-child-run-capability-fanout.md`](0049-native-child-run-capability-fanout.md)
+47. [`0050-discord-bounded-live-task-activity.md`](0050-discord-bounded-live-task-activity.md)
+48. [`0051-scheduling-metadata-and-singleton-workspace-default.md`](0051-scheduling-metadata-and-singleton-workspace-default.md)
+49. [`0052-windows-codex-service-sandbox-directory.md`](0052-windows-codex-service-sandbox-directory.md)
+50. [`0053-discord-worker-action-approval.md`](0053-discord-worker-action-approval.md)
+51. [`0054-discord-retry-resolves-prior-failure.md`](0054-discord-retry-resolves-prior-failure.md)
+52. [`0055-owner-cycle-scoped-work-order-ids.md`](0055-owner-cycle-scoped-work-order-ids.md)
+53. [`0056-authority-reducing-work-order-default.md`](0056-authority-reducing-work-order-default.md)
+54. [`0057-production-managed-worktree-composition.md`](0057-production-managed-worktree-composition.md)
 
 ## Proposed ADRs
 

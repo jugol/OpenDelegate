@@ -8,6 +8,7 @@ import { PROTOCOL_VERSION } from "@opendelegate/protocol";
 
 import {
   WorkerRuntimeError,
+  configurationFingerprint,
   createSqliteWorkerStateRepository,
   sanitizeWorkerDiagnostic,
   validateWorkerConfiguration,
@@ -109,6 +110,19 @@ test("diagnostic sanitization copies only allowlisted inert values", () => {
     retryable: true,
   });
   assert.equal(getterRead, false);
+  assert.deepEqual(
+    sanitizeWorkerDiagnostic({
+      code: "WORKSPACE_RESOLUTION_FAILED",
+      stage: "startup",
+      retryable: true,
+      detail: "private path",
+    }),
+    {
+      code: "WORKSPACE_RESOLUTION_FAILED",
+      stage: "startup",
+      retryable: true,
+    },
+  );
 });
 
 test("the local repository refuses an incompatible durable state document", async () => {
@@ -141,5 +155,72 @@ test("the local repository refuses an incompatible durable state document", asyn
   } finally {
     repository.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the local repository rejects incoherent durable progress bounds after restart", async () => {
+  const variants = [
+    {
+      progressCount: -1,
+      lastProgressAtMs: 1_000,
+      lastProgressDigest: "a".repeat(64),
+    },
+    {
+      progressCount: 1,
+      lastProgressAtMs: 1_001,
+      lastProgressDigest: "a".repeat(64),
+    },
+    {
+      progressCount: 1,
+      lastProgressAtMs: 1_000,
+      lastProgressDigest: "provider-session-id",
+    },
+    {
+      lastProgressAtMs: 1_000,
+      lastProgressDigest: "a".repeat(64),
+    },
+  ] as const;
+
+  for (const [index, progress] of variants.entries()) {
+    const directory = await mkdtemp(join(tmpdir(), `opendelegate-worker-progress-state-${index}-`));
+    const repository = createSqliteWorkerStateRepository({
+      filename: join(directory, "worker.sqlite"),
+    });
+    const workerConfiguration = configuration();
+    const state = {
+      schemaVersion: 1,
+      generation: 0,
+      configuration: workerConfiguration,
+      configurationFingerprint: configurationFingerprint(workerConfiguration),
+      operationalState: "active",
+      lastObservedAtMs: 1_000,
+      inbox: [],
+      runs: [
+        {
+          assignment: {},
+          dispatchMessageId: "dispatch-1",
+          assignmentFingerprint: "sha256:fixture",
+          state: "running",
+          acceptedAtMs: 900,
+          ...progress,
+        },
+      ],
+      outbox: [],
+      nextOutboxSequence: 1,
+    } as unknown as PersistedWorkerState;
+
+    try {
+      await assert.rejects(
+        () => repository.initialize(state),
+        (error: unknown) => {
+          assert.equal(error instanceof WorkerRuntimeError, true);
+          assert.equal((error as WorkerRuntimeError).code, "STATE_CORRUPT");
+          return true;
+        },
+      );
+    } finally {
+      repository.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 });

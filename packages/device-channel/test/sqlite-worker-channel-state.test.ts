@@ -89,6 +89,72 @@ test("Worker channel state durably sequences, replays, and de-duplicates authent
   }
 });
 
+test("Worker re-credentialing starts one fresh transport epoch while rotation preserves state", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "opendelegate-worker-recredential-"));
+  const filename = join(directory, "channel.sqlite");
+  const sourceCheckoutRoot = process.cwd();
+  let state: SqliteWorkerChannelState | undefined;
+  try {
+    state = await SqliteWorkerChannelState.open({
+      deviceId: "worker-1",
+      mainDeviceId: "main-1",
+      certificateGeneration: 1,
+      filename,
+      sourceCheckoutRoot,
+    });
+    await state.enqueueOutbound((sequence) => workerHeartbeat(sequence, "before-recredential"));
+    await state.commitInbound(mainDispatch(1, "before-recredential"));
+    await state.close();
+    state = undefined;
+
+    state = await SqliteWorkerChannelState.open({
+      deviceId: "worker-1",
+      mainDeviceId: "main-1",
+      certificateGeneration: 2,
+      filename,
+      sourceCheckoutRoot,
+    });
+    assert.equal((await state.resume()).nextWorkerSequence, 2, "routine rotation preserves state");
+    await state.close();
+    state = undefined;
+
+    state = await SqliteWorkerChannelState.open({
+      deviceId: "worker-1",
+      mainDeviceId: "main-1",
+      certificateGeneration: 3,
+      resetForRecredential: true,
+      filename,
+      sourceCheckoutRoot,
+    });
+    assert.deepEqual(await state.resume(), {
+      acknowledgedMainSequence: 0,
+      acknowledgedWorkerSequence: 0,
+      nextWorkerSequence: 1,
+      pendingOutbound: [],
+    });
+    await state.enqueueOutbound((sequence) => workerHeartbeat(sequence, "after-recredential"));
+    await state.close();
+    state = undefined;
+
+    state = await SqliteWorkerChannelState.open({
+      deviceId: "worker-1",
+      mainDeviceId: "main-1",
+      certificateGeneration: 3,
+      resetForRecredential: true,
+      filename,
+      sourceCheckoutRoot,
+    });
+    assert.deepEqual(
+      (await state.resume()).pendingOutbound.map((frame) => frame.messageId),
+      ["after-recredential"],
+      "reconnecting at the same generation must not repeat the epoch reset",
+    );
+  } finally {
+    await state?.close().catch(() => undefined);
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Worker channel effect claims recover interrupted processing after restart", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opendelegate-worker-effect-"));
   const filename = join(directory, "channel.sqlite");

@@ -193,6 +193,13 @@ export const simplifiedChineseMessages = {
     adapterUpgrading: "正在更新…",
     adapterUpgradeRequested: "已请求更新。该设备将在下次刷新时报告结果。",
     adapterUpgradeFailed: "无法请求更新。",
+    adapterBlockedProviderHome: "此 Worker 服务无法访问已配置的提供商主目录。",
+    adapterBlockedExecutable:
+      "此 Worker 服务无法找到或执行该提供商。请配置其原生可执行文件，或为服务账户安装它。",
+    adapterBlockedAuthentication: "请在为此 Worker 服务配置的确切主目录中登录该提供商。",
+    adapterBlockedVersion: "此提供商版本尚未通过适配器兼容性检查。",
+    adapterBlockedPlatform: "此适配器无法在当前操作系统上强制执行所需的沙箱。",
+    adapterBlockedProbe: "提供商就绪检查失败。请在此设备上运行 `opendelegate worker diagnose`。",
     capabilityBlockedSessionHelperAbsent:
       "该设备在前台运行 OpenDelegate，因此没有用户会话助手，无法访问桌面。在该设备上将工作节点安装为原生服务即可启用。",
     noAgentAdapters: "暂无 Agent 适配器观测信息。",
@@ -368,7 +375,7 @@ export const simplifiedChineseMessages = {
     hardTitle: "预算硬停止",
     hardDetail: "{metrics} 已达到硬停止限额。在所有者明确增加此任务预算之前，新工作将保持停止。",
     hardIdleDetail:
-      "{metrics} 已达到非活动停止限额。所有者发送新消息或选择重试/继续即可重新开始空闲计时；仅因非活动无需增加任务预算。",
+      "{metrics} 已达到非活动停止限额。所有者发送一条新消息（例如“继续”）即可重新开始空闲计时；仅因非活动无需增加任务预算。",
     limitEvents: "限额事件",
     noLimitEvents: "尚未记录预警或硬停止事件。",
     hardEvent: "硬停止",

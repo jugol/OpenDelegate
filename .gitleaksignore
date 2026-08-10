@@ -63,3 +63,10 @@ e953ec34a1150c4765949e7dfd65ba219d7519af:apps/service-host/test/service-host.tes
 e953ec34a1150c4765949e7dfd65ba219d7519af:apps/service-host/src/configuration.ts:generic-api-key:503
 e953ec34a1150c4765949e7dfd65ba219d7519af:packages/platform-services/src/render-linux.ts:generic-api-key:33
 e953ec34a1150c4765949e7dfd65ba219d7519af:packages/platform-services/src/render-linux.ts:generic-api-key:48
+# The same reviewed fixtures after PR #51 was squash-merged into main.
+978aa848f000b97869223e674994921a94c10659:apps/service-host/src/configuration.ts:generic-api-key:66
+978aa848f000b97869223e674994921a94c10659:apps/service-host/src/configuration.ts:generic-api-key:76
+978aa848f000b97869223e674994921a94c10659:apps/service-host/test/service-host.test.ts:generic-api-key:220
+978aa848f000b97869223e674994921a94c10659:apps/service-host/src/configuration.ts:generic-api-key:503
+978aa848f000b97869223e674994921a94c10659:packages/platform-services/src/render-linux.ts:generic-api-key:33
+978aa848f000b97869223e674994921a94c10659:packages/platform-services/src/render-linux.ts:generic-api-key:48

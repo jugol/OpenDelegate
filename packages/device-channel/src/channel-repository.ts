@@ -14,6 +14,8 @@ import {
 export interface ObserveDeviceChannelConnection {
   readonly deviceId: string;
   readonly certificateGeneration: number;
+  /** Starts a new transport epoch only when this is a newer re-credentialed generation. */
+  readonly resetForRecredential?: boolean;
 }
 
 export interface CommitInboundResult {
@@ -193,6 +195,26 @@ export class SqliteDeviceChannelRepository implements DeviceChannelRepository {
         );
       }
       if (generation > existing.certificate_generation) {
+        if (input.resetForRecredential === true) {
+          this.database
+            .prepare("DELETE FROM od_device_channel_inbound_effect WHERE device_id = ?")
+            .run(deviceId);
+          this.database
+            .prepare("DELETE FROM od_device_channel_inbox WHERE device_id = ?")
+            .run(deviceId);
+          this.database
+            .prepare("DELETE FROM od_device_channel_outbox WHERE device_id = ?")
+            .run(deviceId);
+          this.database
+            .prepare(
+              `UPDATE od_device_channel_state
+               SET certificate_generation = ?, last_worker_sequence = 0,
+                   acknowledged_main_sequence = 0, next_main_sequence = 1
+               WHERE device_id = ?`,
+            )
+            .run(generation, deviceId);
+          return;
+        }
         this.database
           .prepare(
             `UPDATE od_device_channel_state

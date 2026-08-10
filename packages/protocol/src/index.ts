@@ -146,6 +146,7 @@ export type WorkerOutboundEventTypeV1 =
   | "worker.run.cancelled"
   | "worker.run.claimed"
   | "worker.run.failed"
+  | "worker.run.progress"
   | "worker.run.rejected"
   | "worker.run.succeeded";
 

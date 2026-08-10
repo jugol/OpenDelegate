@@ -27,12 +27,14 @@ test("only current leased Worker reports can authorize Task completion", async (
   const clock = mutableClock(NOW_MS);
   const dispatch = new RecordingDispatchPort();
   const verificationInputs: AuthoritativeWorkerReport[][] = [];
+  const activityChanges: string[] = [];
   const executor = new AuthoritativeWorkerTaskExecutor({
     clock,
     eventStore: new InMemoryEventStore({
       clock: { now: () => new Date(clock.now()).toISOString() },
     }),
     idSource: sequentialIds(),
+    onActivityChange: (taskId) => activityChanges.push(taskId),
     leaseDurationMs: 60_000,
     checkpoints: {
       async build(taskId) {
@@ -106,15 +108,30 @@ test("only current leased Worker reports can authorize Task completion", async (
         ...workerEvent(assignment, 1, "worker.run.claimed"),
         createdAt: "2026-07-25T21:00:00+09:00",
       },
-      workerEvent(assignment, 2, "worker.run.succeeded", {
-        artifactIds: ["artifact-release-report"],
-        report: "Build and tests completed on the assigned Worker.",
+      workerEvent(assignment, 2, "worker.run.progress", {
+        report: "The Worker is running the platform build.",
       }),
     ]),
     [
       { disposition: "accepted", messageId: `${assignment.runId}:claimed` },
-      { disposition: "accepted", messageId: `${assignment.runId}:succeeded` },
+      { disposition: "accepted", messageId: `${assignment.runId}:progress` },
     ],
+  );
+  const activity = executor.activity(assignment.taskId);
+  assert.equal(activity?.phase, "working");
+  assert.equal(activity?.totalWorkOrders, 1);
+  assert.equal(activity?.milestones.at(-1)?.deviceId, assignment.deviceId);
+  assert.equal(activity?.milestones.at(-1)?.summary, "The Worker is running the platform build.");
+  assert.equal(activityChanges.length >= 4, true);
+  assert.deepEqual(new Set(activityChanges), new Set([assignment.taskId]));
+  assert.deepEqual(
+    await executor.acceptWorkerEvents("device-worker-1", [
+      workerEvent(assignment, 3, "worker.run.succeeded", {
+        artifactIds: ["artifact-release-report"],
+        report: "Build and tests completed on the assigned Worker.",
+      }),
+    ]),
+    [{ disposition: "accepted", messageId: `${assignment.runId}:succeeded` }],
   );
 
   assert.deepEqual(await execution, {
@@ -663,6 +680,67 @@ test("restart repeats the exact durable dispatch identity instead of creating an
     }),
   ]);
   assert.equal((await resumedExecution).state, "completed");
+});
+
+test("resuming an explicitly paused execution creates a higher-fenced replacement Run", async () => {
+  const clock = mutableClock(NOW_MS);
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(clock.now()).toISOString() },
+  });
+  const dispatch = new RecordingDispatchPort();
+  const executor = new AuthoritativeWorkerTaskExecutor({
+    clock,
+    eventStore,
+    idSource: sequentialIds(),
+    leaseDurationMs: 60_000,
+    planner: fixedPlanner(),
+    targetResolver: fixedTargetResolver(),
+    dispatch,
+    verifier: fixedVerifier(),
+  });
+  const execution = executor.execute(request("pause-resume-attempt", 1));
+  const pausedRun = await dispatch.nextAssignment();
+  await executor.acceptWorkerEvents(pausedRun.deviceId, [
+    workerEvent(pausedRun, 1, "worker.run.claimed"),
+  ]);
+
+  await executor.cancel({
+    taskId: pausedRun.taskId,
+    executionKey: "pause-resume-attempt",
+    reason: "paused",
+  });
+  await assert.rejects(execution, { code: "EXECUTION_CANCELLED" });
+
+  const resumedExecution = executor.execute(request("pause-resume-attempt", 1));
+  const replacementRun = await dispatch.nextAssignment();
+  assert.notEqual(replacementRun.runId, pausedRun.runId);
+  assert.notEqual(replacementRun.leaseId, pausedRun.leaseId);
+  assert.equal(replacementRun.fencingToken, pausedRun.fencingToken + 1);
+  assert.deepEqual(
+    await executor.acceptWorkerEvents(pausedRun.deviceId, [
+      workerEvent(pausedRun, 2, "worker.run.succeeded", {
+        artifactIds: [],
+        report: "This stale result cannot complete the resumed Task.",
+      }),
+    ]),
+    [{ disposition: "rejected-stale", messageId: `${pausedRun.runId}:succeeded` }],
+  );
+
+  await executor.acceptWorkerEvents(replacementRun.deviceId, [
+    workerEvent(replacementRun, 1, "worker.run.claimed"),
+    workerEvent(replacementRun, 2, "worker.run.succeeded", {
+      artifactIds: [],
+      report: "The replacement Run completed after owner-authorized resume.",
+    }),
+  ]);
+  assert.equal((await resumedExecution).state, "completed");
+  assert.deepEqual(
+    dispatch.cancellations.map(({ assignment, reason }) => ({
+      reason,
+      runId: assignment.runId,
+    })),
+    [{ reason: "paused", runId: pausedRun.runId }],
+  );
 });
 
 test("Main preserves a required Agent binding and safe native-session lineage across restart", async () => {

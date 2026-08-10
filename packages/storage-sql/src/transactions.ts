@@ -21,21 +21,64 @@ export type SqlWriteOperation<TResult> = (
   transaction: Transaction<SqlStorageSchema>,
 ) => Promise<TResult>;
 
+export interface SqlWriteCoordinator {
+  run<TResult>(operation: () => Promise<TResult>): Promise<TResult>;
+}
+
+interface SharedSqlWriteCoordinator {
+  readonly coordinator: SqlWriteCoordinator;
+  references: number;
+}
+
+const sharedSqliteWriteCoordinators = new Map<string, SharedSqlWriteCoordinator>();
+
+export function acquireSqliteWriteCoordinator(key: string): {
+  readonly coordinator: SqlWriteCoordinator;
+  release(): void;
+} {
+  let shared = sharedSqliteWriteCoordinators.get(key);
+  if (shared === undefined) {
+    shared = { coordinator: new AsyncMutex(), references: 0 };
+    sharedSqliteWriteCoordinators.set(key, shared);
+  }
+  shared.references += 1;
+  let released = false;
+  return {
+    coordinator: shared.coordinator,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const current = sharedSqliteWriteCoordinators.get(key);
+      if (current !== shared) {
+        return;
+      }
+      current.references -= 1;
+      if (current.references === 0) {
+        sharedSqliteWriteCoordinators.delete(key);
+      }
+    },
+  };
+}
+
 export class SqlTransactionRunner {
   private readonly backend: SqlBackend;
   private readonly database: Kysely<SqlStorageSchema>;
-  private readonly mutex = new AsyncMutex();
+  private readonly mutex: SqlWriteCoordinator;
   private readonly retryPolicy: SqlRetryPolicy;
 
   public constructor(
     database: Kysely<SqlStorageSchema>,
     backend: SqlBackend,
     retryPolicy: SqlRetryPolicy,
+    coordinator?: SqlWriteCoordinator,
   ) {
     assertRetryPolicy(retryPolicy);
     this.database = database;
     this.backend = backend;
     this.retryPolicy = retryPolicy;
+    this.mutex = coordinator ?? new AsyncMutex();
   }
 
   public async write<TResult>(operation: SqlWriteOperation<TResult>): Promise<TResult> {

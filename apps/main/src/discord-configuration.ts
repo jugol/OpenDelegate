@@ -279,14 +279,11 @@ function validateMainDiscordBindingFields(
 
 function validateForumConfiguration(input: unknown): DiscordForumAdapterConfig {
   const record = requireRecord(input);
-  assertExactKeys(record, [
-    "applicationId",
-    "botUserId",
-    "guildId",
-    "forumBindings",
-    "ownerUserIds",
-    "allowedRoleIds",
-  ]);
+  assertAllowedKeys(
+    record,
+    ["applicationId", "botUserId", "guildId", "forumBindings", "ownerUserIds", "allowedRoleIds"],
+    ["presentationLocale"],
+  );
   const forumBindings = requireArray(record["forumBindings"]).map((value) => {
     const binding = requireRecord(value);
     assertExactKeys(binding, ["channelId", "workflowTagIds"]);
@@ -324,7 +321,17 @@ function validateForumConfiguration(input: unknown): DiscordForumAdapterConfig {
     forumBindings: Object.freeze(forumBindings),
     ownerUserIds,
     allowedRoleIds,
+    ...(record["presentationLocale"] === undefined
+      ? {}
+      : { presentationLocale: requireDiscordPresentationLocale(record["presentationLocale"]) }),
   });
+}
+
+function requireDiscordPresentationLocale(input: unknown): "en" | "ko" {
+  if (input !== "en" && input !== "ko") {
+    throw configurationInvalid();
+  }
+  return input;
 }
 
 function validateSecretBackend(input: unknown): MainDiscordSecretBackendConfiguration {
@@ -432,6 +439,18 @@ function assertExactKeys(
   expected: readonly string[],
 ): void {
   if (Object.keys(input).sort().join(",") !== [...expected].sort().join(",")) {
+    throw configurationInvalid();
+  }
+}
+
+function assertAllowedKeys(
+  input: Readonly<Record<string, unknown>>,
+  required: readonly string[],
+  optional: readonly string[],
+): void {
+  const keys = Object.keys(input);
+  const allowed = new Set([...required, ...optional]);
+  if (required.some((key) => !Object.hasOwn(input, key)) || keys.some((key) => !allowed.has(key))) {
     throw configurationInvalid();
   }
 }

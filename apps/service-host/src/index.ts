@@ -18,7 +18,9 @@ export {
 } from "./configuration.ts";
 export { CoreHealthServer, type CoreHealthServerOptions } from "./health.ts";
 export {
+  buildWorkerServiceEnvironment,
   runCoreServiceHost,
+  resolveWorkerReleaseRoot,
   startCoLocatedMainDeviceWorkload,
   verifyServiceHostReleaseIdentity,
   waitForCoreWorkloadReadiness,

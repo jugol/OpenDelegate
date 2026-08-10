@@ -1434,7 +1434,7 @@ function buildConfigurationPrompt(
     "A Coordinator model change on the active Main Agent Adapter applies to new Task sessions through configuration alone. A Coordinator provider or adapter change also requires the authenticated Main Agent reconfiguration flow and service restart; do not claim that changing agent.coordinator-profile by itself replaced the running Coordinator.",
     "Resolve friendly model names only against the target Device's authoritative ready adapter model catalog below. Persist the exact modelId and adapterId; never invent, shorten, or transfer a model ID from another Device. If no exact unambiguous match exists, explain the available choices and ask one focused question.",
     "Changing an Agent profile affects only new Task or workstream sessions. Existing native sessions and any checkpoint continuation created from them retain their recorded provider, adapter, and model binding. Explain this when it matters.",
-    'The Main-scoped discord.binding controls the live Discord Forum connection. Its value is null when disabled, or exactly {"schemaVersion":1,"enabled":true,"botTokenAlias":"opaque managed-store alias","forum":{"applicationId":"17-20 digit ID","botUserId":"17-20 digit ID","guildId":"17-20 digit ID","forumBindings":[{"channelId":"17-20 digit ID","workflowTagIds":{"done":"ID","failed":"ID","intake":"ID","review":"ID","running":"ID","waiting":"ID"}}],"ownerUserIds":["ID"],"allowedRoleIds":["ID"]}}.',
+    'The Main-scoped discord.binding controls the live Discord Forum connection. Its value is null when disabled, or exactly {"schemaVersion":1,"enabled":true,"botTokenAlias":"opaque managed-store alias","forum":{"applicationId":"17-20 digit ID","botUserId":"17-20 digit ID","guildId":"17-20 digit ID","forumBindings":[{"channelId":"17-20 digit ID","workflowTagIds":{"done":"ID","failed":"ID","intake":"ID","review":"ID","running":"ID","waiting":"ID"}}],"ownerUserIds":["ID"],"allowedRoleIds":["ID"],"presentationLocale":"en|ko"}}. presentationLocale is optional, defaults to en, and changes only deterministic OpenDelegate Discord headings, status text, progress labels, and controls; it never rewrites owner or Agent prose.',
     "Disable Discord by setting discord.binding to explicit null. Never unset this key; null is the durable disabled-state marker.",
     "Adding another Forum means preserving the existing object and adding a distinct forumBindings entry. Replacing the bot, guild, or Forum means proposing the complete replacement object. Disabling means setting discord.binding to null. Durable Tasks and native Agent sessions remain in Main; Discord thread identities are not silently migrated.",
     "A secure Discord token intake returns secret://main/ALIAS. Store only ALIAS as botTokenAlias after removing the exact secret://main/ prefix. Never put the token or the secret:// reference itself in discord.binding. Applying, replacing, or disabling Discord requires the normal owner Approval; the runtime validates the credential and installation and restores the previous binding if activation fails.",
@@ -2390,6 +2390,13 @@ function sanitizeObservedAgentAdapter(
       value.compatibility !== "compatible" &&
       value.compatibility !== "untested" &&
       value.compatibility !== "incompatible") ||
+    (value.blockedBy !== undefined &&
+      value.blockedBy !== "provider-home-unavailable" &&
+      value.blockedBy !== "executable-unavailable" &&
+      value.blockedBy !== "authentication-required" &&
+      value.blockedBy !== "version-unsupported" &&
+      value.blockedBy !== "platform-incompatible" &&
+      value.blockedBy !== "probe-failed") ||
     typeof value.observedAtMs !== "number" ||
     !Number.isSafeInteger(value.observedAtMs) ||
     value.observedAtMs < 0
@@ -2416,6 +2423,7 @@ function sanitizeObservedAgentAdapter(
     adapterId: value.adapterId,
     readiness: value.readiness,
     compatibility: value.compatibility,
+    ...(value.blockedBy === undefined ? {} : { blockedBy: value.blockedBy }),
     ...(value.version === undefined ? {} : { version: value.version }),
     observedAtMs: value.observedAtMs,
     ...(modelCatalogObservedAtMs === undefined

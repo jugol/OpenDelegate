@@ -207,8 +207,9 @@ through a secure handoff and resumes the same Task afterward.
     important product decision.
 30. As an owner, I want Discord tags to show a compact Task state, so that I can scan
     work without opening every post.
-31. As an owner, I want a stable status card rather than a flood of progress
-    messages, so that Task conversations remain readable.
+31. As an owner, I want exactly one obvious current Task surface rather than a
+    fixed dashboard competing with live progress, so that Task conversations remain
+    readable and old controls cannot look current.
 32. As an owner, I want significant progress and failures reported in the Task, so
     that I can follow work from a phone.
 33. As an owner, I want to pause, cancel, retry, and approve from Discord controls,
@@ -491,18 +492,35 @@ through a secure handoff and resumes the same Task afterward.
    Waiting, Review, Done, and Failed. Remaining tag capacity is reserved for facets
    such as priority or category. The database is authoritative when Discord's
    20-available-tag and five-applied-tag limits cannot represent internal state.
-7. The bot maintains a concise status surface and edits it instead of posting a new
-   message for every heartbeat. The surface shows Task state and references but does
-   not repeat the Forum title, the current owner question, or mutable Task controls.
+7. Before work has a chronological or live surface, the bot may maintain one concise
+   bootstrap status surface instead of posting a message for every heartbeat. As
+   soon as live activity, a question, a failure, a decision, or a final result is
+   available, that bootstrap surface is deleted; it never competes with the latest
+   owner-visible turn. The current surface shows Task state and references but does
+   not repeat the Forum title or the current owner question.
    Each accepted owner message receives one idempotent in-place acknowledgement on
    that exact message: a best-effort `👀` reaction plus Discord's typing indicator.
-    Typing is refreshed while the turn remains active; after a durable question,
-    result, or failure is delivered, the same message transitions to `✅` or `❌`.
-    OpenDelegate does not post a second generic working card for the same input.
-    Durable outbound delivery runs outside the serialized Gateway receipt path, so
-    a slow reaction or reply in one thread cannot delay intake of another Forum
-    post. A live `THREAD_CREATE` payload is reused for its starter message instead
-    of requiring a redundant channel lookup before acknowledgement.
+   Typing is refreshed while the turn remains active; after a durable question,
+   result, or failure is delivered, the same message transitions to `✅` or `❌`.
+   OpenDelegate does not post a second generic working card for the same input.
+   During a long owner-input cycle it may maintain one separate live activity
+   message near that turn. Main planning, dispatch, bounded Worker progress, Work
+   Order completion, and verification update that message in place. Worker progress
+   uses a closed owner-safe vocabulary rather than free-form provider prose; token
+   deltas, raw tool activity, hidden reasoning, native session identifiers, local
+   paths, and heartbeats never enter it. The message retains only a short rolling
+   set of meaningful milestones. If the current Worker Run requires an owner
+   decision, the same message shows one owner-safe action, Device, risk, and evidence
+   summary plus approve-once and reject controls; it does not create a second
+   “attention” card. The Worker waits durably without an arbitrary short timeout.
+   The activity message closes before a question, failure, or final result becomes
+   the canonical reply. Pausing replaces the running activity with one bounded
+   paused recovery surface at the latest conversation position; it retains Resume
+   and Cancel controls until the same Task resumes or terminates.
+   Durable outbound delivery runs outside the serialized Gateway receipt path, so
+   a slow reaction or reply in one thread cannot delay intake of another Forum
+   post. A live `THREAD_CREATE` payload is reused for its starter message instead
+   of requiring a redundant channel lookup before acknowledgement.
 8. Significant decisions, questions, failures, and final results remain ordinary
    replies exactly once in chronological order, keyed by their immutable Task source
    event rather than mutable Artifact or link enrichment. The full owner question
@@ -511,12 +529,25 @@ through a secure handoff and resumes the same Task afterward.
    message in place, removes its controls, and resumes the Task once. A failure reply
    includes the owner-safe concrete reason or exhausted resource and the applicable
    recovery control, such as Retry; the owner is never left with only a generic
-   attention notice.
-9. Buttons and menus offer pause, cancel, retry, approve, reject, inspect Runs, and
-   open Artifact actions where Discord permits. If authoritative Task state rejects
+   attention notice. When that Task enters a new running attempt, the prior failure
+   reply is edited in place into a historical “Retry started” receipt and its stale
+   controls are removed; the current status or result remains below it. Cancellation
+   is a final chronological reply with an optional Retry control. Once Retry starts,
+   that cancellation reply becomes a control-free historical receipt just like a
+   recovered failure; a later cancellation may then create one new current recovery
+   surface.
+9. Buttons and menus offer pause, cancel, retry, approve once, reject, inspect Runs,
+   and open Artifact actions where Discord permits. A Discord Approval decision
+   resolves the exact same durable Approval service record shown in Admin Web; it
+   never creates a parallel Task-local approval authority. If authoritative Task state rejects
    a control from an older message, the deferred interaction explains that the
    control is no longer available and the command outbox completes without retrying
-   the same deterministic refusal. Transport and storage failures remain retryable.
+   the same deterministic refusal. This is a repair path for legacy or externally
+   missed edits, not the normal successful-retry UX. Transport and storage failures
+   remain retryable. A successful Task control dismisses its transient deferred
+   interaction response; the new durable Task surface is the confirmation. This
+   prevents ephemeral receipts from pointing at an activity message that the bounded
+   surface lifecycle has already superseded and deleted.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
     resume the Task and reopen the external conversation when permitted.
 11. If the external post is deleted, Task data remains in Main and the binding is
@@ -527,6 +558,9 @@ through a secure handoff and resumes the same Task afterward.
     Discord binding through Configuration Chat and protected Approval. A replacement
     becomes durable only after the candidate Gateway proves `READY`; failure restores
     the prior binding without changing Task or native-session identity.
+14. Deterministic Discord headings, status vocabulary, progress labels, and controls
+    use the owner-selected binding presentation locale. English remains the default;
+    Agent-authored prose and durable internal fields are not falsely translated.
 
 ### FR-6 — Task intake and lifecycle
 
@@ -587,16 +621,25 @@ may request a transition but cannot manufacture a state outside the transition r
 ### FR-7 — Work Orders, Runs, and scheduling
 
 1. Each Work Order has a stable ID, explicit brief, completion criteria, constraints,
-   selected inputs, required Capabilities, scheduling hints, and an optional Agent
+   selected inputs, required Capabilities, required Secret references, scheduling
+   hints, and an optional Agent
    requirement naming a provider plus an optional exact adapter, exact model, and
-   allowed compatibility set.
+   allowed compatibility set. Agent-authored IDs are plan-local labels; Main
+   deterministically replaces them with owner-input-cycle-scoped durable IDs and
+   remaps dependencies before persistence. Retries in one cycle keep the same IDs,
+   while a later owner cycle cannot collide merely because an Agent reused a label.
+   If and only if an Agent omits `requiredSecretRefs`, Main deterministically supplies
+   the least-authority value `[]`; an explicit malformed value or any other missing
+   authority, ordering, input, constraint, or eligibility field still fails closed.
 2. A deterministic eligibility stage filters Devices by health, connection, Policy,
    Capability, Secret availability, resource capacity, and hard Task constraints.
 3. A deterministic score may rank workload, route cost, artifact locality, session
    affinity, and owner preferences.
 4. Main uses semantic reasoning only when choosing or decomposing among eligible
    options is not mechanically determined.
-5. A dispatch creates a leased Worker Run with a unique idempotency key.
+5. A dispatch creates a leased Worker Run with a unique idempotency key. Worker IDs
+   are Device-scoped, so durable references pair the Device ID and Worker ID; two
+   different Devices may use the same local Worker ID.
 6. Claim, heartbeat, timeout, cancellation, and retry behavior does not require an
    LLM.
 7. A retry creates a new Run linked to the previous attempt.
@@ -719,6 +762,34 @@ may request a transition but cannot manufacture a state outside the transition r
 15. A successful provider-bound Run reports a safe native-session observation whose
     provider, exact adapter, and exact model, when required, match the durable
     assignment.
+16. A ready bridged Codex App Server or Claude Agent SDK adapter may advertise the
+    verified `native-subagents` Capability. CLI fallbacks and unbridged generic
+    adapters do not advertise it.
+17. Provider-native child Agents are a local Worker optimization. They inherit the
+    exact parent Task, Work Order, Device, Workspace, sandbox, provider session, and
+    OpenDelegate Policy callback and cannot create or route a cross-Device Work
+    Order.
+18. One Worker Run may create at most four native child Agents and one nesting level.
+    Provider configuration enforces the available concurrency or depth boundary;
+    OpenDelegate additionally fails closed if the observable lifecycle exceeds the
+    total child bound.
+19. Child-Agent delegation itself grants no new side-effect authority. Every child
+    command, file mutation, network action, Computer Use input, or other protected
+    action uses the same exact-action authorization path as its parent.
+20. Normalized progress may report bounded child lifecycle and aggregate state, but
+    child prompts, provider thread IDs, paths, hidden reasoning, and private
+    provider messages do not leave the Device. Provider usage is aggregated across
+    the root and child native threads before it reaches Run and Task Budget
+    accounting.
+    A Worker may forward an egress-inspected, deduplicated, rate-limited normalized
+    progress summary to Main for live presentation. That event is non-terminal and
+    does not renew a Run lease, reset a Budget, enter Task conversation history, or
+    become continuation-checkpoint context.
+21. When a bridged provider starts native child sessions, each Run-scoped local MCP
+    capability may authenticate at most the root session plus four simultaneous
+    child sessions. All clients share the same immutable Task, Work Order, Run,
+    Device, lease, fence, expiry, Workspace, tool allow-list, and Policy authority;
+    disposal or authority loss revokes every connection together.
 
 ### FR-10 — Context isolation and compaction
 
@@ -1013,7 +1084,11 @@ may request a transition but cannot manufacture a state outside the transition r
 10. A once grant is atomically consumed by the executable enforcement boundary before
     the action. Stateless preview or evaluation cannot authorize it, and a consumed
     or replayed grant fails closed across process restart.
-11. Discord and Admin Web show the proposed action, reason, target, risk, and evidence.
+11. Discord and Admin Web show the proposed action, reason, target, risk, and
+    evidence. Discord uses an owner-safe summary on the current live Task surface
+    and offers approve-once or reject; Admin Web retains the complete normalized
+    Approval detail and broader grant scopes. Multiple pending Worker actions are
+    serialized visibly rather than collapsed or duplicated.
 12. The executor rejects actions outside the approved scope even if an Agent claims
     approval exists.
 13. More permissive owner configuration is supported and clearly surfaced.

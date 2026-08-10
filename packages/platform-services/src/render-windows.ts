@@ -50,10 +50,10 @@ export function renderWindowsServiceArtifacts(
       account: coreIdentity,
       startup: "automatic",
       delayedAutoStart: false,
-      serviceSidType: "restricted",
+      serviceSidType: "unrestricted",
       requiredPrivileges: ["SeChangeNotifyPrivilege"],
       executable: definition.coreExecutablePath,
-      arguments: serviceArguments(definition, "core"),
+      arguments: windowsServiceArguments(definition, "core"),
       logs: {
         stdout: definition.coreStdoutLogPath,
         stderr: definition.coreStderrLogPath,
@@ -73,7 +73,7 @@ export function renderWindowsServiceArtifacts(
   const secretReferences = renderSecretReferences(definition);
   const coreImagePath = renderWindowsCommandLine(
     definition.coreExecutablePath,
-    serviceArguments(definition, "core"),
+    windowsServiceArguments(definition, "core"),
   );
   const installCommands = [
     command(
@@ -101,7 +101,7 @@ export function renderWindowsServiceArtifacts(
       ["description", serviceName, `OpenDelegate ${configuration.role} core service`],
       { plane: "core", verb: "install", privilege: "elevated" },
     ),
-    command("sc.exe", ["sidtype", serviceName, "restricted"], {
+    command("sc.exe", ["sidtype", serviceName, "unrestricted"], {
       plane: "core",
       verb: "install",
       privilege: "elevated",
@@ -149,6 +149,7 @@ export function renderWindowsServiceArtifacts(
       verb: "stop",
       privilege: "elevated",
       expectedExitCodes: [0, 1062],
+      timeoutMs: 45_000,
     }),
   ] as const;
   const removeCommands = [
@@ -192,7 +193,7 @@ export function renderWindowsServiceArtifacts(
     removeCommands,
     foregroundFallback: {
       command: definition.coreExecutablePath,
-      arguments: serviceArguments(definition, "core"),
+      arguments: windowsServiceArguments(definition, "core"),
       requiresExternalSupervisor: true,
       restartPolicy: "on-failure",
       limitation: "Diagnostic foreground execution does not replace Windows SCM persistence.",
@@ -201,7 +202,7 @@ export function renderWindowsServiceArtifacts(
 }
 
 function renderTaskXml(definition: PlatformServiceDefinition, ownerSid: string): string {
-  const helperArguments = serviceArguments(definition, "session-helper")
+  const helperArguments = windowsServiceArguments(definition, "session-helper")
     .map((argument) => quoteWindowsArgument(argument))
     .join(" ");
   return `<?xml version="1.0" encoding="UTF-16"?>
@@ -230,7 +231,7 @@ function renderTaskXml(definition: PlatformServiceDefinition, ownerSid: string):
     <StartWhenAvailable>true</StartWhenAvailable>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <RestartOnFailure>
-      <Interval>PT15S</Interval>
+      <Interval>PT1M</Interval>
       <Count>3</Count>
     </RestartOnFailure>
   </Settings>
@@ -242,6 +243,23 @@ function renderTaskXml(definition: PlatformServiceDefinition, ownerSid: string):
   </Actions>
 </Task>
 `;
+}
+
+function windowsServiceArguments(
+  definition: PlatformServiceDefinition,
+  plane: "core" | "session-helper",
+): readonly string[] {
+  const stdoutLogPath =
+    plane === "core" ? definition.coreStdoutLogPath : definition.helperStdoutLogPath;
+  const stderrLogPath =
+    plane === "core" ? definition.coreStderrLogPath : definition.helperStderrLogPath;
+  return [
+    ...serviceArguments(definition, plane),
+    "--stdout-log",
+    stdoutLogPath,
+    "--stderr-log",
+    stderrLogPath,
+  ];
 }
 
 function renderWindowsCommandLine(executable: string, arguments_: readonly string[]): string {

@@ -190,7 +190,10 @@ Every turn declares a sandbox and permission mode.
   Every Worker callback crosses the same exact-action bridge except Device-local
   Knowledge tools, whose one-use capability is independently enforced on the
   Device. Settings sources are empty, MCP is strict, and filesystem/network
-  sandbox startup fails closed.
+  sandbox startup fails closed. On Linux, readiness verifies both the `bwrap` and
+  `socat` executables and a bounded nested user-namespace smoke test. A host AppArmor,
+  container, or kernel policy that rejects that smoke is reported incompatible before
+  dispatch; OpenDelegate never silently enables the SDK's weaker nested sandbox.
 - Codex CLI supports `provider-default`, `read-only`, `workspace-write`, and
   `danger-full-access`. The fallback supports deny or an exact Task-scoped dangerous
   bypass. Deny mode disables the shell tool; every mode ignores ambient user

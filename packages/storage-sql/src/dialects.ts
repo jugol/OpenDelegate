@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
 import Database from "better-sqlite3";
@@ -18,6 +18,7 @@ import { Pool } from "pg";
 
 import { SqlStorageError } from "./errors.ts";
 import type { SqlBackend, SqlStorageSchema } from "./schema.ts";
+import { acquireSqliteWriteCoordinator, type SqlWriteCoordinator } from "./transactions.ts";
 
 export interface SqlitePragmas {
   readonly busyTimeoutMs: number;
@@ -30,6 +31,7 @@ export interface SqlDatabaseContext {
   readonly backend: SqlBackend;
   readonly database: Kysely<SqlStorageSchema>;
   readonly migrationTableSchema?: string;
+  readonly writeCoordinator?: SqlWriteCoordinator;
   close(): Promise<void>;
   inspectSqlitePragmas?(): SqlitePragmas;
 }
@@ -67,13 +69,19 @@ export async function createSqliteDatabase(
 
   await mkdir(dirname(options.filename), { recursive: true });
   const sqlite = new Database(options.filename);
+  let writeCoordinatorLease: ReturnType<typeof acquireSqliteWriteCoordinator> | undefined;
 
   try {
     sqlite.pragma("foreign_keys = ON");
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("synchronous = FULL");
     sqlite.pragma(`busy_timeout = ${busyTimeoutMs}`);
+    const canonicalFilename = await realpath(options.filename);
+    const coordinationKey =
+      process.platform === "win32" ? canonicalFilename.toLowerCase() : canonicalFilename;
+    writeCoordinatorLease = acquireSqliteWriteCoordinator(`sqlite:${coordinationKey}`);
   } catch (error) {
+    writeCoordinatorLease?.release();
     sqlite.close();
     throw new SqlStorageError(
       "STORAGE_UNAVAILABLE",
@@ -96,6 +104,8 @@ export async function createSqliteDatabase(
         sqlite.close();
       }
     },
+    undefined,
+    writeCoordinatorLease,
   );
 }
 
@@ -261,6 +271,7 @@ function createContext(
   inspectSqlitePragmas?: () => SqlitePragmas,
   closeUnusedDriver?: () => Promise<void>,
   migrationTableSchema?: string,
+  writeCoordinatorLease?: ReturnType<typeof acquireSqliteWriteCoordinator>,
 ): SqlDatabaseContext {
   const database = new Kysely<SqlStorageSchema>({ dialect });
   let closed = false;
@@ -269,14 +280,21 @@ function createContext(
     backend,
     database,
     ...(migrationTableSchema === undefined ? {} : { migrationTableSchema }),
+    ...(writeCoordinatorLease === undefined
+      ? {}
+      : { writeCoordinator: writeCoordinatorLease.coordinator }),
     ...(inspectSqlitePragmas === undefined ? {} : { inspectSqlitePragmas }),
     close: async () => {
       if (closed) {
         return;
       }
       closed = true;
-      await database.destroy();
-      await closeUnusedDriver?.();
+      try {
+        await database.destroy();
+        await closeUnusedDriver?.();
+      } finally {
+        writeCoordinatorLease?.release();
+      }
     },
   };
 }
