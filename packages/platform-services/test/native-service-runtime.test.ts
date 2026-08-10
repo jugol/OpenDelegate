@@ -178,9 +178,14 @@ class FakeProcess {
   public readonly requests: NativeProcessRequest[] = [];
   public unavailable = new Set<string>();
   public handler: (request: NativeProcessRequest) => NativeProcessResult = () => processResult(0);
+  public processAliveHandler: (processId: number) => boolean = () => false;
 
   public async isExecutable(path: string): Promise<boolean> {
     return !this.unavailable.has(path);
+  }
+
+  public async isProcessAlive(processId: number): Promise<boolean> {
+    return this.processAliveHandler(processId);
   }
 
   public async run(request: NativeProcessRequest): Promise<NativeProcessResult> {
@@ -1324,6 +1329,12 @@ test("logged-in Windows helper health waits for Task Scheduler to report Running
 test("Windows helper stop waits for Task Scheduler to leave Running", async () => {
   const process = new FakeProcess();
   let statusReads = 0;
+  let processReads = 0;
+  process.processAliveHandler = (processId) => {
+    assert.equal(processId, 4242);
+    processReads += 1;
+    return processReads < 3;
+  };
   process.handler = (request) => {
     assert.deepEqual(request.arguments, [
       "/Query",
@@ -1343,12 +1354,21 @@ test("Windows helper stop waits for Task Scheduler to leave Running", async () =
   };
   let now = 0;
   const sleeps: number[] = [];
+  const fileSystem = new FakeFileSystem();
+  const helperPresencePath = String.raw`C:\ProgramData\OpenDelegate\run\helper-plane-v2.json`;
+  fileSystem.kinds.set(helperPresencePath, "regular-file");
+  fileSystem.files.set(
+    helperPresencePath,
+    Buffer.from(JSON.stringify({ payload: { processId: 4242 } }), "utf8"),
+  );
 
   await waitForWindowsScheduledTaskStopped({
     executable: String.raw`C:\Windows\System32\schtasks.exe`,
     taskName: "\\OpenDelegate-personal-SessionHelper",
     timeoutMs: 30_000,
     process,
+    fileSystem,
+    helperPresencePath,
     clock: {
       now: () => new Date(now),
       async sleep(milliseconds) {
@@ -1358,8 +1378,9 @@ test("Windows helper stop waits for Task Scheduler to leave Running", async () =
     },
   });
 
-  assert.equal(statusReads, 3);
-  assert.deepEqual(sleeps, [500, 500]);
+  assert.equal(statusReads, 5);
+  assert.equal(processReads, 3);
+  assert.deepEqual(sleeps, [500, 500, 500, 500]);
 });
 
 test("a partial Windows SCM install is compensated without invoking a shell", async () => {

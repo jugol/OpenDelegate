@@ -74,6 +74,7 @@ export interface NativeProcessResult {
 
 export interface NativeProcessBoundary {
   isExecutable(path: string): Promise<boolean>;
+  isProcessAlive(processId: number): Promise<boolean>;
   run(request: NativeProcessRequest): Promise<NativeProcessResult>;
 }
 
@@ -423,6 +424,29 @@ class NodeNativeProcessBoundary implements NativeProcessBoundary {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  public async isProcessAlive(processId: number): Promise<boolean> {
+    if (!Number.isSafeInteger(processId) || processId <= 0) {
+      return false;
+    }
+    try {
+      globalThis.process.kill(processId, 0);
+      return true;
+    } catch (error: unknown) {
+      const code = safeErrorCode(error);
+      if (code === "ESRCH") {
+        return false;
+      }
+      if (code === "EPERM") {
+        return true;
+      }
+      throw new NativeBoundaryError(
+        "NATIVE_PROCESS_FAILED",
+        "A native process lifetime could not be inspected.",
+        { cause: error },
+      );
     }
   }
 

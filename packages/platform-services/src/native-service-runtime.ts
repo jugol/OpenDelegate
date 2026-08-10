@@ -698,6 +698,7 @@ function createNativeSupervisorAdapter(
             invocation,
             boundaries.process,
             boundaries.clock,
+            boundaries.fileSystem,
             tools,
           );
           if (result.timedOut || !invocation.expectedExitCodes.includes(result.exitCode)) {
@@ -715,6 +716,7 @@ function createNativeSupervisorAdapter(
             : [...completed, { invocation: activeLifecycleInvocation, exitCode: 0 }],
           boundaries.process,
           boundaries.clock,
+          boundaries.fileSystem,
           tools,
         );
         throw error;
@@ -1270,6 +1272,7 @@ async function rollbackPartialSupervisorOperation(
   }[],
   process: NativeProcessBoundary,
   clock: NativeClockBoundary,
+  fileSystem: NativeFileSystemBoundary,
   tools: NativeTools,
 ): Promise<void> {
   for (const entry of [...completed].reverse()) {
@@ -1280,7 +1283,14 @@ async function rollbackPartialSupervisorOperation(
     if (inverse === undefined) {
       continue;
     }
-    const result = await runSupervisorInvocation(configuration, inverse, process, clock, tools);
+    const result = await runSupervisorInvocation(
+      configuration,
+      inverse,
+      process,
+      clock,
+      fileSystem,
+      tools,
+    );
     if (result.timedOut || !inverse.expectedExitCodes.includes(result.exitCode)) {
       throw uncertain(`A partial ${operation.plane} supervisor mutation could not be rolled back.`);
     }
@@ -1376,6 +1386,7 @@ async function runSupervisorInvocation(
   invocation: CommandInvocation,
   process: NativeProcessBoundary,
   clock: NativeClockBoundary,
+  fileSystem: NativeFileSystemBoundary,
   tools: NativeTools,
 ): Promise<NativeProcessResult> {
   const executable = resolveSupervisorExecutable(invocation.executable, tools);
@@ -1424,6 +1435,8 @@ async function runSupervisorInvocation(
         timeoutMs: invocation.timeoutMs,
         process,
         clock,
+        fileSystem,
+        helperPresencePath: win32.join(configuration.paths.runtimeRoot, "helper-plane-v2.json"),
       });
     }
     return result;
@@ -1461,6 +1474,8 @@ export async function waitForWindowsScheduledTaskStopped(input: {
   readonly timeoutMs: number;
   readonly process: NativeProcessBoundary;
   readonly clock: NativeClockBoundary;
+  readonly fileSystem: NativeFileSystemBoundary;
+  readonly helperPresencePath: string;
 }): Promise<void> {
   const deadline = input.clock.now().getTime() + input.timeoutMs;
   for (;;) {
@@ -1475,18 +1490,26 @@ export async function waitForWindowsScheduledTaskStopped(input: {
       arguments: ["/Query", "/TN", input.taskName, "/FO", "CSV", "/NH"],
       timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
     });
-    if (!status.timedOut && status.exitCode === 1) {
-      return;
-    }
+    let supervisorStopped = !status.timedOut && status.exitCode === 1;
     if (!status.timedOut && status.exitCode === 0) {
       const state = parseSupervisorState("windows", "session-helper", status);
-      if (state !== "running") {
-        return;
-      }
+      supervisorStopped = state !== "running";
     } else if (!status.timedOut) {
-      throw new NativeSupervisorError(
-        "The Windows scheduled-task stop state could not be inspected.",
-      );
+      if (status.exitCode !== 1) {
+        throw new NativeSupervisorError(
+          "The Windows scheduled-task stop state could not be inspected.",
+        );
+      }
+    }
+    if (
+      supervisorStopped &&
+      (await windowsHelperPresenceProcessStopped(
+        input.fileSystem,
+        input.process,
+        input.helperPresencePath,
+      ))
+    ) {
+      return;
     }
     const sleepMs = Math.min(500, deadline - input.clock.now().getTime());
     if (sleepMs <= 0) {
@@ -1496,6 +1519,43 @@ export async function waitForWindowsScheduledTaskStopped(input: {
     }
     await input.clock.sleep(sleepMs);
   }
+}
+
+async function windowsHelperPresenceProcessStopped(
+  fileSystem: NativeFileSystemBoundary,
+  process: NativeProcessBoundary,
+  presencePath: string,
+): Promise<boolean> {
+  const metadata = await fileSystem.inspect(presencePath);
+  if (metadata.kind === "missing") {
+    return true;
+  }
+  if (
+    metadata.kind !== "regular-file" ||
+    typeof metadata.size !== "number" ||
+    metadata.size > 4_096
+  ) {
+    throw new NativeSupervisorError("The Windows helper presence record is invalid.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse((await fileSystem.read(presencePath, 4_096)).toString("utf8"));
+  } catch {
+    throw new NativeSupervisorError("The Windows helper presence record could not be read.");
+  }
+  const processId =
+    parsed !== null &&
+    typeof parsed === "object" &&
+    "payload" in parsed &&
+    parsed.payload !== null &&
+    typeof parsed.payload === "object" &&
+    "processId" in parsed.payload
+      ? parsed.payload.processId
+      : undefined;
+  if (!Number.isSafeInteger(processId) || Number(processId) <= 0) {
+    throw new NativeSupervisorError("The Windows helper presence process identity is invalid.");
+  }
+  return !(await process.isProcessAlive(Number(processId)));
 }
 
 async function waitForWindowsServiceStopped(input: {
