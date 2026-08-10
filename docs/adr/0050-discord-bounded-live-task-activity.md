@@ -37,6 +37,9 @@ When an owner pauses, the running activity cycle is superseded by one bounded
 paused recovery surface at the latest conversation position. That surface exposes
 Resume and Cancel, starts no work, and remains idempotent across reconciliation or
 Main restart. Resuming replaces it with the next running cycle for the same Task.
+Every unfinished Work Order whose prior Run was retired by Pause receives a new
+higher fencing token; the intentional retirement is never surfaced as a resumed
+Task failure, and late events from that older Run remain stale.
 
 Worker Agent bridges classify provider progress into a closed owner-safe vocabulary:
 working, using Device-local tools, verifying, consulting Device-local Knowledge,

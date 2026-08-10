@@ -2317,4 +2317,6 @@ but had no visible way to resume, precisely when a recovery control was needed.
 **Consequence:** Pause remains a durable execution boundary while recovery stays
 obvious and chronological. There is still at most one current activity or recovery
 surface, delayed running revisions cannot resurrect after pause, and no Discord
-message becomes execution authority.
+message becomes execution authority. An owner-authorized Resume does not reinterpret
+the deliberately retired Run as a Task failure: Main creates a new higher-fenced Run
+for each unfinished Work Order, while late events from the paused Run remain stale.

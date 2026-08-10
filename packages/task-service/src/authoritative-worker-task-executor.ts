@@ -1306,10 +1306,12 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
         report: reportFrom(current),
       };
     }
+    const resumesPausedRun = current?.status === "retired" && current.retirementReason === "paused";
     if (
       current !== undefined &&
       isTerminal(current.status) &&
-      current.executionKeyDigest === executionKeyDigest
+      current.executionKeyDigest === executionKeyDigest &&
+      !resumesPausedRun
     ) {
       await this.#finishBudgetForPersistedRun(current);
       return failureFrom(current);
