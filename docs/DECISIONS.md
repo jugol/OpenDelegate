@@ -2383,3 +2383,21 @@ surface, and deterministic UI language follows the explicit Discord binding rath
 than consuming LLM context. This supersedes the persistent-panel portion of D-065,
 extends D-102 to cancellation recovery surfaces, and removes D-114's requirement to
 keep updating the starter panel after a chronological cancellation reply exists.
+
+## D-116 — A current deterministic status surface remains actionable
+
+**Decision:** When Discord's one current surface is a stable `status` projection,
+it includes every Task control valid for that state. A resource wait therefore keeps
+Pause and Cancel next to the current explanation. Question, failure, decision, and
+final fallback panels do not copy controls from their chronological surface. Closed
+resource-wait explanations use the binding's deterministic presentation locale.
+
+**Rationale:** Live Korean Forum QA reached `waiting_resource` after a Worker went
+offline. The sole current card changed to an English diagnostic and dropped every
+control, so the owner could neither read the state naturally nor cancel the Task from
+the point where OpenDelegate said it was waiting.
+
+**Consequence:** A long-running Task remains controllable while it waits for a Device
+or route, without reintroducing competing current cards. Deterministic diagnostics
+are localized without spending Agent context, while Agent-authored text and durable
+identifiers remain unchanged under D-115.

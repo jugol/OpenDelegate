@@ -25,6 +25,12 @@ default is English. Presentation translates only OpenDelegate's closed determini
 vocabulary; owner and Agent prose, model identifiers, Device identifiers, and durable
 configuration fields remain unchanged.
 
+When the one current surface is a deterministic status projection, it retains the
+controls valid for that state. In particular, a resource-wait surface keeps Pause and
+Cancel visible, while question, failure, and final fallback panels continue to defer
+to their chronological surface instead of duplicating controls. Closed resource-wait
+explanations are localized with the rest of the deterministic chrome.
+
 ## Alternatives considered
 
 ### Keep both the fixed panel and live activity
@@ -55,7 +61,8 @@ cancelled Retry surfaces for schema compatibility.
 Adapter tests prove that a bootstrap panel is deleted before chronological work,
 that a Korean cancellation Retry becomes a Korean control-free historical receipt,
 and that the one live activity surface carries Korean phase, milestone, and control
-labels. SQLite contract coverage proves the cancellation resolution survives a
+labels, and that a Korean resource-wait surface retains localized Pause and Cancel
+controls. SQLite contract coverage proves the cancellation resolution survives a
 restart.
 
 ## References

@@ -1560,6 +1560,30 @@ test("the stable status panel does not repeat the Forum title or chronological o
   assert.doesNotMatch(rendered, /od:v1:/u);
 });
 
+test("a localized resource wait keeps the current owner controls on the stable status panel", () => {
+  const payload = renderStatusPanel(
+    {
+      taskId: "task-waiting-resource",
+      state: "waiting_resource",
+      objective: "두 기기에서 안전한 읽기 전용 점검을 해줘.",
+      summary:
+        "No eligible Worker is online for this Work Order. OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget. Resource code: WORKER_OFFLINE.",
+      significance: "status",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /작업 상태/u);
+  assert.match(rendered, /대기 중/u);
+  assert.match(rendered, /이 작업을 맡을 수 있는 Worker가 현재 오프라인입니다/u);
+  assert.match(rendered, /다시 온라인이 되면 OpenDelegate가 자동으로 계속합니다/u);
+  assert.match(rendered, /일시정지/u);
+  assert.match(rendered, /취소/u);
+  assert.match(rendered, /od:v1:pause/u);
+  assert.match(rendered, /od:v1:cancel/u);
+  assert.doesNotMatch(rendered, /No eligible Worker is online/u);
+});
+
 test("a chronological failure update carries its Retry control", () => {
   const payload = renderTaskUpdate({
     taskId: "task-failed",

@@ -363,6 +363,12 @@ external authority and compares the seal immediately before atomically switching
 writes definitions atomically, applies least-privilege ownership, and prunes only bounded
 semantic-version release directories after health succeeds. Activation failure removes only the
 new release and seal while preserving the prior active release and its seal.
+Upgrade rollback switches only release bytes, service definitions, and the active
+pointer. It must never replace the live runtime home or database with a backup: doing
+so can rewind Device-channel sequences, Task state, leases, and other monotonic
+authorities while Workers continue forward. Main backup restore is a separate,
+stopped disaster-recovery procedure with the reconciliation requirements in
+[`BACKUP_AND_RESTORE.md`](BACKUP_AND_RESTORE.md).
 Windows ACL changes use fixed `icacls.exe` argv. Linux creates a non-login system
 account through fixed `groupadd`/`useradd`/`usermod` argv. macOS creates and validates
 a hidden `/var/empty`, `/usr/bin/false` account through fixed `dscl` and
