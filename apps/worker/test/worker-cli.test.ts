@@ -39,8 +39,13 @@ import {
   resolveWorkerAgentPermissions,
   resolveWorkerAgentSandbox,
   resolveWorkerPaths,
+  type WorkerConfigurationDocument,
 } from "../src/index.ts";
-import { executeWorkerJoinPhases, normalizeWorkerJoinFailure } from "../src/worker-app.ts";
+import {
+  executeWorkerJoinPhases,
+  normalizeWorkerJoinFailure,
+  preserveRecredentialedWorkerConfiguration,
+} from "../src/worker-app.ts";
 
 const executeFile = promisify(execFile);
 const checkout = resolve(import.meta.dirname, "../../..");
@@ -164,6 +169,103 @@ test("Worker join phase boundary marks local failures after accepted enrollment"
       error instanceof EnrollmentGrantExecutorFailure && error.kind === "post-enrollment",
   );
   assert.deepEqual(observed, ["prepare", "enroll", "finalize"]);
+});
+
+test("Worker re-credentialing replaces identity material without resetting local configuration", () => {
+  const current = {
+    schemaVersion: 1,
+    deviceId: "Windows_5090",
+    workerId: "worker-primary",
+    mainDeviceId: "device-main-test",
+    keyId: "device-key-current",
+    certificateGeneration: 9,
+    certificatePem: "-----BEGIN CERTIFICATE-----\ncurrent\n-----END CERTIFICATE-----",
+    certificateAuthorityPem: "-----BEGIN CERTIFICATE-----\nauthority\n-----END CERTIFICATE-----",
+    expectedMainSpkiSha256: `sha256:${"A".repeat(43)}`,
+    transportProfile: {
+      deviceId: "device-main-test",
+      endpoints: [
+        {
+          endpointId: "main-private",
+          label: "Main private route",
+          kind: "wss",
+          url: "wss://main.example.test/api/v1/device/channel",
+          credentialRef: "device-identity",
+        },
+      ],
+    },
+    secretBackend: {
+      backend: "windows-dpapi",
+      vaultRoot: resolve("current-owner-vault"),
+    },
+    agent: {
+      provider: "claude",
+      allowUntestedVersion: false,
+      claudeExecutable: resolve("claude.exe"),
+      claudeHome: resolve("claude-home"),
+    },
+    platformMutation: { executables: { npm: resolve("npm.exe") } },
+    workspaces: [
+      {
+        workspaceId: "workspace-open-delegate",
+        alias: "OpenDelegate",
+        type: "git",
+        rootPath: resolve("workspace-root"),
+        isolation: "agent-native-worktree",
+        capabilities: ["typescript", "git"],
+      },
+    ],
+    createdAt: "2026-07-25T00:00:00.000Z",
+  } satisfies WorkerConfigurationDocument;
+  const replacement = {
+    schemaVersion: 1,
+    deviceId: "Windows_5090",
+    workerId: "worker-primary",
+    mainDeviceId: "device-main-test",
+    keyId: "device-key-recredentialed",
+    certificateGeneration: 10,
+    certificatePem: "-----BEGIN CERTIFICATE-----\nreplacement\n-----END CERTIFICATE-----",
+    certificateAuthorityPem: "-----BEGIN CERTIFICATE-----\nauthority\n-----END CERTIFICATE-----",
+    expectedMainSpkiSha256: `sha256:${"C".repeat(43)}`,
+    transportProfile: {
+      deviceId: "device-main-test",
+      endpoints: [
+        {
+          endpointId: "main-recredentialed",
+          label: "Main current route",
+          kind: "wss",
+          url: "wss://main-current.example.test/api/v1/device/channel",
+          credentialRef: "device-identity",
+        },
+      ],
+    },
+    secretBackend: {
+      backend: "windows-dpapi",
+      vaultRoot: resolve("replacement-owner-vault"),
+    },
+    agent: { provider: "auto", allowUntestedVersion: false },
+    workspaces: [],
+    createdAt: "2026-08-10T00:00:00.000Z",
+  } satisfies WorkerConfigurationDocument;
+
+  const preserved = preserveRecredentialedWorkerConfiguration(replacement, current);
+  assert.equal(preserved.keyId, replacement.keyId);
+  assert.equal(preserved.certificateGeneration, 10);
+  assert.equal(preserved.expectedMainSpkiSha256, replacement.expectedMainSpkiSha256);
+  assert.deepEqual(preserved.transportProfile, replacement.transportProfile);
+  assert.deepEqual(preserved.secretBackend, replacement.secretBackend);
+  assert.deepEqual(preserved.agent, current.agent);
+  assert.deepEqual(preserved.platformMutation, current.platformMutation);
+  assert.deepEqual(preserved.workspaces, current.workspaces);
+  assert.equal(preserved.createdAt, current.createdAt);
+  assert.throws(
+    () =>
+      preserveRecredentialedWorkerConfiguration(
+        { ...replacement, certificateGeneration: current.certificateGeneration },
+        current,
+      ),
+    /newer certificate generation/u,
+  );
 });
 
 test("macOS Worker join gives retry guidance only for pre-enrollment failures", () => {

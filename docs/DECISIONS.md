@@ -2401,3 +2401,24 @@ the point where OpenDelegate said it was waiting.
 or route, without reintroducing competing current cards. Deterministic diagnostics
 are localized without spending Agent context, while Agent-authored text and durable
 identifiers remain unchanged under D-115.
+
+## D-117 — Worker re-credentialing is an identity-only recovery
+
+**Decision:** When `worker join` receives a replacement identity for the same Device
+and fixed Main, it requires a strictly newer certificate generation. It replaces the
+Device key, certificate, Main trust material, route profile, and selected Secret
+backend while preserving the Worker ID, Agent configuration, platform-mutation
+allowlist, Workspace metadata, and original creation time. A Grant for another Device
+or Main fails before local Secret preparation or enrollment submission.
+
+**Rationale:** Re-credentialing is the supported recovery when a certificate expires
+or per-generation channel state can no longer reconcile. Treating it as a fresh join
+reset Device-local operating configuration and made a safe channel repair capable of
+silently changing which Agent or Workspace the Worker used.
+
+**Consequence:** Recovery advances the identity generation without changing the
+Device's scheduling or execution personality. On an installed Windows Worker, the
+owner stops the service, joins with the one-use re-credential Grant, stages the new
+owner-bound Secrets to the existing virtual service identity, and restarts it. The
+generation change resets only per-generation channel state; durable Task, Knowledge,
+Workspace registry, and Device history remain intact.

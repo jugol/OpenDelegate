@@ -552,6 +552,7 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
   await prepareRuntimeDirectories(options.paths);
   const grantPath = requireAbsolutePath(options.grantFile, "Enrollment Grant file");
   const environment = options.environment ?? process.env;
+  const currentConfiguration = await loadExistingWorkerConfigurationForJoin(options.paths);
   let result: {
     readonly channelVerified: boolean;
     readonly configuration: WorkerConfigurationDocument;
@@ -570,6 +571,16 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
               throw appError(
                 "CONFIG_INVALID",
                 "The Enrollment Grant does not contain a mutual-TLS WSS Worker endpoint.",
+              );
+            }
+            if (
+              currentConfiguration !== undefined &&
+              (currentConfiguration.deviceId !== grant.deviceId ||
+                currentConfiguration.mainDeviceId !== grant.mainDeviceId)
+            ) {
+              throw appError(
+                "CONFIG_INVALID",
+                "The Enrollment Grant does not match this enrolled Worker and cannot replace its identity.",
               );
             }
             return { channelEndpoints };
@@ -643,7 +654,7 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
                     },
                   }
                 : options.secretBackend;
-            const configuration = validateWorkerConfigurationDocument({
+            const replacement = validateWorkerConfigurationDocument({
               schemaVersion: CONFIG_SCHEMA_VERSION,
               deviceId: enrolled.deviceId,
               workerId: "worker-primary",
@@ -691,6 +702,10 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
               workspaces: [],
               createdAt: new Date().toISOString(),
             });
+            const configuration =
+              currentConfiguration === undefined
+                ? replacement
+                : preserveRecredentialedWorkerConfiguration(replacement, currentConfiguration);
             await writeConfiguration(options.paths.configFile, configuration);
             const channelVerified = await verifyInitialWorkerChannel({
               configuration,
@@ -712,6 +727,50 @@ export async function joinWorker(options: JoinWorkerOptions): Promise<WorkerConf
     );
   }
   return result.configuration;
+}
+
+export function preserveRecredentialedWorkerConfiguration(
+  replacement: WorkerConfigurationDocument,
+  current: WorkerConfigurationDocument,
+): WorkerConfigurationDocument {
+  if (
+    replacement.deviceId !== current.deviceId ||
+    replacement.mainDeviceId !== current.mainDeviceId
+  ) {
+    throw appError(
+      "CONFIG_INVALID",
+      "A replacement Worker identity must retain the existing Device and fixed Main identity.",
+    );
+  }
+  if (replacement.certificateGeneration <= current.certificateGeneration) {
+    throw appError(
+      "CONFIG_INVALID",
+      "A replacement Worker identity must use a newer certificate generation.",
+    );
+  }
+  return validateWorkerConfigurationDocument({
+    ...replacement,
+    workerId: current.workerId,
+    agent: current.agent,
+    ...(current.platformMutation === undefined
+      ? {}
+      : { platformMutation: current.platformMutation }),
+    workspaces: current.workspaces,
+    createdAt: current.createdAt,
+  });
+}
+
+async function loadExistingWorkerConfigurationForJoin(
+  paths: WorkerPaths,
+): Promise<WorkerConfigurationDocument | undefined> {
+  try {
+    return await loadWorkerConfiguration(paths);
+  } catch (error) {
+    if (error instanceof WorkerAppError && error.code === "CONFIG_MISSING") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function createWorkerEnrollmentIdentity(

@@ -32,6 +32,22 @@ Service when the current session can actually use it. A headless Linux host must
 select the systemd credential-backed vault explicitly; `Auto` never invents or
 persists a plaintext fallback key.
 
+### Re-credential an existing Worker
+
+Use re-credentialing only to recover the same Device from an expired credential or
+an unrecoverable per-generation channel mismatch. On Main, issue a short-lived grant
+with the existing Device ID and `--recredential`. Never open or paste that file.
+
+Stop an installed Worker service before running `worker join` with the same Worker
+home. A successful replacement must have a newer certificate generation and keeps
+the existing Agent, platform-mutation, Workspace, and creation metadata. On Windows,
+`join` first binds the new Secrets to the owner account; run
+`windows-service-secret-stage` with the existing instance, handoff root, vault root,
+and Worker home before restarting the service. The staging command replaces the old
+handoff only after the new owner-bound records are durable. If any step after Main
+accepts the grant is uncertain, do not replay it—inspect `worker status` and Main's
+Device record before issuing another grant.
+
 On macOS, prefer to execute `worker join` from Terminal.app in the signed-in desktop
 session. An SSH or background process can pass a read-only Keychain health check while
 still being unable to write the required Secrets. OpenDelegate proves the stable core
