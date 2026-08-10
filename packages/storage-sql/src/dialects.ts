@@ -18,10 +18,7 @@ import { Pool } from "pg";
 
 import { SqlStorageError } from "./errors.ts";
 import type { SqlBackend, SqlStorageSchema } from "./schema.ts";
-import {
-  acquireSqliteWriteCoordinator,
-  type SqlWriteCoordinator,
-} from "./transactions.ts";
+import { acquireSqliteWriteCoordinator, type SqlWriteCoordinator } from "./transactions.ts";
 
 export interface SqlitePragmas {
   readonly busyTimeoutMs: number;
@@ -72,9 +69,7 @@ export async function createSqliteDatabase(
 
   await mkdir(dirname(options.filename), { recursive: true });
   const sqlite = new Database(options.filename);
-  let writeCoordinatorLease:
-    | ReturnType<typeof acquireSqliteWriteCoordinator>
-    | undefined;
+  let writeCoordinatorLease: ReturnType<typeof acquireSqliteWriteCoordinator> | undefined;
 
   try {
     sqlite.pragma("foreign_keys = ON");
