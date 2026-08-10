@@ -1294,8 +1294,8 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
             nextId: (kind) => `${kind}_${randomUUID()}`,
           },
           budget,
-          onActivityChange: () => {
-            void discordBindingController?.runtime?.synchronizeNow().catch(() => undefined);
+          onActivityChange: (taskId, activity) => {
+            discordBindingController?.runtime?.observeTaskActivity(taskId, activity);
           },
         });
         actionRunAuthority.bind(authoritativeWorkerExecutor);

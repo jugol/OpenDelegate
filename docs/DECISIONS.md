@@ -1994,6 +1994,9 @@ like independent Discord participants or exposing Device-local execution details
 **Consequence:** Owners see a concise current picture of Main and subordinate Device
 work near the active turn. Questions, failures, and results remain the only durable
 chronological replies, while stale or overly frequent progress is safely discarded.
+Main hands each immutable activity revision to the Discord runtime at change time;
+the runtime retains only the newest bounded snapshot until publication so a
+coalesced refresh cannot lose the whole activity cycle when execution finishes.
 
 ## D-099 — Scheduling preserves exact execution metadata and repairs singleton Workspace defaults
 

@@ -187,6 +187,10 @@ export class DiscordMainRuntime {
   readonly #closeResource: (() => Promise<void>) | undefined;
   readonly #onStatusChange: ((status: DiscordRuntimeStatus) => void) | undefined;
   readonly #diagnostics: DiscordRuntimeDiagnostic[] = [];
+  readonly #observedTaskActivity = new Map<
+    string,
+    NonNullable<TaskChannelProjection["activity"]>
+  >();
   #status: DiscordRuntimeStatus = frozenStatus("unavailable", "DISCORD_STOPPED");
   #adapterStarted = false;
   #started = false;
@@ -225,6 +229,32 @@ export class DiscordMainRuntime {
 
   public get diagnostics(): readonly DiscordRuntimeDiagnostic[] {
     return Object.freeze(this.#diagnostics.map((diagnostic) => Object.freeze({ ...diagnostic })));
+  }
+
+  /**
+   * Retains the latest bounded presentation snapshot until synchronization
+   * publishes it. This closes the race where several activity wake-ups coalesce
+   * and the executor finishes before the projector performs its next lookup.
+   */
+  public observeTaskActivity(
+    taskId: string,
+    activity: NonNullable<TaskChannelProjection["activity"]>,
+  ): void {
+    assertOpaqueIdentifier(taskId, "Discord activity Task ID");
+    if (this.#closed) {
+      return;
+    }
+    const current = this.#observedTaskActivity.get(taskId);
+    if (
+      current !== undefined &&
+      (current.cycleId === activity.cycleId
+        ? current.revision >= activity.revision
+        : current.updatedAtMs >= activity.updatedAtMs)
+    ) {
+      return;
+    }
+    this.#observedTaskActivity.set(taskId, cloneTaskActivity(activity));
+    void this.synchronizeNow().catch(() => undefined);
   }
 
   public async presentTask(taskId: string): Promise<void> {
@@ -338,14 +368,24 @@ export class DiscordMainRuntime {
   }
 
   async #publishCurrentTaskState(): Promise<void> {
-    for (const binding of await this.#repository.listBindings()) {
+    const bindings = await this.#repository.listBindings();
+    const boundTaskIds = new Set(bindings.map((binding) => binding.taskId));
+    for (const taskId of this.#observedTaskActivity.keys()) {
+      if (!boundTaskIds.has(taskId)) {
+        this.#observedTaskActivity.delete(taskId);
+      }
+    }
+    for (const binding of bindings) {
       if (binding.externalState !== "available") {
         continue;
       }
       try {
         const task = await this.#tasks.get(binding.taskId);
         let artifact: NonNullable<TaskChannelProjection["artifact"]> | undefined;
-        const activity = await this.#taskActivity?.activity(task.taskId);
+        const activity = latestTaskActivity(
+          await this.#taskActivity?.activity(task.taskId),
+          this.#observedTaskActivity.get(task.taskId),
+        );
         let approval: NonNullable<TaskChannelProjection["approval"]> | undefined;
         if (this.#taskApproval !== undefined) {
           try {
@@ -369,6 +409,9 @@ export class DiscordMainRuntime {
         await this.#adapter.publishTaskProjection(
           projectTask(task, artifact, effectiveActivity, approval),
         );
+        if (task.state !== "running") {
+          this.#observedTaskActivity.delete(task.taskId);
+        }
       } catch (error) {
         this.#recordDiagnostic("discord.runtime.task_projection_failed", errorCode(error));
       }
@@ -389,6 +432,7 @@ export class DiscordMainRuntime {
 
   async #close(): Promise<void> {
     this.#closed = true;
+    this.#observedTaskActivity.clear();
     if (this.#timer !== undefined) {
       this.#scheduler.clearTimeout(this.#timer);
       this.#timer = undefined;
@@ -823,6 +867,30 @@ function approvalFallbackActivity(
       }),
     ]),
   });
+}
+
+function cloneTaskActivity(
+  activity: NonNullable<TaskChannelProjection["activity"]>,
+): NonNullable<TaskChannelProjection["activity"]> {
+  return Object.freeze({
+    ...activity,
+    milestones: Object.freeze(
+      activity.milestones.map((milestone) => Object.freeze({ ...milestone })),
+    ),
+  });
+}
+
+function latestTaskActivity(
+  projected: NonNullable<TaskChannelProjection["activity"]> | undefined,
+  observed: NonNullable<TaskChannelProjection["activity"]> | undefined,
+): NonNullable<TaskChannelProjection["activity"]> | undefined {
+  if (projected === undefined || observed === undefined) {
+    return projected ?? observed;
+  }
+  if (projected.cycleId === observed.cycleId) {
+    return projected.revision >= observed.revision ? projected : observed;
+  }
+  return projected.updatedAtMs >= observed.updatedAtMs ? projected : observed;
 }
 
 function significanceFor(state: DiscordTaskState): TaskChannelProjection["significance"] {

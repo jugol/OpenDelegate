@@ -181,10 +181,12 @@ export interface AuthoritativeWorkerTaskExecutorOptions {
   readonly checkpoints?: TaskContinuationCheckpointPort;
   readonly directCompletionAuthorizer?: DirectPlanningCompletionAuthorizer;
   /**
-   * Best-effort presentation wake-up. Durable Task and Worker state never depend
-   * on this callback, and callers must coalesce or throttle their own refreshes.
+   * Best-effort presentation handoff. The immutable snapshot lets a projector
+   * retain the latest bounded revision even when its refresh coalesces with the
+   * execution that produced it. Durable Task and Worker state never depend on
+   * this callback, and callers must coalesce or throttle their own refreshes.
    */
-  readonly onActivityChange?: (taskId: string) => void;
+  readonly onActivityChange?: (taskId: string, activity: TaskExecutionActivitySnapshot) => void;
 }
 
 export type TaskExecutionActivityPhase = "planning" | "dispatching" | "working" | "verifying";
@@ -405,7 +407,8 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
   readonly #budget: TaskBudgetEnforcementPort | undefined;
   readonly #checkpoints: TaskContinuationCheckpointPort | undefined;
   readonly #directCompletionAuthorizer: DirectPlanningCompletionAuthorizer | undefined;
-  readonly #onActivityChange: ((taskId: string) => void) | undefined;
+  readonly #onActivityChange:
+    ((taskId: string, activity: TaskExecutionActivitySnapshot) => void) | undefined;
   readonly #leaseDurationMs: number;
   readonly #active = new Map<string, ActiveTaskExecution>();
   readonly #runWaiters = new Map<string, Set<() => void>>();
@@ -626,7 +629,10 @@ export class AuthoritativeWorkerTaskExecutor implements TaskExecutor {
 
   #notifyActivityChanged(taskId: string): void {
     try {
-      this.#onActivityChange?.(taskId);
+      const activity = this.activity(taskId);
+      if (activity !== undefined) {
+        this.#onActivityChange?.(taskId, activity);
+      }
     } catch {
       // Presentation wake-ups are explicitly best effort. The periodic Discord
       // reconciler remains the repair path and orchestration must never fail here.
