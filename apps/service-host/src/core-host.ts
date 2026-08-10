@@ -242,6 +242,7 @@ async function startWorkerWorkload(
   };
   const completed = runWorkerDaemon({
     paths,
+    releaseVersion: configuration.releaseVersion,
     environment: buildWorkerServiceEnvironment(process.env),
     signal: workerController.signal,
     onReady: resolveReady,

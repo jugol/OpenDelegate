@@ -365,7 +365,7 @@ export interface JoinWorkerOptions {
 export interface RunWorkerDaemonOptions {
   readonly paths: WorkerPaths;
   /** Authenticated bundle/product version supplied by the Worker launcher. */
-  readonly releaseVersion?: string;
+  readonly releaseVersion: string;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly computerUseProbe?: WorkerComputerUseCapabilityProbe;
   readonly computerUseRuntime?: WorkerComputerUseRuntimePort;
@@ -900,7 +900,7 @@ export async function createWorkerRuntime(
   const configuration = await loadWorkerConfiguration(options.paths);
   await prepareRuntimeDirectories(options.paths);
   const environment = options.environment ?? process.env;
-  const releaseVersion = options.releaseVersion ?? "development";
+  const releaseVersion = options.releaseVersion;
   if (!validRuntimeIdentifier(releaseVersion)) {
     throw appError("CONFIG_INVALID", "The Worker release version is invalid.");
   }

@@ -2289,3 +2289,6 @@ turn instead of asking an LLM to rediscover it.
 facts without privilege escalation or local path disclosure. Missing facts remain
 explicitly unavailable, and OpenDelegate still resolves Workspace authority,
 sessions, Policy, and device routing deterministically outside the LLM.
+The Worker daemon contract requires an authenticated release version from every
+launcher, including the native service host; it cannot silently identify a packaged
+service as a development build.
