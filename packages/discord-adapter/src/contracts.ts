@@ -313,6 +313,12 @@ export interface DiscordApiPort {
     responseRef: string;
     payload: DiscordMessagePayload;
   }): Promise<void>;
+  /**
+   * Removes a successfully completed deferred response. Task state surfaces are
+   * the durable confirmation; retaining an ephemeral reply to a superseded live
+   * activity message would leave Discord showing an orphaned reply reference.
+   */
+  deleteDeferredInteraction(input: { responseRef: string }): Promise<void>;
 }
 
 export interface DiscordTaskSource {

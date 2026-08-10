@@ -1445,6 +1445,10 @@ class TestDiscordApi implements DiscordApiPort {
     throw new Error("No interaction is expected in this test.");
   }
 
+  public async deleteDeferredInteraction(): Promise<void> {
+    throw new Error("No interaction is expected in this test.");
+  }
+
   #nextMessage(): string {
     this.#nextMessageId += 1n;
     return this.#nextMessageId.toString();

@@ -2320,3 +2320,21 @@ surface, delayed running revisions cannot resurrect after pause, and no Discord
 message becomes execution authority. An owner-authorized Resume does not reinterpret
 the deliberately retired Run as a Task failure: Main creates a new higher-fenced Run
 for each unfinished Work Order, while late events from the paused Run remain stale.
+
+## D-113 — Successful Discord Task controls leave no orphaned ephemeral receipt
+
+**Decision:** Discord still defers every Task-control interaction immediately, but
+after Pause, Resume, Cancel, or Retry is durably accepted it deletes that deferred
+ephemeral response. The resulting durable Task activity, recovery, failure, or final
+surface confirms the transition. Rejected, unauthorized, and stale controls retain
+their owner-safe ephemeral explanation.
+
+**Rationale:** A successful interaction response is visually attached to the bot
+message containing the clicked button. Bounded activity cycles deliberately delete
+superseded running and paused messages, so retained success receipts showed “original
+message deleted” beside otherwise successful Pause and Resume flows.
+
+**Consequence:** Successful controls produce no chronological or owner-only debris,
+while failure feedback remains explicit. Durable command idempotency and Discord's
+three-second acknowledgement boundary are unchanged; deletion uses only the opaque
+Device-local interaction reference.

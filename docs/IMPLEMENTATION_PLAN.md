@@ -638,6 +638,9 @@ Make Discord the complete primary Task interface.
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.
 - Implement pause, resume, cancel, retry, approval, denial, and inspect interactions.
+  After a Task command succeeds, delete its deferred ephemeral response and let the
+  resulting durable Task surface confirm the transition. Keep owner-safe ephemeral
+  text for rejected, unauthorized, or stale controls.
 - Project a pending protected Worker action into that same live activity message
   with an owner-safe Device/action/risk/evidence summary and approve-once/reject
   controls. Resolve the global durable Approval record—not a parallel Task approval—

@@ -336,6 +336,11 @@ class FakeDiscordApi implements DiscordApiPort {
     this.operations.push({ kind: "interaction-result", ...input });
   }
 
+  public async deleteDeferredInteraction(input: { responseRef: string }): Promise<void> {
+    this.#assertOnline();
+    this.operations.push({ kind: "interaction-dismiss", ...input });
+  }
+
   #assertOnline(): void {
     if (!this.online) {
       throw new DiscordApiError("OFFLINE", "Bot token abc.def.secret could not connect.");
@@ -1902,6 +1907,14 @@ test("pause, resume, cancel, and retry controls map to channel-neutral idempoten
     tasks.calls.filter((call) => call["kind"] === "command").map((call) => call["command"]),
     ["pause", "resume", "cancel", "retry"],
   );
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "interaction-dismiss").length,
+    4,
+  );
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "interaction-result").length,
+    0,
+  );
 });
 
 test("a stale Task control resolves once instead of retrying forever", async () => {
@@ -2031,7 +2044,7 @@ test("interactions defer before asynchronous Task controls and replay is idempot
     false,
   );
   assert.equal(
-    api.operations.filter((operation) => operation["kind"] === "interaction-result").length,
+    api.operations.filter((operation) => operation["kind"] === "interaction-dismiss").length,
     1,
   );
 });

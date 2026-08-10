@@ -536,7 +536,10 @@ through a secure handoff and resumes the same Task afterward.
    control is no longer available and the command outbox completes without retrying
    the same deterministic refusal. This is a repair path for legacy or externally
    missed edits, not the normal successful-retry UX. Transport and storage failures
-   remain retryable.
+   remain retryable. A successful Task control dismisses its transient deferred
+   interaction response; the new durable Task surface is the confirmation. This
+   prevents ephemeral receipts from pointing at an activity message that the bounded
+   surface lifecycle has already superseded and deleted.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
     resume the Task and reopen the external conversation when permitted.
 11. If the external post is deleted, Task data remains in Main and the binding is

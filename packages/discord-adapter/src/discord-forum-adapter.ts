@@ -1839,10 +1839,7 @@ export class DiscordForumAdapter {
           idempotencyKey: action.idempotencyKey,
           command: action.command,
         });
-        await this.#finishDeferredInteraction(
-          action.responseRef,
-          `${capitalize(action.command)} was accepted for this Task.`,
-        );
+        await this.#dismissDeferredInteraction(action.responseRef);
         return;
       case "approval-decision":
         await this.#tasks.resolveApproval({
@@ -1878,6 +1875,23 @@ export class DiscordForumAdapter {
         (error.code === "NOT_FOUND" || error.code === "FORBIDDEN")
       ) {
         this.#recordDiagnostic("discord.interaction_followup_unavailable", {
+          errorCode: error.code,
+        });
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async #dismissDeferredInteraction(responseRef: string): Promise<void> {
+    try {
+      await this.#api.deleteDeferredInteraction({ responseRef });
+    } catch (error) {
+      if (
+        error instanceof DiscordApiError &&
+        (error.code === "NOT_FOUND" || error.code === "FORBIDDEN")
+      ) {
+        this.#recordDiagnostic("discord.interaction_dismiss_unavailable", {
           errorCode: error.code,
         });
         return;
@@ -2272,10 +2286,6 @@ function laterSnowflake(current: string | undefined, candidate: string): string 
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown Discord adapter failure.";
-}
-
-function capitalize(value: string): string {
-  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }
 
 function cryptoRandomSuffix(): string {
