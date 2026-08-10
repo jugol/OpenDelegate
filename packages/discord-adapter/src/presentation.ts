@@ -479,6 +479,14 @@ const KOREAN_CLOSED_TEXT = Object.freeze({
   "This Task was cancelled.": "작업을 취소했어요.",
   "Main is planning the work.": "Main이 작업을 계획하고 있어요.",
   "Main is verifying the combined results.": "Main이 취합한 결과를 확인하고 있어요.",
+  "Worker Agent is consulting Device-local Knowledge.":
+    "Worker가 이 기기의 Knowledge를 확인하고 있어요.",
+  "Worker Agent is coordinating child Agents.": "Worker가 하위 Agent와 작업을 조율하고 있어요.",
+  "Worker Agent is using Device-local tools.": "Worker가 이 기기의 도구를 사용하고 있어요.",
+  "Worker Agent is verifying its work.": "Worker가 작업 결과를 확인하고 있어요.",
+  "Worker Agent is waiting for owner approval.": "Worker가 소유자 승인을 기다리고 있어요.",
+  "Worker Agent is making progress.": "Worker가 작업을 진행하고 있어요.",
+  "The Worker is making progress.": "Worker가 작업을 진행하고 있어요.",
   "The Worker accepted its Work Order.": "Worker가 배정된 작업을 받았어요.",
   "The Worker reported completion; Main is checking its result.":
     "Worker가 완료를 보고해 Main이 결과를 확인하고 있어요.",
@@ -506,6 +514,10 @@ const KOREAN_CLOSED_TEXT = Object.freeze({
 function localizeKnownText(value: string, locale: DiscordPresentationLocale): string {
   if (locale === "en") {
     return value;
+  }
+  const preparedWorkOrders = /^Main prepared ([1-9][0-9]*) Work Orders?\.$/u.exec(value);
+  if (preparedWorkOrders !== null) {
+    return `Main이 Worker에 배정할 작업 ${preparedWorkOrders[1]}개를 준비했어요.`;
   }
   return KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT] ?? value;
 }

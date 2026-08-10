@@ -1840,14 +1840,25 @@ test("retrying a cancellation resolves its old button and keeps one localized cu
       cycleId: "activity_retry_after_cancel",
       revision: 1,
       updatedAtMs: 2_000,
-      phase: "planning",
+      phase: "working",
       completedWorkOrders: 0,
-      totalWorkOrders: 0,
+      totalWorkOrders: 2,
       milestones: [
         {
           key: "main:planning",
           status: "active",
           summary: "Main is planning the work.",
+        },
+        {
+          key: "main:prepared",
+          status: "completed",
+          summary: "Main prepared 2 Work Orders.",
+        },
+        {
+          key: "worker:progress",
+          status: "active",
+          summary: "Worker Agent is making progress.",
+          deviceLabel: "5090White",
         },
       ],
     },
@@ -1869,9 +1880,13 @@ test("retrying a cancellation resolves its old button and keeps one localized cu
   const liveRendered = JSON.stringify(liveActivity?.["payload"]);
   assert.match(liveRendered, /OpenDelegate가 작업 중이에요/u);
   assert.match(liveRendered, /Main이 작업을 계획하고 있어요/u);
+  assert.match(liveRendered, /Main이 Worker에 배정할 작업 2개를 준비했어요/u);
+  assert.match(liveRendered, /Worker가 작업을 진행하고 있어요/u);
   assert.match(liveRendered, /일시정지/u);
   assert.match(liveRendered, /취소/u);
   assert.doesNotMatch(liveRendered, /OpenDelegate is working/u);
+  assert.doesNotMatch(liveRendered, /Main prepared 2 Work Orders/u);
+  assert.doesNotMatch(liveRendered, /Worker Agent is making progress/u);
   assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
 });
 
