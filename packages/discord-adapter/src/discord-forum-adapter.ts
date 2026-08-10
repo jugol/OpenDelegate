@@ -374,15 +374,15 @@ export class DiscordForumAdapter {
     });
     let authoritativeRequestKey = panelRequestKey;
     if (projection.activity !== undefined && keepsLiveActivityOpen(projection.state)) {
+      const projectedActivity = activityProjection(projection);
       const activityRequestKey = `${digestValue({
-        taskId: projection.taskId,
-        cycleId: projection.activity.cycleId,
-        revision: projection.activity.revision,
-      })}:025-activity`;
+        projection: projectedActivity,
+        presentationLocale: this.#config.presentationLocale ?? "en",
+      })}:025-activity-v2`;
       await this.#enqueueOutbox(activityRequestKey, {
         kind: "upsert-task-activity",
         taskId: projection.taskId,
-        projection: activityProjection(projection),
+        projection: projectedActivity,
       });
     }
     if (projection.significance !== "status") {
@@ -1622,7 +1622,12 @@ export class DiscordForumAdapter {
         const binding = await requiredBinding(this.#repository, action.taskId);
         const current = binding.activitySurface;
         if (current?.cycleId === activity.cycleId) {
-          if (current.state !== "open" || current.revision >= activity.revision) {
+          if (
+            current.state !== "open" ||
+            current.revision > activity.revision ||
+            (current.revision === activity.revision &&
+              current.outboxCreatedAtMs >= item.createdAtMs)
+          ) {
             return;
           }
         } else if (current !== undefined && current.outboxCreatedAtMs >= item.createdAtMs) {

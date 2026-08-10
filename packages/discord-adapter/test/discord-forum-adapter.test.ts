@@ -1132,7 +1132,15 @@ test("one bounded live activity message is edited and closed for a Task cycle", 
   await adapter.publishTaskProjection({
     ...base,
     approval: {
-      approvalId: "approval-worker-action",
+      approvalId: "approval-worker-action-first",
+      description: "Windows build workstation wants approval for one protected action.",
+    },
+  });
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection({
+    ...base,
+    approval: {
+      approvalId: "approval-worker-action-second",
       description: "Mac Studio wants to temporarily expand its sandbox for this Task.",
     },
     activity: {
@@ -1166,9 +1174,15 @@ test("one bounded live activity message is edited and closed for a Task cycle", 
       typeof operation["requestKey"] === "string" &&
       operation["requestKey"].startsWith("task-activity:"),
   );
-  assert.equal(activityWrites.length, 2);
+  assert.equal(activityWrites.length, 3);
   assert.equal(activityWrites[0]?.["messageId"], activityWrites[1]?.["messageId"]);
+  assert.equal(activityWrites[1]?.["messageId"], activityWrites[2]?.["messageId"]);
+  assert.match(JSON.stringify(activityWrites[1]?.["payload"]), /approval-worker-action-first/u);
   assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Mac Studio/u);
+  assert.match(
+    JSON.stringify(activityWrites.at(-1)?.["payload"]),
+    /approval-worker-action-second/u,
+  );
   assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Approval needed/u);
   assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Approve/u);
   assert.doesNotMatch(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Pause/u);

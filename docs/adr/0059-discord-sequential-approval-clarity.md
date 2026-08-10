@@ -33,6 +33,12 @@ surface advances to the next Approval or subsequent Task state. Rejected,
 unauthorized, stale, or failed interactions still retain their bounded private error
 response.
 
+The durable activity outbox identity includes the complete owner-safe activity
+projection, not only the underlying execution cycle and revision. A later Approval
+may replace an earlier one while execution progress is otherwise unchanged, so a
+newer outbox item with the same execution revision is allowed to edit the existing
+open activity message. Older or equal delivery order still loses deterministically.
+
 ## Consequences
 
 Sequential exact-action review remains fail-closed and at-most-once, while the owner
@@ -48,6 +54,8 @@ localization remains deterministic and does not consume Agent context.
   explicit approve-once label.
 - Adapter tests prove that a successful Approval decision dismisses its deferred
   interaction while the durable Task surface remains authoritative.
+- Adapter tests prove that replacing an Approval at the same execution activity
+  revision edits the existing message instead of leaving stale controls.
 
 ## References
 
