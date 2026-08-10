@@ -405,7 +405,9 @@ export class DiscordMainRuntime {
           activity ??
           (task.state === "running" && approval !== undefined
             ? approvalFallbackActivity(task.taskId, approval, this.#clock.nowMs())
-            : undefined);
+            : task.state === "running"
+              ? runningFallbackActivity(task, this.#clock.nowMs())
+              : undefined);
         await this.#adapter.publishTaskProjection(
           projectTask(task, artifact, effectiveActivity, approval),
         );
@@ -864,6 +866,33 @@ function approvalFallbackActivity(
         key: `owner-approval:${taskId}`,
         status: "active" as const,
         summary: "A Worker is waiting for owner approval before it can continue.",
+      }),
+    ]),
+  });
+}
+
+function runningFallbackActivity(
+  task: DiscordProjectionTask,
+  updatedAtMs: number,
+): NonNullable<TaskChannelProjection["activity"]> {
+  assertBoundedInteger(updatedAtMs, 0, Number.MAX_SAFE_INTEGER, "Discord activity timestamp");
+  const executionEvent = [...task.events]
+    .reverse()
+    .find((event) => event.type === "task.execution-recorded");
+  const cycleSource = executionEvent?.eventId ?? task.taskId;
+  assertOpaqueIdentifier(cycleSource, "Discord activity cycle source");
+  return Object.freeze({
+    cycleId: `running_${cycleSource}`.slice(0, 160),
+    revision: 1,
+    updatedAtMs,
+    phase: "planning" as const,
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: Object.freeze([
+      Object.freeze({
+        key: `main:${task.taskId}`.slice(0, 160),
+        status: "active" as const,
+        summary: "Main is preparing or coordinating the current work.",
       }),
     ]),
   });

@@ -56,6 +56,8 @@ test("an observed activity revision survives a coalesced executor lookup until p
   });
 
   await runtime.start();
+  assert.equal(projections.at(-1)?.activity?.phase, "planning");
+  assert.equal(projections.at(-1)?.activity?.totalWorkOrders, 0);
   runtime.observeTaskActivity("task-activity-handoff", {
     cycleId: "activity_cycle_live",
     revision: 2,
@@ -93,7 +95,7 @@ test("an observed activity revision survives a coalesced executor lookup until p
 
   state = "completed";
   await runtime.synchronizeNow();
-  state = "running";
+  state = "paused";
   await runtime.synchronizeNow();
   assert.equal(projections.at(-1)?.activity, undefined);
 

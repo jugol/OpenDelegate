@@ -1997,6 +1997,9 @@ chronological replies, while stale or overly frequent progress is safely discard
 Main hands each immutable activity revision to the Discord runtime at change time;
 the runtime retains only the newest bounded snapshot until publication so a
 coalesced refresh cannot lose the whole activity cycle when execution finishes.
+Main composition also keeps one bounded single-consumer handoff across binding
+activation, and a running Task with no richer snapshot receives one stable Planning
+activity so owner controls never disappear merely because presentation raced.
 
 ## D-099 — Scheduling preserves exact execution metadata and repairs singleton Workspace defaults
 

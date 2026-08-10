@@ -277,7 +277,9 @@ test("Main Discord runtime keeps a pending Worker approval actionable without an
 
   approvalAvailable = false;
   await runtime.synchronizeNow();
-  assert.equal(projections.at(-1)?.activity, undefined);
+  assert.equal(projections.at(-1)?.approval, undefined);
+  assert.equal(projections.at(-1)?.activity?.phase, "planning");
+  assert.equal(projections.at(-1)?.activity?.cycleId, "running_task-running-approval");
   await runtime.close();
 });
 

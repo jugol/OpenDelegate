@@ -47,6 +47,7 @@ import {
   TaskExecutionCoordinator,
   TaskService,
   type TaskBudgetAdministrationPort,
+  type TaskExecutionActivitySnapshot,
   type TaskExecutionCoordinatorOptions,
   type TaskExecutor,
 } from "@opendelegate/task-service";
@@ -832,6 +833,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
   let deviceChannel: ProductionMainDeviceChannelRuntime | undefined;
   let fleet: MainWorkerFleetProjection | undefined;
   let authoritativeWorkerExecutor: AuthoritativeWorkerTaskExecutor | undefined;
+  const pendingDiscordTaskActivity = new Map<string, TaskExecutionActivitySnapshot>();
   let mainSingletonOwnership: MainSingletonOwnership | undefined;
   let ownershipLossUnsubscribe: (() => void) | undefined;
   let closeAfterOwnershipLoss: (() => Promise<void>) | undefined;
@@ -1295,6 +1297,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
           },
           budget,
           onActivityChange: (taskId, activity) => {
+            rememberDiscordTaskActivity(pendingDiscordTaskActivity, taskId, activity);
             discordBindingController?.runtime?.observeTaskActivity(taskId, activity);
           },
         });
@@ -1434,7 +1437,10 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
                 : {
                     taskActivity: {
                       activity: async (taskId: string) => {
-                        const activity = discordTaskActivityExecutor.activity(taskId);
+                        const bufferedActivity = pendingDiscordTaskActivity.get(taskId);
+                        pendingDiscordTaskActivity.delete(taskId);
+                        const activity =
+                          discordTaskActivityExecutor.activity(taskId) ?? bufferedActivity;
                         if (activity === undefined) {
                           return undefined;
                         }
@@ -3258,6 +3264,22 @@ async function exists(path: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+function rememberDiscordTaskActivity(
+  pending: Map<string, TaskExecutionActivitySnapshot>,
+  taskId: string,
+  activity: TaskExecutionActivitySnapshot,
+): void {
+  pending.delete(taskId);
+  pending.set(taskId, activity);
+  while (pending.size > 64) {
+    const oldestTaskId = pending.keys().next().value as string | undefined;
+    if (oldestTaskId === undefined) {
+      return;
+    }
+    pending.delete(oldestTaskId);
   }
 }
 
