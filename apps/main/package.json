@@ -36,7 +36,7 @@
     "@opendelegate/secrets": "workspace:*",
     "@opendelegate/storage-sql": "workspace:*",
     "@opendelegate/task-service": "workspace:*",
-    "better-sqlite3": "13.0.1",
+    "better-sqlite3": "13.0.3",
     "pg": "8.22.0"
   },
   "devDependencies": {
