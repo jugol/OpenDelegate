@@ -98,10 +98,23 @@ every Keychain operation. The release pipeline must compile, sign, bundle, and
 notarize this helper. An unsigned, replaced, unpinned, missing, or unlaunchable
 helper fails closed.
 
-Items use the data-protection Keychain and
-`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. They neither synchronize nor
-migrate to another Device and remain unavailable until the first unlock after a
-restart.
+The foreground owner backend explicitly targets the signed-in owner's default
+file-based login Keychain with `kSecUseKeychain`; it never relies on ambient
+Keychain search-list order and it sets `kSecAttrSynchronizable` to false. The
+Keychain remains responsible for encryption and interactive unlock policy. An SSH,
+background, or locked session that cannot write the login Keychain fails before a
+one-use enrollment Grant is submitted to Main.
+
+The owner backend is not reused by the persistent core daemon. Apple documents that
+programs outside a user login context, including a `launchd` daemon, must target a
+file-based Keychain and that the system context's default is the System Keychain.
+The persistent macOS Worker therefore requires a separate System-Keychain binding
+prepared through the elevated native-service boundary, plus an owner-login binding
+for the interactive helper. Until that migration and its access-control lifecycle
+are implemented and proven, native macOS service document generation remains
+fail-closed. No Data Protection Keychain fallback is attempted: a standalone helper
+lacks the provisioned application context required by that Keychain class, and the
+Data Protection Keychain is unavailable to the core daemon's system context.
 
 ### Graphical Linux
 
@@ -264,6 +277,7 @@ remain incomplete until those live results exist.
 - [`ADR-0011`](0011-native-two-plane-service-supervision-and-authenticated-ipc.md)
 - [Microsoft `ProtectedData`](https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.protecteddata)
 - [Apple `SecItemAdd`](https://developer.apple.com/documentation/security/secitemadd(_:_:))
-- [Apple Keychain item accessibility](https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlockthisdeviceonly)
+- [Apple TN3137: On Mac keychains](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)
+- [Apple `kSecUseKeychain`](https://developer.apple.com/documentation/security/ksecusekeychain)
 - [systemd service credentials](https://systemd.io/CREDENTIALS/)
 - [`secret-tool`](https://manpages.ubuntu.com/manpages/noble/man1/secret-tool.1.html)

@@ -49,13 +49,26 @@ private func readBoundedSecret() -> Data {
   return result
 }
 
-private func baseQuery(service: String, account: String) -> [CFString: Any] {
+private func ownerLoginKeychain() -> SecKeychain {
+  var keychain: SecKeychain?
+  let status = SecKeychainCopyDefault(&keychain)
+  guard status == errSecSuccess, let keychain else {
+    terminate(failureExit)
+  }
+  return keychain
+}
+
+private func baseQuery(
+  keychain: SecKeychain,
+  service: String,
+  account: String
+) -> [CFString: Any] {
   return [
     kSecClass: kSecClassGenericPassword,
     kSecAttrService: service,
     kSecAttrAccount: account,
     kSecAttrSynchronizable: kCFBooleanFalse as Any,
-    kSecUseDataProtectionKeychain: kCFBooleanTrue as Any,
+    kSecUseKeychain: keychain,
   ]
 }
 
@@ -75,11 +88,13 @@ guard arguments.count >= 2 else {
 }
 
 let operation = arguments[1]
+let keychain = ownerLoginKeychain()
 if operation == "status" {
   guard arguments.count == 2 else {
     terminate(invalidExit)
   }
   var probe = baseQuery(
+    keychain: keychain,
     service: "io.opendelegate.secret.health-probe",
     account: "backend-availability"
   )
@@ -108,14 +123,13 @@ guard validIdentifier(service), validIdentifier(account) else {
   terminate(invalidExit)
 }
 
-var query = baseQuery(service: service, account: account)
+var query = baseQuery(keychain: keychain, service: service, account: account)
 
 switch operation {
 case "create":
   var secret = readBoundedSecret()
   defer { secret.resetBytes(in: 0..<secret.count) }
   query[kSecValueData] = secret
-  query[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
   let status = SecItemAdd(query as CFDictionary, nil)
   guard status == errSecSuccess else {
     mapStatus(status, conflictIsDistinct: true)
