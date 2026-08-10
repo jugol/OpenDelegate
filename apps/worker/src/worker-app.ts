@@ -442,9 +442,12 @@ export interface ProvisionHeadlessLinuxSecretBackendOptions {
 }
 
 export interface PrepareWindowsServiceSecretBackendOptions {
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly handoffRoot: string;
   readonly hostPlatform?: NodeJS.Platform;
   readonly instanceId: string;
+  /** Defaults to an owner-local vault outside the native service state root. */
+  readonly ownerHelperVaultRoot?: string;
   readonly paths: WorkerPaths;
   readonly powershellPath?: string;
   readonly runner?: NativeSecretCommandRunner;
@@ -2127,6 +2130,24 @@ export async function prepareWindowsServiceSecretBackend(
         vaultRoot:
           configuration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot,
       });
+      const ownerHelper = await prepareWindowsOwnerHelperSecret({
+        allowCreate: false,
+        configuration,
+        options,
+        sourceStore: ownerStore,
+        sourceVaultRoot:
+          configuration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot,
+      });
+      const persistedHelper = configuration.secretBackend.servicePreparation.ipcTrust.helper;
+      if (
+        ownerHelper.binding.keyId !== persistedHelper.keyId ||
+        ownerHelper.binding.publicKeySpkiBase64Url !== persistedHelper.publicKeySpkiBase64Url
+      ) {
+        throw appError(
+          "CONFIG_INVALID",
+          "The owner-session helper Secret does not match its durable public binding.",
+        );
+      }
       const handoff = new WindowsServiceDpapiSecretHandoff({
         deviceId: configuration.deviceId,
         handoffRoot,
@@ -2149,6 +2170,33 @@ export async function prepareWindowsServiceSecretBackend(
           );
         }
       }
+      const migratedBackend = Object.freeze({
+        ...configuration.secretBackend,
+        servicePreparation: Object.freeze({
+          ...configuration.secretBackend.servicePreparation,
+          ownerHelperSecretBinding: Object.freeze({
+            backend: "windows-dpapi" as const,
+            vaultRoot: ownerHelper.vaultRoot,
+          }),
+        }),
+      });
+      if (
+        !pathsEqualForCurrentHost(
+          ownerHelper.vaultRoot,
+          configuration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot,
+        )
+      ) {
+        await writeConfiguration(
+          options.paths.configFile,
+          validateWorkerConfigurationDocument({
+            ...configuration,
+            secretBackend: migratedBackend,
+          }),
+        );
+      }
+      if (ownerHelper.deleteSourceAfterPersistence) {
+        await ownerStore.delete(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
+      }
       // A crash after the durable configuration switch but before owner-vault
       // cleanup resumes here. The handoff is complete, so removing only the
       // core-owned duplicates left in the owner vault is safe and idempotent.
@@ -2158,7 +2206,7 @@ export async function prepareWindowsServiceSecretBackend(
         }
       }
       return {
-        backend: configuration.secretBackend,
+        backend: migratedBackend,
         sealing: configuration.secretBackend.servicePreparation.sealing,
       };
     } catch (error) {
@@ -2201,6 +2249,13 @@ export async function prepareWindowsServiceSecretBackend(
     sourceCheckoutRoot: options.paths.sourceCheckoutRoot,
     vaultRoot: configuration.secretBackend.vaultRoot,
   });
+  const ownerHelper = await prepareWindowsOwnerHelperSecret({
+    allowCreate: true,
+    configuration,
+    options,
+    sourceStore: ownerStore,
+    sourceVaultRoot: configuration.secretBackend.vaultRoot,
+  });
   const handoff = new WindowsServiceDpapiSecretHandoff({
     deviceId: configuration.deviceId,
     handoffRoot,
@@ -2221,7 +2276,7 @@ export async function prepareWindowsServiceSecretBackend(
   try {
     // The logged-in session helper owns this key. It intentionally remains in
     // the owner DPAPI vault and is never staged for or opened by the service.
-    const helperIpc = await provisionWorkerSessionHelperOwnerSigningSecret(ownerStore);
+    const helperIpc = ownerHelper.binding;
     const coreIpc = await readWorkerComputerUseCoreKeyBinding(ownerStore);
     // Phase one is copy-only. A failure leaves every source Secret intact, so a
     // later invocation can safely resume even if some handoff entries exist.
@@ -2258,7 +2313,7 @@ export async function prepareWindowsServiceSecretBackend(
       sealing,
       ownerHelperSecretBinding: Object.freeze({
         backend: "windows-dpapi" as const,
-        vaultRoot: configuration.secretBackend.vaultRoot,
+        vaultRoot: ownerHelper.vaultRoot,
       }),
       ipcTrust: Object.freeze({
         core: Object.freeze({
@@ -2289,6 +2344,10 @@ export async function prepareWindowsServiceSecretBackend(
     });
     await writeConfiguration(options.paths.configFile, updated);
 
+    if (ownerHelper.deleteSourceAfterPersistence) {
+      await ownerStore.delete(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
+    }
+
     // Phase two removes only core-owned source copies after both the handoff and
     // its public recovery binding are durable. The owner helper key is deliberately
     // not in this collection.
@@ -2311,6 +2370,115 @@ export async function prepareWindowsServiceSecretBackend(
         : "The Windows service Secret handoff did not complete.",
     );
   }
+}
+
+async function prepareWindowsOwnerHelperSecret(input: {
+  readonly allowCreate: boolean;
+  readonly configuration: WorkerConfigurationDocument;
+  readonly options: PrepareWindowsServiceSecretBackendOptions;
+  readonly sourceStore: WindowsDpapiSecretStore;
+  readonly sourceVaultRoot: string;
+}): Promise<{
+  readonly binding: WorkerSessionHelperOwnerKeyBinding;
+  readonly deleteSourceAfterPersistence: boolean;
+  readonly vaultRoot: string;
+}> {
+  const targetVaultRoot = resolveWindowsOwnerHelperVaultRoot(input.options, input.sourceVaultRoot);
+  const sameVault = pathsEqualForCurrentHost(input.sourceVaultRoot, targetVaultRoot);
+  const targetStore = sameVault
+    ? input.sourceStore
+    : new WindowsDpapiSecretStore({
+        deviceId: input.configuration.deviceId,
+        hostPlatform: "win32",
+        ...(input.options.powershellPath === undefined
+          ? {}
+          : { powershellPath: input.options.powershellPath }),
+        ...(input.options.runner === undefined ? {} : { runner: input.options.runner }),
+        sourceCheckoutRoot: input.options.paths.sourceCheckoutRoot,
+        vaultRoot: targetVaultRoot,
+      });
+  const sourceReady = (
+    await input.sourceStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)
+  ).ready;
+  let targetReady = (
+    await targetStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)
+  ).ready;
+  if (!sameVault && sourceReady && !targetReady) {
+    await input.sourceStore.executeWithSecretBytes(
+      WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS,
+      async (value) => {
+        await targetStore.store(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS, value);
+      },
+    );
+    targetReady = true;
+  }
+  if (!targetReady && !input.allowCreate) {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "The retained owner-session helper Secret is unavailable.",
+    );
+  }
+  const binding = input.allowCreate
+    ? await provisionWorkerSessionHelperOwnerSigningSecret(targetStore)
+    : await readWorkerSessionHelperOwnerKeyBinding(targetStore);
+  if (!sameVault && sourceReady) {
+    const sourceBinding = await readWorkerSessionHelperOwnerKeyBinding(input.sourceStore);
+    if (
+      sourceBinding.keyId !== binding.keyId ||
+      sourceBinding.publicKeySpkiBase64Url !== binding.publicKeySpkiBase64Url
+    ) {
+      throw appError(
+        "CONFIG_INVALID",
+        "The owner-session helper Secret migration target contains another identity.",
+      );
+    }
+  }
+  return Object.freeze({
+    binding,
+    deleteSourceAfterPersistence: !sameVault && sourceReady,
+    vaultRoot: targetVaultRoot,
+  });
+}
+
+function resolveWindowsOwnerHelperVaultRoot(
+  options: PrepareWindowsServiceSecretBackendOptions,
+  currentVaultRoot: string,
+): string {
+  const requestedRoot =
+    options.ownerHelperVaultRoot ??
+    (isWithin(options.paths.home, currentVaultRoot)
+      ? join(
+          requireEnvironmentPath(
+            (options.environment ?? process.env)["LOCALAPPDATA"],
+            "LOCALAPPDATA",
+          ),
+          "OpenDelegate",
+          "owner-session",
+          options.instanceId,
+          "secrets",
+          "dpapi",
+        )
+      : currentVaultRoot);
+  const targetVaultRoot = requireExternalProvisioningPath(
+    requestedRoot,
+    options.paths.sourceCheckoutRoot,
+    "Windows owner-session helper Secret vault root",
+  );
+  if (
+    isWithin(options.paths.home, targetVaultRoot) ||
+    pathsEqualForCurrentHost(targetVaultRoot, options.handoffRoot) ||
+    pathsEqualForCurrentHost(targetVaultRoot, options.vaultRoot) ||
+    isWithin(targetVaultRoot, options.handoffRoot) ||
+    isWithin(targetVaultRoot, options.vaultRoot) ||
+    isWithin(options.handoffRoot, targetVaultRoot) ||
+    isWithin(options.vaultRoot, targetVaultRoot)
+  ) {
+    throw appError(
+      "CONFIG_PATH_UNSAFE",
+      "The owner-session helper Secret vault must remain outside and disjoint from service state.",
+    );
+  }
+  return targetVaultRoot;
 }
 
 export interface RestoreWindowsServiceSecretBackendOptions {

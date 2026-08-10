@@ -2426,3 +2426,22 @@ their transport inbox, outbox, effect journal, acknowledgements, and sequence
 checkpoint exactly once when the newer generation is durably identified by the
 `device.recredentialed` audit event. Routine authenticated certificate rotation
 preserves those queues and checkpoints.
+
+## D-118 — Windows staging separates owner-session Secrets from service state
+
+**Decision:** Windows Worker service staging keeps core identity and core IPC Secrets in the
+service-only handoff/vault, while the owner-session helper signing Secret is durably retained in an
+owner-local DPAPI vault outside the native service data root. When an older staged Worker records
+that owner binding inside service state, an exact replay of the staging command copies the same
+helper identity to the canonical owner-local vault, verifies its public pin, persists the new
+binding, and only then deletes the obsolete source copy.
+
+**Rationale:** A Worker joined directly under `DATA_ROOT/state` previously inherited its temporary
+foreground DPAPI vault beneath the future service state root. The native service document correctly
+rejected that overlap, but staging did not relocate the owner-only helper Secret, making the default
+agent-guided Windows installation path impossible to finish.
+
+**Consequence:** Default Windows staging remains conversational and requires no extra path choice.
+The owner/helper and core/service planes are structurally disjoint, interrupted migration is
+idempotent, a conflicting helper identity fails closed, and the service-document validator keeps
+its existing strict boundary.

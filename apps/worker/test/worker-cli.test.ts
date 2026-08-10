@@ -765,7 +765,16 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     sourceCheckoutRoot: checkout,
     home: join(fixtureRoot, "worker"),
   });
-  const ownerVaultRoot = join(fixtureRoot, "owner-secrets");
+  const ownerVaultRoot = join(paths.home, "secrets", "dpapi");
+  const localAppData = join(fixtureRoot, "local-app-data");
+  const ownerHelperVaultRoot = join(
+    localAppData,
+    "OpenDelegate",
+    "owner-session",
+    "personal",
+    "secrets",
+    "dpapi",
+  );
   const handoffRoot = join(fixtureRoot, "service-handoff");
   const serviceVaultRoot = join(fixtureRoot, "service-secrets");
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
@@ -836,6 +845,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     }
 
     const input = {
+      environment: { LOCALAPPDATA: localAppData },
       handoffRoot,
       hostPlatform: "win32" as const,
       instanceId: "personal",
@@ -846,12 +856,54 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
       vaultRoot: serviceVaultRoot,
     };
     const first = await prepareWindowsServiceSecretBackend(input);
+    const helperStore = new WindowsDpapiSecretStore({
+      deviceId: "device-worker-service",
+      hostPlatform: "win32",
+      powershellPath,
+      runner,
+      sourceCheckoutRoot: checkout,
+      vaultRoot: ownerHelperVaultRoot,
+    });
+    // Recreate the durable shape emitted by older builds: the helper key and
+    // its public binding still point inside DATA_ROOT/state. An exact replay of
+    // staging must migrate that same identity before service-document runs.
+    await helperStore.executeWithSecretBytes(
+      WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS,
+      async (value) => {
+        await ownerStore.store(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS, value);
+      },
+    );
+    await helperStore.delete(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
+    const legacyConfiguration = JSON.parse(await readFile(paths.configFile, "utf8")) as {
+      secretBackend: {
+        servicePreparation: { ownerHelperSecretBinding: { vaultRoot: string } };
+      };
+    };
+    legacyConfiguration.secretBackend.servicePreparation.ownerHelperSecretBinding.vaultRoot =
+      ownerVaultRoot;
+    await writeFile(paths.configFile, `${JSON.stringify(legacyConfiguration)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    const migratedReplay = await prepareWindowsServiceSecretBackend(input);
+    assert.deepEqual(migratedReplay.backend, first.backend);
+    assert.equal(
+      (await ownerStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
+      false,
+    );
+    assert.equal(
+      (await helperStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
+      true,
+    );
     // Simulate a crash after the durable service binding was written but before
     // the owner-vault duplicates were deleted. Replay must finish that cleanup
     // without reopening the service-account-sealed handoff for public-key data.
-    await ownerStore.store(alias, secret);
-    await ownerStore.store(WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS, Buffer.alloc(32, 0xa5));
-    await ownerStore.store(WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS, Buffer.alloc(48, 0x5a));
+    await helperStore.store(alias, secret);
+    await helperStore.store(WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS, Buffer.alloc(32, 0xa5));
+    await helperStore.store(
+      WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
+      Buffer.alloc(48, 0x5a),
+    );
     const replay = await prepareWindowsServiceSecretBackend(input);
     const exactReplay = await prepareWindowsServiceSecretBackend(input);
     // The durable backend is idempotent across every repetition.
@@ -864,7 +916,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     assert.equal(first.backend.vaultRoot, serviceVaultRoot);
     assert.equal(
       first.backend.servicePreparation?.ownerHelperSecretBinding.vaultRoot,
-      ownerVaultRoot,
+      ownerHelperVaultRoot,
     );
     assert.equal(first.backend.servicePreparation?.sealing, "service-account");
     assert.match(
@@ -881,6 +933,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
     assert.equal(replay.sealing, "service-account");
     assert.equal(exactReplay.sealing, "service-account");
     assert.equal((await ownerStore.availability(alias)).ready, false);
+    assert.equal((await helperStore.availability(alias)).ready, false);
     const handoff = new WindowsServiceDpapiSecretHandoff({
       deviceId: "device-worker-service",
       handoffRoot,
@@ -895,18 +948,22 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
       WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
       WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
     ]) {
-      assert.equal((await ownerStore.availability(coreAlias)).ready, false);
+      assert.equal((await helperStore.availability(coreAlias)).ready, false);
       assert.equal((await handoff.availability(coreAlias)).ready, true);
     }
     assert.equal(
       (await ownerStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
+      false,
+    );
+    assert.equal(
+      (await helperStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
       true,
     );
     assert.equal(
       (await handoff.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)).ready,
       false,
     );
-    const ownerBinding = await readWorkerSessionHelperOwnerKeyBinding(ownerStore);
+    const ownerBinding = await readWorkerSessionHelperOwnerKeyBinding(helperStore);
     assert.equal(ownerBinding.alias, WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
     assert.match(ownerBinding.keyId, /^sha256:[0-9a-f]{64}$/u);
     assert.ok(ownerBinding.publicKeySpkiBase64Url.length > 0);
@@ -918,7 +975,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
         paths,
         powershellPath,
         runner,
-        vaultRoot: ownerVaultRoot,
+        vaultRoot: ownerHelperVaultRoot,
       }),
       (error: unknown) =>
         error instanceof WorkerAppError && error.code === "SECRET_BACKEND_UNAVAILABLE",
@@ -947,12 +1004,12 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
       paths,
       powershellPath,
       runner,
-      vaultRoot: ownerVaultRoot,
+      vaultRoot: ownerHelperVaultRoot,
     });
     assert.equal(restored.backend.backend, "windows-dpapi");
-    assert.equal(restored.backend.vaultRoot, ownerVaultRoot);
+    assert.equal(restored.backend.vaultRoot, ownerHelperVaultRoot);
     assert.equal(restored.restoredAliases, 3);
-    assert.equal((await ownerStore.availability(alias)).ready, true);
+    assert.equal((await helperStore.availability(alias)).ready, true);
     assert.equal((await loadWorkerConfiguration(paths)).secretBackend.backend, "windows-dpapi");
     // A Worker that was never staged is refused rather than silently rebound.
     await assert.rejects(
@@ -961,7 +1018,7 @@ test("Windows Worker staging moves the enrolled identity to a service-only hando
         paths,
         powershellPath,
         runner,
-        vaultRoot: ownerVaultRoot,
+        vaultRoot: ownerHelperVaultRoot,
       }),
       (error: unknown) => error instanceof WorkerAppError && error.code === "CONFIG_INVALID",
     );
