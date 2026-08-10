@@ -105,6 +105,13 @@ export function renderTaskUpdate(projection: TaskChannelProjection): DiscordMess
   const status = workflowStatusForTaskState(projection.state);
   const headline = taskUpdateHeadline(projection.significance);
   const buttons = controlButtons(projection);
+  const content = [
+    headline,
+    safeMarkdown(projection.summary, projection.approval === undefined ? 1_800 : 1_250),
+    ...(projection.approval === undefined
+      ? []
+      : [`⚠️ **Approval needed** — ${safeMarkdown(projection.approval.description, 450)}`]),
+  ].join("\n\n");
   const components: DiscordMessagePayload["components"] = Object.freeze([
     Object.freeze({
       type: 17 as const,
@@ -112,7 +119,7 @@ export function renderTaskUpdate(projection: TaskChannelProjection): DiscordMess
       components: Object.freeze([
         Object.freeze({
           type: 10 as const,
-          content: `${headline}\n\n${safeMarkdown(projection.summary, 1_800)}`,
+          content,
         }),
         ...(buttons.components.length === 0
           ? []

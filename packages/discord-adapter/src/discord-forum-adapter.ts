@@ -405,8 +405,24 @@ export class DiscordForumAdapter {
           taskId: projection.taskId,
           projection: chronologicalProjection(projection),
         });
+      } else if (projection.significance === "failure") {
+        const refreshProjection = chronologicalProjection(projection);
+        const refreshRequestKey = `${digestValue({
+          taskId: projection.taskId,
+          failureRequestKey: priorUpdateRequestKey,
+          projection: refreshProjection,
+        })}:035-refresh-failure`;
+        await this.#enqueueOutbox(refreshRequestKey, {
+          kind: "refresh-task-failure",
+          taskId: projection.taskId,
+          failureRequestKey: priorUpdateRequestKey,
+          projection: refreshProjection,
+        });
+        authoritativeRequestKey = refreshRequestKey;
       }
-      authoritativeRequestKey = updateRequestKey;
+      if (authoritativeRequestKey === panelRequestKey) {
+        authoritativeRequestKey = updateRequestKey;
+      }
       if (ownerMessageCompletion !== undefined) {
         await this.#enqueueOwnerMessageCompletion(
           projection,
@@ -1447,6 +1463,38 @@ export class DiscordForumAdapter {
         }
         return;
       }
+      case "refresh-task-failure": {
+        const binding = await requiredBinding(this.#repository, action.taskId);
+        const surface = binding.failureSurface;
+        if (
+          surface === undefined ||
+          surface.state !== "open" ||
+          surface.requestKey !== action.failureRequestKey ||
+          surface.sourceEventId !== action.projection.sourceEventId
+        ) {
+          this.#recordDiagnostic("discord.task_failure_refresh_unavailable", {
+            taskId: action.taskId,
+            requestKey: action.failureRequestKey,
+          });
+          return;
+        }
+        try {
+          await this.#api.editMessage({
+            threadId: binding.threadId,
+            messageId: surface.messageId,
+            payload: renderTaskUpdate(action.projection),
+          });
+        } catch (error) {
+          if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+            throw error;
+          }
+          this.#recordDiagnostic("discord.task_failure_message_missing", {
+            threadId: binding.threadId,
+            messageId: surface.messageId,
+          });
+        }
+        return;
+      }
       case "upsert-task-activity": {
         const activity = action.projection.activity;
         if (activity === undefined) {
@@ -1946,6 +1994,7 @@ async function bindingForAction(
     case "sync-tags":
     case "upsert-status-panel":
     case "post-task-update":
+    case "refresh-task-failure":
     case "upsert-task-activity":
     case "close-task-activity":
     case "resolve-owner-prompt":

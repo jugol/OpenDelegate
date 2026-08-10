@@ -1044,6 +1044,17 @@ function validateOutboxAction(value: unknown): asserts value is DiscordOutboxAct
     validateProjection(action["projection"]);
     return;
   }
+  if (kind === "refresh-task-failure") {
+    assertOnlyKeys(action, ["kind", "taskId", "failureRequestKey", "projection"]);
+    requireTaskId(action["taskId"]);
+    requireBoundedString(action["failureRequestKey"], "Discord failure request key", 512);
+    validateProjection(action["projection"]);
+    const projection = action["projection"] as TaskChannelProjection;
+    if (projection.significance !== "failure") {
+      throw persistenceConflict();
+    }
+    return;
+  }
   if (kind === "upsert-task-activity") {
     assertOnlyKeys(action, ["kind", "taskId", "projection"]);
     requireTaskId(action["taskId"]);

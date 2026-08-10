@@ -472,6 +472,12 @@ export type DiscordOutboxAction =
       readonly projection: TaskChannelProjection;
     }
   | {
+      readonly kind: "refresh-task-failure";
+      readonly taskId: string;
+      readonly failureRequestKey: string;
+      readonly projection: TaskChannelProjection;
+    }
+  | {
       readonly kind: "upsert-task-activity";
       readonly taskId: string;
       readonly projection: TaskChannelProjection;

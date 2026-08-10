@@ -2180,3 +2180,21 @@ directory on Windows, macOS, and Linux without broadening permissions on the
 owner's original checkout. Related retries and follow-ups reuse the same worktree;
 unrelated workstreams remain isolated. `agent-native-worktree` retains its explicit
 meaning and is never silently migrated.
+
+## D-106 — One open Discord failure card follows the current pending approval
+
+**Decision:** While a Task remains on the same failure event, OpenDelegate edits the
+exact persisted failure message whenever its current pending approval changes. The
+card names the current approval scope and replaces its controls atomically; after no
+pending approval remains, the same card exposes Retry. Refreshes are durable,
+idempotent outbox actions and never create an additional chronological failure card.
+
+**Rationale:** Live multi-Device QA showed the stable status panel moving to the
+next pending approval while the chronological failure card retained buttons for an
+older, already denied approval. The owner could see that action was needed but could
+not perform the authoritative action from the visible control surface.
+
+**Consequence:** Sequential Worker approvals can be reviewed from one nearby Discord
+card without stale IDs or message noise. The original failure explanation and exact
+Discord message identity remain durable, and stale or externally deleted surfaces
+still fail safely with bounded diagnostics.

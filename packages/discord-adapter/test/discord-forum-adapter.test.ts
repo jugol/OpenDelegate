@@ -1439,6 +1439,93 @@ test("a chronological failure update carries its Retry control", () => {
   assert.match(rendered, /od:v1:retry/);
 });
 
+test("one failure card follows the current pending approval without creating message noise", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000136");
+  const starter = ownerMessage(thread.id, thread.id, "Run bounded work across two Devices.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Run bounded work across two Devices.",
+    summary: "The read-only Worker attempt needs owner attention.",
+    sourceEventId: "event_multi_device_failure",
+    significance: "failure",
+    approval: {
+      approvalId: "approval-first",
+      description: "Allow the first exact read-only retry?",
+    },
+  });
+  await adapter.flushOutbox();
+
+  const failureMessage = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("approval-first"),
+  );
+  assert.notEqual(failureMessage, undefined);
+  const originalSurface = (await repository.getBindingByTask("task-1"))?.failureSurface;
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Run bounded work across two Devices.",
+    summary: "The read-only Worker attempt needs owner attention.",
+    sourceEventId: "event_multi_device_failure",
+    significance: "failure",
+    approval: {
+      approvalId: "approval-second",
+      description: "Allow the second exact read-only retry?",
+    },
+  });
+  await adapter.flushOutbox();
+
+  const approvalEdit = api.operations
+    .filter(
+      (operation) =>
+        operation["kind"] === "message-edit" &&
+        operation["messageId"] === failureMessage?.["messageId"],
+    )
+    .at(-1);
+  const approvalRendered = JSON.stringify(approvalEdit?.["payload"]);
+  assert.match(approvalRendered, /Approval needed/u);
+  assert.match(approvalRendered, /second exact read-only retry/u);
+  assert.match(approvalRendered, /approval-second/u);
+  assert.doesNotMatch(approvalRendered, /approval-first/u);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "failed",
+    objective: "Run bounded work across two Devices.",
+    summary: "The read-only Worker attempt needs owner attention.",
+    sourceEventId: "event_multi_device_failure",
+    significance: "failure",
+  });
+  await adapter.flushOutbox();
+
+  const retryEdit = api.operations
+    .filter(
+      (operation) =>
+        operation["kind"] === "message-edit" &&
+        operation["messageId"] === failureMessage?.["messageId"],
+    )
+    .at(-1);
+  const retryRendered = JSON.stringify(retryEdit?.["payload"]);
+  assert.match(retryRendered, /od:v1:retry/u);
+  assert.doesNotMatch(retryRendered, /Approval needed/u);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  assert.deepEqual((await repository.getBindingByTask("task-1"))?.failureSurface, originalSurface);
+  assert.equal(
+    (await repository.listOutbox()).filter(
+      (item) => item.action.kind === "refresh-task-failure" && item.delivered,
+    ).length,
+    2,
+  );
+});
+
 test("a successful retry resolves the prior failure control in place", async () => {
   const { adapter, api, repository } = fixture();
   const thread = forumThread("300000000000000134");
