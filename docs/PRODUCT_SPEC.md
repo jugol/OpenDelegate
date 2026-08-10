@@ -207,8 +207,9 @@ through a secure handoff and resumes the same Task afterward.
     important product decision.
 30. As an owner, I want Discord tags to show a compact Task state, so that I can scan
     work without opening every post.
-31. As an owner, I want a stable status card rather than a flood of progress
-    messages, so that Task conversations remain readable.
+31. As an owner, I want exactly one obvious current Task surface rather than a
+    fixed dashboard competing with live progress, so that Task conversations remain
+    readable and old controls cannot look current.
 32. As an owner, I want significant progress and failures reported in the Task, so
     that I can follow work from a phone.
 33. As an owner, I want to pause, cancel, retry, and approve from Discord controls,
@@ -491,9 +492,12 @@ through a secure handoff and resumes the same Task afterward.
    Waiting, Review, Done, and Failed. Remaining tag capacity is reserved for facets
    such as priority or category. The database is authoritative when Discord's
    20-available-tag and five-applied-tag limits cannot represent internal state.
-7. The bot maintains a concise status surface and edits it instead of posting a new
-   message for every heartbeat. The surface shows Task state and references but does
-   not repeat the Forum title, the current owner question, or mutable Task controls.
+7. Before work has a chronological or live surface, the bot may maintain one concise
+   bootstrap status surface instead of posting a message for every heartbeat. As
+   soon as live activity, a question, a failure, a decision, or a final result is
+   available, that bootstrap surface is deleted; it never competes with the latest
+   owner-visible turn. The current surface shows Task state and references but does
+   not repeat the Forum title or the current owner question.
    Each accepted owner message receives one idempotent in-place acknowledgement on
    that exact message: a best-effort `👀` reaction plus Discord's typing indicator.
    Typing is refreshed while the turn remains active; after a durable question,
@@ -528,8 +532,10 @@ through a secure handoff and resumes the same Task afterward.
    attention notice. When that Task enters a new running attempt, the prior failure
    reply is edited in place into a historical “Retry started” receipt and its stale
    controls are removed; the current status or result remains below it. Cancellation
-   is a final chronological reply with an optional Retry control, not only an edit to
-   the starter status panel.
+   is a final chronological reply with an optional Retry control. Once Retry starts,
+   that cancellation reply becomes a control-free historical receipt just like a
+   recovered failure; a later cancellation may then create one new current recovery
+   surface.
 9. Buttons and menus offer pause, cancel, retry, approve once, reject, inspect Runs,
    and open Artifact actions where Discord permits. A Discord Approval decision
    resolves the exact same durable Approval service record shown in Admin Web; it
@@ -552,6 +558,9 @@ through a secure handoff and resumes the same Task afterward.
     Discord binding through Configuration Chat and protected Approval. A replacement
     becomes durable only after the candidate Gateway proves `READY`; failure restores
     the prior binding without changing Task or native-session identity.
+14. Deterministic Discord headings, status vocabulary, progress labels, and controls
+    use the owner-selected binding presentation locale. English remains the default;
+    Agent-authored prose and durable internal fields are not falsely translated.
 
 ### FR-6 — Task intake and lifecycle
 

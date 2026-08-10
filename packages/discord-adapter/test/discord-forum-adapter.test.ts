@@ -380,6 +380,7 @@ function fixture(options?: {
   tasks?: FakeTaskPort;
   clock?: FakeClock;
   gateway?: FakeGateway;
+  presentationLocale?: "en" | "ko";
 }) {
   const repository = options?.repository ?? new InMemoryDiscordStateRepository();
   const api = options?.api ?? new FakeDiscordApi();
@@ -393,6 +394,9 @@ function fixture(options?: {
       forumBindings: [{ channelId: FORUM_ID, workflowTagIds: STATUS_TAGS }],
       ownerUserIds: [OWNER_ID],
       allowedRoleIds: [OWNER_ROLE_ID],
+      ...(options?.presentationLocale === undefined
+        ? {}
+        : { presentationLocale: options.presentationLocale }),
     },
     repository,
     api,
@@ -807,7 +811,7 @@ test("one owner answer resolves the one durable question in place and resumes on
   assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
   assert.equal(
     api.operations.filter((operation) => operation["kind"] === "message-reconciled").length,
-    1,
+    0,
   );
   const edit = api.operations.find((operation) => operation["kind"] === "message-edit");
   const rendered = JSON.stringify(edit?.["payload"]);
@@ -1013,8 +1017,8 @@ test("restart reconciliation scans active and paged archived posts without dupli
   assert.equal((await restartedRepository.getBindingByThread(archived.id))?.archived, true);
 });
 
-test("Task projection keeps one workflow tag, a stable panel, and concise Artifact presentation", async () => {
-  const { adapter, api, repository, clock } = fixture();
+test("Task projection retires its bootstrap panel when chronological work begins", async () => {
+  const { adapter, api, repository } = fixture();
   const thread = {
     ...forumThread("300000000000000031"),
     appliedTagIds: [
@@ -1030,6 +1034,17 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
   api.messages.set(thread.id, [starter]);
   await adapter.handleGatewayDispatch(messageDispatch(1, starter));
 
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "intake",
+    objective: "Render the report",
+    summary: "OpenDelegate is reading this Task.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+  const bootstrapPanel = api.operations.find((operation) => operation["kind"] === "panel");
+  assert.notEqual(bootstrapPanel, undefined);
+
   const projection: TaskChannelProjection = {
     taskId: "task-1",
     state: "completed",
@@ -1037,18 +1052,15 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
     summary: "The report is ready with all checks passing.",
     sourceEventId: "event_report_completed",
     significance: "final",
-  };
-  await adapter.publishTaskProjection(projection);
-  await adapter.flushOutbox();
-  clock.value += 5_000;
-  await adapter.publishTaskProjection({
-    ...projection,
     artifact: {
       label: "Open report",
       url: "https://artifacts.example.test/reports/release",
     },
     inspectUrl: "https://admin.example.test/tasks/task-1",
-  });
+  };
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection(projection);
   await adapter.flushOutbox();
 
   const tagOperations = api.operations.filter((operation) => operation["kind"] === "tags");
@@ -1060,37 +1072,26 @@ test("Task projection keeps one workflow tag, a stable panel, and concise Artifa
     STATUS_TAGS.done,
   ]);
   const panels = api.operations.filter((operation) => operation["kind"] === "panel");
-  assert.equal(panels.length, 2);
-  const panelPayload = panels.at(-1)?.["payload"];
-  assert.match(JSON.stringify(panelPayload), /Open report/);
-  assert.match(JSON.stringify(panelPayload), /32768/);
-  const statusPanelMessageId = panels.at(-1)?.["messageId"];
-  assert.equal(
-    (await repository.getBindingByTask("task-1"))?.statusPanelMessageId,
-    statusPanelMessageId,
+  assert.equal(panels.length, 1);
+  assert.deepEqual(
+    api.operations
+      .filter((operation) => operation["kind"] === "message-delete")
+      .map((operation) => operation["messageId"]),
+    [bootstrapPanel?.["messageId"]],
   );
   assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+  const resultPayload = api.operations.find((operation) => operation["kind"] === "message")?.[
+    "payload"
+  ];
+  assert.match(JSON.stringify(resultPayload), /Open report/u);
+  assert.match(JSON.stringify(resultPayload), /Inspect runs/u);
   assert.deepEqual(
     api.operations
       .filter((operation) => operation["kind"] === "message-acknowledgement-completed")
       .map((operation) => operation["outcome"]),
     ["success"],
   );
-
-  assert.equal(typeof statusPanelMessageId, "string");
-  api.missingStatusPanelMessageIds.add(statusPanelMessageId as string);
-  await adapter.publishTaskProjection({
-    ...projection,
-    state: "running",
-    summary: "The deleted status panel is being restored.",
-    significance: "status",
-  });
-  await adapter.flushOutbox();
-  const restored = await repository.getBindingByTask("task-1");
-  const restoredPanel = api.operations.filter((operation) => operation["kind"] === "panel").at(-1);
-  assert.equal(restored?.statusPanelMessageId, restoredPanel?.["messageId"]);
-  assert.equal(restored?.externalState, "available");
-  assert.equal(restoredPanel?.["requestedMessageId"], undefined);
+  assert.equal((await repository.getBindingByTask("task-1"))?.externalState, "available");
 });
 
 test("one bounded live activity message is edited and closed for a Task cycle", async () => {
@@ -1801,6 +1802,79 @@ test("a successful retry resolves the prior failure control in place", async () 
   });
 });
 
+test("retrying a cancellation resolves its old button and keeps one localized current surface", async () => {
+  const { adapter, api, repository } = fixture({ presentationLocale: "ko" });
+  const thread = forumThread("300000000000000145");
+  const starter = ownerMessage(thread.id, thread.id, "두 기기에서 안전한 읽기 전용 점검을 해줘.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "cancelled",
+    objective: "두 기기에서 안전한 읽기 전용 점검을 해줘.",
+    summary: "This Task was cancelled.",
+    sourceEventId: "event_cancelled_first",
+    significance: "final",
+  });
+  await adapter.flushOutbox();
+
+  const cancelled = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message" &&
+      JSON.stringify(operation["payload"]).includes("od:v1:retry"),
+  );
+  assert.notEqual(cancelled, undefined);
+  assert.match(JSON.stringify(cancelled?.["payload"]), /작업을 취소했어요/u);
+  assert.match(JSON.stringify(cancelled?.["payload"]), /다시 시도/u);
+  assert.equal((await repository.getBindingByTask("task-1"))?.failureSurface?.state, "open");
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "두 기기에서 안전한 읽기 전용 점검을 해줘.",
+    summary: "OpenDelegate is working on this Task.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_retry_after_cancel",
+      revision: 1,
+      updatedAtMs: 2_000,
+      phase: "planning",
+      completedWorkOrders: 0,
+      totalWorkOrders: 0,
+      milestones: [
+        {
+          key: "main:planning",
+          status: "active",
+          summary: "Main is planning the work.",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+
+  const resolved = api.operations.find(
+    (operation) =>
+      operation["kind"] === "message-edit" && operation["messageId"] === cancelled?.["messageId"],
+  );
+  assert.match(JSON.stringify(resolved?.["payload"]), /다시 시작했어요/u);
+  assert.doesNotMatch(JSON.stringify(resolved?.["payload"]), /od:v1:retry/u);
+  assert.equal((await repository.getBindingByTask("task-1"))?.failureSurface?.state, "resolved");
+
+  const liveActivity = api.operations.find(
+    (operation) =>
+      operation["kind"] === "panel" && String(operation["requestKey"]).startsWith("task-activity:"),
+  );
+  const liveRendered = JSON.stringify(liveActivity?.["payload"]);
+  assert.match(liveRendered, /OpenDelegate가 작업 중이에요/u);
+  assert.match(liveRendered, /Main이 작업을 계획하고 있어요/u);
+  assert.match(liveRendered, /일시정지/u);
+  assert.match(liveRendered, /취소/u);
+  assert.doesNotMatch(liveRendered, /OpenDelegate is working/u);
+  assert.equal(api.operations.filter((operation) => operation["kind"] === "message").length, 1);
+});
+
 test("a fast retry resolves its failure when projection coalescing observes only completion", async () => {
   const { adapter, api, repository } = fixture();
   const thread = forumThread("300000000000000135");
@@ -2003,7 +2077,7 @@ test("Discord outage leaves an idempotent durable outbox that drains after resta
     significance: "status",
   });
   await initial.adapter.flushOutbox();
-  assert.equal((await initial.repository.listOutbox()).filter((item) => !item.delivered).length, 2);
+  assert.equal((await initial.repository.listOutbox()).filter((item) => !item.delivered).length, 1);
 
   const restartedRepository = new InMemoryDiscordStateRepository(initial.repository.snapshot());
   initial.api.online = true;

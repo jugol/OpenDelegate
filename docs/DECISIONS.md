@@ -2354,3 +2354,32 @@ confirmation or recovery control.
 **Consequence:** Cancellation reads like every other terminal Task outcome, remains
 idempotent by the immutable command event, and keeps recovery near the latest turn.
 The final reply is presentation only; the Task command journal remains authority.
+
+## D-115 — Discord exposes one current surface in the owner's presentation locale
+
+Implementation detail:
+[ADR-0058](adr/0058-discord-single-current-localized-surface.md).
+
+**Decision:** The starter-adjacent status panel is only a bootstrap fallback. The
+first live activity or chronological question, decision, failure, cancellation, or
+result durably retires it, leaving one obvious current surface near the latest owner
+turn. A cancellation result is persisted as a Retry-bearing recovery surface; when
+a retry supersedes it, OpenDelegate edits that exact message into a control-free
+historical receipt before presenting the new current activity. Repeated cancellation
+cycles may create a new recovery surface only after the prior one is resolved.
+Deterministic Discord chrome uses the binding's bounded presentation locale, with
+English as the default. Closed OpenDelegate vocabulary may be translated, while
+Agent-authored prose and durable identifiers remain unchanged.
+
+**Rationale:** Live Korean Forum QA showed three visually competing truths in one
+screen: an old fixed `Running` panel, a cancellation `Retry` that remained active
+after retry, and a newer working card. All static chrome was English despite the
+owner operating in Korean. Event delivery and execution safety were correct, but the
+conversation was not legible as one lifecycle.
+
+**Consequence:** Owners no longer have to infer which card is authoritative. Retry
+history remains visible without stale controls, active work has one nearby mutable
+surface, and deterministic UI language follows the explicit Discord binding rather
+than consuming LLM context. This supersedes the persistent-panel portion of D-065,
+extends D-102 to cancellation recovery surfaces, and removes D-114's requirement to
+keep updating the starter panel after a chronological cancellation reply exists.

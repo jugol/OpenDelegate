@@ -347,9 +347,9 @@ export class DiscordForumAdapter {
 
   async publishTaskProjection(projection: TaskChannelProjection): Promise<void> {
     // Rendering validates all owner-visible fields and URLs before durable work is queued.
-    renderStatusPanel(projection);
+    renderStatusPanel(projection, this.#config.presentationLocale);
     if (projection.activity !== undefined) {
-      renderTaskActivity(projection);
+      renderTaskActivity(projection, this.#config.presentationLocale);
     }
     const binding = await this.#repository.getBindingByTask(projection.taskId);
     if (binding === undefined) {
@@ -359,7 +359,9 @@ export class DiscordForumAdapter {
     await this.#refreshOwnerActivity(projection, binding);
     const projectionDigest = digestValue(panelProjection(projection));
     const ownerMessageCompletion = await this.#ownerMessageCompletion(projection, binding);
-    const panelRequestKey = `${projectionDigest}:02-panel`;
+    // Version the projection identity so an upgrade replays the one-time retirement
+    // for status panels created by the former persistent-panel lifecycle.
+    const panelRequestKey = `${projectionDigest}:02-panel-v2`;
     await this.#enqueueOutbox(`${projectionDigest}:01-tags`, {
       kind: "sync-tags",
       taskId: projection.taskId,
@@ -391,7 +393,8 @@ export class DiscordForumAdapter {
           "A significant chronological Task update requires a stable source event ID.",
         );
       }
-      const priorUpdateRequestKey = await this.#significantUpdateRequestKey(projection);
+      const priorUpdate = await this.#significantUpdate(projection);
+      const priorUpdateRequestKey = priorUpdate?.id;
       const updateRequestKey =
         priorUpdateRequestKey ??
         `${digestValue({
@@ -407,32 +410,40 @@ export class DiscordForumAdapter {
         });
       } else if (projection.significance === "failure") {
         const refreshProjection = chronologicalProjection(projection);
-        const refreshRequestKey = `${digestValue({
-          taskId: projection.taskId,
-          failureRequestKey: priorUpdateRequestKey,
-          projection: refreshProjection,
-        })}:035-refresh-failure`;
-        await this.#enqueueOutbox(refreshRequestKey, {
-          kind: "refresh-task-failure",
-          taskId: projection.taskId,
-          failureRequestKey: priorUpdateRequestKey,
-          projection: refreshProjection,
-        });
-        authoritativeRequestKey = refreshRequestKey;
+        if (sameProjection(priorUpdate, refreshProjection)) {
+          authoritativeRequestKey = updateRequestKey;
+        } else {
+          const refreshRequestKey = `${digestValue({
+            taskId: projection.taskId,
+            failureRequestKey: priorUpdateRequestKey,
+            projection: refreshProjection,
+          })}:035-refresh-failure`;
+          await this.#enqueueOutbox(refreshRequestKey, {
+            kind: "refresh-task-failure",
+            taskId: projection.taskId,
+            failureRequestKey: priorUpdateRequestKey,
+            projection: refreshProjection,
+          });
+          authoritativeRequestKey = refreshRequestKey;
+        }
       } else if (projection.significance === "question") {
         const refreshProjection = chronologicalProjection(projection);
-        const refreshRequestKey = `${digestValue({
-          taskId: projection.taskId,
-          promptRequestKey: priorUpdateRequestKey,
-          projection: refreshProjection,
-        })}:035-refresh-prompt`;
-        await this.#enqueueOutbox(refreshRequestKey, {
-          kind: "refresh-owner-prompt",
-          taskId: projection.taskId,
-          promptRequestKey: priorUpdateRequestKey,
-          projection: refreshProjection,
-        });
-        authoritativeRequestKey = refreshRequestKey;
+        if (sameProjection(priorUpdate, refreshProjection)) {
+          authoritativeRequestKey = updateRequestKey;
+        } else {
+          const refreshRequestKey = `${digestValue({
+            taskId: projection.taskId,
+            promptRequestKey: priorUpdateRequestKey,
+            projection: refreshProjection,
+          })}:035-refresh-prompt`;
+          await this.#enqueueOutbox(refreshRequestKey, {
+            kind: "refresh-owner-prompt",
+            taskId: projection.taskId,
+            promptRequestKey: priorUpdateRequestKey,
+            projection: refreshProjection,
+          });
+          authoritativeRequestKey = refreshRequestKey;
+        }
       }
       if (authoritativeRequestKey === panelRequestKey) {
         authoritativeRequestKey = updateRequestKey;
@@ -484,7 +495,7 @@ export class DiscordForumAdapter {
   }
 
   async createTaskThread(projection: TaskChannelProjection): Promise<DiscordTaskBinding> {
-    renderStatusPanel(projection);
+    renderStatusPanel(projection, this.#config.presentationLocale);
     let result: DiscordTaskBinding | undefined;
     await this.#withThread(`outbound-task:${projection.taskId}`, async () => {
       const existing = await this.#repository.getBindingByTask(projection.taskId);
@@ -844,7 +855,7 @@ export class DiscordForumAdapter {
         item.delivered &&
         item.action.kind === "post-task-update" &&
         item.action.taskId === projection.taskId &&
-        item.action.projection.significance === "failure" &&
+        isRetrySurfaceProjection(item.action.projection) &&
         item.action.projection.sourceEventId === surface.sourceEventId,
     );
     if (failure?.action.kind !== "post-task-update") {
@@ -868,9 +879,9 @@ export class DiscordForumAdapter {
     );
   }
 
-  async #significantUpdateRequestKey(
+  async #significantUpdate(
     projection: TaskChannelProjection,
-  ): Promise<string | undefined> {
+  ): Promise<DiscordOutboxItem | undefined> {
     const sourceEventId = projection.sourceEventId;
     if (sourceEventId === undefined) {
       return undefined;
@@ -881,7 +892,7 @@ export class DiscordForumAdapter {
         item.action.taskId === projection.taskId &&
         item.action.projection.sourceEventId === sourceEventId &&
         item.action.projection.significance === projection.significance,
-    )?.id;
+    );
   }
 
   async #ensureBinding(thread: DiscordThread): Promise<DiscordTaskBinding | undefined> {
@@ -1417,7 +1428,22 @@ export class DiscordForumAdapter {
       }
       case "upsert-status-panel": {
         const binding = await requiredBinding(this.#repository, action.taskId);
-        const payload = renderStatusPanel(action.projection);
+        if (retiresStableStatusPanel(action.projection)) {
+          if (binding.statusPanelMessageId !== undefined) {
+            try {
+              await this.#api.deleteMessage({
+                threadId: binding.threadId,
+                messageId: binding.statusPanelMessageId,
+              });
+            } catch (error) {
+              if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
+                throw error;
+              }
+            }
+          }
+          return;
+        }
+        const payload = renderStatusPanel(action.projection, this.#config.presentationLocale);
         let result: { readonly messageId: string };
         try {
           result = await this.#api.upsertStatusPanel({
@@ -1456,14 +1482,14 @@ export class DiscordForumAdapter {
         const result = await this.#api.createMessage({
           threadId: binding.threadId,
           requestKey: item.id,
-          payload: renderTaskUpdate(action.projection),
+          payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
         });
-        if (action.projection.significance === "failure") {
+        if (isRetrySurfaceProjection(action.projection)) {
           const sourceEventId = action.projection.sourceEventId;
           if (sourceEventId === undefined) {
             throw new DiscordAdapterError(
               "PROJECTION_INVALID",
-              "A chronological Discord failure has no source event ID.",
+              "A chronological Discord retry surface has no source event ID.",
             );
           }
           await this.#repository.updateBinding(binding.threadId, {
@@ -1514,7 +1540,7 @@ export class DiscordForumAdapter {
           await this.#api.editMessage({
             threadId: binding.threadId,
             messageId: surface.messageId,
-            payload: renderTaskUpdate(action.projection),
+            payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
           });
         } catch (error) {
           if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
@@ -1552,13 +1578,13 @@ export class DiscordForumAdapter {
             : await this.#api.createMessage({
                 threadId: binding.threadId,
                 requestKey: action.promptRequestKey,
-                payload: renderTaskUpdate(action.projection),
+                payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
               });
         try {
           await this.#api.editMessage({
             threadId: binding.threadId,
             messageId: prompt.messageId,
-            payload: renderTaskUpdate(action.projection),
+            payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
           });
         } catch (error) {
           if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
@@ -1567,7 +1593,7 @@ export class DiscordForumAdapter {
           prompt = await this.#api.createMessage({
             threadId: binding.threadId,
             requestKey: action.promptRequestKey,
-            payload: renderTaskUpdate(action.projection),
+            payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
           });
           this.#recordDiagnostic("discord.owner_prompt_refresh_message_restored", {
             taskId: action.taskId,
@@ -1614,7 +1640,7 @@ export class DiscordForumAdapter {
           }
         }
         const requestKey = `task-activity:${action.taskId}:${activity.cycleId}`;
-        const payload = renderTaskActivity(action.projection);
+        const payload = renderTaskActivity(action.projection, this.#config.presentationLocale);
         let result: { readonly messageId: string };
         const messageId =
           current?.cycleId === activity.cycleId && current.state === "open"
@@ -1757,13 +1783,13 @@ export class DiscordForumAdapter {
             : await this.#api.createMessage({
                 threadId: binding.threadId,
                 requestKey: action.promptRequestKey,
-                payload: renderTaskUpdate(action.projection),
+                payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
               });
         try {
           await this.#api.editMessage({
             threadId: binding.threadId,
             messageId: prompt.messageId,
-            payload: renderResolvedOwnerPrompt(action.projection),
+            payload: renderResolvedOwnerPrompt(action.projection, this.#config.presentationLocale),
           });
         } catch (error) {
           if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
@@ -1802,7 +1828,7 @@ export class DiscordForumAdapter {
           await this.#api.editMessage({
             threadId: binding.threadId,
             messageId: surface.messageId,
-            payload: renderResolvedTaskFailure(action.projection),
+            payload: renderResolvedTaskFailure(action.projection, this.#config.presentationLocale),
           });
         } catch (error) {
           if (!(error instanceof DiscordApiError) || error.code !== "NOT_FOUND") {
@@ -1867,7 +1893,7 @@ export class DiscordForumAdapter {
     try {
       await this.#api.editDeferredInteraction({
         responseRef,
-        payload: renderInteractionResult(message, success),
+        payload: renderInteractionResult(message, success, this.#config.presentationLocale),
       });
     } catch (error) {
       if (
@@ -2010,10 +2036,21 @@ function validateConfig(config: DiscordForumAdapterConfig): void {
     throw configInvalid();
   }
   const keys = Object.keys(config);
+  const expectedKeys = [
+    "allowedRoleIds",
+    "applicationId",
+    "botUserId",
+    "forumBindings",
+    "guildId",
+    "ownerUserIds",
+    ...(config.presentationLocale === undefined ? [] : ["presentationLocale"]),
+  ].sort();
   if (
     keys.some((key) => /token|secret|credential/iu.test(key)) ||
-    keys.sort().join(",") !==
-      "allowedRoleIds,applicationId,botUserId,forumBindings,guildId,ownerUserIds"
+    keys.sort().join(",") !== expectedKeys.join(",") ||
+    (config.presentationLocale !== undefined &&
+      config.presentationLocale !== "en" &&
+      config.presentationLocale !== "ko")
   ) {
     throw configInvalid();
   }
@@ -2140,6 +2177,31 @@ function keepsLiveActivityOpen(state: TaskChannelProjection["state"]): boolean {
   return state === "running" || state === "paused";
 }
 
+function retiresStableStatusPanel(projection: TaskChannelProjection): boolean {
+  return (
+    projection.significance !== "status" ||
+    projection.state === "running" ||
+    projection.state === "paused"
+  );
+}
+
+function isRetrySurfaceProjection(projection: TaskChannelProjection): boolean {
+  return (
+    projection.significance === "failure" ||
+    (projection.significance === "final" && projection.state === "cancelled")
+  );
+}
+
+function sameProjection(
+  item: DiscordOutboxItem | undefined,
+  projection: TaskChannelProjection,
+): boolean {
+  return (
+    item?.action.kind === "post-task-update" &&
+    canonicalJson(item.action.projection) === canonicalJson(projection)
+  );
+}
+
 function panelProjection(projection: TaskChannelProjection): TaskChannelProjection {
   return Object.freeze({
     taskId: projection.taskId,
@@ -2196,6 +2258,10 @@ function chronologicalProjection(projection: TaskChannelProjection): TaskChannel
     ...(projection.approval === undefined
       ? {}
       : { approval: Object.freeze({ ...projection.approval }) }),
+    ...(projection.artifact === undefined
+      ? {}
+      : { artifact: Object.freeze({ ...projection.artifact }) }),
+    ...(projection.inspectUrl === undefined ? {} : { inspectUrl: projection.inspectUrl }),
   });
 }
 
@@ -2204,6 +2270,11 @@ function supersedesOpenFailure(
   failureSourceEventId: string,
 ): boolean {
   if (projection.state === "failed") {
+    return (
+      projection.sourceEventId !== undefined && projection.sourceEventId !== failureSourceEventId
+    );
+  }
+  if (projection.state === "cancelled") {
     return (
       projection.sourceEventId !== undefined && projection.sourceEventId !== failureSourceEventId
     );

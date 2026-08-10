@@ -16,6 +16,8 @@ export type DiscordPermission =
 
 export type DiscordWorkflowStatus = "intake" | "running" | "waiting" | "review" | "done" | "failed";
 
+export type DiscordPresentationLocale = "en" | "ko";
+
 export type DiscordTaskState =
   | "intake"
   | "queued"
@@ -40,6 +42,11 @@ export interface DiscordForumAdapterConfig {
   readonly forumBindings: readonly DiscordForumBindingConfig[];
   readonly ownerUserIds: readonly string[];
   readonly allowedRoleIds: readonly string[];
+  /**
+   * Owner-visible deterministic Discord chrome. Agent-authored prose is kept as
+   * authored; only OpenDelegate's closed presentation vocabulary is localized.
+   */
+  readonly presentationLocale?: DiscordPresentationLocale;
 }
 
 export interface DiscordAuthor {
@@ -418,6 +425,10 @@ export interface DiscordTaskActivitySurface {
 }
 
 export interface DiscordTaskFailureSurface {
+  /**
+   * Historical name retained for durable compatibility. This surface tracks any
+   * terminal Discord card that exposes Retry, including cancellation results.
+   */
   readonly requestKey: string;
   readonly sourceEventId: string;
   readonly messageId: string;

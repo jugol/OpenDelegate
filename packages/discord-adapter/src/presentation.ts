@@ -4,19 +4,32 @@ import {
   type DiscordButton,
   type DiscordContainer,
   type DiscordMessagePayload,
+  type DiscordPresentationLocale,
   type DiscordTaskState,
   type DiscordWorkflowStatus,
   type TaskChannelProjection,
 } from "./contracts.ts";
 import { DiscordAdapterError } from "./errors.ts";
 
-const STATUS_LABELS: Readonly<Record<DiscordWorkflowStatus, string>> = Object.freeze({
-  intake: "Intake",
-  running: "Running",
-  waiting: "Waiting",
-  review: "Review",
-  done: "Done",
-  failed: "Failed",
+const STATUS_LABELS: Readonly<
+  Record<DiscordPresentationLocale, Readonly<Record<DiscordWorkflowStatus, string>>>
+> = Object.freeze({
+  en: Object.freeze({
+    intake: "Intake",
+    running: "Running",
+    waiting: "Waiting",
+    review: "Review",
+    done: "Done",
+    failed: "Failed",
+  }),
+  ko: Object.freeze({
+    intake: "접수",
+    running: "작업 중",
+    waiting: "대기 중",
+    review: "검토 중",
+    done: "완료",
+    failed: "문제 발생",
+  }),
 });
 
 const STATUS_COLORS: Readonly<Record<DiscordWorkflowStatus, number>> = Object.freeze({
@@ -49,23 +62,31 @@ export function workflowStatusForTaskState(state: DiscordTaskState): DiscordWork
   }
 }
 
-export function renderStatusPanel(projection: TaskChannelProjection): DiscordMessagePayload {
+export function renderStatusPanel(
+  projection: TaskChannelProjection,
+  locale: DiscordPresentationLocale = "en",
+): DiscordMessagePayload {
   validateProjection(projection);
   const status = workflowStatusForTaskState(projection.state);
   const detailLines = [
-    "## Task status",
-    `**${STATUS_LABELS[status]}**`,
-    safeMarkdown(statusPanelSummary(projection), 1_500),
+    locale === "ko" ? "## 작업 상태" : "## Task status",
+    `**${STATUS_LABELS[locale][status]}**`,
+    safeMarkdown(statusPanelSummary(projection, locale), 1_500),
   ];
   if (projection.progress !== undefined) {
     detailLines.push(
-      `Progress: ${projection.progress.completed.toString()}/${projection.progress.total.toString()}`,
+      `${locale === "ko" ? "진행" : "Progress"}: ${projection.progress.completed.toString()}/${projection.progress.total.toString()}`,
     );
   }
   if (projection.approval !== undefined) {
-    detailLines.push(`Approval needed: ${safeMarkdown(projection.approval.description, 500)}`);
+    detailLines.push(
+      `${locale === "ko" ? "승인 필요" : "Approval needed"}: ${safeMarkdown(
+        localizeKnownText(projection.approval.description, locale),
+        500,
+      )}`,
+    );
   }
-  const references = linkButtons(projection);
+  const references = linkButtons(projection, locale);
   const containerComponents: DiscordContainer["components"] = Object.freeze([
     Object.freeze({ type: 10 as const, content: detailLines.join("\n\n") }),
     ...(references.components.length === 0
@@ -85,32 +106,54 @@ export function renderStatusPanel(projection: TaskChannelProjection): DiscordMes
   });
 }
 
-function statusPanelSummary(projection: TaskChannelProjection): string {
+function statusPanelSummary(
+  projection: TaskChannelProjection,
+  locale: DiscordPresentationLocale,
+): string {
   switch (projection.significance) {
     case "question":
-      return "Waiting for your reply to the latest message below.";
+      return locale === "ko"
+        ? "아래의 최신 질문에 답변해 주세요."
+        : "Waiting for your reply to the latest message below.";
     case "failure":
-      return "Action is needed. See the latest failure update below.";
+      return locale === "ko"
+        ? "확인이 필요합니다. 아래의 최신 오류 안내를 확인해 주세요."
+        : "Action is needed. See the latest failure update below.";
     case "final":
-      return "Completed. See the latest result below.";
+      return locale === "ko"
+        ? "처리가 끝났습니다. 아래의 최신 결과를 확인해 주세요."
+        : "Completed. See the latest result below.";
     case "decision":
-      return "The Task changed. See the latest decision below.";
+      return locale === "ko"
+        ? "작업 상태가 변경됐습니다. 아래의 최신 결정을 확인해 주세요."
+        : "The Task changed. See the latest decision below.";
     case "status":
-      return projection.summary;
+      return localizeKnownText(projection.summary, locale);
   }
 }
 
-export function renderTaskUpdate(projection: TaskChannelProjection): DiscordMessagePayload {
+export function renderTaskUpdate(
+  projection: TaskChannelProjection,
+  locale: DiscordPresentationLocale = "en",
+): DiscordMessagePayload {
   validateProjection(projection);
   const status = workflowStatusForTaskState(projection.state);
-  const headline = taskUpdateHeadline(projection.significance);
-  const buttons = controlButtons(projection);
+  const headline = taskUpdateHeadline(projection.significance, locale);
+  const buttons = controlButtons(projection, locale);
   const content = [
     headline,
-    safeMarkdown(projection.summary, projection.approval === undefined ? 1_800 : 1_250),
+    safeMarkdown(
+      localizeKnownText(projection.summary, locale),
+      projection.approval === undefined ? 1_800 : 1_250,
+    ),
     ...(projection.approval === undefined
       ? []
-      : [`⚠️ **Approval needed** — ${safeMarkdown(projection.approval.description, 450)}`]),
+      : [
+          `⚠️ **${locale === "ko" ? "승인 필요" : "Approval needed"}** — ${safeMarkdown(
+            localizeKnownText(projection.approval.description, locale),
+            450,
+          )}`,
+        ]),
   ].join("\n\n");
   const components: DiscordMessagePayload["components"] = Object.freeze([
     Object.freeze({
@@ -134,46 +177,71 @@ export function renderTaskUpdate(projection: TaskChannelProjection): DiscordMess
   });
 }
 
-export function renderTaskActivity(projection: TaskChannelProjection): DiscordMessagePayload {
+export function renderTaskActivity(
+  projection: TaskChannelProjection,
+  locale: DiscordPresentationLocale = "en",
+): DiscordMessagePayload {
   validateProjection(projection);
   const activity = projection.activity;
   if (activity === undefined) {
     throw invalidProjection();
   }
-  const phaseLabel: Readonly<Record<typeof activity.phase, string>> = {
-    planning: "Planning",
-    dispatching: "Dispatching",
-    working: "Working across Devices",
-    verifying: "Verifying results",
-  };
+  const phaseLabel: Readonly<Record<typeof activity.phase, string>> =
+    locale === "ko"
+      ? {
+          planning: "계획 중",
+          dispatching: "작업 배정 중",
+          working: "여러 기기에서 작업 중",
+          verifying: "결과 확인 중",
+        }
+      : {
+          planning: "Planning",
+          dispatching: "Dispatching",
+          working: "Working across Devices",
+          verifying: "Verifying results",
+        };
   const progress =
     activity.totalWorkOrders === 0
       ? phaseLabel[activity.phase]
-      : `${phaseLabel[activity.phase]} · ${activity.completedWorkOrders.toString()}/${activity.totalWorkOrders.toString()} Work Orders complete`;
+      : `${phaseLabel[activity.phase]} · ${activity.completedWorkOrders.toString()}/${activity.totalWorkOrders.toString()} ${locale === "ko" ? "작업 단위 완료" : "Work Orders complete"}`;
   const milestoneLines = activity.milestones.map((milestone) => {
     const marker = milestone.status === "completed" ? "✅" : "↻";
-    const deviceName = milestone.deviceLabel ?? "Worker Device";
+    const deviceName = milestone.deviceLabel ?? (locale === "ko" ? "작업 기기" : "Worker Device");
     const device = deviceName === undefined ? "" : ` **${shortDeviceLabel(deviceName)}** —`;
-    return `${marker}${device} ${safeMarkdown(milestone.summary, 500)}`;
+    return `${marker}${device} ${safeMarkdown(localizeKnownText(milestone.summary, locale), 500)}`;
   });
   const content =
     projection.state === "paused"
-      ? [
-          "## OpenDelegate is paused",
-          "**Execution is safely paused.**",
-          "Resume this same Task when you are ready, or cancel it.",
-          "_No new work starts while this Task is paused._",
-        ].join("\n\n")
+      ? locale === "ko"
+        ? [
+            "## OpenDelegate가 일시정지됐어요",
+            "**실행이 안전하게 멈춰 있습니다.**",
+            "준비되면 같은 작업을 계속하거나 취소할 수 있어요.",
+            "_일시정지 중에는 새로운 작업을 시작하지 않습니다._",
+          ].join("\n\n")
+        : [
+            "## OpenDelegate is paused",
+            "**Execution is safely paused.**",
+            "Resume this same Task when you are ready, or cancel it.",
+            "_No new work starts while this Task is paused._",
+          ].join("\n\n")
       : [
-          "## OpenDelegate is working",
+          locale === "ko" ? "## OpenDelegate가 작업 중이에요" : "## OpenDelegate is working",
           `**${progress}**`,
           ...milestoneLines,
           ...(projection.approval === undefined
             ? []
-            : [`⚠️ **Approval needed** — ${safeMarkdown(projection.approval.description, 500)}`]),
-          "_This one message updates when meaningful progress changes._",
+            : [
+                `⚠️ **${locale === "ko" ? "승인 필요" : "Approval needed"}** — ${safeMarkdown(
+                  localizeKnownText(projection.approval.description, locale),
+                  500,
+                )}`,
+              ]),
+          locale === "ko"
+            ? "_의미 있는 진행 상황이 생길 때 이 메시지 하나만 갱신됩니다._"
+            : "_This one message updates when meaningful progress changes._",
         ].join("\n\n");
-  const buttons = controlButtons(projection);
+  const buttons = controlButtons(projection, locale);
   return Object.freeze({
     flags: DISCORD_COMPONENTS_V2_FLAG,
     components: Object.freeze([
@@ -194,6 +262,7 @@ export function renderTaskActivity(projection: TaskChannelProjection): DiscordMe
 
 export function renderResolvedOwnerPrompt(
   projection: TaskChannelProjection,
+  locale: DiscordPresentationLocale = "en",
 ): DiscordMessagePayload {
   validateProjection(projection);
   if (projection.significance !== "question") {
@@ -211,10 +280,16 @@ export function renderResolvedOwnerPrompt(
         components: Object.freeze([
           Object.freeze({
             type: 10 as const,
-            content: `## Input received\n\n${safeMarkdown(
-              projection.summary,
-              1_500,
-            )}\n\n✅ Your reply was received. OpenDelegate is continuing this Task.`,
+            content:
+              locale === "ko"
+                ? `## 답변을 받았어요\n\n${safeMarkdown(
+                    localizeKnownText(projection.summary, locale),
+                    1_500,
+                  )}\n\n✅ 답변을 반영해 OpenDelegate가 작업을 계속합니다.`
+                : `## Input received\n\n${safeMarkdown(
+                    projection.summary,
+                    1_500,
+                  )}\n\n✅ Your reply was received. OpenDelegate is continuing this Task.`,
           }),
         ]),
       }),
@@ -225,12 +300,13 @@ export function renderResolvedOwnerPrompt(
 
 export function renderResolvedTaskFailure(
   projection: TaskChannelProjection,
+  locale: DiscordPresentationLocale = "en",
 ): DiscordMessagePayload {
   validateProjection(projection);
-  if (projection.significance !== "failure") {
+  if (!isRetrySurfaceProjection(projection)) {
     throw new DiscordAdapterError(
       "PROJECTION_INVALID",
-      "Only a chronological failure projection can be resolved in place.",
+      "Only a chronological retry surface can be resolved in place.",
     );
   }
   return Object.freeze({
@@ -242,10 +318,16 @@ export function renderResolvedTaskFailure(
         components: Object.freeze([
           Object.freeze({
             type: 10 as const,
-            content: `## Retry started\n\n${safeMarkdown(
-              projection.summary,
-              1_400,
-            )}\n\n↻ OpenDelegate accepted a retry. Follow the latest status or result below.`,
+            content:
+              locale === "ko"
+                ? `## 다시 시작했어요\n\n${safeMarkdown(
+                    localizeKnownText(projection.summary, locale),
+                    1_400,
+                  )}\n\n↻ 재시도를 시작했습니다. 아래의 최신 진행 상황이나 결과를 확인해 주세요.`
+                : `## Retry started\n\n${safeMarkdown(
+                    projection.summary,
+                    1_400,
+                  )}\n\n↻ OpenDelegate accepted a retry. Follow the latest status or result below.`,
           }),
         ]),
       }),
@@ -254,21 +336,28 @@ export function renderResolvedTaskFailure(
   });
 }
 
-function taskUpdateHeadline(significance: TaskChannelProjection["significance"]): string {
+function taskUpdateHeadline(
+  significance: TaskChannelProjection["significance"],
+  locale: DiscordPresentationLocale,
+): string {
   switch (significance) {
     case "final":
-      return "## Result";
+      return locale === "ko" ? "## 결과" : "## Result";
     case "failure":
-      return "## Task needs attention";
+      return locale === "ko" ? "## 확인이 필요해요" : "## Task needs attention";
     case "question":
-      return "## Owner input needed";
+      return locale === "ko" ? "## 답변이 필요해요" : "## Owner input needed";
     case "decision":
     case "status":
-      return "## Task update";
+      return locale === "ko" ? "## 작업 업데이트" : "## Task update";
   }
 }
 
-export function renderInteractionResult(message: string, success = true): DiscordMessagePayload {
+export function renderInteractionResult(
+  message: string,
+  success = true,
+  locale: DiscordPresentationLocale = "en",
+): DiscordMessagePayload {
   return Object.freeze({
     flags: DISCORD_COMPONENTS_V2_FLAG,
     components: Object.freeze([
@@ -276,7 +365,10 @@ export function renderInteractionResult(message: string, success = true): Discor
         type: 17 as const,
         accent_color: success ? 0x059669 : 0xdc2626,
         components: Object.freeze([
-          Object.freeze({ type: 10 as const, content: safeMarkdown(message, 1_000) }),
+          Object.freeze({
+            type: 10 as const,
+            content: safeMarkdown(localizeKnownText(message, locale), 1_000),
+          }),
         ]),
       }),
     ]),
@@ -284,17 +376,20 @@ export function renderInteractionResult(message: string, success = true): Discor
   });
 }
 
-function controlButtons(projection: TaskChannelProjection): DiscordActionRow {
+function controlButtons(
+  projection: TaskChannelProjection,
+  locale: DiscordPresentationLocale,
+): DiscordActionRow {
   const buttons: DiscordButton[] = [];
   if (projection.approval !== undefined) {
     buttons.push(
       actionButton(
-        "Approve",
+        locale === "ko" ? "승인" : "Approve",
         3,
         `od:v1:approve:${safeCustomIdSegment(projection.approval.approvalId)}`,
       ),
       actionButton(
-        "Reject",
+        locale === "ko" ? "거부" : "Reject",
         4,
         `od:v1:reject:${safeCustomIdSegment(projection.approval.approvalId)}`,
       ),
@@ -306,14 +401,14 @@ function controlButtons(projection: TaskChannelProjection): DiscordActionRow {
       case "running":
       case "waiting_resource":
       case "review":
-        buttons.push(actionButton("Pause", 2, "od:v1:pause"));
+        buttons.push(actionButton(locale === "ko" ? "일시정지" : "Pause", 2, "od:v1:pause"));
         break;
       case "paused":
-        buttons.push(actionButton("Resume", 1, "od:v1:resume"));
+        buttons.push(actionButton(locale === "ko" ? "계속" : "Resume", 1, "od:v1:resume"));
         break;
       case "failed":
       case "cancelled":
-        buttons.push(actionButton("Retry", 1, "od:v1:retry"));
+        buttons.push(actionButton(locale === "ko" ? "다시 시도" : "Retry", 1, "od:v1:retry"));
         break;
       case "waiting_user":
       case "completed":
@@ -325,13 +420,16 @@ function controlButtons(projection: TaskChannelProjection): DiscordActionRow {
     projection.state !== "failed" &&
     projection.state !== "cancelled"
   ) {
-    buttons.push(actionButton("Cancel", 4, "od:v1:cancel"));
+    buttons.push(actionButton(locale === "ko" ? "취소" : "Cancel", 4, "od:v1:cancel"));
   }
-  buttons.push(...linkButtons(projection).components);
+  buttons.push(...linkButtons(projection, locale).components);
   return Object.freeze({ type: 1 as const, components: Object.freeze(buttons.slice(0, 5)) });
 }
 
-function linkButtons(projection: TaskChannelProjection): DiscordActionRow {
+function linkButtons(
+  projection: TaskChannelProjection,
+  locale: DiscordPresentationLocale,
+): DiscordActionRow {
   const buttons: DiscordButton[] = [];
   if (projection.artifact !== undefined) {
     buttons.push(
@@ -348,7 +446,7 @@ function linkButtons(projection: TaskChannelProjection): DiscordActionRow {
       Object.freeze({
         type: 2 as const,
         style: 5 as const,
-        label: "Inspect runs",
+        label: locale === "ko" ? "실행 내역" : "Inspect runs",
         url: projection.inspectUrl,
       }),
     );
@@ -358,6 +456,58 @@ function linkButtons(projection: TaskChannelProjection): DiscordActionRow {
 
 function actionButton(label: string, style: 1 | 2 | 3 | 4, customId: string): DiscordButton {
   return Object.freeze({ type: 2 as const, style, label, custom_id: customId });
+}
+
+function isRetrySurfaceProjection(projection: TaskChannelProjection): boolean {
+  return (
+    projection.significance === "failure" ||
+    (projection.significance === "final" && projection.state === "cancelled")
+  );
+}
+
+const KOREAN_CLOSED_TEXT = Object.freeze({
+  "OpenDelegate is reading this Task.": "OpenDelegate가 작업 내용을 확인하고 있어요.",
+  "This Task is queued for its next eligible execution attempt.":
+    "다음 실행이 가능한 순서를 기다리고 있어요.",
+  "OpenDelegate is working on this Task.": "OpenDelegate가 이 작업을 진행하고 있어요.",
+  "This Task is waiting for owner input.": "계속하려면 답변이 필요해요.",
+  "This Task is waiting for an eligible resource.": "사용 가능한 기기나 리소스를 기다리고 있어요.",
+  "This Task is ready for review.": "결과를 검토할 준비가 됐어요.",
+  "This Task is complete.": "작업을 완료했어요.",
+  "This Task needs attention before it can continue.": "계속하려면 확인이 필요해요.",
+  "This Task is paused.": "작업이 일시정지됐어요.",
+  "This Task was cancelled.": "작업을 취소했어요.",
+  "Main is planning the work.": "Main이 작업을 계획하고 있어요.",
+  "Main is verifying the combined results.": "Main이 취합한 결과를 확인하고 있어요.",
+  "The Worker accepted its Work Order.": "Worker가 배정된 작업을 받았어요.",
+  "The Worker reported completion; Main is checking its result.":
+    "Worker가 완료를 보고해 Main이 결과를 확인하고 있어요.",
+  "The Worker reported a problem; Main is deciding the next step.":
+    "Worker가 문제를 보고해 Main이 다음 조치를 판단하고 있어요.",
+  "Work Order completed.": "배정된 작업을 완료했어요.",
+  "Main dispatched this Work Order.": "Main이 이 작업을 Worker에 배정했어요.",
+  "A Worker is waiting for owner approval before it can continue.":
+    "Worker가 계속하기 전에 승인을 기다리고 있어요.",
+  "Main is preparing or coordinating the current work.":
+    "Main이 현재 작업을 준비하고 조율하고 있어요.",
+  "Execution is paused until the owner resumes this Task.":
+    "사용자가 계속할 때까지 실행을 안전하게 멈췄어요.",
+  "The approval was granted for its exact recorded scope.": "표시된 범위에 한해 승인했어요.",
+  "The approval was rejected.": "승인을 거부했어요.",
+  "This Task control is no longer available in the Task's current state. Use the latest Task update or send a new message.":
+    "현재 작업 상태에서는 이 버튼을 사용할 수 없어요. 최신 작업 업데이트를 확인하거나 새 메시지를 보내 주세요.",
+  "This approval is no longer available in the Task's current state. Use the latest Task update.":
+    "현재 작업 상태에서는 이 승인을 처리할 수 없어요. 최신 작업 업데이트를 확인해 주세요.",
+  "This Task control conflicts with an already processed request. Use the latest Task update.":
+    "이미 처리된 요청과 충돌하는 버튼이에요. 최신 작업 업데이트를 확인해 주세요.",
+  "This Task is no longer available.": "이 작업은 더 이상 사용할 수 없어요.",
+} satisfies Readonly<Record<string, string>>);
+
+function localizeKnownText(value: string, locale: DiscordPresentationLocale): string {
+  if (locale === "en") {
+    return value;
+  }
+  return KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT] ?? value;
 }
 
 function validateProjection(projection: TaskChannelProjection): void {

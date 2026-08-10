@@ -488,6 +488,34 @@ test("SQLite persists a durable Discord failure-resolution action across restart
   }
 });
 
+test("SQLite persists a durable Discord cancellation-resolution action across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "resolve-task-failure",
+    taskId: "task-1",
+    failureRequestKey: "cancelled-projection:03-update",
+    projection: {
+      taskId: "task-1",
+      state: "cancelled",
+      objective: "Stop and optionally retry the Task.",
+      summary: "This Task was cancelled.",
+      sourceEventId: "event_cancelled_before_retry",
+      significance: "final",
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("resolve-cancellation", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
+    await fixture.cleanup();
+  }
+});
+
 test("SQLite persists a durable Discord failure-control refresh across restart", async () => {
   const fixture = await createSqliteFixture();
   let repository: SqlDiscordStateRepository | undefined;

@@ -1157,7 +1157,10 @@ function validateOutboxAction(value: unknown): asserts value is DiscordOutboxAct
     requireBoundedString(action["failureRequestKey"], "Discord failure request key", 512);
     validateProjection(action["projection"]);
     const projection = action["projection"] as TaskChannelProjection;
-    if (projection.significance !== "failure") {
+    if (
+      projection.significance !== "failure" &&
+      !(projection.significance === "final" && projection.state === "cancelled")
+    ) {
       throw persistenceConflict();
     }
     return;
