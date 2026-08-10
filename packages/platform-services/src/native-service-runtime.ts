@@ -1431,9 +1431,7 @@ async function runSupervisorInvocation(
       result.exitCode === 0 &&
       !result.timedOut
     ) {
-      const taskIndex = invocation.arguments.findIndex(
-        (value) => value.toLowerCase() === "/tn",
-      );
+      const taskIndex = invocation.arguments.findIndex((value) => value.toLowerCase() === "/tn");
       const taskName = invocation.arguments[taskIndex + 1];
       if (taskName === undefined) {
         throw new NativeSupervisorError("A Windows scheduled-task stop command has no task name.");
@@ -1490,9 +1488,7 @@ export async function waitForWindowsScheduledTaskStopped(input: {
   for (;;) {
     const remainingMs = deadline - input.clock.now().getTime();
     if (remainingMs <= 0) {
-      throw new NativeSupervisorError(
-        "The Windows scheduled task did not stop before timeout.",
-      );
+      throw new NativeSupervisorError("The Windows scheduled task did not stop before timeout.");
     }
     const status = await input.process.run({
       executable: input.executable,
@@ -1522,9 +1518,7 @@ export async function waitForWindowsScheduledTaskStopped(input: {
     }
     const sleepMs = Math.min(500, deadline - input.clock.now().getTime());
     if (sleepMs <= 0) {
-      throw new NativeSupervisorError(
-        "The Windows scheduled task did not stop before timeout.",
-      );
+      throw new NativeSupervisorError("The Windows scheduled task did not stop before timeout.");
     }
     await input.clock.sleep(sleepMs);
   }
