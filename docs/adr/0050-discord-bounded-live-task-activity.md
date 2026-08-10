@@ -33,6 +33,10 @@ Task panel and from significant chronological replies. It summarizes Main planni
 dispatch, bounded Worker progress, Work Order completion, and final verification in
 a short rolling list. It may include the currently relevant Pause and Cancel
 controls so recovery controls are not available only near the Forum starter.
+When an owner pauses, the running activity cycle is superseded by one bounded
+paused recovery surface at the latest conversation position. That surface exposes
+Resume and Cancel, starts no work, and remains idempotent across reconciliation or
+Main restart. Resuming replaces it with the next running cycle for the same Task.
 
 Worker Agent bridges classify provider progress into a closed owner-safe vocabulary:
 working, using Device-local tools, verifying, consulting Device-local Knowledge,
@@ -63,9 +67,10 @@ The Discord Adapter persists the activity surface identity and revision with the
 Task binding. Newer revisions edit the existing message; stale queued revisions are
 ignored. Closing the cycle marks it closed before deleting or compacting the surface,
 so a delayed outbox item cannot recreate stale progress. A new owner-input cycle gets
-a new surface. Questions, decisions, failures, cancellation, pause, review, and final
-results close the active surface after their authoritative reply or state projection
-is durable.
+a new surface. Pause closes the running cycle only after its paused recovery surface
+is durable. Questions, decisions, failures, cancellation, review, and final results
+close the current surface after their authoritative reply or state projection is
+durable.
 
 ## Consequences
 
@@ -73,6 +78,8 @@ An owner can see that Main is planning, which Device is working, which Work Orde
 finished, and whether verification is running without receiving one Discord message
 per token, tool call, child Agent, or heartbeat. Multi-Device work reads as one
 coherent Task rather than separate bots reporting directly to Discord.
+An intentionally paused Task remains recoverable beside the latest turn instead of
+requiring the owner to find an old status panel or know a textual command.
 
 Progress remains deliberately lossy and presentation-only. Main restart reconstructs
 or replaces it from current orchestration state; the Task, Run journals, results,
@@ -94,6 +101,9 @@ comes from the ordinary owner-safe failure reply and inspection surfaces.
   cycle after terminal delivery.
 - A new owner-input cycle creates a new live surface, while a question, failure, or
   result closes the prior one.
+- Pause replaces the running surface with exactly one restart-stable paused surface
+  containing Resume and Cancel; Resume continues the same Task and opens one new
+  running cycle.
 - Progress content is absent from Task conversation messages and continuation
   checkpoints.
 

@@ -1202,6 +1202,137 @@ test("one bounded live activity message is edited and closed for a Task cycle", 
   );
 });
 
+test("pause replaces live progress with one idempotent recovery surface", async () => {
+  const { adapter, api, repository } = fixture();
+  const thread = forumThread("300000000000000046");
+  const starter = ownerMessage(thread.id, thread.id, "Pause and resume this Task safely.");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Pause and resume this Task safely.",
+    summary: "The Task is running.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_running_before_pause",
+      revision: 1,
+      updatedAtMs: 1_000,
+      phase: "working",
+      completedWorkOrders: 0,
+      totalWorkOrders: 1,
+      milestones: [
+        {
+          key: "work-order:safe-check",
+          status: "active",
+          summary: "The Worker is performing a read-only check.",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+
+  const paused: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "paused",
+    objective: "Pause and resume this Task safely.",
+    summary: "This Task is paused.",
+    significance: "status",
+    activity: {
+      cycleId: "paused_event_pause_1",
+      revision: 1,
+      updatedAtMs: 2_000,
+      phase: "planning",
+      completedWorkOrders: 0,
+      totalWorkOrders: 0,
+      milestones: [
+        {
+          key: "paused:task-1",
+          status: "active",
+          summary: "Execution is paused until the owner resumes this Task.",
+        },
+      ],
+    },
+  };
+  await adapter.publishTaskProjection(paused);
+  await adapter.flushOutbox();
+
+  let activityWrites = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 2);
+  const pausedPayload = JSON.stringify(activityWrites.at(-1)?.["payload"]);
+  assert.match(pausedPayload, /OpenDelegate is paused/u);
+  assert.match(pausedPayload, /Resume/u);
+  assert.match(pausedPayload, /Cancel/u);
+  assert.doesNotMatch(pausedPayload, /Pause/u);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    1,
+  );
+  const pausedSurface = (await repository.getBindingByTask("task-1"))?.activitySurface;
+  assert.equal(pausedSurface?.cycleId, "paused_event_pause_1");
+  assert.equal(pausedSurface?.revision, 1);
+  assert.equal(pausedSurface?.updatedAtMs, 2_000);
+  assert.equal(pausedSurface?.state, "open");
+  assert.equal(Number.isSafeInteger(pausedSurface?.outboxCreatedAtMs), true);
+  assert.equal(typeof pausedSurface?.messageId, "string");
+
+  await adapter.publishTaskProjection(paused);
+  await adapter.flushOutbox();
+  activityWrites = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 2);
+
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Pause and resume this Task safely.",
+    summary: "The same Task resumed.",
+    significance: "status",
+    activity: {
+      cycleId: "activity_running_after_resume",
+      revision: 1,
+      updatedAtMs: 3_000,
+      phase: "planning",
+      completedWorkOrders: 0,
+      totalWorkOrders: 0,
+      milestones: [
+        {
+          key: "main:planning",
+          status: "active",
+          summary: "Main resumed the same Task.",
+        },
+      ],
+    },
+  });
+  await adapter.flushOutbox();
+  activityWrites = api.operations.filter(
+    (operation) =>
+      operation["kind"] === "panel" &&
+      typeof operation["requestKey"] === "string" &&
+      operation["requestKey"].startsWith("task-activity:"),
+  );
+  assert.equal(activityWrites.length, 3);
+  const resumedPayload = JSON.stringify(activityWrites.at(-1)?.["payload"]);
+  assert.match(resumedPayload, /OpenDelegate is working/u);
+  assert.match(resumedPayload, /Pause/u);
+  assert.doesNotMatch(resumedPayload, /Resume/u);
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "message-delete").length,
+    2,
+  );
+});
+
 test("live activity never exposes an opaque Device identifier when its label is unavailable", async () => {
   const { adapter, api } = fixture();
   const thread = forumThread("300000000000000044");

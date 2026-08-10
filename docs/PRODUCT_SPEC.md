@@ -510,7 +510,9 @@ through a secure handoff and resumes the same Task afterward.
    summary plus approve-once and reject controls; it does not create a second
    “attention” card. The Worker waits durably without an arbitrary short timeout.
    The activity message closes before a question, failure, or final result becomes
-   the canonical reply.
+   the canonical reply. Pausing replaces the running activity with one bounded
+   paused recovery surface at the latest conversation position; it retains Resume
+   and Cancel controls until the same Task resumes or terminates.
    Durable outbound delivery runs outside the serialized Gateway receipt path, so
    a slow reaction or reply in one thread cannot delay intake of another Forum
    post. A live `THREAD_CREATE` payload is reused for its starter message instead

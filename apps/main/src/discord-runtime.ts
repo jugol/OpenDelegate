@@ -402,12 +402,14 @@ export class DiscordMainRuntime {
           }
         }
         const effectiveActivity =
-          activity ??
-          (task.state === "running" && approval !== undefined
-            ? approvalFallbackActivity(task.taskId, approval, this.#clock.nowMs())
-            : task.state === "running"
-              ? runningFallbackActivity(task, this.#clock.nowMs())
-              : undefined);
+          task.state === "paused"
+            ? pausedFallbackActivity(task)
+            : (activity ??
+              (task.state === "running" && approval !== undefined
+                ? approvalFallbackActivity(task, approval)
+                : task.state === "running"
+                  ? runningFallbackActivity(task)
+                  : undefined));
         await this.#adapter.publishTaskProjection(
           projectTask(task, artifact, effectiveActivity, approval),
         );
@@ -849,21 +851,19 @@ function projectTask(
 }
 
 function approvalFallbackActivity(
-  taskId: string,
+  task: DiscordProjectionTask,
   approval: NonNullable<TaskChannelProjection["approval"]>,
-  updatedAtMs: number,
 ): NonNullable<TaskChannelProjection["activity"]> {
-  assertBoundedInteger(updatedAtMs, 0, Number.MAX_SAFE_INTEGER, "Discord activity timestamp");
   return Object.freeze({
     cycleId: `approval_${approval.approvalId}`,
     revision: 1,
-    updatedAtMs,
+    updatedAtMs: stableTaskActivityTimestamp(task),
     phase: "working" as const,
     completedWorkOrders: 0,
     totalWorkOrders: 0,
     milestones: Object.freeze([
       Object.freeze({
-        key: `owner-approval:${taskId}`,
+        key: `owner-approval:${task.taskId}`,
         status: "active" as const,
         summary: "A Worker is waiting for owner approval before it can continue.",
       }),
@@ -873,9 +873,7 @@ function approvalFallbackActivity(
 
 function runningFallbackActivity(
   task: DiscordProjectionTask,
-  updatedAtMs: number,
 ): NonNullable<TaskChannelProjection["activity"]> {
-  assertBoundedInteger(updatedAtMs, 0, Number.MAX_SAFE_INTEGER, "Discord activity timestamp");
   const executionEvent = [...task.events]
     .reverse()
     .find((event) => event.type === "task.execution-recorded");
@@ -884,7 +882,7 @@ function runningFallbackActivity(
   return Object.freeze({
     cycleId: `running_${cycleSource}`.slice(0, 160),
     revision: 1,
-    updatedAtMs,
+    updatedAtMs: stableTaskActivityTimestamp(task),
     phase: "planning" as const,
     completedWorkOrders: 0,
     totalWorkOrders: 0,
@@ -896,6 +894,35 @@ function runningFallbackActivity(
       }),
     ]),
   });
+}
+
+function pausedFallbackActivity(
+  task: DiscordProjectionTask,
+): NonNullable<TaskChannelProjection["activity"]> {
+  const pauseEvent = [...task.events].reverse().find((event) => event.type === "task.commanded");
+  const cycleSource = pauseEvent?.eventId ?? task.events.at(-1)?.eventId ?? task.taskId;
+  assertOpaqueIdentifier(cycleSource, "Discord paused activity cycle source");
+  return Object.freeze({
+    cycleId: `paused_${cycleSource}`.slice(0, 160),
+    revision: 1,
+    updatedAtMs: stableTaskActivityTimestamp(task),
+    phase: "planning" as const,
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: Object.freeze([
+      Object.freeze({
+        key: `paused:${task.taskId}`.slice(0, 160),
+        status: "active" as const,
+        summary: "Execution is paused until the owner resumes this Task.",
+      }),
+    ]),
+  });
+}
+
+function stableTaskActivityTimestamp(task: DiscordProjectionTask): number {
+  const updatedAtMs = Date.parse(task.updatedAt);
+  assertBoundedInteger(updatedAtMs, 0, Number.MAX_SAFE_INTEGER, "Discord activity timestamp");
+  return updatedAtMs;
 }
 
 function cloneTaskActivity(

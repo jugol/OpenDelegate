@@ -2301,3 +2301,20 @@ sessions, Policy, and device routing deterministically outside the LLM.
 The Worker daemon contract requires an authenticated release version from every
 launcher, including the native service host; it cannot silently identify a packaged
 service as a development build.
+
+## D-112 — A paused Discord Task keeps one nearby recovery surface
+
+**Decision:** Pausing a running Discord Task supersedes its live progress cycle with
+one bounded paused recovery surface at the latest conversation position. The surface
+contains Resume and Cancel controls, starts no work, and is reconstructed
+idempotently from durable Task state after Main restart. Resume continues the same
+Task and replaces the paused surface with the next running activity cycle.
+
+**Rationale:** Deleting the live activity on pause left only a non-interactive status
+panel near the Forum starter. The owner received confirmation that Pause succeeded
+but had no visible way to resume, precisely when a recovery control was needed.
+
+**Consequence:** Pause remains a durable execution boundary while recovery stays
+obvious and chronological. There is still at most one current activity or recovery
+surface, delayed running revisions cannot resurrect after pause, and no Discord
+message becomes execution authority.

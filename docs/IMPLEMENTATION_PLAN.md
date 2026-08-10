@@ -623,8 +623,10 @@ Make Discord the complete primary Task interface.
   Work Order completion, and verification into a short rolling milestone list and
   edit that message only on meaningful revision. Persist its Discord identity and
   closed revision with the Task binding so stale outbox work cannot duplicate or
-  resurrect it. Close it when a question, decision, failure, pause, cancellation,
-  review state, or final result becomes authoritative.
+  resurrect it. Replace the running cycle with one bounded paused recovery surface
+  containing Resume and Cancel controls when pause becomes authoritative. Close the
+  current surface when a question, decision, failure, cancellation, review state,
+  or final result becomes authoritative.
 - Map provider activity to a closed owner-safe Worker `progress` vocabulary before
   the durable outbox boundary; the boundary accepts no free-form progress text.
   Deduplicate and rate-limit reports per Run with a hard count bound; never forward

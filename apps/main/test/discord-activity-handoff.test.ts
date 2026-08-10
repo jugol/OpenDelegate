@@ -97,7 +97,24 @@ test("an observed activity revision survives a coalesced executor lookup until p
   await runtime.synchronizeNow();
   state = "paused";
   await runtime.synchronizeNow();
-  assert.equal(projections.at(-1)?.activity, undefined);
+  const pausedActivity = projections.at(-1)?.activity;
+  assert.deepEqual(pausedActivity, {
+    cycleId: "paused_task-activity-handoff",
+    revision: 1,
+    updatedAtMs: Date.parse(NOW),
+    phase: "planning",
+    completedWorkOrders: 0,
+    totalWorkOrders: 0,
+    milestones: [
+      {
+        key: "paused:task-activity-handoff",
+        status: "active",
+        summary: "Execution is paused until the owner resumes this Task.",
+      },
+    ],
+  });
+  await runtime.synchronizeNow();
+  assert.deepEqual(projections.at(-1)?.activity, pausedActivity);
 
   await runtime.close();
 });

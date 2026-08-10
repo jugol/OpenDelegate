@@ -451,9 +451,10 @@ export class DiscordForumAdapter {
         panelRequestKey,
       );
     }
-    const activityToClose = keepsLiveActivityOpen(projection.state)
-      ? undefined
-      : await this.#activityToClose(binding);
+    const activityToClose =
+      projection.activity !== undefined && keepsLiveActivityOpen(projection.state)
+        ? undefined
+        : await this.#activityToClose(binding);
     if (activityToClose !== undefined) {
       const closeRevision = activityToClose.revision + 1;
       if (!Number.isSafeInteger(closeRevision)) {
@@ -2122,7 +2123,7 @@ function keepsOwnerActivityOpen(state: TaskChannelProjection["state"]): boolean 
 }
 
 function keepsLiveActivityOpen(state: TaskChannelProjection["state"]): boolean {
-  return state === "running";
+  return state === "running" || state === "paused";
 }
 
 function panelProjection(projection: TaskChannelProjection): TaskChannelProjection {

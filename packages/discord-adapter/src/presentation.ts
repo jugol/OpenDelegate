@@ -156,15 +156,23 @@ export function renderTaskActivity(projection: TaskChannelProjection): DiscordMe
     const device = deviceName === undefined ? "" : ` **${shortDeviceLabel(deviceName)}** —`;
     return `${marker}${device} ${safeMarkdown(milestone.summary, 500)}`;
   });
-  const content = [
-    "## OpenDelegate is working",
-    `**${progress}**`,
-    ...milestoneLines,
-    ...(projection.approval === undefined
-      ? []
-      : [`⚠️ **Approval needed** — ${safeMarkdown(projection.approval.description, 500)}`]),
-    "_This one message updates when meaningful progress changes._",
-  ].join("\n\n");
+  const content =
+    projection.state === "paused"
+      ? [
+          "## OpenDelegate is paused",
+          "**Execution is safely paused.**",
+          "Resume this same Task when you are ready, or cancel it.",
+          "_No new work starts while this Task is paused._",
+        ].join("\n\n")
+      : [
+          "## OpenDelegate is working",
+          `**${progress}**`,
+          ...milestoneLines,
+          ...(projection.approval === undefined
+            ? []
+            : [`⚠️ **Approval needed** — ${safeMarkdown(projection.approval.description, 500)}`]),
+          "_This one message updates when meaningful progress changes._",
+        ].join("\n\n");
   const buttons = controlButtons(projection);
   return Object.freeze({
     flags: DISCORD_COMPONENTS_V2_FLAG,

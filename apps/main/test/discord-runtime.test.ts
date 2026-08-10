@@ -261,7 +261,7 @@ test("Main Discord runtime keeps a pending Worker approval actionable without an
   assert.deepEqual(projections.at(-1)?.activity, {
     cycleId: "approval_approval-read-only-escalation",
     revision: 1,
-    updatedAtMs: 4_200,
+    updatedAtMs: Date.parse(NOW),
     phase: "working",
     completedWorkOrders: 0,
     totalWorkOrders: 0,
@@ -274,6 +274,10 @@ test("Main Discord runtime keeps a pending Worker approval actionable without an
     ],
   });
   assert.equal(projections.at(-1)?.approval?.approvalId, "approval-read-only-escalation");
+
+  clock.value = 9_000;
+  await runtime.synchronizeNow();
+  assert.equal(projections.at(-1)?.activity?.updatedAtMs, Date.parse(NOW));
 
   approvalAvailable = false;
   await runtime.synchronizeNow();
