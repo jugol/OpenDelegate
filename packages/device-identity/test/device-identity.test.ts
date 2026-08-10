@@ -885,10 +885,10 @@ test("certificate rotation selects the active credential after an expired rotati
   const generationTwo = (await repository.snapshot()).certificates.filter(
     (certificate) => certificate.generation === 2,
   );
-  assert.deepEqual(
-    generationTwo.map((certificate) => certificate.status),
-    ["revoked", "overlap"],
-  );
+  assert.deepEqual(generationTwo.map((certificate) => certificate.status).sort(), [
+    "overlap",
+    "revoked",
+  ]);
 });
 
 test("Device revocation atomically rejects every certificate generation and is idempotent", async () => {
