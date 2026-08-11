@@ -102,6 +102,19 @@ export async function buildNativeServiceHosts(options = {}) {
     if (result.stdout.trim() !== "OpenDelegate native service launcher 1") {
       throw new Error("The native service launcher self-test failed.");
     }
+    if (platform !== "win32") {
+      const rootResult = await execFileAsync(executable, ["--root-self-test"], {
+        cwd: dirname(executable),
+        encoding: "utf8",
+        maxBuffer: 64 * 1024,
+        timeout: 10_000,
+        windowsHide: true,
+      });
+      const expectedRoot = await realpath(dirname(dirname(executable)));
+      if (rootResult.stdout.trim() !== expectedRoot) {
+        throw new Error("The native service launcher installation-root self-test failed.");
+      }
+    }
   }
   return Object.freeze({ platform, architecture, coreExecutable, helperExecutable });
 }

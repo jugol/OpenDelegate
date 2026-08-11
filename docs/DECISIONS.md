@@ -2804,3 +2804,24 @@ owner-authenticated state can be shared with the Device's dedicated service grou
 and unsafe aliases or world-write access continue to fail closed. Platform service
 preparation owns the explicit access grant; adapters validate and preserve it rather
 than silently broadening or narrowing it.
+
+## D-135 — POSIX service launchers prove their installed-root resolution
+
+**Decision:** Every Linux and macOS native service-host build executes a second
+self-test that resolves and prints the release root from the real executable path.
+The build accepts the host only when that canonical root is exactly two directories
+above the compiled launcher. On macOS, a successful `_NSGetExecutablePath` call is
+accepted without interpreting its in/out buffer-capacity value as a returned path
+length; `realpath` remains the canonical-path boundary.
+
+**Rationale:** Live macOS alpha.63 installation successfully staged, verified,
+promoted, registered, and started both launchd planes, but each native host exited
+before Node startup with `OpenDelegate service installation root is unavailable`.
+The existing `--self-test` returned before exercising path discovery. On successful
+macOS calls, `_NSGetExecutablePath` may leave the supplied capacity unchanged, so
+comparing that value with the capacity falsely rejected every valid executable.
+
+**Consequence:** Release construction now rejects a launcher that cannot locate its
+own installed tree on the target POSIX host. launchd no longer enters a restart loop
+for this defect, while an actually missing, unresolvable, or overlong executable
+path still fails closed before a bundled runtime can start.
