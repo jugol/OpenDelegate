@@ -25,7 +25,7 @@ const limits: AgentRunLimits = {
   maxDiagnosticBytes: 4 * 1024,
 };
 
-test("Codex App Server ignores benign status, goal, and skill notifications", async () => {
+test("Codex App Server accepts its tested notification catalog without losing a completed turn", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
   try {
     const cwd = await realpath(process.cwd());
@@ -98,6 +98,7 @@ test("Codex App Server ignores benign status, goal, and skill notifications", as
         FIXTURE_EMIT_REMOTE_CONTROL_STATUS: "1",
         FIXTURE_CODEX_EMIT_SKILLS_CHANGED: "1",
         FIXTURE_EMIT_THREAD_GOAL_CLEARED: "1",
+        FIXTURE_CODEX_EMIT_V0146_NOTIFICATIONS: "1",
       },
       limits,
     };
@@ -125,6 +126,12 @@ test("Codex App Server ignores benign status, goal, and skill notifications", as
       ),
     );
     assert.ok(events.some((event) => event.type === "tool_result" && event.toolName === "shell"));
+    assert.ok(
+      events.some(
+        (event) => event.type === "diagnostic" && event.code === "CODEX_PROVIDER_RETRYING",
+      ),
+    );
+    assert.equal(JSON.stringify(events).includes("private fixture provider detail"), false);
 
     assert.ok(first.session);
     const resumed = await adapter.resume({

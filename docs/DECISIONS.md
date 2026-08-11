@@ -2589,3 +2589,26 @@ Discord interaction deadlines.
 fails closed at the durable prefix boundary, while old heartbeat history no longer
 slows unrelated owner controls. Retention or deletion of handled history is a
 separate audited lifecycle decision.
+
+## D-125 — Tested Codex notifications cannot invalidate a completed turn
+
+Implementation detail:
+[ADR-0063](adr/0063-codex-app-server-notification-catalog.md).
+
+**Decision:** The Codex App Server adapter's supported notification catalog exactly
+matches the generated experimental notification union of its pinned tested version.
+Catalogued notifications are advisory unless explicitly projected. Provider error
+notifications become bounded diagnostics and do not override the authoritative
+`turn/completed` outcome. A genuinely unknown method still fails closed. Every Codex
+version promotion must regenerate and compare the protocol catalog before it can be
+declared tested.
+
+**Rationale:** Live Windows Artifact QA proved that Codex could persist a completed
+native turn and commit Run-scoped files while OpenDelegate misclassified a normal new
+notification as a protocol violation. The resulting Worker failure skipped the
+success-only Artifact promotion boundary and left Discord without the files.
+
+**Consequence:** Normal provider evolution and transient retries no longer discard a
+successful Run or its Artifact output, provider-private error text remains local,
+and future schema drift produces a deterministic pre-promotion failure rather than a
+sporadic owner-facing Task failure.

@@ -40,7 +40,7 @@ process.stdout.write(
       candidates,
       updateAvailable: candidates.some((entry) => entry.updateAvailable),
       nextStep:
-        "An update candidate is not a compatibility approval. Update exact pins on a branch, regenerate or compare provider schemas where available, run adapter conformance and release gates, then promote the version.",
+        "An update candidate is not a compatibility approval. Update exact pins on a branch, run pnpm providers:verify-codex-protocol for Codex, review other provider schemas where available, then run focused adapter conformance and the affected release gates before promotion.",
     },
     null,
     2,

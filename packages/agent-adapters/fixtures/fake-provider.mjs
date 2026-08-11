@@ -245,6 +245,37 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
           params: { threadId },
         });
       }
+      if (process.env.FIXTURE_CODEX_EMIT_V0146_NOTIFICATIONS === "1") {
+        send({
+          method: "thread/name/updated",
+          params: { threadId, threadName: "Fixture Task" },
+        });
+        send({
+          method: "hook/started",
+          params: { threadId, turnId, run: { id: "hook-fixture" } },
+        });
+        send({
+          method: "hook/completed",
+          params: { threadId, turnId, run: { id: "hook-fixture", status: "completed" } },
+        });
+        send({
+          method: "fs/changed",
+          params: { paths: [] },
+        });
+        send({
+          method: "error",
+          params: {
+            threadId,
+            turnId,
+            willRetry: true,
+            error: {
+              message: "private fixture provider detail",
+              codexErrorInfo: null,
+              additionalDetails: null,
+            },
+          },
+        });
+      }
       if (process.env.FIXTURE_CODEX_EMIT_UNSUPPORTED_AFTER_TURN_STARTED === "1") {
         send({
           method: "fixture/unsupported",

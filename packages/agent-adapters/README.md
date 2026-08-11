@@ -46,6 +46,13 @@ Claude SDK pin weekly. Codex and Claude CLI candidates still require schema revi
 where available, adapter conformance, and the affected release gates before their
 tested-version constants may change.
 
+Before promoting a Codex version, install that exact candidate and run
+`corepack pnpm providers:verify-codex-protocol`. The verifier generates the App
+Server TypeScript protocol into a temporary directory and requires its complete
+notification catalog to match the adapter exactly. This catches benign provider
+additions before they can invalidate an otherwise completed Worker Run while still
+failing closed for genuinely unreviewed protocol drift.
+
 CLI bindings reuse their provider's authenticated programmatic model-catalog
 discovery, so an exact model is verified before CLI execution instead of being
 accepted as an unchecked string.

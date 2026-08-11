@@ -75,11 +75,28 @@ export const CODEX_NATIVE_SUBAGENT_MAX_CHILDREN = 4;
 const CODEX_NATIVE_SUBAGENT_MAX_THREADS = CODEX_NATIVE_SUBAGENT_MAX_CHILDREN + 1;
 const CODEX_NATIVE_SUBAGENT_MAX_DEPTH = 1;
 
-const BENIGN_NOTIFICATION_METHODS = new Set([
+// Keep this list aligned with the notifications exposed by the tested Codex App
+// Server catalog. Notifications are advisory JSON-RPC messages; the exact turn
+// outcome remains authoritative in turn/completed (or persisted thread state).
+// An actually unknown method still fails closed so provider protocol drift is
+// visible instead of being silently reinterpreted.
+const SUPPORTED_NOTIFICATION_METHODS = new Set([
+  "account/login/completed",
   "account/rateLimits/updated",
   "account/updated",
+  "app/list/updated",
+  "command/exec/outputDelta",
   "configWarning",
   "deprecationNotice",
+  "error",
+  "externalAgentConfig/import/completed",
+  "externalAgentConfig/import/progress",
+  "fs/changed",
+  "fuzzyFileSearch/sessionCompleted",
+  "fuzzyFileSearch/sessionUpdated",
+  "guardianWarning",
+  "hook/completed",
+  "hook/started",
   "item/agentMessage/delta",
   "item/autoApprovalReview/completed",
   "item/autoApprovalReview/started",
@@ -94,29 +111,48 @@ const BENIGN_NOTIFICATION_METHODS = new Set([
   "item/reasoning/summaryTextDelta",
   "item/reasoning/textDelta",
   "item/started",
+  "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
   "model/rerouted",
   "model/safetyBuffering/updated",
   "model/verification",
+  "process/exited",
+  "process/outputDelta",
   "rawResponse/completed",
   "rawResponseItem/completed",
   "remoteControl/status/changed",
   "serverRequest/resolved",
   "skills/changed",
+  "thread/archived",
+  "thread/closed",
   "thread/compacted",
+  "thread/deleted",
   "thread/environment/connected",
   "thread/environment/disconnected",
   "thread/goal/cleared",
+  "thread/goal/updated",
+  "thread/name/updated",
+  "thread/realtime/closed",
+  "thread/realtime/error",
+  "thread/realtime/itemAdded",
+  "thread/realtime/outputAudio/delta",
+  "thread/realtime/sdp",
+  "thread/realtime/started",
+  "thread/realtime/transcript/delta",
+  "thread/realtime/transcript/done",
   "thread/settings/updated",
   "thread/started",
   "thread/status/changed",
   "thread/tokenUsage/updated",
+  "thread/unarchived",
   "turn/completed",
   "turn/diff/updated",
   "turn/moderationMetadata",
   "turn/plan/updated",
   "turn/started",
   "warning",
+  "windows/worldWritableWarning",
+  "windowsSandbox/setupCompleted",
 ]);
 
 interface CodexTurnResult {
@@ -260,7 +296,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
       cancellationGraceMs: 1_000,
     });
     connection.onServerMessage = async (message) => {
-      if (!isNotification(message) || !BENIGN_NOTIFICATION_METHODS.has(message.method)) {
+      if (!isNotification(message) || !SUPPORTED_NOTIFICATION_METHODS.has(message.method)) {
         throw new AgentAdapterError(
           "UNKNOWN_PROVIDER_MESSAGE",
           "Codex App Server emitted an unsupported message while listing models.",
@@ -483,7 +519,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
           "Codex App Server emitted an invalid JSON-RPC message.",
         );
       }
-      if (!BENIGN_NOTIFICATION_METHODS.has(message.method)) {
+      if (!SUPPORTED_NOTIFICATION_METHODS.has(message.method)) {
         throw new AgentAdapterError(
           "UNKNOWN_PROVIDER_MESSAGE",
           `Codex App Server emitted unsupported notification ${message.method}.`,
@@ -495,6 +531,25 @@ export class CodexAppServerAdapter implements AgentAdapter {
         }
         const delta = readStringField(message.params, "delta");
         await emit({ kind: "message_delta", text: delta });
+        return;
+      }
+      if (message.method === "error" || message.method === "thread/realtime/error") {
+        await emit({
+          kind: "diagnostic",
+          level: "warning",
+          code:
+            message.method === "error" &&
+            isRecord(message.params) &&
+            message.params["willRetry"] === true
+              ? "CODEX_PROVIDER_RETRYING"
+              : "CODEX_PROVIDER_ERROR_REPORTED",
+          message:
+            message.method === "error" &&
+            isRecord(message.params) &&
+            message.params["willRetry"] === true
+              ? "Codex reported a transient provider error and is retrying the same turn."
+              : "Codex reported a provider error; OpenDelegate is waiting for the authoritative turn outcome.",
+        });
         return;
       }
       if (message.method === "item/started") {
@@ -803,7 +858,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
       cancellationGraceMs: request.limits.cancellationGraceMs,
     });
     connection.onServerMessage = async (message) => {
-      if (!isNotification(message) || !BENIGN_NOTIFICATION_METHODS.has(message.method)) {
+      if (!isNotification(message) || !SUPPORTED_NOTIFICATION_METHODS.has(message.method)) {
         throw new AgentAdapterError(
           "UNKNOWN_PROVIDER_MESSAGE",
           "Codex App Server emitted an unsupported message while reconciling a turn.",

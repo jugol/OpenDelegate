@@ -1,6 +1,6 @@
 {
   "name": "opendelegate",
-  "version": "0.1.0-alpha.53",
+  "version": "0.1.0-alpha.54",
   "private": true,
   "description": "A personal, self-hosted control plane for orchestrating AI agents across devices.",
   "license": "Apache-2.0",
@@ -20,6 +20,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --max-warnings=0",
     "providers:check": "node tooling/check-agent-provider-updates.mjs",
+    "providers:verify-codex-protocol": "node tooling/verify-codex-app-server-protocol.mjs",
     "release:build": "node tooling/build-release.mjs",
     "release:configure": "node --experimental-strip-types tooling/configure-release.mjs",
     "release:examples": "node tooling/create-release-examples.mjs",
