@@ -424,14 +424,15 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     activeVersion,
   );
   const targetRuntimeConfiguration = requireRenderedFile(artifacts, "runtime-configuration");
+  const previousArtifacts = renderPlatformServiceArtifacts({
+    ...definition.configuration,
+    bundle: {
+      ...definition.configuration.bundle,
+      version: activeVersion,
+    },
+  });
   const previousRuntimeConfiguration = requireRenderedFile(
-    renderPlatformServiceArtifacts({
-      ...definition.configuration,
-      bundle: {
-        ...definition.configuration.bundle,
-        version: activeVersion,
-      },
-    }),
+    previousArtifacts,
     "runtime-configuration",
   );
   const steps: ServicePlanStep[] = [
@@ -498,6 +499,24 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
             action: {
               kind: "file.write" as const,
               file: requireRenderedFile(artifacts, "core-manifest"),
+              atomic: true as const,
+            },
+          },
+        ]
+      : []),
+    ...(definition.configuration.platform === "macos"
+      ? [
+          {
+            id: "write-macos-core-manifest",
+            description: "Persist the bounded macOS core service environment.",
+            action: {
+              kind: "file.write" as const,
+              file: requireRenderedFile(artifacts, "core-manifest"),
+              atomic: true as const,
+            },
+            rollback: {
+              kind: "file.write" as const,
+              file: requireRenderedFile(previousArtifacts, "core-manifest"),
               atomic: true as const,
             },
           },

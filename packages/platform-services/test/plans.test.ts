@@ -357,6 +357,35 @@ test("Windows upgrade repairs the declared service SID definition before restart
   assert.equal(manifest?.rollback, undefined);
 });
 
+test("macOS upgrade persists its bounded service PATH before restarting core", () => {
+  const base = macOsConfiguration();
+  const configuration = macOsConfiguration({
+    bundle: {
+      ...base.bundle,
+      version: "1.3.0",
+    },
+  });
+  const plan = createServicePlan({
+    operation: "upgrade",
+    configuration,
+    activeVersion: "1.2.3",
+  });
+  const stopCoreIndex = plan.steps.findIndex((step) => step.id === "stop-core");
+  const manifestIndex = plan.steps.findIndex((step) => step.id === "write-macos-core-manifest");
+  const startCoreIndex = plan.steps.findIndex((step) => step.id === "start-core");
+  assert.ok(stopCoreIndex >= 0);
+  assert.ok(stopCoreIndex < manifestIndex);
+  assert.ok(manifestIndex < startCoreIndex);
+  const manifest = plan.steps[manifestIndex];
+  assert.equal(manifest?.action.kind, "file.write");
+  if (manifest?.action.kind === "file.write") {
+    assert.equal(manifest.action.file.purpose, "core-manifest");
+    assert.match(manifest.action.file.content, /<key>EnvironmentVariables<\/key>/u);
+    assert.match(manifest.action.file.content, /\/opt\/homebrew\/bin/u);
+  }
+  assert.equal(manifest?.rollback?.kind, "file.write");
+});
+
 test("failed install health removes newly registered supervisor planes", async () => {
   const plan = createServicePlan({
     operation: "install",

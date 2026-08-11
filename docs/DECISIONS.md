@@ -2902,4 +2902,6 @@ route Agent work to it.
 CLIs are discoverable after boot without copying an owner's complete shell
 environment into the service. The Worker still runs as its least-privilege identity,
 provider homes remain explicitly bound, and existing installations have a narrow,
-auditable migration into the new manifest.
+auditable migration into the new manifest. The upgrade plan writes that manifest
+atomically while the core is stopped; rollback retains the bounded path while it
+returns the stable activation link to the previous release.
