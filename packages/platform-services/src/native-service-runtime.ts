@@ -15,6 +15,7 @@ import {
   NativeBoundaryError,
   type NativeClockBoundary,
   type NativeFileSystemBoundary,
+  type NativePathMetadata,
   type NativeProcessBoundary,
   type NativeProcessRequest,
   type NativeProcessResult,
@@ -405,8 +406,17 @@ function createNativeFilesystemAdapter(
           return { disposition };
         }
         case "release.stage": {
+          const posixAccess = await resolvePosixReleaseAccess(configuration, boundaries, tools);
           const existing = await fileSystem.inspect(action.stagingDirectory);
           if (existing.kind === "directory") {
+            if (posixAccess !== undefined) {
+              await applyPosixReleaseTreeAccess(
+                configuration.platform,
+                action.stagingDirectory,
+                fileSystem,
+                posixAccess,
+              );
+            }
             await releaseVerifier.verifyStaged(
               configuration,
               action.stagingDirectory,
@@ -429,6 +439,14 @@ function createNativeFilesystemAdapter(
           }
           await fileSystem.ensureDirectory(temporary, 0o700);
           try {
+            if (posixAccess !== undefined) {
+              await fileSystem.setPosixOwnershipAndMode(
+                temporary,
+                posixAccess.uid,
+                posixAccess.gid,
+                0o750,
+              );
+            }
             const sourceRealPath = await fileSystem.realPath(action.sourceDirectory);
             await copyReleaseTree(
               configuration.platform,
@@ -436,6 +454,7 @@ function createNativeFilesystemAdapter(
               temporary,
               fileSystem,
               sourceRealPath,
+              posixAccess,
             );
             await releaseVerifier.verifyStaged(
               configuration,
@@ -466,6 +485,15 @@ function createNativeFilesystemAdapter(
         case "release.promote": {
           const release = await fileSystem.inspect(action.releaseDirectory);
           if (release.kind === "directory") {
+            const posixAccess = await resolvePosixReleaseAccess(configuration, boundaries, tools);
+            if (posixAccess !== undefined) {
+              await applyPosixReleaseTreeAccess(
+                configuration.platform,
+                action.releaseDirectory,
+                fileSystem,
+                posixAccess,
+              );
+            }
             await releaseVerifier.verifyStaged(
               configuration,
               action.releaseDirectory,
@@ -1206,6 +1234,7 @@ async function copyReleaseTree(
   destination: string,
   fileSystem: NativeFileSystemBoundary,
   sourceRootRealPath: string,
+  posixAccess?: PosixReleaseAccess,
 ): Promise<void> {
   const currentRealPath = await fileSystem.realPath(source);
   if (
@@ -1222,15 +1251,100 @@ async function copyReleaseTree(
     }
     if (entry.kind === "directory") {
       await fileSystem.ensureDirectory(destinationPath, 0o750);
-      await copyReleaseTree(platform, sourcePath, destinationPath, fileSystem, sourceRootRealPath);
+      if (posixAccess !== undefined) {
+        await fileSystem.setPosixOwnershipAndMode(
+          destinationPath,
+          posixAccess.uid,
+          posixAccess.gid,
+          0o750,
+        );
+      }
+      await copyReleaseTree(
+        platform,
+        sourcePath,
+        destinationPath,
+        fileSystem,
+        sourceRootRealPath,
+        posixAccess,
+      );
     } else {
       const fileRealPath = await fileSystem.realPath(sourcePath);
       if (!isDescendant(platform, sourceRootRealPath, fileRealPath)) {
         throw uncertain("Release staging detected a file escaping its verified root.");
       }
       await fileSystem.copyRegularFile(sourcePath, destinationPath);
+      if (posixAccess !== undefined) {
+        const metadata = await fileSystem.inspect(sourcePath);
+        await fileSystem.setPosixOwnershipAndMode(
+          destinationPath,
+          posixAccess.uid,
+          posixAccess.gid,
+          canonicalPosixReleaseFileMode(metadata),
+        );
+      }
     }
   }
+}
+
+interface PosixReleaseAccess {
+  readonly uid: number;
+  readonly gid: number;
+}
+
+async function resolvePosixReleaseAccess(
+  configuration: PlatformServiceConfiguration,
+  boundaries: NativeServiceBoundaries,
+  tools: NativeTools,
+): Promise<PosixReleaseAccess | undefined> {
+  if (configuration.platform === "windows") {
+    return undefined;
+  }
+  return {
+    uid: 0,
+    gid: await resolveUnixId(
+      boundaries.process,
+      tools.id,
+      "-g",
+      configuration.serviceIdentity.userName,
+    ),
+  };
+}
+
+async function applyPosixReleaseTreeAccess(
+  platform: PlatformFamily,
+  root: string,
+  fileSystem: NativeFileSystemBoundary,
+  access: PosixReleaseAccess,
+): Promise<void> {
+  const rootMetadata = await fileSystem.inspect(root);
+  if (rootMetadata.kind !== "directory") {
+    throw uncertain("Release access normalization requires a regular directory root.");
+  }
+  await fileSystem.setPosixOwnershipAndMode(root, access.uid, access.gid, 0o750);
+  for (const entry of await fileSystem.list(root)) {
+    const path = pathJoin(platform, root, entry.name);
+    if (entry.kind === "symbolic-link" || entry.kind === "special") {
+      throw uncertain("Release access normalization refused a symbolic link or special file.");
+    }
+    if (entry.kind === "directory") {
+      await applyPosixReleaseTreeAccess(platform, path, fileSystem, access);
+      continue;
+    }
+    const metadata = await fileSystem.inspect(path);
+    await fileSystem.setPosixOwnershipAndMode(
+      path,
+      access.uid,
+      access.gid,
+      canonicalPosixReleaseFileMode(metadata),
+    );
+  }
+}
+
+function canonicalPosixReleaseFileMode(metadata: NativePathMetadata): number {
+  if (metadata.kind !== "regular-file" || metadata.mode === undefined) {
+    throw uncertain("Release access normalization could not inspect a regular file mode.");
+  }
+  return (metadata.mode & 0o111) === 0 ? 0o640 : 0o750;
 }
 
 async function pruneReleases(

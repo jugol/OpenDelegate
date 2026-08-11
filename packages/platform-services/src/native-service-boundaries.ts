@@ -31,6 +31,7 @@ export interface NativePathMetadata {
   readonly kind: NativePathKind;
   readonly size?: number;
   readonly modifiedAtMs?: number;
+  readonly mode?: number;
 }
 
 export interface NativeDirectoryEntry {
@@ -169,6 +170,7 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
               : "special",
         size: metadata.size,
         modifiedAtMs: metadata.mtimeMs,
+        mode: metadata.mode & 0o777,
       };
     } catch (error) {
       if (isErrorCode(error, "ENOENT")) {

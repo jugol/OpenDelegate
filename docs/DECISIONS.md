@@ -2763,3 +2763,24 @@ plist parsing had passed.
 **Consequence:** Rendered LaunchDaemons and LaunchAgents are accepted by launchd's
 actual parser, tests assert the canonical byte form, and rollback remains clean for
 older failed install attempts.
+
+## D-133 — POSIX release staging assigns canonical service-group access recursively
+
+**Decision:** Linux and macOS release staging makes the immutable copy root and
+every descendant owned by the platform installer and the Device service group
+before verification and activation. Directories and executable files use `0750`;
+regular non-executable files use `0640`. Existing verified staging or release trees
+encountered during an idempotent replay receive the same bounded, link-free access
+normalization before reuse.
+
+**Rationale:** Live macOS alpha.61 installation copied a valid signed release below
+a correctly secured install root, but the newly created release tree retained the
+installer's default group. Both launchd planes then failed `access(..., X_OK)` with
+`errno 13` for their promoted host executables. Checking executability as elevated
+installer had not proved that either runtime identity could traverse the tree.
+
+**Consequence:** The boot daemon and owner-session helper can both traverse the
+stable `current` target through their shared service group without granting world
+access or write access. File executability remains derived from the signed source
+mode, data files do not become executable, and symbolic links or special files
+continue to fail closed.

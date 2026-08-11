@@ -64,10 +64,17 @@ class MemoryJournal implements ServiceCommandJournal {
 class FakeFileSystem implements NativeFileSystemBoundary {
   public readonly kinds = new Map<string, NativePathKind>();
   public readonly files = new Map<string, Buffer>();
+  public readonly modes = new Map<string, number>();
   public readonly links = new Map<string, string>();
   public readonly removed: string[] = [];
   public readonly directories = new Map<string, NativeDirectoryEntry[]>();
   public readonly reads: string[] = [];
+  public readonly posixAccessChanges: {
+    readonly path: string;
+    readonly uid: number;
+    readonly gid: number;
+    readonly mode: number;
+  }[] = [];
 
   public async inspect(path: string) {
     const kind =
@@ -82,7 +89,11 @@ class FakeFileSystem implements NativeFileSystemBoundary {
     return {
       kind,
       ...(kind === "regular-file"
-        ? { size: this.files.get(path)?.length ?? 0, modifiedAtMs: 1 }
+        ? {
+            size: this.files.get(path)?.length ?? 0,
+            modifiedAtMs: 1,
+            mode: this.modes.get(path) ?? 0o640,
+          }
         : {}),
     };
   }
@@ -128,6 +139,7 @@ class FakeFileSystem implements NativeFileSystemBoundary {
     }
     this.files.set(destination, Buffer.from(sourceBytes));
     this.kinds.set(destination, "regular-file");
+    this.modes.set(destination, this.modes.get(source) ?? 0o640);
   }
 
   public async renameAtomic(source: string, destination: string, _replace: boolean): Promise<void> {
@@ -157,17 +169,21 @@ class FakeFileSystem implements NativeFileSystemBoundary {
     const before = await this.inspect(path);
     this.kinds.set(path, "missing");
     this.files.delete(path);
+    this.modes.delete(path);
     this.links.delete(path);
     this.removed.push(path);
     return before.kind === "missing" ? "unchanged" : "changed";
   }
 
   public async setPosixOwnershipAndMode(
-    _path: string,
-    _uid: number,
-    _gid: number,
-    _mode: number,
-  ): Promise<void> {}
+    path: string,
+    uid: number,
+    gid: number,
+    mode: number,
+  ): Promise<void> {
+    this.posixAccessChanges.push({ path, uid, gid, mode });
+    this.modes.set(path, mode);
+  }
 
   public async sameVolume(_left: string, _right: string): Promise<boolean> {
     return true;
@@ -1282,6 +1298,132 @@ test("macOS install accepts the native-prefixed hidden-account attribute", async
   });
 
   assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+});
+
+test("macOS staging grants the service group access to every copied release path", async () => {
+  const configuration = macOsConfiguration({ role: "worker" });
+  const plan = createServicePlan({ operation: "install", configuration });
+  const stageStep = plan.steps.find((step) => step.action.kind === "release.stage");
+  const promoteStep = plan.steps.find((step) => step.action.kind === "release.promote");
+  assert.equal(stageStep?.action.kind, "release.stage");
+  assert.equal(promoteStep?.action.kind, "release.promote");
+  if (
+    stageStep?.action.kind !== "release.stage" ||
+    promoteStep?.action.kind !== "release.promote"
+  ) {
+    throw new Error("expected release staging and promotion steps");
+  }
+  const stagingDirectory = stageStep.action.stagingDirectory;
+  const releaseDirectory = promoteStep.action.releaseDirectory;
+
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (request.executable === "/usr/bin/dscl") {
+      const attribute = request.arguments[3];
+      if (attribute === "PrimaryGroupID") {
+        return processResult(0, "PrimaryGroupID: 490\n");
+      }
+      if (attribute === "UserShell") {
+        return processResult(0, "UserShell: /usr/bin/false\n");
+      }
+      if (attribute === "NFSHomeDirectory") {
+        return processResult(0, "NFSHomeDirectory: /var/empty\n");
+      }
+      if (attribute === "UniqueID") {
+        return processResult(0, "UniqueID: 490\n");
+      }
+      if (attribute === "IsHidden") {
+        return processResult(0, "dsAttrTypeNative:IsHidden: 1\n");
+      }
+    }
+    if (request.executable === "/usr/sbin/dseditgroup") {
+      return processResult(0, "yes owner is a member of _opendelegate\n");
+    }
+    if (request.executable === "/usr/bin/id") {
+      return processResult(0, "490\n");
+    }
+    return processResult(0);
+  };
+
+  const fileSystem = new FakeFileSystem();
+  const source = configuration.bundle.sourceDirectory;
+  const sourceBin = `${source}/bin`;
+  for (const [path, bytes, mode] of [
+    [`${sourceBin}/opendelegate-service-host`, Buffer.from("core"), 0o755],
+    [`${sourceBin}/opendelegate-session-helper`, Buffer.from("helper"), 0o755],
+    [`${source}/release-metadata.json`, Buffer.from("{}"), 0o644],
+  ] as const) {
+    fileSystem.files.set(path, bytes);
+    fileSystem.kinds.set(path, "regular-file");
+    fileSystem.modes.set(path, mode);
+  }
+  fileSystem.kinds.set(source, "directory");
+  fileSystem.kinds.set(sourceBin, "directory");
+  fileSystem.directories.set(source, [
+    { name: "bin", kind: "directory" },
+    { name: "release-metadata.json", kind: "regular-file" },
+  ]);
+  fileSystem.directories.set(sourceBin, [
+    { name: "opendelegate-service-host", kind: "regular-file" },
+    { name: "opendelegate-session-helper", kind: "regular-file" },
+  ]);
+  fileSystem.kinds.set(stagingDirectory, "missing");
+  fileSystem.kinds.set(releaseDirectory, "missing");
+  fileSystem.directories.set("/Library/OpenDelegate/releases", [
+    { name: configuration.bundle.version, kind: "directory" },
+  ]);
+
+  const originalInspect = fileSystem.inspect.bind(fileSystem);
+  fileSystem.inspect = async (path) => {
+    if (
+      !fileSystem.kinds.has(path) &&
+      path.startsWith(`${stagingDirectory}.`) &&
+      path.endsWith(".copying")
+    ) {
+      return { kind: "missing" as const };
+    }
+    return await originalInspect(path);
+  };
+
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "macos",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthRole: "worker",
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "macos",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-install-macos-release-access",
+    configuration,
+    plan,
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  const copyRoot = fileSystem.posixAccessChanges.find(
+    (change) => change.path.startsWith(`${stagingDirectory}.`) && change.path.endsWith(".copying"),
+  )?.path;
+  assert.ok(copyRoot, "the staging copy root must receive canonical POSIX access");
+  assert.deepEqual(
+    fileSystem.posixAccessChanges
+      .filter((change) => change.path === copyRoot || change.path.startsWith(`${copyRoot}/`))
+      .map((change) => ({ ...change, path: change.path.slice(copyRoot.length) || "/" })),
+    [
+      { path: "/", uid: 0, gid: 490, mode: 0o750 },
+      { path: "/bin", uid: 0, gid: 490, mode: 0o750 },
+      { path: "/bin/opendelegate-service-host", uid: 0, gid: 490, mode: 0o750 },
+      { path: "/bin/opendelegate-session-helper", uid: 0, gid: 490, mode: 0o750 },
+      { path: "/release-metadata.json", uid: 0, gid: 490, mode: 0o640 },
+    ],
+  );
 });
 
 test("logged-out helpers defer while the core starts and exact replay does not invoke supervisors twice", async () => {
