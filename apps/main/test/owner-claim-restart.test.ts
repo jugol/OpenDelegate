@@ -28,10 +28,7 @@ test("an unclaimed Main can reopen its local claim listener immediately after a 
     `${JSON.stringify(mainSecrets.configuration)}\n`,
     { mode: 0o600 },
   );
-  // Main owns the Admin, claim, static Artifact, and interactive Artifact
-  // listeners at four consecutive ports. Reserve the complete block so this
-  // process-level test cannot race another concurrently running Main fixture.
-  const port = await reserveContiguousPortBlock(4);
+  const port = await reserveAdjacentPortPair();
   const children = new Set<ChildProcessWithoutNullStreams>();
 
   t.after(async () => {
@@ -100,6 +97,10 @@ function startInit(input: {
       input.home,
       "--admin-root",
       input.adminRoot,
+      // Artifact startup has separate listener and recovery coverage. This
+      // process test isolates the Admin + adjacent local-claim restart pair.
+      "--artifacts",
+      "disabled",
       "--secret-backend-config",
       input.secretBackendConfigurationFile,
       "--listen-host",
@@ -165,26 +166,28 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   await once(child, "exit");
 }
 
-async function reserveContiguousPortBlock(portCount: number): Promise<number> {
+async function reserveAdjacentPortPair(): Promise<number> {
   const initialCandidate = 20_000 + ((process.pid * 37) % 19_000);
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const candidate =
-      20_000 + ((initialCandidate - 20_000 + attempt * portCount) % (19_000 - portCount));
-    const servers = Array.from({ length: portCount }, () => createServer());
+    const candidate = 20_000 + ((initialCandidate - 20_000 + attempt * 2) % 19_000);
+    const first = createServer();
+    const adjacent = createServer();
     try {
-      for (const [offset, server] of servers.entries()) {
-        await new Promise<void>((resolvePromise, rejectPromise) => {
-          server.once("error", rejectPromise);
-          server.listen(candidate + offset, "127.0.0.1", resolvePromise);
-        });
-      }
-      await Promise.all(servers.map((server) => closeServer(server)));
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        first.once("error", rejectPromise);
+        first.listen(candidate, "127.0.0.1", resolvePromise);
+      });
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        adjacent.once("error", rejectPromise);
+        adjacent.listen(candidate + 1, "127.0.0.1", resolvePromise);
+      });
+      await Promise.all([closeServer(first), closeServer(adjacent)]);
       return candidate;
     } catch {
-      await Promise.all(servers.map((server) => closeServer(server)));
+      await Promise.all([closeServer(first), closeServer(adjacent)]);
     }
   }
-  throw new Error("Could not reserve a contiguous loopback port block for the owner-claim test.");
+  throw new Error("Could not reserve adjacent loopback ports for the owner-claim test.");
 }
 
 async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
