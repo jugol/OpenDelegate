@@ -82,8 +82,9 @@ child instead of recreating owner-managed provider state. Child creation is expl
 non-recursive and the parent and child are revalidated canonically before ACL mutation,
 whether the child was pre-existing or newly created. The child's `icacls` mutations
 also use `/L`, so a junction or symbolic-link replacement cannot redirect the ACL
-operation into its target. A provider home that disappears between checks is never
-recreated.
+operation into its target. The owner-managed sandbox fails closed rather than invoking
+the protected-service-vault `takeown` fallback. A provider home that disappears between
+checks is never recreated.
 
 Because this decision adds a runtime field, the upgrade executor snapshots the exact
 installed runtime-configuration bytes immediately before the atomic forward write.

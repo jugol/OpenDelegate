@@ -2941,7 +2941,9 @@ service-specific entries.
 The sandbox child and its exact parent are canonically revalidated immediately before
 ACL mutation whether the child was pre-existing or newly created. Its `icacls`
 operations use link-local `/L` semantics, so a replacement race cannot redirect the
-owner or DACL mutation into the link target.
+owner or DACL mutation into the link target. Owner-managed sandbox children fail
+closed on access denial and never enter the protected-service-vault `takeown` recovery
+path.
 
 Start and restart compare the installed runtime-configuration bytes with the supplied
 canonical configuration before any Agent-home ACL repair. The provider homes receiving

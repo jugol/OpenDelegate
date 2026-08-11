@@ -906,6 +906,43 @@ test("Windows sandbox repair revalidates an existing child before link-local ACL
     ),
     false,
   );
+
+  const deniedFileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(deniedFileSystem, configuration);
+  const deniedProcess = new FakeProcess();
+  deniedProcess.handler = (request) =>
+    request.executable.toLowerCase().endsWith("icacls.exe") &&
+    request.arguments[0] === sandbox &&
+    request.arguments.includes("/setowner")
+      ? processResult(5)
+      : processResult(0);
+  const deniedBoundaries = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem: deniedFileSystem,
+    process: deniedProcess,
+  }).boundaries;
+  const denied = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries: deniedBoundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-sandbox-owner-denied",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+  assert.equal(denied.report.outcome, "failed");
+  assert.equal(denied.report.failedStepId, "ensure-codex-sandbox-helper");
+  assert.equal(
+    deniedProcess.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("takeown.exe") &&
+        request.arguments.includes(sandbox),
+    ),
+    false,
+  );
 });
 
 test("preflight checks every native tool and publisher trust before mutation", async () => {

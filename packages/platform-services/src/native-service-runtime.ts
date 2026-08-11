@@ -447,7 +447,7 @@ function createNativeFilesystemAdapter(
               action.access.owner,
               boundaries,
               tools,
-              true,
+              action.requiredExistingParent === undefined,
               action.requiredExistingParent !== undefined,
             );
             if ((await fileSystem.inspect(action.path)).kind !== "directory") {
