@@ -59,7 +59,7 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
         continue;
       }
       if (this.#isCurrent !== undefined) {
-        const current = await this.#isCurrent(candidate).catch(() => false);
+        const current = await approvalIsCurrent(this.#isCurrent, candidate);
         if (!current) {
           continue;
         }
@@ -109,7 +109,7 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
       return false;
     }
     if (this.#isCurrent !== undefined) {
-      const current = await this.#isCurrent(approval).catch(() => false);
+      const current = await approvalIsCurrent(this.#isCurrent, approval);
       if (!current) {
         throw new DiscordTaskPortError(
           "APPROVAL_UNAVAILABLE",
@@ -148,6 +148,17 @@ export class DiscordActionApproval implements DiscordTaskApprovalProjectionPort 
       // The durable decision succeeded; periodic Discord reconciliation repairs presentation.
     }
     return true;
+  }
+}
+
+async function approvalIsCurrent(
+  check: NonNullable<DiscordActionApprovalOptions["isCurrent"]>,
+  approval: ApprovalRequest,
+): Promise<boolean> {
+  try {
+    return await check(approval);
+  } catch {
+    return false;
   }
 }
 
