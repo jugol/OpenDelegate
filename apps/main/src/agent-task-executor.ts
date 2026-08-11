@@ -1146,7 +1146,9 @@ function statementRequiresComputerUse(statement: string): boolean {
     /\b(?:invoke|use|execute|perform|run|require)\b.{0,48}\bcomputer[ -]use\b/giu,
   )) {
     const leading = normalized.slice(Math.max(0, (match.index ?? 0) - 24), match.index);
-    if (!/(?:\bdo\s+not|\bdon't|\bnever|\bmust\s+not|\bmay\s+not|\bwithout)\s*$/iu.test(leading)) {
+    if (
+      !/(?:\bdo\s+not|\bdon't|\bnever|\bmust\s+not|\bmay\s+not|\bwithout|\bno)\s*$/iu.test(leading)
+    ) {
       return true;
     }
   }
@@ -1161,16 +1163,16 @@ function statementRequiresComputerUse(statement: string): boolean {
 
   for (const match of normalized.matchAll(/computer[ -]use.{0,48}?(?:사용|실행|호출|조작)/giu)) {
     const trailing = normalized.slice((match.index ?? 0) + match[0].length);
-    if (!/^하지/u.test(trailing)) {
+    if (!/^(?:하지|해서는?\s*안|하면\s*안|해서\s*안|할\s+수\s+없)/u.test(trailing)) {
       return true;
     }
   }
 
   if (
-    /(?:\b(?:do\s+not|don't|never|must\s+not|may\s+not)\s+(?:invoke|use|execute|perform|run|require)\s+(?:the\s+)?computer[ -]use\b|\bwithout\s+(?:using\s+)?computer[ -]use\b|\bcomputer[ -]use\b.{0,72}\b(?:(?:must|should|may)\s+(?:not|never)\s+(?:be\s+)?(?:invoked|used|executed|required|performed)|(?:is|are)\s+(?:not\s+(?:invoked|used|executed|required|performed)|(?:strictly\s+)?(?:forbidden|prohibited|disallowed|not\s+allowed)))\b)/iu.test(
+    /(?:\b(?:do\s+not|don't|never|must\s+not|may\s+not|no)\s+(?:invoke|use|execute|perform|run|require)\s+(?:the\s+)?computer[ -]use\b|\bwithout\s+(?:using\s+)?computer[ -]use\b|\bcomputer[ -]use\b.{0,72}\b(?:(?:must|should|may)\s+(?:not|never)\s+(?:be\s+)?(?:invoked|used|executed|required|performed)|(?:is|are)\s+(?:not\s+(?:invoked|used|executed|required|performed)|(?:strictly\s+)?(?:forbidden|prohibited|disallowed|not\s+allowed)))\b)/iu.test(
       normalized,
     ) ||
-    /(?:computer[ -]use.{0,72}(?:(?:사용|실행|호출|조작)하지\s*(?:마|않|못)|금지|제외|불가)|computer[ -]use\s*없이)/iu.test(
+    /(?:computer[ -]use.{0,72}(?:(?:사용|실행|호출|조작)(?:하지\s*(?:마|않|못)|해서는?\s*안|하면\s*안|해서\s*안|할\s+수\s+없)|금지|제외|불가)|computer[ -]use\s*없이)/iu.test(
       normalized,
     )
   ) {
