@@ -1306,6 +1306,14 @@ test("a successful native Run promotes its declared Artifacts before terminal su
       /mcp__opendelegate-artifact__artifact_write_chunk/u,
     );
     assert.match(adapter.starts[0]?.prompt ?? "", /mcp__opendelegate-artifact__artifact_commit/u);
+    assert.match(
+      adapter.starts[0]?.prompt ?? "",
+      /deterministic Worker code promotes every committed file to Main's durable Artifact Store/u,
+    );
+    assert.match(
+      adapter.starts[0]?.prompt ?? "",
+      /do not wait for, claim, or deny later Main promotion or Discord presentation/u,
+    );
     assert.equal(
       adapter.starts[0]?.environment?.["OPENDELEGATE_ARTIFACT_ASSIGNMENT_FINGERPRINT"],
       undefined,

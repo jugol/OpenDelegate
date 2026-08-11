@@ -673,6 +673,16 @@ const OUTCOME_ORCHESTRATION_INSTRUCTIONS = Object.freeze([
 const OUTCOME_PRESENTATION_INSTRUCTION =
   "Present the verified outcome in the most useful available form: Discord summary, file, Artifact, hosted result, or Git reference. Mention only results supported by authoritative Worker reports.";
 
+const ARTIFACT_PLANNING_INSTRUCTIONS = Object.freeze([
+  "A Worker Agent may write and commit a Run-scoped Artifact manifest, but deterministic Worker code performs Main promotion only after that native turn succeeds.",
+  "Do not require Worker-authored text to attest post-turn Main promotion or Discord presentation. Plan the file creation and manifest commit; OpenDelegate records promoted Artifact IDs in the authenticated terminal evidence and the Discord adapter presents available results afterward.",
+]);
+
+const ARTIFACT_VERIFICATION_INSTRUCTIONS = Object.freeze([
+  "Each entry in an authoritative report's artifactEvidence array is deterministic post-turn evidence that the named Artifact reached Main's durable store. Its state \"promoted-to-main-durable-store\" is stronger than Worker-authored report text written before promotion.",
+  "Do not treat a Worker report's uncertainty about later Main promotion or Discord presentation as contradicting non-empty artifactEvidence. When the Task asks to return a file in this Task, promoted Artifact evidence satisfies the delivery boundary; the Discord adapter owns its subsequent owner-visible presentation.",
+]);
+
 function buildCoordinatorPrompt(
   request: TaskExecutionRequest,
   maximumBytes: number,
@@ -768,6 +778,7 @@ function buildPlanningPrompt(
         "Use only the versioned, hash-verified public checkpoint below. Omitted counts are explicit; do not invent omitted details or import another Task's context.",
         "Deterministic OpenDelegate code validates dependencies, selects eligible Devices, issues authority, dispatches Runs, and enforces Policy.",
         ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+        ...ARTIFACT_PLANNING_INSTRUCTIONS,
         "Do not claim execution happened. Do not expose private chain-of-thought.",
         ...planningContextInstructions(deviceContext),
         "Return one exact JSON object and no Markdown fence.",
@@ -786,6 +797,7 @@ function buildPlanningPrompt(
     "You are the OpenDelegate Main Agent planning exactly one durable Task.",
     "Return a bounded Work Order plan. Deterministic OpenDelegate code will validate dependencies, select eligible Devices, issue leases, dispatch Runs, and enforce Policy.",
     ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+    ...ARTIFACT_PLANNING_INSTRUCTIONS,
     "Do not claim any execution happened. Do not expose private chain-of-thought.",
     ...planningContextInstructions(deviceContext),
     "Return one exact JSON object and no Markdown fence.",
@@ -839,6 +851,11 @@ function buildVerificationPrompt(
     runId: report.runId,
     report: boundedContinuationEvidence(report.report),
     artifactIds: report.artifactIds,
+    artifactEvidence: report.artifactIds.map((artifactId) => ({
+      artifactId,
+      state: "promoted-to-main-durable-store" as const,
+      source: "deterministic-worker-terminal-event" as const,
+    })),
     ...(report.agentSession === undefined ? {} : { agentSession: report.agentSession }),
   }));
   const orders = workOrders.map((order) => ({
@@ -855,6 +872,7 @@ function buildVerificationPrompt(
       "Lease, fencing, route, credential, local-path, Knowledge, and private transcript data are intentionally absent.",
       "Judge only whether the evidence satisfies every exact completion criterion in the checkpoint. Never invent omitted evidence.",
       ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+      ...ARTIFACT_VERIFICATION_INSTRUCTIONS,
       OUTCOME_PRESENTATION_INSTRUCTION,
       "Return one exact JSON object and no Markdown fence.",
       'If every criterion is satisfied: {"schemaVersion":1,"state":"completed","publicMessage":"owner-visible synthesis","verifiedCompletionCriteria":["copy every exact Task criterion"]}.',
@@ -879,6 +897,7 @@ function buildVerificationPrompt(
     "Every record below was accepted by deterministic OpenDelegate code from the authenticated, current, unexpired Worker Run named in that record.",
     "You cannot manufacture, alter, or infer execution evidence. Judge only whether these authoritative reports satisfy every exact Task completion criterion.",
     ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+    ...ARTIFACT_VERIFICATION_INSTRUCTIONS,
     OUTCOME_PRESENTATION_INSTRUCTION,
     "Return one exact JSON object and no Markdown fence.",
     'If every criterion is satisfied: {"schemaVersion":1,"state":"completed","publicMessage":"owner-visible synthesis","verifiedCompletionCriteria":["copy every exact Task criterion"]}.',

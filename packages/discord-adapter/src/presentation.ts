@@ -542,6 +542,11 @@ const KOREAN_CLOSED_TEXT = Object.freeze({
   "This Task is no longer available.": "이 작업은 더 이상 사용할 수 없어요.",
 } satisfies Readonly<Record<string, string>>);
 
+const RESOURCE_WAIT_SUFFIX =
+  "OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget.";
+const KOREAN_RESOURCE_WAIT_SUFFIX =
+  "관련 기기나 리소스 상태가 바뀌면 OpenDelegate가 자동으로 계속합니다. 기다리는 동안 자동 재시도 횟수는 차감되지 않습니다.";
+
 function localizeKnownText(value: string, locale: DiscordPresentationLocale): string {
   if (locale === "en") {
     return value;
@@ -566,7 +571,15 @@ function localizeKnownText(value: string, locale: DiscordPresentationLocale): st
     const stage = localizeWorkerStage(retryableWorkerFailure[1] ?? "unknown");
     return `Worker Run에서 다시 시도할 수 있는 오류가 발생했습니다. 단계: ${stage} · 코드: ${retryableWorkerFailure[2]}.\n\n마지막 Worker 보고(불완전할 수 있음):\n${retryableWorkerFailure[3]}`;
   }
-  return KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT] ?? value;
+  const closedText = KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT];
+  if (closedText !== undefined) {
+    return closedText;
+  }
+  if (value.endsWith(RESOURCE_WAIT_SUFFIX)) {
+    const explanation = value.slice(0, -RESOURCE_WAIT_SUFFIX.length).trimEnd();
+    return `${explanation} ${KOREAN_RESOURCE_WAIT_SUFFIX}`;
+  }
+  return value;
 }
 
 function localizeWorkerStage(stage: string): string {

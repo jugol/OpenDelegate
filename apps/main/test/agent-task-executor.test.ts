@@ -418,6 +418,10 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
     /login, MFA, CAPTCHA, legal confirmation, or OS permission/u,
   );
   assert.match(adapter.starts[0]?.prompt ?? "", /never invent a handoff URL/u);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /Do not require Worker-authored text to attest post-turn Main promotion or Discord presentation/u,
+  );
 
   const verified = await reasoner.verify({
     task,
@@ -443,6 +447,11 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   assert.match(
     adapter.resumes[0]?.prompt ?? "",
     /Discord summary, file, Artifact, hosted result, or Git reference/u,
+  );
+  assert.match(adapter.resumes[0]?.prompt ?? "", /"state":"promoted-to-main-durable-store"/u);
+  assert.match(
+    adapter.resumes[0]?.prompt ?? "",
+    /stronger than Worker-authored report text written before promotion/u,
   );
 });
 

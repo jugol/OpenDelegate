@@ -1663,6 +1663,7 @@ function appendArtifactOutputContract(prompt: string, maximumBytes: number): str
     "## Artifact output contract",
     "",
     "If this Run produces durable files for the owner, use only the exact Run-scoped mcp__opendelegate-artifact__artifact_write_chunk tool to append bounded base64-encoded bytes at explicit offsets. After every file is complete, call mcp__opendelegate-artifact__artifact_commit once with the exact relative paths, media types, original filenames, and optional presentation modes. Do not attempt to discover or write an Artifact staging path directly. Do not include credentials, Device-local Knowledge, hidden reasoning, raw transcripts, or temporary files. If there are no durable files, do not call either Artifact tool.",
+    "artifact_commit seals only this Run's manifest. After the native Agent turn succeeds, deterministic Worker code promotes every committed file to Main's durable Artifact Store before the Worker success event can be accepted. That post-turn boundary is intentionally not observable from this Agent turn. After a successful commit, report the exact file facts and finish normally; do not wait for, claim, or deny later Main promotion or Discord presentation.",
     "relativePath must use forward slashes and remain within this Run capability. requestedPresentation may be omitted or be download, inline, static-html, or interactive-html.",
   ].join("\n");
   if (Buffer.byteLength(instructions, "utf8") > maximumBytes) {

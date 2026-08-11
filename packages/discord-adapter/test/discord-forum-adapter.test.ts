@@ -1626,6 +1626,25 @@ test("a localized Workspace wait does not leak deterministic English into Korean
   assert.match(rendered, /od:v1:cancel/u);
 });
 
+test("a Korean resource wait localizes the deterministic suffix after an Agent-authored explanation", () => {
+  const payload = renderStatusPanel(
+    {
+      taskId: "task-waiting-artifact",
+      state: "waiting_resource",
+      objective: "결과 파일을 전달해 줘.",
+      summary:
+        "Artifact 승격 증거를 기다리고 있습니다. OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget.",
+      significance: "status",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /Artifact 승격 증거를 기다리고 있습니다/u);
+  assert.match(rendered, /관련 기기나 리소스 상태가 바뀌면 OpenDelegate가 자동으로 계속합니다/u);
+  assert.match(rendered, /자동 재시도 횟수는 차감되지 않습니다/u);
+  assert.doesNotMatch(rendered, /relevant resource availability changes/u);
+});
+
 test("sequential Worker Approvals are localized and explicitly approve once", () => {
   const payload = renderTaskActivity(
     {

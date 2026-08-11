@@ -114,6 +114,11 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
+- Distinguished the Worker Agent's pre-promotion report from deterministic post-turn Artifact
+  evidence, so a successfully promoted file can complete its Task and be presented by Discord
+  instead of waiting for the Worker to observe a boundary that deliberately runs after its turn.
+- Localized the deterministic resource-wait suffix when it follows a Korean Agent explanation,
+  avoiding an English orchestration footer inside an otherwise Korean Discord status card.
 - Enabled a private loopback Artifact Gateway during ordinary new-Main initialization, added an
   explicit enable/disable or custom reconfiguration boundary for existing Mains, and retained the
   Windows service Secret backend so file delivery cannot disappear after service promotion.

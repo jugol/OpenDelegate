@@ -2655,3 +2655,27 @@ boundary, causing blind automatic retries and an opaque owner result.
 step, existing installations are never silently migrated, and remote Worker upload
 still requires an explicit owner-approved HTTPS route. Artifact failures remain
 bounded and actionable without exposing paths, endpoints, or provider internals.
+
+## D-128 — Promoted Artifact IDs outrank pre-promotion Agent uncertainty
+
+Implementation detail:
+[ADR-0066](adr/0066-post-turn-artifact-evidence.md).
+
+**Decision:** A Worker Agent commits only its Run-scoped manifest and returns from
+the native turn. Deterministic Worker code then promotes the declared files before
+emitting a successful terminal event. Artifact IDs accepted from that event are
+therefore post-turn Main-promotion evidence for Task verification. Worker-authored
+text cannot be required to attest, and cannot negate, that later boundary. Discord
+presentation remains a deterministic adapter responsibility after the Artifact is
+available.
+
+**Rationale:** Live alpha.58 QA stored the exact file in Main, recorded its checksum
+and provenance, and rendered an `Open report` action, yet the Main Agent left the
+Task waiting because the earlier Worker prose correctly said it could not observe
+post-turn promotion. The evidence package did not explain the temporal boundary.
+
+**Consequence:** Worker prompts finish normally after a successful manifest commit;
+verification labels promoted Artifact IDs with their deterministic meaning; and a
+Task can complete without asking an Agent to observe work that runs only after that
+Agent's turn. Discord still must reconcile and present the available Artifact, and
+an Artifact ID does not grant a credential or bypass exposure Policy.
