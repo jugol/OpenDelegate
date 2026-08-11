@@ -113,6 +113,13 @@ describe("native two-plane JavaScript host", () => {
       () => parseServiceHostConfiguration(win32AliasProviderBinding),
       /provider home path is invalid/u,
     );
+    const reservedProviderBinding = validConfiguration();
+    reservedProviderBinding.agentProviderAccess.codexHomeDirectory =
+      "C:\\Users\\owner\\COM³\\codex-state";
+    assert.throws(
+      () => parseServiceHostConfiguration(reservedProviderBinding),
+      /provider home path is invalid/u,
+    );
   });
 
   it("accepts an explicit headless Linux core without inventing helper authority", () => {

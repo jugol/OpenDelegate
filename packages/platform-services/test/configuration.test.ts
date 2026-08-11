@@ -139,6 +139,12 @@ test("accepts only bounded Windows Agent provider homes with a verified owner pr
       },
     }),
     windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\COM¹\\codex-state",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
       ownerSession: {
         ...windowsConfiguration().ownerSession,
         homeDirectory: "C:\\Users\\owner",
@@ -245,6 +251,7 @@ test("accepts only a normalized non-root Windows owner home", () => {
     "C:\\Users\\owner.",
     "C:\\Users\\owner \\profile",
     "C:\\Users\\CON\\owner",
+    "C:\\Users\\LPT²\\owner",
     "C:\\Users\\owner\\..\\other",
     "relative\\owner",
     "\\\\server\\share\\owner",

@@ -1,6 +1,6 @@
 import { win32 } from "node:path";
 
-const WINDOWS_DEVICE_COMPONENT = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
+const WINDOWS_DEVICE_COMPONENT = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/iu;
 
 /**
  * Accepts a canonical, non-root local DOS-drive path. Win32 silently strips
