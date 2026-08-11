@@ -970,6 +970,39 @@ test("Main planning rejects Computer Use work that omits its exact authority cap
   );
 });
 
+test("Main planning does not turn explicit Computer Use prohibitions into input authority", async () => {
+  const adapter = new FakeAgentAdapter("orchestration-forbidden-computer-use");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  const planned = await reasoner.plan({
+    task: request(1).task,
+    attempt: 1,
+    executionKey: "computer-use-prohibition",
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(planned.state, "ready");
+  assert.deepEqual(
+    planned.state === "ready" ? planned.plan.workOrders[0]?.requiredCapabilities : undefined,
+    ["codex"],
+  );
+});
+
 test("Main Device queries fail closed when their directory is unavailable or already cancelled", async () => {
   let directoryCalls = 0;
   const createReasoner = (list: () => Promise<readonly DeviceSummaryV1[]>) =>
@@ -1200,6 +1233,7 @@ type FakeAgentMode =
   | "placement-question"
   | "outcome-platform-question"
   | "orchestration"
+  | "orchestration-forbidden-computer-use"
   | "orchestration-missing-computer-use"
   | "orchestration-omitted-secret-refs"
   | "orchestration-dependencies"
@@ -1302,6 +1336,28 @@ class FakeAgentAdapter implements AgentAdapter {
               ...releaseWorkOrder(),
               brief: "Invoke Computer Use to type a marker in Notepad.",
               completionCriteria: ["Computer Use is invoked and the marker is visible."],
+              requiredCapabilities: ["codex"],
+            },
+          ],
+        },
+      });
+    }
+    if (this.#mode === "orchestration-forbidden-computer-use") {
+      return handle(session(input), {
+        schemaVersion: 1,
+        state: "ready",
+        plan: {
+          protocolVersion: "v1",
+          taskId: input.taskId,
+          workOrders: [
+            {
+              ...releaseWorkOrder(),
+              constraints: [
+                "Computer Use, browser automation, and external network access are forbidden.",
+                "Computer Use is not used for this Work Order.",
+                "Computer Use must never be invoked by this Work Order.",
+                "shell, OS API, 일반 filesystem, browser, Computer Use, 외부 network, 설치, 삭제를 사용하지 않는다.",
+              ],
               requiredCapabilities: ["codex"],
             },
           ],
