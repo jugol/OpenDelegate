@@ -1023,6 +1023,86 @@ test("macOS upgrade accepts only the exact legacy core manifest without the serv
   });
 });
 
+test("Windows Worker upgrade accepts only the exact legacy runtime without the owner home", async () => {
+  const base = windowsConfigurationWithServiceBinding("worker");
+  const configuration = windowsConfiguration({
+    ...base,
+    ownerSession: {
+      ...base.ownerSession,
+      homeDirectory: "C:\\Users\\owner",
+    },
+  });
+  const installedConfiguration = windowsConfiguration({
+    ...configuration,
+    bundle: { ...configuration.bundle, version: "1.2.2" },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    const content =
+      file.purpose === "runtime-configuration"
+        ? `${JSON.stringify(
+            (() => {
+              const legacy = JSON.parse(file.content) as {
+                ownerSession: { homeDirectory?: string };
+              };
+              delete legacy.ownerSession.homeDirectory;
+              return legacy;
+            })(),
+            undefined,
+            2,
+          )}\n`
+        : file.content;
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: true,
+    healthRole: "worker",
+  });
+  const runtimeFile = installedArtifacts.files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtimeFile);
+  const exactLegacyBytes = fileSystem.files.get(runtimeFile.path);
+  assert.ok(exactLegacyBytes);
+
+  fileSystem.files.set(runtimeFile.path, Buffer.concat([exactLegacyBytes, Buffer.from(" ")]));
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration,
+      plan: createServicePlan({ operation: "upgrade", configuration, activeVersion: "1.2.2" }),
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+
+  fileSystem.files.set(runtimeFile.path, exactLegacyBytes);
+  await preflightNativeServiceOperation({
+    platform: "windows",
+    boundaries,
+    configuration,
+    plan: createServicePlan({ operation: "upgrade", configuration, activeVersion: "1.2.2" }),
+    releaseVerifier: trustedRelease(),
+  });
+});
+
 test("Windows Worker upgrade accepts only a coherent staged credential migration", async () => {
   const targetConfiguration = windowsConfigurationWithServiceBinding("worker");
   const previousCore = {

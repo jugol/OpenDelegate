@@ -21,6 +21,7 @@ export {
   loadWorkerSecretBackendConfiguration,
   prepareMacOsServiceSecretBackend,
   prepareWindowsServiceSecretBackend,
+  projectWorkerAgentEnvironment,
   projectComputerUseReadiness,
   restoreWindowsServiceSecretBackend,
   provisionHeadlessLinuxSecretBackend,

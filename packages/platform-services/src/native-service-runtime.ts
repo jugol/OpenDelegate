@@ -2241,6 +2241,7 @@ async function assertUpgradeConfigurationMatchesInstalled(
       !existing.equals(expected) &&
       !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing) &&
       !matchesLegacyMacOsManifestWithoutServicePath(configuration, installedFile, existing) &&
+      !matchesLegacyWindowsRuntimeWithoutOwnerHome(configuration, installedFile, existing) &&
       !matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
         configuration,
         installedFile,
@@ -2252,6 +2253,42 @@ async function assertUpgradeConfigurationMatchesInstalled(
       );
     }
   }
+}
+
+function matchesLegacyWindowsRuntimeWithoutOwnerHome(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "windows" ||
+    installedFile.purpose !== "runtime-configuration" ||
+    installedFile.encoding !== "utf8" ||
+    configuration.ownerSession.homeDirectory === undefined
+  ) {
+    return false;
+  }
+  let previous: Record<string, unknown>;
+  let expected: Record<string, unknown>;
+  try {
+    previous = requireJsonRecord(JSON.parse(existing.toString("utf8")) as unknown);
+    expected = requireJsonRecord(JSON.parse(installedFile.content) as unknown);
+  } catch {
+    return false;
+  }
+  const previousOwner = nestedRecord(previous, "ownerSession");
+  const expectedOwner = nestedRecord(expected, "ownerSession");
+  if (
+    previousOwner === undefined ||
+    expectedOwner === undefined ||
+    Object.hasOwn(previousOwner, "homeDirectory") ||
+    expectedOwner["homeDirectory"] !== configuration.ownerSession.homeDirectory ||
+    existing.toString("utf8") !== stableJson(previous)
+  ) {
+    return false;
+  }
+  previousOwner["homeDirectory"] = expectedOwner["homeDirectory"];
+  return stableJson(previous) === stableJson(expected);
 }
 
 function matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(

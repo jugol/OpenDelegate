@@ -2,6 +2,7 @@ export * from "./claude-cli-adapter.ts";
 export * from "./claude-agent-sdk-adapter.ts";
 export * from "./codex-app-server-adapter.ts";
 export * from "./codex-cli-adapter.ts";
+export * from "./codex-command.ts";
 export * from "./action-authorization.ts";
 export * from "./contracts.ts";
 export * from "./controlled-provider-home.ts";

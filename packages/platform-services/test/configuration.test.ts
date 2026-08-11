@@ -92,6 +92,35 @@ test("accepts only the exact external Windows Codex sandbox helper directory", (
   }
 });
 
+test("accepts only a normalized non-root Windows owner home", () => {
+  const accepted = createPlatformServiceDefinition(
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        homeDirectory: "C:\\Users\\owner",
+      },
+    }),
+  ).configuration;
+  assert.equal(accepted.ownerSession.homeDirectory, "C:\\Users\\owner");
+
+  for (const homeDirectory of ["C:\\", "C:\\Users\\owner\\..\\other", "relative\\owner"]) {
+    assert.throws(
+      () =>
+        createPlatformServiceDefinition(
+          windowsConfiguration({
+            ownerSession: {
+              ...windowsConfiguration().ownerSession,
+              homeDirectory,
+            },
+          }),
+        ),
+      (error: unknown) =>
+        error instanceof PlatformServiceError &&
+        (error.code === "INVALID_PATH" || error.code === "INVALID_IDENTITY"),
+    );
+  }
+});
+
 test("rejects overlapping mutable roots and bundle sources", () => {
   const linux = linuxConfiguration();
   assert.throws(

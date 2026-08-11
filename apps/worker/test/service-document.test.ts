@@ -5,10 +5,36 @@ import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { test } from "node:test";
 
-import { buildWorkerServiceDocument } from "../src/service-document.ts";
+import { buildWorkerServiceDocument, verifyWindowsOwnerProfile } from "../src/service-document.ts";
 import { resolveWorkerPaths, WorkerAppError } from "../src/worker-app.ts";
 
 const SERVICE_SID = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
+
+test("a Windows owner profile must match the OS account instead of USERPROFILE text", () => {
+  assert.equal(
+    verifyWindowsOwnerProfile("WORKSTATION\\owner", {
+      username: "owner",
+      homedir: "C:\\Users\\owner",
+    }),
+    "C:\\Users\\owner",
+  );
+  assert.throws(
+    () =>
+      verifyWindowsOwnerProfile("WORKSTATION\\owner", {
+        username: "another-owner",
+        homedir: "C:\\Users\\forged",
+      }),
+    (error: unknown) => error instanceof WorkerAppError && error.code === "CONFIG_INVALID",
+  );
+  assert.throws(
+    () =>
+      verifyWindowsOwnerProfile("WORKSTATION\\owner", {
+        username: "owner",
+        homedir: "C:\\Users\\owner\\..\\forged",
+      }),
+    (error: unknown) => error instanceof WorkerAppError && error.code === "CONFIG_INVALID",
+  );
+});
 
 test("a staged Windows Worker composes its service document from durable public bindings", async () => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-service-document-"));
@@ -96,10 +122,12 @@ test("a staged Windows Worker composes its service document from durable public 
       ownerSession: {
         userName: "WORKSTATION\\owner",
         stableUserId: "S-1-5-21-1000",
+        homeDirectory: "C:\\Users\\owner",
       },
     });
 
     assert.equal(document.platform, "windows");
+    assert.equal(document.ownerSession.homeDirectory, "C:\\Users\\owner");
     assert.deepEqual(document.ipcTrust, { protocolVersion: 2, core, helper });
     assert.equal(document.bundle.sourceDirectory, win32.resolve(bundle));
     assert.equal(document.helperSecretBinding.vaultRoot, win32.resolve(ownerVaultRoot));

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { AgentAdapter, AgentAdapterProbe } from "@opendelegate/agent-adapters";
+import type {
+  AgentAdapter,
+  AgentAdapterProbe,
+  AgentAdapterProbeInput,
+} from "@opendelegate/agent-adapters";
 
 import { createWorkerSchedulingInventoryProvider } from "../src/index.ts";
 
@@ -44,6 +48,54 @@ function stubAdapter(
 }
 
 describe("Worker agent adapter inventory", () => {
+  it("uses the bounded service environment for provider discovery and model inspection", async () => {
+    const base = stubAdapter("claude-service", {
+      installed: true,
+      version: "2.1.220",
+      compatibility: "tested",
+      auth: { state: "ready" },
+      diagnostics: [],
+    });
+    let probeInput: AgentAdapterProbeInput | undefined;
+    let catalogInput: AgentAdapterProbeInput | undefined;
+    const adapter: AgentAdapter = {
+      ...base,
+      async probe(input) {
+        probeInput = input;
+        return await base.probe(input);
+      },
+      async listModels(input) {
+        catalogInput = input;
+        return {
+          observedAt: "2026-08-11T00:00:00.000Z",
+          models: [{ modelId: "claude-opus-5", displayName: "Claude Opus 5" }],
+        };
+      },
+    };
+    const inventory = createWorkerSchedulingInventoryProvider({
+      adapters: [adapter],
+      environment: {
+        PATH: "C:\\Users\\owner\\.local\\bin;C:\\Windows\\System32",
+        USERPROFILE: "C:\\Users\\owner",
+        OPENDELEGATE_SERVICE_MODE: "system-service",
+        DATABASE_URI: "must-not-reach-an-agent-process",
+      },
+      workspaceRegistry,
+      probeCacheMs: 0,
+    });
+
+    const snapshot = await inventory.snapshot();
+
+    assert.deepEqual(probeInput?.environment, {
+      PATH: "C:\\Users\\owner\\.local\\bin;C:\\Windows\\System32",
+      USERPROFILE: "C:\\Users\\owner",
+    });
+    assert.deepEqual(catalogInput?.environment, probeInput?.environment);
+    assert.equal(Object.hasOwn(probeInput?.environment ?? {}, "DATABASE_URI"), false);
+    assert.equal(Object.hasOwn(probeInput?.environment ?? {}, "OPENDELEGATE_SERVICE_MODE"), false);
+    assert.equal(snapshot.serviceMode, "system-service");
+  });
+
   it("leaves out an adapter no owner action on this Device could make usable", async () => {
     // Advertising it would put a row on every surface whose only possible reading is
     // "incompatible", with no button that changes it.

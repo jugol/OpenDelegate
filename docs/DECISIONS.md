@@ -2905,3 +2905,26 @@ provider homes remain explicitly bound, and existing installations have a narrow
 auditable migration into the new manifest. The upgrade plan writes that manifest
 atomically while the core is stopped; rollback retains the bounded path while it
 returns the stable activation link to the previous release.
+
+## D-140 — Windows core services receive bounded owner provider executable paths
+
+See [ADR-0067](adr/0067-windows-owner-agent-launcher-path.md).
+
+**Decision:** A Windows service document records the installation owner's normalized,
+non-root profile directory when the owner shell can prove it. The Worker child then
+prepends only that profile's `.local\bin` and `AppData\Roaming\npm` directories to
+the service's existing system `PATH`, with case-insensitive deduplication. It never
+copies the owner's complete interactive `PATH`. During upgrade, the installer accepts
+only the exact legacy runtime configuration whose sole difference is the missing
+owner-home field; every other installed byte drift still fails closed.
+
+**Rationale:** The live Windows Worker ran correctly under its virtual service
+account, but Claude was installed at the owner's `.local\bin\claude.exe`. An owner
+shell diagnostic therefore reported Claude ready while the persistent Worker reported
+`probe-failed`. The service identity needs a stable executable lookup boundary without
+inheriting aliases, temporary directories, or mutable shell-specific entries.
+
+**Consequence:** Owner-installed Codex and Claude launchers in the two supported
+Windows user package locations remain discoverable after boot, while provider homes,
+authentication, service identity, and approval policy stay unchanged. Existing
+installations have one narrow, auditable migration into the new runtime document.

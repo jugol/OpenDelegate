@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { arch, platform } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 
 import { isMainServiceReadyMessage, loadMainConfiguration } from "@opendelegate/main";
+import { parseWindowsOwnerHome } from "@opendelegate/platform-services";
 import {
   createNodeSessionHelperIpcTransport,
   type SessionHelperIpcEndpoint,
@@ -175,7 +176,7 @@ async function startMainControlPlaneWorkload(
   const entryPath = join(configuration.releaseRoot, "apps", "main", "opendelegate.mjs");
   const child = spawn(nodePath, [entryPath, "serve", "--home", configuration.stateRoot], {
     cwd: configuration.releaseRoot,
-    env: scrubIdentityEnvironment(process.env),
+    env: buildCoreChildServiceEnvironment(scrubIdentityEnvironment(process.env), configuration),
     stdio: ["ignore", "inherit", "inherit", "ipc"],
     windowsHide: true,
   });
@@ -244,7 +245,7 @@ async function startWorkerWorkload(
   const completed = runWorkerDaemon({
     paths,
     releaseVersion: configuration.releaseVersion,
-    environment: buildWorkerServiceEnvironment(process.env),
+    environment: buildCoreChildServiceEnvironment(process.env, configuration),
     signal: workerController.signal,
     onReady: resolveReady,
     onConnectionDiagnostic: (diagnostic: WorkerConnectionDiagnostic) => {
@@ -322,10 +323,39 @@ async function verifyWorkerServiceSecretBinding(
  * marker explicit because Windows SCM and launchd do not expose systemd's
  * INVOCATION_ID convention.
  */
-export function buildWorkerServiceEnvironment(
+export function buildCoreChildServiceEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
+  configuration?: Pick<ServiceHostConfiguration, "ownerSession" | "platform">,
 ): Readonly<Record<string, string | undefined>> {
-  return Object.freeze({ ...environment, OPENDELEGATE_SERVICE_MODE: "system-service" });
+  const result: Record<string, string | undefined> = {
+    ...environment,
+    OPENDELEGATE_SERVICE_MODE: "system-service",
+  };
+  const ownerHome = parseWindowsOwnerHome(configuration?.ownerSession.homeDirectory);
+  if (configuration?.platform === "windows" && ownerHome !== undefined) {
+    const pathKey = Object.keys(result).find((key) => key.toLowerCase() === "path") ?? "PATH";
+    const existingEntries = (result[pathKey] ?? "")
+      .split(";")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    const entries = [
+      win32.join(ownerHome, ".local", "bin"),
+      win32.join(ownerHome, "AppData", "Roaming", "npm"),
+      ...existingEntries,
+    ];
+    const observed = new Set<string>();
+    result[pathKey] = entries
+      .filter((entry) => {
+        const key = win32.normalize(entry).toLocaleLowerCase("en-US");
+        if (observed.has(key)) {
+          return false;
+        }
+        observed.add(key);
+        return true;
+      })
+      .join(";");
+  }
+  return Object.freeze(result);
 }
 
 function writeWorkerServiceEvent(event: string, fields: Readonly<Record<string, unknown>>): void {

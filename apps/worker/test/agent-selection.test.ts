@@ -4,6 +4,7 @@ import test from "node:test";
 import type {
   AgentAdapter,
   AgentAdapterProbe,
+  AgentAdapterProbeInput,
   AgentResumeRequest,
   AgentRunHandle,
   AgentStartRequest,
@@ -19,6 +20,8 @@ const autoConfiguration: WorkerAgentConfiguration = {
 class ProbeOnlyAdapter implements AgentAdapter {
   public readonly adapterId: string;
   public readonly provider: "claude" | "codex";
+  public readonly probeInputs: AgentAdapterProbeInput[] = [];
+  public readonly modelInputs: AgentAdapterProbeInput[] = [];
   readonly #compatibility: AgentAdapterProbe["compatibility"];
 
   public constructor(
@@ -31,7 +34,8 @@ class ProbeOnlyAdapter implements AgentAdapter {
     this.#compatibility = compatibility;
   }
 
-  public probe(): Promise<AgentAdapterProbe> {
+  public probe(input: AgentAdapterProbeInput = {}): Promise<AgentAdapterProbe> {
+    this.probeInputs.push(input);
     return Promise.resolve({
       contractVersion: 1,
       adapterId: this.adapterId,
@@ -51,6 +55,14 @@ class ProbeOnlyAdapter implements AgentAdapter {
         workspaceIsolation: ["none"],
       },
       diagnostics: [],
+    });
+  }
+
+  public listModels(input: AgentAdapterProbeInput = {}) {
+    this.modelInputs.push(input);
+    return Promise.resolve({
+      observedAt: "2026-08-11T00:00:00.000Z",
+      models: [{ modelId: "gpt-5.6-sol", displayName: "GPT-5.6 Sol" }],
     });
   }
 
@@ -115,4 +127,30 @@ test("a fixed Device provider cannot be widened by an assignment", async () => {
     ),
     /immutable Run requirement/u,
   );
+});
+
+test("Run adapter selection uses the same bounded environment as service discovery", async () => {
+  const codex = new ProbeOnlyAdapter("codex-app-server", "codex");
+  const selected = await selectAgentAdapter(
+    [codex],
+    autoConfiguration,
+    {
+      provider: "codex",
+      adapterId: "codex-app-server",
+      modelId: "gpt-5.6-sol",
+      allowedCompatibilities: ["tested"],
+    },
+    {
+      PATH: "C:\\Users\\owner\\AppData\\Roaming\\npm;C:\\Windows\\System32",
+      USERPROFILE: "C:\\Users\\owner",
+      OPENAI_API_KEY: "must-not-reach-an-agent-process",
+    },
+  );
+
+  assert.equal(selected.adapter, codex);
+  assert.deepEqual(codex.probeInputs.at(-1)?.environment, {
+    PATH: "C:\\Users\\owner\\AppData\\Roaming\\npm;C:\\Windows\\System32",
+    USERPROFILE: "C:\\Users\\owner",
+  });
+  assert.deepEqual(codex.modelInputs.at(-1)?.environment, codex.probeInputs.at(-1)?.environment);
 });

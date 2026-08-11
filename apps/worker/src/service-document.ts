@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { platform } from "node:os";
+import { platform, userInfo } from "node:os";
 import { isAbsolute, join, posix, resolve, win32 } from "node:path";
 
 import {
   composeServiceConfiguration,
+  parseWindowsOwnerHome,
   type PlatformFamily,
   type PlatformServiceConfiguration,
 } from "@opendelegate/platform-services";
@@ -236,7 +237,8 @@ export async function buildWorkerServiceDocument(
     );
   }
 
-  const ownerSession = options.ownerSession ?? (await resolveWindowsOwnerSession());
+  const ownerSession =
+    options.ownerSession ?? (await resolveWindowsOwnerSession(options.environment ?? process.env));
   const codexHome =
     configuration.agent.codexHome ??
     defaultProviderHome("codex", options.paths, options.environment ?? process.env);
@@ -253,6 +255,9 @@ export async function buildWorkerServiceDocument(
     ownerSession: {
       userName: ownerSession.userName,
       stableUserId: ownerSession.stableUserId,
+      ...(ownerSession.homeDirectory === undefined
+        ? {}
+        : { homeDirectory: platformPath(family, ownerSession.homeDirectory) }),
       // A Worker never opens Admin: the configuration reader rejects it outright.
       adminAutoOpen: { enabled: false },
     },
@@ -377,16 +382,20 @@ async function readBundleVersion(bundleDirectory: string): Promise<string> {
  * The owner account the session helper will run as.
  *
  * The SID is the stable identity — a renamed account keeps it, and the IPC peer
- * list is checked against the SID rather than the display name — so it is read
- * from the OS rather than from an environment variable Windows does not set.
+ * list is checked against the SID rather than the display name. The profile is
+ * independently read through Node's OS user API and must name the same effective
+ * account; mutable USERPROFILE input is never accepted as proof.
  */
-async function resolveWindowsOwnerSession(): Promise<{
+async function resolveWindowsOwnerSession(
+  environment: Readonly<Record<string, string | undefined>>,
+): Promise<{
   readonly userName: string;
   readonly stableUserId: string;
+  readonly homeDirectory?: string;
 }> {
   const output = await new Promise<string>((settle, fail) => {
     execFile(
-      join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "whoami.exe"),
+      join(environment["SystemRoot"] ?? "C:\\Windows", "System32", "whoami.exe"),
       ["/user", "/nh", "/fo", "csv"],
       { shell: false, windowsHide: true, timeout: 5_000, maxBuffer: 16 * 1024 },
       (error, stdout) => (error === null ? settle(stdout) : fail(error)),
@@ -411,7 +420,40 @@ async function resolveWindowsOwnerSession(): Promise<{
       "The owner account identity could not be read from this host.",
     );
   }
-  return { userName, stableUserId: sid };
+  let profile: { readonly username: string; readonly homedir: string };
+  try {
+    profile = userInfo();
+  } catch {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "The owner profile could not be read from this host.",
+    );
+  }
+  const homeDirectory = verifyWindowsOwnerProfile(userName, profile);
+  return {
+    userName,
+    stableUserId: sid,
+    homeDirectory,
+  };
+}
+
+export function verifyWindowsOwnerProfile(
+  accountName: string,
+  profile: { readonly username: string; readonly homedir: string },
+): string {
+  const accountLeaf = accountName.split("\\").at(-1);
+  const homeDirectory = parseWindowsOwnerHome(profile.homedir);
+  if (
+    accountLeaf === undefined ||
+    accountLeaf.toLocaleLowerCase("en-US") !== profile.username.toLocaleLowerCase("en-US") ||
+    homeDirectory === undefined
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "The owner profile does not match the effective Windows account.",
+    );
+  }
+  return homeDirectory;
 }
 
 function platformFamily(value: NodeJS.Platform): PlatformFamily | undefined {

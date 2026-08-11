@@ -84,6 +84,7 @@ approved product specification.
 61. [`0064-worker-identity-key-diagnostics.md`](0064-worker-identity-key-diagnostics.md)
 62. [`0065-artifact-gateway-installation-and-worker-diagnostics.md`](0065-artifact-gateway-installation-and-worker-diagnostics.md)
 63. [`0066-post-turn-artifact-evidence.md`](0066-post-turn-artifact-evidence.md)
+64. [`0067-windows-owner-agent-launcher-path.md`](0067-windows-owner-agent-launcher-path.md)
 
 ## Proposed ADRs
 

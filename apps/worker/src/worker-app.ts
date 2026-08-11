@@ -154,6 +154,26 @@ const MAXIMUM_CONFIG_BYTES = 1_048_576;
 const MAXIMUM_SECRET_BACKEND_CONFIG_BYTES = 65_536;
 const MAXIMUM_ENCRYPTED_CREDENTIAL_BYTES = 262_144;
 const PRIVATE_KEY_ALIAS_PREFIX = "identity-p256.";
+const WORKER_AGENT_ENVIRONMENT_KEYS = Object.freeze([
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "HOME",
+  "USERPROFILE",
+  "LOCALAPPDATA",
+  "APPDATA",
+  "TMP",
+  "TEMP",
+  "SHELL",
+  "LANG",
+  "LC_ALL",
+  "TERM",
+  "NO_COLOR",
+  "CODEX_HOME",
+  "CLAUDE_CONFIG_DIR",
+] as const);
 const PLATFORM_MUTATION_EXECUTABLE_IDS = new Set<PlatformMutationExecutableId>([
   "npm",
   "pnpm",
@@ -1021,6 +1041,7 @@ export async function createWorkerRuntime(
   const configuration = await loadWorkerConfiguration(options.paths);
   await prepareRuntimeDirectories(options.paths);
   const environment = options.environment ?? process.env;
+  const agentEnvironment = projectWorkerAgentEnvironment(environment);
   const releaseVersion = options.releaseVersion;
   if (!validRuntimeIdentifier(releaseVersion)) {
     throw appError("CONFIG_INVALID", "The Worker release version is invalid.");
@@ -1091,6 +1112,7 @@ export async function createWorkerRuntime(
     configuration.agent,
     options.paths,
     nativeSessionLeaseStore,
+    agentEnvironment,
   );
   const artifactChannel: {
     current?: Pick<WorkerDeviceChannelClient, "prepareArtifact">;
@@ -1171,6 +1193,7 @@ export async function createWorkerRuntime(
           adapters,
           configuration.agent,
           assignment.agentRequirement,
+          agentEnvironment,
         );
         const workspaceContext = await resolveWorkerPromptWorkspaceContext(
           workspaceRegistry,
@@ -1214,6 +1237,7 @@ export async function createWorkerRuntime(
             provider: adapter.provider,
           }),
           permissions: resolveWorkerAgentPermissions(probe.capabilities, actionAuthorization),
+          environment: agentEnvironment,
           limits: {
             wallTimeoutMs: 2 * 60 * 60_000,
             idleTimeoutMs: 20 * 60_000,
@@ -1238,6 +1262,7 @@ export async function createWorkerRuntime(
     actionChannel,
     identityChannel,
     agentAdapters: adapters,
+    agentEnvironment,
     runLeaseAuthorities,
     runtime: () => runtimeReference.current,
   });
@@ -1764,11 +1789,13 @@ export async function diagnoseWorker(input: {
   readonly environment?: Readonly<Record<string, string | undefined>>;
 }): Promise<WorkerDiagnosticSnapshot> {
   const configuration = await loadWorkerConfiguration(input.paths);
+  const environment = input.environment ?? process.env;
+  const agentEnvironment = projectWorkerAgentEnvironment(environment);
   const managedSecrets = createWorkerManagedSecretStore(
     configuration.secretBackend,
     configuration.deviceId,
     input.paths,
-    input.environment ?? process.env,
+    environment,
   );
   const [health, identityKeyStatus] = await Promise.all([
     managedSecrets.health(),
@@ -1781,32 +1808,34 @@ export async function diagnoseWorker(input: {
   const providerHomes = {
     claude:
       configuration.agent.claudeHome ??
-      defaultProviderHome("claude", input.paths, input.environment),
+      defaultProviderHome("claude", input.paths, agentEnvironment),
     codex:
-      configuration.agent.codexHome ?? defaultProviderHome("codex", input.paths, input.environment),
+      configuration.agent.codexHome ?? defaultProviderHome("codex", input.paths, agentEnvironment),
   };
   const agents = await Promise.all(
-    createWorkerAgentAdapters(configuration.agent, input.paths).map(async (adapter) => {
-      const probe = await adapter.probe();
-      return {
-        adapterId: adapter.adapterId,
-        provider: adapter.provider,
-        installed: probe.installed,
-        authState: probe.auth.state,
-        ...(probe.compatibility === undefined ? {} : { compatibility: probe.compatibility }),
-        ...(probe.version === undefined ? {} : { version: probe.version }),
-        ...(adapter.provider === "claude" || adapter.provider === "codex"
-          ? { providerHome: providerHomes[adapter.provider] }
-          : {}),
-        ...(probe.remediation === undefined ? {} : { remediation: probe.remediation }),
-        // The adapters already explain every unready state; dropping them left the
-        // owner with a bare "not_ready" and nowhere to look.
-        diagnostics: probe.diagnostics.map((diagnostic) => ({
-          code: diagnostic.code,
-          message: diagnostic.message,
-        })),
-      };
-    }),
+    createWorkerAgentAdapters(configuration.agent, input.paths, undefined, agentEnvironment).map(
+      async (adapter) => {
+        const probe = await adapter.probe({ environment: agentEnvironment });
+        return {
+          adapterId: adapter.adapterId,
+          provider: adapter.provider,
+          installed: probe.installed,
+          authState: probe.auth.state,
+          ...(probe.compatibility === undefined ? {} : { compatibility: probe.compatibility }),
+          ...(probe.version === undefined ? {} : { version: probe.version }),
+          ...(adapter.provider === "claude" || adapter.provider === "codex"
+            ? { providerHome: providerHomes[adapter.provider] }
+            : {}),
+          ...(probe.remediation === undefined ? {} : { remediation: probe.remediation }),
+          // The adapters already explain every unready state; dropping them left the
+          // owner with a bare "not_ready" and nowhere to look.
+          diagnostics: probe.diagnostics.map((diagnostic) => ({
+            code: diagnostic.code,
+            message: diagnostic.message,
+          })),
+        };
+      },
+    ),
   );
   return deepFreeze({
     enrolled: true,
@@ -3321,19 +3350,22 @@ export async function renewWorkerDeviceCertificate(input: {
 export async function applyProviderUpgrade(
   adapters: readonly AgentAdapter[],
   adapterId: string,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<WorkerProviderUpgradeResultV1> {
   const adapter = adapters.find((candidate) => candidate.adapterId === adapterId);
   if (adapter === undefined) {
     return { adapterId, status: "failed", code: "ADAPTER_UNKNOWN" };
   }
-  const probe = await adapter.probe();
+  const agentEnvironment = projectWorkerAgentEnvironment(environment);
+  const probe = await adapter.probe({ environment: agentEnvironment });
   if (probe.remediation === undefined) {
     return { adapterId, status: "failed", code: "NO_UPGRADE_AVAILABLE" };
   }
   const outcome = await upgradeAgentProvider({
     adapterId,
     remediation: probe.remediation,
-    reprobe: () => adapter.probe(),
+    environment: agentEnvironment,
+    reprobe: () => adapter.probe({ environment: agentEnvironment }),
   });
   return outcome.status === "upgraded"
     ? {
@@ -3360,6 +3392,7 @@ function createWorkerTransportResolver(input: {
     current?: Pick<WorkerDeviceChannelClient, "activateIdentity" | "rotateIdentity">;
   };
   readonly agentAdapters: readonly AgentAdapter[];
+  readonly agentEnvironment: Readonly<Record<string, string>>;
   readonly runLeaseAuthorities: Map<string, CalibratedWorkerRunLeaseAuthority>;
   readonly runtime: () => WorkerRuntime | undefined;
 }): TransportResolver<WorkerMainConnection> {
@@ -3405,7 +3438,11 @@ function createWorkerTransportResolver(input: {
               await input.runtime()?.setOperationalState("revoked", "Main revoked this Device.");
             },
             onProviderUpgrade: async (frame) =>
-              applyProviderUpgrade(input.agentAdapters, frame.payload.adapterId),
+              applyProviderUpgrade(
+                input.agentAdapters,
+                frame.payload.adapterId,
+                input.agentEnvironment,
+              ),
           });
           for (const [runId, authority] of input.runLeaseAuthorities) {
             if (!authority.attach(client)) {
@@ -3669,14 +3706,42 @@ export function createWorkerNativeSessionLeaseStore(paths: WorkerPaths): FileSes
   });
 }
 
+/**
+ * Projects a service or foreground environment onto the non-secret variables an
+ * Agent provider is allowed to inherit. Windows variable names are
+ * case-insensitive, so a native `Path` entry is deliberately canonicalized to
+ * `PATH` before it reaches adapter executable discovery.
+ */
+export function projectWorkerAgentEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string>> {
+  const caseInsensitive = platform() === "win32";
+  const values = new Map<string, string>();
+  for (const [key, value] of Object.entries(environment)) {
+    if (typeof value === "string") {
+      values.set(caseInsensitive ? key.toLocaleUpperCase("en-US") : key, value);
+    }
+  }
+  const result: Record<string, string> = {};
+  for (const key of WORKER_AGENT_ENVIRONMENT_KEYS) {
+    const value = values.get(caseInsensitive ? key.toLocaleUpperCase("en-US") : key);
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return Object.freeze(result);
+}
+
 export function createWorkerAgentAdapters(
   configuration: WorkerAgentConfiguration,
   paths: WorkerPaths,
   leaseStore: SessionLeaseStore = createWorkerNativeSessionLeaseStore(paths),
+  environment?: Readonly<Record<string, string | undefined>>,
 ): readonly AgentAdapter[] {
+  const agentEnvironment = projectWorkerAgentEnvironment(environment ?? process.env);
   const codexHome =
     configuration.codexHome === undefined
-      ? defaultProviderHome("codex", paths)
+      ? defaultProviderHome("codex", paths, agentEnvironment)
       : requireExternalProvisioningPath(
           configuration.codexHome,
           paths.sourceCheckoutRoot,
@@ -3684,7 +3749,7 @@ export function createWorkerAgentAdapters(
         );
   const claudeHome =
     configuration.claudeHome === undefined
-      ? defaultProviderHome("claude", paths)
+      ? defaultProviderHome("claude", paths, agentEnvironment)
       : requireExternalProvisioningPath(
           configuration.claudeHome,
           paths.sourceCheckoutRoot,
@@ -3693,6 +3758,7 @@ export function createWorkerAgentAdapters(
   return Object.freeze([
     new CodexAppServerAdapter({
       codexHome,
+      environment: agentEnvironment,
       leaseStore,
       ...(configuration.codexExecutable === undefined
         ? {}
@@ -3711,6 +3777,7 @@ export function createWorkerAgentAdapters(
     }),
     new CodexCliAdapter({
       codexHome,
+      environment: agentEnvironment,
       leaseStore,
       ...(configuration.codexExecutable === undefined
         ? {}
@@ -3756,6 +3823,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
   if (!Number.isSafeInteger(probeCacheMs) || probeCacheMs < 0 || probeCacheMs > 3_600_000) {
     throw appError("CONFIG_INVALID", "Worker capability probe cache duration is invalid.");
   }
+  const agentEnvironment = projectWorkerAgentEnvironment(input.environment);
   let cached:
     | {
         readonly expiresAt: number;
@@ -3771,7 +3839,9 @@ export function createWorkerSchedulingInventoryProvider(input: {
     snapshot: async (): Promise<WorkerSchedulingInventoryV1> => {
       const now = Date.now();
       if (cached === undefined || cached.expiresAt <= now) {
-        const outcomes = await Promise.allSettled(input.adapters.map((adapter) => adapter.probe()));
+        const outcomes = await Promise.allSettled(
+          input.adapters.map((adapter) => adapter.probe({ environment: agentEnvironment })),
+        );
         const probes: AgentAdapterProbe[] = [];
         const failedAdapters: Pick<AgentAdapter, "adapterId" | "provider">[] = [];
         outcomes.forEach((outcome, index) => {
@@ -3808,7 +3878,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
             ) {
               return undefined;
             }
-            return await adapter.listModels();
+            return await adapter.listModels({ environment: agentEnvironment });
           }),
         );
         const modelCatalogs = new Map<string, AgentModelCatalog>();
@@ -4268,7 +4338,9 @@ export async function selectAgentAdapter(
   adapters: readonly AgentAdapter[],
   configuration: WorkerAgentConfiguration,
   requirement: WorkerRunAssignmentV1["agentRequirement"],
+  environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<{ readonly adapter: AgentAdapter; readonly probe: AgentAdapterProbe }> {
+  const agentEnvironment = projectWorkerAgentEnvironment(environment);
   const ordered =
     requirement === undefined
       ? configuration.provider === "auto"
@@ -4285,7 +4357,7 @@ export async function selectAgentAdapter(
     requirement?.allowedCompatibilities ?? (["tested"] as const),
   );
   for (const adapter of ordered) {
-    const probe = await adapter.probe();
+    const probe = await adapter.probe({ environment: agentEnvironment });
     if (
       probe.contractVersion === 1 &&
       probe.adapterId === adapter.adapterId &&
@@ -4306,7 +4378,7 @@ export async function selectAgentAdapter(
         }
         let catalog;
         try {
-          catalog = await adapter.listModels();
+          catalog = await adapter.listModels({ environment: agentEnvironment });
         } catch {
           continue;
         }

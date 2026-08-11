@@ -2,6 +2,8 @@ import { createHash, createPublicKey } from "node:crypto";
 import { open, realpath } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
+import { parseWindowsOwnerHome } from "@opendelegate/platform-services";
+
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const SECRET_REFERENCE_PATTERN = /^secret:\/\/[A-Za-z0-9._~/-]+$/u;
@@ -450,8 +452,15 @@ function parseOwnerSession(
       throw new ServiceHostError("The Unix owner session identity is invalid.");
     }
     requirePlatformPath(platform, record["homeDirectory"], "owner home");
-  } else if (record["uid"] !== undefined || record["homeDirectory"] !== undefined) {
-    throw new ServiceHostError("The Windows owner session identity is invalid.");
+  } else {
+    if (record["uid"] !== undefined) {
+      throw new ServiceHostError("The Windows owner session identity is invalid.");
+    }
+    if (record["homeDirectory"] !== undefined) {
+      if (parseWindowsOwnerHome(record["homeDirectory"]) === undefined) {
+        throw new ServiceHostError("The Windows owner session identity is invalid.");
+      }
+    }
   }
   const adminAutoOpen = parseAdminAutoOpen(record["adminAutoOpen"]);
   return {

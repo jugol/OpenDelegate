@@ -50,6 +50,7 @@ describe("native two-plane JavaScript host", () => {
       enabled: true,
       url: "http://127.0.0.1:43180/",
     });
+    assert.equal(configuration.ownerSession.homeDirectory, "C:\\Users\\owner");
     assert.equal(
       configuration.localIpc.core.privateKeyReference,
       "secret://windows/core-ipc-signing-v2",
@@ -160,6 +161,7 @@ function validConfiguration() {
     ownerSession: {
       userName: "WORKSTATION\\owner",
       stableUserId: "S-1-5-21-1000",
+      homeDirectory: "C:\\Users\\owner",
       adminAutoOpen: {
         enabled: true,
         url: "http://127.0.0.1:43180/",

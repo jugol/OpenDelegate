@@ -7,6 +7,7 @@ import {
   type PlatformServiceConfiguration,
   type PlatformServiceDefinition,
 } from "./types.ts";
+import { parseWindowsOwnerHome } from "./windows-owner-home.ts";
 
 const BASE_KEYS = new Set([
   "platform",
@@ -226,6 +227,20 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
     }
     if (!/^S-\d(?:-\d+)+$/.test(input.ownerSession.stableUserId)) {
       throw new PlatformServiceError("INVALID_IDENTITY", "Windows owner session requires a SID.");
+    }
+    if (input.ownerSession.uid !== undefined) {
+      throw new PlatformServiceError(
+        "INVALID_IDENTITY",
+        "Windows owner session cannot declare a Unix UID.",
+      );
+    }
+    if (input.ownerSession.homeDirectory !== undefined) {
+      if (parseWindowsOwnerHome(input.ownerSession.homeDirectory) === undefined) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          "ownerSession.homeDirectory must be a normalized absolute non-root Windows path.",
+        );
+      }
     }
     assertRecord(input.helperSecretBinding, "helperSecretBinding");
     assertExactKeys(input.helperSecretBinding, WINDOWS_HELPER_SECRET_BINDING_KEYS);

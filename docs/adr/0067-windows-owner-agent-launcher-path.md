@@ -1,0 +1,116 @@
+# ADR-0067: Windows owner Agent launcher path
+
+- Status: Accepted
+- Date: 2026-08-12
+- Decision: D-140
+
+## Context
+
+The Windows core runs continuously under an instance-specific virtual-service
+account. That identity correctly isolates OpenDelegate from the interactive owner,
+but SCM supplies a system-oriented executable search path. Live service evidence
+showed Claude installed under the owner's `.local\bin` and Codex installed by npm
+under the owner's `AppData\Roaming\npm`; both were available in the owner terminal
+while the persistent Worker reported an adapter probe failure.
+
+Copying the owner's complete interactive `PATH` into a privileged service boundary
+would admit unrelated, temporary, and owner-writable executable locations. Requiring
+system-wide provider installs would contradict D-076's single owner-authenticated
+provider home. Windows npm also exposes Codex through a `.cmd` shell wrapper, while
+Agent adapters deliberately launch providers without a shell.
+
+## Decision
+
+The Windows native service document records the installing owner's profile directory
+only when the owner process can derive it from the operating-system account record and
+the normalized account name matches `whoami`. The path must be an absolute,
+non-root Windows profile path. Service installation and guarded upgrade reject every
+other value.
+
+The core child environment prepends exactly these two locations to the existing
+service `PATH`, with case-insensitive deduplication:
+
+1. `<owner-home>\.local\bin`
+2. `<owner-home>\AppData\Roaming\npm`
+
+OpenDelegate does not inherit the owner's complete shell environment. Before an
+Agent adapter receives the environment, Worker projects it onto the fixed non-secret
+process-variable allowlist used by provider execution. The same projected environment
+is used for readiness probes, model catalogs, immutable Run selection, provider
+start, native-session resume or continuation, diagnostics, and provider upgrades.
+Runtime service-mode evidence continues to use the unprojected service environment.
+
+On Windows, the Codex adapters inspect the bounded `PATH` for npm's exact
+`node_modules\@openai\codex\bin\codex.js` layout. When present, they invoke that
+entry point through OpenDelegate's pinned Node executable. They never enable a shell
+or execute the npm `.cmd` wrapper. An explicitly configured provider executable still
+wins over discovery.
+
+Upgrade accepts one exact predecessor runtime document whose sole difference is the
+missing owner-home field. It writes the current document atomically while the service
+is stopped. Any additional installed-definition drift remains a hard preflight
+failure.
+
+## Alternatives considered
+
+### Inherit the owner's complete interactive environment
+
+Rejected because it would make service execution depend on mutable shell state and
+admit executable directories unrelated to OpenDelegate's supported provider installs.
+
+### Execute npm command wrappers through a shell
+
+Rejected because shell lookup and metacharacter interpretation would weaken the
+explicit executable boundary shared by every Agent adapter.
+
+### Copy provider launchers or authentication into service-owned storage
+
+Rejected because copied provider state would drift from the owner's SSOT
+authentication and unnecessarily duplicate credentials or provider-managed files.
+
+### Require system-wide Codex and Claude installation
+
+Rejected because a personal-first installation should reuse the provider tools the
+owner already installed and authenticated without requiring a second machine-wide
+installation.
+
+## Consequences
+
+- Owner-installed Codex and Claude launchers in the two declared Windows locations
+  remain discoverable after boot and without an interactive terminal.
+- Main's local Worker, remote Workers, diagnostics, scheduling inventory, model
+  validation, and actual native sessions use one executable-discovery boundary.
+- The two provider launcher directories are owner-writable by design. The provider
+  sandbox, virtual-service identity, exact-action authorization, service ACLs, and
+  Secret Store remain separate enforcement layers; no broader owner path is admitted.
+- Install and upgrade persist one additional non-secret owner profile path and must
+  preserve the exact legacy-document migration.
+- A provider installed elsewhere requires an explicit executable configuration or a
+  future ADR extending the bounded discovery policy.
+
+## Verification
+
+- Windows owner-home parsing rejects roots, relative paths, trailing separators,
+  device paths, and account mismatches.
+- Service-host tests prove the two ordered launcher paths, case-insensitive
+  deduplication, input immutability, and `system-service` reporting.
+- Worker inventory tests prove that provider probes and model inspection receive the
+  bounded allowlist while secret-like variables and service markers do not.
+- A Windows composition test creates the real npm Codex package layout and proves
+  both `codex-app-server` and `codex-cli` report tested, authenticated readiness.
+- Run-selection tests prove the same projected environment reaches immutable model
+  validation; the Worker execution plan carries it into start and resume handling.
+- Guarded upgrade tests accept only the exact missing-owner-home predecessor and
+  reject any second runtime-document difference.
+
+## References
+
+- [`../PRODUCT_SPEC.md`](../PRODUCT_SPEC.md), FR-3 and FR-16
+- [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md), Phase 4
+- [`../DECISIONS.md`](../DECISIONS.md), D-076, D-139, and D-140
+- [`0010-reproducible-platform-bundles-and-provenance.md`](0010-reproducible-platform-bundles-and-provenance.md)
+- [`0011-native-two-plane-service-supervision-and-authenticated-ipc.md`](0011-native-two-plane-service-supervision-and-authenticated-ipc.md)
+- [`0018-programmatic-agent-adapters-and-action-authorization.md`](0018-programmatic-agent-adapters-and-action-authorization.md)
+- [`0040-windows-worker-service-preparation-binding.md`](0040-windows-worker-service-preparation-binding.md)
+- [`0047-windows-virtual-service-sid-network-compatibility.md`](0047-windows-virtual-service-sid-network-compatibility.md)
+- [`0052-windows-codex-service-sandbox-directory.md`](0052-windows-codex-service-sandbox-directory.md)
