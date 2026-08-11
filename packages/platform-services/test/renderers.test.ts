@@ -103,6 +103,11 @@ test("renders a LaunchDaemon and Aqua LaunchAgent with separate privilege planes
   const artifacts = renderPlatformServiceArtifacts(macOsConfiguration());
   assert.equal(artifacts.platform, "macos");
   assert.ok(artifacts.helper);
+  for (const manifest of [artifacts.core.manifest, artifacts.helper.manifest]) {
+    assert.match(manifest.content, /<true\/>/u);
+    assert.match(manifest.content, /<false\/>/u);
+    assert.doesNotMatch(manifest.content, /<(true|false)><\/\1>/u);
+  }
   const daemon = parseLaunchdPlist(artifacts.core.manifest.content);
   const agent = parseLaunchdPlist(artifacts.helper.manifest.content);
 

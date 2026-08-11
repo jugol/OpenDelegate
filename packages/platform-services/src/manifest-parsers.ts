@@ -438,7 +438,7 @@ function tokenizePlist(xml: string): XmlToken[] {
     .replace(/^<\?xml[^?]*\?>\s*/, "")
     .replace(/^<!DOCTYPE plist PUBLIC "[^"]+" "[^"]+">\s*/, "");
   const tokenPattern =
-    /<plist version="1\.0">|<\/?(?:array|dict|false|integer|key|plist|string|true)>|[^<]+/gy;
+    /<plist version="1\.0">|<(?:false|true)\/>|<\/?(?:array|dict|false|integer|key|plist|string|true)>|[^<]+/gy;
   const tokens: XmlToken[] = [];
   let offset = 0;
   while (offset < body.length) {
@@ -457,6 +457,11 @@ function tokenizePlist(xml: string): XmlToken[] {
     }
     if (raw === '<plist version="1.0">') {
       tokens.push({ type: "open", name: "plist" });
+      continue;
+    }
+    if (raw.endsWith("/>")) {
+      const name = raw.slice(1, -2);
+      tokens.push({ type: "open", name }, { type: "close", name });
       continue;
     }
     const close = raw.startsWith("</");

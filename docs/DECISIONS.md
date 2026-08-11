@@ -2747,3 +2747,19 @@ launchd mutation.
 **Consequence:** A newly created account remains idempotently acceptable on the
 same host, reinstallation no longer fails at `ensure-service-account`, and malformed
 or missing identity attributes continue to fail closed.
+
+## D-132 — launchd booleans use canonical self-closing plist elements
+
+**Decision:** macOS service manifests render boolean values only as `<true/>` and
+`<false/>`. The bounded internal parser accepts that canonical form while retaining
+support for previously rendered expanded elements during inspection.
+
+**Rationale:** On macOS 26, `plutil -lint` accepted `<true></true>`, but
+`launchctl bootstrap` rejected the same minimal manifest with exit code 5 and
+launchd error 109. An otherwise identical probe using `<true/>` loaded successfully.
+Live alpha.60 therefore rolled back at `start-core` even though preflight and local
+plist parsing had passed.
+
+**Consequence:** Rendered LaunchDaemons and LaunchAgents are accepted by launchd's
+actual parser, tests assert the canonical byte form, and rollback remains clean for
+older failed install attempts.

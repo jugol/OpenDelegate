@@ -270,7 +270,7 @@ function renderPlistValue(value: PlistValue, indent: number): string {
   }
   if (typeof value === "boolean") {
     const tag = value ? "true" : "false";
-    return `${padding}<${tag}></${tag}>`;
+    return `${padding}<${tag}/>`;
   }
   if (typeof value === "number") {
     return `${padding}<integer>${String(value)}</integer>`;
