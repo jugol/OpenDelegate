@@ -1,6 +1,7 @@
 import "reflect-metadata";
 
 import assert from "node:assert/strict";
+import { createPrivateKey } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,7 @@ import type { WorkerHeartbeatV1, WorkerRunAssignmentV1 } from "@opendelegate/wor
 
 import {
   MainDeviceChannelServer,
+  DeviceChannelClientError,
   SqliteDeviceChannelRepository,
   SqliteWorkerChannelState,
   WorkerDeviceChannelClient,
@@ -113,6 +115,37 @@ test(
       mainDeviceId: "main-device-1",
       certificateGeneration: issued.generation,
     });
+    const mismatchedPkcs8 = Buffer.from(
+      createPrivateKey(serverIdentity.privateKeyPem).export({ format: "der", type: "pkcs8" }),
+    );
+    await assert.rejects(
+      WorkerDeviceChannelClient.connect({
+        endpointUrl: "wss://127.0.0.1:1/api/v1/device/channel",
+        deviceId: issued.deviceId,
+        workerId: "worker-runtime-1",
+        mainDeviceId: "main-device-1",
+        connectTimeoutMs: 500,
+        identity: {
+          certificatePem: verified.certificatePem,
+          certificateAuthorityPem: verified.certificateAuthorityPem,
+          certificateGeneration: verified.generation,
+          executeWithPrivateKeyBytes: async (executor) => {
+            try {
+              await executor(mismatchedPkcs8);
+            } finally {
+              mismatchedPkcs8.fill(0);
+            }
+          },
+        },
+        state: workerState,
+        onDispatch: async () => undefined,
+        onControl: async () => undefined,
+        onRevoked: async () => undefined,
+      }),
+      (error: unknown) =>
+        error instanceof DeviceChannelClientError &&
+        error.diagnosticCode === "IDENTITY_KEY_INVALID",
+    );
     await assert.rejects(
       WorkerDeviceChannelClient.connect({
         endpointUrl: "wss://127.0.0.1:1/api/v1/device/channel",

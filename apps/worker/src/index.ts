@@ -15,6 +15,7 @@ export {
   createWorkerRuntime,
   defaultSecretBackend,
   diagnoseWorker,
+  inspectConfiguredWorkerIdentityKey,
   joinWorker,
   listWorkerWorkspaces,
   loadWorkerConfiguration,

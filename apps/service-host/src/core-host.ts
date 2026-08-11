@@ -19,6 +19,7 @@ import {
   WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
   WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
   createWorkerManagedSecretStore,
+  inspectConfiguredWorkerIdentityKey,
   loadWorkerConfiguration,
   readWorkerComputerUseCoreKeyBinding,
   resolveWorkerPaths,
@@ -219,6 +220,13 @@ async function startWorkerWorkload(
     home: configuration.stateRoot,
   });
   await verifyWorkerServiceSecretBinding(configuration, paths);
+  const identityKeyStatus = await inspectConfiguredWorkerIdentityKey({
+    paths,
+    environment: buildCoreChildServiceEnvironment(process.env, configuration),
+  });
+  writeWorkerServiceEvent("worker.identity-key-diagnostic", {
+    status: identityKeyStatus,
+  });
   const computerUseRuntime = await tryStartWorkerComputerUseRuntime(
     configuration,
     paths,

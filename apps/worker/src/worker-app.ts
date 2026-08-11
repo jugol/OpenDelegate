@@ -1864,6 +1864,33 @@ export async function diagnoseWorker(input: {
   });
 }
 
+/**
+ * Reads only the configured Device identity boundary. Native service hosts use
+ * this narrow probe so a reconnect failure can distinguish a broken local key
+ * from a transport failure without probing Agent providers or exposing key
+ * material.
+ */
+export async function inspectConfiguredWorkerIdentityKey(input: {
+  readonly paths: WorkerPaths;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}): Promise<WorkerDiagnosticSnapshot["identityKeyStatus"]> {
+  const configuration = await loadWorkerConfiguration(input.paths);
+  const managedSecrets = createWorkerManagedSecretStore(
+    configuration.secretBackend,
+    configuration.deviceId,
+    input.paths,
+    input.environment ?? process.env,
+  );
+  if ((await managedSecrets.health()).status !== "ready") {
+    return "unavailable";
+  }
+  return inspectWorkerIdentityKey(
+    managedSecrets,
+    `${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`,
+    configuration.certificatePem,
+  );
+}
+
 export async function inspectWorkerIdentityKey(
   managedSecrets: Pick<ManagedSecretStore, "executeWithSecretBytes">,
   alias: string,

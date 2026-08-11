@@ -1,6 +1,6 @@
 {
   "name": "opendelegate",
-  "version": "0.1.0-alpha.77",
+  "version": "0.1.0-alpha.78",
   "private": true,
   "description": "A personal, self-hosted control plane for orchestrating AI agents across devices.",
   "license": "Apache-2.0",

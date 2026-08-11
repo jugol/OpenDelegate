@@ -1,4 +1,10 @@
-import { createHash, createPrivateKey, randomUUID } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  randomUUID,
+  X509Certificate,
+} from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { TLSSocket } from "node:tls";
 import { isDeepStrictEqual } from "node:util";
@@ -238,35 +244,34 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
       }
       const keyCopy = Buffer.from(pkcs8);
       try {
-        const privateKey = createPrivateKey({
-          key: keyCopy,
-          format: "der",
-          type: "pkcs8",
-        });
+        const privateKey = parseMatchingPrivateKey(keyCopy, options.identity.certificatePem);
         const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
-        const socket = new WebSocket(options.endpointUrl, DEVICE_CHANNEL_SUBPROTOCOL, {
-          ca: options.identity.certificateAuthorityPem,
-          cert: options.identity.certificatePem,
-          key: privateKeyPem,
-          minVersion: "TLSv1.3",
-          maxVersion: "TLSv1.3",
-          rejectUnauthorized: true,
-          maxPayload: MAX_DEVICE_CHANNEL_FRAME_BYTES,
-          perMessageDeflate: false,
-          followRedirects: false,
-          handshakeTimeout: connectTimeoutMs,
-        });
-        const client = new WorkerDeviceChannelClient(options, socket);
-        await client.open(connectTimeoutMs);
-        connected = client;
-      } catch (error) {
-        if (error instanceof DeviceChannelClientError) {
-          throw error;
+        try {
+          const socket = new WebSocket(options.endpointUrl, DEVICE_CHANNEL_SUBPROTOCOL, {
+            ca: options.identity.certificateAuthorityPem,
+            cert: options.identity.certificatePem,
+            key: privateKeyPem,
+            minVersion: "TLSv1.3",
+            maxVersion: "TLSv1.3",
+            rejectUnauthorized: true,
+            maxPayload: MAX_DEVICE_CHANNEL_FRAME_BYTES,
+            perMessageDeflate: false,
+            followRedirects: false,
+            handshakeTimeout: connectTimeoutMs,
+          });
+          const client = new WorkerDeviceChannelClient(options, socket);
+          await client.open(connectTimeoutMs);
+          connected = client;
+        } catch (error) {
+          if (error instanceof DeviceChannelClientError) {
+            throw error;
+          }
+          throw new DeviceChannelClientError(
+            `The Worker Device channel could not connect${safeErrorCode(
+              error instanceof Error ? error : undefined,
+            )}.`,
+          );
         }
-        throw new DeviceChannelClientError(
-          "The Worker private-key lease could not be used.",
-          "IDENTITY_KEY_INVALID",
-        );
       } finally {
         keyCopy.fill(0);
       }
@@ -1487,6 +1492,32 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     } catch {
       // Diagnostics must not affect the authenticated channel lifecycle.
     }
+  }
+}
+
+function parseMatchingPrivateKey(pkcs8: Buffer, certificatePem: string) {
+  try {
+    const privateKey = createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" });
+    const privateSpki = Buffer.from(
+      createPublicKey(privateKey).export({ format: "der", type: "spki" }),
+    );
+    const certificateSpki = Buffer.from(
+      new X509Certificate(certificatePem).publicKey.export({ format: "der", type: "spki" }),
+    );
+    try {
+      if (!privateSpki.equals(certificateSpki)) {
+        throw new Error("mismatch");
+      }
+    } finally {
+      privateSpki.fill(0);
+      certificateSpki.fill(0);
+    }
+    return privateKey;
+  } catch {
+    throw new DeviceChannelClientError(
+      "The Worker private key is invalid or does not match its certificate.",
+      "IDENTITY_KEY_INVALID",
+    );
   }
 }
 
