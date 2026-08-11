@@ -69,18 +69,21 @@ owner/provider-managed paths. Recursive traversal uses `/L`, so descendant symbo
 links are modified as links rather than followed. Missing paths are skipped, while a
 linked, special, or noncanonical declared root fails before mutation.
 
-The owner profile itself must be a canonical local DOS-drive path. UNC paths,
-device-namespace aliases such as `\\?\`, and trailing-separator variants fail before
-protected-root comparison. Start and restart also require the installed runtime
-configuration to match the supplied canonical bytes before any provider or launcher
-ACL action executes.
+The owner profile and both provider homes must be canonical local DOS-drive paths. UNC
+paths, device-namespace aliases such as `\\?\`, trailing separators, components ending
+in a period or space, and reserved DOS device names fail before protected-root
+comparison. Start and restart also require the installed runtime configuration to
+match the supplied canonical bytes before any provider or launcher ACL action executes.
 
 The Codex `.sandbox-bin` Full Control repair runs after the broader Codex-home Modify
 grant so it cannot be downgraded. It has an exact existing-parent precondition: when
 the declared Codex home is missing, lifecycle skips both the home grant and sandbox
 child instead of recreating owner-managed provider state. Child creation is explicitly
 non-recursive and the parent and child are revalidated canonically before ACL mutation,
-so a provider home that disappears between checks is never recreated.
+whether the child was pre-existing or newly created. The child's `icacls` mutations
+also use `/L`, so a junction or symbolic-link replacement cannot redirect the ACL
+operation into its target. A provider home that disappears between checks is never
+recreated.
 
 Because this decision adds a runtime field, the upgrade executor snapshots the exact
 installed runtime-configuration bytes immediately before the atomic forward write.

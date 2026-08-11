@@ -829,6 +829,85 @@ test("Windows sandbox repair never recreates a provider home that disappears", a
   assert.equal(fileSystem.kinds.get(sandbox), "missing");
 });
 
+test("Windows sandbox repair revalidates an existing child before link-local ACL mutation", async () => {
+  const configuration = windowsConfiguration({
+    agentSandbox: {
+      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    },
+  });
+  const sandbox = configuration.agentSandbox?.codexSandboxBinDirectory;
+  assert.ok(sandbox);
+
+  const successfulFileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(successfulFileSystem, configuration);
+  const successfulProcess = new FakeProcess();
+  successfulProcess.handler = () => processResult(0);
+  const successfulBoundaries = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem: successfulFileSystem,
+    process: successfulProcess,
+  }).boundaries;
+  const successful = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries: successfulBoundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-sandbox-link-local-acl",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+  assert.equal(successful.report.outcome, "succeeded");
+  const sandboxAclRequests = successfulProcess.requests.filter(
+    (request) =>
+      request.executable.toLowerCase().endsWith("icacls.exe") && request.arguments[0] === sandbox,
+  );
+  assert.ok(sandboxAclRequests.length > 0);
+  assert.equal(
+    sandboxAclRequests.every((request) => request.arguments.includes("/L")),
+    true,
+  );
+
+  const racedFileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(racedFileSystem, configuration);
+  const racedJournal = new MemoryJournal();
+  const realPath = racedFileSystem.realPath.bind(racedFileSystem);
+  racedFileSystem.realPath = async (path) =>
+    path === sandbox && racedJournal.claims > 0
+      ? "C:\\Users\\owner\\redirected-sandbox"
+      : await realPath(path);
+  const racedProcess = new FakeProcess();
+  racedProcess.handler = () => processResult(0);
+  const racedBoundaries = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem: racedFileSystem,
+    process: racedProcess,
+  }).boundaries;
+  const raced = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries: racedBoundaries,
+    journalFactory: { create: () => racedJournal },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-existing-sandbox-race",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+  assert.equal(raced.report.outcome, "failed");
+  assert.equal(raced.report.failedStepId, "ensure-codex-sandbox-helper");
+  assert.equal(
+    racedProcess.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") && request.arguments[0] === sandbox,
+    ),
+    false,
+  );
+});
+
 test("preflight checks every native tool and publisher trust before mutation", async () => {
   const configuration = linuxConfiguration();
   const journal = new MemoryJournal();

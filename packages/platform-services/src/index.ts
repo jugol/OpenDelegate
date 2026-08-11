@@ -153,7 +153,7 @@ export {
   type ReadOnlyCommandRunner,
   type WindowsHostValidationReport,
 } from "./windows-host-validation.ts";
-export { parseWindowsOwnerHome } from "./windows-owner-home.ts";
+export { isCanonicalLocalWindowsPath, parseWindowsOwnerHome } from "./windows-owner-home.ts";
 export {
   NativeBoundaryError,
   createNodeNativeServiceBoundaries,

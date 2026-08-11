@@ -2,7 +2,10 @@ import { createHash, createPublicKey } from "node:crypto";
 import { open, realpath } from "node:fs/promises";
 import { isAbsolute, posix, resolve, win32 } from "node:path";
 
-import { parseWindowsOwnerHome } from "@opendelegate/platform-services";
+import {
+  isCanonicalLocalWindowsPath,
+  parseWindowsOwnerHome,
+} from "@opendelegate/platform-services";
 
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
@@ -882,11 +885,8 @@ function requirePlatformPath(
     value !== value.trim() ||
     value.includes("\0") ||
     (platform === "windows"
-      ? win32.normalize(value) !== value
-      : posix.normalize(value) !== value) ||
-    (platform === "windows"
-      ? !/^[A-Za-z]:\\[^<>:"|?*\r\n]+$/u.test(value)
-      : !value.startsWith("/") || value.includes("\\"))
+      ? !isCanonicalLocalWindowsPath(value)
+      : posix.normalize(value) !== value || !value.startsWith("/") || value.includes("\\"))
   ) {
     throw new ServiceHostError(`The ${label} path is invalid.`);
   }

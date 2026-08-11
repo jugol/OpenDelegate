@@ -419,6 +419,23 @@ function createNativeFilesystemAdapter(
           }
           const existing = await fileSystem.inspect(action.path);
           if (configuration.platform === "windows" && existing.kind === "directory") {
+            if (action.requiredExistingParent !== undefined) {
+              const parent = await fileSystem.inspect(action.requiredExistingParent);
+              const child = await fileSystem.inspect(action.path);
+              if (parent.kind !== "directory" || child.kind !== "directory") {
+                throw uncertain("An owner-managed child directory lost its exact parent binding.");
+              }
+              const [canonicalParent, canonicalChild] = await Promise.all([
+                fileSystem.realPath(action.requiredExistingParent),
+                fileSystem.realPath(action.path),
+              ]);
+              if (
+                !equalPath("windows", canonicalParent, action.requiredExistingParent) ||
+                !equalPath("windows", canonicalChild, action.path)
+              ) {
+                throw uncertain("An owner-managed child directory changed through a link.");
+              }
+            }
             // A running service-owned Secret Store intentionally removes the
             // interactive administrator from its DACL. Reinstallation must let
             // elevated icacls restore the canonical ACL before any Node chmod or
@@ -431,6 +448,7 @@ function createNativeFilesystemAdapter(
               boundaries,
               tools,
               true,
+              action.requiredExistingParent !== undefined,
             );
             if ((await fileSystem.inspect(action.path)).kind !== "directory") {
               throw uncertain("A native service directory changed during access repair.");
@@ -472,6 +490,8 @@ function createNativeFilesystemAdapter(
             action.access.owner,
             boundaries,
             tools,
+            false,
+            action.requiredExistingParent !== undefined,
           );
           return { disposition };
         }
@@ -1231,6 +1251,7 @@ async function applyDirectoryAccess(
   boundaries: NativeServiceBoundaries,
   tools: NativeTools,
   recoverProtectedOwner = false,
+  doNotFollowLinks = false,
 ): Promise<void> {
   if (configuration.platform === "windows") {
     const action = findDirectoryAccess(configuration, path);
@@ -1246,7 +1267,12 @@ async function applyDirectoryAccess(
     // real Windows host even though mocked process boundaries accept it.
     const ownerRequest: NativeProcessRequest = {
       executable: tools.icacls,
-      arguments: [path, "/setowner", windowsPrincipal(action.owner)],
+      arguments: [
+        path,
+        "/setowner",
+        windowsPrincipal(action.owner),
+        ...(doNotFollowLinks ? ["/L"] : []),
+      ],
       timeoutMs: 30_000,
     };
     let ownerNeedsFinalTransfer = false;
@@ -1273,6 +1299,9 @@ async function applyDirectoryAccess(
         `${windowsPrincipal(grant.principal)}:${windowsPermission(grant.permission)}`,
       );
     }
+    if (doNotFollowLinks) {
+      arguments_.push("/L");
+    }
     await runRequired(boundaries.process, {
       executable: tools.icacls,
       arguments: arguments_,
@@ -1284,7 +1313,7 @@ async function applyDirectoryAccess(
     if (resetReleaseTree) {
       await runRequired(boundaries.process, {
         executable: tools.icacls,
-        arguments: [path, "/reset", "/T", "/C", "/Q"],
+        arguments: [path, "/reset", "/T", "/C", "/Q", ...(doNotFollowLinks ? ["/L"] : [])],
         timeoutMs: 30_000,
       });
     }

@@ -2912,7 +2912,9 @@ See [ADR-0067](adr/0067-windows-owner-agent-launcher-path.md).
 
 **Decision:** A Windows service document records the installation owner's canonical,
 non-root local DOS-drive profile directory when the owner shell can prove it. UNC,
-device-namespace, and trailing-separator aliases are rejected. The Worker child then
+device-namespace, trailing-separator, trailing-dot/space component, and reserved DOS
+device-name aliases are rejected. The same canonical local-path rule applies to each
+provider home before any elevated lifecycle mutation. The Worker child then
 prepends only that profile's `.local\bin` and `AppData\Roaming\npm` directories to
 the service's existing system `PATH`, with case-insensitive deduplication. It never
 copies the owner's complete interactive `PATH`. During upgrade, the installer accepts
@@ -2935,6 +2937,11 @@ a persistent Windows service document. Missing owner-managed paths and their Cod
 sandbox child are skipped rather than created; links and special entries fail closed.
 The executor never disables inheritance or resets a provider tree while adding these
 service-specific entries.
+
+The sandbox child and its exact parent are canonically revalidated immediately before
+ACL mutation whether the child was pre-existing or newly created. Its `icacls`
+operations use link-local `/L` semantics, so a replacement race cannot redirect the
+owner or DACL mutation into the link target.
 
 Start and restart compare the installed runtime-configuration bytes with the supplied
 canonical configuration before any Agent-home ACL repair. The provider homes receiving

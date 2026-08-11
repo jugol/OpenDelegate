@@ -7,7 +7,7 @@ import {
   type PlatformServiceConfiguration,
   type PlatformServiceDefinition,
 } from "./types.ts";
-import { parseWindowsOwnerHome } from "./windows-owner-home.ts";
+import { isCanonicalLocalWindowsPath, parseWindowsOwnerHome } from "./windows-owner-home.ts";
 
 const BASE_KEYS = new Set([
   "platform",
@@ -384,7 +384,12 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       ],
     ] as const;
     for (const [provider, name, providerHome] of providerHomes) {
-      assertSafeAbsolutePath("windows", providerHome, name);
+      if (!isCanonicalLocalWindowsPath(providerHome)) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          `${name} must be a canonical local DOS-drive path without Win32 aliases.`,
+        );
+      }
       if (win32.dirname(providerHome) === providerHome) {
         throw new PlatformServiceError("INVALID_PATH", `${name} cannot be a volume root.`);
       }
