@@ -105,6 +105,38 @@ test(
 );
 
 test(
+  "the Windows native filesystem boundary creates one exact Codex authentication link",
+  { skip: process.platform !== "win32" },
+  async (context) => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-native-auth-link-"));
+    context.after(async () => {
+      await rm(root, { force: true, recursive: true });
+    });
+    const ownerAuth = join(root, "owner-auth.json");
+    const serviceAuth = join(root, "service-auth.json");
+    const occupied = join(root, "occupied.json");
+    await writeFile(ownerAuth, "fixture-auth");
+    await writeFile(occupied, "do-not-replace");
+    const fileSystem = createNodeNativeServiceBoundaries().fileSystem;
+
+    assert.equal(
+      await fileSystem.createFileLinkAtomic(ownerAuth, serviceAuth, "windows"),
+      "changed",
+    );
+    assert.equal(resolve(root, await readlink(serviceAuth)), resolve(ownerAuth));
+    assert.equal(
+      await fileSystem.createFileLinkAtomic(ownerAuth, serviceAuth, "windows"),
+      "unchanged",
+    );
+    await assert.rejects(
+      fileSystem.createFileLinkAtomic(ownerAuth, occupied, "windows"),
+      (error: unknown) =>
+        error instanceof NativeBoundaryError && error.code === "NATIVE_FILESYSTEM_UNSAFE",
+    );
+  },
+);
+
+test(
   "the macOS activation link repairs service-group traversal on an unchanged target",
   { skip: process.platform !== "darwin" },
   async (context) => {

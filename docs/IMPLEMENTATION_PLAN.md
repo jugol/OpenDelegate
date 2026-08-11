@@ -441,11 +441,12 @@ Make Main and Worker roles truly persistent on all target operating systems.
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
-- On Windows, prepare only the active owner's exact Codex `.sandbox-bin` helper
-  directory for the virtual-service identity. Install, start, restart, and upgrade
-  reassert an inheritance-free ACL granting Full Control to Administrators, SYSTEM,
-  the owner SID, and the exact OpenDelegate service SID; no broader provider home or
-  source checkout is opened.
+- On Windows, bind the owner's exact Codex home only as the authentication SSOT and
+  prepare a separate managed service `CODEX_HOME` below instance state. Its exact
+  `auth.json` is a validated symbolic link to the owner file rather than a credential
+  copy. Install, start, restart, and upgrade make the virtual-service identity the
+  owner of the managed `.sandbox-bin`, while Administrators and SYSTEM retain Full
+  Control; the interactive Codex helper and source checkout are never shared.
 - Implement a Device-local service-preparation boundary for every persistent shape.
   A graphical Device migrates core-owned Secrets to the native service identity,
   leaves the owner-session key in its separate store, and durably exports only the
@@ -476,9 +477,9 @@ Make Main and Worker roles truly persistent on all target operating systems.
 - User-session helper loss removes graphical Capabilities without dropping headless
   work.
 - Failed upgrades roll back to a healthy version.
-- A Windows Codex Run can initialize its sandbox helper from the installed service
-  identity, while an ACL probe proves that sibling provider-home content was not
-  widened.
+- A Windows Codex Run can initialize and refresh its service-owned sandbox helper
+  repeatedly, sees the owner's existing authentication through the exact SSOT link,
+  and cannot mutate the interactive Codex helper or sibling provider-home content.
 - A bundle build completes while an existing Main remains healthy on its configured
   listeners, without changing its process, service definition, or active version.
 

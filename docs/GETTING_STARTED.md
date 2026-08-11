@@ -235,6 +235,10 @@ owner-interactive login rule. Explicit external Codex and Claude homes remain sh
 never copy a global credential directory. If either Adapter is degraded only because authentication
 is not ready, authenticate the exact configured home and run **Assess device** again.
 
+On a persistent Windows Worker, Codex execution state is intentionally isolated in the managed
+service home, but its exact `auth.json` links to the owner's selected Codex home. The service therefore
+reuses that one login without copying token bytes or sharing the interactive `.sandbox-bin`.
+
 An Agent Binding contains the provider, exact adapter, and exact provider-native model ID. The
 selection list comes only from the target Device's latest tested model catalog. Configuration Chat
 is intentionally Device-scoped: on the NAS page, say _“Use Claude Opus on this Device”_; on the Mac

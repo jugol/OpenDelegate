@@ -46,7 +46,11 @@ const WINDOWS_SERVICE_SECRET_BINDING_KEYS = new Set([
 ]);
 const WINDOWS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "vaultRoot"]);
 const WINDOWS_AGENT_SANDBOX_KEYS = new Set(["codexSandboxBinDirectory"]);
-const WINDOWS_AGENT_PROVIDER_ACCESS_KEYS = new Set(["codexHomeDirectory", "claudeHomeDirectory"]);
+const WINDOWS_AGENT_PROVIDER_ACCESS_KEYS = new Set([
+  "codexHomeDirectory",
+  "codexServiceHomeDirectory",
+  "claudeHomeDirectory",
+]);
 const MACOS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "helperPath", "expectedHelperSha256"]);
 const MACOS_SERVICE_SECRET_BINDING_KEYS = new Set([
   "backend",
@@ -378,6 +382,11 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
         input.agentProviderAccess.codexHomeDirectory,
       ],
       [
+        "codex",
+        "agentProviderAccess.codexServiceHomeDirectory",
+        input.agentProviderAccess.codexServiceHomeDirectory,
+      ],
+      [
         "claude",
         "agentProviderAccess.claudeHomeDirectory",
         input.agentProviderAccess.claudeHomeDirectory,
@@ -432,6 +441,36 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
         }
       }
     }
+    const expectedCodexServiceHome = win32.join(
+      input.paths.stateRoot,
+      "state",
+      "providers",
+      "codex",
+    );
+    if (
+      !samePath(
+        "windows",
+        input.agentProviderAccess.codexServiceHomeDirectory,
+        expectedCodexServiceHome,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "agentProviderAccess.codexServiceHomeDirectory must be the exact managed Codex provider root.",
+      );
+    }
+    if (
+      pathsOverlap(
+        "windows",
+        input.agentProviderAccess.codexHomeDirectory,
+        input.agentProviderAccess.codexServiceHomeDirectory,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The owner and service Codex homes must be disjoint.",
+      );
+    }
     if (
       pathsOverlap(
         "windows",
@@ -445,11 +484,23 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       );
     }
     if (
+      pathsOverlap(
+        "windows",
+        input.agentProviderAccess.codexServiceHomeDirectory,
+        input.agentProviderAccess.claudeHomeDirectory,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The service Codex and Claude homes must be disjoint.",
+      );
+    }
+    if (
       input.agentSandbox !== undefined &&
       !samePath(
         "windows",
         win32.dirname(input.agentSandbox.codexSandboxBinDirectory),
-        input.agentProviderAccess.codexHomeDirectory,
+        input.agentProviderAccess.codexServiceHomeDirectory,
       )
     ) {
       throw new PlatformServiceError(

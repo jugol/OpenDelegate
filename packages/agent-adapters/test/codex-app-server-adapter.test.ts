@@ -432,6 +432,58 @@ test("Codex App Server fails closed when persisted state cannot prove terminal c
   }
 });
 
+test("Codex App Server contains EPIPE when the provider exits during owner authorization", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
+  try {
+    const cwd = await realpath(process.cwd());
+    const adapter = new CodexAppServerAdapter({
+      codexHome: join(root, "codex-home"),
+      executable: process.execPath,
+      prefixArgs: [fixturePath, "codex-app-server"],
+    });
+    const handle = await adapter.start({
+      operation: "start",
+      requestId: "request-provider-exit-during-approval",
+      runId: "run-provider-exit-during-approval",
+      taskId: "task-provider-exit-during-approval",
+      workstreamId: "implementation",
+      sessionKey: "task-provider-exit-during-approval/implementation",
+      deviceId: "device-windows",
+      prompt: "Run one bounded command.",
+      workspace: {
+        workspaceId: "workspace-app-server",
+        cwd,
+        isolation: "none",
+      },
+      sandbox: "workspace-write",
+      permissions: {
+        mode: "allow-listed",
+        allowedTools: ["shell"],
+        actionAuthorization: {
+          authorizeAndConsume: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            return { decision: "allow", reasonCode: "POLICY_TEST" };
+          },
+        },
+      },
+      environment: {
+        FIXTURE_CODEX_EXIT_AFTER_APPROVAL_REQUEST: "1",
+        FIXTURE_CODEX_RECONCILED_TURN_STATUS: "inProgress",
+      },
+      limits,
+    });
+    for await (const event of handle.events) {
+      void event;
+    }
+    const result = await handle.result;
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.error?.code, "PROVIDER_CONNECTION_CLOSED");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Codex App Server never masks a protocol violation with persisted turn reconciliation", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
   try {

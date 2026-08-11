@@ -61,19 +61,33 @@ test("rejects relative or source-checkout runtime state paths", () => {
       ),
     (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
   );
+
+  for (const codexServiceHomeDirectory of [
+    "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\..\\escaped",
+    "C:\\Users\\owner\\.codex\\service",
+  ]) {
+    assert.throws(
+      () =>
+        createPlatformServiceDefinition(
+          windowsConfiguration({ agentProviderAccess: { codexServiceHomeDirectory } }),
+        ),
+      (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
+    );
+  }
 });
 
 test("accepts only the exact external Windows Codex sandbox helper directory", () => {
   const accepted = createPlatformServiceDefinition(
     windowsConfiguration({
       agentSandbox: {
-        codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+        codexSandboxBinDirectory:
+          "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
       },
     }),
   ).configuration;
   assert.equal(
     accepted.platform === "windows" ? accepted.agentSandbox?.codexSandboxBinDirectory : undefined,
-    "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
   );
 
   for (const codexSandboxBinDirectory of [
@@ -109,6 +123,7 @@ test("accepts only bounded Windows Agent provider homes with a verified owner pr
   ).configuration;
   assert.deepEqual(accepted.platform === "windows" ? accepted.agentProviderAccess : undefined, {
     codexHomeDirectory: "C:\\Users\\owner\\.codex",
+    codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
     claudeHomeDirectory: "C:\\Users\\owner\\.claude",
   });
 
@@ -214,7 +229,7 @@ test("accepts only bounded Windows Agent provider homes with a verified owner pr
     createPlatformServiceDefinition(
       windowsConfiguration({
         agentProviderAccess: {
-          codexHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+          codexHomeDirectory: "C:\\Users\\owner\\.codex",
           claudeHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\claude",
         },
       }),

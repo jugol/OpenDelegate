@@ -47,6 +47,7 @@ export interface ServiceHostConfiguration {
   };
   readonly agentProviderAccess?: {
     readonly codexHomeDirectory: string;
+    readonly codexServiceHomeDirectory: string;
     readonly claudeHomeDirectory: string;
   };
   readonly helperSecretBinding:
@@ -351,17 +352,21 @@ function parseAgentProviderAccess(
   const record = requireRecord(input, "Windows Agent provider-home binding");
   requireExactKeys(
     record,
-    ["codexHomeDirectory", "claudeHomeDirectory"],
+    ["codexHomeDirectory", "codexServiceHomeDirectory", "claudeHomeDirectory"],
     [],
     "Windows Agent provider-home binding",
   );
   const homes = [
     ["codex", record["codexHomeDirectory"]],
+    ["codex", record["codexServiceHomeDirectory"]],
     ["claude", record["claudeHomeDirectory"]],
   ] as const;
   for (const [provider, value] of homes) {
     requirePlatformPath("windows", value, `${provider} provider home`);
     const home = value as string;
+    if (!isCanonicalLocalWindowsPath(home)) {
+      throw new ServiceHostError("A Windows Agent provider home path is invalid.");
+    }
     const managedRoot = win32.resolve(stateRoot, "state", "providers", provider);
     const belongsToManagedProvider =
       configuredPathsEqual("windows", managedRoot, home) ||
@@ -389,11 +394,24 @@ function parseAgentProviderAccess(
     }
   }
   const codexHomeDirectory = record["codexHomeDirectory"] as string;
+  const codexServiceHomeDirectory = record["codexServiceHomeDirectory"] as string;
   const claudeHomeDirectory = record["claudeHomeDirectory"] as string;
+  const expectedCodexServiceHome = win32.resolve(stateRoot, "state", "providers", "codex");
+  if (!configuredPathsEqual("windows", codexServiceHomeDirectory, expectedCodexServiceHome)) {
+    throw new ServiceHostError(
+      "The Windows Codex service home must be the exact managed provider root.",
+    );
+  }
+  if (pathsOverlap("windows", codexHomeDirectory, codexServiceHomeDirectory)) {
+    throw new ServiceHostError("The owner and service Codex homes must be disjoint.");
+  }
   if (pathsOverlap("windows", codexHomeDirectory, claudeHomeDirectory)) {
     throw new ServiceHostError("The Windows Codex and Claude homes must be disjoint.");
   }
-  return Object.freeze({ codexHomeDirectory, claudeHomeDirectory });
+  if (pathsOverlap("windows", codexServiceHomeDirectory, claudeHomeDirectory)) {
+    throw new ServiceHostError("The service Codex and Claude homes must be disjoint.");
+  }
+  return Object.freeze({ codexHomeDirectory, codexServiceHomeDirectory, claudeHomeDirectory });
 }
 
 function parseServiceSecretBinding(

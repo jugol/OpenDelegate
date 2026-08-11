@@ -108,7 +108,10 @@ export interface WindowsAgentSandboxConfiguration {
 }
 
 export interface WindowsAgentProviderAccessConfiguration {
+  /** Owner-authenticated Codex home containing the one SSOT auth.json. */
   readonly codexHomeDirectory: string;
+  /** Service-owned Codex execution home below the managed provider root. */
+  readonly codexServiceHomeDirectory: string;
   readonly claudeHomeDirectory: string;
 }
 

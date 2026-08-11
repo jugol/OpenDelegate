@@ -85,6 +85,7 @@ approved product specification.
 62. [`0065-artifact-gateway-installation-and-worker-diagnostics.md`](0065-artifact-gateway-installation-and-worker-diagnostics.md)
 63. [`0066-post-turn-artifact-evidence.md`](0066-post-turn-artifact-evidence.md)
 64. [`0067-windows-owner-agent-launcher-path.md`](0067-windows-owner-agent-launcher-path.md)
+65. [`0068-windows-codex-service-home.md`](0068-windows-codex-service-home.md)
 
 ## Proposed ADRs
 

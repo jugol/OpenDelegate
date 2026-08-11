@@ -174,6 +174,26 @@ class FakeFileSystem implements NativeFileSystemBoundary {
     return this.links.get(path);
   }
 
+  public async createFileLinkAtomic(
+    target: string,
+    linkPath: string,
+    _platform: "windows",
+  ): Promise<"changed" | "unchanged"> {
+    if (this.links.get(linkPath) === target) {
+      return "unchanged";
+    }
+    if ((await this.inspect(linkPath)).kind !== "missing") {
+      throw new Error("occupied file link");
+    }
+    this.links.set(linkPath, target);
+    this.kinds.set(linkPath, "symbolic-link");
+    return "changed";
+  }
+
+  public async readFileLink(path: string): Promise<string | undefined> {
+    return this.links.get(path);
+  }
+
   public async remove(path: string, _recursive: boolean): Promise<"changed" | "unchanged"> {
     const before = await this.inspect(path);
     this.kinds.set(path, "missing");
@@ -465,7 +485,8 @@ test("Windows Worker install accepts the release and staging root actions after 
       homeDirectory: "C:\\Users\\owner",
     },
     agentSandbox: {
-      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
     },
     agentProviderAccess: {
       codexHomeDirectory: "C:\\Users\\owner\\.codex",
@@ -570,14 +591,17 @@ test("Windows Worker install accepts the release and staging root actions after 
   assert.ok(
     icaclsRequests.some(
       (request) =>
-        request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin" &&
+        request.arguments[0] ===
+          "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin" &&
         request.arguments.includes("NT SERVICE\\OpenDelegate-personal:(OI)(CI)F"),
     ),
   );
   assert.ok(
     icaclsRequests.findIndex((request) => request.arguments[0] === "C:\\Users\\owner\\.codex") <
       icaclsRequests.findIndex(
-        (request) => request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin",
+        (request) =>
+          request.arguments[0] ===
+          "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
       ),
   );
   for (const [path, permission] of [
@@ -620,7 +644,8 @@ test("Windows Worker install accepts the release and staging root actions after 
   assert.equal(
     icaclsRequests.some(
       (request) =>
-        request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin" &&
+        request.arguments[0] ===
+          "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin" &&
         request.arguments.includes("/grant:r") &&
         request.arguments.includes("/T"),
     ),
@@ -639,7 +664,8 @@ test("Windows provider access skips missing paths and rejects linked roots befor
       claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
     agentSandbox: {
-      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
     },
     serviceSecretBinding: {
       backend: "windows-service-dpapi",
@@ -657,7 +683,11 @@ test("Windows provider access skips missing paths and rejects linked roots befor
   const fileSystem = new FakeFileSystem();
   seedInstalledRuntimeConfiguration(fileSystem, configuration);
   fileSystem.kinds.set("C:\\Users\\owner\\.codex", "missing");
-  fileSystem.kinds.set("C:\\Users\\owner\\.codex\\.sandbox-bin", "missing");
+  const serviceCodexHome = configuration.agentProviderAccess.codexServiceHomeDirectory;
+  const serviceSandbox = configuration.agentSandbox?.codexSandboxBinDirectory;
+  assert.ok(serviceSandbox);
+  fileSystem.kinds.set(serviceCodexHome, "missing");
+  fileSystem.kinds.set(serviceSandbox, "missing");
   const process = new FakeProcess();
   const { boundaries } = fakeBoundaries({
     platform: "windows",
@@ -695,13 +725,9 @@ test("Windows provider access skips missing paths and rejects linked roots befor
     ),
     true,
   );
-  assert.equal(fileSystem.kinds.get("C:\\Users\\owner\\.codex\\.sandbox-bin"), "missing");
-  assert.equal(
-    process.requests.some(
-      (request) => request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin",
-    ),
-    false,
-  );
+  assert.equal(fileSystem.kinds.get(serviceCodexHome), "directory");
+  assert.equal(fileSystem.kinds.get(serviceSandbox), "directory");
+  assert.equal(fileSystem.links.get(`${serviceCodexHome}\\auth.json`), undefined);
 
   fileSystem.kinds.set("C:\\Users\\owner\\.claude", "symbolic-link");
   process.requests.length = 0;
@@ -781,12 +807,13 @@ test("Windows start rejects provider-home drift before ACL mutation", async () =
 test("Windows sandbox repair never recreates a provider home that disappears", async () => {
   const configuration = windowsConfiguration({
     agentSandbox: {
-      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
     },
   });
   const fileSystem = new FakeFileSystem();
   seedInstalledRuntimeConfiguration(fileSystem, configuration);
-  const codexHome = configuration.agentProviderAccess.codexHomeDirectory;
+  const codexHome = configuration.agentProviderAccess.codexServiceHomeDirectory;
   const sandbox = configuration.agentSandbox?.codexSandboxBinDirectory;
   assert.ok(sandbox);
   fileSystem.kinds.set(sandbox, "missing");
@@ -832,7 +859,8 @@ test("Windows sandbox repair never recreates a provider home that disappears", a
 test("Windows sandbox repair revalidates an existing child before link-local ACL mutation", async () => {
   const configuration = windowsConfiguration({
     agentSandbox: {
-      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
     },
   });
   const sandbox = configuration.agentSandbox?.codexSandboxBinDirectory;
@@ -991,6 +1019,50 @@ test("Windows sandbox repair revalidates an existing child before link-local ACL
       request.executable.toLowerCase().endsWith("takeown.exe"),
     )?.arguments,
     ["/F", sandbox, "/A", "/R", "/D", "N", "/SKIPSL"],
+  );
+});
+
+test("Windows Codex authentication linking rejects a different existing target", async () => {
+  const configuration = windowsConfiguration({
+    agentSandbox: {
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
+  const alias = `${configuration.agentProviderAccess.codexServiceHomeDirectory}\\auth.json`;
+  fileSystem.links.set(alias, "C:\\Users\\owner\\other-auth.json");
+  fileSystem.kinds.set(alias, "symbolic-link");
+  const process = new FakeProcess();
+  process.handler = () => processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+  });
+  const result = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-wrong-codex-auth-link",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+
+  assert.equal(result.report.outcome, "failed");
+  assert.equal(result.report.failedStepId, "ensure-codex-auth-ssot-link");
+  assert.equal(fileSystem.links.get(alias), "C:\\Users\\owner\\other-auth.json");
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "start",
+    ),
+    false,
   );
 });
 
@@ -1508,6 +1580,22 @@ test("Windows Worker upgrade accepts only the exact legacy runtime without owner
   );
 
   fileSystem.files.set(runtimeFile.path, exactLegacyBytes);
+  await preflightNativeServiceOperation({
+    platform: "windows",
+    boundaries,
+    configuration,
+    plan: createServicePlan({ operation: "upgrade", configuration, activeVersion: "1.2.2" }),
+    releaseVerifier: trustedRelease(),
+  });
+
+  const previousWithoutServiceHome = JSON.parse(runtimeFile.content) as {
+    agentProviderAccess: { codexServiceHomeDirectory?: string };
+  };
+  delete previousWithoutServiceHome.agentProviderAccess.codexServiceHomeDirectory;
+  fileSystem.files.set(
+    runtimeFile.path,
+    Buffer.from(`${JSON.stringify(previousWithoutServiceHome, undefined, 2)}\n`, "utf8"),
+  );
   await preflightNativeServiceOperation({
     platform: "windows",
     boundaries,

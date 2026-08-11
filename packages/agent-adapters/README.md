@@ -61,9 +61,11 @@ Every first-class Codex and Claude adapter uses an absolute, explicitly configur
 provider home and rejects ambient or per-Run attempts to override it. The default
 Device paths are `state/providers/codex` and `state/providers/claude`. Existing
 authentication is never copied. An owner may explicitly select an existing local
-Codex home as the Device's shared source of truth; otherwise the owner authenticates
-the managed home through the provider's normal interactive login. Keep every
-provider home outside the checkout and restrict it to the runtime identity.
+Codex home as the Device's shared source of truth. Persistent Windows services use a
+separate managed execution home whose exact `auth.json` links to that SSOT; session
+and sandbox state remain service-local. Other managed homes use the provider's normal
+interactive login. Keep every provider home outside the checkout and restrict it to
+the runtime identity.
 
 Claude SDK also ignores ambient settings, skills, and plugins and requires its
 fail-closed sandbox. Native Windows Claude SDK execution is reported incompatible

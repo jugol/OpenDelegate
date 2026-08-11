@@ -126,8 +126,9 @@ test("Windows install grants the virtual service temporary full control of its D
   );
 });
 
-test("Windows lifecycle plans repair only the Codex sandbox helper ACL before start", () => {
-  const sandboxDirectory = "C:\\Users\\owner\\.codex\\.sandbox-bin";
+test("Windows lifecycle plans prepare an isolated service Codex home before start", () => {
+  const serviceHome = "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex";
+  const sandboxDirectory = `${serviceHome}\\.sandbox-bin`;
   const configuration = windowsConfiguration({
     agentSandbox: { codexSandboxBinDirectory: sandboxDirectory },
   });
@@ -149,14 +150,24 @@ test("Windows lifecycle plans repair only the Codex sandbox helper ACL before st
     assert.ok(sandbox);
     assert.equal(sandbox.action.kind, "directory.ensure");
     assert.equal(sandbox.action.path, sandboxDirectory);
-    assert.equal(sandbox.action.requiredExistingParent, "C:\\Users\\owner\\.codex");
-    assert.equal(sandbox.action.access.owner, "S-1-5-21-1000");
+    assert.equal(sandbox.action.requiredExistingParent, serviceHome);
+    assert.equal(sandbox.action.access.owner, "NT SERVICE\\OpenDelegate-personal");
     assert.deepEqual(sandbox.action.access.grants, [
       { principal: "BUILTIN\\Administrators", permission: "full-control" },
       { principal: "S-1-5-18", permission: "full-control" },
-      { principal: "S-1-5-21-1000", permission: "full-control" },
+      { principal: "S-1-5-21-1000", permission: "read-execute" },
       { principal: "NT SERVICE\\OpenDelegate-personal", permission: "full-control" },
     ]);
+    const service = plan.steps.find((step) => step.id === "ensure-codex-service-home");
+    assert.ok(service);
+    assert.equal(service.action.kind, "directory.ensure");
+    assert.equal(service.action.path, serviceHome);
+    assert.equal(service.action.access.owner, "NT SERVICE\\OpenDelegate-personal");
+    const auth = plan.steps.find((step) => step.id === "ensure-codex-auth-ssot-link");
+    assert.ok(auth);
+    assert.equal(auth.action.kind, "file.symbolic-link.ensure");
+    assert.equal(auth.action.path, `${serviceHome}\\auth.json`);
+    assert.equal(auth.action.target, "C:\\Users\\owner\\.codex\\auth.json");
     assert.ok(
       plan.steps.findIndex((step) => step.id === "ensure-codex-sandbox-helper") <
         plan.steps.findIndex((step) => step.id === "start-core"),
@@ -171,6 +182,7 @@ test("Windows lifecycle plans preserve provider ACLs while granting exact servic
   };
   const access = {
     codexHomeDirectory: "C:\\Users\\owner\\.codex",
+    codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
     claudeHomeDirectory: "C:\\Users\\owner\\.claude",
   };
   for (const input of [
@@ -179,7 +191,9 @@ test("Windows lifecycle plans preserve provider ACLs while granting exact servic
       configuration: windowsConfiguration({
         ownerSession,
         agentProviderAccess: access,
-        agentSandbox: { codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin" },
+        agentSandbox: {
+          codexSandboxBinDirectory: `${access.codexServiceHomeDirectory}\\.sandbox-bin`,
+        },
       }),
     },
     {
@@ -187,7 +201,9 @@ test("Windows lifecycle plans preserve provider ACLs while granting exact servic
       configuration: windowsConfiguration({
         ownerSession,
         agentProviderAccess: access,
-        agentSandbox: { codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin" },
+        agentSandbox: {
+          codexSandboxBinDirectory: `${access.codexServiceHomeDirectory}\\.sandbox-bin`,
+        },
       }),
       activeVersion: "1.2.3",
     },
@@ -196,7 +212,9 @@ test("Windows lifecycle plans preserve provider ACLs while granting exact servic
       configuration: windowsConfiguration({
         ownerSession,
         agentProviderAccess: access,
-        agentSandbox: { codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin" },
+        agentSandbox: {
+          codexSandboxBinDirectory: `${access.codexServiceHomeDirectory}\\.sandbox-bin`,
+        },
       }),
       activeVersion: "1.2.3",
     },
@@ -205,7 +223,9 @@ test("Windows lifecycle plans preserve provider ACLs while granting exact servic
       configuration: windowsConfiguration({
         ownerSession,
         agentProviderAccess: access,
-        agentSandbox: { codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin" },
+        agentSandbox: {
+          codexSandboxBinDirectory: `${access.codexServiceHomeDirectory}\\.sandbox-bin`,
+        },
         bundle: { ...windowsConfiguration().bundle, version: "1.2.4" },
       }),
       activeVersion: "1.2.3",

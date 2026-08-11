@@ -420,6 +420,9 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         },
       });
       approvalPending = true;
+      if (process.env.FIXTURE_CODEX_EXIT_AFTER_APPROVAL_REQUEST === "1") {
+        process.exit(0);
+      }
       continue;
     }
     if (message.id === approvalRequestId && approvalPending) {

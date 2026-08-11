@@ -17,9 +17,17 @@ const IPC_TRUST = Object.freeze({
   }),
 });
 
+type WindowsConfigurationOverrides = Omit<
+  Partial<WindowsServiceConfiguration>,
+  "agentProviderAccess"
+> & {
+  readonly agentProviderAccess?: Partial<WindowsServiceConfiguration["agentProviderAccess"]>;
+};
+
 export function windowsConfiguration(
-  overrides: Partial<WindowsServiceConfiguration> = {},
+  overrides: WindowsConfigurationOverrides = {},
 ): WindowsServiceConfiguration {
+  const { agentProviderAccess, ...rest } = overrides;
   return {
     platform: "windows",
     instanceId: "personal",
@@ -48,7 +56,9 @@ export function windowsConfiguration(
     },
     agentProviderAccess: {
       codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
       claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      ...agentProviderAccess,
     },
     helperSecretBinding: {
       backend: "windows-dpapi",
@@ -65,7 +75,7 @@ export function windowsConfiguration(
       timeoutMs: 30_000,
     },
     retainPreviousVersions: 2,
-    ...overrides,
+    ...rest,
   };
 }
 

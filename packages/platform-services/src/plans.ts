@@ -84,6 +84,13 @@ export type PlanAction =
       readonly restoreOriginalBytes?: true;
     }
   | {
+      readonly kind: "file.symbolic-link.ensure";
+      readonly path: string;
+      readonly target: string;
+      readonly platform: "windows";
+      readonly targetType: "file";
+    }
+  | {
       readonly kind: "health.check";
       readonly plane: RuntimePlane;
       readonly endpoint: string;
@@ -297,7 +304,7 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       directoryAccess(configuration, "installer-only"),
     ),
     ...windowsAgentProviderAccessSteps(configuration),
-    ...windowsAgentSandboxSteps(configuration),
+    ...windowsCodexServiceHomeSteps(configuration),
     ...releaseInstallSteps(artifacts),
     ...artifacts.files.map((file): ServicePlanStep => ({
       id: `write-${file.purpose}`,
@@ -338,7 +345,7 @@ function lifecyclePlan(
     operation === "start"
       ? [
           ...windowsAgentProviderAccessSteps(artifacts.definition.configuration),
-          ...windowsAgentSandboxSteps(artifacts.definition.configuration),
+          ...windowsCodexServiceHomeSteps(artifacts.definition.configuration),
           supervisorStep("start-core", artifacts, "core", "start", "stop"),
           ...(hasSessionHelper(artifacts)
             ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
@@ -367,7 +374,7 @@ function restartPlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         : []),
       supervisorStep("stop-core", artifacts, "core", "stop", "start"),
       ...windowsAgentProviderAccessSteps(artifacts.definition.configuration),
-      ...windowsAgentSandboxSteps(artifacts.definition.configuration),
+      ...windowsCodexServiceHomeSteps(artifacts.definition.configuration),
       supervisorStep("start-core", artifacts, "core", "start", "stop"),
       ...(hasSessionHelper(artifacts)
         ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
@@ -510,7 +517,7 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
       : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
     ...windowsAgentProviderAccessSteps(definition.configuration),
-    ...windowsAgentSandboxSteps(definition.configuration),
+    ...windowsCodexServiceHomeSteps(definition.configuration),
     ...(definition.configuration.platform === "windows"
       ? [
           windowsServiceSidRepairStep(artifacts),
@@ -967,7 +974,13 @@ function directoryStep(
 function directoryAccess(
   configuration: PlatformServiceConfiguration,
   profile:
-    "installer-only" | "provider-sandbox" | "read-execute" | "service-secret" | "shared" | "state",
+    | "installer-only"
+    | "provider-sandbox"
+    | "provider-service-home"
+    | "read-execute"
+    | "service-secret"
+    | "shared"
+    | "state",
 ): DirectoryAccessPolicy {
   const installer =
     configuration.platform === "windows" ? "BUILTIN\\Administrators" : "platform-installer";
@@ -980,7 +993,7 @@ function directoryAccess(
       ? configuration.ownerSession.stableUserId
       : configuration.ownerSession.userName;
   const grants: DirectoryAccessGrant[] = [{ principal: installer, permission: "full-control" }];
-  if (profile === "provider-sandbox") {
+  if (profile === "provider-sandbox" || profile === "provider-service-home") {
     if (configuration.platform !== "windows") {
       throw new PlatformServiceError(
         "INVALID_CONFIGURATION",
@@ -989,11 +1002,11 @@ function directoryAccess(
     }
     grants.push(
       { principal: "S-1-5-18", permission: "full-control" },
-      { principal: owner, permission: "full-control" },
+      { principal: owner, permission: "read-execute" },
       { principal: core, permission: "full-control" },
     );
     return {
-      owner,
+      owner: core,
       grants,
       denyUnlisted: true,
     };
@@ -1023,14 +1036,27 @@ function directoryAccess(
   };
 }
 
-function windowsAgentSandboxSteps(
+function windowsCodexServiceHomeSteps(
   configuration: PlatformServiceConfiguration,
 ): readonly ServicePlanStep[] {
-  if (configuration.platform !== "windows" || configuration.agentSandbox === undefined) {
+  if (configuration.platform !== "windows") {
     return [];
   }
-  return [
+  const serviceHome = configuration.agentProviderAccess.codexServiceHomeDirectory;
+  const steps: ServicePlanStep[] = [
     {
+      id: "ensure-codex-service-home",
+      description: `Ensure the service-owned Codex home ${serviceHome}.`,
+      action: {
+        kind: "directory.ensure",
+        path: serviceHome,
+        mode: "0700",
+        access: directoryAccess(configuration, "provider-service-home"),
+      },
+    },
+  ];
+  if (configuration.agentSandbox !== undefined) {
+    steps.push({
       id: "ensure-codex-sandbox-helper",
       description: `Ensure external runtime directory ${configuration.agentSandbox.codexSandboxBinDirectory}.`,
       action: {
@@ -1040,8 +1066,20 @@ function windowsAgentSandboxSteps(
         access: directoryAccess(configuration, "provider-sandbox"),
         requiredExistingParent: win32.dirname(configuration.agentSandbox.codexSandboxBinDirectory),
       },
+    });
+  }
+  steps.push({
+    id: "ensure-codex-auth-ssot-link",
+    description: "Bind the service Codex home to the owner's exact authentication SSOT.",
+    action: {
+      kind: "file.symbolic-link.ensure",
+      path: win32.join(serviceHome, "auth.json"),
+      target: win32.join(configuration.agentProviderAccess.codexHomeDirectory, "auth.json"),
+      platform: "windows",
+      targetType: "file",
     },
-  ];
+  });
+  return steps;
 }
 
 function windowsAgentProviderAccessSteps(

@@ -2031,6 +2031,8 @@ code.
 
 ## D-100 — Windows Codex service sandbox access is exact and lifecycle-repaired
 
+**Status:** Superseded by [D-142](#d-142--windows-services-isolate-codex-execution-state-while-sharing-owner-authentication).
+
 Implementation detail:
 [ADR-0052](adr/0052-windows-codex-service-sandbox-directory.md).
 
@@ -2970,6 +2972,10 @@ only its own exact access entries if an installer or provider recreated those pa
 
 ## D-141 — Windows sandbox owner recovery is bounded and link-local
 
+**Status:** Superseded for normal service execution by
+[D-142](#d-142--windows-services-isolate-codex-execution-state-while-sharing-owner-authentication).
+The bounded recovery remains historical compatibility evidence only.
+
 **Decision:** When the exact existing Codex `.sandbox-bin` child rejects an elevated
 link-local `icacls /setowner`, the lifecycle executor may recover that one child with
 `takeown /A /R /D N /SKIPSL`. Immediately before and after that command it must prove
@@ -2990,3 +2996,50 @@ symbolic links.
 hosts without granting OpenDelegate a general owner-tree takeover primitive. A link
 or directory replacement before recovery, after recovery, or before the final
 link-local ACL mutation remains a deterministic failure.
+
+## D-142 — Windows services isolate Codex execution state while sharing owner authentication
+
+See [ADR-0068](adr/0068-windows-codex-service-home.md).
+
+**Decision:** A persistent Windows core never uses the interactive owner's Codex home
+as its effective `CODEX_HOME`. The signed service document binds both that owner home
+and one OpenDelegate-managed service home below the instance state root. Lifecycle
+install, start, restart, and upgrade create the managed home and its `.sandbox-bin`
+with the exact virtual-service identity as owner. Administrators and SYSTEM retain
+Full Control; no interactive process shares that sandbox helper directory.
+
+The managed home's `auth.json` is an exact file symbolic link to
+`<owner-codex-home>\auth.json`. OpenDelegate never copies credential bytes. The
+elevated lifecycle executor creates or verifies only that one link after proving the
+source home, managed home, link path, and target path are the canonical paths declared
+by the service document. A non-link occupant, different target, replacement race, or
+path alias fails closed. A missing owner authentication file may leave the exact link
+dangling so a later owner login becomes visible without re-copying credentials.
+
+The service host projects the managed home as `CODEX_HOME`; a foreground Worker keeps
+using the owner-configured home. This service binding overrides a persisted foreground
+`agent.codexHome` only when the signed host environment says `system-service`.
+Provider-native sessions, configuration, and sandbox state therefore remain durable
+but service-local, while login and token refresh retain one owner SSOT.
+
+D-142 supersedes the D-140/D-141 requirement to repair the owner's `.sandbox-bin` for
+the service. Existing owner-home access remains bounded to the declared provider home
+for the shared authentication target, but lifecycle never resets or takes ownership
+of the interactive sandbox. Upgrade accepts only the exact prior runtime document
+missing the new service-home field, including when that addition must compose with the
+already accepted D-118 credential migration; unrelated drift remains a hard failure.
+
+**Rationale:** Live Windows execution proved that Codex sandbox setup replaces the
+helper DACL with its sandbox group, SYSTEM, Administrators, and the current caller.
+When the helper was owned by the interactive user, the virtual-service caller lost
+`WRITE_DAC`; a later harmless read failed `SetNamedSecurityInfoW`, requested spurious
+owner approvals, and provider cancellation then exposed an independent `EPIPE` crash.
+Additive ACL repair on one shared helper cannot remain stable against that provider-
+owned rewrite. Giving the service its own helper, owned by the service identity,
+preserves the caller's owner right across provider DACL refreshes.
+
+**Consequence:** Interactive Codex and OpenDelegate no longer corrupt each other's
+Windows sandbox ACLs. The owner authenticates once, service runs observe the same
+credential file, and provider sessions or helper binaries are not copied into the
+owner's interactive runtime. One finite runtime-document migration and one narrowly
+validated credential link are added to Windows lifecycle preparation.

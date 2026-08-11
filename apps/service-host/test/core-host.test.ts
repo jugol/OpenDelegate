@@ -42,6 +42,7 @@ describe("native Worker service environment", () => {
       },
       agentProviderAccess: {
         codexHomeDirectory: "C:\\Users\\owner\\.codex",
+        codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
         claudeHomeDirectory: "C:\\Users\\owner\\.claude",
       },
     });
@@ -51,7 +52,10 @@ describe("native Worker service environment", () => {
       "C:\\Users\\owner\\.local\\bin;C:\\Users\\owner\\AppData\\Roaming\\npm;C:\\Windows\\System32",
     );
     assert.equal(input.Path, "C:\\Windows\\System32;C:\\USERS\\OWNER\\.LOCAL\\BIN");
-    assert.equal(environment["CODEX_HOME"], "C:\\Users\\owner\\.codex");
+    assert.equal(
+      environment["CODEX_HOME"],
+      "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+    );
     assert.equal(environment["CLAUDE_CONFIG_DIR"], "C:\\Users\\owner\\.claude");
     assert.equal(Object.hasOwn(environment, "codex_home"), false);
     assert.equal(input.codex_home, "C:\\wrong-codex");
@@ -71,6 +75,8 @@ describe("native Worker service environment", () => {
         },
         agentProviderAccess: {
           codexHomeDirectory: "C:\\Users\\owner\\.codex",
+          codexServiceHomeDirectory:
+            "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
           claudeHomeDirectory: "C:\\Users\\owner\\.claude",
         },
       },
@@ -80,7 +86,10 @@ describe("native Worker service environment", () => {
       environment["PATH"],
       "C:\\Users\\owner\\.local\\bin;C:\\Users\\owner\\AppData\\Roaming\\npm;C:\\Windows\\System32",
     );
-    assert.equal(environment["CODEX_HOME"], "C:\\Users\\owner\\.codex");
+    assert.equal(
+      environment["CODEX_HOME"],
+      "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+    );
     assert.equal(environment["CLAUDE_CONFIG_DIR"], "C:\\Users\\owner\\.claude");
   });
 });

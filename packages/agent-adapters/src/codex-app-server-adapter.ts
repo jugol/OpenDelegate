@@ -943,7 +943,25 @@ class CodexJsonlConnection {
   #diagnosticPromise: Promise<void> | undefined;
   #readTail: Promise<void> = Promise.resolve();
   #closed = false;
+  #inputFailure: AgentAdapterError | undefined;
   #forceTimer: NodeJS.Timeout | undefined;
+  readonly #onInputError = (_error: Error): void => {
+    if (this.#closed || this.#inputFailure !== undefined) {
+      return;
+    }
+    this.#inputFailure = new AgentAdapterError(
+      "PROVIDER_CONNECTION_CLOSED",
+      "Codex App Server closed its protocol input unexpectedly.",
+      true,
+    );
+    for (const pending of this.#pending.values()) {
+      pending.reject(this.#inputFailure);
+    }
+    this.#pending.clear();
+    if (this.#options.child.exitCode === null && this.#options.child.signalCode === null) {
+      this.#options.child.kill();
+    }
+  };
 
   public constructor(options: CodexJsonlConnectionOptions) {
     this.#options = options;
@@ -959,6 +977,10 @@ class CodexJsonlConnection {
     this.#reader = readBoundedLines(this.#options.child.stdout, this.#options.maxLineBytes)[
       Symbol.asyncIterator
     ]();
+    // A provider may exit while an owner authorization is pending. Node emits
+    // EPIPE asynchronously on stdin in that race; without an error listener it
+    // becomes an uncaught process-level event and can terminate the Worker.
+    this.#options.child.stdin.on("error", this.#onInputError);
     this.#diagnosticPromise = drainBounded(
       this.#options.child.stderr,
       this.#options.maxDiagnosticBytes,
@@ -1033,6 +1055,7 @@ class CodexJsonlConnection {
       waitForChild(this.#options.child),
       this.#diagnosticPromise ?? Promise.resolve(),
     ]);
+    this.#options.child.stdin.off("error", this.#onInputError);
   }
 
   async #pumpUntil(done: () => boolean): Promise<void> {
@@ -1052,6 +1075,9 @@ class CodexJsonlConnection {
   async #readOneSerialized(): Promise<void> {
     const next = await this.#reader?.next();
     if (next === undefined || next.done) {
+      if (this.#inputFailure !== undefined) {
+        throw this.#inputFailure;
+      }
       throw new AgentAdapterError(
         "PROVIDER_CONNECTION_CLOSED",
         "Codex App Server closed its protocol stream unexpectedly.",
@@ -1106,6 +1132,9 @@ class CodexJsonlConnection {
   }
 
   #write(message: unknown): void {
+    if (this.#inputFailure !== undefined) {
+      throw this.#inputFailure;
+    }
     if (this.#closed || !this.#options.child.stdin.writable) {
       throw new AgentAdapterError(
         "PROVIDER_CONNECTION_CLOSED",

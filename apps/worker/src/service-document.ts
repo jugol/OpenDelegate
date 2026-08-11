@@ -242,6 +242,7 @@ export async function buildWorkerServiceDocument(
   const codexHome =
     configuration.agent.codexHome ??
     defaultProviderHome("codex", options.paths, options.environment ?? process.env);
+  const codexServiceHome = win32.join(options.paths.stateDirectory, "providers", "codex");
   const claudeHome =
     configuration.agent.claudeHome ??
     defaultProviderHome("claude", options.paths, options.environment ?? process.env);
@@ -286,13 +287,17 @@ export async function buildWorkerServiceDocument(
     },
     windowsAgentProviderAccess: {
       codexHomeDirectory: platformPath(family, codexHome),
+      codexServiceHomeDirectory: platformPath(family, codexServiceHome),
       claudeHomeDirectory: platformPath(family, claudeHome),
     },
     ...(configuration.agent.provider === "claude"
       ? {}
       : {
           windowsAgentSandbox: {
-            codexSandboxBinDirectory: win32.join(platformPath(family, codexHome), ".sandbox-bin"),
+            codexSandboxBinDirectory: win32.join(
+              platformPath(family, codexServiceHome),
+              ".sandbox-bin",
+            ),
           },
         }),
   });

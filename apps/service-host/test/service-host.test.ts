@@ -53,6 +53,7 @@ describe("native two-plane JavaScript host", () => {
     assert.equal(configuration.ownerSession.homeDirectory, "C:\\Users\\owner");
     assert.deepEqual(configuration.agentProviderAccess, {
       codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
       claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     });
     assert.equal(
@@ -222,6 +223,7 @@ function validConfiguration() {
     },
     agentProviderAccess: {
       codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
       claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
     helperSecretBinding: {

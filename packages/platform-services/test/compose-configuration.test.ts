@@ -54,6 +54,7 @@ function windowsInput(
       "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
     windowsAgentProviderAccess: {
       codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
       claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
     healthPort: 43_190,

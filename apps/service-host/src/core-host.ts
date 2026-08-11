@@ -345,7 +345,7 @@ export function buildCoreChildServiceEnvironment(
       result[name] = value;
     };
     if (configuration.agentProviderAccess !== undefined) {
-      setBoundValue("CODEX_HOME", configuration.agentProviderAccess.codexHomeDirectory);
+      setBoundValue("CODEX_HOME", configuration.agentProviderAccess.codexServiceHomeDirectory);
       setBoundValue("CLAUDE_CONFIG_DIR", configuration.agentProviderAccess.claudeHomeDirectory);
     }
     const pathKey = Object.keys(result).find((key) => key.toLowerCase() === "path") ?? "PATH";

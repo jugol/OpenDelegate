@@ -137,10 +137,15 @@ test("a staged Windows Worker composes its service document from durable public 
     assert.equal(document.serviceSecretBinding?.serviceSid, SERVICE_SID);
     assert.equal(
       document.agentSandbox?.codexSandboxBinDirectory,
-      win32.join(win32.resolve(codexHome), ".sandbox-bin"),
+      win32.join(win32.resolve(paths.stateDirectory), "providers", "codex", ".sandbox-bin"),
     );
     assert.deepEqual(document.agentProviderAccess, {
       codexHomeDirectory: win32.resolve(codexHome),
+      codexServiceHomeDirectory: win32.join(
+        win32.resolve(paths.stateDirectory),
+        "providers",
+        "codex",
+      ),
       claudeHomeDirectory: win32.resolve(claudeHome),
     });
     assert.equal(

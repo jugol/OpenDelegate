@@ -77,19 +77,29 @@ test(
       "../../../packages/agent-adapters/fixtures/fake-provider.mjs",
       import.meta.url,
     );
+    const ownerCodexHome = join(root, "owner", ".codex");
+    const serviceCodexHome = join(root, "service-state", "providers", "codex");
     await mkdir(dirname(codexEntrypoint), { recursive: true });
     await writeFile(
       codexEntrypoint,
-      `process.argv.splice(2, 0, "codex");\nimport(${JSON.stringify(fixtureUrl.href)}).catch(() => process.exit(1));\n`,
+      `process.env.FIXTURE_EXPECT_CODEX_HOME = ${JSON.stringify(serviceCodexHome)};\nprocess.argv.splice(2, 0, "codex");\nimport(${JSON.stringify(fixtureUrl.href)}).catch(() => process.exit(1));\n`,
       { encoding: "utf8", mode: 0o600 },
     );
     const paths = resolveWorkerPaths({
       sourceCheckoutRoot: resolve("."),
       home: join(root, "worker"),
     });
-    const environment = { PATH: `${npmDirectory};C:\\Windows\\System32` };
+    const environment = {
+      PATH: `${npmDirectory};C:\\Windows\\System32`,
+      CODEX_HOME: serviceCodexHome,
+      OPENDELEGATE_SERVICE_MODE: "system-service",
+    };
     const adapters = createWorkerAgentAdapters(
-      { provider: "auto", allowUntestedVersion: false },
+      {
+        provider: "auto",
+        allowUntestedVersion: false,
+        codexHome: ownerCodexHome,
+      },
       paths,
       undefined,
       environment,

@@ -287,13 +287,13 @@ remains a platform release gate.
 CLI adapters remain capability-reduced fallbacks. They receive `permissions: deny`
 for provider-native tools; explicitly composed OpenDelegate MCP capabilities retain
 their own independent authorization. Native Windows Claude SDK execution is
-reported incompatible because its required sandbox is unavailable there. Codex and
-Claude each use a separate OpenDelegate-controlled provider home below Worker state
-unless the owner supplies an external absolute path. Authenticate those exact homes
-explicitly; an existing login from the user's global provider home is intentionally
-not copied or inherited. Provider credentials are never accepted through a Run
-environment or written into the checkout. Claude network access is limited to the
-DNS names recorded at join.
+reported incompatible because its required sandbox is unavailable there. Foreground
+Codex and Claude use the owner's explicitly selected or already authenticated home;
+provider credentials are never accepted through a Run environment or written into
+the checkout. A persistent Windows Worker gives Codex a separate managed execution
+home and service-owned `.sandbox-bin`, while its exact `auth.json` is a validated
+symbolic link to the owner's one SSOT file. It never copies login bytes. Claude
+network access is limited to the DNS names recorded at join.
 
 On Linux, a present `bubblewrap` executable is not sufficient readiness evidence.
 The Worker also proves that the nested user namespace required by Claude's fail-closed
@@ -309,10 +309,10 @@ different model or tuning value.
 An always-on service often has a smaller `PATH` than the owner's terminal. Use
 `--codex-executable` or `--claude-executable` at join when the provider is installed
 outside that service path. Windows requires a native `.exe`; `.cmd` and `.bat`
-wrappers stay rejected because Worker never invokes a shell. If an external provider
-home belongs to the owner, grant only the exact OpenDelegate service identity the
-access that provider needs, or keep the provider home service-local and authenticate
-it separately.
+wrappers stay rejected because Worker never invokes a shell. On Windows the lifecycle
+command grants only the exact OpenDelegate service identity the access required for
+the owner authentication source and prepares the isolated Codex service home
+automatically; a second Codex login is not required.
 
 The core daemon does not assume a graphical session. Native service and
 user-session helper installation are separate platform operations exposed by the

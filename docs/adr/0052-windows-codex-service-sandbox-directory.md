@@ -1,6 +1,6 @@
 # ADR-0052: Windows Codex service sandbox directory
 
-- Status: accepted
+- Status: Superseded by ADR-0068
 - Date: 2026-08-10
 - Decision: D-100
 

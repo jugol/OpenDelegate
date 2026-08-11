@@ -1112,7 +1112,7 @@ export async function createWorkerRuntime(
     configuration.agent,
     options.paths,
     nativeSessionLeaseStore,
-    agentEnvironment,
+    environment,
   );
   const artifactChannel: {
     current?: Pick<WorkerDeviceChannelClient, "prepareArtifact">;
@@ -1809,11 +1809,15 @@ export async function diagnoseWorker(input: {
     claude:
       configuration.agent.claudeHome ??
       defaultProviderHome("claude", input.paths, agentEnvironment),
-    codex:
-      configuration.agent.codexHome ?? defaultProviderHome("codex", input.paths, agentEnvironment),
+    codex: resolveWorkerCodexProviderHome(
+      configuration.agent,
+      input.paths,
+      environment,
+      agentEnvironment,
+    ),
   };
   const agents = await Promise.all(
-    createWorkerAgentAdapters(configuration.agent, input.paths, undefined, agentEnvironment).map(
+    createWorkerAgentAdapters(configuration.agent, input.paths, undefined, environment).map(
       async (adapter) => {
         const probe = await adapter.probe({ environment: agentEnvironment });
         return {
@@ -3738,15 +3742,14 @@ export function createWorkerAgentAdapters(
   leaseStore: SessionLeaseStore = createWorkerNativeSessionLeaseStore(paths),
   environment?: Readonly<Record<string, string | undefined>>,
 ): readonly AgentAdapter[] {
-  const agentEnvironment = projectWorkerAgentEnvironment(environment ?? process.env);
-  const codexHome =
-    configuration.codexHome === undefined
-      ? defaultProviderHome("codex", paths, agentEnvironment)
-      : requireExternalProvisioningPath(
-          configuration.codexHome,
-          paths.sourceCheckoutRoot,
-          "Codex provider home",
-        );
+  const rawEnvironment = environment ?? process.env;
+  const agentEnvironment = projectWorkerAgentEnvironment(rawEnvironment);
+  const codexHome = resolveWorkerCodexProviderHome(
+    configuration,
+    paths,
+    rawEnvironment,
+    agentEnvironment,
+  );
   const claudeHome =
     configuration.claudeHome === undefined
       ? defaultProviderHome("claude", paths, agentEnvironment)
@@ -3793,6 +3796,25 @@ export function createWorkerAgentAdapters(
       allowUntestedVersion: configuration.allowUntestedVersion,
     }),
   ]);
+}
+
+function resolveWorkerCodexProviderHome(
+  configuration: WorkerAgentConfiguration,
+  paths: WorkerPaths,
+  rawEnvironment: Readonly<Record<string, string | undefined>>,
+  agentEnvironment = projectWorkerAgentEnvironment(rawEnvironment),
+): string {
+  const serviceCodexHome =
+    platform() === "win32" && rawEnvironment["OPENDELEGATE_SERVICE_MODE"] === "system-service"
+      ? agentEnvironment["CODEX_HOME"]
+      : undefined;
+  return requireExternalProvisioningPath(
+    serviceCodexHome ??
+      configuration.codexHome ??
+      defaultProviderHome("codex", paths, agentEnvironment),
+    paths.sourceCheckoutRoot,
+    serviceCodexHome === undefined ? "Codex provider home" : "Codex service home",
+  );
 }
 
 interface WorkerWakeOnLanCapabilityProbe {

@@ -75,6 +75,7 @@ export interface ComposeServiceConfigurationInput {
   };
   readonly windowsAgentProviderAccess?: {
     readonly codexHomeDirectory: string;
+    readonly codexServiceHomeDirectory: string;
     readonly claudeHomeDirectory: string;
   };
   /** Existing owner DPAPI vault that retains only the session-helper identity. */

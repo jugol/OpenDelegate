@@ -497,6 +497,54 @@ function createNativeFilesystemAdapter(
           );
           return { disposition };
         }
+        case "file.symbolic-link.ensure": {
+          if (configuration.platform !== "windows" || action.platform !== "windows") {
+            throw uncertain("Codex authentication linking is available only on Windows.");
+          }
+          const sourceHome = configuration.agentProviderAccess.codexHomeDirectory;
+          const serviceHome = configuration.agentProviderAccess.codexServiceHomeDirectory;
+          const expectedPath = win32.join(serviceHome, "auth.json");
+          const expectedTarget = win32.join(sourceHome, "auth.json");
+          if (
+            !equalPath("windows", action.path, expectedPath) ||
+            !equalPath("windows", action.target, expectedTarget) ||
+            !equalPath("windows", win32.dirname(action.path), serviceHome) ||
+            !equalPath("windows", win32.dirname(action.target), sourceHome)
+          ) {
+            throw uncertain("The Codex authentication link escaped its declared homes.");
+          }
+          const [sourceParent, serviceParent, source] = await Promise.all([
+            fileSystem.inspect(sourceHome),
+            fileSystem.inspect(serviceHome),
+            fileSystem.inspect(action.target),
+          ]);
+          if (sourceParent.kind === "missing") {
+            return { disposition: "unchanged" };
+          }
+          if (sourceParent.kind !== "directory" || serviceParent.kind !== "directory") {
+            throw uncertain("A declared Codex home is unavailable during authentication linking.");
+          }
+          if (source.kind !== "missing" && source.kind !== "regular-file") {
+            throw uncertain("The owner Codex authentication source is not a regular file.");
+          }
+          const [canonicalSourceHome, canonicalServiceHome] = await Promise.all([
+            fileSystem.realPath(sourceHome),
+            fileSystem.realPath(serviceHome),
+          ]);
+          if (
+            !equalPath("windows", canonicalSourceHome, sourceHome) ||
+            !equalPath("windows", canonicalServiceHome, serviceHome)
+          ) {
+            throw uncertain("A declared Codex home resolves through a link.");
+          }
+          return {
+            disposition: await fileSystem.createFileLinkAtomic(
+              action.target,
+              action.path,
+              action.platform,
+            ),
+          };
+        }
         case "file.write": {
           if (context.phase === "forward") {
             if (action.restoreOriginalBytes === true) {
@@ -2264,6 +2312,7 @@ async function assertMutationTopologySafe(
     configuration.paths.logRoot,
     nativeServiceJournalRoot(configuration),
   ]);
+  const allowedLeafLinks = new Set<string>();
   if (plan.operation === "install" || plan.operation === "upgrade") {
     paths.add(configuration.bundle.sourceDirectory);
     paths.add(`${configuration.bundle.sourceDirectory}.publisher-attestation.json`);
@@ -2283,8 +2332,14 @@ async function assertMutationTopologySafe(
   }
   for (const step of plan.steps) {
     collectActionPaths(step.action, paths);
+    if (step.action.kind === "file.symbolic-link.ensure") {
+      allowedLeafLinks.add(normalizedPathKey(configuration.platform, step.action.path));
+    }
     if (step.rollback !== undefined) {
       collectActionPaths(step.rollback, paths);
+      if (step.rollback.kind === "file.symbolic-link.ensure") {
+        allowedLeafLinks.add(normalizedPathKey(configuration.platform, step.rollback.path));
+      }
     }
   }
   for (const path of paths) {
@@ -2292,7 +2347,8 @@ async function assertMutationTopologySafe(
       configuration.platform,
       path,
       fileSystem,
-      path.endsWith(`${pathSeparator(configuration.platform)}current`),
+      path.endsWith(`${pathSeparator(configuration.platform)}current`) ||
+        allowedLeafLinks.has(normalizedPathKey(configuration.platform, path)),
     );
   }
 }
@@ -2545,6 +2601,22 @@ function migrateLegacyWindowsRuntimeOwnerBindings(
     }
     previous["agentProviderAccess"] = expected["agentProviderAccess"];
     migrated = true;
+  } else {
+    const previousAccess = nestedRecord(previous, "agentProviderAccess");
+    const expectedAccess = nestedRecord(expected, "agentProviderAccess");
+    if (previousAccess === undefined || expectedAccess === undefined) {
+      return undefined;
+    }
+    if (!Object.hasOwn(previousAccess, "codexServiceHomeDirectory")) {
+      if (
+        expectedAccess["codexServiceHomeDirectory"] !==
+        configuration.agentProviderAccess.codexServiceHomeDirectory
+      ) {
+        return undefined;
+      }
+      previousAccess["codexServiceHomeDirectory"] = expectedAccess["codexServiceHomeDirectory"];
+      migrated = true;
+    }
   }
   return migrated ? Buffer.from(stableJson(previous), "utf8") : undefined;
 }
@@ -2851,6 +2923,8 @@ function assertFilesystemActionAllowed(
       allowedExact.add(step.action.path);
     } else if (step.action.kind === "file.write") {
       allowedExact.add(step.action.file.path);
+    } else if (step.action.kind === "file.symbolic-link.ensure") {
+      allowedExact.add(step.action.path);
     }
   }
   const path =
@@ -2860,15 +2934,17 @@ function assertFilesystemActionAllowed(
       ? action.path
       : action.kind === "file.write"
         ? action.file.path
-        : action.kind === "release.remove"
-          ? action.releaseDirectory
-          : action.kind === "release.stage" || action.kind === "release.verify"
-            ? action.stagingDirectory
-            : action.kind === "release.promote"
-              ? action.releaseDirectory
-              : action.kind === "release.prune"
-                ? action.releasesRoot
-                : action.activeDirectory;
+        : action.kind === "file.symbolic-link.ensure"
+          ? action.path
+          : action.kind === "release.remove"
+            ? action.releaseDirectory
+            : action.kind === "release.stage" || action.kind === "release.verify"
+              ? action.stagingDirectory
+              : action.kind === "release.promote"
+                ? action.releaseDirectory
+                : action.kind === "release.prune"
+                  ? action.releasesRoot
+                  : action.activeDirectory;
   if (
     !allowedExact.has(path) &&
     !isDescendant(
@@ -2895,6 +2971,10 @@ function collectActionPaths(action: PlanAction, paths: Set<string>): void {
       return;
     case "file.write":
       paths.add(action.file.path);
+      return;
+    case "file.symbolic-link.ensure":
+      paths.add(action.path);
+      paths.add(action.target);
       return;
     case "activation.switch":
       paths.add(action.activeDirectory);
@@ -2923,6 +3003,11 @@ function collectActionPaths(action: PlanAction, paths: Set<string>): void {
     case "supervisor.invoke":
       return;
   }
+}
+
+function normalizedPathKey(platform: PlatformFamily, path: string): string {
+  const normalized = (platform === "windows" ? win32 : posix).normalize(path);
+  return platform === "windows" ? normalized.toLocaleLowerCase("en-US") : normalized;
 }
 
 interface NativeTools {

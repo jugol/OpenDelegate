@@ -580,6 +580,7 @@ function normalizeRollbackFailures(
       actionKind !== "activation.switch" &&
       actionKind !== "directory.access-grant" &&
       actionKind !== "directory.ensure" &&
+      actionKind !== "file.symbolic-link.ensure" &&
       actionKind !== "file.write" &&
       actionKind !== "health.check" &&
       actionKind !== "path.remove" &&
