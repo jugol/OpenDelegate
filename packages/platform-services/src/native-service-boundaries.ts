@@ -5,6 +5,7 @@ import {
   chmod,
   chown,
   copyFile,
+  lchmod,
   lstat,
   mkdir,
   open,
@@ -290,19 +291,27 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
   ): Promise<"changed" | "unchanged"> {
     const currentTarget = await this.readDirectoryLink(linkPath);
     const normalizedTarget = resolve(target);
+    const existing = await this.inspect(linkPath);
     if (
       currentTarget !== undefined &&
       resolve(dirname(linkPath), currentTarget) === normalizedTarget
     ) {
+      if (platform === "macos" && existing.mode !== 0o750) {
+        await lchmod(linkPath, 0o750);
+        await syncNativeDirectory(dirname(linkPath));
+        return "changed";
+      }
       return "unchanged";
     }
-    const existing = await this.inspect(linkPath);
     if (existing.kind !== "missing" && existing.kind !== "symbolic-link") {
       throw unsafePath("The stable service activation path is not a directory link.");
     }
     const temporary = `${linkPath}.${randomUUID()}.opendelegate-link`;
     try {
       await symlink(target, temporary, platform === "windows" ? "junction" : "dir");
+      if (platform === "macos") {
+        await lchmod(temporary, 0o750);
+      }
       if (platform === "windows" && existing.kind === "symbolic-link") {
         await replaceWindowsDirectoryLink(temporary, linkPath);
       } else {

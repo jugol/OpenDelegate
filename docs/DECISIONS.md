@@ -2825,3 +2825,24 @@ comparing that value with the capacity falsely rejected every valid executable.
 own installed tree on the target POSIX host. launchd no longer enters a restart loop
 for this defect, while an actually missing, unresolvable, or overlong executable
 path still fails closed before a bundled runtime can start.
+
+## D-136 — macOS activation links retain service-group traversal
+
+**Decision:** Before an atomic macOS activation switch, the temporary `current`
+symbolic link receives mode `0750` without dereferencing it. An idempotent switch to
+the already selected release also inspects and repairs that link mode before it may
+report `unchanged`. Linux keeps its existing link behavior because Linux does not
+authorize symlink traversal from symlink mode; Windows continues to use junctions.
+
+**Rationale:** Live alpha.64 activation produced a correctly grouped release tree
+and a correctly grouped `current` link, but the invoking install script's `umask
+077` made the macOS link itself `0700`. Both the boot daemon and owner-session
+helper then failed `realpath` through the stable path even though their executable
+targets were `0750`. Direct bundle root self-tests passed, while the installed-path
+self-test failed with permission denied.
+
+**Consequence:** The stable pointer no longer inherits a caller's restrictive umask
+on macOS, both runtime identities can traverse it through the dedicated service
+group, and an interrupted older installation is repaired on replay. The link target
+is still canonicalized, switched atomically, and never followed while its own mode
+is changed.
