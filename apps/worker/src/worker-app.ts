@@ -44,9 +44,12 @@ import {
 } from "@opendelegate/agent-adapters";
 import {
   ComputerUseOsBackend,
+  type ComputerUseReadinessReport,
   type DesktopAuthorityPort,
   type DesktopLeasePort,
   type NativeComputerUseDriver,
+  type ReadinessCheckName,
+  type ReadinessCheckStatus,
 } from "@opendelegate/computer-use-os";
 import {
   DeviceCertificateUnusableError,
@@ -119,6 +122,7 @@ import {
   type WorkerRouteIncidentCode,
   type WorkerRunLeaseAuthority,
   type WorkerRunCapabilityProvider,
+  type WorkerRuntimeReadiness,
   type WorkerSchedulingInventoryProvider,
   type WorkerSchedulingInventoryV1,
   type WorkspaceRecord,
@@ -1252,6 +1256,9 @@ export async function createWorkerRuntime(
     processFactory,
     transportResolver,
     maximumConcurrentRuns: DEFAULT_MAXIMUM_CONCURRENT_RUNS,
+    ...(computerUse === undefined
+      ? {}
+      : { healthProvider: { snapshot: () => computerUse.healthSnapshot() } }),
     inventoryProvider: createWorkerSchedulingInventoryProvider({
       adapters,
       ...(computerUse === undefined ? {} : { computerUseProbe: computerUse.probe }),
@@ -1299,16 +1306,17 @@ export async function createWorkerRuntime(
   };
 }
 
-interface WorkerComputerUseRuntimeComposition {
+export interface WorkerComputerUseRuntimeComposition {
   readonly provider: WorkerRunCapabilityProvider;
   readonly probe: WorkerComputerUseCapabilityProbe;
+  healthSnapshot(): WorkerRuntimeReadiness;
   resourceLockProjection(): Promise<
     NonNullable<WorkerSchedulingInventoryV1["resourceLocks"]>[number]
   >;
   close(): Promise<void>;
 }
 
-async function createWorkerComputerUseRuntime(input: {
+export async function createWorkerComputerUseRuntime(input: {
   readonly configuration: WorkerConfigurationDocument;
   readonly paths: WorkerPaths;
   readonly broker: LocalRunCapabilityBroker;
@@ -1401,17 +1409,21 @@ async function createWorkerComputerUseRuntime(input: {
         }
       },
     });
+    let latestReadiness = unavailableComputerUseReadiness();
     let closed = false;
     return Object.freeze({
       provider,
+      healthSnapshot: () => latestReadiness,
       resourceLockProjection: () => desktopAuthority.resourceLockProjection(),
       probe: Object.freeze({
         async probe() {
-          const runtimeLease = await acquireComputerUseRuntimeLease(runtimePort, hostOsFamily);
-          if (runtimeLease === undefined) {
-            return Object.freeze({ verification: "unavailable" as const });
-          }
+          let runtimeLease: WorkerComputerUseRuntimeLease | undefined;
           try {
+            runtimeLease = await acquireComputerUseRuntimeLease(runtimePort, hostOsFamily);
+            if (runtimeLease === undefined) {
+              latestReadiness = unavailableComputerUseReadiness();
+              return Object.freeze({ verification: "unavailable" as const });
+            }
             const readinessBackend = new ComputerUseOsBackend({
               osFamily: hostOsFamily,
               driver: runtimeLease.driver,
@@ -1426,6 +1438,7 @@ async function createWorkerComputerUseRuntime(input: {
               deviceId: input.configuration.deviceId,
               ...runtimeLease.binding,
             });
+            latestReadiness = projectComputerUseReadiness(report);
             return Object.freeze({
               verification:
                 report.status === "ready" && report.checks.every((check) => check.status === "pass")
@@ -1434,8 +1447,11 @@ async function createWorkerComputerUseRuntime(input: {
                     ? ("degraded" as const)
                     : ("unavailable" as const),
             });
+          } catch (error) {
+            latestReadiness = unavailableComputerUseReadiness();
+            throw error;
           } finally {
-            await runtimeLease.release().catch(() => undefined);
+            await runtimeLease?.release().catch(() => undefined);
           }
         },
       }),
@@ -1453,6 +1469,64 @@ async function createWorkerComputerUseRuntime(input: {
     desktopAuthority.close();
     throw error;
   }
+}
+
+export function projectComputerUseReadiness(
+  report: ComputerUseReadinessReport,
+): WorkerRuntimeReadiness {
+  if (report.backendId === `${report.osFamily}-native-driver-unavailable`) {
+    return unavailableComputerUseReadiness();
+  }
+  const status = (name: ReadinessCheckName): ReadinessCheckStatus | undefined =>
+    report.checks.find((check) => check.name === name)?.status;
+  const session =
+    status("interactive-session") === "fail"
+      ? ("logged-out" as const)
+      : status("unlocked-session") === "fail"
+        ? ("locked" as const)
+        : [
+              "interactive-session",
+              "unlocked-session",
+              "helper-authentication",
+              "service-epoch",
+            ].every((name) => status(name as ReadinessCheckName) === "pass")
+          ? ("ready" as const)
+          : ("unavailable" as const);
+  const permission = (name: "accessibility" | "input" | "screen-capture") =>
+    status(name) === "pass" ? "granted" : status(name) === "fail" ? "denied" : "unknown";
+  const desktop =
+    session === "locked"
+      ? ("locked" as const)
+      : session === "ready" &&
+          report.status === "ready" &&
+          ["screen-capture", "accessibility", "input"].every(
+            (name) => status(name as ReadinessCheckName) === "pass",
+          )
+        ? ("available" as const)
+        : ("unavailable" as const);
+  return Object.freeze({
+    daemon: "healthy",
+    session,
+    desktop,
+    permissions: Object.freeze({
+      accessibility: permission("accessibility"),
+      input: permission("input"),
+      screenCapture: permission("screen-capture"),
+    }),
+  });
+}
+
+function unavailableComputerUseReadiness(): WorkerRuntimeReadiness {
+  return Object.freeze({
+    daemon: "healthy",
+    session: "unavailable",
+    desktop: "unavailable",
+    permissions: Object.freeze({
+      accessibility: "unknown",
+      input: "unknown",
+      screenCapture: "unknown",
+    }),
+  });
 }
 
 async function acquireComputerUseRuntimeLease(
