@@ -907,15 +907,66 @@ test("Windows sandbox repair revalidates an existing child before link-local ACL
     false,
   );
 
+  const ownerRaceFileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(ownerRaceFileSystem, configuration);
+  let ownerRaceAttempted = false;
+  const ownerRaceRealPath = ownerRaceFileSystem.realPath.bind(ownerRaceFileSystem);
+  ownerRaceFileSystem.realPath = async (path) =>
+    path === sandbox && ownerRaceAttempted
+      ? "C:\\Users\\owner\\redirected-after-owner-denial"
+      : await ownerRaceRealPath(path);
+  const ownerRaceProcess = new FakeProcess();
+  ownerRaceProcess.handler = (request) => {
+    if (
+      request.executable.toLowerCase().endsWith("icacls.exe") &&
+      request.arguments[0] === sandbox &&
+      request.arguments.includes("/setowner")
+    ) {
+      ownerRaceAttempted = true;
+      return processResult(5);
+    }
+    return processResult(0);
+  };
+  const ownerRace = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries: fakeBoundaries({
+      platform: "windows",
+      elevated: true,
+      loggedIn: false,
+      fileSystem: ownerRaceFileSystem,
+      process: ownerRaceProcess,
+    }).boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-sandbox-owner-race",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+  assert.equal(ownerRace.report.outcome, "failed");
+  assert.equal(ownerRace.report.failedStepId, "ensure-codex-sandbox-helper");
+  assert.equal(
+    ownerRaceProcess.requests.some((request) =>
+      request.executable.toLowerCase().endsWith("takeown.exe"),
+    ),
+    false,
+  );
+
   const deniedFileSystem = new FakeFileSystem();
   seedInstalledRuntimeConfiguration(deniedFileSystem, configuration);
   const deniedProcess = new FakeProcess();
-  deniedProcess.handler = (request) =>
-    request.executable.toLowerCase().endsWith("icacls.exe") &&
-    request.arguments[0] === sandbox &&
-    request.arguments.includes("/setowner")
-      ? processResult(5)
-      : processResult(0);
+  let deniedOwnerAttempts = 0;
+  deniedProcess.handler = (request) => {
+    if (
+      request.executable.toLowerCase().endsWith("icacls.exe") &&
+      request.arguments[0] === sandbox &&
+      request.arguments.includes("/setowner")
+    ) {
+      deniedOwnerAttempts += 1;
+      return processResult(deniedOwnerAttempts === 1 ? 5 : 0);
+    }
+    return processResult(0);
+  };
   const deniedBoundaries = fakeBoundaries({
     platform: "windows",
     elevated: true,
@@ -933,15 +984,13 @@ test("Windows sandbox repair revalidates an existing child before link-local ACL
     configuration,
     plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
   });
-  assert.equal(denied.report.outcome, "failed");
-  assert.equal(denied.report.failedStepId, "ensure-codex-sandbox-helper");
-  assert.equal(
-    deniedProcess.requests.some(
-      (request) =>
-        request.executable.toLowerCase().endsWith("takeown.exe") &&
-        request.arguments.includes(sandbox),
-    ),
-    false,
+  assert.equal(denied.report.outcome, "succeeded", JSON.stringify(denied.report));
+  assert.equal(deniedOwnerAttempts, 2);
+  assert.deepEqual(
+    deniedProcess.requests.find((request) =>
+      request.executable.toLowerCase().endsWith("takeown.exe"),
+    )?.arguments,
+    ["/F", sandbox, "/A", "/R", "/D", "N", "/SKIPSL"],
   );
 });
 

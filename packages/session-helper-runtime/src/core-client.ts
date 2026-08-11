@@ -277,13 +277,20 @@ export class SessionHelperCoreClient implements NativeComputerUseDriver {
     };
     signal?.addEventListener("abort", abort, { once: true });
     try {
-      await this.#channel.send({
-        type: "request",
-        requestId,
-        capability,
-        payload,
-      } as unknown as SessionHelperCapabilityRequest);
-      return await response;
+      // Attach a rejection observer to the response before delivery can yield.
+      // Otherwise a helper disconnect between the two sequential awaits leaves
+      // the response Promise temporarily unhandled and Node terminates the core
+      // service under its default unhandled-rejection policy.
+      const delivery = Promise.resolve().then(() =>
+        this.#channel.send({
+          type: "request",
+          requestId,
+          capability,
+          payload,
+        } as unknown as SessionHelperCapabilityRequest),
+      );
+      const [, received] = await Promise.all([delivery, response]);
+      return received;
     } catch (error: unknown) {
       if (error instanceof NativeDriverError) {
         throw error;

@@ -447,8 +447,9 @@ function createNativeFilesystemAdapter(
               action.access.owner,
               boundaries,
               tools,
-              action.requiredExistingParent === undefined,
+              true,
               action.requiredExistingParent !== undefined,
+              action.requiredExistingParent,
             );
             if ((await fileSystem.inspect(action.path)).kind !== "directory") {
               throw uncertain("A native service directory changed during access repair.");
@@ -492,6 +493,7 @@ function createNativeFilesystemAdapter(
             tools,
             false,
             action.requiredExistingParent !== undefined,
+            action.requiredExistingParent,
           );
           return { disposition };
         }
@@ -1252,6 +1254,7 @@ async function applyDirectoryAccess(
   tools: NativeTools,
   recoverProtectedOwner = false,
   doNotFollowLinks = false,
+  requiredExistingParent?: string,
 ): Promise<void> {
   if (configuration.platform === "windows") {
     const action = findDirectoryAccess(configuration, path);
@@ -1282,11 +1285,20 @@ async function applyDirectoryAccess(
         throw new NativeSupervisorError("A protected Windows directory owner repair timed out.");
       }
       if (ownerResult.exitCode !== 0) {
+        if (requiredExistingParent !== undefined) {
+          await assertOwnerManagedChildBinding(boundaries.fileSystem, requiredExistingParent, path);
+        }
         await runRequired(boundaries.process, {
           executable: tools.takeown,
-          arguments: ["/F", path, "/A"],
+          arguments:
+            requiredExistingParent === undefined
+              ? ["/F", path, "/A"]
+              : ["/F", path, "/A", "/R", "/D", "N", "/SKIPSL"],
           timeoutMs: 30_000,
         });
+        if (requiredExistingParent !== undefined) {
+          await assertOwnerManagedChildBinding(boundaries.fileSystem, requiredExistingParent, path);
+        }
         ownerNeedsFinalTransfer = true;
       }
     } else {
@@ -1337,6 +1349,33 @@ async function applyDirectoryAccess(
     serviceGid,
     mode,
   );
+}
+
+async function assertOwnerManagedChildBinding(
+  fileSystem: NativeServiceBoundaries["fileSystem"],
+  parentPath: string,
+  childPath: string,
+): Promise<void> {
+  if (!equalPath("windows", win32.dirname(childPath), parentPath)) {
+    throw uncertain("An owner-managed child directory has an invalid parent binding.");
+  }
+  const [parent, child] = await Promise.all([
+    fileSystem.inspect(parentPath),
+    fileSystem.inspect(childPath),
+  ]);
+  if (parent.kind !== "directory" || child.kind !== "directory") {
+    throw uncertain("An owner-managed child directory lost its exact parent binding.");
+  }
+  const [canonicalParent, canonicalChild] = await Promise.all([
+    fileSystem.realPath(parentPath),
+    fileSystem.realPath(childPath),
+  ]);
+  if (
+    !equalPath("windows", canonicalParent, parentPath) ||
+    !equalPath("windows", canonicalChild, childPath)
+  ) {
+    throw uncertain("An owner-managed child directory changed through a link.");
+  }
 }
 
 async function applyRenderedFileAccess(

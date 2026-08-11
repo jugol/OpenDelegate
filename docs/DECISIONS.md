@@ -2941,9 +2941,9 @@ service-specific entries.
 The sandbox child and its exact parent are canonically revalidated immediately before
 ACL mutation whether the child was pre-existing or newly created. Its `icacls`
 operations use link-local `/L` semantics, so a replacement race cannot redirect the
-owner or DACL mutation into the link target. Owner-managed sandbox children fail
-closed on access denial and never enter the protected-service-vault `takeown` recovery
-path.
+owner or DACL mutation into the link target. Owner-managed sandbox children use only
+the bounded recovery in D-141; every other access denial fails closed and never enters
+the protected-service-vault recovery path.
 
 Start and restart compare the installed runtime-configuration bytes with the supplied
 canonical configuration before any Agent-home ACL repair. The provider homes receiving
@@ -2967,3 +2967,26 @@ installations have one narrow, auditable migration into the new runtime document
 The persistent service can read and update the owner's SSOT provider state without
 copying credentials or replacing owner/provider ACLs, and every lifecycle start repairs
 only its own exact access entries if an installer or provider recreated those paths.
+
+## D-141 — Windows sandbox owner recovery is bounded and link-local
+
+**Decision:** When the exact existing Codex `.sandbox-bin` child rejects an elevated
+link-local `icacls /setowner`, the lifecycle executor may recover that one child with
+`takeown /A /R /D N /SKIPSL`. Immediately before and after that command it must prove
+that the declared Codex home and sandbox child are ordinary directories resolving to
+their exact canonical paths. The subsequent owner and DACL mutations retain `icacls
+/L`. This exception is unavailable to provider homes, launcher directories, a
+missing child, a noncanonical parent, or any child that changes identity; those cases
+fail before ownership recovery.
+
+**Rationale:** A live Windows host denied `icacls /setowner` even though the existing
+sandbox directory already had the intended interactive owner and the installer was
+elevated. Refusing recovery made every otherwise valid upgrade roll back. The current
+Windows `takeown` supports `/SKIPSL` only together with recursive mode, so the bounded
+command is the native recovery that can repair inherited descendants without following
+symbolic links.
+
+**Consequence:** Existing owner-managed Codex sandbox state can be repaired on real
+hosts without granting OpenDelegate a general owner-tree takeover primitive. A link
+or directory replacement before recovery, after recovery, or before the final
+link-local ACL mutation remains a deterministic failure.

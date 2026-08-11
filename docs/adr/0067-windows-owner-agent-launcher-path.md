@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-12
-- Decision: D-140
+- Decision: D-140, D-141
 
 ## Context
 
@@ -82,9 +82,12 @@ child instead of recreating owner-managed provider state. Child creation is expl
 non-recursive and the parent and child are revalidated canonically before ACL mutation,
 whether the child was pre-existing or newly created. The child's `icacls` mutations
 also use `/L`, so a junction or symbolic-link replacement cannot redirect the ACL
-operation into its target. The owner-managed sandbox fails closed rather than invoking
-the protected-service-vault `takeown` fallback. A provider home that disappears between
-checks is never recreated.
+operation into its target. If an existing ordinary sandbox child rejects the initial
+link-local owner transfer, the executor may run only `takeown /A /R /D N /SKIPSL` on
+that exact child after revalidating both parent and child. It revalidates them again
+before the final link-local owner and DACL operations. This bounded recovery cannot be
+used for a missing child, provider home, launcher directory, or changed link target. A
+provider home that disappears between checks is never recreated.
 
 Because this decision adds a runtime field, the upgrade executor snapshots the exact
 installed runtime-configuration bytes immediately before the atomic forward write.
@@ -149,6 +152,9 @@ installation.
   unrelated ACL entries, replace only the declared service principal's ACE, reject
   protected-root overlap, and do not recreate a missing provider home through its
   sandbox child.
+- A Windows sandbox recovery regression proves that an initial owner-transfer denial
+  uses recursive `/SKIPSL`, while a child replacement after that denial prevents
+  `takeown` from running.
 - Run-selection tests prove the same projected environment reaches immutable model
   validation; the Worker execution plan carries it into start and resume handling.
 - Guarded upgrade tests accept only an exact predecessor missing the owner-home field,
@@ -162,7 +168,7 @@ installation.
 
 - [`../PRODUCT_SPEC.md`](../PRODUCT_SPEC.md), FR-3 and FR-16
 - [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md), Phase 4
-- [`../DECISIONS.md`](../DECISIONS.md), D-076, D-134, D-139, and D-140
+- [`../DECISIONS.md`](../DECISIONS.md), D-076, D-134, D-139, D-140, and D-141
 - [`0010-reproducible-platform-bundles-and-provenance.md`](0010-reproducible-platform-bundles-and-provenance.md)
 - [`0011-native-two-plane-service-supervision-and-authenticated-ipc.md`](0011-native-two-plane-service-supervision-and-authenticated-ipc.md)
 - [`0018-programmatic-agent-adapters-and-action-authorization.md`](0018-programmatic-agent-adapters-and-action-authorization.md)
