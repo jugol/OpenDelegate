@@ -361,6 +361,35 @@ function createNativeFilesystemAdapter(
     async perform(action: FilesystemAction, context) {
       assertFilesystemActionAllowed(configuration, action);
       switch (action.kind) {
+        case "directory.access-grant": {
+          if (configuration.platform !== "windows") {
+            throw uncertain("Additive provider-directory access is available only on Windows.");
+          }
+          const existing = await fileSystem.inspect(action.path);
+          if (existing.kind === "missing" && action.missingPathPolicy === "skip") {
+            return { disposition: "unchanged" };
+          }
+          if (existing.kind !== "directory") {
+            throw uncertain("An owner-managed Agent access path is not a canonical directory.");
+          }
+          const canonicalPath = await fileSystem.realPath(action.path);
+          if (!equalPath("windows", canonicalPath, action.path)) {
+            throw uncertain("An owner-managed Agent access path resolves through a link.");
+          }
+          await runRequired(boundaries.process, {
+            executable: tools.icacls,
+            arguments: [
+              action.path,
+              "/grant:r",
+              `${windowsPrincipal(action.principal)}:${windowsPermission(action.permission)}`,
+              "/T",
+              "/L",
+              "/Q",
+            ],
+            timeoutMs: 120_000,
+          });
+          return { disposition: "changed" };
+        }
         case "directory.ensure": {
           const existing = await fileSystem.inspect(action.path);
           if (configuration.platform === "windows" && existing.kind === "directory") {
@@ -2589,14 +2618,16 @@ function assertFilesystemActionAllowed(
     configuration,
   }).steps;
   for (const step of artifacts) {
-    if (step.action.kind === "directory.ensure") {
+    if (step.action.kind === "directory.ensure" || step.action.kind === "directory.access-grant") {
       allowedExact.add(step.action.path);
     } else if (step.action.kind === "file.write") {
       allowedExact.add(step.action.file.path);
     }
   }
   const path =
-    action.kind === "directory.ensure" || action.kind === "path.remove"
+    action.kind === "directory.ensure" ||
+    action.kind === "directory.access-grant" ||
+    action.kind === "path.remove"
       ? action.path
       : action.kind === "file.write"
         ? action.file.path
@@ -2628,6 +2659,7 @@ function assertFilesystemActionAllowed(
 
 function collectActionPaths(action: PlanAction, paths: Set<string>): void {
   switch (action.kind) {
+    case "directory.access-grant":
     case "directory.ensure":
     case "path.remove":
       paths.add(action.path);
@@ -2729,6 +2761,9 @@ function requiredNativeTools(
       } else {
         required.add(tools.id);
       }
+    }
+    if (step.action.kind === "directory.access-grant") {
+      required.add(tools.icacls);
     }
     if (step.action.kind === "file.write" && configuration.platform !== "windows") {
       required.add(tools.id);

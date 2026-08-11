@@ -95,10 +95,21 @@ export interface WindowsServiceConfiguration extends BaseServiceConfiguration {
    * must be able to secure before Codex can enter its Windows sandbox.
    */
   readonly agentSandbox?: WindowsAgentSandboxConfiguration;
+  /**
+   * Exact owner-authenticated provider homes that the persistent core may use.
+   * Lifecycle preparation preserves their existing ACLs and adds only this
+   * instance's virtual-service identity.
+   */
+  readonly agentProviderAccess?: WindowsAgentProviderAccessConfiguration;
 }
 
 export interface WindowsAgentSandboxConfiguration {
   readonly codexSandboxBinDirectory: string;
+}
+
+export interface WindowsAgentProviderAccessConfiguration {
+  readonly codexHomeDirectory: string;
+  readonly claudeHomeDirectory: string;
 }
 
 export interface WindowsOwnerHelperSecretBinding {

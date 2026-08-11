@@ -47,6 +47,7 @@ test("a staged Windows Worker composes its service document from durable public 
   const installRoot = join(root, "installed");
   const ownerVaultRoot = join(root, "owner-vault");
   const codexHome = join(root, "owner-codex");
+  const claudeHome = join(root, "owner-claude");
   const core = keyPin();
   const helper = keyPin();
 
@@ -97,6 +98,7 @@ test("a staged Windows Worker composes its service document from durable public 
         agent: {
           provider: "auto",
           codexHome,
+          claudeHome,
           allowUntestedVersion: false,
         },
         workspaces: [],
@@ -136,6 +138,10 @@ test("a staged Windows Worker composes its service document from durable public 
       document.agentSandbox?.codexSandboxBinDirectory,
       win32.join(win32.resolve(codexHome), ".sandbox-bin"),
     );
+    assert.deepEqual(document.agentProviderAccess, {
+      codexHomeDirectory: win32.resolve(codexHome),
+      claudeHomeDirectory: win32.resolve(claudeHome),
+    });
     assert.equal(
       document.serviceSecretBinding?.handoffRoot,
       win32.resolve(join(dataRoot, "state", "secrets", "handoff")),

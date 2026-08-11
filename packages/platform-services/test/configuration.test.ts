@@ -92,6 +92,61 @@ test("accepts only the exact external Windows Codex sandbox helper directory", (
   }
 });
 
+test("accepts only bounded Windows Agent provider homes with a verified owner profile", () => {
+  const accepted = createPlatformServiceDefinition(
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        homeDirectory: "C:\\Users\\owner",
+      },
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.codex",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+  ).configuration;
+  assert.deepEqual(accepted.platform === "windows" ? accepted.agentProviderAccess : undefined, {
+    codexHomeDirectory: "C:\\Users\\owner\\.codex",
+    claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+  });
+
+  for (const configuration of [
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.codex",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        homeDirectory: "C:\\Users\\owner",
+      },
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        homeDirectory: "C:\\Users\\owner",
+      },
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\src\\OpenDelegate\\.codex",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+  ]) {
+    assert.throws(
+      () => createPlatformServiceDefinition(configuration),
+      (error: unknown) =>
+        error instanceof PlatformServiceError &&
+        ["INVALID_IDENTITY", "INVALID_PATH", "PATH_INSIDE_CHECKOUT"].includes(error.code),
+    );
+  }
+});
+
 test("accepts only a normalized non-root Windows owner home", () => {
   const accepted = createPlatformServiceDefinition(
     windowsConfiguration({

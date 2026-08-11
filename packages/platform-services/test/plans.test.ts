@@ -163,6 +163,84 @@ test("Windows lifecycle plans repair only the Codex sandbox helper ACL before st
   }
 });
 
+test("Windows lifecycle plans preserve provider ACLs while granting exact service access", () => {
+  const ownerSession = {
+    ...windowsConfiguration().ownerSession,
+    homeDirectory: "C:\\Users\\owner",
+  };
+  const access = {
+    codexHomeDirectory: "C:\\Users\\owner\\.codex",
+    claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+  };
+  for (const input of [
+    {
+      operation: "install" as const,
+      configuration: windowsConfiguration({
+        ownerSession,
+        agentProviderAccess: access,
+        agentSandbox: { codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin" },
+      }),
+    },
+    {
+      operation: "start" as const,
+      configuration: windowsConfiguration({
+        ownerSession,
+        agentProviderAccess: access,
+        agentSandbox: { codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin" },
+      }),
+      activeVersion: "1.2.3",
+    },
+    {
+      operation: "restart" as const,
+      configuration: windowsConfiguration({
+        ownerSession,
+        agentProviderAccess: access,
+        agentSandbox: { codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin" },
+      }),
+      activeVersion: "1.2.3",
+    },
+    {
+      operation: "upgrade" as const,
+      configuration: windowsConfiguration({
+        ownerSession,
+        agentProviderAccess: access,
+        agentSandbox: { codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin" },
+        bundle: { ...windowsConfiguration().bundle, version: "1.2.4" },
+      }),
+      activeVersion: "1.2.3",
+    },
+  ]) {
+    const plan = createServicePlan(input);
+    const grants = plan.steps.filter((step) => step.action.kind === "directory.access-grant");
+    assert.deepEqual(
+      grants.map((step) =>
+        step.action.kind === "directory.access-grant"
+          ? [step.action.path, step.action.permission]
+          : [],
+      ),
+      [
+        ["C:\\Users\\owner\\.codex", "read-write"],
+        ["C:\\Users\\owner\\.claude", "read-write"],
+        ["C:\\Users\\owner\\.local\\bin", "read-execute"],
+        ["C:\\Users\\owner\\AppData\\Roaming\\npm", "read-execute"],
+      ],
+    );
+    for (const grant of grants) {
+      assert.equal(grant.action.kind, "directory.access-grant");
+      assert.equal(grant.action.principal, "NT SERVICE\\OpenDelegate-personal");
+      assert.equal(grant.action.preserveExistingAccess, true);
+      assert.equal(grant.action.missingPathPolicy, "skip");
+      assert.ok(
+        plan.steps.indexOf(grant) < plan.steps.findIndex((step) => step.id === "start-core"),
+      );
+    }
+    assert.ok(
+      Math.max(...grants.map((grant) => plan.steps.indexOf(grant))) <
+        plan.steps.findIndex((step) => step.id === "ensure-codex-sandbox-helper"),
+    );
+  }
+});
+
 test("Admin preference reconfiguration atomically rewrites runtime state and restarts only the owner helper", async () => {
   const previousConfiguration = linuxConfiguration({ role: "main" });
   const configuration = linuxConfiguration({

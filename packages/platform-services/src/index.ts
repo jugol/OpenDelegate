@@ -141,6 +141,7 @@ export {
   type ServiceIdentity,
   type ServiceOperation,
   type ServicePlaneArtifact,
+  type WindowsAgentProviderAccessConfiguration,
   type WindowsAgentSandboxConfiguration,
   type WindowsServiceConfiguration,
   type WindowsServiceSecretBinding,

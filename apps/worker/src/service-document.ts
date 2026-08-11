@@ -242,6 +242,9 @@ export async function buildWorkerServiceDocument(
   const codexHome =
     configuration.agent.codexHome ??
     defaultProviderHome("codex", options.paths, options.environment ?? process.env);
+  const claudeHome =
+    configuration.agent.claudeHome ??
+    defaultProviderHome("claude", options.paths, options.environment ?? process.env);
 
   return composeServiceConfiguration({
     platform: family,
@@ -280,6 +283,10 @@ export async function buildWorkerServiceDocument(
       serviceName: configuration.secretBackend.serviceName,
       serviceSid: configuration.secretBackend.serviceSid,
       vaultRoot: platformPath(family, configuration.secretBackend.vaultRoot),
+    },
+    windowsAgentProviderAccess: {
+      codexHomeDirectory: platformPath(family, codexHome),
+      claudeHomeDirectory: platformPath(family, claudeHome),
     },
     ...(configuration.agent.provider === "claude"
       ? {}

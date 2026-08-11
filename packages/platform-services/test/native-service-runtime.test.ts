@@ -451,8 +451,16 @@ test("Windows Worker install accepts the release and staging root actions after 
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
   const configuration = windowsConfiguration({
     role: "worker",
+    ownerSession: {
+      ...windowsConfiguration().ownerSession,
+      homeDirectory: "C:\\Users\\owner",
+    },
     agentSandbox: {
       codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    },
+    agentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
     serviceSecretBinding: {
       backend: "windows-service-dpapi",
@@ -557,6 +565,34 @@ test("Windows Worker install accepts the release and staging root actions after 
         request.arguments.includes("NT SERVICE\\OpenDelegate-personal:(OI)(CI)F"),
     ),
   );
+  assert.ok(
+    icaclsRequests.findIndex(
+      (request) => request.arguments[0] === "C:\\Users\\owner\\.codex",
+    ) <
+      icaclsRequests.findIndex(
+        (request) => request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin",
+      ),
+  );
+  for (const [path, permission] of [
+    ["C:\\Users\\owner\\.codex", "(OI)(CI)M"],
+    ["C:\\Users\\owner\\.claude", "(OI)(CI)M"],
+    ["C:\\Users\\owner\\.local\\bin", "(OI)(CI)RX"],
+    ["C:\\Users\\owner\\AppData\\Roaming\\npm", "(OI)(CI)RX"],
+  ] as const) {
+    const grant = icaclsRequests.find((request) => request.arguments[0] === path);
+    assert.ok(grant, path);
+    assert.deepEqual(grant.arguments, [
+      path,
+      "/grant:r",
+      `NT SERVICE\\OpenDelegate-personal:${permission}`,
+      "/T",
+      "/L",
+      "/Q",
+    ]);
+    assert.equal(grant.arguments.includes("/inheritance:r"), false);
+    assert.equal(grant.arguments.includes("/reset"), false);
+    assert.equal(grant.arguments.includes("/setowner"), false);
+  }
   assert.equal(
     icaclsRequests.some(
       (request) =>
@@ -576,7 +612,102 @@ test("Windows Worker install accepts the release and staging root actions after 
   );
   assert.equal(
     icaclsRequests.some(
-      (request) => request.arguments.includes("/grant:r") && request.arguments.includes("/T"),
+      (request) =>
+        request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin" &&
+        request.arguments.includes("/grant:r") &&
+        request.arguments.includes("/T"),
+    ),
+    false,
+  );
+});
+
+test("Windows provider access skips missing paths and rejects linked roots before ACL mutation", async () => {
+  const configuration = windowsConfiguration({
+    ownerSession: {
+      ...windowsConfiguration().ownerSession,
+      homeDirectory: "C:\\Users\\owner",
+    },
+    agentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+    },
+    serviceSecretBinding: {
+      backend: "windows-service-dpapi",
+      handoffRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\handoff",
+      serviceName: "OpenDelegate-personal",
+      serviceSid: WINDOWS_SERVICE_SID,
+      vaultRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service",
+    },
+  });
+  const plan = createServicePlan({
+    operation: "start",
+    configuration,
+    activeVersion: "1.2.3",
+  });
+  const fileSystem = new FakeFileSystem();
+  fileSystem.kinds.set("C:\\Users\\owner\\.codex", "missing");
+  const process = new FakeProcess();
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const skipped = await executor.execute({
+    commandId: "service-start-provider-access-missing",
+    configuration,
+    plan,
+  });
+  assert.equal(skipped.report.outcome, "succeeded");
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") &&
+        request.arguments[0] === "C:\\Users\\owner\\.codex",
+    ),
+    false,
+  );
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") &&
+        request.arguments[0] === "C:\\Users\\owner\\.claude",
+    ),
+    true,
+  );
+
+  fileSystem.kinds.set("C:\\Users\\owner\\.claude", "symbolic-link");
+  process.requests.length = 0;
+  const linkedExecutor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  });
+
+  await assert.rejects(
+    linkedExecutor.execute({
+      commandId: "service-start-provider-access-link",
+      configuration,
+      plan,
+    }),
+    (error: unknown) => error instanceof ServiceCommandExecutionError,
+  );
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") &&
+        ["C:\\Users\\owner\\.codex", "C:\\Users\\owner\\.claude"].includes(
+          request.arguments[0] ?? "",
+        ),
     ),
     false,
   );

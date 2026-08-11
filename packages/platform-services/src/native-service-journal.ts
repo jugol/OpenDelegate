@@ -578,6 +578,7 @@ function normalizeRollbackFailures(
       actionKind !== "account.ensure" &&
       actionKind !== "account.remove" &&
       actionKind !== "activation.switch" &&
+      actionKind !== "directory.access-grant" &&
       actionKind !== "directory.ensure" &&
       actionKind !== "file.write" &&
       actionKind !== "health.check" &&

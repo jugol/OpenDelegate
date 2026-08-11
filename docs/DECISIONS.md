@@ -2918,6 +2918,15 @@ copies the owner's complete interactive `PATH`. During upgrade, the installer ac
 only the exact legacy runtime configuration whose sole difference is the missing
 owner-home field; every other installed byte drift still fails closed.
 
+The same service document binds the exact resolved Codex and Claude home directories.
+Before install, start, restart, or upgrade starts the core, the elevated lifecycle
+executor preserves every existing ACL entry and grants only the instance service
+identity recursive Modify access to those two homes. It likewise grants that identity
+recursive Read & Execute access to the two bounded launcher directories, when they
+exist. Missing owner-managed paths are skipped rather than created, links and special
+entries fail closed, and the executor never disables inheritance or resets a provider
+tree while adding these service-specific entries.
+
 **Rationale:** The live Windows Worker ran correctly under its virtual service
 account, but Claude was installed at the owner's `.local\bin\claude.exe`. An owner
 shell diagnostic therefore reported Claude ready while the persistent Worker reported
@@ -2928,3 +2937,6 @@ inheriting aliases, temporary directories, or mutable shell-specific entries.
 Windows user package locations remain discoverable after boot, while provider homes,
 authentication, service identity, and approval policy stay unchanged. Existing
 installations have one narrow, auditable migration into the new runtime document.
+The persistent service can read and update the owner's SSOT provider state without
+copying credentials or replacing owner/provider ACLs, and every lifecycle start repairs
+only its own exact access entries if an installer or provider recreated those paths.

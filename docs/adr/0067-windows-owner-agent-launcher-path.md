@@ -51,6 +51,17 @@ missing owner-home field. It writes the current document atomically while the se
 is stopped. Any additional installed-definition drift remains a hard preflight
 failure.
 
+The service document also records the exact resolved Codex and Claude home directories.
+The elevated install, start, restart, and upgrade plans add the instance virtual-service
+identity to those existing directories with inheritable recursive Modify access. They
+add the same identity to the two launcher directories above with inheritable recursive
+Read & Execute access. These are additive, identity-scoped grants: lifecycle execution
+uses `icacls /grant:r` only for the OpenDelegate service principal and never uses
+`/inheritance:r`, `/reset`, ownership transfer, or directory creation for these
+owner/provider-managed paths. Recursive traversal uses `/L`, so descendant symbolic
+links are modified as links rather than followed. Missing paths are skipped, while a
+linked, special, or noncanonical declared root fails before mutation.
+
 ## Alternatives considered
 
 ### Inherit the owner's complete interactive environment
@@ -83,6 +94,9 @@ installation.
 - The two provider launcher directories are owner-writable by design. The provider
   sandbox, virtual-service identity, exact-action authorization, service ACLs, and
   Secret Store remain separate enforcement layers; no broader owner path is admitted.
+- The exact Codex and Claude homes keep their existing owner- and provider-managed ACLs;
+  only the current OpenDelegate instance service principal receives recursive Modify.
+  The exact two launcher directories receive only recursive Read & Execute.
 - Install and upgrade persist one additional non-secret owner profile path and must
   preserve the exact legacy-document migration.
 - A provider installed elsewhere requires an explicit executable configuration or a
@@ -98,6 +112,9 @@ installation.
   bounded allowlist while secret-like variables and service markers do not.
 - A Windows composition test creates the real npm Codex package layout and proves
   both `codex-app-server` and `codex-cli` report tested, authenticated readiness.
+- Service-plan and native-executor tests prove that provider-home and launcher grants
+  precede core start, skip missing paths, reject links, preserve inheritance and all
+  unrelated ACL entries, and replace only the declared service principal's ACE.
 - Run-selection tests prove the same projected environment reaches immutable model
   validation; the Worker execution plan carries it into start and resume handling.
 - Guarded upgrade tests accept only the exact missing-owner-home predecessor and
@@ -107,7 +124,7 @@ installation.
 
 - [`../PRODUCT_SPEC.md`](../PRODUCT_SPEC.md), FR-3 and FR-16
 - [`../IMPLEMENTATION_PLAN.md`](../IMPLEMENTATION_PLAN.md), Phase 4
-- [`../DECISIONS.md`](../DECISIONS.md), D-076, D-139, and D-140
+- [`../DECISIONS.md`](../DECISIONS.md), D-076, D-134, D-139, and D-140
 - [`0010-reproducible-platform-bundles-and-provenance.md`](0010-reproducible-platform-bundles-and-provenance.md)
 - [`0011-native-two-plane-service-supervision-and-authenticated-ipc.md`](0011-native-two-plane-service-supervision-and-authenticated-ipc.md)
 - [`0018-programmatic-agent-adapters-and-action-authorization.md`](0018-programmatic-agent-adapters-and-action-authorization.md)

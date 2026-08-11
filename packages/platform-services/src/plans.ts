@@ -63,6 +63,15 @@ export type PlanAction =
       readonly access: DirectoryAccessPolicy;
     }
   | {
+      readonly kind: "directory.access-grant";
+      readonly path: string;
+      readonly principal: string;
+      readonly permission: "read-execute" | "read-write";
+      readonly recursive: true;
+      readonly preserveExistingAccess: true;
+      readonly missingPathPolicy: "skip";
+    }
+  | {
       readonly kind: "file.write";
       readonly file: RenderedFile;
       readonly atomic: true;
@@ -280,6 +289,7 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       "0700",
       directoryAccess(configuration, "installer-only"),
     ),
+    ...windowsAgentProviderAccessSteps(configuration),
     ...windowsAgentSandboxSteps(configuration),
     ...releaseInstallSteps(artifacts),
     ...artifacts.files.map((file): ServicePlanStep => ({
@@ -320,6 +330,7 @@ function lifecyclePlan(
   const steps =
     operation === "start"
       ? [
+          ...windowsAgentProviderAccessSteps(artifacts.definition.configuration),
           ...windowsAgentSandboxSteps(artifacts.definition.configuration),
           supervisorStep("start-core", artifacts, "core", "start", "stop"),
           ...(hasSessionHelper(artifacts)
@@ -348,6 +359,7 @@ function restartPlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
         : []),
       supervisorStep("stop-core", artifacts, "core", "stop", "start"),
+      ...windowsAgentProviderAccessSteps(artifacts.definition.configuration),
       ...windowsAgentSandboxSteps(artifacts.definition.configuration),
       supervisorStep("start-core", artifacts, "core", "start", "stop"),
       ...(hasSessionHelper(artifacts)
@@ -489,6 +501,7 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
+    ...windowsAgentProviderAccessSteps(definition.configuration),
     ...windowsAgentSandboxSteps(definition.configuration),
     ...(definition.configuration.platform === "windows"
       ? [
@@ -1014,6 +1027,72 @@ function windowsAgentSandboxSteps(
       directoryAccess(configuration, "provider-sandbox"),
     ),
   ];
+}
+
+function windowsAgentProviderAccessSteps(
+  configuration: PlatformServiceConfiguration,
+): readonly ServicePlanStep[] {
+  if (configuration.platform !== "windows" || configuration.agentProviderAccess === undefined) {
+    return [];
+  }
+  const ownerHome = configuration.ownerSession.homeDirectory;
+  if (ownerHome === undefined) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Windows Agent provider access requires the verified owner profile directory.",
+    );
+  }
+  const principal = `NT SERVICE\\OpenDelegate-${configuration.instanceId}`;
+  const grants = new Map<
+    string,
+    {
+      readonly id: string;
+      readonly path: string;
+      permission: "read-execute" | "read-write";
+    }
+  >();
+  const add = (id: string, path: string, permission: "read-execute" | "read-write"): void => {
+    const key = win32.resolve(path).toLocaleLowerCase("en-US");
+    const existing = grants.get(key);
+    if (existing === undefined) {
+      grants.set(key, { id, path, permission });
+    } else if (permission === "read-write") {
+      existing.permission = permission;
+    }
+  };
+  add(
+    "grant-codex-home-service-access",
+    configuration.agentProviderAccess.codexHomeDirectory,
+    "read-write",
+  );
+  add(
+    "grant-claude-home-service-access",
+    configuration.agentProviderAccess.claudeHomeDirectory,
+    "read-write",
+  );
+  add(
+    "grant-owner-local-bin-service-access",
+    win32.join(ownerHome, ".local", "bin"),
+    "read-execute",
+  );
+  add(
+    "grant-owner-npm-bin-service-access",
+    win32.join(ownerHome, "AppData", "Roaming", "npm"),
+    "read-execute",
+  );
+  return [...grants.values()].map((grant): ServicePlanStep => ({
+    id: grant.id,
+    description: `Preserve existing access and grant the core service ${grant.permission} access to ${grant.path}.`,
+    action: {
+      kind: "directory.access-grant",
+      path: grant.path,
+      principal,
+      permission: grant.permission,
+      recursive: true,
+      preserveExistingAccess: true,
+      missingPathPolicy: "skip",
+    },
+  }));
 }
 
 function plan(

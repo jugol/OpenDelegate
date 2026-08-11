@@ -46,6 +46,7 @@ const WINDOWS_SERVICE_SECRET_BINDING_KEYS = new Set([
 ]);
 const WINDOWS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "vaultRoot"]);
 const WINDOWS_AGENT_SANDBOX_KEYS = new Set(["codexSandboxBinDirectory"]);
+const WINDOWS_AGENT_PROVIDER_ACCESS_KEYS = new Set(["codexHomeDirectory", "claudeHomeDirectory"]);
 const MACOS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "helperPath", "expectedHelperSha256"]);
 const MACOS_SERVICE_SECRET_BINDING_KEYS = new Set([
   "backend",
@@ -117,7 +118,7 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
     input.platform === "linux"
       ? new Set(["systemdCredential"])
       : input.platform === "windows"
-        ? new Set(["agentSandbox", "serviceSecretBinding"])
+        ? new Set(["agentProviderAccess", "agentSandbox", "serviceSecretBinding"])
         : new Set(["serviceSecretBinding"]),
   );
 
@@ -353,6 +354,40 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
           "PATH_INSIDE_CHECKOUT",
           "The Codex sandbox helper directory must remain outside the source checkout.",
         );
+      }
+    }
+    if (input.agentProviderAccess !== undefined) {
+      assertRecord(input.agentProviderAccess, "agentProviderAccess");
+      assertExactKeys(input.agentProviderAccess, WINDOWS_AGENT_PROVIDER_ACCESS_KEYS);
+      if (input.ownerSession.homeDirectory === undefined) {
+        throw new PlatformServiceError(
+          "INVALID_IDENTITY",
+          "Windows Agent provider access requires the verified owner profile directory.",
+        );
+      }
+      for (const [name, providerHome] of [
+        ["agentProviderAccess.codexHomeDirectory", input.agentProviderAccess.codexHomeDirectory],
+        ["agentProviderAccess.claudeHomeDirectory", input.agentProviderAccess.claudeHomeDirectory],
+      ] as const) {
+        assertSafeAbsolutePath("windows", providerHome, name);
+        if (win32.dirname(providerHome) === providerHome) {
+          throw new PlatformServiceError("INVALID_PATH", `${name} cannot be a volume root.`);
+        }
+        for (const [protectedName, protectedPath] of [
+          ["source checkout", input.paths.sourceCheckoutDirectory],
+          ["release bundle", input.bundle.sourceDirectory],
+        ] as const) {
+          if (
+            samePath("windows", protectedPath, providerHome) ||
+            isDescendantPath("windows", protectedPath, providerHome) ||
+            isDescendantPath("windows", providerHome, protectedPath)
+          ) {
+            throw new PlatformServiceError(
+              protectedName === "source checkout" ? "PATH_INSIDE_CHECKOUT" : "INVALID_PATH",
+              `${name} must remain disjoint from the ${protectedName}.`,
+            );
+          }
+        }
       }
     }
   } else {
