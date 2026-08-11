@@ -6,6 +6,50 @@ import { AgentAdapterError } from "./errors.ts";
 
 export type AgentProviderHomeOwner = "claude" | "codex";
 
+interface ControlledProviderHomeMetadata {
+  readonly canonicalPath?: string;
+  readonly kind: "directory" | "missing" | "unsafe";
+  readonly mode?: number;
+}
+
+export interface ControlledProviderHomeFileSystem {
+  inspect(path: string): Promise<ControlledProviderHomeMetadata>;
+  ensureDirectory(path: string, mode: number): Promise<void>;
+  setMode(path: string, mode: number): Promise<void>;
+}
+
+export interface PrepareControlledProviderHomeOptions {
+  readonly fileSystem?: ControlledProviderHomeFileSystem;
+  readonly hostPlatform?: NodeJS.Platform;
+}
+
+const nativeProviderHomeFileSystem: ControlledProviderHomeFileSystem = {
+  async inspect(path) {
+    try {
+      const metadata = await lstat(path);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+        return { kind: "unsafe" };
+      }
+      return {
+        canonicalPath: await realpath(path),
+        kind: "directory",
+        mode: metadata.mode & 0o777,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { kind: "missing" };
+      }
+      throw error;
+    }
+  },
+  async ensureDirectory(path, mode) {
+    await mkdir(path, { recursive: true, mode });
+  },
+  async setMode(path, mode) {
+    await chmod(path, mode);
+  },
+};
+
 /**
  * The provider home the owner already authenticated on this Device.
  *
@@ -66,22 +110,38 @@ export function resolveControlledProviderHome(path: string, provider: string): s
   return resolve(path);
 }
 
-export async function prepareControlledProviderHome(path: string, provider: string): Promise<void> {
-  await mkdir(path, { recursive: true, mode: 0o700 });
-  const metadata = await lstat(path);
-  const canonical = await realpath(path);
+export async function prepareControlledProviderHome(
+  path: string,
+  provider: string,
+  options: PrepareControlledProviderHomeOptions = {},
+): Promise<void> {
+  const fileSystem = options.fileSystem ?? nativeProviderHomeFileSystem;
+  let metadata = await fileSystem.inspect(path);
+  const created = metadata.kind === "missing";
+  if (created) {
+    await fileSystem.ensureDirectory(path, 0o700);
+    metadata = await fileSystem.inspect(path);
+  }
   if (
-    !metadata.isDirectory() ||
-    metadata.isSymbolicLink() ||
-    !sameFilesystemPath(canonical, path)
+    metadata.kind !== "directory" ||
+    metadata.canonicalPath === undefined ||
+    !sameFilesystemPath(metadata.canonicalPath, path)
   ) {
     throw new AgentAdapterError(
       "CONTROLLED_PROVIDER_HOME_UNSAFE",
       `The configured ${provider} provider home is unsafe.`,
     );
   }
-  if (process.platform !== "win32") {
-    await chmod(path, 0o700);
+  if ((options.hostPlatform ?? process.platform) !== "win32") {
+    if (metadata.mode === undefined || (metadata.mode & 0o002) !== 0) {
+      throw new AgentAdapterError(
+        "CONTROLLED_PROVIDER_HOME_UNSAFE",
+        `The configured ${provider} provider home has unsafe access permissions.`,
+      );
+    }
+    if (created) {
+      await fileSystem.setMode(path, 0o700);
+    }
   }
 }
 

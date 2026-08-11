@@ -2784,3 +2784,23 @@ stable `current` target through their shared service group without granting worl
 access or write access. File executability remains derived from the signed source
 mode, data files do not become executable, and symbolic links or special files
 continue to fail closed.
+
+## D-134 — Existing provider homes keep deliberate service-sharing access
+
+**Decision:** Agent adapters create a missing managed provider home privately, but
+they do not rewrite the mode of an existing safe provider home. An existing path
+must still be an exact, canonical directory and may not be world-writable. A
+persistent Device may therefore grant its dedicated service identity access to the
+owner's exact Codex or Claude home without the first adapter probe reverting that
+access to owner-only mode.
+
+**Rationale:** The macOS launchd core runs as `_opendelegate`, while D-076 binds its
+Agent adapters to the owner's already authenticated `.codex` and `.claude` homes.
+The adapter's unconditional `chmod 0700` both prevented that service identity from
+using the home and destroyed any narrowly prepared group access at every probe.
+
+**Consequence:** Newly invented provider state remains private by default, existing
+owner-authenticated state can be shared with the Device's dedicated service group,
+and unsafe aliases or world-write access continue to fail closed. Platform service
+preparation owns the explicit access grant; adapters validate and preserve it rather
+than silently broadening or narrowing it.
