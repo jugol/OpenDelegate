@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -874,7 +883,9 @@ test(
   "macOS Worker staging separates boot and login Keychain identities idempotently",
   { skip: process.platform !== "darwin" },
   async () => {
-    const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-worker-macos-service-secret-"));
+    const fixtureRoot = await realpath(
+      await mkdtemp(join(tmpdir(), "opendelegate-worker-macos-service-secret-")),
+    );
     const bundleRoot = join(fixtureRoot, "bundle");
     const packagedHelperPath = join(
       bundleRoot,
