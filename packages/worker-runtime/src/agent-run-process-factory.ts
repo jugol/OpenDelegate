@@ -1127,7 +1127,7 @@ class AdapterRunProcess implements RunProcess {
             diagnostic: {
               code: egressDenied ? "ARTIFACT_EGRESS_DENIED" : "ARTIFACT_PROMOTION_FAILED",
               stage: "artifact",
-              retryable: !egressDenied,
+              retryable: artifactPromotionRetryable(error, egressDenied),
             },
             ...usageProperty(usage),
             ...agentSessionProperty(this.#agentSession),
@@ -1722,9 +1722,24 @@ function validatePromotedArtifactIds(value: readonly string[]): readonly string[
 }
 
 function isArtifactEgressDenied(error: unknown): boolean {
-  return (
-    error !== null && typeof error === "object" && "code" in error && error.code === "EGRESS_DENIED"
-  );
+  return readOwnDataProperty(error, "code") === "EGRESS_DENIED";
+}
+
+function artifactPromotionRetryable(error: unknown, egressDenied: boolean): boolean {
+  const retryable = readOwnDataProperty(error, "retryable");
+  return typeof retryable === "boolean" ? retryable : !egressDenied;
+}
+
+function readOwnDataProperty(input: unknown, key: string): unknown {
+  if (input === null || typeof input !== "object") {
+    return undefined;
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isNormalizedAbsolutePath(value: unknown): value is string {

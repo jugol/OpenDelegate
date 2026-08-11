@@ -217,6 +217,16 @@ best-effort flow, but it does not prove a pinned executable identity or service 
    same bootstrap configuration and stdin flag rotates that alias safely. A pre-provisioned alias
    may omit `--database-uri-stdin`.
 
+   A new Main also creates a private, authenticated, loopback-only Artifact Gateway by default and
+   derives its non-secret Secret Store descriptor from Main's selected backend. Do not omit or
+   hand-write this core result-delivery boundary. Pass `--artifacts disabled` only when the owner
+   explicitly declines Artifact delivery. For a custom Artifact route, generate a complete
+   secret-free configuration outside the checkout and pass `--artifact-config ABSOLUTE_PATH`;
+   non-loopback origins require HTTPS and the verified reverse-proxy boundary. Re-running `init`
+   without either option preserves an existing Main. Adding, replacing, or removing Artifact
+   configuration later must use one of those explicit options and changes no other bootstrap
+   setting.
+
 2. Keep Main loopback-only unless the owner selects a private-network or custom listener. Require
    HTTPS and an exact allowed origin for any non-loopback listener. Configure it with the complete
    `--listen-host`, `--listen-port`, `--listen-origin`, `--tls-certificate`, and `--tls-private-key`
@@ -408,7 +418,11 @@ not a Task conversation:
 5. configure ordered routes per Device;
 6. enroll each additional Worker with a short-lived single-use grant (the fixed Main was already
    enrolled locally in section 4); and
-7. configure Artifact exposure and retention.
+7. confirm the default local Artifact Gateway is healthy, then configure any remote-Worker viewer or
+   upload route and retention. The loopback default serves the co-located Worker only; a Worker on
+   another Device needs an owner-approved private HTTPS route through LAN, Omada, Tailscale, a
+   verified reverse proxy, or another configured transport. Do not silently mutate a VPN, proxy,
+   firewall, DNS, or certificate boundary.
 
 Issue each grant through the packaged deterministic boundary:
 

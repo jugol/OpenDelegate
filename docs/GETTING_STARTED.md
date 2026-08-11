@@ -106,6 +106,14 @@ Unless you choose otherwise, the accepted defaults are:
 - private-network Artifact exposure with authentication; and
 - no automatic network, firewall, driver, kernel, new package-source, or remote-script changes.
 
+On a new Main, `init` includes a private, authenticated, loopback-only Artifact Gateway. This lets
+the Main's co-located Worker return files without a separate hidden setup step. An owner who
+deliberately does not want Artifact delivery can select `--artifacts disabled`; a custom
+`--artifact-config` can add or replace the configuration later without changing unrelated Main
+settings. A Worker on another Device still needs an explicitly configured HTTPS Artifact route or
+verified reverse proxy over the owner's LAN, Omada, Tailscale, tunnel, or equivalent network. The
+installer must ask before mutating that network boundary.
+
 ### Make the Configuration Agent ready
 
 Before Main is initialized, the init Agent must make the initial Main Agent Adapter ready. This

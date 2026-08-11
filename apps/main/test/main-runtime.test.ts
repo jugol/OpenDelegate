@@ -21,6 +21,7 @@ import { SqlConfigurationRepository } from "@opendelegate/storage-sql";
 
 import { browserOpenCommand, openBrowser, parseArguments } from "../src/cli.ts";
 import {
+  defaultMainArtifactConfiguration,
   inspectPersistedMainConfiguration,
   listenMainRuntime,
   loadMainConfiguration,
@@ -167,6 +168,12 @@ test("CLI init accepts secret-free database and exact HTTPS listener configurati
     () => parseArguments(["serve", "--artifact-config", "artifacts.json"]),
     /available only with init/,
   );
+  assert.equal(parseArguments(["init", "--artifacts", "disabled"]).artifactMode, "disabled");
+  assert.equal(parseArguments(["init", "--artifacts", "enabled"]).artifactMode, "enabled");
+  assert.throws(
+    () => parseArguments(["init", "--artifacts", "enabled", "--artifact-config", "artifacts.json"]),
+    /either --artifacts or --artifact-config/i,
+  );
 });
 
 test("browser opener commands are explicit for Windows, macOS, and Linux", () => {
@@ -310,6 +317,48 @@ test("init creates a secret-free SQLite Main outside the source checkout", async
   });
   assert.equal(second.created, false);
   assert.deepEqual(second.configuration, initialized.configuration);
+
+  const artifactConfiguration = await defaultMainArtifactConfiguration({
+    home,
+    installationRoot: resolve("."),
+    mainListener: initialized.configuration.main,
+    hostPlatform: "win32",
+  });
+  const artifactEnabled = await initializeMainHome({
+    home,
+    adminRoot,
+    sourceCheckout: resolve("."),
+    artifacts: artifactConfiguration,
+    managedSecretStore: mainSecrets.store,
+  });
+  assert.equal(artifactEnabled.created, false);
+  assert.deepEqual(artifactEnabled.configuration.artifacts, artifactConfiguration);
+  assert.deepEqual(
+    (
+      JSON.parse(await readFile(join(home, "config", "main.json"), "utf8")) as {
+        artifacts?: unknown;
+      }
+    ).artifacts,
+    artifactConfiguration,
+  );
+
+  const artifactDisabled = await initializeMainHome({
+    home,
+    adminRoot,
+    sourceCheckout: resolve("."),
+    artifacts: null,
+    managedSecretStore: mainSecrets.store,
+  });
+  assert.equal(artifactDisabled.created, false);
+  assert.equal(artifactDisabled.configuration.artifacts, undefined);
+  assert.equal(
+    "artifacts" in
+      (JSON.parse(await readFile(join(home, "config", "main.json"), "utf8")) as Record<
+        string,
+        unknown
+      >),
+    false,
+  );
   await assert.rejects(
     initializeMainHome({
       home,

@@ -114,6 +114,12 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
+- Enabled a private loopback Artifact Gateway during ordinary new-Main initialization, added an
+  explicit enable/disable or custom reconfiguration boundary for existing Mains, and retained the
+  Windows service Secret backend so file delivery cannot disappear after service promotion.
+- Preserved bounded Artifact-stage Worker diagnostics and Main's explicit retry decision through
+  promotion and Discord localization, preventing terminal delivery refusals from becoming opaque
+  `WORKER_BOUNDARY_ERROR` retries.
 - Replaced noisy per-step Discord replies with one editable live Task-activity surface that
   aggregates Main planning, multi-Device dispatch, egress-inspected Worker milestones, Work Order
   completion, and verification. Terminal replies close it through a durable cross-cycle tombstone,

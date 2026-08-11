@@ -1394,7 +1394,7 @@ test("Worker terminal success remains pending until Artifact promotion is durabl
   }
 });
 
-test("Artifact egress denial is non-retryable and never leaks local diagnostics into the Run report", async () => {
+test("Artifact promotion failures preserve safe retryability without leaking local diagnostics", async () => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-promotion-fail-"));
   const checkout = join(root, "checkout");
   const runtimeDirectory = join(root, "runtime");
@@ -1424,7 +1424,15 @@ test("Artifact egress denial is non-retryable and never leaks local diagnostics 
           assignmentFingerprint: input.assignmentFingerprint,
         });
       },
-      promote() {
+      promote(input) {
+        if (input.assignment.runId === "run-delivery-fail") {
+          return Promise.reject(
+            Object.assign(new Error("private delivery endpoint"), {
+              code: "DELIVERY_FAILED",
+              retryable: false,
+            }),
+          );
+        }
         return Promise.reject(
           Object.assign(new Error("private-local-path C:\\secret\\report.txt"), {
             code: "EGRESS_DENIED",
@@ -1459,6 +1467,19 @@ test("Artifact egress denial is non-retryable and never leaks local diagnostics 
     });
     assert.equal(outcome.report.includes("private-local-path"), false);
     assert.equal("artifactIds" in outcome, false);
+
+    const deliveryProcess = await factory.start(
+      executionContext(assignment("run-delivery-fail", "work-order-delivery-fail")),
+    );
+    const deliveryOutcome = await deliveryProcess.completion;
+    assert.equal(deliveryOutcome.status, "failed");
+    assert.deepEqual(deliveryOutcome.diagnostic, {
+      code: "ARTIFACT_PROMOTION_FAILED",
+      stage: "artifact",
+      retryable: false,
+    });
+    assert.equal(deliveryOutcome.report.includes("private delivery endpoint"), false);
+    assert.equal("artifactIds" in deliveryOutcome, false);
   } finally {
     sessionStore.close();
     await rm(root, { recursive: true, force: true });

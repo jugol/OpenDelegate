@@ -555,7 +555,7 @@ function localizeKnownText(value: string, locale: DiscordPresentationLocale): st
       value,
     );
   if (terminalWorkerFailure !== null) {
-    const stage = terminalWorkerFailure[1] === "execution" ? "실행" : terminalWorkerFailure[1];
+    const stage = localizeWorkerStage(terminalWorkerFailure[1] ?? "unknown");
     return `Worker Run이 ${stage} 단계에서 실패했습니다 (${terminalWorkerFailure[2]}). 외부 작업이 실제로 어디까지 실행됐는지 확실하지 않아 OpenDelegate가 자동으로 다시 실행하지 않았습니다. 실행 내역을 확인한 뒤 다시 시도해 주세요.\n\n마지막 Worker 보고(불완전할 수 있음):\n${terminalWorkerFailure[3]}`;
   }
   const retryableWorkerFailure =
@@ -563,10 +563,21 @@ function localizeKnownText(value: string, locale: DiscordPresentationLocale): st
       value,
     );
   if (retryableWorkerFailure !== null) {
-    const stage = retryableWorkerFailure[1] === "execution" ? "실행" : retryableWorkerFailure[1];
+    const stage = localizeWorkerStage(retryableWorkerFailure[1] ?? "unknown");
     return `Worker Run에서 다시 시도할 수 있는 오류가 발생했습니다. 단계: ${stage} · 코드: ${retryableWorkerFailure[2]}.\n\n마지막 Worker 보고(불완전할 수 있음):\n${retryableWorkerFailure[3]}`;
   }
   return KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT] ?? value;
+}
+
+function localizeWorkerStage(stage: string): string {
+  switch (stage) {
+    case "artifact":
+      return "결과 파일 전달";
+    case "execution":
+      return "실행";
+    default:
+      return stage;
+  }
 }
 
 function approvalDescription(

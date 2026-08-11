@@ -2,6 +2,8 @@ import type { RedactedDiagnostic } from "@opendelegate/transport";
 
 const SAFE_CODES = new Set([
   "AGENT_REQUIREMENT_UNAVAILABLE",
+  "ARTIFACT_EGRESS_DENIED",
+  "ARTIFACT_PROMOTION_FAILED",
   "LEASE_EXPIRED",
   "PROCESS_CANCELLED",
   "PROCESS_FAILED",
@@ -29,6 +31,7 @@ export function sanitizeWorkerDiagnostic(input: unknown): RedactedDiagnostic {
   }
   const stage = readOwnValue(record, "stage");
   if (
+    stage === "artifact" ||
     stage === "cancellation" ||
     stage === "execution" ||
     stage === "lease" ||

@@ -58,6 +58,12 @@ export type MainArtifactSecretBackendConfiguration =
       readonly vaultRoot: string;
     }
   | {
+      readonly backend: "windows-service-dpapi";
+      readonly vaultRoot: string;
+      readonly handoffRoot: string;
+      readonly serviceSid: string;
+    }
+  | {
       readonly backend: "macos-keychain";
       readonly helperPath: string;
       readonly expectedHelperSha256: string;
@@ -1066,6 +1072,20 @@ function validateSecretBackend(input: unknown): MainArtifactSecretBackendConfigu
         backend: "windows-dpapi",
         vaultRoot: requireAbsolutePath(record["vaultRoot"]),
       });
+    case "windows-service-dpapi":
+      assertExactKeys(record, ["backend", "vaultRoot", "handoffRoot", "serviceSid"]);
+      if (
+        typeof record["serviceSid"] !== "string" ||
+        !/^S-1-(?:[0-9]+-){1,14}[0-9]+$/u.test(record["serviceSid"])
+      ) {
+        throw configurationInvalid();
+      }
+      return Object.freeze({
+        backend: "windows-service-dpapi",
+        vaultRoot: requireAbsolutePath(record["vaultRoot"]),
+        handoffRoot: requireAbsolutePath(record["handoffRoot"]),
+        serviceSid: record["serviceSid"],
+      });
     case "macos-keychain":
       assertExactKeys(record, ["backend", "helperPath", "expectedHelperSha256"]);
       if (
@@ -1110,6 +1130,15 @@ function secretStoreConfiguration(input: {
         deviceId: input.deviceId,
         sourceCheckoutRoot: input.sourceCheckout,
         vaultRoot: input.backend.vaultRoot,
+      };
+    case "windows-service-dpapi":
+      return {
+        backend: "windows-service-dpapi",
+        deviceId: input.deviceId,
+        sourceCheckoutRoot: input.sourceCheckout,
+        vaultRoot: input.backend.vaultRoot,
+        handoffRoot: input.backend.handoffRoot,
+        serviceSid: input.backend.serviceSid,
       };
     case "macos-keychain":
       return {

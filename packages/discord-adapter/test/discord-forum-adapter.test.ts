@@ -1712,6 +1712,25 @@ test("a Korean failure update localizes deterministic diagnostics without rewrit
   assert.match(rendered, /다시 시도/u);
 });
 
+test("a Korean Artifact failure names the owner-facing delivery stage", () => {
+  const payload = renderTaskUpdate(
+    {
+      taskId: "task-localized-artifact-failure",
+      state: "failed",
+      objective: "결과 파일을 전달해 줘.",
+      summary:
+        "Worker Run encountered a retryable failure during artifact (ARTIFACT_PROMOTION_FAILED).\n\nLast Worker report (may be incomplete):\n파일 생성은 완료했습니다.",
+      sourceEventId: "event_localized_artifact_failure",
+      significance: "failure",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /단계: 결과 파일 전달 · 코드: ARTIFACT_PROMOTION_FAILED/u);
+  assert.match(rendered, /파일 생성은 완료했습니다/u);
+  assert.doesNotMatch(rendered, /단계: artifact/u);
+});
+
 test("one failure card follows the current pending approval without creating message noise", async () => {
   const { adapter, api, repository } = fixture();
   const thread = forumThread("300000000000000136");

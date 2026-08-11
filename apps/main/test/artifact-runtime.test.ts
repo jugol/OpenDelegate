@@ -190,6 +190,23 @@ test("default Artifact configuration is private, loopback-only, and uses distinc
     backend: "windows-dpapi",
     vaultRoot: join(home, "secrets", "main"),
   });
+  assert.deepEqual(
+    validateMainArtifactConfiguration({
+      ...configuration,
+      secretBackend: {
+        backend: "windows-service-dpapi",
+        vaultRoot: join(home, "secrets", "service"),
+        handoffRoot: join(home, "state", "secrets"),
+        serviceSid: "S-1-5-80-1-2-3-4-5",
+      },
+    }).secretBackend,
+    {
+      backend: "windows-service-dpapi",
+      vaultRoot: join(home, "secrets", "service"),
+      handoffRoot: join(home, "state", "secrets"),
+      serviceSid: "S-1-5-80-1-2-3-4-5",
+    },
+  );
   assert.throws(
     () =>
       validateMainArtifactConfiguration({

@@ -2633,3 +2633,25 @@ remedy falsely blamed Main.
 and `mismatch` without exposing private material. A transient locked or inaccessible
 store can recover through retry; an invalid or mismatched key stays fail-closed. The
 foreground-versus-persistent macOS Keychain boundary in D-119 is unchanged.
+
+## D-127 — Artifact delivery is part of normal Main initialization
+
+Implementation detail:
+[ADR-0065](adr/0065-artifact-gateway-installation-and-worker-diagnostics.md).
+
+**Decision:** A new Main receives a private, authenticated, loopback-only Artifact
+Gateway unless the owner explicitly disables it or supplies a complete custom
+configuration. An explicit Artifact option on a later `init` atomically changes only
+that top-level configuration, while a normal restart preserves existing state.
+Worker diagnostics retain safe Artifact-stage codes and the delivery boundary's
+explicit retry decision.
+
+**Rationale:** Live Linux file-transfer QA proved that a successful Agent turn and
+committed Run manifest could never reach Main when ordinary initialization omitted
+the Gateway. The Worker then erased the useful delivery failure at its redaction
+boundary, causing blind automatic retries and an opaque owner result.
+
+**Consequence:** Co-located file delivery works without a hidden optional setup
+step, existing installations are never silently migrated, and remote Worker upload
+still requires an explicit owner-approved HTTPS route. Artifact failures remain
+bounded and actionable without exposing paths, endpoints, or provider internals.

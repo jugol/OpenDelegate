@@ -1,5 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { access, lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import {
+  access,
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { arch, homedir, hostname, platform, release } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -447,7 +457,8 @@ export interface InitializeMainHomeOptions {
   readonly databaseSecret?: Uint8Array;
   readonly listener?: MainListenerConfiguration;
   readonly discord?: MainDiscordConfiguration;
-  readonly artifacts?: MainArtifactConfiguration;
+  /** `null` is an explicit request to disable an existing Artifact Gateway. */
+  readonly artifacts?: MainArtifactConfiguration | null;
   readonly deviceChannel?: MainDeviceChannelConfiguration;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly managedSecretStore?: ManagedSecretStore;
@@ -613,11 +624,15 @@ async function initializeMainHomeInternal(
   if (await exists(paths.configurationFile)) {
     const persistedConfiguration = await loadMainConfiguration(paths.configurationFile);
     assertExistingConfigurationMatches(persistedConfiguration, options);
+    const durableConfiguration = applyRequestedArtifactConfiguration(
+      persistedConfiguration,
+      options.artifacts,
+    );
     const configuration =
       options.activeAdminRoot === undefined
-        ? persistedConfiguration
+        ? durableConfiguration
         : validateMainConfiguration({
-            ...persistedConfiguration,
+            ...durableConfiguration,
             adminRoot: resolve(options.activeAdminRoot),
           });
     await validateAdminRoot(configuration.adminRoot);
@@ -637,6 +652,9 @@ async function initializeMainHomeInternal(
       paths,
       managedSecretStore,
     });
+    if (durableConfiguration !== persistedConfiguration) {
+      await writeMainConfigurationAtomically(paths.configurationFile, durableConfiguration);
+    }
     await sealRuntimeState(paths);
     return {
       created: false,
@@ -667,7 +685,9 @@ async function initializeMainHomeInternal(
     secretBackend,
     adminRoot: resolve(options.adminRoot),
     ...(options.discord === undefined ? {} : { discord: options.discord }),
-    ...(options.artifacts === undefined ? {} : { artifacts: options.artifacts }),
+    ...(options.artifacts === undefined || options.artifacts === null
+      ? {}
+      : { artifacts: options.artifacts }),
     ...(options.deviceChannel === undefined ? {} : { deviceChannel: options.deviceChannel }),
   });
   await validateAdminRoot(configuration.adminRoot);
@@ -708,7 +728,6 @@ function assertExistingConfigurationMatches(
     ...(options.database === undefined ? {} : { database: options.database }),
     ...(options.secretBackend === undefined ? {} : { secretBackend: options.secretBackend }),
     ...(options.discord === undefined ? {} : { discord: options.discord }),
-    ...(options.artifacts === undefined ? {} : { artifacts: options.artifacts }),
     ...(options.deviceChannel === undefined ? {} : { deviceChannel: options.deviceChannel }),
     ...(options.expectedAdminRoot === undefined
       ? {}
@@ -723,8 +742,6 @@ function assertExistingConfigurationMatches(
       JSON.stringify(requested.secretBackend) !== JSON.stringify(configuration.secretBackend)) ||
     (options.discord !== undefined &&
       JSON.stringify(requested.discord) !== JSON.stringify(configuration.discord)) ||
-    (options.artifacts !== undefined &&
-      JSON.stringify(requested.artifacts) !== JSON.stringify(configuration.artifacts)) ||
     (options.deviceChannel !== undefined &&
       JSON.stringify(requested.deviceChannel) !== JSON.stringify(configuration.deviceChannel)) ||
     (options.expectedAdminRoot !== undefined && requested.adminRoot !== configuration.adminRoot);
@@ -733,6 +750,40 @@ function assertExistingConfigurationMatches(
       "CONFIG_EXISTS",
       "Main is already initialized with different requested settings. Existing configuration was not changed.",
     );
+  }
+}
+
+function applyRequestedArtifactConfiguration(
+  configuration: MainConfiguration,
+  requested: MainArtifactConfiguration | null | undefined,
+): MainConfiguration {
+  if (requested === undefined) {
+    return configuration;
+  }
+  const candidate: Record<string, unknown> = { ...configuration };
+  if (requested === null) {
+    delete candidate["artifacts"];
+  } else {
+    candidate["artifacts"] = requested;
+  }
+  const validated = validateMainConfiguration(candidate);
+  return JSON.stringify(validated) === JSON.stringify(configuration) ? configuration : validated;
+}
+
+async function writeMainConfigurationAtomically(
+  path: string,
+  configuration: MainConfiguration,
+): Promise<void> {
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(configuration, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    await rename(temporaryPath, path);
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
   }
 }
 
