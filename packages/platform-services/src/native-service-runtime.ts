@@ -2632,14 +2632,15 @@ async function readMacAttribute(
     arguments: [".", "-read", path, attribute],
     timeoutMs: 10_000,
   });
-  const prefix = `${attribute}:`;
-  const line = result.stdout
-    .split(/\r?\n/u)
-    .find((candidate) => candidate.trimStart().startsWith(prefix));
-  if (line === undefined) {
-    throw uncertain("A macOS service identity is missing a required attribute.");
+  const prefixes = [`${attribute}:`, `dsAttrTypeNative:${attribute}:`];
+  for (const candidate of result.stdout.split(/\r?\n/u)) {
+    const line = candidate.trimStart();
+    const prefix = prefixes.find((value) => line.startsWith(value));
+    if (prefix !== undefined) {
+      return line.slice(prefix.length).trim();
+    }
   }
-  return line.trimStart().slice(prefix.length).trim();
+  throw uncertain("A macOS service identity is missing a required attribute.");
 }
 
 function findDirectoryAccess(

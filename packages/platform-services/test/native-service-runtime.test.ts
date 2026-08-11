@@ -1224,6 +1224,66 @@ test("Linux install rejects an existing service account with a mismatched primar
   assert.equal(mutations(), 0);
 });
 
+test("macOS install accepts the native-prefixed hidden-account attribute", async () => {
+  const configuration = macOsConfiguration({ role: "worker" });
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (request.executable === "/usr/bin/dscl") {
+      const attribute = request.arguments[3];
+      if (attribute === "PrimaryGroupID") {
+        return processResult(0, "PrimaryGroupID: 490\n");
+      }
+      if (attribute === "UserShell") {
+        return processResult(0, "UserShell: /usr/bin/false\n");
+      }
+      if (attribute === "NFSHomeDirectory") {
+        return processResult(0, "NFSHomeDirectory: /var/empty\n");
+      }
+      if (attribute === "UniqueID") {
+        return processResult(0, "UniqueID: 490\n");
+      }
+      if (attribute === "IsHidden") {
+        return processResult(0, "dsAttrTypeNative:IsHidden: 1\n");
+      }
+      return processResult(0);
+    }
+    if (request.executable === "/usr/sbin/dseditgroup") {
+      return processResult(0, "yes owner is a member of _opendelegate\n");
+    }
+    if (request.executable === "/usr/bin/id") {
+      return processResult(0, "490\n");
+    }
+    return processResult(0);
+  };
+  const journal = new MemoryJournal();
+  const fileSystem = new FakeFileSystem();
+  fileSystem.directories.set("/Library/OpenDelegate/releases", [
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const { boundaries } = fakeBoundaries({
+    platform: "macos",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthRole: "worker",
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "macos",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-install-existing-macos-account",
+    configuration,
+    plan: createServicePlan({ operation: "install", configuration }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+});
+
 test("logged-out helpers defer while the core starts and exact replay does not invoke supervisors twice", async () => {
   const configuration = windowsConfiguration();
   const journal = new MemoryJournal();

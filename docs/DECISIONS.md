@@ -2727,3 +2727,23 @@ from traversing its own state.
 make the complete service path traversable, and recover an interrupted transition
 in place. `CONFIG_PATH_UNSAFE` directs an operator to ownership repair or elevated
 document composition; it never recommends a new Grant for an access failure.
+
+The internal-preview publisher key remains at the verifier's canonical
+`STATE_ROOT/trust/publisher-ed25519.pem` path; `DATA_ROOT/trust` is not an equivalent
+location.
+
+## D-131 — macOS service-account inspection accepts native dscl attribute names
+
+**Decision:** Existing macOS service identities are validated from both standard
+`Attribute: value` output and the `dsAttrTypeNative:Attribute: value` form returned
+by `dscl` for native attributes such as `IsHidden`. The value and every account
+invariant remain exact; only the attribute namespace spelling is normalized.
+
+**Rationale:** Live alpha.59 installation created a correct hidden, non-interactive
+`_opendelegate` identity. macOS returned `dsAttrTypeNative:IsHidden: 1`, while the
+runtime parser searched only for `IsHidden: 1` and rejected the account before any
+launchd mutation.
+
+**Consequence:** A newly created account remains idempotently acceptable on the
+same host, reinstallation no longer fails at `ensure-service-account`, and malformed
+or missing identity attributes continue to fail closed.

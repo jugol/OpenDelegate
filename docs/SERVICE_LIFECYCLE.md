@@ -175,7 +175,9 @@ ordering is security-sensitive:
 4. Make both `DATA_ROOT` traversable by the service identity and the copied state
    tree owned by that identity before launchd starts it. The owner remains a member
    of the service group for bounded read access.
-5. Review `service plan install`, then run the elevated install with a stable
+5. Place the internal-preview publisher key at the verifier's canonical
+   `STATE_ROOT/trust/publisher-ed25519.pem` path. `DATA_ROOT/trust` is not used.
+6. Review `service plan install`, then run the elevated install with a stable
    command ID.
 
 Automation must not change ownership first and then invoke `service-document` as
