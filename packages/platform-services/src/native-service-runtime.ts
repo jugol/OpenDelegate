@@ -357,6 +357,7 @@ function createNativeFilesystemAdapter(
   tools: NativeTools,
 ): ServiceFilesystemAdapter {
   const fileSystem = boundaries.fileSystem;
+  const originalRenderedFiles = new Map<string, Buffer | null>();
   return {
     async perform(action: FilesystemAction, context) {
       assertFilesystemActionAllowed(configuration, action);
@@ -445,6 +446,47 @@ function createNativeFilesystemAdapter(
           return { disposition };
         }
         case "file.write": {
+          if (context.phase === "forward") {
+            if (action.restoreOriginalBytes === true) {
+              throw uncertain("A forward file write cannot request original-byte restoration.");
+            }
+            if (!originalRenderedFiles.has(action.file.path)) {
+              const original = await fileSystem.inspect(action.file.path);
+              if (original.kind === "missing") {
+                originalRenderedFiles.set(action.file.path, null);
+              } else if (
+                original.kind === "regular-file" &&
+                original.size !== undefined &&
+                original.size <= MAXIMUM_RENDERED_FILE_BYTES
+              ) {
+                originalRenderedFiles.set(
+                  action.file.path,
+                  Buffer.from(await fileSystem.read(action.file.path, MAXIMUM_RENDERED_FILE_BYTES)),
+                );
+              } else {
+                throw uncertain("A rendered service file could not be snapshotted safely.");
+              }
+            }
+          }
+          if (context.phase === "rollback" && action.restoreOriginalBytes === true) {
+            if (!originalRenderedFiles.has(action.file.path)) {
+              throw uncertain("The exact pre-mutation service file is unavailable for rollback.");
+            }
+            const original = originalRenderedFiles.get(action.file.path);
+            if (original === null) {
+              return { disposition: await fileSystem.remove(action.file.path, false) };
+            }
+            if (original === undefined) {
+              throw uncertain("The exact pre-mutation service file is unavailable for rollback.");
+            }
+            const disposition = await fileSystem.writeAtomic(
+              action.file.path,
+              original,
+              Number.parseInt(action.file.mode, 8),
+            );
+            await applyRenderedFileAccess(configuration, action.file, boundaries, tools);
+            return { disposition };
+          }
           const bytes = encodeRenderedFile(action.file);
           const disposition = await fileSystem.writeAtomic(
             action.file.path,

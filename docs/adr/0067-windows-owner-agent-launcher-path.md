@@ -73,6 +73,12 @@ grant so it cannot be downgraded. It has an exact existing-parent precondition: 
 the declared Codex home is missing, lifecycle skips both the home grant and sandbox
 child instead of recreating owner-managed provider state.
 
+Because this decision adds a runtime field, the upgrade executor snapshots the exact
+installed runtime-configuration bytes immediately before the atomic forward write.
+Its rollback action restores that snapshot, not a newly rendered approximation of
+the predecessor. An `alpha.70` host can therefore restart on the byte-identical
+configuration it parsed before the attempted upgrade.
+
 ## Alternatives considered
 
 ### Inherit the owner's complete interactive environment
@@ -134,6 +140,8 @@ installation.
   validation; the Worker execution plan carries it into start and resume handling.
 - Guarded upgrade tests accept only an exact predecessor missing the owner-home field,
   the provider-home binding, or both, and reject any second runtime-document difference.
+- A failed-health upgrade test proves rollback restores the exact legacy runtime bytes,
+  including the continued absence of the provider-home field.
 
 ## References
 

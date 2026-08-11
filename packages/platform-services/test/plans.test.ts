@@ -346,6 +346,11 @@ test("upgrade atomically activates a staged release and rolls back after failed 
   });
 
   const activation = plan.steps.find((step) => step.action.kind === "activation.switch");
+  const runtimeWrite = plan.steps.find((step) => step.id === "write-runtime-configuration");
+  assert.equal(runtimeWrite?.rollback?.kind, "file.write");
+  if (runtimeWrite?.rollback?.kind === "file.write") {
+    assert.equal(runtimeWrite.rollback.restoreOriginalBytes, true);
+  }
   assert.ok(activation);
   assert.equal(activation.action.kind, "activation.switch");
   assert.match(activation.action.targetReleaseDirectory, /1\.3\.0$/);

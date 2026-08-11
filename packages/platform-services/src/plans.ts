@@ -80,6 +80,8 @@ export type PlanAction =
       readonly kind: "file.write";
       readonly file: RenderedFile;
       readonly atomic: true;
+      /** Rollback-only: restore the exact bytes observed before the forward write. */
+      readonly restoreOriginalBytes?: true;
     }
   | {
       readonly kind: "health.check";
@@ -413,6 +415,7 @@ function reconfigurePlan(
           kind: "file.write",
           file: previousRuntimeConfiguration,
           atomic: true,
+          restoreOriginalBytes: true,
         },
       },
       supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
@@ -536,6 +539,7 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
               kind: "file.write" as const,
               file: requireRenderedFile(previousArtifacts, "core-manifest"),
               atomic: true as const,
+              restoreOriginalBytes: true as const,
             },
           },
         ]
@@ -552,6 +556,7 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         kind: "file.write",
         file: previousRuntimeConfiguration,
         atomic: true,
+        restoreOriginalBytes: true,
       },
     },
     {

@@ -2933,6 +2933,11 @@ sandbox child are skipped rather than created; links and special entries fail cl
 The executor never disables inheritance or resets a provider tree while adding these
 service-specific entries.
 
+When an upgrade or reconfiguration rewrites a rendered service file, the executor
+snapshots its exact pre-mutation bytes after preflight and marks the rollback action
+to restore that snapshot. A schema migration therefore cannot roll an older binary
+back onto a newly rendered configuration it does not understand.
+
 **Rationale:** The live Windows Worker ran correctly under its virtual service
 account, but Claude was installed at the owner's `.local\bin\claude.exe`. An owner
 shell diagnostic therefore reported Claude ready while the persistent Worker reported

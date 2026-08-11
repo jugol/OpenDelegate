@@ -1261,6 +1261,77 @@ test("Windows Worker upgrade accepts only the exact legacy runtime without owner
   });
 });
 
+test("Windows upgrade rollback restores the exact pre-migration runtime bytes", async () => {
+  const base = windowsConfigurationWithServiceBinding("worker");
+  const configuration = windowsConfiguration({
+    ...base,
+    health: {
+      ...base.health,
+      timeoutMs: 1_000,
+    },
+  });
+  const installedConfiguration = windowsConfiguration({
+    ...configuration,
+    bundle: { ...configuration.bundle, version: "1.2.2" },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    let content = file.content;
+    if (file.purpose === "runtime-configuration") {
+      const legacy = JSON.parse(file.content) as { agentProviderAccess?: unknown };
+      delete legacy.agentProviderAccess;
+      content = `${JSON.stringify(legacy, undefined, 2)}\n`;
+    }
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const runtimeFile = installedArtifacts.files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtimeFile);
+  const exactLegacyBytes = Buffer.from(fileSystem.files.get(runtimeFile.path)!);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: false,
+    healthRole: "worker",
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-upgrade-legacy-runtime-rollback",
+    configuration,
+    plan: createServicePlan({
+      operation: "upgrade",
+      configuration,
+      activeVersion: "1.2.2",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "rolled-back", JSON.stringify(result.report));
+  assert.equal(result.report.failedStepId, "health-core");
+  assert.deepEqual(fileSystem.files.get(runtimeFile.path), exactLegacyBytes);
+  assert.doesNotMatch(exactLegacyBytes.toString("utf8"), /agentProviderAccess/u);
+});
+
 test("Windows Worker upgrade accepts only a coherent staged credential migration", async () => {
   const targetConfiguration = windowsConfigurationWithServiceBinding("worker");
   const previousCore = {
