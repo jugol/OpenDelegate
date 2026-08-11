@@ -290,27 +290,112 @@ test("a systemd-enrolled headless Linux Worker composes a core-only service docu
   }
 });
 
-test("service-document still fails closed for macOS before Keychain plane migration", async () => {
-  await assert.rejects(
-    buildWorkerServiceDocument({
-      paths: resolveWorkerPaths({
-        sourceCheckoutRoot: process.cwd(),
-        home: join(tmpdir(), "unused"),
-      }),
-      bundleDirectory: "/tmp/bundle",
+test("a System-Keychain-prepared macOS Worker composes both launchd planes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-macos-service-document-"));
+  const bundle = join(root, "bundle");
+  const serviceBundle = posixTestPath(bundle);
+  const dataRoot = join(root, "runtime-data");
+  const serviceDataRoot = posixTestPath(dataRoot);
+  const paths = resolveWorkerPaths({
+    sourceCheckoutRoot: bundle,
+    home: join(dataRoot, "state"),
+  });
+  const helperBytes = Buffer.from("macos-keychain-helper");
+  const helperDigest = `sha256:${createHash("sha256").update(helperBytes).digest("hex")}`;
+  const stableHelper = "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal";
+  const bindingPath =
+    "/Library/Application Support/OpenDelegate/personal/system-keychain-binding.json";
+  const core = keyPin();
+  const helper = keyPin();
+
+  try {
+    await mkdir(paths.configDirectory, { recursive: true });
+    await mkdir(join(bundle, "runtime", "native"), { recursive: true });
+    await writeFile(join(bundle, "runtime", "native", "opendelegate-keychain-helper"), helperBytes);
+    await writeFile(
+      paths.configFile,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        deviceId: "device-macos-persistent",
+        workerId: "worker-primary",
+        mainDeviceId: "device-main",
+        keyId: "device-key-macos",
+        certificateGeneration: 1,
+        certificatePem: "-----BEGIN CERTIFICATE-----\nworker\n-----END CERTIFICATE-----",
+        certificateAuthorityPem:
+          "-----BEGIN CERTIFICATE-----\nauthority\n-----END CERTIFICATE-----",
+        expectedMainSpkiSha256: `sha256:${"A".repeat(43)}`,
+        transportProfile: {
+          deviceId: "device-main",
+          endpoints: [
+            {
+              endpointId: "main-private",
+              label: "Main private route",
+              kind: "wss",
+              url: "wss://main.example.test/api/v1/device/channel",
+              credentialRef: "device-identity",
+            },
+          ],
+        },
+        secretBackend: {
+          backend: "macos-system-keychain",
+          bindingPath,
+          helperPath: stableHelper,
+          expectedHelperSha256: helperDigest,
+          servicePreparation: {
+            schemaVersion: 1,
+            serviceIdentity: { userName: "_opendelegate", groupName: "_opendelegate" },
+            ownerHelperSecretBinding: {
+              backend: "macos-keychain",
+              helperPath: stableHelper,
+              expectedHelperSha256: helperDigest,
+            },
+            ipcTrust: { core, helper },
+          },
+        },
+        agent: { provider: "auto", allowUntestedVersion: false },
+        workspaces: [],
+        createdAt: "2026-08-11T00:00:00.000Z",
+      })}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await writeFile(
+      join(bundle, "release-metadata.json"),
+      `${JSON.stringify({ productVersion: "0.1.0" })}\n`,
+    );
+    await writeFile(join(bundle, "SHA256SUMS"), "fixture  payload\n");
+
+    const document = await buildWorkerServiceDocument({
+      paths,
+      bundleDirectory: serviceBundle,
       installRoot: "/Library/OpenDelegate",
-      dataRoot: "/Library/Application Support/OpenDelegate",
+      dataRoot: serviceDataRoot,
       instanceId: "personal",
       healthPort: 43_190,
-      sourceCheckoutRoot: process.cwd(),
+      sourceCheckoutRoot: serviceBundle,
       hostPlatform: "darwin",
-      ownerSession: { userName: "owner", stableUserId: "501" },
-    }),
-    (error: unknown) =>
-      error instanceof WorkerAppError &&
-      error.code === "CONFIG_INVALID" &&
-      error.message.includes("Keychain migration"),
-  );
+      ownerSession: {
+        userName: "owner",
+        stableUserId: "501",
+        uid: 501,
+        homeDirectory: "/Users/owner",
+      },
+    });
+
+    assert.equal(document.platform, "macos");
+    assert.deepEqual(document.ipcTrust, { protocolVersion: 2, core, helper });
+    assert.equal(document.helperSecretBinding.helperPath, stableHelper);
+    assert.deepEqual(document.serviceSecretBinding, {
+      backend: "macos-system-keychain",
+      bindingPath,
+      helperPath: stableHelper,
+      expectedHelperSha256: helperDigest,
+      keychainPath: "/Library/Keychains/System.keychain",
+      serviceUserName: "_opendelegate",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 function keyPin(): {

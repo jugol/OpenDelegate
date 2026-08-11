@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -15,6 +15,7 @@ import {
 import {
   WindowsDpapiSecretStore,
   WindowsServiceDpapiSecretHandoff,
+  MacOsKeychainSecretStore,
   type NativeSecretCommandRequest,
   type NativeSecretCommandResult,
   type NativeSecretCommandRunner,
@@ -30,6 +31,7 @@ import {
   listWorkerWorkspaces,
   loadWorkerConfiguration,
   loadWorkerSecretBackendConfiguration,
+  prepareMacOsServiceSecretBackend,
   prepareWindowsServiceSecretBackend,
   provisionHeadlessLinuxSecretBackend,
   restoreWindowsServiceSecretBackend,
@@ -693,6 +695,49 @@ test("Worker CLI exposes an explicit Windows service Secret staging boundary", (
   );
 });
 
+test("Worker CLI exposes an owner-session macOS System Keychain staging boundary", () => {
+  assert.deepEqual(
+    parseWorkerArguments([
+      "macos-service-secret-stage",
+      "--home",
+      "worker-home",
+      "--binding-path",
+      "/Library/Application Support/OpenDelegate/personal/system-keychain-binding.json",
+      "--system-helper",
+      "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal",
+      "--service-user",
+      "_opendelegate",
+      "--service-group",
+      "_opendelegate",
+    ]),
+    {
+      command: "macos-service-secret-stage",
+      home: resolve("worker-home"),
+      macOsServiceProvisioning: {
+        bindingPath: resolve(
+          "/Library/Application Support/OpenDelegate/personal/system-keychain-binding.json",
+        ),
+        serviceGroup: "_opendelegate",
+        serviceUser: "_opendelegate",
+        systemHelperPath: resolve(
+          "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal",
+        ),
+      },
+    },
+  );
+  assert.throws(
+    () =>
+      parseWorkerArguments([
+        "macos-service-secret-stage",
+        "--binding-path",
+        "/Library/Application Support/OpenDelegate/personal/system-keychain-binding.json",
+        "--system-helper",
+        "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal",
+      ]),
+    WorkerAppError,
+  );
+});
+
 class WindowsWorkerSecretFixtureRunner implements NativeSecretCommandRunner {
   public readonly requests: NativeSecretCommandRequest[] = [];
   readonly #protected = new Map<string, Buffer>();
@@ -758,6 +803,200 @@ class WindowsWorkerSecretFixtureRunner implements NativeSecretCommandRunner {
     return { exitCode: 70, stdout: Buffer.alloc(0) };
   }
 }
+
+class MacOsWorkerSecretFixtureRunner implements NativeSecretCommandRunner {
+  public readonly requests: NativeSecretCommandRequest[] = [];
+  readonly #loginValues = new Map<string, Buffer>();
+  readonly #systemValues = new Map<string, Buffer>();
+
+  public async run(request: NativeSecretCommandRequest): Promise<NativeSecretCommandResult> {
+    this.requests.push({
+      ...request,
+      args: [...request.args],
+      environment: { ...request.environment },
+      stdin: Buffer.from(request.stdin),
+    });
+    if (request.executable.endsWith("codesign")) {
+      return { exitCode: 0, stdout: Buffer.alloc(0) };
+    }
+    const wrapped = request.args[0] === "--";
+    const operation = request.args[wrapped ? 2 : 0];
+    if (operation === "prepare-system-binding") {
+      const sourceHelper = request.args[1];
+      const bindingPath = request.args[request.args.indexOf("--binding") + 1];
+      const targetHelper = request.args[request.args.indexOf("--trusted-helper") + 1];
+      if (sourceHelper === undefined || bindingPath === undefined || targetHelper === undefined) {
+        return { exitCode: 64, stdout: Buffer.alloc(0) };
+      }
+      await mkdir(join(targetHelper, ".."), { recursive: true });
+      await mkdir(join(bindingPath, ".."), { recursive: true });
+      await copyFile(sourceHelper, targetHelper);
+      await chmod(targetHelper, 0o755);
+      await writeFile(bindingPath, "{}\n", { encoding: "utf8", mode: 0o644 });
+      return { exitCode: 0, stdout: Buffer.from("ready") };
+    }
+    const values = request.args.includes("--system-binding")
+      ? this.#systemValues
+      : this.#loginValues;
+    const accountIndex = request.args.indexOf("--account");
+    const alias = accountIndex < 0 ? "" : (request.args[accountIndex + 1] ?? "");
+    if (operation === "status") {
+      return { exitCode: 0, stdout: Buffer.from("ready") };
+    }
+    if (operation === "has") {
+      return values.has(alias)
+        ? { exitCode: 0, stdout: Buffer.from("ready") }
+        : { exitCode: 11, stdout: Buffer.alloc(0) };
+    }
+    if (operation === "create") {
+      if (values.has(alias)) {
+        return { exitCode: 10, stdout: Buffer.alloc(0) };
+      }
+      values.set(alias, Buffer.from(request.stdin));
+      return { exitCode: 0, stdout: Buffer.alloc(0) };
+    }
+    if (operation === "read") {
+      const value = values.get(alias);
+      return value === undefined
+        ? { exitCode: 11, stdout: Buffer.alloc(0) }
+        : { exitCode: 0, stdout: Buffer.from(value) };
+    }
+    if (operation === "delete") {
+      return values.delete(alias)
+        ? { exitCode: 0, stdout: Buffer.alloc(0) }
+        : { exitCode: 11, stdout: Buffer.alloc(0) };
+    }
+    return { exitCode: 70, stdout: Buffer.alloc(0) };
+  }
+}
+
+test(
+  "macOS Worker staging separates boot and login Keychain identities idempotently",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-worker-macos-service-secret-"));
+    const bundleRoot = join(fixtureRoot, "bundle");
+    const packagedHelperPath = join(
+      bundleRoot,
+      "runtime",
+      "native",
+      "opendelegate-keychain-helper",
+    );
+    const legacyHelperPath = join(fixtureRoot, "legacy", "opendelegate-keychain-helper");
+    const systemHelperPath = join(
+      fixtureRoot,
+      "privileged",
+      "opendelegate-keychain-helper-personal",
+    );
+    const bindingPath = join(fixtureRoot, "system", "system-keychain-binding.json");
+    const paths = resolveWorkerPaths({
+      sourceCheckoutRoot: bundleRoot,
+      home: join(fixtureRoot, "state", "worker"),
+    });
+    const helperBytes = Buffer.from("signed-macos-keychain-helper", "utf8");
+    const helperDigest = `sha256:${createHash("sha256").update(helperBytes).digest("hex")}`;
+    const keyId = "device-key_0123456789012345678901";
+    const runner = new MacOsWorkerSecretFixtureRunner();
+
+    try {
+      await mkdir(join(packagedHelperPath, ".."), { recursive: true });
+      await mkdir(join(legacyHelperPath, ".."), { recursive: true });
+      await writeFile(packagedHelperPath, helperBytes, { mode: 0o755 });
+      await writeFile(legacyHelperPath, helperBytes, { mode: 0o755 });
+      await mkdir(paths.configDirectory, { recursive: true });
+      await writeFile(
+        paths.configFile,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          deviceId: "device-worker-macos-service",
+          workerId: "worker-macos",
+          mainDeviceId: "device-main-test",
+          keyId,
+          certificateGeneration: 1,
+          certificatePem: "-----BEGIN CERTIFICATE-----\nworker\n-----END CERTIFICATE-----",
+          certificateAuthorityPem:
+            "-----BEGIN CERTIFICATE-----\nauthority\n-----END CERTIFICATE-----",
+          expectedMainSpkiSha256: `sha256:${"A".repeat(43)}`,
+          transportProfile: {
+            deviceId: "device-main-test",
+            endpoints: [
+              {
+                endpointId: "main-private",
+                label: "Main private route",
+                kind: "wss",
+                url: "wss://main.example.test/api/v1/device/channel",
+                credentialRef: "device-identity",
+              },
+            ],
+          },
+          secretBackend: {
+            backend: "macos-keychain",
+            helperPath: legacyHelperPath,
+            expectedHelperSha256: helperDigest,
+          },
+          agent: { provider: "auto", allowUntestedVersion: false },
+          workspaces: [],
+          createdAt: "2026-08-11T00:00:00.000Z",
+        })}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      const sourceStore = new MacOsKeychainSecretStore({
+        codesignPath: "/usr/bin/codesign",
+        deviceId: "device-worker-macos-service",
+        expectedHelperSha256: helperDigest,
+        helperPath: legacyHelperPath,
+        hostPlatform: "darwin",
+        runner,
+      });
+      await sourceStore.store(`identity-p256.${keyId}`, Buffer.from("device-private-key"));
+      await sourceStore.store(WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS, Buffer.alloc(32, 0xa5));
+      const { privateKey: corePrivateKey } = generateKeyPairSync("ed25519");
+      const coreMaterial = Buffer.from(corePrivateKey.export({ format: "der", type: "pkcs8" }));
+      try {
+        await sourceStore.store(WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS, coreMaterial);
+      } finally {
+        coreMaterial.fill(0);
+      }
+
+      const input = {
+        bindingPath,
+        hostPlatform: "darwin" as const,
+        paths,
+        runner,
+        serviceGroup: "_opendelegate",
+        serviceUser: "_opendelegate",
+        sudoPath: "/usr/bin/sudo",
+        systemHelperPath,
+      };
+      const first = await prepareMacOsServiceSecretBackend(input);
+      const firstHelperKey = first.backend.servicePreparation.ipcTrust.helper.keyId;
+      const replay = await prepareMacOsServiceSecretBackend(input);
+      assert.deepEqual(replay.backend, first.backend);
+      assert.equal(replay.backend.servicePreparation.ipcTrust.helper.keyId, firstHelperKey);
+      assert.equal(first.backend.backend, "macos-system-keychain");
+      assert.equal(first.backend.bindingPath, bindingPath);
+      assert.equal(first.backend.helperPath, systemHelperPath);
+      for (const alias of [
+        `identity-p256.${keyId}`,
+        WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
+        WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
+      ]) {
+        assert.equal((await sourceStore.availability(alias)).ready, false);
+      }
+      const persisted = await readFile(paths.configFile, "utf8");
+      assert.equal(persisted.includes("device-private-key"), false);
+      assert.equal(
+        JSON.stringify(
+          runner.requests.map(({ args, environment }) => ({ args, environment })),
+        ).includes("device-private-key"),
+        false,
+      );
+    } finally {
+      helperBytes.fill(0);
+      await rm(fixtureRoot, { force: true, recursive: true });
+    }
+  },
+);
 
 test("Windows Worker staging moves the enrolled identity to a service-only handoff idempotently", async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-worker-service-secret-"));

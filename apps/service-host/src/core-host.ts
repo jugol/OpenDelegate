@@ -217,6 +217,7 @@ async function startWorkerWorkload(
     sourceCheckoutRoot: workerReleaseRoot,
     home: configuration.stateRoot,
   });
+  await verifyWorkerServiceSecretBinding(configuration, paths);
   const computerUseRuntime = await tryStartWorkerComputerUseRuntime(
     configuration,
     paths,
@@ -289,6 +290,31 @@ async function startWorkerWorkload(
       await completed.catch(() => undefined);
     },
   };
+}
+
+async function verifyWorkerServiceSecretBinding(
+  configuration: ServiceHostConfiguration,
+  paths: ReturnType<typeof resolveWorkerPaths>,
+): Promise<void> {
+  if (configuration.platform !== "macos") {
+    return;
+  }
+  const worker = await loadWorkerConfiguration(paths);
+  const runtimeBinding = configuration.serviceSecretBinding;
+  if (
+    runtimeBinding === undefined ||
+    runtimeBinding["backend"] !== "macos-system-keychain" ||
+    worker.secretBackend.backend !== "macos-system-keychain" ||
+    worker.secretBackend.bindingPath !== runtimeBinding["bindingPath"] ||
+    worker.secretBackend.helperPath !== runtimeBinding["helperPath"] ||
+    worker.secretBackend.expectedHelperSha256 !== runtimeBinding["expectedHelperSha256"] ||
+    worker.secretBackend.servicePreparation.serviceIdentity.userName !==
+      runtimeBinding["serviceUserName"]
+  ) {
+    throw new ServiceHostError(
+      "The Worker System Keychain binding does not match its native service configuration.",
+    );
+  }
 }
 
 /**

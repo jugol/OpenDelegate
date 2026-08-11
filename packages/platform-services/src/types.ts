@@ -119,12 +119,22 @@ export interface MacOsServiceConfiguration extends BaseServiceConfiguration {
   readonly ipcTrust: LocalIpcTrustConfiguration;
   readonly serviceIdentity: ServiceIdentity;
   readonly helperSecretBinding: MacOsOwnerHelperSecretBinding;
+  readonly serviceSecretBinding: MacOsSystemKeychainSecretBinding;
 }
 
 export interface MacOsOwnerHelperSecretBinding {
   readonly backend: "macos-keychain";
   readonly helperPath: string;
   readonly expectedHelperSha256: `sha256:${string}`;
+}
+
+export interface MacOsSystemKeychainSecretBinding {
+  readonly backend: "macos-system-keychain";
+  readonly bindingPath: string;
+  readonly helperPath: string;
+  readonly expectedHelperSha256: `sha256:${string}`;
+  readonly keychainPath: "/Library/Keychains/System.keychain";
+  readonly serviceUserName: string;
 }
 
 export interface LinuxServiceConfiguration extends BaseServiceConfiguration {

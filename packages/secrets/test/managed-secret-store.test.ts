@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -427,8 +427,10 @@ class KeychainFixtureRunner implements NativeSecretCommandRunner {
     if (request.executable.endsWith("codesign")) {
       return { exitCode: 0, stdout: Buffer.alloc(0) };
     }
-    const operation = request.args[0];
-    const alias = request.args.at(-1) ?? "";
+    const operationIndex = request.args[0] === "--" ? 2 : 0;
+    const operation = request.args[operationIndex];
+    const accountIndex = request.args.indexOf("--account");
+    const alias = accountIndex < 0 ? "" : (request.args[accountIndex + 1] ?? "");
     if (operation === "status") {
       return { exitCode: 0, stdout: Buffer.from("ready") };
     }
@@ -654,6 +656,59 @@ test("the signed macOS Keychain helper receives Secret bytes only through stdin"
     await writeFile(helperPath, "tampered-helper", { mode: 0o700 });
     assert.equal((await store.health()).status, "unavailable");
     assert.equal(runner.requests.length, requestCountBeforeTamper);
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+});
+
+test("the macOS System Keychain backend binds every operation and can stage through sudo", async () => {
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-system-keychain-shape-");
+  const helperPath = join(fixtureRoot, "opendelegate-keychain-helper");
+  const bindingPath = join(fixtureRoot, "system-keychain-binding.json");
+  await writeFile(helperPath, "fixture", { mode: 0o700 });
+  const expectedHelperSha256 = `sha256:${createHash("sha256").update("fixture").digest("hex")}`;
+  const runner = new KeychainFixtureRunner();
+  const store = new MacOsKeychainSecretStore({
+    bindingPath,
+    codesignPath: join(fixtureRoot, "codesign"),
+    deviceId: "device-macos-system",
+    expectedHelperSha256,
+    helperPath,
+    hostPlatform: "darwin",
+    runner,
+    sudoPath: "/usr/bin/sudo",
+  });
+  const secret = Buffer.from("system-keychain-secret", "utf8");
+
+  try {
+    assert.equal(store.backend, "macos-system-keychain");
+    assert.equal((await store.health()).status, "ready");
+    await store.store("device-key", secret);
+    await store.executeWithSecretBytes("device-key", (value) => {
+      assert.deepEqual(value, secret);
+    });
+    const helperRequests = runner.requests.filter(({ args }) => args[0] === "--");
+    assert.equal(helperRequests.length, 3);
+    assert.equal(
+      helperRequests.every(({ executable }) => executable === resolve("/usr/bin/sudo")),
+      true,
+    );
+    assert.equal(
+      helperRequests.every(({ args }) => {
+        const bindingIndex = args.indexOf("--system-binding");
+        return (
+          args[0] === "--" &&
+          args[1] === helperPath &&
+          bindingIndex >= 0 &&
+          args[bindingIndex + 1] === bindingPath
+        );
+      }),
+      true,
+    );
+    assert.equal(
+      JSON.stringify(helperRequests.map(({ args }) => args)).includes(secret.toString()),
+      false,
+    );
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }

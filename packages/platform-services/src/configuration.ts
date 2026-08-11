@@ -46,6 +46,14 @@ const WINDOWS_SERVICE_SECRET_BINDING_KEYS = new Set([
 const WINDOWS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "vaultRoot"]);
 const WINDOWS_AGENT_SANDBOX_KEYS = new Set(["codexSandboxBinDirectory"]);
 const MACOS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "helperPath", "expectedHelperSha256"]);
+const MACOS_SERVICE_SECRET_BINDING_KEYS = new Set([
+  "backend",
+  "bindingPath",
+  "helperPath",
+  "expectedHelperSha256",
+  "keychainPath",
+  "serviceUserName",
+]);
 const LINUX_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "secretToolPath"]);
 const HEALTH_KEYS = new Set(["endpoint", "timeoutMs"]);
 const CORE_IPC_TRUST_KEYS = new Set(["protocolVersion", "core"]);
@@ -109,7 +117,7 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       ? new Set(["systemdCredential"])
       : input.platform === "windows"
         ? new Set(["agentSandbox", "serviceSecretBinding"])
-        : undefined,
+        : new Set(["serviceSecretBinding"]),
   );
 
   if (!["windows", "macos", "linux"].includes(input.platform)) {
@@ -371,6 +379,52 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       throw new PlatformServiceError("INVALID_IDENTITY", "The core service must not run as root.");
     }
     if (input.platform === "macos") {
+      assertRecord(input.serviceSecretBinding, "serviceSecretBinding");
+      assertExactKeys(input.serviceSecretBinding, MACOS_SERVICE_SECRET_BINDING_KEYS);
+      if (
+        input.serviceSecretBinding.backend !== "macos-system-keychain" ||
+        input.serviceSecretBinding.keychainPath !== "/Library/Keychains/System.keychain" ||
+        input.serviceSecretBinding.serviceUserName !== input.serviceIdentity.userName ||
+        !/^sha256:[a-f0-9]{64}$/u.test(input.serviceSecretBinding.expectedHelperSha256)
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_CONFIGURATION",
+          "The macOS System Keychain service binding is invalid.",
+        );
+      }
+      assertSafeAbsolutePath(
+        "macos",
+        input.serviceSecretBinding.bindingPath,
+        "serviceSecretBinding.bindingPath",
+      );
+      assertSafeAbsolutePath(
+        "macos",
+        input.serviceSecretBinding.helperPath,
+        "serviceSecretBinding.helperPath",
+      );
+      if (
+        !input.serviceSecretBinding.bindingPath.startsWith(
+          "/Library/Application Support/OpenDelegate/",
+        ) ||
+        !input.serviceSecretBinding.helperPath.startsWith(
+          "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-",
+        ) ||
+        samePath(
+          "macos",
+          input.paths.sourceCheckoutDirectory,
+          input.serviceSecretBinding.helperPath,
+        ) ||
+        isDescendantPath(
+          "macos",
+          input.paths.sourceCheckoutDirectory,
+          input.serviceSecretBinding.helperPath,
+        )
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          "The macOS System Keychain binding must use the root-owned OpenDelegate locations.",
+        );
+      }
       assertRecord(input.helperSecretBinding, "helperSecretBinding");
       assertExactKeys(input.helperSecretBinding, MACOS_HELPER_SECRET_BINDING_KEYS);
       if (
@@ -388,11 +442,30 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
         "helperSecretBinding.helperPath",
       );
       if (
-        !isDescendantPath("macos", input.paths.installRoot, input.helperSecretBinding.helperPath)
+        !isDescendantPath("macos", input.paths.installRoot, input.helperSecretBinding.helperPath) &&
+        !samePath(
+          "macos",
+          input.serviceSecretBinding.helperPath,
+          input.helperSecretBinding.helperPath,
+        )
       ) {
         throw new PlatformServiceError(
           "INVALID_PATH",
           "The pinned macOS Keychain helper must be inside the immutable installation.",
+        );
+      }
+      if (
+        samePath(
+          "macos",
+          input.serviceSecretBinding.helperPath,
+          input.helperSecretBinding.helperPath,
+        ) &&
+        input.serviceSecretBinding.expectedHelperSha256 !==
+          input.helperSecretBinding.expectedHelperSha256
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_CONFIGURATION",
+          "The shared macOS Keychain helper must have one pinned digest.",
         );
       }
     } else if (input.helperSecretBinding !== null) {

@@ -85,7 +85,16 @@ export interface ServiceHostConfiguration {
     readonly endpoint: string;
     readonly timeoutMs: number;
   };
-  readonly serviceSecretBinding?: Readonly<Record<string, unknown>>;
+  readonly serviceSecretBinding?:
+    | {
+        readonly backend: "macos-system-keychain";
+        readonly bindingPath: string;
+        readonly helperPath: string;
+        readonly expectedHelperSha256: `sha256:${string}`;
+        readonly keychainPath: "/Library/Keychains/System.keychain";
+        readonly serviceUserName: string;
+      }
+    | Readonly<Record<string, unknown>>;
 }
 
 export interface ServiceHostIpcPlaneBinding {
@@ -257,10 +266,7 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
   });
   const localIpc = parseLocalIpc(record["localIpc"], platform, helperSecretBinding !== null);
   const health = parseHealth(record["health"]);
-  const serviceSecretBinding =
-    record["serviceSecretBinding"] === undefined
-      ? undefined
-      : Object.freeze({ ...requireRecord(record["serviceSecretBinding"], "Secret binding") });
+  const serviceSecretBinding = parseServiceSecretBinding(record["serviceSecretBinding"], platform);
   return deepFreeze({
     schemaVersion: 3 as const,
     instanceId: record["instanceId"] as string,
@@ -278,6 +284,62 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
     localIpc,
     health,
     ...(serviceSecretBinding === undefined ? {} : { serviceSecretBinding }),
+  });
+}
+
+function parseServiceSecretBinding(
+  input: unknown,
+  platform: ServiceHostConfiguration["platform"],
+): ServiceHostConfiguration["serviceSecretBinding"] {
+  if (input === undefined) {
+    if (platform === "macos") {
+      throw new ServiceHostError("The macOS core System Keychain binding is required.");
+    }
+    return undefined;
+  }
+  const record = requireRecord(input, "Secret binding");
+  if (platform !== "macos") {
+    if (platform === "linux") {
+      throw new ServiceHostError("Linux does not accept a service Secret binding document.");
+    }
+    return Object.freeze({ ...record });
+  }
+  requireExactKeys(
+    record,
+    [
+      "backend",
+      "bindingPath",
+      "helperPath",
+      "expectedHelperSha256",
+      "keychainPath",
+      "serviceUserName",
+    ],
+    [],
+    "macOS System Keychain binding",
+  );
+  requirePlatformPath("macos", record["bindingPath"], "System Keychain binding document");
+  requirePlatformPath("macos", record["helperPath"], "System Keychain helper");
+  if (
+    record["backend"] !== "macos-system-keychain" ||
+    record["keychainPath"] !== "/Library/Keychains/System.keychain" ||
+    typeof record["expectedHelperSha256"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/u.test(record["expectedHelperSha256"]) ||
+    typeof record["serviceUserName"] !== "string" ||
+    !/^_?[A-Za-z][A-Za-z0-9_-]{0,30}$/u.test(record["serviceUserName"]) ||
+    !(record["bindingPath"] as string).startsWith("/Library/Application Support/OpenDelegate/") ||
+    !(record["helperPath"] as string).startsWith(
+      "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-",
+    )
+  ) {
+    throw new ServiceHostError("The macOS System Keychain binding is invalid.");
+  }
+  return Object.freeze({
+    backend: "macos-system-keychain" as const,
+    bindingPath: record["bindingPath"] as string,
+    helperPath: record["helperPath"] as string,
+    expectedHelperSha256: record["expectedHelperSha256"] as `sha256:${string}`,
+    keychainPath: "/Library/Keychains/System.keychain" as const,
+    serviceUserName: record["serviceUserName"] as string,
   });
 }
 

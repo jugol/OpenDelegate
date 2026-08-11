@@ -452,9 +452,11 @@ Make Main and Worker roles truly persistent on all target operating systems.
   two public IPC pins into a create-new install document. Windows is implemented by
   D-088. D-089 implements the distinct headless Linux shape by enrolling directly
   under the final systemd identity, exporting the core public pin and that exact
-  non-root identity, and omitting the unavailable helper entirely. macOS and
-  graphical Linux remain required and must fail closed until their equivalent
-  two-plane migration exists.
+  non-root identity, and omitting the unavailable helper entirely. D-129 implements
+  the macOS equivalent with a stable root-owned System Keychain helper for the core
+  and a separate owner-login Keychain identity for the Aqua LaunchAgent. Graphical
+  Linux remains required and fail-closed until its equivalent two-plane migration
+  exists.
 - Compose a headless Linux Main document from its co-located Worker's already
   prepared core-only document rather than accepting a second hand-authored
   topology. Bind the durable Instance, Device, state root, systemd credential, and

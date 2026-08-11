@@ -88,11 +88,10 @@ export function renderRuntimeConfiguration(
       },
       localIpc,
       health: configuration.health,
-      ...(configuration.platform !== "windows" || configuration.serviceSecretBinding === undefined
+      ...(!("serviceSecretBinding" in configuration) ||
+      configuration.serviceSecretBinding === undefined
         ? {}
-        : {
-            serviceSecretBinding: configuration.serviceSecretBinding,
-          }),
+        : { serviceSecretBinding: configuration.serviceSecretBinding }),
     }),
     encoding: "utf8",
     mode: "0640",

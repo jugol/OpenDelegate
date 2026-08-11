@@ -20,6 +20,7 @@ import {
   listWorkerWorkspaces,
   loadWorkerConfiguration,
   loadWorkerSecretBackendConfiguration,
+  prepareMacOsServiceSecretBackend,
   prepareWindowsServiceSecretBackend,
   provisionHeadlessLinuxSecretBackend,
   restoreWindowsServiceSecretBackend,
@@ -49,6 +50,7 @@ export type WorkerCliCommand =
   | "help"
   | "join"
   | "knowledge-mcp-bridge"
+  | "macos-service-secret-stage"
   | "mcp-bridge"
   | "platform-mutation-mcp-bridge"
   | "run"
@@ -81,6 +83,12 @@ export interface ParsedWorkerArguments {
     readonly handoffRoot: string;
     readonly instanceId: string;
     readonly vaultRoot: string;
+  };
+  readonly macOsServiceProvisioning?: {
+    readonly bindingPath: string;
+    readonly serviceGroup: string;
+    readonly serviceUser: string;
+    readonly systemHelperPath: string;
   };
   /** Foreground vault a staged Worker is returned to. */
   readonly windowsServiceRestoreVaultRoot?: string;
@@ -130,6 +138,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "help" &&
     command !== "join" &&
     command !== "knowledge-mcp-bridge" &&
+    command !== "macos-service-secret-stage" &&
     command !== "mcp-bridge" &&
     command !== "platform-mutation-mcp-bridge" &&
     command !== "run" &&
@@ -166,6 +175,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   let ownerHome: string | undefined;
   let serviceUser: string | undefined;
   let serviceGroup: string | undefined;
+  let bindingPath: string | undefined;
+  let systemHelperPath: string | undefined;
   let workspaceId: string | undefined;
   let workspaceAlias: string | undefined;
   let workspaceType: "directory" | "git" | "mounted-storage" | undefined;
@@ -213,7 +224,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       option !== "--owner-uid" &&
       option !== "--owner-home" &&
       option !== "--service-user" &&
-      option !== "--service-group"
+      option !== "--service-group" &&
+      option !== "--binding-path" &&
+      option !== "--system-helper"
     ) {
       throw new WorkerAppError("CONFIG_INVALID", `Unknown Worker option: ${String(option)}.`);
     }
@@ -289,6 +302,12 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
         break;
       case "--service-group":
         serviceGroup = target;
+        break;
+      case "--binding-path":
+        bindingPath = resolve(target);
+        break;
+      case "--system-helper":
+        systemHelperPath = resolve(target);
         break;
       case "--systemd-creds":
         systemdCredsPath = resolve(target);
@@ -459,9 +478,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     healthPort !== undefined ||
     ownerUser !== undefined ||
     ownerUid !== undefined ||
-    ownerHome !== undefined ||
-    serviceUser !== undefined ||
-    serviceGroup !== undefined;
+    ownerHome !== undefined;
   if (command !== "service-document" && hasServiceDocumentOption) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
@@ -492,12 +509,43 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     );
   }
   if (
-    command === "service-document" &&
+    (command === "service-document" || command === "macos-service-secret-stage") &&
     [serviceUser, serviceGroup].filter((value) => value !== undefined).length === 1
   ) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
-      "Linux service identity requires --service-user and --service-group together.",
+      "Service identity requires --service-user and --service-group together.",
+    );
+  }
+  if (
+    command !== "service-document" &&
+    command !== "macos-service-secret-stage" &&
+    (serviceUser !== undefined || serviceGroup !== undefined)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "Service identity options are accepted only by macOS service preparation or service-document.",
+    );
+  }
+  if (
+    command !== "macos-service-secret-stage" &&
+    (bindingPath !== undefined || systemHelperPath !== undefined)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "System Keychain options are accepted only by macos-service-secret-stage.",
+    );
+  }
+  if (
+    command === "macos-service-secret-stage" &&
+    (bindingPath === undefined ||
+      systemHelperPath === undefined ||
+      serviceUser === undefined ||
+      serviceGroup === undefined)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "macos-service-secret-stage requires --binding-path, --system-helper, --service-user, and --service-group.",
     );
   }
   if (
@@ -648,6 +696,16 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
             vaultRoot: vaultRoot!,
           },
         }),
+    ...(command !== "macos-service-secret-stage"
+      ? {}
+      : {
+          macOsServiceProvisioning: {
+            bindingPath: bindingPath!,
+            serviceGroup: serviceGroup!,
+            serviceUser: serviceUser!,
+            systemHelperPath: systemHelperPath!,
+          },
+        }),
     ...(command !== "windows-service-secret-restore"
       ? {}
       : { windowsServiceRestoreVaultRoot: vaultRoot! }),
@@ -782,6 +840,23 @@ async function run(arguments_: readonly string[]): Promise<void> {
     return;
   }
   const paths = pathsFor(parsed);
+  if (parsed.command === "macos-service-secret-stage") {
+    const prepared = await prepareMacOsServiceSecretBackend({
+      ...parsed.macOsServiceProvisioning!,
+      paths,
+    });
+    writeJson({
+      event: "worker.macos-service-secret.staged",
+      backend: prepared.backend.backend,
+      bindingPath: prepared.backend.bindingPath,
+      helperPath: prepared.backend.helperPath,
+      migratedAliases: prepared.migratedAliases,
+      servicePreparation: prepared.backend.servicePreparation,
+      nextStep:
+        "Copy this Worker home to DATA_ROOT/state if it is not already there, then run 'opendelegate worker service-document ...' and install the reviewed launchd service document from an elevated shell.",
+    });
+    return;
+  }
   if (parsed.command === "service-document") {
     const request = parsed.serviceDocument!;
     const configuration = await buildWorkerServiceDocument({
@@ -1108,6 +1183,10 @@ Usage:
     --vault-root ABSOLUTE_PATH [--home <path>]
   opendelegate worker windows-service-secret-restore
     --vault-root ABSOLUTE_PATH [--home <path>]
+  opendelegate worker macos-service-secret-stage
+    --binding-path "/Library/Application Support/OpenDelegate/INSTANCE/system-keychain.json"
+    --system-helper /Library/PrivilegedHelperTools/opendelegate-keychain-helper-INSTANCE
+    --service-user USER --service-group GROUP [--home <path>]
   opendelegate worker service-document --output ABSOLUTE_PATH
     --bundle ABSOLUTE_PATH --install-root ABSOLUTE_PATH --data-root ABSOLUTE_PATH
     --health-port PORT [--instance-id INSTANCE_ID] [--home <path>]
@@ -1130,14 +1209,17 @@ The one-use Enrollment Grant token is accepted only inside the protected grant
 file. It is never accepted in argv or environment variables. Worker state,
 Device-local Knowledge, and managed credentials remain outside the installation.
 
-service-document composes a staged Windows Worker or an explicitly headless Linux
-Worker from durable public IPC bindings and the bundle checksum manifest. Linux
-requires the owner arguments shown above and deliberately emits no graphical helper.
-The optional service-account arguments only verify the identity captured at join.
+service-document composes a staged Windows or macOS Worker, or an explicitly
+headless Linux Worker, from durable public IPC bindings and the bundle checksum
+manifest. macos-service-secret-stage must run from Terminal.app in the signed-in
+owner session; it prompts through sudo, moves only core Secrets to the System
+Keychain, and retains a distinct login-Keychain helper identity. Linux requires the
+owner arguments shown above and deliberately emits no graphical helper. The
+optional service-account arguments only verify the identity captured at preparation.
 It writes only a create-new document and never elevates or
-registers a service. Graphical Linux and macOS remain fail-closed until their
-separate owner-session Secret migration is implemented. Installing the reviewed
-document is a separate, elevated step:
+registers a service. Graphical Linux remains fail-closed until its separate
+owner-session Secret migration is implemented. Installing the reviewed document is
+a separate, elevated step:
 'opendelegate service install --config <path> --command-id <id>'.
 `);
 }

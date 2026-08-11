@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from "node:path";
 
 import type {
   MacOsKeychainSecretStoreConfig,
+  MacOsSystemKeychainSecretStoreConfig,
   ManagedSecretDeletion,
   ManagedSecretMutation,
   ManagedSecretStore,
@@ -26,7 +27,8 @@ const ALLOWED_MACOS_ENVIRONMENT = new Set(["LANG", "LC_ALL"]);
 const MAXIMUM_HELPER_BYTES = 67_108_864;
 
 export class MacOsKeychainSecretStore implements ManagedSecretStore {
-  public readonly backend = "macos-keychain" as const;
+  public readonly backend: "macos-keychain" | "macos-system-keychain";
+  readonly #bindingPath: string | undefined;
   readonly #codesignPath: string;
   readonly #deviceId: string;
   readonly #environment: Readonly<Record<string, string>>;
@@ -35,13 +37,19 @@ export class MacOsKeychainSecretStore implements ManagedSecretStore {
   readonly #maximumSecretBytes: number;
   readonly #runner: NativeSecretCommandRunner;
   readonly #service: string;
+  readonly #sudoPath: string | undefined;
 
-  public constructor(config: MacOsKeychainSecretStoreConfig) {
+  public constructor(
+    config: MacOsKeychainSecretStoreConfig | MacOsSystemKeychainSecretStoreConfig,
+  ) {
     assertSecretIdentifier(config.deviceId, "Device ID");
     if ((config.hostPlatform ?? process.platform) !== "darwin") {
       throw configurationInvalid();
     }
     this.#codesignPath = validateExecutablePath(config.codesignPath ?? DEFAULT_CODESIGN_PATH);
+    this.#bindingPath =
+      "bindingPath" in config ? validateExecutablePath(config.bindingPath) : undefined;
+    this.backend = this.#bindingPath === undefined ? "macos-keychain" : "macos-system-keychain";
     this.#deviceId = config.deviceId;
     this.#environment = validateMacOsEnvironment(config.environment ?? {});
     if (
@@ -56,6 +64,13 @@ export class MacOsKeychainSecretStore implements ManagedSecretStore {
       config.maximumSecretBytes ?? DEFAULT_MAXIMUM_SECRET_BYTES,
     );
     this.#runner = config.runner ?? new NodeNativeSecretCommandRunner();
+    this.#sudoPath =
+      "sudoPath" in config && config.sudoPath !== undefined
+        ? validateExecutablePath(config.sudoPath)
+        : undefined;
+    if (this.#sudoPath !== undefined && this.#bindingPath === undefined) {
+      throw configurationInvalid();
+    }
     this.#service = `io.opendelegate.secret.${createHash("sha256")
       .update(config.deviceId)
       .digest("hex")
@@ -84,7 +99,10 @@ export class MacOsKeychainSecretStore implements ManagedSecretStore {
       return Object.freeze({
         backend: this.backend,
         deviceId: this.#deviceId,
-        reasonCode: "signed-keychain-helper-unavailable",
+        reasonCode:
+          this.backend === "macos-system-keychain"
+            ? "system-keychain-binding-unavailable"
+            : "signed-keychain-helper-unavailable",
         status: "unavailable" as const,
       });
     }
@@ -258,15 +276,27 @@ export class MacOsKeychainSecretStore implements ManagedSecretStore {
     stdin: Uint8Array,
     maximumStdoutBytes: number,
   ): Promise<NativeSecretCommandResult> {
+    const helperArgs =
+      this.#bindingPath === undefined
+        ? alias === undefined
+          ? [operation]
+          : [operation, "--service", this.#service, "--account", alias]
+        : [
+            operation,
+            "--system-binding",
+            this.#bindingPath,
+            "--service",
+            this.#service,
+            ...(alias === undefined ? [] : ["--account", alias]),
+          ];
+    const executable = this.#sudoPath ?? this.#helperPath;
     const args =
-      alias === undefined
-        ? [operation]
-        : [operation, "--service", this.#service, "--account", alias];
+      this.#sudoPath === undefined ? helperArgs : ["--", this.#helperPath, ...helperArgs];
     try {
       return await this.#runner.run({
         args,
         environment: this.#environment,
-        executable: this.#helperPath,
+        executable,
         maximumStdoutBytes,
         stdin,
         timeoutMs: COMMAND_TIMEOUT_MS,

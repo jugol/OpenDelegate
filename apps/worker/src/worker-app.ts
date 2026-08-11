@@ -6,6 +6,7 @@ import {
   generateKeyPairSync,
   randomBytes,
   randomUUID,
+  timingSafeEqual,
   X509Certificate,
 } from "node:crypto";
 import { constants as fileConstants, type BigIntStats } from "node:fs";
@@ -272,6 +273,13 @@ export type WorkerSecretBackendConfiguration =
       readonly expectedHelperSha256: string;
     }
   | {
+      readonly backend: "macos-system-keychain";
+      readonly bindingPath: string;
+      readonly helperPath: string;
+      readonly expectedHelperSha256: string;
+      readonly servicePreparation: WorkerMacOsServicePreparation;
+    }
+  | {
       readonly backend: "linux-secret-service";
       readonly secretToolPath: string;
     }
@@ -312,6 +320,23 @@ export interface WorkerLinuxHeadlessServicePreparation {
   };
   readonly ipcTrust: {
     readonly core: WorkerLocalIpcPublicKeyPin;
+  };
+}
+
+export interface WorkerMacOsServicePreparation {
+  readonly schemaVersion: 1;
+  readonly serviceIdentity: {
+    readonly userName: string;
+    readonly groupName: string;
+  };
+  readonly ownerHelperSecretBinding: {
+    readonly backend: "macos-keychain";
+    readonly helperPath: string;
+    readonly expectedHelperSha256: string;
+  };
+  readonly ipcTrust: {
+    readonly core: WorkerLocalIpcPublicKeyPin;
+    readonly helper: WorkerLocalIpcPublicKeyPin;
   };
 }
 
@@ -455,6 +480,26 @@ export interface PrepareWindowsServiceSecretBackendOptions {
   readonly runner?: NativeSecretCommandRunner;
   readonly scPath?: string;
   readonly vaultRoot: string;
+}
+
+export interface PrepareMacOsServiceSecretBackendOptions {
+  readonly bindingPath: string;
+  readonly hostPlatform?: NodeJS.Platform;
+  readonly paths: WorkerPaths;
+  readonly runner?: NativeSecretCommandRunner;
+  readonly serviceGroup: string;
+  readonly serviceUser: string;
+  readonly sudoPath?: string;
+  /** Stable root-owned helper path used by the LaunchDaemon across releases. */
+  readonly systemHelperPath: string;
+}
+
+export interface MacOsServiceSecretBackendPreparation {
+  readonly backend: Extract<
+    WorkerSecretBackendConfiguration,
+    { readonly backend: "macos-system-keychain" }
+  >;
+  readonly migratedAliases: number;
 }
 
 /** The durable backend and its persisted effective handoff sealing strength. */
@@ -2101,6 +2146,329 @@ export async function provisionHeadlessLinuxSecretBackend(
     key.fill(0);
     encrypted?.fill(0);
   }
+}
+
+/**
+ * Moves only core-owned Secrets from the interactive login Keychain into a
+ * root-prepared System Keychain binding. The owner helper receives a distinct
+ * key in the login Keychain; neither private key crosses back after the durable
+ * configuration switch.
+ */
+export async function prepareMacOsServiceSecretBackend(
+  options: PrepareMacOsServiceSecretBackendOptions,
+): Promise<MacOsServiceSecretBackendPreparation> {
+  if ((options.hostPlatform ?? process.platform) !== "darwin") {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "macOS service Secret preparation is available only on macOS.",
+    );
+  }
+  if (
+    !/^_?[A-Za-z][A-Za-z0-9_-]{0,30}$/u.test(options.serviceUser) ||
+    !/^_?[A-Za-z][A-Za-z0-9_-]{0,30}$/u.test(options.serviceGroup)
+  ) {
+    throw appError("CONFIG_INVALID", "The macOS service identity is invalid.");
+  }
+  const configuration = await loadWorkerConfiguration(options.paths);
+  const bindingPath = requireAbsolutePath(options.bindingPath, "System Keychain binding");
+  const systemHelperPath = requireAbsolutePath(
+    options.systemHelperPath,
+    "persistent System Keychain helper",
+  );
+  const sudoPath = requireAbsolutePath(options.sudoPath ?? "/usr/bin/sudo", "sudo executable");
+  const runner = options.runner ?? new NodeNativeSecretCommandRunner();
+
+  if (configuration.secretBackend.backend === "macos-system-keychain") {
+    const preparation = configuration.secretBackend.servicePreparation;
+    if (
+      configuration.secretBackend.bindingPath !== bindingPath ||
+      configuration.secretBackend.helperPath !== systemHelperPath ||
+      preparation.serviceIdentity.userName !== options.serviceUser ||
+      preparation.serviceIdentity.groupName !== options.serviceGroup
+    ) {
+      throw appError(
+        "CONFIG_INVALID",
+        "This Worker is already bound to a different macOS persistent-service identity.",
+      );
+    }
+    const serviceStore = createPlatformManagedSecretStore({
+      backend: "macos-system-keychain",
+      bindingPath,
+      deviceId: configuration.deviceId,
+      expectedHelperSha256: configuration.secretBackend.expectedHelperSha256,
+      helperPath: systemHelperPath,
+      hostPlatform: "darwin",
+      runner,
+      sudoPath,
+    });
+    const aliases = workerCoreSecretAliases(configuration.keyId);
+    for (const alias of aliases) {
+      if (!(await serviceStore.availability(alias)).ready) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "The persistent macOS System Keychain binding is incomplete.",
+        );
+      }
+    }
+    return { backend: configuration.secretBackend, migratedAliases: aliases.length };
+  }
+  if (configuration.secretBackend.backend !== "macos-keychain") {
+    throw appError(
+      "CONFIG_INVALID",
+      "Only an interactive macOS login-Keychain enrollment can be prepared for launchd.",
+    );
+  }
+
+  const preparationHelperPath = requireAbsolutePath(
+    join(options.paths.sourceCheckoutRoot, "runtime", "native", "opendelegate-keychain-helper"),
+    "packaged macOS Keychain helper",
+  );
+  let preparationHelperBytes: Buffer | undefined;
+  try {
+    preparationHelperBytes = await readStableWorkerFile(preparationHelperPath, 67_108_864);
+    const expectedHelperSha256 = `sha256:${createHash("sha256")
+      .update(preparationHelperBytes)
+      .digest("hex")}`;
+    const preparationStore = createPlatformManagedSecretStore({
+      backend: "macos-keychain",
+      deviceId: configuration.deviceId,
+      expectedHelperSha256,
+      helperPath: preparationHelperPath,
+      hostPlatform: "darwin",
+      runner,
+    });
+    if ((await preparationStore.health()).status !== "ready") {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The packaged signed macOS Keychain helper is unavailable in this owner session.",
+      );
+    }
+
+    const service = `io.opendelegate.secret.${createHash("sha256")
+      .update(configuration.deviceId)
+      .digest("hex")
+      .slice(0, 32)}`;
+    const prepared = await runner.run({
+      args: [
+        "--",
+        preparationHelperPath,
+        "prepare-system-binding",
+        "--binding",
+        bindingPath,
+        "--service-user",
+        options.serviceUser,
+        "--trusted-helper",
+        systemHelperPath,
+        "--service",
+        service,
+        "--keychain",
+        "/Library/Keychains/System.keychain",
+      ],
+      environment: macOsSecretEnvironment(process.env),
+      executable: sudoPath,
+      maximumStdoutBytes: 16,
+      stdin: new Uint8Array(),
+      timeoutMs: 120_000,
+    });
+    const bindingReady = prepared.exitCode === 0 && prepared.stdout.equals(Buffer.from("ready"));
+    prepared.stdout.fill(0);
+    if (!bindingReady) {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The elevated System Keychain binding preparation did not complete.",
+      );
+    }
+
+    const sourceStore = createPlatformManagedSecretStore({
+      backend: "macos-keychain",
+      deviceId: configuration.deviceId,
+      expectedHelperSha256: configuration.secretBackend.expectedHelperSha256,
+      helperPath: configuration.secretBackend.helperPath,
+      hostPlatform: "darwin",
+      runner,
+    });
+    if ((await sourceStore.health()).status !== "ready") {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The enrolled login Keychain is unavailable in this owner session.",
+      );
+    }
+    const coreIpc = await readWorkerComputerUseCoreKeyBinding(sourceStore);
+
+    const ownerStore = createPlatformManagedSecretStore({
+      backend: "macos-keychain",
+      deviceId: configuration.deviceId,
+      expectedHelperSha256,
+      helperPath: systemHelperPath,
+      hostPlatform: "darwin",
+      runner,
+    });
+    if ((await ownerStore.health()).status !== "ready") {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The installed owner-session Keychain helper is unavailable.",
+      );
+    }
+    let durableOwnerKeyReady = false;
+    let durableOwnerKeyFailure: unknown;
+    try {
+      durableOwnerKeyReady = (
+        await ownerStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)
+      ).ready;
+    } catch (error) {
+      durableOwnerKeyFailure = error;
+    }
+    if (!durableOwnerKeyReady) {
+      let legacyOwnerKeyReady = false;
+      try {
+        legacyOwnerKeyReady = (
+          await sourceStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)
+        ).ready;
+      } catch {
+        // The stable helper may already own this login-Keychain item, in which
+        // case the superseded helper is intentionally unable to inspect it.
+      }
+      if (legacyOwnerKeyReady) {
+        await sourceStore.delete(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
+      } else if (durableOwnerKeyFailure !== undefined) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "The persistent owner-session Keychain identity could not be recovered safely.",
+        );
+      }
+    }
+    const helperIpc = durableOwnerKeyReady
+      ? await readWorkerSessionHelperOwnerKeyBinding(ownerStore)
+      : await provisionWorkerSessionHelperOwnerSigningSecret(ownerStore);
+    const systemStore = createPlatformManagedSecretStore({
+      backend: "macos-system-keychain",
+      bindingPath,
+      deviceId: configuration.deviceId,
+      expectedHelperSha256,
+      helperPath: systemHelperPath,
+      hostPlatform: "darwin",
+      runner,
+      sudoPath,
+    });
+    if ((await systemStore.health()).status !== "ready") {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The prepared System Keychain is not readable through its service binding.",
+      );
+    }
+
+    const coreAliases = workerCoreSecretAliases(configuration.keyId);
+    for (const alias of coreAliases) {
+      const sourceReady = (await sourceStore.availability(alias)).ready;
+      const targetReady = (await systemStore.availability(alias)).ready;
+      if (sourceReady && !targetReady) {
+        await sourceStore.executeWithSecretBytes(alias, async (value) => {
+          await systemStore.store(alias, value);
+        });
+      } else if (!sourceReady && !targetReady) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "A required core Secret is unavailable from both macOS Keychain planes.",
+        );
+      } else if (sourceReady && targetReady) {
+        let equal = false;
+        await sourceStore.executeWithSecretBytes(alias, async (sourceValue) => {
+          await systemStore.executeWithSecretBytes(alias, (targetValue) => {
+            equal =
+              sourceValue.byteLength === targetValue.byteLength &&
+              timingSafeEqual(sourceValue, targetValue);
+          });
+        });
+        if (!equal) {
+          throw appError(
+            "CONFIG_INVALID",
+            "The System Keychain already contains a different persistent Device identity.",
+          );
+        }
+      }
+    }
+    for (const alias of coreAliases) {
+      if (!(await systemStore.availability(alias)).ready) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "The System Keychain migration is incomplete.",
+        );
+      }
+    }
+
+    const servicePreparation: WorkerMacOsServicePreparation = Object.freeze({
+      schemaVersion: 1,
+      serviceIdentity: Object.freeze({
+        userName: options.serviceUser,
+        groupName: options.serviceGroup,
+      }),
+      ownerHelperSecretBinding: Object.freeze({
+        backend: "macos-keychain",
+        helperPath: systemHelperPath,
+        expectedHelperSha256,
+      }),
+      ipcTrust: Object.freeze({
+        core: Object.freeze({
+          keyId: coreIpc.keyId,
+          publicKeySpkiBase64Url: coreIpc.publicKeySpkiBase64Url,
+        }),
+        helper: Object.freeze({
+          keyId: helperIpc.keyId,
+          publicKeySpkiBase64Url: helperIpc.publicKeySpkiBase64Url,
+        }),
+      }),
+    });
+    const backend = Object.freeze({
+      backend: "macos-system-keychain" as const,
+      bindingPath,
+      helperPath: systemHelperPath,
+      expectedHelperSha256,
+      servicePreparation,
+    });
+    await writeConfiguration(
+      options.paths.configFile,
+      validateWorkerConfigurationDocument({ ...configuration, secretBackend: backend }),
+    );
+    for (const alias of coreAliases) {
+      if ((await sourceStore.availability(alias)).ready) {
+        await sourceStore.delete(alias);
+      }
+    }
+    return { backend, migratedAliases: coreAliases.length };
+  } catch (error) {
+    if (error instanceof WorkerAppError) {
+      throw error;
+    }
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      error instanceof SecretError && error.detail !== undefined
+        ? `The macOS System Keychain migration did not complete. ${error.detail}`
+        : "The macOS System Keychain migration did not complete.",
+    );
+  } finally {
+    preparationHelperBytes?.fill(0);
+  }
+}
+
+function workerCoreSecretAliases(keyId: string): readonly string[] {
+  return Object.freeze([
+    `${PRIVATE_KEY_ALIAS_PREFIX}${keyId}`,
+    WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
+    WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
+  ]);
+}
+
+function macOsSecretEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string>> {
+  return Object.freeze(
+    Object.fromEntries(
+      ["LANG", "LC_ALL"].flatMap((name) => {
+        const value = environment[name];
+        return value === undefined ? [] : [[name, value]];
+      }),
+    ),
+  );
 }
 
 export async function prepareWindowsServiceSecretBackend(
@@ -4000,6 +4368,15 @@ export function createWorkerManagedSecretStore(
         expectedHelperSha256: configuration.expectedHelperSha256,
       };
       break;
+    case "macos-system-keychain":
+      backend = {
+        backend: "macos-system-keychain",
+        bindingPath: configuration.bindingPath,
+        deviceId,
+        helperPath: configuration.helperPath,
+        expectedHelperSha256: configuration.expectedHelperSha256,
+      };
+      break;
     case "linux-secret-service":
       backend = {
         backend: "linux-secret-service",
@@ -4372,6 +4749,30 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
         helperPath: requireAbsolutePath(text(record["helperPath"]), "Keychain helper"),
         expectedHelperSha256: text(record["expectedHelperSha256"]),
       };
+    case "macos-system-keychain":
+      assertExactKeys(record, [
+        "backend",
+        "bindingPath",
+        "helperPath",
+        "expectedHelperSha256",
+        "servicePreparation",
+      ]);
+      if (!/^sha256:[0-9a-f]{64}$/u.test(text(record["expectedHelperSha256"]))) {
+        throw appError("CONFIG_INVALID", "macOS system helper fingerprint is invalid.");
+      }
+      return {
+        backend: "macos-system-keychain",
+        bindingPath: requirePosixAbsolutePath(
+          text(record["bindingPath"]),
+          "System Keychain binding",
+        ),
+        helperPath: requirePosixAbsolutePath(
+          text(record["helperPath"]),
+          "persistent Keychain helper",
+        ),
+        expectedHelperSha256: text(record["expectedHelperSha256"]),
+        servicePreparation: validateMacOsServicePreparation(record["servicePreparation"]),
+      };
     case "linux-secret-service":
       assertExactKeys(record, ["backend", "secretToolPath"]);
       return {
@@ -4403,6 +4804,54 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
     default:
       throw appError("CONFIG_INVALID", "Worker Secret Store configuration is invalid.");
   }
+}
+
+function validateMacOsServicePreparation(value: unknown): WorkerMacOsServicePreparation {
+  const record = readRecord(value);
+  assertExactKeys(record, [
+    "schemaVersion",
+    "serviceIdentity",
+    "ownerHelperSecretBinding",
+    "ipcTrust",
+  ]);
+  if (record["schemaVersion"] !== 1) {
+    throw appError("CONFIG_INVALID", "macOS service preparation version is unsupported.");
+  }
+  const identity = readRecord(record["serviceIdentity"]);
+  assertExactKeys(identity, ["userName", "groupName"]);
+  const userName = unixAccountName(identity["userName"], "macOS service user");
+  const groupName = unixAccountName(identity["groupName"], "macOS service group");
+  if (userName === "root") {
+    throw appError("CONFIG_INVALID", "The macOS core service identity must not be root.");
+  }
+  const ownerHelper = readRecord(record["ownerHelperSecretBinding"]);
+  assertExactKeys(ownerHelper, ["backend", "helperPath", "expectedHelperSha256"]);
+  if (
+    ownerHelper["backend"] !== "macos-keychain" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(text(ownerHelper["expectedHelperSha256"]))
+  ) {
+    throw appError("CONFIG_INVALID", "The macOS owner Keychain binding is invalid.");
+  }
+  const ipcTrust = readRecord(record["ipcTrust"]);
+  assertExactKeys(ipcTrust, ["core", "helper"]);
+  const core = validateWorkerLocalIpcPublicKeyPin(ipcTrust["core"]);
+  const helper = validateWorkerLocalIpcPublicKeyPin(ipcTrust["helper"]);
+  if (core.keyId === helper.keyId) {
+    throw appError("CONFIG_INVALID", "Core and owner-session helper must use distinct keys.");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    serviceIdentity: Object.freeze({ userName, groupName }),
+    ownerHelperSecretBinding: Object.freeze({
+      backend: "macos-keychain",
+      helperPath: requirePosixAbsolutePath(
+        text(ownerHelper["helperPath"]),
+        "owner Keychain helper",
+      ),
+      expectedHelperSha256: text(ownerHelper["expectedHelperSha256"]),
+    }),
+    ipcTrust: Object.freeze({ core, helper }),
+  });
 }
 
 function validateLinuxHeadlessServicePreparation(

@@ -104,6 +104,15 @@ export function macOsConfiguration(
       helperPath: "/Library/OpenDelegate/current/runtime/native/opendelegate-keychain-helper",
       expectedHelperSha256: `sha256:${"b".repeat(64)}`,
     },
+    serviceSecretBinding: {
+      backend: "macos-system-keychain",
+      bindingPath:
+        "/Library/Application Support/OpenDelegate/personal/system-keychain-binding.json",
+      helperPath: "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal",
+      expectedHelperSha256: `sha256:${"c".repeat(64)}`,
+      keychainPath: "/Library/Keychains/System.keychain",
+      serviceUserName: "_opendelegate",
+    },
     secretReferences: {
       deviceIdentity: "secret://macos/device-identity",
       coreIpcSigningKey: "secret://macos/core-ipc-signing-v2",

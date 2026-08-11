@@ -14,6 +14,7 @@ export function createPlatformManagedSecretStore(
     case "linux-systemd-credential-vault":
       return new SystemdCredentialVaultSecretStore(config);
     case "macos-keychain":
+    case "macos-system-keychain":
       return new MacOsKeychainSecretStore(config);
     case "windows-dpapi":
       return new WindowsDpapiSecretStore(config);

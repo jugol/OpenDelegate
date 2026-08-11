@@ -31,6 +31,7 @@ export type ManagedSecretBackend =
   | "linux-secret-service"
   | "linux-systemd-credential-vault"
   | "macos-keychain"
+  | "macos-system-keychain"
   | "windows-dpapi"
   | "windows-service-dpapi";
 
@@ -166,6 +167,27 @@ export interface MacOsKeychainSecretStoreConfig {
   readonly runner?: NativeSecretCommandRunner;
 }
 
+/**
+ * A persistent macOS daemon cannot reuse the signed-in owner's login Keychain.
+ * Its binding document is created by the elevated preparation boundary and is
+ * then enforced again by the native helper on every operation. The document is
+ * intentionally non-secret, but must be root-owned and non-writable by the
+ * service or owner identities.
+ */
+export interface MacOsSystemKeychainSecretStoreConfig {
+  readonly bindingPath: string;
+  readonly codesignPath?: string;
+  readonly deviceId: string;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly expectedHelperSha256: string;
+  readonly helperPath: string;
+  readonly hostPlatform?: NodeJS.Platform;
+  readonly maximumSecretBytes?: number;
+  readonly runner?: NativeSecretCommandRunner;
+  /** Used only by interactive preparation; normal service runtime omits it. */
+  readonly sudoPath?: string;
+}
+
 export interface LinuxSecretServiceSecretStoreConfig {
   readonly deviceId: string;
   readonly environment?: Readonly<Record<string, string>>;
@@ -181,6 +203,9 @@ export type PlatformManagedSecretStoreConfig =
       readonly backend: "linux-systemd-credential-vault";
     } & SystemdCredentialVaultSecretStoreConfig)
   | ({ readonly backend: "macos-keychain" } & MacOsKeychainSecretStoreConfig)
+  | ({
+      readonly backend: "macos-system-keychain";
+    } & MacOsSystemKeychainSecretStoreConfig)
   | ({ readonly backend: "windows-dpapi" } & WindowsDpapiSecretStoreConfig)
   | ({
       readonly backend: "windows-service-dpapi";

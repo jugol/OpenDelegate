@@ -152,11 +152,23 @@ opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
 opendelegate service plan install --config ABSOLUTE_NEW_PATH
 ```
 
-This production-shaped path is wired for staged Windows, explicitly headless
-systemd Linux Workers, and a headless Main derived from its co-located Worker.
-macOS and graphical Linux fail closed until their separate
-service-account and owner-session Secret migration is implemented; a hand-authored
-document is not a substitute.
+On macOS, first run the owner-session preparation from Terminal.app while the login
+Keychain is unlocked; `sudo` may request the owner's password:
+
+```text
+opendelegate worker macos-service-secret-stage --home ABSOLUTE_WORKER_HOME \
+  --binding-path "/Library/Application Support/OpenDelegate/INSTANCE/system-keychain-binding.json" \
+  --system-helper "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-INSTANCE" \
+  --service-user _opendelegate --service-group _opendelegate
+```
+
+This production-shaped path is wired for staged Windows, prepared two-plane macOS,
+explicitly headless systemd Linux Workers, and a headless Main derived from its
+co-located Worker. macOS composition refuses an unprepared login-Keychain Worker or
+a target bundle whose helper digest differs from the prepared stable helper.
+Graphical Linux still fails closed until its separate service-account and
+owner-session Secret migration is implemented; a hand-authored document is not a
+substitute.
 
 ## Read-only commands
 

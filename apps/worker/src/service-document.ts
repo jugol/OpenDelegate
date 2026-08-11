@@ -65,12 +65,6 @@ export async function buildWorkerServiceDocument(
       "The current host platform has no native OpenDelegate service integration.",
     );
   }
-  if (family === "macos") {
-    throw new WorkerAppError(
-      "CONFIG_INVALID",
-      "Persistent macOS Worker preparation still lacks the separate core-service and owner-session Keychain migration required by the two-plane runtime. No install document was written.",
-    );
-  }
   for (const [label, value] of [
     ["bundle directory", options.bundleDirectory],
     ["install root", options.installRoot],
@@ -96,6 +90,82 @@ export async function buildWorkerServiceDocument(
     readBundleVersion(options.bundleDirectory),
     readBundleChecksum(options.bundleDirectory),
   ]);
+  if (family === "macos") {
+    if (configuration.secretBackend.backend !== "macos-system-keychain") {
+      throw new WorkerAppError(
+        "CONFIG_INVALID",
+        "Run macos-service-secret-stage from the signed-in owner session before composing a persistent macOS service document.",
+      );
+    }
+    const preparation = configuration.secretBackend.servicePreparation;
+    const ownerSession = requireUnixOwnerSession(options.ownerSession);
+    if (
+      options.serviceIdentity !== undefined &&
+      (options.serviceIdentity.userName !== preparation.serviceIdentity.userName ||
+        options.serviceIdentity.groupName !== preparation.serviceIdentity.groupName)
+    ) {
+      throw new WorkerAppError(
+        "CONFIG_INVALID",
+        "The requested macOS service identity does not match the System Keychain binding.",
+      );
+    }
+    const bundledHelperPath = join(
+      options.bundleDirectory,
+      "runtime",
+      "native",
+      "opendelegate-keychain-helper",
+    );
+    let bundledHelper: Buffer | undefined;
+    try {
+      bundledHelper = await readStableWorkerFile(bundledHelperPath, 67_108_864);
+      const digest = `sha256:${createHash("sha256").update(bundledHelper).digest("hex")}`;
+      if (digest !== configuration.secretBackend.expectedHelperSha256) {
+        throw new WorkerAppError(
+          "CONFIG_INVALID",
+          "The target bundle changes the pinned macOS Keychain helper. Rebind the System Keychain with this bundle before installation or upgrade.",
+        );
+      }
+    } finally {
+      bundledHelper?.fill(0);
+    }
+    return composeServiceConfiguration({
+      platform: "macos",
+      role: "worker",
+      instanceId: options.instanceId,
+      deviceId: configuration.deviceId,
+      bundle: { version, sourceDirectory: serviceBundleDirectory, checksum },
+      sourceCheckoutDirectory: platformPath(family, options.sourceCheckoutRoot),
+      installRoot: platformPath(family, options.installRoot),
+      dataRoot: platformPath(family, options.dataRoot),
+      ownerSession: {
+        ...ownerSession,
+        adminAutoOpen: { enabled: false },
+      },
+      serviceIdentity: preparation.serviceIdentity,
+      ipcTrust: {
+        core: preparation.ipcTrust.core,
+        helper: preparation.ipcTrust.helper,
+      },
+      secretReferences: {
+        coreIpcSigningKey: `secret://worker/${WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS}`,
+        helperIpcSigningKey: `secret://worker/${WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS}`,
+      },
+      healthPort: options.healthPort,
+      macOsKeychainHelper: {
+        helperPath: preparation.ownerHelperSecretBinding.helperPath,
+        expectedHelperSha256: preparation.ownerHelperSecretBinding
+          .expectedHelperSha256 as `sha256:${string}`,
+      },
+      macOsSystemKeychain: {
+        bindingPath: configuration.secretBackend.bindingPath,
+        helperPath: configuration.secretBackend.helperPath,
+        expectedHelperSha256: configuration.secretBackend
+          .expectedHelperSha256 as `sha256:${string}`,
+        keychainPath: "/Library/Keychains/System.keychain",
+        serviceUserName: preparation.serviceIdentity.userName,
+      },
+    });
+  }
   if (family === "linux") {
     if (configuration.secretBackend.backend !== "linux-systemd-credential-vault") {
       throw new WorkerAppError(
@@ -235,7 +305,7 @@ function requireUnixOwnerSession(value: BuildWorkerServiceDocumentOptions["owner
   ) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
-      "Linux service-document requires the installation owner's user name, numeric UID, and home directory.",
+      "Unix service-document requires the installation owner's user name, numeric UID, and home directory.",
     );
   }
   return {

@@ -2679,3 +2679,30 @@ verification labels promoted Artifact IDs with their deterministic meaning; and 
 Task can complete without asking an Agent to observe work that runs only after that
 Agent's turn. Discord still must reconcile and present the available Artifact, and
 an Artifact ID does not grant a credential or bypass exposure Policy.
+
+## D-129 — macOS service preparation owns a stable System-Keychain helper
+
+Implementation detail:
+[ADR-0017](adr/0017-device-local-secret-store-backends.md).
+
+**Decision:** `worker macos-service-secret-stage` runs from the signed-in owner's
+Terminal session and invokes one fixed elevated native operation. That operation
+installs the exact bundled helper at a stable root-owned path, creates a root-owned
+binding to `/Library/Keychains/System.keychain`, and grants that helper access for
+the configured non-login service identity. Core-owned Device identity, desktop
+authority, and core IPC Secrets move to the System Keychain. A distinct helper IPC
+identity remains in the owner's login Keychain. Only the two public IPC pins enter
+the durable service document.
+
+**Rationale:** A boot-persistent LaunchDaemon cannot depend on the owner's login
+Keychain, while the Aqua LaunchAgent must not receive the daemon's private identity.
+Pinning one stable helper path and digest makes Keychain ACL behavior independent of
+immutable release-directory changes and keeps an interrupted migration replayable.
+
+**Consequence:** macOS service-document generation is enabled only after the exact
+two-plane preparation is durable and every required System-Keychain alias is
+readable. A changed helper digest, service identity, binding path, inaccessible
+Keychain item, or conflicting replay fails before launchd mutation. This implements
+the source and command-shape portion of D-119; supported-release status still
+requires signed/notarized clean-host install, logout/login, restart, and reboot
+evidence on the declared macOS target.
