@@ -853,7 +853,7 @@ async function run(arguments_: readonly string[]): Promise<void> {
       migratedAliases: prepared.migratedAliases,
       servicePreparation: prepared.backend.servicePreparation,
       nextStep:
-        "Copy this Worker home to DATA_ROOT/state if it is not already there, then run 'opendelegate worker service-document ...' and install the reviewed launchd service document from an elevated shell.",
+        "Copy this Worker home to DATA_ROOT/state before making that tree service-private. Compose the service document while the copied configuration is readable (or from an elevated shell after adoption), then install the reviewed launchd service document from an elevated shell.",
     });
     return;
   }

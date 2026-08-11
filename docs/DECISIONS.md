@@ -2706,3 +2706,24 @@ Keychain item, or conflicting replay fails before launchd mutation. This impleme
 the source and command-shape portion of D-119; supported-release status still
 requires signed/notarized clean-host install, logout/login, restart, and reboot
 evidence on the declared macOS target.
+
+## D-130 — macOS Worker-home adoption is a recoverable two-phase transition
+
+**Decision:** Migration of an enrolled macOS Worker into a launchd service root
+copies state and composes the no-Secret service document while that configuration
+is readable, then adopts the copied tree and its parent for the non-login service
+identity before activation. If adoption has already made the state private, only
+document composition runs elevated and the same durable enrollment is reused.
+Configuration I/O distinguishes an absent file from an unreadable or unsafe path.
+
+**Rationale:** Live alpha.59 installation successfully migrated three core Secrets
+to the System Keychain, then changed the copied state to mode `0700` before invoking
+`service-document` as the owner. The generic loader reported the resulting access
+failure as a missing enrollment, even though the state and enrollment were intact.
+The parent data root also remained owner-private, preventing the service identity
+from traversing its own state.
+
+**Consequence:** Install automation must preserve the documented two-phase order,
+make the complete service path traversable, and recover an interrupted transition
+in place. `CONFIG_PATH_UNSAFE` directs an operator to ownership repair or elevated
+document composition; it never recommends a new Grant for an access failure.

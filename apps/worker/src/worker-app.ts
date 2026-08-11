@@ -930,8 +930,14 @@ export async function loadWorkerConfiguration(
   let bytes: Buffer;
   try {
     bytes = await readStableWorkerFile(paths.configFile, MAXIMUM_CONFIG_BYTES);
-  } catch {
-    throw appError("CONFIG_MISSING", "Worker is not enrolled. Run worker join first.");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw appError("CONFIG_MISSING", "Worker is not enrolled. Run worker join first.");
+    }
+    throw appError(
+      "CONFIG_PATH_UNSAFE",
+      "Worker configuration could not be read safely by the current process. Check the Worker home and service-state ownership; compose a service document from an elevated shell when the staged home is service-private.",
+    );
   }
   try {
     return validateWorkerConfigurationDocument(JSON.parse(bytes.toString("utf8")));

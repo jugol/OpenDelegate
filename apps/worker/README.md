@@ -360,10 +360,15 @@ Review the plan, then run the separately elevated `service install` command with
 caller-stable command ID. `service-document` never overwrites an existing file and
 does not elevate or register a service.
 
-The current command deliberately refuses macOS and graphical Linux rather than
-producing a document whose core service and owner-session helper point at the same
-Secret authority. Their separate service-account migration remains a release
-blocker. Explicitly headless Linux follows the core-only path above.
+macOS uses a separate two-plane preparation rather than reusing the login Keychain
+from a boot-time LaunchDaemon. Run `macos-service-secret-stage` from Terminal.app,
+copy the enrolled Worker home to `DATA_ROOT/state`, and compose the document before
+making that copied tree service-private. If adoption already happened, compose only
+the no-Secret service document from an elevated shell; do not re-enroll the Worker.
+The exact guarded ordering and recovery rule are documented in
+[`docs/SERVICE_LIFECYCLE.md`](../../docs/SERVICE_LIFECYCLE.md). Graphical Linux still
+fails closed until its separate owner-session Secret migration is implemented;
+explicitly headless Linux follows the core-only path above.
 
 The service consumes the handoff only when its current identity matches, then stores
 the Device identity with `CurrentUser` DPAPI under that service profile. No Secret

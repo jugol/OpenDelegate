@@ -162,6 +162,27 @@ opendelegate worker macos-service-secret-stage --home ABSOLUTE_WORKER_HOME \
   --service-user _opendelegate --service-group _opendelegate
 ```
 
+When an already-enrolled owner Worker is migrated into `DATA_ROOT/state`, the
+ordering is security-sensitive:
+
+1. Run `macos-service-secret-stage` from the signed-in owner session.
+2. Copy the complete Worker home to `DATA_ROOT/state` while it is still readable by
+   the process that will compose the document.
+3. Compose the create-new service document before recursively adopting the copied
+   tree for the service identity. If the tree is already service-private, run only
+   `worker service-document` from an elevated shell; it reads public configuration
+   and writes no Secret values.
+4. Make both `DATA_ROOT` traversable by the service identity and the copied state
+   tree owned by that identity before launchd starts it. The owner remains a member
+   of the service group for bounded read access.
+5. Review `service plan install`, then run the elevated install with a stable
+   command ID.
+
+Automation must not change ownership first and then invoke `service-document` as
+the unprivileged owner. An unreadable configuration is reported as
+`CONFIG_PATH_UNSAFE`, not as a missing enrollment, and must be recovered in place;
+it is never a reason to issue a new Enrollment Grant.
+
 This production-shaped path is wired for staged Windows, prepared two-plane macOS,
 explicitly headless systemd Linux Workers, and a headless Main derived from its
 co-located Worker. macOS composition refuses an unprepared login-Keychain Worker or

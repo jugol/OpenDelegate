@@ -1606,6 +1606,28 @@ test("Worker configuration accepts only known platform mutation tools at absolut
   }
 });
 
+test("Worker configuration distinguishes a missing file from an unreadable or unsafe path", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "opendelegate-worker-config-read-"));
+  const paths = resolveWorkerPaths({
+    sourceCheckoutRoot: checkout,
+    home: join(fixtureRoot, "runtime"),
+  });
+  try {
+    await assert.rejects(
+      loadWorkerConfiguration(paths),
+      (error: unknown) => error instanceof WorkerAppError && error.code === "CONFIG_MISSING",
+    );
+
+    await mkdir(paths.configFile, { recursive: true });
+    await assert.rejects(
+      loadWorkerConfiguration(paths),
+      (error: unknown) => error instanceof WorkerAppError && error.code === "CONFIG_PATH_UNSAFE",
+    );
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test("Workspace registration is durable, idempotent, and lists no Device-local path", async () => {
   const home = await mkdtemp(join(tmpdir(), "opendelegate-worker-workspaces-"));
   const workspaceRoot = join(home, "registered-project");
