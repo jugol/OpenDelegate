@@ -275,6 +275,12 @@ export async function preflightNativeServiceOperation(input: {
       input.boundaries.fileSystem,
     );
   }
+  if (
+    configuration.platform === "windows" &&
+    (input.plan.operation === "start" || input.plan.operation === "restart")
+  ) {
+    await assertRuntimeConfigurationMatchesInstalled(configuration, input.boundaries.fileSystem);
+  }
   const definition = createPlatformServiceDefinition(configuration);
   if (
     !(await input.boundaries.fileSystem.sameVolume(
@@ -434,7 +440,31 @@ function createNativeFilesystemAdapter(
           const disposition = await fileSystem.ensureDirectory(
             action.path,
             Number.parseInt(action.mode, 8),
+            action.requiredExistingParent === undefined,
           );
+          if (action.requiredExistingParent !== undefined) {
+            const parent = await fileSystem.inspect(action.requiredExistingParent);
+            const child = await fileSystem.inspect(action.path);
+            if (parent.kind !== "directory" || child.kind !== "directory") {
+              if (disposition === "changed") {
+                await fileSystem.remove(action.path, false).catch(() => undefined);
+              }
+              throw uncertain("An owner-managed child directory lost its exact parent binding.");
+            }
+            const [canonicalParent, canonicalChild] = await Promise.all([
+              fileSystem.realPath(action.requiredExistingParent),
+              fileSystem.realPath(action.path),
+            ]);
+            if (
+              !equalPath("windows", canonicalParent, action.requiredExistingParent) ||
+              !equalPath("windows", canonicalChild, action.path)
+            ) {
+              if (disposition === "changed") {
+                await fileSystem.remove(action.path, false).catch(() => undefined);
+              }
+              throw uncertain("An owner-managed child directory changed through a link.");
+            }
+          }
           await applyDirectoryAccess(
             configuration,
             action.path,
@@ -2295,6 +2325,34 @@ async function assertReconfigurationMatchesInstalled(
   }
 }
 
+async function assertRuntimeConfigurationMatchesInstalled(
+  configuration: PlatformServiceConfiguration,
+  fileSystem: NativeFileSystemBoundary,
+): Promise<void> {
+  const expected = renderPlatformServiceArtifacts(configuration).files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  if (expected === undefined) {
+    failPreflight("The canonical runtime configuration is unavailable.");
+  }
+  let existing: Buffer;
+  try {
+    existing = await fileSystem.read(expected.path, MAXIMUM_RENDERED_FILE_BYTES);
+  } catch (error) {
+    throw new ServiceCommandExecutionError(
+      "SERVICE_COMMAND_PREFLIGHT_FAILED",
+      "Windows start and restart require the installed runtime configuration to be readable.",
+      false,
+      { cause: error },
+    );
+  }
+  if (!existing.equals(encodeRenderedFile(expected))) {
+    failPreflight(
+      "Windows start and restart refused installed runtime-configuration drift before Agent access repair.",
+    );
+  }
+}
+
 async function assertUpgradeConfigurationMatchesInstalled(
   configuration: PlatformServiceConfiguration,
   activeVersion: string,
@@ -2331,6 +2389,7 @@ async function assertUpgradeConfigurationMatchesInstalled(
       !existing.equals(expected) &&
       !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing) &&
       !matchesLegacyMacOsManifestWithoutServicePath(configuration, installedFile, existing) &&
+      !matchesCombinedWindowsRuntimeMigrations(configuration, installedFile, existing) &&
       !matchesLegacyWindowsRuntimeWithoutOwnerBindings(configuration, installedFile, existing) &&
       !matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
         configuration,
@@ -2350,13 +2409,42 @@ function matchesLegacyWindowsRuntimeWithoutOwnerBindings(
   installedFile: RenderedFile,
   existing: Buffer,
 ): boolean {
+  const migrated = migrateLegacyWindowsRuntimeOwnerBindings(configuration, installedFile, existing);
+  return migrated !== undefined && migrated.equals(encodeRenderedFile(installedFile));
+}
+
+function matchesCombinedWindowsRuntimeMigrations(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  const ownerBindingMigration = migrateLegacyWindowsRuntimeOwnerBindings(
+    configuration,
+    installedFile,
+    existing,
+  );
+  return (
+    ownerBindingMigration !== undefined &&
+    matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
+      configuration,
+      installedFile,
+      ownerBindingMigration,
+    )
+  );
+}
+
+function migrateLegacyWindowsRuntimeOwnerBindings(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): Buffer | undefined {
   if (
     configuration.platform !== "windows" ||
     installedFile.purpose !== "runtime-configuration" ||
     installedFile.encoding !== "utf8" ||
     configuration.ownerSession.homeDirectory === undefined
   ) {
-    return false;
+    return undefined;
   }
   let previous: Record<string, unknown>;
   let expected: Record<string, unknown>;
@@ -2364,7 +2452,7 @@ function matchesLegacyWindowsRuntimeWithoutOwnerBindings(
     previous = requireJsonRecord(JSON.parse(existing.toString("utf8")) as unknown);
     expected = requireJsonRecord(JSON.parse(installedFile.content) as unknown);
   } catch {
-    return false;
+    return undefined;
   }
   const previousOwner = nestedRecord(previous, "ownerSession");
   const expectedOwner = nestedRecord(expected, "ownerSession");
@@ -2373,24 +2461,24 @@ function matchesLegacyWindowsRuntimeWithoutOwnerBindings(
     expectedOwner === undefined ||
     existing.toString("utf8") !== stableJson(previous)
   ) {
-    return false;
+    return undefined;
   }
   let migrated = false;
   if (!Object.hasOwn(previousOwner, "homeDirectory")) {
     if (expectedOwner["homeDirectory"] !== configuration.ownerSession.homeDirectory) {
-      return false;
+      return undefined;
     }
     previousOwner["homeDirectory"] = expectedOwner["homeDirectory"];
     migrated = true;
   }
   if (!Object.hasOwn(previous, "agentProviderAccess")) {
     if (!Object.hasOwn(expected, "agentProviderAccess")) {
-      return false;
+      return undefined;
     }
     previous["agentProviderAccess"] = expected["agentProviderAccess"];
     migrated = true;
   }
-  return migrated && stableJson(previous) === stableJson(expected);
+  return migrated ? Buffer.from(stableJson(previous), "utf8") : undefined;
 }
 
 function matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(

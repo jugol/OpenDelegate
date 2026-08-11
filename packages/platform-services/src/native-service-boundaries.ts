@@ -45,7 +45,11 @@ export interface NativeFileSystemBoundary {
   realPath(path: string): Promise<string>;
   list(path: string): Promise<readonly NativeDirectoryEntry[]>;
   read(path: string, maximumBytes: number): Promise<Buffer>;
-  ensureDirectory(path: string, mode: number): Promise<"changed" | "unchanged">;
+  ensureDirectory(
+    path: string,
+    mode: number,
+    recursive?: boolean,
+  ): Promise<"changed" | "unchanged">;
   writeAtomic(path: string, bytes: Buffer, mode: number): Promise<"changed" | "unchanged">;
   copyRegularFile(source: string, destination: string): Promise<void>;
   renameAtomic(source: string, destination: string, replace: boolean): Promise<void>;
@@ -205,7 +209,11 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
     return await readStableRegularFile(path, maximumBytes);
   }
 
-  public async ensureDirectory(path: string, mode: number): Promise<"changed" | "unchanged"> {
+  public async ensureDirectory(
+    path: string,
+    mode: number,
+    recursive = true,
+  ): Promise<"changed" | "unchanged"> {
     const before = await this.inspect(path);
     if (before.kind === "directory") {
       await chmod(path, mode);
@@ -214,7 +222,7 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
     if (before.kind !== "missing") {
       throw unsafePath("A native service directory path is occupied by a non-directory.");
     }
-    await mkdir(path, { recursive: true, mode });
+    await mkdir(path, { recursive, mode });
     const after = await this.inspect(path);
     if (after.kind !== "directory") {
       throw unsafePath("A native service directory was replaced during creation.");

@@ -221,7 +221,15 @@ test("accepts only a normalized non-root Windows owner home", () => {
   ).configuration;
   assert.equal(accepted.ownerSession.homeDirectory, "C:\\Users\\owner");
 
-  for (const homeDirectory of ["C:\\", "C:\\Users\\owner\\..\\other", "relative\\owner"]) {
+  for (const homeDirectory of [
+    "C:\\",
+    "C:\\Users\\owner\\",
+    "C:\\Users\\owner\\..\\other",
+    "relative\\owner",
+    "\\\\server\\share\\owner",
+    "\\\\?\\C:\\Users\\owner",
+    "\\\\.\\C:\\Users\\owner",
+  ]) {
     assert.throws(
       () =>
         createPlatformServiceDefinition(

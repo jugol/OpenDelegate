@@ -1,6 +1,6 @@
 import { createHash, createPublicKey } from "node:crypto";
 import { open, realpath } from "node:fs/promises";
-import { isAbsolute, resolve, win32 } from "node:path";
+import { isAbsolute, posix, resolve, win32 } from "node:path";
 
 import { parseWindowsOwnerHome } from "@opendelegate/platform-services";
 
@@ -881,6 +881,9 @@ function requirePlatformPath(
     value.length === 0 ||
     value !== value.trim() ||
     value.includes("\0") ||
+    (platform === "windows"
+      ? win32.normalize(value) !== value
+      : posix.normalize(value) !== value) ||
     (platform === "windows"
       ? !/^[A-Za-z]:\\[^<>:"|?*\r\n]+$/u.test(value)
       : !value.startsWith("/") || value.includes("\\"))

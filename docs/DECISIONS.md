@@ -2910,13 +2910,16 @@ returns the stable activation link to the previous release.
 
 See [ADR-0067](adr/0067-windows-owner-agent-launcher-path.md).
 
-**Decision:** A Windows service document records the installation owner's normalized,
-non-root profile directory when the owner shell can prove it. The Worker child then
+**Decision:** A Windows service document records the installation owner's canonical,
+non-root local DOS-drive profile directory when the owner shell can prove it. UNC,
+device-namespace, and trailing-separator aliases are rejected. The Worker child then
 prepends only that profile's `.local\bin` and `AppData\Roaming\npm` directories to
 the service's existing system `PATH`, with case-insensitive deduplication. It never
 copies the owner's complete interactive `PATH`. During upgrade, the installer accepts
-only the exact legacy runtime configuration whose sole difference is the missing
-owner-home field; every other installed byte drift still fails closed.
+only an exact legacy runtime configuration missing the owner-home field, the provider-
+home binding, or both. These finite additions compose with the separately authorized
+D-118 credential migration when one predecessor requires both. Every other installed
+byte drift still fails closed.
 
 The same service document must bind the exact resolved Codex and Claude home directories
 into both the lifecycle ACL plan and the core runtime's provider-home variables.
@@ -2932,6 +2935,10 @@ a persistent Windows service document. Missing owner-managed paths and their Cod
 sandbox child are skipped rather than created; links and special entries fail closed.
 The executor never disables inheritance or resets a provider tree while adding these
 service-specific entries.
+
+Start and restart compare the installed runtime-configuration bytes with the supplied
+canonical configuration before any Agent-home ACL repair. The provider homes receiving
+access therefore cannot differ from the homes the restarted core will actually use.
 
 When an upgrade or reconfiguration rewrites a rendered service file, the executor
 snapshots its exact pre-mutation bytes after preflight and marks the rollback action

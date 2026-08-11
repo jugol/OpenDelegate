@@ -46,10 +46,11 @@ entry point through OpenDelegate's pinned Node executable. They never enable a s
 or execute the npm `.cmd` wrapper. An explicitly configured provider executable still
 wins over discovery.
 
-Upgrade accepts one exact predecessor runtime document whose sole difference is the
-missing owner-home field. It writes the current document atomically while the service
-is stopped. Any additional installed-definition drift remains a hard preflight
-failure.
+Upgrade accepts an exact predecessor runtime document missing the owner-home field,
+the provider-home binding, or both. It writes the current document atomically while
+the service is stopped. These exact additions may compose with D-118's coherent
+credential migration; a shared normalization path still rejects any additional
+installed-definition drift.
 
 The service document also records the exact resolved Codex and Claude home directories
 and the runtime configuration projects them as `CODEX_HOME` and `CLAUDE_CONFIG_DIR`.
@@ -68,10 +69,18 @@ owner/provider-managed paths. Recursive traversal uses `/L`, so descendant symbo
 links are modified as links rather than followed. Missing paths are skipped, while a
 linked, special, or noncanonical declared root fails before mutation.
 
+The owner profile itself must be a canonical local DOS-drive path. UNC paths,
+device-namespace aliases such as `\\?\`, and trailing-separator variants fail before
+protected-root comparison. Start and restart also require the installed runtime
+configuration to match the supplied canonical bytes before any provider or launcher
+ACL action executes.
+
 The Codex `.sandbox-bin` Full Control repair runs after the broader Codex-home Modify
 grant so it cannot be downgraded. It has an exact existing-parent precondition: when
 the declared Codex home is missing, lifecycle skips both the home grant and sandbox
-child instead of recreating owner-managed provider state.
+child instead of recreating owner-managed provider state. Child creation is explicitly
+non-recursive and the parent and child are revalidated canonically before ACL mutation,
+so a provider home that disappears between checks is never recreated.
 
 Because this decision adds a runtime field, the upgrade executor snapshots the exact
 installed runtime-configuration bytes immediately before the atomic forward write.
@@ -140,6 +149,8 @@ installation.
   validation; the Worker execution plan carries it into start and resume handling.
 - Guarded upgrade tests accept only an exact predecessor missing the owner-home field,
   the provider-home binding, or both, and reject any second runtime-document difference.
+- The same upgrade coverage composes those additions with D-118's exact credential
+  migration without admitting an unrelated fourth difference.
 - A failed-health upgrade test proves rollback restores the exact legacy runtime bytes,
   including the continued absence of the provider-home field.
 

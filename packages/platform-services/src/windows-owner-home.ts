@@ -11,6 +11,8 @@ export function parseWindowsOwnerHome(value: unknown): string | undefined {
     value !== value.trim() ||
     value.includes("\0") ||
     value.includes("\n") ||
+    value.endsWith("\\") ||
+    !/^[A-Za-z]:\\[^<>:"|?*\r\n]+$/u.test(value) ||
     !win32.isAbsolute(value) ||
     win32.normalize(value) !== value ||
     win32.dirname(value) === value

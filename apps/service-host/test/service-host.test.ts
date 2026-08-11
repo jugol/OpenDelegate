@@ -93,6 +93,13 @@ describe("native two-plane JavaScript host", () => {
     const broadProviderBinding = validConfiguration();
     broadProviderBinding.agentProviderAccess.codexHomeDirectory = "C:\\Users\\owner";
     assert.throws(() => parseServiceHostConfiguration(broadProviderBinding), /provider home/u);
+    const aliasedProviderBinding = validConfiguration();
+    aliasedProviderBinding.agentProviderAccess.codexHomeDirectory =
+      "C:\\Users\\owner\\.codex\\..\\escaped";
+    assert.throws(
+      () => parseServiceHostConfiguration(aliasedProviderBinding),
+      /provider home path is invalid/u,
+    );
   });
 
   it("accepts an explicit headless Linux core without inventing helper authority", () => {
