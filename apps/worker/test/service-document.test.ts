@@ -46,8 +46,9 @@ test("a staged Windows Worker composes its service document from durable public 
   });
   const installRoot = join(root, "installed");
   const ownerVaultRoot = join(root, "owner-vault");
-  const codexHome = join(root, "owner-codex");
-  const claudeHome = join(root, "owner-claude");
+  const ownerHome = join(root, "owner");
+  const codexHome = join(ownerHome, ".codex");
+  const claudeHome = join(ownerHome, ".claude");
   const core = keyPin();
   const helper = keyPin();
 
@@ -124,12 +125,12 @@ test("a staged Windows Worker composes its service document from durable public 
       ownerSession: {
         userName: "WORKSTATION\\owner",
         stableUserId: "S-1-5-21-1000",
-        homeDirectory: "C:\\Users\\owner",
+        homeDirectory: win32.resolve(ownerHome),
       },
     });
 
     assert.equal(document.platform, "windows");
-    assert.equal(document.ownerSession.homeDirectory, "C:\\Users\\owner");
+    assert.equal(document.ownerSession.homeDirectory, win32.resolve(ownerHome));
     assert.deepEqual(document.ipcTrust, { protocolVersion: 2, core, helper });
     assert.equal(document.bundle.sourceDirectory, win32.resolve(bundle));
     assert.equal(document.helperSecretBinding.vaultRoot, win32.resolve(ownerVaultRoot));

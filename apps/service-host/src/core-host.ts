@@ -325,7 +325,10 @@ async function verifyWorkerServiceSecretBinding(
  */
 export function buildCoreChildServiceEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
-  configuration?: Pick<ServiceHostConfiguration, "ownerSession" | "platform">,
+  configuration?: Pick<
+    ServiceHostConfiguration,
+    "agentProviderAccess" | "ownerSession" | "platform"
+  >,
 ): Readonly<Record<string, string | undefined>> {
   const result: Record<string, string | undefined> = {
     ...environment,
@@ -333,6 +336,18 @@ export function buildCoreChildServiceEnvironment(
   };
   const ownerHome = parseWindowsOwnerHome(configuration?.ownerSession.homeDirectory);
   if (configuration?.platform === "windows" && ownerHome !== undefined) {
+    const setBoundValue = (name: string, value: string): void => {
+      for (const key of Object.keys(result)) {
+        if (key !== name && key.toLowerCase() === name.toLowerCase()) {
+          delete result[key];
+        }
+      }
+      result[name] = value;
+    };
+    if (configuration.agentProviderAccess !== undefined) {
+      setBoundValue("CODEX_HOME", configuration.agentProviderAccess.codexHomeDirectory);
+      setBoundValue("CLAUDE_CONFIG_DIR", configuration.agentProviderAccess.claudeHomeDirectory);
+    }
     const pathKey = Object.keys(result).find((key) => key.toLowerCase() === "path") ?? "PATH";
     const existingEntries = (result[pathKey] ?? "")
       .split(";")

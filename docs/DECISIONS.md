@@ -2918,14 +2918,20 @@ copies the owner's complete interactive `PATH`. During upgrade, the installer ac
 only the exact legacy runtime configuration whose sole difference is the missing
 owner-home field; every other installed byte drift still fails closed.
 
-The same service document binds the exact resolved Codex and Claude home directories.
+The same service document must bind the exact resolved Codex and Claude home directories
+into both the lifecycle ACL plan and the core runtime's provider-home variables.
 Before install, start, restart, or upgrade starts the core, the elevated lifecycle
 executor preserves every existing ACL entry and grants only the instance service
 identity recursive Modify access to those two homes. It likewise grants that identity
 recursive Read & Execute access to the two bounded launcher directories, when they
-exist. Missing owner-managed paths are skipped rather than created, links and special
-entries fail closed, and the executor never disables inheritance or resets a provider
-tree while adding these service-specific entries.
+exist. A declared home must be a strict descendant of the verified owner profile or
+the exact provider's managed state root, may not overlap either launcher tree or the
+other provider home, and must remain disjoint from source, bundle, install, authority,
+runtime, log, owner-helper vault, and service-Secret roots. It may not be omitted from
+a persistent Windows service document. Missing owner-managed paths and their Codex
+sandbox child are skipped rather than created; links and special entries fail closed.
+The executor never disables inheritance or resets a provider tree while adding these
+service-specific entries.
 
 **Rationale:** The live Windows Worker ran correctly under its virtual service
 account, but Claude was installed at the owner's `.local\bin\claude.exe`. An owner

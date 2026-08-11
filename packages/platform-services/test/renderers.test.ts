@@ -87,11 +87,16 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
   const runtimeFile = artifacts.files.find((file) => file.purpose === "runtime-configuration");
   assert.ok(runtimeFile);
   const runtime = JSON.parse(runtimeFile.content) as {
+    agentProviderAccess: {
+      codexHomeDirectory: string;
+      claudeHomeDirectory: string;
+    };
     logs: {
       core: { stdout: string };
       sessionHelper: { stderr: string };
     };
   };
+  assert.deepEqual(runtime.agentProviderAccess, windowsConfiguration().agentProviderAccess);
   assert.equal(runtime.logs.core.stdout, "C:\\ProgramData\\OpenDelegate\\logs\\core.stdout.log");
   assert.equal(
     runtime.logs.sessionHelper.stderr,

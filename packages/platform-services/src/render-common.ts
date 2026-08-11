@@ -75,6 +75,9 @@ export function renderRuntimeConfiguration(
         ...configuration.ownerSession,
         adminAutoOpen: configuration.ownerSession.adminAutoOpen,
       },
+      ...(configuration.platform === "windows"
+        ? { agentProviderAccess: configuration.agentProviderAccess }
+        : {}),
       helperSecretBinding: configuration.helperSecretBinding,
       logs: {
         core: {

@@ -100,7 +100,7 @@ export interface WindowsServiceConfiguration extends BaseServiceConfiguration {
    * Lifecycle preparation preserves their existing ACLs and adds only this
    * instance's virtual-service identity.
    */
-  readonly agentProviderAccess?: WindowsAgentProviderAccessConfiguration;
+  readonly agentProviderAccess: WindowsAgentProviderAccessConfiguration;
 }
 
 export interface WindowsAgentSandboxConfiguration {

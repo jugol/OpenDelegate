@@ -566,9 +566,7 @@ test("Windows Worker install accepts the release and staging root actions after 
     ),
   );
   assert.ok(
-    icaclsRequests.findIndex(
-      (request) => request.arguments[0] === "C:\\Users\\owner\\.codex",
-    ) <
+    icaclsRequests.findIndex((request) => request.arguments[0] === "C:\\Users\\owner\\.codex") <
       icaclsRequests.findIndex(
         (request) => request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin",
       ),
@@ -631,6 +629,9 @@ test("Windows provider access skips missing paths and rejects linked roots befor
       codexHomeDirectory: "C:\\Users\\owner\\.codex",
       claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
+    agentSandbox: {
+      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    },
     serviceSecretBinding: {
       backend: "windows-service-dpapi",
       handoffRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\handoff",
@@ -646,6 +647,7 @@ test("Windows provider access skips missing paths and rejects linked roots befor
   });
   const fileSystem = new FakeFileSystem();
   fileSystem.kinds.set("C:\\Users\\owner\\.codex", "missing");
+  fileSystem.kinds.set("C:\\Users\\owner\\.codex\\.sandbox-bin", "missing");
   const process = new FakeProcess();
   const { boundaries } = fakeBoundaries({
     platform: "windows",
@@ -682,6 +684,13 @@ test("Windows provider access skips missing paths and rejects linked roots befor
         request.arguments[0] === "C:\\Users\\owner\\.claude",
     ),
     true,
+  );
+  assert.equal(fileSystem.kinds.get("C:\\Users\\owner\\.codex\\.sandbox-bin"), "missing");
+  assert.equal(
+    process.requests.some(
+      (request) => request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    ),
+    false,
   );
 
   fileSystem.kinds.set("C:\\Users\\owner\\.claude", "symbolic-link");
@@ -1154,7 +1163,7 @@ test("macOS upgrade accepts only the exact legacy core manifest without the serv
   });
 });
 
-test("Windows Worker upgrade accepts only the exact legacy runtime without the owner home", async () => {
+test("Windows Worker upgrade accepts only the exact legacy runtime without owner bindings", async () => {
   const base = windowsConfigurationWithServiceBinding("worker");
   const configuration = windowsConfiguration({
     ...base,
@@ -1176,8 +1185,10 @@ test("Windows Worker upgrade accepts only the exact legacy runtime without the o
             (() => {
               const legacy = JSON.parse(file.content) as {
                 ownerSession: { homeDirectory?: string };
+                agentProviderAccess?: unknown;
               };
               delete legacy.ownerSession.homeDirectory;
+              delete legacy.agentProviderAccess;
               return legacy;
             })(),
             undefined,
@@ -1225,6 +1236,22 @@ test("Windows Worker upgrade accepts only the exact legacy runtime without the o
   );
 
   fileSystem.files.set(runtimeFile.path, exactLegacyBytes);
+  await preflightNativeServiceOperation({
+    platform: "windows",
+    boundaries,
+    configuration,
+    plan: createServicePlan({ operation: "upgrade", configuration, activeVersion: "1.2.2" }),
+    releaseVerifier: trustedRelease(),
+  });
+
+  const previousWithoutProviderHomes = JSON.parse(runtimeFile.content) as {
+    agentProviderAccess?: unknown;
+  };
+  delete previousWithoutProviderHomes.agentProviderAccess;
+  fileSystem.files.set(
+    runtimeFile.path,
+    Buffer.from(`${JSON.stringify(previousWithoutProviderHomes, undefined, 2)}\n`, "utf8"),
+  );
   await preflightNativeServiceOperation({
     platform: "windows",
     boundaries,
@@ -1714,6 +1741,9 @@ test("logged-out helpers defer while the core starts and exact replay does not i
   const journal = new MemoryJournal();
   const process = new FakeProcess();
   process.handler = (request) => {
+    if (request.executable.toLowerCase().endsWith("icacls.exe")) {
+      return processResult(0);
+    }
     if (request.executable.toLowerCase().endsWith("sc.exe")) {
       return processResult(0);
     }
@@ -1789,6 +1819,9 @@ test("logged-in Windows helper health uses live presence when Task Scheduler tex
     return helperProcessReads >= 3;
   };
   process.handler = (request) => {
+    if (request.executable.toLowerCase().endsWith("icacls.exe")) {
+      return processResult(0);
+    }
     if (request.executable.toLowerCase().endsWith("schtasks.exe")) {
       if (request.arguments[0]?.toLowerCase() === "/query") {
         return processResult(0, '"\\OpenDelegate-personal-SessionHelper","N/A","���� ��"\r\n');

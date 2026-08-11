@@ -111,14 +111,16 @@ export function parsePlatformServiceConfiguration(input: unknown): PlatformServi
 function validateConfiguration(input: PlatformServiceConfiguration): void {
   assertRecord(input, "configuration");
   const expectedKeys =
-    input.platform === "windows" ? BASE_KEYS : new Set([...BASE_KEYS, "serviceIdentity"]);
+    input.platform === "windows"
+      ? new Set([...BASE_KEYS, "agentProviderAccess"])
+      : new Set([...BASE_KEYS, "serviceIdentity"]);
   assertExactKeys(
     input,
     expectedKeys,
     input.platform === "linux"
       ? new Set(["systemdCredential"])
       : input.platform === "windows"
-        ? new Set(["agentProviderAccess", "agentSandbox", "serviceSecretBinding"])
+        ? new Set(["agentSandbox", "serviceSecretBinding"])
         : new Set(["serviceSecretBinding"]),
   );
 
@@ -356,39 +358,99 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
         );
       }
     }
-    if (input.agentProviderAccess !== undefined) {
-      assertRecord(input.agentProviderAccess, "agentProviderAccess");
-      assertExactKeys(input.agentProviderAccess, WINDOWS_AGENT_PROVIDER_ACCESS_KEYS);
-      if (input.ownerSession.homeDirectory === undefined) {
+    assertRecord(input.agentProviderAccess, "agentProviderAccess");
+    assertExactKeys(input.agentProviderAccess, WINDOWS_AGENT_PROVIDER_ACCESS_KEYS);
+    const ownerHome = input.ownerSession.homeDirectory;
+    if (ownerHome === undefined) {
+      throw new PlatformServiceError(
+        "INVALID_IDENTITY",
+        "Windows Agent provider access requires the verified owner profile directory.",
+      );
+    }
+    const launcherDirectories = [
+      ["owner .local launcher directory", win32.join(ownerHome, ".local", "bin")],
+      ["owner npm launcher directory", win32.join(ownerHome, "AppData", "Roaming", "npm")],
+    ] as const;
+    const providerHomes = [
+      [
+        "codex",
+        "agentProviderAccess.codexHomeDirectory",
+        input.agentProviderAccess.codexHomeDirectory,
+      ],
+      [
+        "claude",
+        "agentProviderAccess.claudeHomeDirectory",
+        input.agentProviderAccess.claudeHomeDirectory,
+      ],
+    ] as const;
+    for (const [provider, name, providerHome] of providerHomes) {
+      assertSafeAbsolutePath("windows", providerHome, name);
+      if (win32.dirname(providerHome) === providerHome) {
+        throw new PlatformServiceError("INVALID_PATH", `${name} cannot be a volume root.`);
+      }
+      const managedProviderRoot = win32.join(input.paths.stateRoot, "state", "providers", provider);
+      const belongsToOwner = isDescendantPath("windows", ownerHome, providerHome);
+      const belongsToManagedProvider =
+        samePath("windows", managedProviderRoot, providerHome) ||
+        isDescendantPath("windows", managedProviderRoot, providerHome);
+      if (!belongsToOwner && !belongsToManagedProvider) {
         throw new PlatformServiceError(
-          "INVALID_IDENTITY",
-          "Windows Agent provider access requires the verified owner profile directory.",
+          "INVALID_PATH",
+          `${name} must be inside the verified owner profile or its exact managed provider root.`,
         );
       }
-      for (const [name, providerHome] of [
-        ["agentProviderAccess.codexHomeDirectory", input.agentProviderAccess.codexHomeDirectory],
-        ["agentProviderAccess.claudeHomeDirectory", input.agentProviderAccess.claudeHomeDirectory],
-      ] as const) {
-        assertSafeAbsolutePath("windows", providerHome, name);
-        if (win32.dirname(providerHome) === providerHome) {
-          throw new PlatformServiceError("INVALID_PATH", `${name} cannot be a volume root.`);
-        }
-        for (const [protectedName, protectedPath] of [
-          ["source checkout", input.paths.sourceCheckoutDirectory],
-          ["release bundle", input.bundle.sourceDirectory],
-        ] as const) {
-          if (
-            samePath("windows", protectedPath, providerHome) ||
-            isDescendantPath("windows", protectedPath, providerHome) ||
-            isDescendantPath("windows", providerHome, protectedPath)
-          ) {
-            throw new PlatformServiceError(
-              protectedName === "source checkout" ? "PATH_INSIDE_CHECKOUT" : "INVALID_PATH",
-              `${name} must remain disjoint from the ${protectedName}.`,
-            );
-          }
+      const protectedRoots = [
+        ["source checkout", input.paths.sourceCheckoutDirectory],
+        ["release bundle", input.bundle.sourceDirectory],
+        ["install root", input.paths.installRoot],
+        ["desktop authority root", input.paths.authorityRoot],
+        ["runtime root", input.paths.runtimeRoot],
+        ["log root", input.paths.logRoot],
+        ["owner helper Secret vault", input.helperSecretBinding.vaultRoot],
+        ...(belongsToManagedProvider
+          ? []
+          : ([["service state root", input.paths.stateRoot]] as const)),
+        ...(input.serviceSecretBinding === undefined
+          ? []
+          : ([
+              ["service Secret handoff root", input.serviceSecretBinding.handoffRoot],
+              ["service Secret vault", input.serviceSecretBinding.vaultRoot],
+            ] as const)),
+        ...launcherDirectories,
+      ] as const;
+      for (const [protectedName, protectedPath] of protectedRoots) {
+        if (pathsOverlap("windows", protectedPath, providerHome)) {
+          throw new PlatformServiceError(
+            protectedName === "source checkout" ? "PATH_INSIDE_CHECKOUT" : "INVALID_PATH",
+            `${name} must remain disjoint from the ${protectedName}.`,
+          );
         }
       }
+    }
+    if (
+      pathsOverlap(
+        "windows",
+        input.agentProviderAccess.codexHomeDirectory,
+        input.agentProviderAccess.claudeHomeDirectory,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The Codex and Claude provider homes must be disjoint.",
+      );
+    }
+    if (
+      input.agentSandbox !== undefined &&
+      !samePath(
+        "windows",
+        win32.dirname(input.agentSandbox.codexSandboxBinDirectory),
+        input.agentProviderAccess.codexHomeDirectory,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The Codex sandbox helper must be the direct child of the bound Codex home.",
+      );
     }
   } else {
     assertAccountName(input.ownerSession.userName, "owner session user");
@@ -818,6 +880,14 @@ function samePath(platform: PlatformFamily, left: string, right: string): boolea
     return win32.normalize(left).toLowerCase() === win32.normalize(right).toLowerCase();
   }
   return posix.normalize(left) === posix.normalize(right);
+}
+
+function pathsOverlap(platform: PlatformFamily, left: string, right: string): boolean {
+  return (
+    samePath(platform, left, right) ||
+    isDescendantPath(platform, left, right) ||
+    isDescendantPath(platform, right, left)
+  );
 }
 
 function isDescendantPath(platform: PlatformFamily, parent: string, candidate: string): boolean {

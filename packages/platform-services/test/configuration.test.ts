@@ -93,6 +93,8 @@ test("accepts only the exact external Windows Codex sandbox helper directory", (
 });
 
 test("accepts only bounded Windows Agent provider homes with a verified owner profile", () => {
+  const ownerWithoutHome = { ...windowsConfiguration().ownerSession };
+  Reflect.deleteProperty(ownerWithoutHome, "homeDirectory");
   const accepted = createPlatformServiceDefinition(
     windowsConfiguration({
       ownerSession: {
@@ -112,6 +114,7 @@ test("accepts only bounded Windows Agent provider homes with a verified owner pr
 
   for (const configuration of [
     windowsConfiguration({
+      ownerSession: ownerWithoutHome,
       agentProviderAccess: {
         codexHomeDirectory: "C:\\Users\\owner\\.codex",
         claudeHomeDirectory: "C:\\Users\\owner\\.claude",
@@ -137,6 +140,43 @@ test("accepts only bounded Windows Agent provider homes with a verified owner pr
         claudeHomeDirectory: "C:\\Users\\owner\\.claude",
       },
     }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Windows",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.local\\bin\\codex-state",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\AppData\\Roaming\\npm",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory:
+          "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.agent-state",
+        claudeHomeDirectory: "C:\\Users\\owner\\.agent-state\\claude",
+      },
+    }),
   ]) {
     assert.throws(
       () => createPlatformServiceDefinition(configuration),
@@ -145,6 +185,29 @@ test("accepts only bounded Windows Agent provider homes with a verified owner pr
         ["INVALID_IDENTITY", "INVALID_PATH", "PATH_INSIDE_CHECKOUT"].includes(error.code),
     );
   }
+
+  assert.doesNotThrow(() =>
+    createPlatformServiceDefinition(
+      windowsConfiguration({
+        agentProviderAccess: {
+          codexHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+          claudeHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\claude",
+        },
+      }),
+    ),
+  );
+
+  assert.throws(
+    () =>
+      createPlatformServiceDefinition(
+        windowsConfiguration({
+          agentSandbox: {
+            codexSandboxBinDirectory: "C:\\Users\\owner\\other\\.sandbox-bin",
+          },
+        }),
+      ),
+    (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
+  );
 });
 
 test("accepts only a normalized non-root Windows owner home", () => {

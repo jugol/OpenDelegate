@@ -159,9 +159,10 @@ export function composeServiceConfiguration(
       ...(input.windowsAgentSandbox === undefined
         ? {}
         : { agentSandbox: input.windowsAgentSandbox }),
-      ...(input.windowsAgentProviderAccess === undefined
-        ? {}
-        : { agentProviderAccess: input.windowsAgentProviderAccess }),
+      agentProviderAccess: required(
+        input.windowsAgentProviderAccess,
+        "The exact Windows Agent provider-home binding is required.",
+      ),
     });
   }
   const serviceIdentity = required(

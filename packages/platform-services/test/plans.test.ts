@@ -149,6 +149,7 @@ test("Windows lifecycle plans repair only the Codex sandbox helper ACL before st
     assert.ok(sandbox);
     assert.equal(sandbox.action.kind, "directory.ensure");
     assert.equal(sandbox.action.path, sandboxDirectory);
+    assert.equal(sandbox.action.requiredExistingParent, "C:\\Users\\owner\\.codex");
     assert.equal(sandbox.action.access.owner, "S-1-5-21-1000");
     assert.deepEqual(sandbox.action.access.grants, [
       { principal: "BUILTIN\\Administrators", permission: "full-control" },

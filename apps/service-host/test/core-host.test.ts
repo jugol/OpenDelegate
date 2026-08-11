@@ -28,6 +28,8 @@ describe("native Worker service environment", () => {
   it("adds only bounded owner provider executable directories on Windows", () => {
     const input = {
       Path: "C:\\Windows\\System32;C:\\USERS\\OWNER\\.LOCAL\\BIN",
+      codex_home: "C:\\wrong-codex",
+      CLAUDE_CONFIG_DIR: "C:\\wrong-claude",
       OPENDELEGATE_SERVICE_MODE: "foreground",
     };
     const environment = buildCoreChildServiceEnvironment(input, {
@@ -38,6 +40,10 @@ describe("native Worker service environment", () => {
         homeDirectory: "C:\\Users\\owner",
         adminAutoOpen: { enabled: false },
       },
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.codex",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
     });
 
     assert.equal(
@@ -45,6 +51,10 @@ describe("native Worker service environment", () => {
       "C:\\Users\\owner\\.local\\bin;C:\\Users\\owner\\AppData\\Roaming\\npm;C:\\Windows\\System32",
     );
     assert.equal(input.Path, "C:\\Windows\\System32;C:\\USERS\\OWNER\\.LOCAL\\BIN");
+    assert.equal(environment["CODEX_HOME"], "C:\\Users\\owner\\.codex");
+    assert.equal(environment["CLAUDE_CONFIG_DIR"], "C:\\Users\\owner\\.claude");
+    assert.equal(Object.hasOwn(environment, "codex_home"), false);
+    assert.equal(input.codex_home, "C:\\wrong-codex");
     assert.equal(environment["OPENDELEGATE_SERVICE_MODE"], "system-service");
   });
 
@@ -59,6 +69,10 @@ describe("native Worker service environment", () => {
           homeDirectory: "C:\\Users\\owner",
           adminAutoOpen: { enabled: false },
         },
+        agentProviderAccess: {
+          codexHomeDirectory: "C:\\Users\\owner\\.codex",
+          claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+        },
       },
     );
 
@@ -66,6 +80,8 @@ describe("native Worker service environment", () => {
       environment["PATH"],
       "C:\\Users\\owner\\.local\\bin;C:\\Users\\owner\\AppData\\Roaming\\npm;C:\\Windows\\System32",
     );
+    assert.equal(environment["CODEX_HOME"], "C:\\Users\\owner\\.codex");
+    assert.equal(environment["CLAUDE_CONFIG_DIR"], "C:\\Users\\owner\\.claude");
   });
 });
 

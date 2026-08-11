@@ -41,9 +41,14 @@ export function windowsConfiguration(
     ownerSession: {
       userName: "WORKSTATION\\owner",
       stableUserId: "S-1-5-21-1000",
+      homeDirectory: "C:\\Users\\owner",
       adminAutoOpen: {
         enabled: false,
       },
+    },
+    agentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
     helperSecretBinding: {
       backend: "windows-dpapi",

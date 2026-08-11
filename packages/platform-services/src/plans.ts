@@ -61,6 +61,11 @@ export type PlanAction =
       readonly path: string;
       readonly mode: "0700" | "0750" | "0770";
       readonly access: DirectoryAccessPolicy;
+      /**
+       * Skip this owner-managed child when its exact canonical parent does not
+       * already exist. The lifecycle executor never creates the parent.
+       */
+      readonly requiredExistingParent?: string;
     }
   | {
       readonly kind: "directory.access-grant";
@@ -1020,19 +1025,24 @@ function windowsAgentSandboxSteps(
     return [];
   }
   return [
-    directoryStep(
-      "ensure-codex-sandbox-helper",
-      configuration.agentSandbox.codexSandboxBinDirectory,
-      "0700",
-      directoryAccess(configuration, "provider-sandbox"),
-    ),
+    {
+      id: "ensure-codex-sandbox-helper",
+      description: `Ensure external runtime directory ${configuration.agentSandbox.codexSandboxBinDirectory}.`,
+      action: {
+        kind: "directory.ensure",
+        path: configuration.agentSandbox.codexSandboxBinDirectory,
+        mode: "0700",
+        access: directoryAccess(configuration, "provider-sandbox"),
+        requiredExistingParent: win32.dirname(configuration.agentSandbox.codexSandboxBinDirectory),
+      },
+    },
   ];
 }
 
 function windowsAgentProviderAccessSteps(
   configuration: PlatformServiceConfiguration,
 ): readonly ServicePlanStep[] {
-  if (configuration.platform !== "windows" || configuration.agentProviderAccess === undefined) {
+  if (configuration.platform !== "windows") {
     return [];
   }
   const ownerHome = configuration.ownerSession.homeDirectory;

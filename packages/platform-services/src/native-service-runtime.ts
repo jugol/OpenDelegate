@@ -391,6 +391,25 @@ function createNativeFilesystemAdapter(
           return { disposition: "changed" };
         }
         case "directory.ensure": {
+          if (action.requiredExistingParent !== undefined) {
+            if (
+              configuration.platform !== "windows" ||
+              !equalPath("windows", win32.dirname(action.path), action.requiredExistingParent)
+            ) {
+              throw uncertain("An owner-managed child directory has an invalid parent binding.");
+            }
+            const parent = await fileSystem.inspect(action.requiredExistingParent);
+            if (parent.kind === "missing") {
+              return { disposition: "unchanged" };
+            }
+            if (parent.kind !== "directory") {
+              throw uncertain("An owner-managed parent path is not a canonical directory.");
+            }
+            const canonicalParent = await fileSystem.realPath(action.requiredExistingParent);
+            if (!equalPath("windows", canonicalParent, action.requiredExistingParent)) {
+              throw uncertain("An owner-managed parent path resolves through a link.");
+            }
+          }
           const existing = await fileSystem.inspect(action.path);
           if (configuration.platform === "windows" && existing.kind === "directory") {
             // A running service-owned Secret Store intentionally removes the
@@ -2270,7 +2289,7 @@ async function assertUpgradeConfigurationMatchesInstalled(
       !existing.equals(expected) &&
       !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing) &&
       !matchesLegacyMacOsManifestWithoutServicePath(configuration, installedFile, existing) &&
-      !matchesLegacyWindowsRuntimeWithoutOwnerHome(configuration, installedFile, existing) &&
+      !matchesLegacyWindowsRuntimeWithoutOwnerBindings(configuration, installedFile, existing) &&
       !matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
         configuration,
         installedFile,
@@ -2284,7 +2303,7 @@ async function assertUpgradeConfigurationMatchesInstalled(
   }
 }
 
-function matchesLegacyWindowsRuntimeWithoutOwnerHome(
+function matchesLegacyWindowsRuntimeWithoutOwnerBindings(
   configuration: PlatformServiceConfiguration,
   installedFile: RenderedFile,
   existing: Buffer,
@@ -2310,14 +2329,26 @@ function matchesLegacyWindowsRuntimeWithoutOwnerHome(
   if (
     previousOwner === undefined ||
     expectedOwner === undefined ||
-    Object.hasOwn(previousOwner, "homeDirectory") ||
-    expectedOwner["homeDirectory"] !== configuration.ownerSession.homeDirectory ||
     existing.toString("utf8") !== stableJson(previous)
   ) {
     return false;
   }
-  previousOwner["homeDirectory"] = expectedOwner["homeDirectory"];
-  return stableJson(previous) === stableJson(expected);
+  let migrated = false;
+  if (!Object.hasOwn(previousOwner, "homeDirectory")) {
+    if (expectedOwner["homeDirectory"] !== configuration.ownerSession.homeDirectory) {
+      return false;
+    }
+    previousOwner["homeDirectory"] = expectedOwner["homeDirectory"];
+    migrated = true;
+  }
+  if (!Object.hasOwn(previous, "agentProviderAccess")) {
+    if (!Object.hasOwn(expected, "agentProviderAccess")) {
+      return false;
+    }
+    previous["agentProviderAccess"] = expected["agentProviderAccess"];
+    migrated = true;
+  }
+  return migrated && stableJson(previous) === stableJson(expected);
 }
 
 function matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(

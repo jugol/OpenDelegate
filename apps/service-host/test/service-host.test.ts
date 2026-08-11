@@ -51,6 +51,10 @@ describe("native two-plane JavaScript host", () => {
       url: "http://127.0.0.1:43180/",
     });
     assert.equal(configuration.ownerSession.homeDirectory, "C:\\Users\\owner");
+    assert.deepEqual(configuration.agentProviderAccess, {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+    });
     assert.equal(
       configuration.localIpc.core.privateKeyReference,
       "secret://windows/core-ipc-signing-v2",
@@ -79,6 +83,16 @@ describe("native two-plane JavaScript host", () => {
     const logOverlap = validConfiguration();
     logOverlap.helperSecretBinding.vaultRoot = "C:\\ProgramData\\OpenDelegate\\logs";
     assert.throws(() => parseServiceHostConfiguration(logOverlap), /helper Secret binding/u);
+
+    const missingProviderBinding = { ...validConfiguration() };
+    Reflect.deleteProperty(missingProviderBinding, "agentProviderAccess");
+    assert.throws(
+      () => parseServiceHostConfiguration(missingProviderBinding),
+      /provider-home binding/u,
+    );
+    const broadProviderBinding = validConfiguration();
+    broadProviderBinding.agentProviderAccess.codexHomeDirectory = "C:\\Users\\owner";
+    assert.throws(() => parseServiceHostConfiguration(broadProviderBinding), /provider home/u);
   });
 
   it("accepts an explicit headless Linux core without inventing helper authority", () => {
@@ -88,6 +102,18 @@ describe("native two-plane JavaScript host", () => {
     assert.equal(configuration.localIpc.sessionHelper, "disabled");
     assert.equal(Object.hasOwn(configuration.localIpc, "helper"), false);
     assert.equal(configuration.localIpc.allowedPeers.length, 1);
+
+    assert.throws(
+      () =>
+        parseServiceHostConfiguration({
+          ...headlessLinuxConfiguration(),
+          agentProviderAccess: {
+            codexHomeDirectory: "/home/owner/.codex",
+            claudeHomeDirectory: "/home/owner/.claude",
+          },
+        }),
+      /Only Windows/u,
+    );
 
     assert.throws(
       () =>
@@ -166,6 +192,10 @@ function validConfiguration() {
         enabled: true,
         url: "http://127.0.0.1:43180/",
       },
+    },
+    agentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
     helperSecretBinding: {
       backend: "windows-dpapi",

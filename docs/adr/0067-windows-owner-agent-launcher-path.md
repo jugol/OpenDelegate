@@ -51,7 +51,13 @@ missing owner-home field. It writes the current document atomically while the se
 is stopped. Any additional installed-definition drift remains a hard preflight
 failure.
 
-The service document also records the exact resolved Codex and Claude home directories.
+The service document also records the exact resolved Codex and Claude home directories
+and the runtime configuration projects them as `CODEX_HOME` and `CLAUDE_CONFIG_DIR`.
+The binding is mandatory for a persistent Windows service. Each home must be a strict
+descendant of the verified owner profile or of that provider's exact managed state root;
+the two homes must be disjoint and neither may overlap the bounded launcher trees,
+source or bundle input, installed releases, service-owned roots, the owner-helper
+vault, or the service Secret handoff and vault.
 The elevated install, start, restart, and upgrade plans add the instance virtual-service
 identity to those existing directories with inheritable recursive Modify access. They
 add the same identity to the two launcher directories above with inheritable recursive
@@ -61,6 +67,11 @@ uses `icacls /grant:r` only for the OpenDelegate service principal and never use
 owner/provider-managed paths. Recursive traversal uses `/L`, so descendant symbolic
 links are modified as links rather than followed. Missing paths are skipped, while a
 linked, special, or noncanonical declared root fails before mutation.
+
+The Codex `.sandbox-bin` Full Control repair runs after the broader Codex-home Modify
+grant so it cannot be downgraded. It has an exact existing-parent precondition: when
+the declared Codex home is missing, lifecycle skips both the home grant and sandbox
+child instead of recreating owner-managed provider state.
 
 ## Alternatives considered
 
@@ -97,6 +108,8 @@ installation.
 - The exact Codex and Claude homes keep their existing owner- and provider-managed ACLs;
   only the current OpenDelegate instance service principal receives recursive Modify.
   The exact two launcher directories receive only recursive Read & Execute.
+- The service runtime uses the same two paths for every probe and native session; an
+  ACL target can never drift from the provider's effective home.
 - Install and upgrade persist one additional non-secret owner profile path and must
   preserve the exact legacy-document migration.
 - A provider installed elsewhere requires an explicit executable configuration or a
@@ -114,11 +127,13 @@ installation.
   both `codex-app-server` and `codex-cli` report tested, authenticated readiness.
 - Service-plan and native-executor tests prove that provider-home and launcher grants
   precede core start, skip missing paths, reject links, preserve inheritance and all
-  unrelated ACL entries, and replace only the declared service principal's ACE.
+  unrelated ACL entries, replace only the declared service principal's ACE, reject
+  protected-root overlap, and do not recreate a missing provider home through its
+  sandbox child.
 - Run-selection tests prove the same projected environment reaches immutable model
   validation; the Worker execution plan carries it into start and resume handling.
-- Guarded upgrade tests accept only the exact missing-owner-home predecessor and
-  reject any second runtime-document difference.
+- Guarded upgrade tests accept only an exact predecessor missing the owner-home field,
+  the provider-home binding, or both, and reject any second runtime-document difference.
 
 ## References
 

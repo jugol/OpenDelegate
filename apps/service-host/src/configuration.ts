@@ -1,6 +1,6 @@
 import { createHash, createPublicKey } from "node:crypto";
 import { open, realpath } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve, win32 } from "node:path";
 
 import { parseWindowsOwnerHome } from "@opendelegate/platform-services";
 
@@ -41,6 +41,10 @@ export interface ServiceHostConfiguration {
           readonly enabled: true;
           readonly url: string;
         };
+  };
+  readonly agentProviderAccess?: {
+    readonly codexHomeDirectory: string;
+    readonly claudeHomeDirectory: string;
   };
   readonly helperSecretBinding:
     | {
@@ -220,7 +224,7 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
       "localIpc",
       "health",
     ],
-    ["serviceSecretBinding"],
+    ["agentProviderAccess", "serviceSecretBinding"],
     "service configuration",
   );
   if (
@@ -254,6 +258,10 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
   }
   const logs = parseLogs(record["logs"], platform);
   const serviceSecretBinding = parseServiceSecretBinding(record["serviceSecretBinding"], platform);
+  const windowsServiceSecretBinding =
+    platform === "windows" && serviceSecretBinding !== undefined
+      ? (serviceSecretBinding as Readonly<Record<string, unknown>>)
+      : undefined;
   const sharedMacOsHelper =
     platform === "macos" && serviceSecretBinding?.backend === "macos-system-keychain"
       ? (serviceSecretBinding as {
@@ -276,6 +284,28 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
     ],
     ...(sharedMacOsHelper === undefined ? {} : { sharedMacOsHelper }),
   });
+  const agentProviderAccess = parseAgentProviderAccess(
+    record["agentProviderAccess"],
+    platform,
+    ownerSession.homeDirectory,
+    record["stateRoot"] as string,
+    [
+      record["releaseRoot"] as string,
+      record["authorityRoot"] as string,
+      record["runtimeRoot"] as string,
+      logs.core.stdout,
+      logs.core.stderr,
+      logs.sessionHelper.stdout,
+      logs.sessionHelper.stderr,
+      ...(helperSecretBinding?.backend === "windows-dpapi" ? [helperSecretBinding.vaultRoot] : []),
+      ...(windowsServiceSecretBinding === undefined
+        ? []
+        : [
+            windowsServiceSecretBinding["handoffRoot"],
+            windowsServiceSecretBinding["vaultRoot"],
+          ].filter((value): value is string => typeof value === "string")),
+    ],
+  );
   const localIpc = parseLocalIpc(record["localIpc"], platform, helperSecretBinding !== null);
   const health = parseHealth(record["health"]);
   return deepFreeze({
@@ -290,12 +320,77 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
     authorityRoot: record["authorityRoot"] as string,
     runtimeRoot: record["runtimeRoot"] as string,
     ownerSession,
+    ...(agentProviderAccess === undefined ? {} : { agentProviderAccess }),
     helperSecretBinding,
     logs,
     localIpc,
     health,
     ...(serviceSecretBinding === undefined ? {} : { serviceSecretBinding }),
   });
+}
+
+function parseAgentProviderAccess(
+  input: unknown,
+  platform: ServiceHostConfiguration["platform"],
+  ownerHome: string | undefined,
+  stateRoot: string,
+  protectedPaths: readonly string[],
+): ServiceHostConfiguration["agentProviderAccess"] {
+  if (platform !== "windows") {
+    if (input !== undefined) {
+      throw new ServiceHostError("Only Windows accepts an Agent provider-home binding.");
+    }
+    return undefined;
+  }
+  if (ownerHome === undefined) {
+    throw new ServiceHostError("The Windows owner profile binding is required.");
+  }
+  const record = requireRecord(input, "Windows Agent provider-home binding");
+  requireExactKeys(
+    record,
+    ["codexHomeDirectory", "claudeHomeDirectory"],
+    [],
+    "Windows Agent provider-home binding",
+  );
+  const homes = [
+    ["codex", record["codexHomeDirectory"]],
+    ["claude", record["claudeHomeDirectory"]],
+  ] as const;
+  for (const [provider, value] of homes) {
+    requirePlatformPath("windows", value, `${provider} provider home`);
+    const home = value as string;
+    const managedRoot = win32.resolve(stateRoot, "state", "providers", provider);
+    const belongsToManagedProvider =
+      configuredPathsEqual("windows", managedRoot, home) ||
+      isDescendantPath("windows", managedRoot, home);
+    if (!isDescendantPath("windows", ownerHome, home) && !belongsToManagedProvider) {
+      throw new ServiceHostError(
+        "A Windows Agent provider home must belong to the owner or its exact managed provider root.",
+      );
+    }
+    for (const protectedPath of [
+      ...protectedPaths,
+      win32.resolve(ownerHome, ".local", "bin"),
+      win32.resolve(ownerHome, "AppData", "Roaming", "npm"),
+    ]) {
+      if (pathsOverlap("windows", home, protectedPath)) {
+        throw new ServiceHostError(
+          "A Windows Agent provider home overlaps a protected service or launcher path.",
+        );
+      }
+    }
+    if (pathsOverlap("windows", home, stateRoot) && !belongsToManagedProvider) {
+      throw new ServiceHostError(
+        "A Windows Agent provider home may enter service state only through its managed root.",
+      );
+    }
+  }
+  const codexHomeDirectory = record["codexHomeDirectory"] as string;
+  const claudeHomeDirectory = record["claudeHomeDirectory"] as string;
+  if (pathsOverlap("windows", codexHomeDirectory, claudeHomeDirectory)) {
+    throw new ServiceHostError("The Windows Codex and Claude homes must be disjoint.");
+  }
+  return Object.freeze({ codexHomeDirectory, claudeHomeDirectory });
 }
 
 function parseServiceSecretBinding(
@@ -809,6 +904,16 @@ function pathsOverlap(
     first.startsWith(`${second}${separator}`) ||
     second.startsWith(`${first}${separator}`)
   );
+}
+
+function configuredPathsEqual(
+  platform: ServiceHostConfiguration["platform"],
+  left: string,
+  right: string,
+): boolean {
+  const normalize = (value: string) =>
+    stripTrailingPathSeparators(platform === "windows" ? value.toLowerCase() : value);
+  return normalize(left) === normalize(right);
 }
 
 function isDescendantPath(
