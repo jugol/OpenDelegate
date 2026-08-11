@@ -926,6 +926,39 @@ describe("Device channel protocol", () => {
       decodeDeviceChannelFrame(JSON.stringify(dispatch), "main-device-1", "main-to-worker"),
       dispatch,
     );
+    const refinedDispatch = {
+      ...dispatch,
+      payload: {
+        ...dispatch.payload,
+        agentRequirement: {
+          ...dispatch.payload.agentRequirement,
+          modelId: "opus[1m]",
+        },
+      },
+    };
+    assert.deepEqual(
+      decodeDeviceChannelFrame(JSON.stringify(refinedDispatch), "main-device-1", "main-to-worker"),
+      refinedDispatch,
+    );
+    assert.throws(
+      () =>
+        decodeDeviceChannelFrame(
+          JSON.stringify({
+            ...dispatch,
+            payload: {
+              ...dispatch.payload,
+              agentRequirement: {
+                ...dispatch.payload.agentRequirement,
+                allowedCompatibilities: ["tested", "compatible"],
+              },
+            },
+          }),
+          "main-device-1",
+          "main-to-worker",
+        ),
+      (error: unknown) =>
+        error instanceof DeviceChannelProtocolError && error.code === "FRAME_INVALID",
+    );
     assert.deepEqual(
       decodeDeviceChannelFrame(JSON.stringify(terminal), "worker-1", "worker-to-main"),
       terminal,
