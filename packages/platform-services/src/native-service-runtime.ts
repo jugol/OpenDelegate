@@ -29,6 +29,7 @@ import {
 } from "./plans.ts";
 import { evaluateSessionHelperReadiness } from "./readiness.ts";
 import { stableJson } from "./render-common.ts";
+import { MACOS_SERVICE_EXECUTABLE_PATH } from "./render-macos.ts";
 import {
   assertMatchingNativeReleaseVerification,
   createNativeReleaseVerifier,
@@ -2239,6 +2240,7 @@ async function assertUpgradeConfigurationMatchesInstalled(
     if (
       !existing.equals(expected) &&
       !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing) &&
+      !matchesLegacyMacOsManifestWithoutServicePath(configuration, installedFile, existing) &&
       !matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
         configuration,
         installedFile,
@@ -2415,6 +2417,37 @@ function matchesLegacyWindowsRestrictedSidManifest(
   const legacyFile: RenderedFile = {
     ...installedFile,
     content: `${installedFile.content.slice(0, first)}${legacy}${installedFile.content.slice(first + declared.length)}`,
+  };
+  return existing.equals(encodeRenderedFile(legacyFile));
+}
+
+function matchesLegacyMacOsManifestWithoutServicePath(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "macos" ||
+    installedFile.purpose !== "core-manifest" ||
+    installedFile.encoding !== "utf8"
+  ) {
+    return false;
+  }
+  const declared = [
+    "  <key>EnvironmentVariables</key>",
+    "  <dict>",
+    "    <key>PATH</key>",
+    `    <string>${MACOS_SERVICE_EXECUTABLE_PATH}</string>`,
+    "  </dict>",
+    "",
+  ].join("\n");
+  const first = installedFile.content.indexOf(declared);
+  if (first < 0 || installedFile.content.indexOf(declared, first + declared.length) >= 0) {
+    return false;
+  }
+  const legacyFile: RenderedFile = {
+    ...installedFile,
+    content: `${installedFile.content.slice(0, first)}${installedFile.content.slice(first + declared.length)}`,
   };
   return existing.equals(encodeRenderedFile(legacyFile));
 }

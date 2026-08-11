@@ -2883,3 +2883,23 @@ absent and the lifecycle rollback incomplete.
 core-before-helper start order without racing launchd's asynchronous removal. A
 genuinely stuck unload fails within a deterministic timeout, and the runtime never
 mistakes an unrelated process-launch failure for successful removal.
+
+## D-139 — macOS core services receive a bounded provider executable path
+
+**Decision:** The macOS LaunchDaemon declares the fixed executable search path
+`/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`. It never inherits
+an interactive shell's mutable `PATH`. During upgrade, the installer accepts the
+one exact legacy OpenDelegate core manifest that lacks this dictionary and replaces
+it with the current signed rendering; any other byte drift still fails closed.
+
+**Rationale:** Live alpha.67 ran a healthy permanent Worker and could authenticate
+its Device channel, but launchd did not supply the path used by owner-installed
+Codex. An explicit diagnostic shell found Codex while the same adapter probe inside
+the boot service reported `probe-failed`, so Main could see the Device but could not
+route Agent work to it.
+
+**Consequence:** Apple Silicon Homebrew, `/usr/local`, and system-installed Agent
+CLIs are discoverable after boot without copying an owner's complete shell
+environment into the service. The Worker still runs as its least-privilege identity,
+provider homes remain explicitly bound, and existing installations have a narrow,
+auditable migration into the new manifest.

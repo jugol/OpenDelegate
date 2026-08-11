@@ -15,6 +15,9 @@ import type {
   RenderedFile,
 } from "./types.ts";
 
+export const MACOS_SERVICE_EXECUTABLE_PATH =
+  "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
 export function renderMacOsServiceArtifacts(
   definition: PlatformServiceDefinition & {
     readonly configuration: Extract<
@@ -49,6 +52,9 @@ export function renderMacOsServiceArtifacts(
       ProgramArguments: [definition.coreExecutablePath, ...serviceArguments(definition, "core")],
       UserName: configuration.serviceIdentity.userName,
       GroupName: configuration.serviceIdentity.groupName,
+      EnvironmentVariables: {
+        PATH: MACOS_SERVICE_EXECUTABLE_PATH,
+      },
       RunAtLoad: true,
       KeepAlive: true,
       AbandonProcessGroup: false,

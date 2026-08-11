@@ -951,6 +951,78 @@ test("Windows upgrade accepts and repairs only the exact legacy restricted SID m
   );
 });
 
+test("macOS upgrade accepts only the exact legacy core manifest without the service PATH", async () => {
+  const configuration = macOsConfiguration();
+  const installedConfiguration = macOsConfiguration({
+    ...configuration,
+    bundle: {
+      ...configuration.bundle,
+      version: "1.2.2",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  const servicePathEntry = [
+    "  <key>EnvironmentVariables</key>",
+    "  <dict>",
+    "    <key>PATH</key>",
+    "    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>",
+    "  </dict>",
+    "",
+  ].join("\n");
+  for (const file of installedArtifacts.files) {
+    const content =
+      file.purpose === "core-manifest" ? file.content.replace(servicePathEntry, "") : file.content;
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  const legacyCoreManifest = installedArtifacts.files.find(
+    (file) => file.purpose === "core-manifest",
+  );
+  assert.ok(legacyCoreManifest);
+  const exactLegacyCoreBytes = fileSystem.files.get(legacyCoreManifest.path);
+  assert.ok(exactLegacyCoreBytes);
+  assert.doesNotMatch(exactLegacyCoreBytes.toString("utf8"), /EnvironmentVariables/u);
+  const { boundaries } = fakeBoundaries({
+    platform: "macos",
+    elevated: true,
+    loggedIn: true,
+    fileSystem,
+    process: new FakeProcess(),
+    healthy: true,
+    healthRole: "worker",
+  });
+  const plan = createServicePlan({
+    operation: "upgrade",
+    configuration,
+    activeVersion: "1.2.2",
+  });
+
+  fileSystem.files.set(
+    legacyCoreManifest.path,
+    Buffer.concat([exactLegacyCoreBytes, Buffer.from(" ", "utf8")]),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "macos",
+      boundaries,
+      configuration,
+      plan,
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+
+  fileSystem.files.set(legacyCoreManifest.path, exactLegacyCoreBytes);
+  await preflightNativeServiceOperation({
+    platform: "macos",
+    boundaries,
+    configuration,
+    plan,
+    releaseVerifier: trustedRelease(),
+  });
+});
+
 test("Windows Worker upgrade accepts only a coherent staged credential migration", async () => {
   const targetConfiguration = windowsConfigurationWithServiceBinding("worker");
   const previousCore = {

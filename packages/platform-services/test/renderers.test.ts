@@ -114,6 +114,17 @@ test("renders a LaunchDaemon and Aqua LaunchAgent with separate privilege planes
   assert.equal(daemon.Label, "dev.opendelegate.personal.core");
   assert.equal(daemon.UserName, "_opendelegate");
   assert.equal(daemon.GroupName, "_opendelegate");
+  assert.ok(
+    typeof daemon.EnvironmentVariables === "object" &&
+      daemon.EnvironmentVariables !== null &&
+      !Array.isArray(daemon.EnvironmentVariables),
+  );
+  const environmentVariables = daemon.EnvironmentVariables as Readonly<Record<string, unknown>>;
+  assert.deepEqual(Object.keys(environmentVariables), ["PATH"]);
+  assert.equal(
+    environmentVariables["PATH"],
+    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  );
   assert.equal(daemon.RunAtLoad, true);
   assert.equal(daemon.KeepAlive, true);
   assert.equal(daemon.AbandonProcessGroup, false);
