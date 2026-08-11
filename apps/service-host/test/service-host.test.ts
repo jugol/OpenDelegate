@@ -101,6 +101,34 @@ describe("native two-plane JavaScript host", () => {
     );
   });
 
+  it("accepts the root-owned macOS helper only when both Secret bindings pin it exactly", () => {
+    const configuration = parseServiceHostConfiguration(macOsConfiguration());
+    assert.equal(configuration.platform, "macos");
+    assert.equal(configuration.helperSecretBinding?.backend, "macos-keychain");
+    if (configuration.helperSecretBinding?.backend !== "macos-keychain") {
+      assert.fail("fixture must use the macOS Keychain helper");
+    }
+    assert.equal(
+      configuration.helperSecretBinding.helperPath,
+      "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal",
+    );
+
+    const mismatchedDigest = macOsConfiguration();
+    mismatchedDigest.helperSecretBinding.expectedHelperSha256 = `sha256:${"b".repeat(64)}`;
+    assert.throws(
+      () => parseServiceHostConfiguration(mismatchedDigest),
+      /owner helper Secret binding/u,
+    );
+
+    const unrelatedExternalHelper = macOsConfiguration();
+    unrelatedExternalHelper.helperSecretBinding.helperPath =
+      "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-other";
+    assert.throws(
+      () => parseServiceHostConfiguration(unrelatedExternalHelper),
+      /owner helper Secret binding/u,
+    );
+  });
+
   it("refuses linked, oversized, and unstable configuration files", async () => {
     const root = await mkdtemp(join(tmpdir(), "opendelegate-service-host-config-"));
     try {
@@ -227,6 +255,78 @@ function headlessLinuxConfiguration() {
         publicKeySpkiBase64Url: "MCowBQYDK2VwAyEAjBmMzBDNPDdi86mu7kAWdhSpEsUBySgfGN0q2ganv5I",
       },
       allowedPeers: ["opendelegate"],
+      socketMode: "0660",
+    },
+    health: {
+      endpoint: "http://127.0.0.1:43190/health/live",
+      timeoutMs: 30_000,
+    },
+  };
+}
+
+function macOsConfiguration() {
+  const ipc = validConfiguration().localIpc;
+  const helperDigest = `sha256:${"a".repeat(64)}`;
+  const helperPath = "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal";
+  return {
+    schemaVersion: 3,
+    instanceId: "personal",
+    deviceId: "device-macos-personal",
+    platform: "macos",
+    role: "worker",
+    releaseVersion: "1.2.3",
+    releaseRoot: "/Library/Application Support/OpenDelegate/personal/install/current",
+    stateRoot: "/Users/Shared/OpenDelegate/personal/state",
+    authorityRoot: "/Users/Shared/OpenDelegate/personal/authority",
+    runtimeRoot: "/Users/Shared/OpenDelegate/personal/run",
+    ownerSession: {
+      userName: "owner",
+      stableUserId: "501",
+      uid: 501,
+      homeDirectory: "/Users/owner",
+      adminAutoOpen: { enabled: false },
+    },
+    helperSecretBinding: {
+      backend: "macos-keychain",
+      helperPath,
+      expectedHelperSha256: helperDigest,
+    },
+    serviceSecretBinding: {
+      backend: "macos-system-keychain",
+      bindingPath:
+        "/Library/Application Support/OpenDelegate/personal/system-keychain-binding.json",
+      helperPath,
+      expectedHelperSha256: helperDigest,
+      keychainPath: "/Library/Keychains/System.keychain",
+      serviceUserName: "_opendelegate",
+    },
+    logs: {
+      core: {
+        stdout: "/Users/Shared/OpenDelegate/personal/logs/core.stdout.log",
+        stderr: "/Users/Shared/OpenDelegate/personal/logs/core.stderr.log",
+      },
+      sessionHelper: {
+        stdout: "/Users/Shared/OpenDelegate/personal/logs/helper.stdout.log",
+        stderr: "/Users/Shared/OpenDelegate/personal/logs/helper.stderr.log",
+      },
+    },
+    localIpc: {
+      ...ipc,
+      kind: "unix-domain-socket",
+      endpoint: "/Users/Shared/OpenDelegate/personal/run/session-helper.sock",
+      credentialReferenceDocument:
+        "/Users/Shared/OpenDelegate/personal/state/config/secret-references.json",
+      core: {
+        ...ipc.core,
+        privateKeyReference: "secret://macos/core-ipc-signing-v2",
+        peerIdentity: "501",
+      },
+      helper: {
+        ...ipc.helper,
+        privateKeyReference: "secret://macos/helper-ipc-signing-v2",
+        peerIdentity: "_opendelegate",
+      },
+      allowedPeers: ["_opendelegate", "501"],
       socketMode: "0660",
     },
     health: {

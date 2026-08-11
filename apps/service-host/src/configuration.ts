@@ -251,6 +251,15 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
     );
   }
   const logs = parseLogs(record["logs"], platform);
+  const serviceSecretBinding = parseServiceSecretBinding(record["serviceSecretBinding"], platform);
+  const sharedMacOsHelper =
+    platform === "macos" && serviceSecretBinding?.backend === "macos-system-keychain"
+      ? (serviceSecretBinding as {
+          readonly backend: "macos-system-keychain";
+          readonly helperPath: string;
+          readonly expectedHelperSha256: `sha256:${string}`;
+        })
+      : undefined;
   const helperSecretBinding = parseHelperSecretBinding(record["helperSecretBinding"], platform, {
     releaseRoot: record["releaseRoot"] as string,
     disjointRoots: [
@@ -263,10 +272,10 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
       logs.sessionHelper.stdout,
       logs.sessionHelper.stderr,
     ],
+    ...(sharedMacOsHelper === undefined ? {} : { sharedMacOsHelper }),
   });
   const localIpc = parseLocalIpc(record["localIpc"], platform, helperSecretBinding !== null);
   const health = parseHealth(record["health"]);
-  const serviceSecretBinding = parseServiceSecretBinding(record["serviceSecretBinding"], platform);
   return deepFreeze({
     schemaVersion: 3 as const,
     instanceId: record["instanceId"] as string,
@@ -349,6 +358,10 @@ function parseHelperSecretBinding(
   roots: {
     readonly releaseRoot: string;
     readonly disjointRoots: readonly string[];
+    readonly sharedMacOsHelper?: {
+      readonly helperPath: string;
+      readonly expectedHelperSha256: `sha256:${string}`;
+    };
   },
 ): ServiceHostConfiguration["helperSecretBinding"] {
   if (input === null) {
@@ -382,18 +395,24 @@ function parseHelperSecretBinding(
       "owner helper Secret binding",
     );
     requirePlatformPath(platform, record["helperPath"], "pinned Keychain helper");
+    const helperPath = record["helperPath"] as string;
+    const expectedHelperSha256 = record["expectedHelperSha256"];
+    const sharedSystemHelper =
+      roots.sharedMacOsHelper !== undefined &&
+      samePath(roots.sharedMacOsHelper.helperPath, helperPath) &&
+      roots.sharedMacOsHelper.expectedHelperSha256 === expectedHelperSha256;
     if (
       record["backend"] !== "macos-keychain" ||
-      typeof record["expectedHelperSha256"] !== "string" ||
-      !/^sha256:[a-f0-9]{64}$/u.test(record["expectedHelperSha256"]) ||
-      !isDescendantPath(platform, roots.releaseRoot, record["helperPath"] as string)
+      typeof expectedHelperSha256 !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/u.test(expectedHelperSha256) ||
+      (!isDescendantPath(platform, roots.releaseRoot, helperPath) && !sharedSystemHelper)
     ) {
       throw new ServiceHostError("The macOS owner helper Secret binding is invalid.");
     }
     return {
       backend: "macos-keychain",
-      helperPath: record["helperPath"] as string,
-      expectedHelperSha256: record["expectedHelperSha256"] as `sha256:${string}`,
+      helperPath,
+      expectedHelperSha256: expectedHelperSha256 as `sha256:${string}`,
     };
   }
   requireExactKeys(record, ["backend", "secretToolPath"], [], "owner helper Secret binding");

@@ -2846,3 +2846,22 @@ on macOS, both runtime identities can traverse it through the dedicated service
 group, and an interrupted older installation is repaired on replay. The link target
 is still canonicalized, switched atomically, and never followed while its own mode
 is changed.
+
+## D-137 — A shared macOS Keychain helper has one exact cross-plane pin
+
+**Decision:** A macOS service configuration may bind the owner-session helper to
+the root-owned helper under `/Library/PrivilegedHelperTools` only when its path and
+SHA-256 pin exactly match the already validated System Keychain service binding.
+An immutable-release helper remains valid as before. Any other external helper path
+or mismatched digest fails closed.
+
+**Rationale:** The platform service configuration deliberately supports one pinned
+helper shared by the owner-session and core planes. The service host parser instead
+accepted only helpers below the immutable release root, so the exact document
+composed by the installer passed preflight but both launchd planes rejected it at
+startup as an invalid owner helper binding.
+
+**Consequence:** The service host and installer now enforce the same trust model.
+The shared root-owned helper can start both native planes without weakening path or
+digest verification, while substitution and cross-instance helper reuse remain
+rejected.
