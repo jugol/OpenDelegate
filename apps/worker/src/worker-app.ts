@@ -6,6 +6,7 @@ import {
   generateKeyPairSync,
   randomBytes,
   randomUUID,
+  X509Certificate,
 } from "node:crypto";
 import { constants as fileConstants, type BigIntStats } from "node:fs";
 import {
@@ -48,6 +49,7 @@ import {
 } from "@opendelegate/computer-use-os";
 import {
   DeviceCertificateUnusableError,
+  DeviceChannelClientError,
   EnrollmentClientError,
   EnrollmentGrantExecutorFailure,
   EnrollmentGrantFileError,
@@ -481,6 +483,7 @@ export interface WorkerDiagnosticSnapshot {
   readonly serviceMode?: "headless";
   readonly secretStoreStatus: "ready" | "unavailable";
   readonly identityKeyReady: boolean;
+  readonly identityKeyStatus: "invalid" | "mismatch" | "ready" | "unavailable";
   readonly agents: readonly {
     readonly adapterId: string;
     readonly provider: AgentProviderName;
@@ -1642,9 +1645,13 @@ export async function diagnoseWorker(input: {
     input.paths,
     input.environment ?? process.env,
   );
-  const [health, keyAvailability] = await Promise.all([
+  const [health, identityKeyStatus] = await Promise.all([
     managedSecrets.health(),
-    managedSecrets.availability(`${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`),
+    inspectWorkerIdentityKey(
+      managedSecrets,
+      `${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`,
+      configuration.certificatePem,
+    ),
   ]);
   const providerHomes = {
     claude:
@@ -1693,9 +1700,48 @@ export async function diagnoseWorker(input: {
       ? { serviceMode: configuration.secretBackend.servicePreparation.mode }
       : {}),
     secretStoreStatus: health.status,
-    identityKeyReady: keyAvailability.ready,
+    identityKeyReady: identityKeyStatus === "ready",
+    identityKeyStatus,
     agents,
   });
+}
+
+export async function inspectWorkerIdentityKey(
+  managedSecrets: Pick<ManagedSecretStore, "executeWithSecretBytes">,
+  alias: string,
+  certificatePem: string,
+): Promise<WorkerDiagnosticSnapshot["identityKeyStatus"]> {
+  let expectedPublicKey: Buffer;
+  try {
+    expectedPublicKey = Buffer.from(
+      new X509Certificate(certificatePem).publicKey.export({ format: "der", type: "spki" }),
+    );
+  } catch {
+    return "invalid";
+  }
+
+  let status: WorkerDiagnosticSnapshot["identityKeyStatus"] | undefined;
+  try {
+    await managedSecrets.executeWithSecretBytes(alias, (value) => {
+      const privateBytes = Buffer.from(value);
+      try {
+        const privateKey = createPrivateKey({ key: privateBytes, format: "der", type: "pkcs8" });
+        const actualPublicKey = Buffer.from(
+          createPublicKey(privateKey).export({ format: "der", type: "spki" }),
+        );
+        status = actualPublicKey.equals(expectedPublicKey) ? "ready" : "mismatch";
+      } catch {
+        status = "invalid";
+      } finally {
+        privateBytes.fill(0);
+      }
+    });
+  } catch {
+    return "unavailable";
+  } finally {
+    expectedPublicKey.fill(0);
+  }
+  return status ?? "invalid";
 }
 
 export async function runWorkerDaemon(options: RunWorkerDaemonOptions): Promise<void> {
@@ -1850,6 +1896,7 @@ export interface WorkerConnectionDiagnostic {
 
 const BLOCKING_CONNECTION_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Set([
   "CERTIFICATE_EXPIRED",
+  "IDENTITY_KEY_INVALID",
   "PEER_IDENTITY_MISMATCH",
 ]);
 
@@ -1861,6 +1908,8 @@ const CONNECTION_DIAGNOSTIC_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Se
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ETIMEDOUT",
+  "IDENTITY_KEY_INVALID",
+  "LOCAL_SECRET_UNAVAILABLE",
   "PEER_IDENTITY_MISMATCH",
   "TLS_HANDSHAKE_FAILED",
   "TRANSPORT_BOUNDARY_ERROR",
@@ -2891,7 +2940,8 @@ function createWorkerTransportResolver(input: {
               certificateAuthorityPem: input.configuration.certificateAuthorityPem,
               certificateGeneration: input.configuration.certificateGeneration,
               executeWithPrivateKeyBytes: (executor) =>
-                input.managedSecrets.executeWithSecretBytes(
+                executeWorkerPrivateKey(
+                  input.managedSecrets,
                   `${PRIVATE_KEY_ALIAS_PREFIX}${input.configuration.keyId}`,
                   executor,
                 ),
@@ -2965,12 +3015,11 @@ function createWorkerTransportResolver(input: {
 }
 
 /**
- * A lapsed Device credential and an unreachable Main both surface as a failed
- * connect, but only one of them is worth retrying. Naming the credential case
- * keeps the owner from reading an unrecoverable identity problem as a network
- * outage.
+ * Local identity access, a lapsed credential, and an unreachable Main can all
+ * surface as a failed connect. Preserve their bounded codes so the owner is sent
+ * to the boundary that actually failed without exposing native error text.
  */
-function classifyChannelConnectFailure(error: unknown): {
+export function classifyChannelConnectFailure(error: unknown): {
   readonly outcome: TransportAttemptTrace["outcome"];
   readonly diagnostic: { readonly code: WorkerRouteIncidentCode };
 } {
@@ -2980,10 +3029,53 @@ function classifyChannelConnectFailure(error: unknown): {
       diagnostic: { code: "CERTIFICATE_EXPIRED" },
     };
   }
+  if (error instanceof SecretError) {
+    if (
+      error.code === "SECRET_ALIAS_UNAVAILABLE" ||
+      error.code === "SECRET_BACKEND_UNAVAILABLE" ||
+      error.code === "SECRET_STORE_ACCESS_FAILED"
+    ) {
+      return {
+        outcome: "identity-rejected",
+        diagnostic: { code: "LOCAL_SECRET_UNAVAILABLE" },
+      };
+    }
+    if (error.code === "SECRET_CORRUPTED") {
+      return {
+        outcome: "identity-rejected",
+        diagnostic: { code: "IDENTITY_KEY_INVALID" },
+      };
+    }
+  }
+  if (error instanceof DeviceChannelClientError && error.diagnosticCode !== undefined) {
+    return {
+      outcome: "identity-rejected",
+      diagnostic: { code: error.diagnosticCode },
+    };
+  }
   return {
     outcome: "connect-failed",
     diagnostic: { code: "TRANSPORT_BOUNDARY_ERROR" },
   };
+}
+
+async function executeWorkerPrivateKey(
+  managedSecrets: Pick<ManagedSecretStore, "executeWithSecretBytes">,
+  alias: string,
+  executor: (value: Uint8Array) => unknown | Promise<unknown>,
+): Promise<void> {
+  const noFailure = Symbol("no private-key executor failure");
+  let executorFailure: unknown | typeof noFailure = noFailure;
+  await managedSecrets.executeWithSecretBytes(alias, async (value) => {
+    try {
+      await executor(value);
+    } catch (error) {
+      executorFailure = error;
+    }
+  });
+  if (executorFailure !== noFailure) {
+    throw executorFailure;
+  }
 }
 
 async function verifyInitialWorkerChannel(input: {
@@ -3015,7 +3107,8 @@ async function verifyInitialWorkerChannel(input: {
             certificateAuthorityPem: input.configuration.certificateAuthorityPem,
             certificateGeneration: input.configuration.certificateGeneration,
             executeWithPrivateKeyBytes: (executor) =>
-              input.managedSecrets.executeWithSecretBytes(
+              executeWorkerPrivateKey(
+                input.managedSecrets,
                 `${PRIVATE_KEY_ALIAS_PREFIX}${input.configuration.keyId}`,
                 executor,
               ),

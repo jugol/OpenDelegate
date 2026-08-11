@@ -15,6 +15,7 @@ import type {
   WorkerHeartbeatV1,
   WorkerMainConnection,
   WorkerOutboxAckV1,
+  WorkerRouteIncidentCode,
   WorkerRouteIncidentV1,
   WorkerRunAssignmentV1,
   WorkerRunLeaseAuthority,
@@ -230,7 +231,10 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
     let connected: WorkerDeviceChannelClient | undefined;
     await options.identity.executeWithPrivateKeyBytes(async (pkcs8) => {
       if (!(pkcs8 instanceof Uint8Array) || pkcs8.byteLength === 0 || pkcs8.byteLength > 65_536) {
-        throw new DeviceChannelClientError("The Worker private-key lease is invalid.");
+        throw new DeviceChannelClientError(
+          "The Worker private-key lease is invalid.",
+          "IDENTITY_KEY_INVALID",
+        );
       }
       const keyCopy = Buffer.from(pkcs8);
       try {
@@ -259,7 +263,10 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
         if (error instanceof DeviceChannelClientError) {
           throw error;
         }
-        throw new DeviceChannelClientError("The Worker private-key lease could not be used.");
+        throw new DeviceChannelClientError(
+          "The Worker private-key lease could not be used.",
+          "IDENTITY_KEY_INVALID",
+        );
       } finally {
         keyCopy.fill(0);
       }
@@ -1485,10 +1492,12 @@ export class WorkerDeviceChannelClient implements WorkerMainConnection {
 
 export class DeviceChannelClientError extends Error {
   public readonly code = "DEVICE_CHANNEL_CLIENT_ERROR" as const;
+  public readonly diagnosticCode: WorkerRouteIncidentCode | undefined;
 
-  public constructor(message: string) {
+  public constructor(message: string, diagnosticCode?: WorkerRouteIncidentCode) {
     super(message);
     this.name = "DeviceChannelClientError";
+    this.diagnosticCode = diagnosticCode;
   }
 }
 

@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
 import { describe, it, mock } from "node:test";
 
-import { runWorkerConnectionLoop, type WorkerConnectionDiagnostic } from "../src/worker-app.ts";
+import { DeviceChannelClientError } from "@opendelegate/device-channel";
+import { SecretError } from "@opendelegate/secrets";
+
+import {
+  classifyChannelConnectFailure,
+  runWorkerConnectionLoop,
+  type WorkerConnectionDiagnostic,
+} from "../src/worker-app.ts";
 
 const notDue = async () => ({ status: "not-due" as const, renewAfter: Number.MAX_SAFE_INTEGER });
 
 function attempt(overrides: {
-  readonly outcome: "authentication-rejected" | "connect-failed";
+  readonly outcome: "authentication-rejected" | "connect-failed" | "identity-rejected";
   readonly code: string;
 }) {
   return {
@@ -20,6 +27,95 @@ function attempt(overrides: {
 }
 
 describe("Worker connection diagnostics", () => {
+  it("distinguishes a local Secret Store read failure from Main rejecting the Device", () => {
+    assert.deepEqual(
+      classifyChannelConnectFailure(
+        new SecretError("SECRET_STORE_ACCESS_FAILED", "The local Secret Store refused access."),
+      ),
+      {
+        outcome: "identity-rejected",
+        diagnostic: { code: "LOCAL_SECRET_UNAVAILABLE" },
+      },
+    );
+  });
+
+  it("treats an invalid Device identity key as blocking", async () => {
+    assert.deepEqual(
+      classifyChannelConnectFailure(
+        new DeviceChannelClientError(
+          "The Worker private-key lease is invalid.",
+          "IDENTITY_KEY_INVALID",
+        ),
+      ),
+      {
+        outcome: "identity-rejected",
+        diagnostic: { code: "IDENTITY_KEY_INVALID" },
+      },
+    );
+
+    const controller = new AbortController();
+    const diagnostics: WorkerConnectionDiagnostic[] = [];
+    await runWorkerConnectionLoop(
+      {
+        runtime: {
+          connect: async () => {
+            controller.abort();
+            return {
+              connected: false as const,
+              diagnostics: [
+                attempt({ outcome: "identity-rejected", code: "IDENTITY_KEY_INVALID" }),
+              ],
+            };
+          },
+        } as never,
+        pulse: async () => false,
+        renewCertificate: notDue,
+      },
+      {
+        reconnectMinimumMs: 1,
+        reconnectMaximumMs: 1,
+        heartbeatIntervalMs: 1,
+        signal: controller.signal,
+        onConnectionDiagnostic: (diagnostic) => {
+          diagnostics.push(diagnostic);
+        },
+      },
+    );
+    assert.deepEqual(diagnostics, [{ code: "IDENTITY_KEY_INVALID", retryable: false }]);
+  });
+
+  it("reports a temporarily unavailable local Secret Store as retryable", async () => {
+    const controller = new AbortController();
+    const diagnostics: WorkerConnectionDiagnostic[] = [];
+    await runWorkerConnectionLoop(
+      {
+        runtime: {
+          connect: async () => {
+            controller.abort();
+            return {
+              connected: false as const,
+              diagnostics: [
+                attempt({ outcome: "identity-rejected", code: "LOCAL_SECRET_UNAVAILABLE" }),
+              ],
+            };
+          },
+        } as never,
+        pulse: async () => false,
+        renewCertificate: notDue,
+      },
+      {
+        reconnectMinimumMs: 1,
+        reconnectMaximumMs: 1,
+        heartbeatIntervalMs: 1,
+        signal: controller.signal,
+        onConnectionDiagnostic: (diagnostic) => {
+          diagnostics.push(diagnostic);
+        },
+      },
+    );
+    assert.deepEqual(diagnostics, [{ code: "LOCAL_SECRET_UNAVAILABLE", retryable: true }]);
+  });
+
   it("names an expired Device certificate instead of retrying it silently", async () => {
     const controller = new AbortController();
     let connectionCount = 0;

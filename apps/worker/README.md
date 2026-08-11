@@ -27,6 +27,13 @@ but that first channel check fails, the retained identity can be inspected with
 `worker status` and `worker diagnose`; the command does not falsely report a joined
 Worker.
 
+`worker diagnose` does more than check whether an identity-key item exists. It
+performs a scoped read, derives only the public key, and reports whether that key is
+`ready`, `unavailable`, `invalid`, or `mismatch` relative to the enrolled Device
+certificate. Secret bytes never enter the diagnostic output. A
+`LOCAL_SECRET_UNAVAILABLE` reconnect diagnostic therefore points to this Device's
+local Secret Store; it does not mean that Main rejected the certificate.
+
 `Auto` selects Windows DPAPI, the signed macOS Keychain helper, or Linux Secret
 Service when the current session can actually use it. A headless Linux host must
 select the systemd credential-backed vault explicitly; `Auto` never invents or

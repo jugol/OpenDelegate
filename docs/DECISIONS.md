@@ -2612,3 +2612,24 @@ success-only Artifact promotion boundary and left Discord without the files.
 successful Run or its Artifact output, provider-private error text remains local,
 and future schema drift produces a deterministic pre-promotion failure rather than a
 sporadic owner-facing Task failure.
+
+## D-126 — Worker identity readiness requires a usable matching key
+
+Implementation detail:
+[ADR-0064](adr/0064-worker-identity-key-diagnostics.md).
+
+**Decision:** Worker diagnosis proves that the local Device identity Secret is
+readable and that its derived public key matches the enrolled certificate. Local
+Secret access and invalid-key failures receive distinct bounded route codes and
+owner remedies. Channel-executor failures are preserved outside the managed Secret
+callback instead of being relabelled as Secret-executor failures.
+
+**Rationale:** Live macOS reconnect QA showed a valid, active certificate and a
+reachable Main while the login-Keychain item was visible but unreadable from the
+background Worker. The old existence-only probe reported ready, and the generic CLI
+remedy falsely blamed Main.
+
+**Consequence:** `worker diagnose` distinguishes `ready`, `unavailable`, `invalid`,
+and `mismatch` without exposing private material. A transient locked or inaccessible
+store can recover through retry; an invalid or mismatched key stays fail-closed. The
+foreground-versus-persistent macOS Keychain boundary in D-119 is unchanged.

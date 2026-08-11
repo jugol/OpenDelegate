@@ -1059,9 +1059,18 @@ async function runForeground(paths: WorkerPaths): Promise<void> {
 }
 
 function connectionRemedy(code: WorkerConnectionDiagnostic["code"]): string {
-  return code === "CERTIFICATE_EXPIRED"
-    ? "This Device certificate has expired. Issue a new enrollment grant from Admin Web and run 'opendelegate worker join --grant-file <path>' on this Device."
-    : "Main rejected this Device's credential. Inspect the Device in Admin Web before reconnecting.";
+  switch (code) {
+    case "CERTIFICATE_EXPIRED":
+      return "This Device certificate has expired. Issue a new enrollment grant from Admin Web and run 'opendelegate worker join --grant-file <path>' on this Device.";
+    case "IDENTITY_KEY_INVALID":
+      return "The stored Device identity key is invalid or does not match its certificate. Stop the Worker, inspect 'opendelegate worker diagnose', and re-credential this Device if the matching key cannot be restored.";
+    case "LOCAL_SECRET_UNAVAILABLE":
+      return "This Worker cannot read its Device identity key from the local Secret Store. Unlock or repair that store, then run 'opendelegate worker diagnose'. On macOS, the foreground Worker must run in the signed-in desktop session that owns the login Keychain.";
+    case "PEER_IDENTITY_MISMATCH":
+      return "Main rejected this Device identity. Inspect the Device record in Admin Web before reconnecting.";
+    default:
+      return "The route to Main failed before OpenDelegate could authenticate it. Check the configured VPN or network route and Main's Worker-channel listener, then retry.";
+  }
 }
 
 async function readProductVersion(): Promise<string> {
