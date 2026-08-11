@@ -2865,3 +2865,21 @@ startup as an invalid owner helper binding.
 The shared root-owned helper can start both native planes without weakening path or
 digest verification, while substitution and cross-instance helper reuse remain
 rejected.
+
+## D-138 — macOS lifecycle waits for launchd to finish each bootout
+
+**Decision:** After a successful macOS `launchctl bootout`, the service runtime
+polls the same launchd domain and label until `launchctl print` reports that the
+service is absent. Only then may a restart bootstrap that plane again. The poll is
+bounded by the original lifecycle-command timeout and treats transient inspection
+failures as unknown rather than as proof of absence.
+
+**Rationale:** `launchctl bootout` can return before launchd has completely removed
+the job. Live alpha.66 restart immediately ran `bootstrap`; launchd briefly reported
+the old job as loaded, then removed it before `kickstart`, leaving the core plane
+absent and the lifecycle rollback incomplete.
+
+**Consequence:** Restart preserves the required helper-before-core stop and
+core-before-helper start order without racing launchd's asynchronous removal. A
+genuinely stuck unload fails within a deterministic timeout, and the runtime never
+mistakes an unrelated process-launch failure for successful removal.

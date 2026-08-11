@@ -1767,6 +1767,106 @@ test("owner-session command arguments remain discrete even when a path contains 
   assert.equal(bootstrap.arguments.filter((argument) => argument === "whoami").length, 0);
 });
 
+test("macOS restart waits for each launchd bootout before bootstrapping it again", async () => {
+  const configuration = macOsConfiguration();
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  const coreTarget = "system/dev.opendelegate.personal.core";
+  const helperTarget = "gui/501/dev.opendelegate.personal.session-helper";
+  const loaded = new Map<string, boolean>([
+    [coreTarget, true],
+    [helperTarget, true],
+  ]);
+  const pendingBootoutPolls = new Map<string, number>();
+  const launchctlArguments = (request: NativeProcessRequest): readonly string[] =>
+    request.arguments[0] === "asuser" ? request.arguments.slice(3) : request.arguments;
+
+  process.handler = (request) => {
+    if (request.executable !== "/bin/launchctl") {
+      return processResult(0);
+    }
+    const args = launchctlArguments(request);
+    const verb = args[0];
+    const target = args[1];
+    if (verb === "bootout" && target !== undefined) {
+      pendingBootoutPolls.set(target, 2);
+      return processResult(0);
+    }
+    if (verb === "print" && target !== undefined) {
+      const remaining = pendingBootoutPolls.get(target);
+      if (remaining !== undefined) {
+        if (remaining > 1) {
+          pendingBootoutPolls.set(target, remaining - 1);
+          return processResult(0, "state = running\n");
+        }
+        pendingBootoutPolls.delete(target);
+        loaded.set(target, false);
+        return processResult(113, "", "Could not find service");
+      }
+      return loaded.get(target) === true
+        ? processResult(0, "state = running\n")
+        : processResult(113, "", "Could not find service");
+    }
+    if (verb === "bootstrap") {
+      const manifest = args[2];
+      const bootstrapTarget = manifest?.includes("session-helper") ? helperTarget : coreTarget;
+      assert.equal(pendingBootoutPolls.has(bootstrapTarget), false);
+      loaded.set(bootstrapTarget, true);
+      return processResult(0);
+    }
+    if (verb === "kickstart") {
+      const kickstartTarget = args[2];
+      assert.ok(kickstartTarget !== undefined);
+      assert.equal(loaded.get(kickstartTarget), true);
+      return processResult(0);
+    }
+    return processResult(0);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "macos",
+    elevated: true,
+    loggedIn: true,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "macos",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-restart-macos-bootout-race",
+    configuration,
+    plan: createServicePlan({
+      operation: "restart",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  for (const target of [helperTarget, coreTarget]) {
+    const normalized = process.requests.map(launchctlArguments);
+    const bootout = normalized.findIndex((args) => args[0] === "bootout" && args[1] === target);
+    const bootstrap = normalized.findIndex(
+      (args, index) =>
+        index > bootout &&
+        args[0] === "bootstrap" &&
+        (target === helperTarget ? args[2]?.includes("session-helper") : args[2]?.includes("core")),
+    );
+    assert.ok(bootout >= 0);
+    assert.ok(bootstrap > bootout);
+    assert.equal(
+      normalized
+        .slice(bootout + 1, bootstrap)
+        .filter((args) => args[0] === "print" && args[1] === target).length,
+      2,
+    );
+  }
+});
+
 test("core health failure rolls a restart back through structured supervisor commands", async () => {
   const configuration = windowsConfiguration({
     health: {

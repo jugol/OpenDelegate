@@ -1560,10 +1560,25 @@ async function runSupervisorInvocation(
         helperPresencePath: win32.join(configuration.paths.runtimeRoot, "helper-plane-v2.json"),
       });
     }
+    if (
+      configuration.platform === "macos" &&
+      invocation.executable === "/bin/launchctl" &&
+      invocation.arguments[0] === "bootout" &&
+      result.exitCode === 0 &&
+      !result.timedOut
+    ) {
+      await waitForMacOsLaunchdBootout({
+        configuration,
+        invocation,
+        process,
+        clock,
+        tools,
+      });
+    }
     return result;
   }
   if (configuration.platform === "macos") {
-    return await process.run({
+    const result = await process.run({
       executable: tools.launchctl,
       arguments: [
         "asuser",
@@ -1574,6 +1589,21 @@ async function runSupervisorInvocation(
       timeoutMs: invocation.timeoutMs,
       environment: ownerEnvironment(configuration),
     });
+    if (
+      invocation.executable === "/bin/launchctl" &&
+      invocation.arguments[0] === "bootout" &&
+      result.exitCode === 0 &&
+      !result.timedOut
+    ) {
+      await waitForMacOsLaunchdBootout({
+        configuration,
+        invocation,
+        process,
+        clock,
+        tools,
+      });
+    }
+    return result;
   }
   return await process.run({
     executable: tools.runuser,
@@ -1587,6 +1617,53 @@ async function runSupervisorInvocation(
     timeoutMs: invocation.timeoutMs,
     environment: ownerEnvironment(configuration),
   });
+}
+
+async function waitForMacOsLaunchdBootout(input: {
+  readonly configuration: Extract<PlatformServiceConfiguration, { readonly platform: "macos" }>;
+  readonly invocation: CommandInvocation;
+  readonly process: NativeProcessBoundary;
+  readonly clock: NativeClockBoundary;
+  readonly tools: NativeTools;
+}): Promise<void> {
+  const target = input.invocation.arguments[1];
+  if (target === undefined) {
+    throw new NativeSupervisorError("A macOS launchd bootout command has no service target.");
+  }
+  const deadline = input.clock.now().getTime() + input.invocation.timeoutMs;
+  for (;;) {
+    const remainingMs = deadline - input.clock.now().getTime();
+    if (remainingMs <= 0) {
+      throw new NativeSupervisorError("The macOS launchd service did not unload before timeout.");
+    }
+    let status: NativeProcessResult | undefined;
+    try {
+      status = await input.process.run({
+        executable: input.tools.launchctl,
+        arguments:
+          input.invocation.privilege === "owner-session"
+            ? [
+                "asuser",
+                String(input.configuration.ownerSession.uid),
+                input.tools.launchctl,
+                "print",
+                target,
+              ]
+            : ["print", target],
+        timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
+        ...(input.invocation.privilege === "owner-session"
+          ? { environment: ownerEnvironment(input.configuration) }
+          : {}),
+      });
+    } catch {
+      // A transient status-process failure is not proof that launchd unloaded the
+      // service. Retry within the original bounded lifecycle timeout.
+    }
+    if (status !== undefined && !status.timedOut && status.exitCode === 113) {
+      return;
+    }
+    await input.clock.sleep(Math.max(1, Math.min(250, remainingMs)));
+  }
 }
 
 export async function waitForWindowsScheduledTaskStopped(input: {
