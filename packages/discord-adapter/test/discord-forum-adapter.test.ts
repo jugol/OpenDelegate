@@ -2415,7 +2415,7 @@ test("interactions defer before durable ingress and earlier work on the same Dis
   assert.equal(tasks.calls.filter((call) => call["kind"] === "command").length, 1);
 });
 
-test("an already late unacknowledged interaction is retired without executing its control", async () => {
+test("an already late unacknowledged interaction executes its durable control once", async () => {
   const { adapter, api, tasks, repository, clock } = fixture();
   const thread = forumThread("300000000000000054");
   const starter = ownerMessage(thread.id, thread.id, "Retire late interactions");
@@ -2438,10 +2438,7 @@ test("an already late unacknowledged interaction is retired without executing it
   await adapter.handleGatewayDispatch(lateInteraction);
 
   assert.equal(api.acknowledgedInteractions.has("400000000000000003"), false);
-  assert.equal(
-    tasks.calls.some((call) => call["kind"] === "command"),
-    false,
-  );
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "command").length, 1);
   assert.equal(
     repository
       .snapshot()
@@ -2451,6 +2448,12 @@ test("an already late unacknowledged interaction is retired without executing it
   assert.equal(
     (await adapter.getDiagnostics()).some(
       (diagnostic) => diagnostic.event === "discord.interaction_ack_late",
+    ),
+    true,
+  );
+  assert.equal(
+    (await adapter.getDiagnostics()).some(
+      (diagnostic) => diagnostic.event === "discord.interaction_applied_without_ack",
     ),
     true,
   );

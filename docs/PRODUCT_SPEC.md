@@ -548,6 +548,10 @@ through a secure handoff and resumes the same Task afterward.
    interaction response; the new durable Task surface is the confirmation. This
    prevents ephemeral receipts from pointing at an activity message that the bounded
    surface lifecycle has already superseded and deleted.
+   If Gateway head-of-line delay has already made the private acknowledgement impossible,
+   an authorized current control still resolves its exact idempotent Task command or Approval
+   once. The durable Task surface becomes the confirmation; stale, unauthorized, malformed,
+   and replayed controls remain inert or idempotent.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
     resume the Task and reopen the external conversation when permitted.
 11. If the external post is deleted, Task data remains in Main and the binding is

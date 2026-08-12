@@ -646,6 +646,10 @@ Make Discord the complete primary Task interface.
   After a Task command succeeds, delete its deferred ephemeral response and let the
   resulting durable Task surface confirm the transition. Keep owner-safe ephemeral
   text for rejected, unauthorized, or stale controls.
+- If Gateway dispatch backlog has already exhausted Discord's acknowledgement window, preserve the
+  authorized owner's exact idempotent control and confirm it through the next durable Task surface
+  instead of retiring the click without executing it. Keep malformed, unauthorized, stale, and
+  duplicate controls fail-closed or idempotent.
 - Project a pending protected Worker action into that same live activity message
   with an owner-safe Device/action/risk/evidence summary and approve-once/reject
   controls. Resolve the global durable Approval record—not a parallel Task approval—

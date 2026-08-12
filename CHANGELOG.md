@@ -71,6 +71,10 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Preserved an authorized Discord button decision when Gateway head-of-line delay makes the
+  interaction too old for Discord's private acknowledgement. The exact idempotent Task command or
+  Approval now still crosses the durable authority boundary once, and the refreshed public Task
+  surface confirms the result instead of silently discarding the owner's click.
 - Made a new owner message on a Task in `review` durably queue a fresh execution cycle. Review
   remains dormant across ordinary Main restarts, but an explicit Discord follow-up now reaches the
   Coordinator and can create new owner-cycle-scoped Work Orders instead of merely reprojecting the

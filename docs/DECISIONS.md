@@ -2578,6 +2578,9 @@ authority. Expired or failed replays cannot execute after Discord reports failur
 wedge Gateway cursor progress, while current controls remain available for a fresh
 owner decision.
 
+The late-interaction retirement rule in this decision is superseded by D-148. The
+acknowledgement-first path and its authority separation remain in force.
+
 ## D-124 — Device-channel cumulative acknowledgement stays bounded
 
 Implementation detail:
@@ -3172,3 +3175,27 @@ Agent turn or Work Order.
 product specification and can plan additional work without losing context. Review remains stable
 while the owner is silent, restart reconciliation cannot create unsolicited work, and duplicate
 Discord delivery remains idempotent through the existing input event identity.
+
+## D-148 — A late Discord interaction preserves the owner's durable control
+
+**Decision:** Main still attempts to defer every Discord Task-control interaction before doing
+thread work. If serialized Gateway delivery has already made that private acknowledgement
+impossible, Main must not silently retire an otherwise valid owner control. It durably claims the
+interaction, verifies the configured owner or allowed role, validates the current bot-authored
+Task binding and control payload, and executes the exact idempotent Task command or global Approval
+decision once. The next durable Task surface is the confirmation. Deterministic stale-state
+refusals complete without retry; unexpected persistence or Task-port failures remain retryable
+behind the Gateway cursor.
+
+**Rationale:** Live Windows Artifact QA repeatedly delivered valid Approval button events 3.5 to
+4.2 seconds after their Discord snowflake timestamps while the Gateway dispatch lane was busy.
+D-123 correctly prevented an unacknowledged action from executing, but that made the visible button
+discard every owner click and left the Worker permanently waiting. The interaction already carries
+Discord-authenticated identity and an exact, current approval ID; the Task and Approval services
+provide the authoritative state check and idempotency boundary.
+
+**Consequence:** A delayed Discord client may still show Discord's own acknowledgement-timeout
+toast, but OpenDelegate no longer loses the owner's intent: the live Task card advances and confirms
+the result. Unauthorized, malformed, wrong-bot, wrong-thread, stale, and duplicate interactions do
+not gain authority. The normal acknowledged path remains preferred and keeps its private failure
+feedback when Discord's deadline is available.

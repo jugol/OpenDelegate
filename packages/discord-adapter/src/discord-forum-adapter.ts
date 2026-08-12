@@ -928,8 +928,16 @@ export class DiscordForumAdapter {
         latencyMs: acknowledgementLatencyMs,
       });
       const lateClaim = await this.#repository.claimInbound(inbound);
-      if (lateClaim.outcome !== "completed") {
-        await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
+      if (lateClaim.outcome === "completed") {
+        return;
+      }
+      const applied = await this.#handleUnacknowledgedInteraction(interaction, key);
+      await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
+      if (applied) {
+        this.#recordDiagnostic("discord.interaction_applied_without_ack", {
+          interactionId: interaction.id,
+          latencyMs: acknowledgementLatencyMs,
+        });
       }
       return;
     }
@@ -1013,6 +1021,61 @@ export class DiscordForumAdapter {
     await this.#withThread(interaction.channelId, async () => {
       await this.#handleAcknowledgedInteraction(interaction, key, responseRef);
     });
+  }
+
+  async #handleUnacknowledgedInteraction(
+    interaction: DiscordInteraction,
+    key: string,
+  ): Promise<boolean> {
+    if (!this.#isAuthorized(interaction.author.id, interaction.author.roleIds)) {
+      return false;
+    }
+    let applied = false;
+    await this.#withThread(interaction.channelId, async () => {
+      const binding = await this.#repository.getBindingByThread(interaction.channelId);
+      if (
+        binding === undefined ||
+        binding.externalState !== "available" ||
+        interaction.messageAuthorId !== this.#config.botUserId
+      ) {
+        return;
+      }
+      const parsed = parseControl(interaction.customId);
+      if (parsed === undefined) {
+        return;
+      }
+      const principalId = `discord:${interaction.author.id}`;
+      try {
+        if (parsed.kind === "command") {
+          await this.#tasks.commandTask({
+            taskId: binding.taskId,
+            principalId,
+            command: parsed.command,
+            idempotencyKey: key,
+          });
+          applied = true;
+        } else {
+          await this.#tasks.resolveApproval({
+            taskId: binding.taskId,
+            approvalId: parsed.approvalId,
+            principalId,
+            idempotencyKey: key,
+            decision: parsed.decision,
+          });
+          applied = true;
+        }
+      } catch (error) {
+        if (error instanceof DiscordTaskPortError) {
+          this.#recordDiagnostic("discord.late_task_callback_rejected", {
+            interactionId: interaction.id,
+            errorCode: error.code,
+          });
+          return;
+        }
+        throw error;
+      }
+    });
+    return applied;
   }
 
   async #handleAcknowledgedInteraction(
