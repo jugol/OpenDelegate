@@ -121,6 +121,7 @@ export interface WindowsServiceDpapiSecretStoreConfig {
   readonly handoffRoot: string;
   readonly hostPlatform?: NodeJS.Platform;
   readonly maximumSecretBytes?: number;
+  readonly nativeHelperPath?: string;
   readonly powershellPath?: string;
   readonly runner?: NativeSecretCommandRunner;
   readonly serviceSid: string;
@@ -134,6 +135,7 @@ export interface WindowsServiceDpapiSecretHandoffConfig {
   readonly handoffRoot: string;
   readonly hostPlatform?: NodeJS.Platform;
   readonly maximumSecretBytes?: number;
+  readonly nativeHelperPath?: string;
   readonly expectedIdentitySid?: string;
   readonly powershellPath?: string;
   readonly runner?: NativeSecretCommandRunner;

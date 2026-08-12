@@ -63,6 +63,7 @@ const WINDOWS_TASK_ELEMENTS = new Set([
   "Enabled",
   "Exec",
   "ExecutionTimeLimit",
+  "Hidden",
   "Interval",
   "LogonTrigger",
   "LogonType",
@@ -96,6 +97,7 @@ const WINDOWS_TASK_CHILDREN = new Map<string, readonly string[]>([
   [
     "Settings",
     [
+      "Hidden",
       "MultipleInstancesPolicy",
       "DisallowStartIfOnBatteries",
       "StopIfGoingOnBatteries",
@@ -105,6 +107,7 @@ const WINDOWS_TASK_CHILDREN = new Map<string, readonly string[]>([
       "RestartOnFailure",
     ],
   ],
+  ["Hidden", []],
   ["MultipleInstancesPolicy", []],
   ["DisallowStartIfOnBatteries", []],
   ["StopIfGoingOnBatteries", []],
@@ -126,6 +129,7 @@ const WINDOWS_TASK_FIXED_TEXT = new Map<string, string>([
   ["Enabled", "true"],
   ["LogonType", "InteractiveToken"],
   ["RunLevel", "LeastPrivilege"],
+  ["Hidden", "true"],
   ["MultipleInstancesPolicy", "IgnoreNew"],
   ["DisallowStartIfOnBatteries", "false"],
   ["StopIfGoingOnBatteries", "false"],

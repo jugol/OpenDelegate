@@ -39,6 +39,7 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
     /--stderr-log C:\\ProgramData\\OpenDelegate\\logs\\helper\.stderr\.log/u,
   );
   assert.match(artifacts.helper.manifest.content, /<Interval>PT1M<\/Interval>/u);
+  assert.match(artifacts.helper.manifest.content, /<Hidden>true<\/Hidden>/u);
   assert.doesNotMatch(artifacts.helper.manifest.content, /<Interval>PT15S<\/Interval>/u);
 
   const createService = artifacts.installCommands.find(

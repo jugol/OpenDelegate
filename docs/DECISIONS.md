@@ -3055,12 +3055,15 @@ readiness is evaluated only after an owner-requested Computer Use Run acquires i
 exclusive `desktop-session` lease.
 
 On Windows, the scheduled session-helper launcher and its Computer Use native child
-are packaged as GUI-subsystem executables while retaining explicit redirected logs.
+are packaged as GUI-subsystem executables while retaining explicit redirected logs,
+and the login Task is marked hidden as a second defense against visible console chrome.
 The SCM core launcher remains a console-subsystem executable because it never enters
 the interactive desktop. Windows service Secrets are persisted in the existing
-DPAPI-NG service vault with its service-only ACL rather than depending on a loaded
-virtual-account `CurrentUser` profile; the legacy CurrentUser record is accepted only
-as a one-time, exact in-service migration source.
+DPAPI-NG service vault with its service-only ACL through a bounded mode of the already
+trusted native service host. Normal boot and restart do not start PowerShell for
+identity, ACL, sealing, or unsealing, and do not depend on a loaded virtual-account
+`CurrentUser` profile; the legacy CurrentUser record is accepted only as a one-time,
+exact in-service migration source.
 
 **Rationale:** Live reboot testing showed three coupled user-facing failures: Task
 Scheduler opened a permanent Windows Terminal for the session helper, capability

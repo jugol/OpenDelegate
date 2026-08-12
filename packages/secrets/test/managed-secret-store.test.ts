@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 import test from "node:test";
 
 import {
@@ -375,7 +375,34 @@ class WindowsServiceDpapiFixtureRunner implements NativeSecretCommandRunner {
       environment: { ...request.environment },
       stdin: Buffer.from(request.stdin),
     });
+    const nativeOperation = request.args[0] === "--secret-helper" ? request.args[1] : undefined;
     const script = request.args.at(-1) ?? "";
+    if (nativeOperation === "identity-probe") {
+      return {
+        exitCode: this.serviceIdentityAvailable ? 0 : 41,
+        stdout: this.serviceIdentityAvailable ? Buffer.from("ready") : Buffer.alloc(0),
+      };
+    }
+    if (nativeOperation === "protect") {
+      return {
+        exitCode: 0,
+        stdout: Buffer.concat([
+          Buffer.from([this.sealingMode]),
+          Buffer.from("sealed-service-handoff"),
+        ]),
+      };
+    }
+    if (nativeOperation === "unprotect") {
+      return this.serviceDpapiNgUnprotectAvailable
+        ? { exitCode: 0, stdout: Buffer.from(this.#plaintext) }
+        : { exitCode: 52, stdout: Buffer.alloc(0) };
+    }
+    if (nativeOperation === "acl") {
+      return {
+        exitCode: this.handoffAclAvailable ? 0 : 44,
+        stdout: Buffer.alloc(0),
+      };
+    }
     if (script.includes("OpenDelegate Windows service identity probe v1")) {
       return {
         exitCode: this.serviceIdentityAvailable ? 0 : 41,
@@ -800,6 +827,54 @@ test("a refused handoff ACL names the directory and what would satisfy it", asyn
         assert.ok((error.detail ?? "").includes(handoffRoot));
         return true;
       },
+    );
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+});
+
+test("the Windows service handoff uses the trusted native host without starting PowerShell", async () => {
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-native-service-secret-");
+  const sourceCheckoutRoot = join(fixtureRoot, "checkout");
+  const nativeHelperPath = win32.join(sourceCheckoutRoot, "bin", "opendelegate-service-host.exe");
+  const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
+  const alias = "identity-p256.native-service-key";
+  const secret = Buffer.from("native-service-secret", "utf8");
+  const runner = new WindowsServiceDpapiFixtureRunner(secret);
+  const handoff = new WindowsServiceDpapiSecretHandoff({
+    deviceId: "device-windows-native-service",
+    expectedIdentitySid: serviceSid,
+    handoffRoot: join(fixtureRoot, "handoff"),
+    hostPlatform: "win32",
+    nativeHelperPath,
+    runner,
+    serviceSid,
+    sourceCheckoutRoot,
+  });
+
+  try {
+    assert.deepEqual(await handoff.stage(alias, secret), {
+      status: "staged",
+      sealing: "service-account",
+    });
+    const opened = await handoff.consume(alias);
+    try {
+      assert.deepEqual(opened, secret);
+    } finally {
+      opened.fill(0);
+    }
+    assert.deepEqual(
+      runner.requests.map(({ args }) => args),
+      [
+        ["--secret-helper", "identity-probe"],
+        ["--secret-helper", "acl"],
+        ["--secret-helper", "protect"],
+        ["--secret-helper", "unprotect"],
+      ],
+    );
+    assert.equal(
+      runner.requests.every(({ executable }) => executable === nativeHelperPath),
+      true,
     );
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });

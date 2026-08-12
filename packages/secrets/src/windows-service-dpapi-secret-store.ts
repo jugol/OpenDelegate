@@ -83,7 +83,8 @@ export class WindowsServiceDpapiSecretHandoff {
   readonly #environment: Readonly<Record<string, string>>;
   readonly #maximumSecretBytes: number;
   readonly #expectedIdentitySid: string | undefined;
-  readonly #powershellPath: string;
+  readonly #helperExecutablePath: string;
+  readonly #nativeHelper: boolean;
   readonly #runner: NativeSecretCommandRunner;
   readonly #serviceSid: string;
   readonly #vault: SecureFileVault;
@@ -101,8 +102,32 @@ export class WindowsServiceDpapiSecretHandoff {
     this.#maximumSecretBytes = validateMaximumSecretBytes(
       config.maximumSecretBytes ?? DEFAULT_MAXIMUM_SECRET_BYTES,
     );
-    this.#powershellPath = config.powershellPath ?? defaultWindowsPowerShellPath();
-    if (!win32.isAbsolute(this.#powershellPath) || this.#powershellPath.includes("\0")) {
+    const defaultNativeHelperPath = win32.join(
+      config.sourceCheckoutRoot,
+      "bin",
+      "opendelegate-service-host.exe",
+    );
+    const nativeHelperPath =
+      config.nativeHelperPath ??
+      (config.runner === undefined && config.powershellPath === undefined
+        ? defaultNativeHelperPath
+        : undefined);
+    if (
+      nativeHelperPath !== undefined &&
+      (!win32.isAbsolute(nativeHelperPath) ||
+        nativeHelperPath.includes("\0") ||
+        win32.normalize(nativeHelperPath).toLowerCase() !==
+          win32.normalize(defaultNativeHelperPath).toLowerCase())
+    ) {
+      throw configurationInvalid();
+    }
+    this.#nativeHelper = nativeHelperPath !== undefined;
+    this.#helperExecutablePath =
+      nativeHelperPath ?? config.powershellPath ?? defaultWindowsPowerShellPath();
+    if (
+      !win32.isAbsolute(this.#helperExecutablePath) ||
+      this.#helperExecutablePath.includes("\0")
+    ) {
       throw configurationInvalid();
     }
     this.#environment = validateWindowsEnvironment(
@@ -179,7 +204,8 @@ export class WindowsServiceDpapiSecretHandoff {
     if (this.#expectedIdentitySid !== undefined) {
       const identityInput = Buffer.from(this.#expectedIdentitySid, "utf8");
       try {
-        const result = await this.#runPowerShell(
+        const result = await this.#runHelper(
+          "identity-probe",
           WINDOWS_SERVICE_IDENTITY_PROBE_SCRIPT,
           identityInput,
           16,
@@ -197,7 +223,7 @@ export class WindowsServiceDpapiSecretHandoff {
     const handoffPath = this.#vault.rootPath();
     const input = encodeSidAndPath(this.#serviceSid, handoffPath);
     try {
-      const result = await this.#runPowerShell(WINDOWS_HANDOFF_ACL_SCRIPT, input, 0);
+      const result = await this.#runHelper("acl", WINDOWS_HANDOFF_ACL_SCRIPT, input, 0);
       result.stdout.fill(0);
       if (result.exitCode !== 0) {
         throw backendUnavailable(
@@ -225,7 +251,8 @@ export class WindowsServiceDpapiSecretHandoff {
     serviceSid.fill(0);
     binding.fill(0);
     try {
-      const result = await this.#runPowerShell(
+      const result = await this.#runHelper(
+        "protect",
         DPAPI_NG_PROTECT_SCRIPT,
         input,
         this.#maximumSecretBytes + NATIVE_OVERHEAD_BYTES,
@@ -258,7 +285,8 @@ export class WindowsServiceDpapiSecretHandoff {
     const input = Buffer.concat([binding, protectedValue]);
     binding.fill(0);
     try {
-      const result = await this.#runPowerShell(
+      const result = await this.#runHelper(
+        "unprotect",
         DPAPI_NG_UNPROTECT_SCRIPT,
         input,
         this.#maximumSecretBytes,
@@ -289,12 +317,19 @@ export class WindowsServiceDpapiSecretHandoff {
       .digest();
   }
 
-  async #runPowerShell(script: string, stdin: Uint8Array, maximumStdoutBytes: number) {
+  async #runHelper(
+    operation: "acl" | "identity-probe" | "protect" | "unprotect",
+    powershellScript: string,
+    stdin: Uint8Array,
+    maximumStdoutBytes: number,
+  ) {
     try {
       return await this.#runner.run({
-        args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        args: this.#nativeHelper
+          ? ["--secret-helper", operation]
+          : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powershellScript],
         environment: this.#environment,
-        executable: this.#powershellPath,
+        executable: this.#helperExecutablePath,
         maximumStdoutBytes,
         stdin,
         timeoutMs: COMMAND_TIMEOUT_MS,
@@ -329,6 +364,9 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
       ...(config.maximumSecretBytes === undefined
         ? {}
         : { maximumSecretBytes: config.maximumSecretBytes }),
+      ...(config.nativeHelperPath === undefined
+        ? {}
+        : { nativeHelperPath: config.nativeHelperPath }),
       ...(config.powershellPath === undefined ? {} : { powershellPath: config.powershellPath }),
       ...(config.runner === undefined ? {} : { runner: config.runner }),
     });
@@ -344,6 +382,9 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
       ...(config.maximumSecretBytes === undefined
         ? {}
         : { maximumSecretBytes: config.maximumSecretBytes }),
+      ...(config.nativeHelperPath === undefined
+        ? {}
+        : { nativeHelperPath: config.nativeHelperPath }),
       ...(config.powershellPath === undefined ? {} : { powershellPath: config.powershellPath }),
       ...(config.runner === undefined ? {} : { runner: config.runner }),
       sourceCheckoutRoot: config.sourceCheckoutRoot,
