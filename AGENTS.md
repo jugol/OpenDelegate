@@ -50,6 +50,11 @@ repository as its registered Workspace.
 
 ## Operator-safe diagnostics
 
+- Never load, replay, summarize, or parse an entire archived Codex rollout or prior
+  large Task transcript. Continue from a curated checkpoint and the canonical
+  repository documents. If a missing fact must be recovered, query one exact file
+  for one exact pattern, cap the displayed result at 20 concise matches, and do not
+  resume the archived Task.
 - Keep interactive diagnostic output bounded. Filter at the source and emit at most
   20 concise records or a short aggregate; never stream an unbounded log, process
   list, event log, database dump, or recursive search into the desktop client.
