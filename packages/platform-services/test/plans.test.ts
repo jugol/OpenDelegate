@@ -426,10 +426,20 @@ test("Windows upgrade repairs the declared service SID definition before restart
   });
 
   const stopCoreIndex = plan.steps.findIndex((step) => step.id === "stop-core");
+  const stopHelperIndex = plan.steps.findIndex((step) => step.id === "stop-helper");
+  const helperManifestIndex = plan.steps.findIndex(
+    (step) => step.id === "write-windows-helper-manifest",
+  );
+  const helperRegistrationIndex = plan.steps.findIndex(
+    (step) => step.id === "refresh-windows-helper-registration",
+  );
   const repairIndex = plan.steps.findIndex((step) => step.id === "repair-windows-service-sid");
   const manifestIndex = plan.steps.findIndex((step) => step.id === "write-windows-core-manifest");
   const startCoreIndex = plan.steps.findIndex((step) => step.id === "start-core");
   assert.ok(stopCoreIndex >= 0);
+  assert.ok(stopHelperIndex < helperManifestIndex);
+  assert.ok(helperManifestIndex < helperRegistrationIndex);
+  assert.ok(helperRegistrationIndex < stopCoreIndex);
   assert.ok(stopCoreIndex < repairIndex);
   assert.ok(repairIndex < manifestIndex);
   assert.ok(manifestIndex < startCoreIndex);
@@ -459,6 +469,40 @@ test("Windows upgrade repairs the declared service SID definition before restart
     assert.match(manifest.action.file.content, /"serviceSidType": "unrestricted"/u);
   }
   assert.equal(manifest?.rollback, undefined);
+
+  const helperManifest = plan.steps[helperManifestIndex];
+  assert.equal(helperManifest?.action.kind, "file.write");
+  if (helperManifest?.action.kind === "file.write") {
+    assert.equal(helperManifest.action.file.purpose, "helper-manifest");
+    assert.match(helperManifest.action.file.content, /<Hidden>true<\/Hidden>/u);
+  }
+  assert.equal(helperManifest?.rollback, undefined);
+
+  const helperRegistration = plan.steps[helperRegistrationIndex];
+  assert.equal(helperRegistration?.action.kind, "supervisor.invoke");
+  if (helperRegistration?.action.kind === "supervisor.invoke") {
+    assert.deepEqual(helperRegistration.action.command.invocations, [
+      {
+        executable: "schtasks.exe",
+        arguments: [
+          "/Create",
+          "/TN",
+          "\\OpenDelegate-personal-SessionHelper",
+          "/XML",
+          "C:\\ProgramData\\OpenDelegate\\state\\manifests\\OpenDelegate-personal.session-helper.task.xml",
+          "/F",
+        ],
+        plane: "session-helper",
+        verb: "install",
+        privilege: "elevated",
+        availabilityPolicy: "required",
+        timeoutMs: 30_000,
+        expectedExitCodes: [0],
+      },
+    ]);
+  }
+  assert.equal(helperRegistration?.rollback, undefined);
+  assert.ok(plan.notes.some((note) => /not reverted to a visible console/u.test(note)));
 });
 
 test("macOS upgrade persists its bounded service PATH before restarting core", () => {

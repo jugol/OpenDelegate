@@ -3058,7 +3058,10 @@ On Windows, the scheduled session-helper launcher and its Computer Use native ch
 are packaged as GUI-subsystem executables while retaining explicit redirected logs,
 and the login Task is marked hidden as a second defense against visible console chrome.
 Upgrade may migrate only the exact predecessor Task bytes missing that one setting;
-all other installed Task drift remains a hard preflight failure.
+all other installed Task drift remains a hard preflight failure. The migration writes
+the canonical manifest and force-replaces the stopped native Task registration before
+either service plane restarts. This hidden-registration hardening is monotonic: a later
+release rollback does not deliberately restore the visible predecessor Task.
 The SCM core launcher remains a console-subsystem executable because it never enters
 the interactive desktop. Windows service Secrets are persisted in the existing
 DPAPI-NG service vault with its service-only ACL through a bounded mode of the already

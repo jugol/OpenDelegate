@@ -515,6 +515,20 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     ...(hasSessionHelper(artifacts)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),
+    ...(definition.configuration.platform === "windows" && hasSessionHelper(artifacts)
+      ? [
+          {
+            id: "write-windows-helper-manifest",
+            description: "Persist the monotonic hidden Windows owner-session helper definition.",
+            action: {
+              kind: "file.write" as const,
+              file: requireRenderedFile(artifacts, "helper-manifest"),
+              atomic: true as const,
+            },
+          },
+          windowsHelperRegistrationRefreshStep(artifacts),
+        ]
+      : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
     ...windowsAgentProviderAccessSteps(definition.configuration),
     ...windowsCodexServiceHomeSteps(definition.configuration),
@@ -598,6 +612,11 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     steps,
     [
       "A failed post-activation health check stops the new release, restores the previous current pointer, and restarts the previous release.",
+      ...(definition.configuration.platform === "windows" && hasSessionHelper(artifacts)
+        ? [
+            "The Windows owner-session helper registration is monotonically migrated to hidden mode and is not reverted to a visible console during release rollback.",
+          ]
+        : []),
       `The healthy active release plus ${String(definition.configuration.retainPreviousVersions)} previous version(s) are retained.`,
     ],
     activeVersion,
@@ -854,6 +873,26 @@ function supervisorStep(
             command: supervisorOperation(artifacts, plane, rollbackVerb),
           },
         }),
+  };
+}
+
+function windowsHelperRegistrationRefreshStep(
+  artifacts: PlatformServiceArtifacts,
+): ServicePlanStep {
+  const operation = supervisorOperation(artifacts, "session-helper", "install");
+  return {
+    id: "refresh-windows-helper-registration",
+    description: "Replace the Windows owner-session helper registration in hidden mode.",
+    action: {
+      kind: "supervisor.invoke",
+      command: {
+        ...operation,
+        invocations: operation.invocations.map((invocation) => ({
+          ...invocation,
+          arguments: [...invocation.arguments, "/F"],
+        })),
+      },
+    },
   };
 }
 
