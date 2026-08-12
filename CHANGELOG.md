@@ -117,7 +117,8 @@ represents a supported release or completed first milestone.
 - Kept Windows login and background capability inventory silent: the session-helper and native
   Computer Use child are packaged without console windows, the login Task is explicitly hidden, and
   OS capture/permission interaction is deferred until an owner-requested Computer Use Run instead of
-  running during heartbeat probes.
+  running during heartbeat probes. Existing installations accept only the exact prior Task manifest
+  missing that one hidden flag during upgrade.
 - Made the Windows virtual-service Secret vault reboot-stable by using its profile-independent
   DPAPI-NG sealing and service-only ACL through the already trusted native service host instead of
   starting Windows PowerShell inside the background service, with a bounded one-time migration from

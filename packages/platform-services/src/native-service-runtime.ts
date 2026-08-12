@@ -2512,6 +2512,7 @@ async function assertUpgradeConfigurationMatchesInstalled(
     if (
       !existing.equals(expected) &&
       !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing) &&
+      !matchesLegacyWindowsVisibleHelperTask(configuration, installedFile, existing) &&
       !matchesLegacyMacOsManifestWithoutServicePath(configuration, installedFile, existing) &&
       !matchesCombinedWindowsRuntimeMigrations(configuration, installedFile, existing) &&
       !matchesLegacyWindowsRuntimeWithoutOwnerBindings(configuration, installedFile, existing) &&
@@ -2526,6 +2527,34 @@ async function assertUpgradeConfigurationMatchesInstalled(
       );
     }
   }
+}
+
+function matchesLegacyWindowsVisibleHelperTask(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "windows" ||
+    installedFile.purpose !== "helper-manifest" ||
+    installedFile.encoding !== "utf16le-bom"
+  ) {
+    return false;
+  }
+  const hiddenSetting = "    <Hidden>true</Hidden>\n";
+  const markerOffset = installedFile.content.indexOf(hiddenSetting);
+  if (markerOffset < 0 || markerOffset !== installedFile.content.lastIndexOf(hiddenSetting)) {
+    return false;
+  }
+  const legacyContent =
+    installedFile.content.slice(0, markerOffset) +
+    installedFile.content.slice(markerOffset + hiddenSetting.length);
+  return existing.equals(
+    encodeRenderedFile({
+      ...installedFile,
+      content: legacyContent,
+    }),
+  );
 }
 
 function matchesLegacyWindowsRuntimeWithoutOwnerBindings(

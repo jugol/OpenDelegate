@@ -3057,6 +3057,8 @@ exclusive `desktop-session` lease.
 On Windows, the scheduled session-helper launcher and its Computer Use native child
 are packaged as GUI-subsystem executables while retaining explicit redirected logs,
 and the login Task is marked hidden as a second defense against visible console chrome.
+Upgrade may migrate only the exact predecessor Task bytes missing that one setting;
+all other installed Task drift remains a hard preflight failure.
 The SCM core launcher remains a console-subsystem executable because it never enters
 the interactive desktop. Windows service Secrets are persisted in the existing
 DPAPI-NG service vault with its service-only ACL through a bounded mode of the already

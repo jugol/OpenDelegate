@@ -1435,6 +1435,80 @@ test("Windows upgrade accepts and repairs only the exact legacy restricted SID m
   );
 });
 
+test("Windows upgrade accepts only the exact predecessor helper Task without Hidden", async () => {
+  const configuration = windowsConfigurationWithServiceBinding("worker");
+  const installedConfiguration = windowsConfiguration({
+    ...configuration,
+    bundle: {
+      ...configuration.bundle,
+      version: "1.2.2",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    const content =
+      file.purpose === "helper-manifest"
+        ? file.content.replace("    <Hidden>true</Hidden>\n", "")
+        : file.content;
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: true,
+    healthRole: "worker",
+  });
+  const plan = createServicePlan({
+    operation: "upgrade",
+    configuration,
+    activeVersion: "1.2.2",
+  });
+  const helperManifest = installedArtifacts.files.find(
+    (file) => file.purpose === "helper-manifest",
+  );
+  assert.ok(helperManifest);
+  const exactPredecessor = fileSystem.files.get(helperManifest.path);
+  assert.ok(exactPredecessor);
+
+  fileSystem.files.set(
+    helperManifest.path,
+    Buffer.concat([exactPredecessor, Buffer.from(" ", "utf8")]),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration,
+      plan,
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+
+  fileSystem.files.set(helperManifest.path, exactPredecessor);
+  await preflightNativeServiceOperation({
+    platform: "windows",
+    boundaries,
+    configuration,
+    plan,
+    releaseVerifier: trustedRelease(),
+  });
+});
+
 test("macOS upgrade accepts only the exact legacy core manifest without the service PATH", async () => {
   const configuration = macOsConfiguration();
   const installedConfiguration = macOsConfiguration({
