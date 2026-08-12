@@ -11,6 +11,7 @@ import {
   type WorkerOutboundEventTypeV1,
   type WorkerOutboundEventV1,
   type WorkerAgentSessionObservationV1,
+  type WorkerAgentRequirementV1,
   type WorkerProviderUsageV1,
   type WorkerRunAssignmentV1,
   type WorkerRunIdentityV1,
@@ -628,7 +629,7 @@ export function parseWorkerAssignmentMessage(input: unknown): WorkerAssignmentMe
   if (
     workOrder.requiredAgent !== undefined &&
     (agentRequirement === undefined ||
-      JSON.stringify(agentRequirement) !== JSON.stringify(workOrder.requiredAgent))
+      !agentRequirementPreservesWorkOrder(agentRequirement, workOrder.requiredAgent))
   ) {
     throw new WorkerRuntimeError(
       "INVALID_MESSAGE",
@@ -672,6 +673,21 @@ export function parseWorkerAssignmentMessage(input: unknown): WorkerAssignmentMe
     type: "worker.run.assign",
     payload: Object.freeze(assignment),
   });
+}
+
+function agentRequirementPreservesWorkOrder(
+  selected: WorkerAgentRequirementV1,
+  required: WorkerAgentRequirementV1,
+): boolean {
+  const requiredCompatibilities = new Set(required.allowedCompatibilities ?? (["tested"] as const));
+  const selectedCompatibilities = selected.allowedCompatibilities ?? (["tested"] as const);
+  return (
+    selected.provider === required.provider &&
+    (required.adapterId === undefined || selected.adapterId === required.adapterId) &&
+    (required.modelId === undefined || selected.modelId === required.modelId) &&
+    (required.effort === undefined || selected.effort === required.effort) &&
+    selectedCompatibilities.every((compatibility) => requiredCompatibilities.has(compatibility))
+  );
 }
 
 export function assignmentFingerprint(message: WorkerAssignmentMessageV1): string {

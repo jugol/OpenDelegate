@@ -3088,3 +3088,24 @@ without claiming that its desktop is already authorized, and the first actual
 Computer Use Run may still surface the required owner interaction. Service Secrets
 remain encrypted at rest and reboot-stable on workgroup hosts under D-073's declared
 machine-sealing fallback and restrictive service-vault ACL.
+
+## D-144 — Resolved Run Agent bindings may only specialize Work Order constraints
+
+**Decision:** A Work Order Agent requirement is a hard lower bound, not a byte-identical
+copy of the eventual Run binding. Main may add the exact adapter, provider-native model,
+or effort selected from the authenticated Device catalog when the Work Order left that
+field open. It may also narrow the allowed compatibility set. It may never change an
+explicit provider, adapter, model, or effort, or broaden the effective compatibility
+allowance; omission of that allowance continues to mean tested-only. Worker validates
+this relationship before accepting or recording the Run.
+
+**Rationale:** Deterministic target resolution necessarily specializes a provider or
+adapter constraint into one executable binding. Treating the two objects as serialized
+byte-equal caused a valid `claude/claude-cli` Work Order to reject the selected
+`claude/claude-cli/opus[1m]` Run. Because the rejected dispatch remained durable and
+unacknowledged, every reconnect replayed the same poison frame and the Device appeared
+offline despite successful mutual TLS.
+
+**Consequence:** Exact binding selection remains fail-closed while valid specialization
+survives disconnect and replay. A rejected substitution or compatibility broadening
+still fails before provider execution.

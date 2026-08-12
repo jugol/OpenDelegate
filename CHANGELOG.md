@@ -71,6 +71,10 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Allowed an immutable Run assignment to add the exact adapter model or effort selected by Main
+  while still proving that every Work Order Agent constraint is preserved and its compatibility
+  allowance is only narrowed. This prevents a valid resolved binding from poisoning durable Worker
+  channel replay after reconnect.
 - Added an explicit, durable `--codex-home` Main option so an owner can share one existing local
   Codex home as a Device SSOT while managed provider homes remain the default.
 - Made the fixed Main computer a normal co-located Worker Device under the same service lifecycle
