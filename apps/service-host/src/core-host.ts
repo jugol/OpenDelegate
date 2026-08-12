@@ -261,7 +261,12 @@ async function startWorkerWorkload(
         code: diagnostic.code,
         retryable: diagnostic.retryable,
       });
-      if (!diagnostic.retryable) {
+      if (workerServiceReadinessDisposition(diagnostic) === "ready") {
+        // The reconnect loop itself is the healthy persistent workload while
+        // Main or its route is temporarily unavailable. Main still treats this
+        // Device as offline until an authenticated heartbeat arrives.
+        resolveReady();
+      } else {
         rejectReady(new ServiceHostError(`The Worker connection is blocked (${diagnostic.code}).`));
       }
     },
@@ -299,6 +304,12 @@ async function startWorkerWorkload(
       await completed.catch(() => undefined);
     },
   };
+}
+
+export function workerServiceReadinessDisposition(
+  diagnostic: WorkerConnectionDiagnostic,
+): "blocked" | "ready" {
+  return diagnostic.retryable ? "ready" : "blocked";
 }
 
 async function verifyWorkerServiceSecretBinding(

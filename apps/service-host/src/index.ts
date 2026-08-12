@@ -22,6 +22,7 @@ export {
   runCoreServiceHost,
   resolveWorkerReleaseRoot,
   startCoLocatedMainDeviceWorkload,
+  workerServiceReadinessDisposition,
   verifyServiceHostReleaseIdentity,
   waitForCoreWorkloadReadiness,
   type CoreWorkloadHandle,

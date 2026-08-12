@@ -1582,6 +1582,12 @@ route no longer kills the Worker process. Authentication rejection and exhausted
 routes keep their existing diagnostics, while ordinary unavailability follows the
 bounded reconnect backoff. The mTLS integration test exercises a refused endpoint
 before the successful channel exchange so a duplicate rejection cannot regress.
+For a native service, the first retryable connection diagnostic also proves that
+local initialization reached this bounded reconnect loop and therefore satisfies
+the service-host readiness gate. This does not make the Device schedulable: Main
+continues to show it offline until an authenticated heartbeat arrives. A
+non-retryable certificate, key, or peer-identity diagnostic still fails startup
+closed.
 
 ## D-081 — Worker reconnect replay advances at durable acknowledgment boundaries
 

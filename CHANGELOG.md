@@ -124,6 +124,10 @@ represents a supported release or completed first milestone.
   DPAPI-NG sealing and service-only ACL through the already trusted native service host instead of
   starting Windows PowerShell inside the background service, with a bounded one-time migration from
   legacy CurrentUser DPAPI records when that older profile is available.
+- Kept a native Worker service alive when Main or its VPN route is temporarily unavailable: an
+  active bounded reconnect loop now satisfies local service readiness, while Main continues to mark
+  the Device offline until its next authenticated heartbeat. Non-retryable identity failures still
+  fail startup closed.
 
 - Distinguished the Worker Agent's pre-promotion report from deterministic post-turn Artifact
   evidence, so a successfully promoted file can complete its Task and be presented by Discord

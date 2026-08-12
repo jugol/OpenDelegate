@@ -11,6 +11,7 @@ import {
   resolveWorkerReleaseRoot,
   startCoLocatedMainDeviceWorkload,
   waitForCoreWorkloadReadiness,
+  workerServiceReadinessDisposition,
   type CoreWorkloadHandle,
   type ServiceHostConfiguration,
 } from "../src/index.ts";
@@ -268,6 +269,17 @@ describe("core workload readiness gate", () => {
         new AbortController().signal,
       ),
       /did not become ready before timeout/u,
+    );
+  });
+
+  it("accepts only retryable connection diagnostics as local service readiness", () => {
+    assert.equal(
+      workerServiceReadinessDisposition({ code: "TRANSPORT_BOUNDARY_ERROR", retryable: true }),
+      "ready",
+    );
+    assert.equal(
+      workerServiceReadinessDisposition({ code: "IDENTITY_KEY_INVALID", retryable: false }),
+      "blocked",
     );
   });
 });
