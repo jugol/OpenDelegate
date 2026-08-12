@@ -191,12 +191,7 @@ async function startWindowsNativeDriver(
         "--parent-process-id",
         String(process.pid),
       ],
-      {
-        cwd: configuration.releaseRoot,
-        env: Object.freeze({}),
-        stdio: ["ignore", "ignore", "pipe", "pipe"],
-        windowsHide: false,
-      },
+      createWindowsNativeHelperSpawnOptions(configuration.releaseRoot),
     );
     await waitForSpawn(child);
     discardBounded(child.stderr, 64 * 1024);
@@ -251,6 +246,18 @@ async function startWindowsNativeDriver(
     }
     throw new ServiceHostError("The Windows native helper could not start safely.");
   }
+}
+
+export function createWindowsNativeHelperSpawnOptions(releaseRoot: string) {
+  return {
+    cwd: releaseRoot,
+    env: Object.freeze({}),
+    stdio: ["ignore", "ignore", "pipe", "pipe"] as ["ignore", "ignore", "pipe", "pipe"],
+    // The native helper owns no owner-facing console. Picker/consent UI is created
+    // explicitly by the helper when Computer Use needs it; the service child itself
+    // must stay background-only across login and reboot.
+    windowsHide: true,
+  };
 }
 
 async function loadComputerUseHelperComponent(

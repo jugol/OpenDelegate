@@ -548,7 +548,8 @@ through a secure handoff and resumes the same Task afterward.
    interaction response; the new durable Task surface is the confirmation. This
    prevents ephemeral receipts from pointing at an activity message that the bounded
    surface lifecycle has already superseded and deleted.
-   If Gateway head-of-line delay has already made the private acknowledgement impossible,
+   Gateway records an interaction's deadline clock at socket ingress, before ordered dispatch or
+   Task work. If head-of-line delay has already made the private acknowledgement impossible,
    an authorized current control still resolves its exact idempotent Task command or Approval
    once. The durable Task surface becomes the confirmation; stale, unauthorized, malformed,
    and replayed controls remain inert or idempotent.
@@ -860,6 +861,9 @@ may request a transition but cannot manufacture a state outside the transition r
 12. When an eligible interactive surface exists, Main presents a bounded Owner
     Handoff. After the owner returns control through the same Task, execution resumes
     from durable state and the existing session lineage where possible.
+13. A persistent user-session helper and its native Computer Use child run without a
+    console or provider window. Explicit OS picker, consent, login, MFA, and handoff
+    surfaces may appear only when the current owner-requested Run requires them.
 
 ### FR-13 — Knowledge-aware capability development
 

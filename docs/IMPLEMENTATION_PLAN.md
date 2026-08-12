@@ -437,6 +437,9 @@ Make Main and Worker roles truly persistent on all target operating systems.
   available.
 - Provide a supervised foreground fallback for Linux without systemd.
 - Implement authenticated local IPC between daemon and user-session helper.
+- Keep the persistent helper and native Computer Use child background-only. Spawn no
+  console or provider window at login, idle health, or capability inventory; explicit
+  owner picker/consent/handoff UI remains Run-scoped.
 - Report service, logged-in session, desktop unlocked state, and OS permissions
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
@@ -476,6 +479,8 @@ Make Main and Worker roles truly persistent on all target operating systems.
 - The core daemon remains available while no user is logged in.
 - User-session helper loss removes graphical Capabilities without dropping headless
   work.
+- Login and reboot leave no persistent OpenDelegate console or provider window; an
+  owner-visible native surface appears only for a requesting Computer Use Run.
 - Failed upgrades roll back to a healthy version.
 - A Windows Codex Run can initialize and refresh its service-owned sandbox helper
   repeatedly, sees the owner's existing authentication through the exact SSOT link,
@@ -646,7 +651,8 @@ Make Discord the complete primary Task interface.
   After a Task command succeeds, delete its deferred ephemeral response and let the
   resulting durable Task surface confirm the transition. Keep owner-safe ephemeral
   text for rejected, unauthorized, or stale controls.
-- If Gateway dispatch backlog has already exhausted Discord's acknowledgement window, preserve the
+- Capture the Discord interaction clock at socket ingress, before ordered Gateway dispatch work. If
+  Gateway dispatch backlog has already exhausted Discord's acknowledgement window, preserve the
   authorized owner's exact idempotent control and confirm it through the next durable Task surface
   instead of retiring the click without executing it. Keep malformed, unauthorized, stale, and
   duplicate controls fail-closed or idempotent.

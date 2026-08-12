@@ -354,6 +354,11 @@ class GatewaySupervisor implements DiscordGatewayConnection {
   }
 
   #receiveFrame(data: string | Uint8Array, isBinary: boolean, generation: number): void {
+    // Capture external arrival before ordered dispatch work. A preceding message or
+    // reconciliation callback may occupy the dispatch tail for seconds; component
+    // interactions must retain the real socket-receive clock so the adapter can
+    // choose its late-control recovery path instead of attempting an expired ACK.
+    const receivedAtMs = this.#configuration.scheduler.nowMs();
     if (isBinary) {
       this.#invalidPayload(generation);
       return;
@@ -440,7 +445,7 @@ class GatewaySupervisor implements DiscordGatewayConnection {
           return;
         }
         if (opcode === 0) {
-          await this.#handleDispatch(envelope);
+          await this.#handleDispatch(envelope, receivedAtMs);
         }
       })
       .catch((error: unknown) => {
@@ -520,7 +525,7 @@ class GatewaySupervisor implements DiscordGatewayConnection {
     }
   }
 
-  async #handleDispatch(envelope: Record<string, unknown>): Promise<void> {
+  async #handleDispatch(envelope: Record<string, unknown>, receivedAtMs: number): Promise<void> {
     const sequence = requireSafeInteger(envelope, "s");
     if (sequence < 0) {
       throw invalidGatewayPayload();
@@ -569,7 +574,7 @@ class GatewaySupervisor implements DiscordGatewayConnection {
       sessionId: this.#sessionId,
       resumeGatewayUrl: this.#resumeGatewayUrl,
       sequence,
-      receivedAtMs: this.#configuration.scheduler.nowMs(),
+      receivedAtMs,
     });
     if (dispatch !== undefined) {
       await this.#callbacks.onDispatch(dispatch);

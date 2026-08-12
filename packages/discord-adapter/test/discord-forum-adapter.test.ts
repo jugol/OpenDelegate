@@ -2459,6 +2459,41 @@ test("an already late unacknowledged interaction executes its durable control on
   );
 });
 
+test("an already late approve-once interaction resolves the exact Approval once", async () => {
+  const { adapter, api, tasks, repository, clock } = fixture();
+  const thread = forumThread("300000000000000055");
+  const starter = ownerMessage(thread.id, thread.id, "Approve one protected action");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  clock.value = 4_000;
+  const lateInteraction = interactionDispatch(2, {
+    id: "400000000000000004",
+    token: "expired-approval-interaction-secret",
+    guildId: GUILD_ID,
+    channelId: thread.id,
+    messageId: "900",
+    customId: "od:v1:approve:approval-live-1",
+    author: { id: OWNER_ID, bot: false, roleIds: [] },
+    receivedAtMs: 1_000,
+  });
+
+  await adapter.handleGatewayDispatch(lateInteraction);
+  await adapter.handleGatewayDispatch(lateInteraction);
+
+  const approvals = tasks.calls.filter((call) => call["kind"] === "approval");
+  assert.equal(api.acknowledgedInteractions.has("400000000000000004"), false);
+  assert.equal(approvals.length, 1);
+  assert.equal(approvals[0]?.["approvalId"], "approval-live-1");
+  assert.equal(approvals[0]?.["decision"], "approve");
+  assert.equal(
+    repository
+      .snapshot()
+      .inbound.find((record) => record.key === "discord-interaction:400000000000000004")?.state,
+    "completed",
+  );
+});
+
 test("approve/reject controls use the approval callback and unauthorized controls are inert", async () => {
   const { adapter, api, tasks } = fixture();
   const thread = forumThread("300000000000000061");

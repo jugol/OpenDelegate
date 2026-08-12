@@ -74,7 +74,9 @@ represents a supported release or completed first milestone.
 - Preserved an authorized Discord button decision when Gateway head-of-line delay makes the
   interaction too old for Discord's private acknowledgement. The exact idempotent Task command or
   Approval now still crosses the durable authority boundary once, and the refreshed public Task
-  surface confirms the result instead of silently discarding the owner's click.
+  surface confirms the result instead of silently discarding the owner's click. Gateway records the
+  interaction clock at socket ingress rather than after its ordered dispatch queue drains, so an
+  already-expired acknowledgement cannot be mistaken for a fresh one and dropped on failure.
 - Made a new owner message on a Task in `review` durably queue a fresh execution cycle. Review
   remains dormant across ordinary Main restarts, but an explicit Discord follow-up now reaches the
   Coordinator and can create new owner-cycle-scoped Work Orders instead of merely reprojecting the
@@ -134,12 +136,13 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
-- Kept Windows login and background capability inventory silent: the session-helper and native
-  Computer Use child are packaged without console windows, the login Task is explicitly hidden, and
-  OS capture/permission interaction is deferred until an owner-requested Computer Use Run instead of
-  running during heartbeat probes. Existing installations accept only the exact prior Task manifest
-  missing that one hidden flag during upgrade, then atomically persist and force-refresh the native
-  Task registration before restarting either service plane.
+- Kept Windows login and background capability inventory silent: the session-helper is packaged
+  without a console window, its native Computer Use child is spawned with hidden process creation,
+  the login Task is explicitly hidden, and OS capture/permission interaction is deferred until an
+  owner-requested Computer Use Run instead of running during heartbeat probes. Existing
+  installations accept only the exact prior Task manifest missing that one hidden flag during
+  upgrade, then atomically persist and force-refresh the native Task registration before restarting
+  either service plane.
 - Made the Windows virtual-service Secret vault reboot-stable by using its profile-independent
   DPAPI-NG sealing and service-only ACL through the already trusted native service host instead of
   starting Windows PowerShell inside the background service, with a bounded one-time migration from

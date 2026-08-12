@@ -32,6 +32,18 @@ product behavior from an earlier chat summary or from implementation convenience
   release gate includes macOS, Windows, Linux, and Computer Use support as defined in
   the implementation plan.
 
+## Operator-safe diagnostics
+
+- Keep interactive diagnostic output bounded. Filter at the source and emit at most
+  20 concise records or a short aggregate; never stream an unbounded log, process
+  list, event log, database dump, or recursive search into the desktop client.
+- When more evidence is required, write the full sanitized capture outside the
+  source checkout and show only its path, record count, and the few lines carrying
+  the signal. Redact credentials and private owner data before any display or saved
+  capture.
+- Prefer one narrow query per hypothesis. Check the projected row count or byte size
+  before display, and tighten the query when it can exceed the interactive bound.
+
 ## Product boundary
 
 OpenDelegate owns deterministic orchestration, durable task state, policy

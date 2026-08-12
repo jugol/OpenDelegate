@@ -3179,7 +3179,9 @@ Discord delivery remains idempotent through the existing input event identity.
 ## D-148 — A late Discord interaction preserves the owner's durable control
 
 **Decision:** Main still attempts to defer every Discord Task-control interaction before doing
-thread work. If serialized Gateway delivery has already made that private acknowledgement
+thread work. Gateway timestamps the frame at socket ingress and carries that clock through its
+ordered dispatch lane; dequeue time must never replace external arrival time. If serialized
+Gateway delivery has already made that private acknowledgement
 impossible, Main must not silently retire an otherwise valid owner control. It durably claims the
 interaction, verifies the configured owner or allowed role, validates the current bot-authored
 Task binding and control payload, and executes the exact idempotent Task command or global Approval
@@ -3189,6 +3191,9 @@ behind the Gateway cursor.
 
 **Rationale:** Live Windows Artifact QA repeatedly delivered valid Approval button events 3.5 to
 4.2 seconds after their Discord snowflake timestamps while the Gateway dispatch lane was busy.
+The Gateway originally stamped `receivedAtMs` only after prior dispatch work drained. The adapter
+therefore misclassified an expired interaction as fresh, attempted an acknowledgement Discord
+could no longer accept, and completed the inbound record without reaching the late-control path.
 D-123 correctly prevented an unacknowledged action from executing, but that made the visible button
 discard every owner click and left the Worker permanently waiting. The interaction already carries
 Discord-authenticated identity and an exact, current approval ID; the Task and Approval services
@@ -3199,3 +3204,19 @@ toast, but OpenDelegate no longer loses the owner's intent: the live Task card a
 the result. Unauthorized, malformed, wrong-bot, wrong-thread, stale, and duplicate interactions do
 not gain authority. The normal acknowledged path remains preferred and keeps its private failure
 feedback when Discord's deadline is available.
+
+## D-149 — Persistent Windows helpers own no console surface
+
+**Decision:** The per-user Windows session helper and its native Computer Use child run as hidden
+background processes. The child may create only an explicit Run-scoped OS picker, consent, or
+Owner Handoff surface. Login, reboot, idle health, capability inventory, and ordinary headless work
+must not open a console window or launch provider UI.
+
+**Rationale:** A live Windows Worker left an OpenDelegate terminal visible and could surface a
+capture-related window while no owner interaction was intended. The scheduled Task itself was
+hidden, but its native child was explicitly spawned with `windowsHide: false`, defeating the
+background-service product contract.
+
+**Consequence:** Persistent orchestration stays visually silent while the owner is not actively
+using Computer Use. Security boundaries remain visible when required: OS permission prompts,
+capture selection, login, MFA, and human-only handoffs are not hidden or automated away.

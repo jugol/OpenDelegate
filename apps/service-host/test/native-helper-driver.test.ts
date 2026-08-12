@@ -5,11 +5,19 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
+  createWindowsNativeHelperSpawnOptions,
   createDeferredNativeComputerUseDriver,
   readReleaseOwnedStableJson,
 } from "../src/native-helper-driver.ts";
 
 describe("native Computer Use helper release files", () => {
+  it("starts the Windows native helper without a persistent console window", () => {
+    const options = createWindowsNativeHelperSpawnOptions(String.raw`C:\OpenDelegate\current`);
+
+    assert.equal(options.windowsHide, true);
+    assert.deepEqual(options.stdio, ["ignore", "ignore", "pipe", "pipe"]);
+  });
+
   it("does not launch an interactive native helper until Computer Use is requested", async () => {
     let starts = 0;
     let probes = 0;
