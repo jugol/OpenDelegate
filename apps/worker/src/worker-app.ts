@@ -3992,6 +3992,9 @@ export function createWorkerSchedulingInventoryProvider(input: {
           return Object.freeze({
             provider: schedulingProvider(probe.provider),
             adapterId: probe.adapterId,
+            toolUse: probe.capabilities.approvalBridge
+              ? ("authorized" as const)
+              : ("text-only" as const),
             readiness: adapterReadiness(probe),
             compatibility: probe.compatibility,
             ...(blockedBy === undefined ? {} : { blockedBy }),
@@ -4028,6 +4031,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
           Object.freeze({
             provider: schedulingProvider(adapter.provider),
             adapterId: adapter.adapterId,
+            toolUse: "text-only" as const,
             readiness: "unavailable" as const,
             compatibility: "untested" as const,
             blockedBy: "probe-failed" as const,

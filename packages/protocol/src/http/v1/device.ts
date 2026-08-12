@@ -125,6 +125,7 @@ const DeviceAgentAdapterSchema = Type.Object(
       Type.Literal("generic-command"),
     ]),
     adapterId: OpaqueIdSchema,
+    toolUse: Type.Optional(Type.Union([Type.Literal("authorized"), Type.Literal("text-only")])),
     readiness: Type.Union([
       Type.Literal("ready"),
       Type.Literal("degraded"),

@@ -1125,7 +1125,7 @@ function parseWorkerAgentAdapters(
     assertExactKeys(
       adapter,
       ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-      ["blockedBy", "version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
+      ["toolUse", "blockedBy", "version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
     );
     const provider = readEnum(
       adapter["provider"],
@@ -1176,6 +1176,15 @@ function parseWorkerAgentAdapters(
     return {
       provider,
       adapterId,
+      ...(adapter["toolUse"] === undefined
+        ? {}
+        : {
+            toolUse: readEnum(
+              adapter["toolUse"],
+              ["authorized", "text-only"] as const,
+              "Agent adapter tool-use authority",
+            ),
+          }),
       readiness,
       compatibility: readEnum(
         adapter["compatibility"],

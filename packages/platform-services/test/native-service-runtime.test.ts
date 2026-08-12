@@ -725,6 +725,15 @@ test("Windows provider access skips missing paths and rejects linked roots befor
     ),
     true,
   );
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") &&
+        request.arguments[0] === "C:\\Users\\owner\\.claude" &&
+        request.arguments.includes("/T"),
+    ),
+    false,
+  );
   assert.equal(fileSystem.kinds.get(serviceCodexHome), "directory");
   assert.equal(fileSystem.kinds.get(serviceSandbox), "directory");
   assert.equal(fileSystem.links.get(`${serviceCodexHome}\\auth.json`), undefined);

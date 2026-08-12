@@ -16,6 +16,8 @@ import {
   type WorkerDispatchTargetResolver,
 } from "@opendelegate/task-service";
 
+import { classifyAgentAdapterToolUse } from "./agent-adapter-tool-use.ts";
+
 export interface WorkerCandidateSource {
   list(): Promise<readonly AgentAwareWorkerCandidate[]>;
 }
@@ -25,6 +27,7 @@ export interface AgentAwareWorkerCandidate extends DeviceCandidate {
   readonly agentAdapters?: readonly {
     readonly provider: WorkerAgentRequirementV1["provider"];
     readonly adapterId: string;
+    readonly toolUse?: "authorized" | "text-only";
     readonly readiness: "ready" | "degraded" | "unavailable";
     readonly compatibility: WorkerAgentCompatibilityV1 | "incompatible";
     readonly models: readonly {
@@ -142,8 +145,12 @@ function resolveCandidateAgentSelection(
   }
   const bindings =
     profile.mode === "prefer" ? [profile.primary, ...profile.fallbacks] : [profile.primary];
+  const textOnlyBindingWasExplicitlySelected =
+    profile.mode === "pinned" || hardRequirement?.adapterId !== undefined;
   const selected = bindings.find(
     (binding) =>
+      (textOnlyBindingWasExplicitlySelected ||
+        adapterAllowsAuthorizedToolUse(adapters, binding.provider, binding.adapterId)) &&
       bindingSatisfiesHardRequirement(binding, hardRequirement) &&
       bindingIsAvailable(binding, adapters),
   );
@@ -161,6 +168,7 @@ function selectAutomaticBinding(
       (adapter) =>
         adapter.readiness === "ready" &&
         adapter.compatibility === "tested" &&
+        (hardRequirement?.adapterId !== undefined || adapterToolUse(adapter) === "authorized") &&
         (adapter.provider === "generic" || adapter.models.length > 0) &&
         (hardRequirement === undefined ||
           (adapter.provider === hardRequirement.provider &&
@@ -247,6 +255,23 @@ function providerPriority(provider: WorkerAgentRequirementV1["provider"]): numbe
 
 function adapterPriority(adapterId: string): number {
   return /(?:app-server|agent-sdk)/u.test(adapterId) ? 0 : /cli/u.test(adapterId) ? 1 : 2;
+}
+
+function adapterToolUse(
+  adapter: NonNullable<AgentAwareWorkerCandidate["agentAdapters"]>[number],
+): "authorized" | "text-only" {
+  return adapter.toolUse ?? classifyAgentAdapterToolUse(adapter.provider, adapter.adapterId);
+}
+
+function adapterAllowsAuthorizedToolUse(
+  adapters: NonNullable<AgentAwareWorkerCandidate["agentAdapters"]>,
+  provider: WorkerAgentRequirementV1["provider"],
+  adapterId: string,
+): boolean {
+  const adapter = adapters.find(
+    (candidate) => candidate.provider === provider && candidate.adapterId === adapterId,
+  );
+  return adapter !== undefined && adapterToolUse(adapter) === "authorized";
 }
 
 function toScheduleRequest(

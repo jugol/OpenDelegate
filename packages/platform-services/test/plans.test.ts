@@ -251,9 +251,15 @@ test("Windows lifecycle plans preserve provider ACLs while granting exact servic
       assert.equal(grant.action.principal, "NT SERVICE\\OpenDelegate-personal");
       assert.equal(grant.action.preserveExistingAccess, true);
       assert.equal(grant.action.missingPathPolicy, "skip");
+      assert.equal(grant.action.recursive, input.operation === "install");
       assert.ok(
         plan.steps.indexOf(grant) < plan.steps.findIndex((step) => step.id === "start-core"),
       );
+      if (input.operation === "restart" || input.operation === "upgrade") {
+        assert.ok(
+          plan.steps.indexOf(grant) < plan.steps.findIndex((step) => step.id === "stop-core"),
+        );
+      }
     }
     assert.ok(
       Math.max(...grants.map((grant) => plan.steps.indexOf(grant))) <

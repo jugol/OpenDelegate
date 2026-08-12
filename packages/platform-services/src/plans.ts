@@ -72,7 +72,7 @@ export type PlanAction =
       readonly path: string;
       readonly principal: string;
       readonly permission: "read-execute" | "read-write";
-      readonly recursive: true;
+      readonly recursive: boolean;
       readonly preserveExistingAccess: true;
       readonly missingPathPolicy: "skip";
     }
@@ -344,7 +344,7 @@ function lifecyclePlan(
   const steps =
     operation === "start"
       ? [
-          ...windowsAgentProviderAccessSteps(artifacts.definition.configuration),
+          ...windowsAgentProviderAccessSteps(artifacts.definition.configuration, false),
           ...windowsCodexServiceHomeSteps(artifacts.definition.configuration),
           supervisorStep("start-core", artifacts, "core", "start", "stop"),
           ...(hasSessionHelper(artifacts)
@@ -369,11 +369,14 @@ function restartPlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     "restart",
     artifacts,
     [
+      // Provider homes can contain thousands of files. Repair their additive
+      // service access while the current core is still available so the normal
+      // restart outage is limited to the actual service-plane switch.
+      ...windowsAgentProviderAccessSteps(artifacts.definition.configuration, false),
       ...(hasSessionHelper(artifacts)
         ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
         : []),
       supervisorStep("stop-core", artifacts, "core", "stop", "start"),
-      ...windowsAgentProviderAccessSteps(artifacts.definition.configuration),
       ...windowsCodexServiceHomeSteps(artifacts.definition.configuration),
       supervisorStep("start-core", artifacts, "core", "start", "stop"),
       ...(hasSessionHelper(artifacts)
@@ -512,6 +515,9 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
           ),
         ]
       : []),
+    // This additive ACL repair is intentionally outside the service outage. A
+    // failure leaves the currently healthy release running.
+    ...windowsAgentProviderAccessSteps(definition.configuration, false),
     ...(hasSessionHelper(artifacts)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),
@@ -530,7 +536,6 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         ]
       : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
-    ...windowsAgentProviderAccessSteps(definition.configuration),
     ...windowsCodexServiceHomeSteps(definition.configuration),
     ...(definition.configuration.platform === "windows"
       ? [
@@ -1123,6 +1128,7 @@ function windowsCodexServiceHomeSteps(
 
 function windowsAgentProviderAccessSteps(
   configuration: PlatformServiceConfiguration,
+  recursive = true,
 ): readonly ServicePlanStep[] {
   if (configuration.platform !== "windows") {
     return [];
@@ -1180,7 +1186,7 @@ function windowsAgentProviderAccessSteps(
       path: grant.path,
       principal,
       permission: grant.permission,
-      recursive: true,
+      recursive,
       preserveExistingAccess: true,
       missingPathPolicy: "skip",
     },

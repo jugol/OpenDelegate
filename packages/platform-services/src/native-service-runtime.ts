@@ -389,7 +389,7 @@ function createNativeFilesystemAdapter(
               action.path,
               "/grant:r",
               `${windowsPrincipal(action.principal)}:${windowsPermission(action.permission)}`,
-              "/T",
+              ...(action.recursive ? ["/T"] : []),
               "/L",
               "/Q",
             ],

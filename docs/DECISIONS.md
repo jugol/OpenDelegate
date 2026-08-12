@@ -2935,16 +2935,18 @@ The same service document must bind the exact resolved Codex and Claude home dir
 into both the lifecycle ACL plan and the core runtime's provider-home variables.
 Before install, start, restart, or upgrade starts the core, the elevated lifecycle
 executor preserves every existing ACL entry and grants only the instance service
-identity recursive Modify access to those two homes. It likewise grants that identity
-recursive Read & Execute access to the two bounded launcher directories, when they
-exist. A declared home must be a strict descendant of the verified owner profile or
-the exact provider's managed state root, may not overlap either launcher tree or the
-other provider home, and must remain disjoint from source, bundle, install, authority,
-runtime, log, owner-helper vault, and service-Secret roots. It may not be omitted from
-a persistent Windows service document. Missing owner-managed paths and their Codex
-sandbox child are skipped rather than created; links and special entries fail closed.
-The executor never disables inheritance or resets a provider tree while adding these
-service-specific entries.
+identity inheritable Modify access to those two homes. Initial installation applies
+that grant recursively to existing descendants; later lifecycle operations refresh the
+canonical root without repeatedly walking the entire tree, as refined by D-146. It
+likewise grants that identity inheritable Read & Execute access to the two bounded
+launcher directories, when they exist. A declared home must be a strict descendant of
+the verified owner profile or the exact provider's managed state root, may not overlap
+either launcher tree or the other provider home, and must remain disjoint from source,
+bundle, install, authority, runtime, log, owner-helper vault, and service-Secret roots.
+It may not be omitted from a persistent Windows service document. Missing owner-managed
+paths and their Codex sandbox child are skipped rather than created; links and special
+entries fail closed. The executor never disables inheritance or resets a provider tree
+while adding these service-specific entries.
 
 The sandbox child and its exact parent are canonically revalidated immediately before
 ACL mutation whether the child was pre-existing or newly created. Its `icacls`
@@ -2973,8 +2975,9 @@ Windows user package locations remain discoverable after boot, while provider ho
 authentication, service identity, and approval policy stay unchanged. Existing
 installations have one narrow, auditable migration into the new runtime document.
 The persistent service can read and update the owner's SSOT provider state without
-copying credentials or replacing owner/provider ACLs, and every lifecycle start repairs
-only its own exact access entries if an installer or provider recreated those paths.
+copying credentials or replacing owner/provider ACLs, and every lifecycle start refreshes
+only its own exact inheritable root access entries if an installer or provider recreated
+those paths.
 
 ## D-141 — Windows sandbox owner recovery is bounded and link-local
 
@@ -3109,3 +3112,44 @@ offline despite successful mutual TLS.
 **Consequence:** Exact binding selection remains fail-closed while valid specialization
 survives disconnect and replay. A rejected substitution or compatibility broadening
 still fails before provider execution.
+
+## D-145 — Worker planning distinguishes authorized tool runtimes from text-only fallbacks
+
+**Decision:** Every Worker adapter observation may expose the bounded execution class
+`authorized` or `text-only`. The value comes from the adapter's executable approval-bridge
+capability and contains no provider diagnostic or credential data. Main includes that class in
+its bounded Device planning snapshot. Auto mode and an ordinary Prefer fallback may select only
+an `authorized` adapter; a text-only provider CLI remains available only when an exact Work Order
+adapter requirement or a Pinned Device profile explicitly chooses it.
+
+Provider CLI fallbacks continue to run with every shell, file mutation, Artifact write, package,
+web/network, native child Agent, and Computer Use tool denied. Main never upgrades them to tool
+authority merely because the provider executable itself supports an unattended mode.
+
+**Rationale:** A live Windows Artifact round-trip was dispatched to `claude-cli`. That adapter
+truthfully had no approval bridge, so it emitted prose describing a Bash call without creating the
+file. Deterministic verification rejected completion, but scheduling should have prevented a
+text-only fallback from receiving ordinary outcome work in the first place.
+
+**Consequence:** Default orchestration selects Codex App Server, Claude Agent SDK, or another
+Policy-bridged adapter for work that may need effects. Explicit text-only use remains possible for
+owners who deliberately want it, exact bindings still fail closed, and older Worker observations
+without the new field are conservatively classified from the built-in adapter identity during a
+rolling upgrade.
+
+## D-146 — Routine Windows lifecycle access repair does not recursively walk provider state
+
+**Decision:** Initial Windows service installation recursively grants the exact virtual-service
+identity its declared additive access to existing Codex, Claude, and launcher trees. Later start,
+restart, and upgrade operations revalidate each canonical non-link root and refresh the same
+inheritable root ACE without `/T`. Restart and upgrade perform that repair before stopping the
+healthy core. Service-owned Codex state and its sandbox retain their separate exact-owner repair.
+
+**Rationale:** Real upgrades spent several minutes walking the complete owner `.codex` and
+`.claude` trees while the Worker was already stopped. The installed service document had not
+changed those roots, and the recursive walk dominated both upgrade time and avoidable outage.
+
+**Consequence:** A normal upgrade no longer takes the Worker offline during a full provider-state
+walk and does not repeat that walk on every lifecycle command. New descendants inherit the root
+grant. An explicitly protected descendant still fails at the point the service actually needs it;
+repairing arbitrary provider-owned protected ACLs is not hidden inside every routine restart.

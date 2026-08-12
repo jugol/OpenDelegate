@@ -30,6 +30,8 @@ import {
   type TaskContinuationCheckpointV1,
 } from "@opendelegate/protocol";
 
+import { classifyAgentAdapterToolUse } from "./agent-adapter-tool-use.ts";
+
 interface StoredSessionEvent {
   readonly eventId: string;
   readonly streamVersion: number;
@@ -1276,6 +1278,7 @@ interface PlanningDeviceObservation {
   readonly readyAgentAdapters: readonly {
     readonly provider: string;
     readonly adapterId: string;
+    readonly toolUse: "authorized" | "text-only";
   }[];
   readonly workerAgentProfile?: DeviceSummaryV1["agentExecutionProfile"];
   readonly wakeOnLan?: {
@@ -1349,6 +1352,8 @@ function projectPlanningDeviceContext(
             Object.freeze({
               provider: adapter.provider,
               adapterId: adapter.adapterId,
+              toolUse:
+                adapter.toolUse ?? classifyAgentAdapterToolUse(adapter.provider, adapter.adapterId),
             }),
           ),
       ),
@@ -1392,6 +1397,7 @@ function planningContextInstructions(
   return Object.freeze([
     "The following JSON is a current, bounded, Main-owned, owner-safe Device snapshot for planning target preferences. Only verified capability names are included:",
     "Workspace IDs are opaque registered execution roots. Set workspaceId when an outcome requires a specific Workspace. When a Device has exactly one registered Workspace, OpenDelegate can select that singleton deterministically if workspaceId is omitted; multiple Workspaces require an explicit choice.",
+    'Each readyAgentAdapters entry declares toolUse. "authorized" means its tool calls pass through OpenDelegate Policy; "text-only" means every shell, file mutation, Artifact write, package install, web/network, native child Agent, and Computer Use tool is denied. Never pin a text-only adapter for work that needs any of those effects. Omit requiredAgent when provider or model choice does not change the outcome.',
     "For an offline Worker, wakeOnLan is its last authenticated target observation. relay-required means the target reported magic-packet wake enabled, but OpenDelegate has no verified online relay and must not claim that it can wake the Device.",
     JSON.stringify({ schemaVersion: 1, devices }),
   ]);

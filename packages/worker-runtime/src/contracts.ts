@@ -157,6 +157,8 @@ export type WorkerAgentAdapterBlockerV1 =
 export interface WorkerSchedulingAgentAdapterV1 {
   readonly provider: "codex" | "claude" | "generic-command";
   readonly adapterId: string;
+  /** Whether this adapter can route tool calls through executable Policy. */
+  readonly toolUse?: "authorized" | "text-only";
   readonly readiness: "ready" | "degraded" | "unavailable";
   readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
   readonly blockedBy?: WorkerAgentAdapterBlockerV1;

@@ -246,7 +246,7 @@ test("a Device profile resolves one exact adapter and model into the dispatch ta
   });
 });
 
-test("a Prefer profile falls back in declared order when its primary binding is unavailable", async () => {
+test("a Prefer profile skips tool-less CLI fallbacks during ordinary automatic dispatch", async () => {
   const resolver = new DeterministicWorkerTargetResolver({
     candidates: source([
       {
@@ -267,7 +267,7 @@ test("a Prefer profile falls back in declared order when its primary binding is 
             },
             {
               provider: "claude",
-              adapterId: "claude-cli",
+              adapterId: "claude-agent-sdk",
               modelId: "claude-fallback",
             },
           ],
@@ -289,7 +289,7 @@ test("a Prefer profile falls back in declared order when its primary binding is 
           },
           {
             provider: "claude",
-            adapterId: "claude-cli",
+            adapterId: "claude-agent-sdk",
             readiness: "ready",
             compatibility: "tested",
             models: [{ modelId: "claude-fallback", isDefault: true }],
@@ -307,11 +307,92 @@ test("a Prefer profile falls back in declared order when its primary binding is 
   });
 
   assert.deepEqual(selected.agentRequirement, {
-    provider: "codex",
-    adapterId: "codex-cli",
-    modelId: "gpt-fallback",
+    provider: "claude",
+    adapterId: "claude-agent-sdk",
+    modelId: "claude-fallback",
     allowedCompatibilities: ["tested"],
   });
+});
+
+test("a Prefer profile fails closed when only implicit tool-less fallbacks remain", async () => {
+  const resolver = new DeterministicWorkerTargetResolver({
+    candidates: source([
+      {
+        ...candidate("device-text-only"),
+        agentExecutionProfile: {
+          schemaVersion: 1,
+          mode: "prefer",
+          primary: { provider: "codex", adapterId: "codex-app-server", modelId: "gpt" },
+          fallbacks: [{ provider: "claude", adapterId: "claude-cli", modelId: "opus" }],
+        },
+        agentAdapters: [
+          {
+            provider: "codex",
+            adapterId: "codex-app-server",
+            readiness: "degraded",
+            compatibility: "tested",
+            models: [{ modelId: "gpt", isDefault: true }],
+          },
+          {
+            provider: "claude",
+            adapterId: "claude-cli",
+            readiness: "ready",
+            compatibility: "tested",
+            models: [{ modelId: "opus", isDefault: true }],
+          },
+        ],
+      },
+    ]),
+  });
+
+  await assert.rejects(
+    resolver.resolve({
+      task: task(),
+      workOrder: workOrder(),
+      previousRuns: [],
+      signal: new AbortController().signal,
+    }),
+    { code: "AGENT_BINDING_UNAVAILABLE", retryable: true },
+  );
+});
+
+test("an explicit Work Order may still select a text-only CLI adapter", async () => {
+  const resolver = new DeterministicWorkerTargetResolver({
+    candidates: source([
+      {
+        ...candidate("device-explicit-cli", {
+          capabilities: [{ name: "claude-code", verification: "verified" }],
+        }),
+        agentExecutionProfile: { schemaVersion: 1, mode: "auto" },
+        agentAdapters: [
+          {
+            provider: "claude",
+            adapterId: "claude-cli",
+            readiness: "ready",
+            compatibility: "tested",
+            models: [{ modelId: "opus", isDefault: true }],
+          },
+        ],
+      },
+    ]),
+  });
+
+  const selected = await resolver.resolve({
+    task: task(),
+    workOrder: {
+      ...workOrder(),
+      requiredCapabilities: [],
+      requiredAgent: {
+        provider: "claude",
+        adapterId: "claude-cli",
+        modelId: "opus",
+      },
+    },
+    previousRuns: [],
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(selected.agentRequirement?.adapterId, "claude-cli");
 });
 
 test("a Pinned profile fails closed when it conflicts with a Work Order hard requirement", async () => {

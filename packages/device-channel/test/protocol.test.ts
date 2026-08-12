@@ -94,6 +94,7 @@ const heartbeat = {
         {
           provider: "codex",
           adapterId: "codex-cli",
+          toolUse: "text-only",
           readiness: "ready",
           compatibility: "tested",
           version: "1.2.3",

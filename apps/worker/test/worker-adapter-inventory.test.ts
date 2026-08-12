@@ -304,6 +304,13 @@ describe("Worker agent adapter inventory", () => {
 
     const snapshot = await inventory.snapshot();
     assert.deepEqual(
+      snapshot.agentAdapters?.map((adapter) => [adapter.adapterId, adapter.toolUse]),
+      [
+        ["claude-agent-sdk", "authorized"],
+        ["claude-cli", "text-only"],
+      ],
+    );
+    assert.deepEqual(
       snapshot.capabilities.find((capability) => capability.name === "native-subagents"),
       {
         name: "native-subagents",

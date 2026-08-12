@@ -71,6 +71,14 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Projected each ready Worker adapter's executable tool-authority class into Main planning and
+  prevented Auto or Prefer dispatch from silently falling through to a tool-less provider CLI. File,
+  shell, Artifact, network, native-child-Agent, package, and Computer Use work now stays on an
+  adapter with an OpenDelegate Policy callback unless the owner explicitly pins a text-only adapter.
+- Kept Windows provider-home access repair ahead of restart/upgrade downtime and limited routine
+  lifecycle repair to the canonical provider roots. Initial installation remains recursive, while
+  subsequent starts, restarts, and upgrades refresh inheritable access without rewalking entire
+  Codex and Claude state trees.
 - Allowed an immutable Run assignment to add the exact adapter model or effort selected by Main
   while still proving that every Work Order Agent constraint is preserved and its compatibility
   allowance is only narrowed. This prevents a valid resolved binding from poisoning durable Worker

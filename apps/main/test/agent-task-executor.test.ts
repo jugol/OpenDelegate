@@ -907,6 +907,24 @@ test("Main planning exposes only verified capabilities and never Device instruct
             { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
             { name: "DEGRADED_CAPABILITY_SENTINEL", verification: "degraded" },
           ],
+          agentAdapters: [
+            {
+              provider: "codex",
+              adapterId: "codex-app-server",
+              readiness: "ready",
+              compatibility: "tested",
+              observedAtMs: 9_900,
+              models: [],
+            },
+            {
+              provider: "claude",
+              adapterId: "claude-cli",
+              readiness: "ready",
+              compatibility: "tested",
+              observedAtMs: 9_900,
+              models: [],
+            },
+          ],
           workspaceIds: ["workspace-build"],
           wakeOnLan: {
             targetState: "enabled",
@@ -931,6 +949,9 @@ test("Main planning exposes only verified capabilities and never Device instruct
   const prompt = adapter.starts[0]?.prompt ?? "";
   assert.match(prompt, /"capabilities":\["codex"\]/u);
   assert.match(prompt, /"workspaceIds":\["workspace-build"\]/u);
+  assert.match(prompt, /"adapterId":"codex-app-server","toolUse":"authorized"/u);
+  assert.match(prompt, /"adapterId":"claude-cli","toolUse":"text-only"/u);
+  assert.match(prompt, /Never pin a text-only adapter for work that needs any of those effects/u);
   assert.match(prompt, /multiple Workspaces require an explicit choice/u);
   assert.match(
     prompt,
