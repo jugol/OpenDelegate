@@ -71,6 +71,10 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Made a new owner message on a Task in `review` durably queue a fresh execution cycle. Review
+  remains dormant across ordinary Main restarts, but an explicit Discord follow-up now reaches the
+  Coordinator and can create new owner-cycle-scoped Work Orders instead of merely reprojecting the
+  old review card.
 - Projected each ready Worker adapter's executable tool-authority class into Main planning and
   prevented Auto or Prefer dispatch from silently falling through to a tool-less provider CLI. File,
   shell, Artifact, network, native-child-Agent, package, and Computer Use work now stays on an

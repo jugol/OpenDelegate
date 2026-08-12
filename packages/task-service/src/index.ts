@@ -707,7 +707,11 @@ function applyInputAppended(task: Task): void {
       task.reopen();
       return;
     }
-    if (task.state === "waiting_user" || task.state === "waiting_resource") {
+    if (
+      task.state === "waiting_user" ||
+      task.state === "waiting_resource" ||
+      task.state === "review"
+    ) {
       task.transitionTo("queued");
     }
   } catch (error) {

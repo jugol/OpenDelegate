@@ -3153,3 +3153,22 @@ changed those roots, and the recursive walk dominated both upgrade time and avoi
 walk and does not repeat that walk on every lifecycle command. New descendants inherit the root
 grant. An explicitly protected descendant still fails at the point the service actually needs it;
 repairing arbitrary provider-owned protected ACLs is not hidden inside every routine restart.
+
+## D-147 — Owner input advances a reviewed Task into a new execution cycle
+
+**Decision:** Appending a new owner message to an Auto Task in `review` durably transitions the
+Task to `queued` and schedules a new Coordinator execution cycle. Merely restarting Main does not
+make a reviewed Task executable; the transition occurs only as part of the accepted owner-input
+event. The new cycle retains the Task conversation and native-session lineage while D-103 gives
+any newly planned Work Orders a distinct owner-cycle-scoped identity.
+
+**Rationale:** Live Discord Artifact QA accepted and persisted an explicit instruction to rerun a
+reviewed Task with a corrected Worker adapter, then only reprojected the existing Review surface.
+The Task service left `review` unchanged, and the execution coordinator correctly refused to run a
+dormant review state. As a result, the owner-visible acknowledgement did not correspond to any new
+Agent turn or Work Order.
+
+**Consequence:** A review follow-up behaves like the long-lived Task continuation promised by the
+product specification and can plan additional work without losing context. Review remains stable
+while the owner is silent, restart reconciliation cannot create unsolicited work, and duplicate
+Discord delivery remains idempotent through the existing input event identity.
