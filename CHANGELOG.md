@@ -114,6 +114,13 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
+- Kept Windows login and background capability inventory silent: the session-helper and native
+  Computer Use child are packaged without console windows, and OS capture/permission interaction is
+  deferred until an owner-requested Computer Use Run instead of running during heartbeat probes.
+- Made the Windows virtual-service Secret vault reboot-stable by using its profile-independent
+  DPAPI-NG sealing and service-only ACL, with a bounded one-time migration from legacy CurrentUser
+  DPAPI records when that older profile is available.
+
 - Distinguished the Worker Agent's pre-promotion report from deterministic post-turn Artifact
   evidence, so a successfully promoted file can complete its Task and be presented by Discord
   instead of waiting for the Worker to observe a boundary that deliberately runs after its turn.

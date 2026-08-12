@@ -39,6 +39,77 @@ const SESSION = Object.freeze({
 });
 
 describe("Worker Computer Use capability composition", () => {
+  it("keeps scheduling inventory non-interactive while proving an authenticated helper", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-passive-computer-use-"));
+    const sourceCheckoutRoot = join(root, "source");
+    const paths = resolveWorkerPaths({ sourceCheckoutRoot, home: join(root, "runtime") });
+    await mkdir(sourceCheckoutRoot, { recursive: true });
+    await mkdir(paths.stateDirectory, { recursive: true });
+    const hostOsFamily =
+      platform() === "win32" ? "windows" : platform() === "darwin" ? "macos" : "linux";
+    let interactiveProbeCalls = 0;
+    const composition = await createWorkerComputerUseRuntime({
+      configuration: { deviceId: "device-passive-helper" } as WorkerConfigurationDocument,
+      paths,
+      actionChannel: {},
+      broker: undefined as never,
+      toolServerLaunch: { command: process.execPath, argsPrefix: [] },
+      runtime: {
+        async acquire() {
+          return {
+            driver: {
+              osFamily: hostOsFamily,
+              async probe() {
+                interactiveProbeCalls += 1;
+                throw new Error("background inventory must not invoke the interactive driver");
+              },
+              async observe() {
+                throw new Error("not used");
+              },
+              async capture() {
+                throw new Error("not used");
+              },
+              async act() {
+                throw new Error("not used");
+              },
+              async cancel() {},
+              async emergencyStop() {},
+            },
+            authority: {
+              async verify() {
+                throw new Error("background inventory must not request active desktop authority");
+              },
+            },
+            binding: {
+              helperInstanceId: "helper-passive",
+              serviceEpoch: 7,
+              persistenceGeneration: 9,
+            },
+            async release() {},
+          };
+        },
+      },
+    });
+    assert.ok(composition);
+    try {
+      assert.deepEqual(await composition.probe.probe(), { verification: "verified" });
+      assert.equal(interactiveProbeCalls, 0);
+      assert.deepEqual(composition.healthSnapshot(), {
+        daemon: "healthy",
+        session: "ready",
+        desktop: "unavailable",
+        permissions: {
+          accessibility: "unknown",
+          input: "unknown",
+          screenCapture: "unknown",
+        },
+      });
+    } finally {
+      await composition.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("projects authenticated helper checks into the Worker heartbeat readiness", () => {
     assert.deepEqual(projectComputerUseReadiness(readinessReport()), {
       daemon: "healthy",
@@ -135,7 +206,7 @@ describe("Worker Computer Use capability composition", () => {
     );
   });
 
-  it("publishes live helper readiness through the externally visible Worker heartbeat", async () => {
+  it("publishes authenticated helper presence without probing the interactive desktop", async () => {
     const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-computer-use-heartbeat-"));
     const sourceCheckoutRoot = join(root, "source");
     const paths = resolveWorkerPaths({
@@ -144,27 +215,14 @@ describe("Worker Computer Use capability composition", () => {
     });
     await mkdir(sourceCheckoutRoot, { recursive: true });
     await mkdir(paths.stateDirectory, { recursive: true });
-    let checks = readinessReport().checks.slice(0, -1);
-    let driverUnavailable = false;
+    let interactiveProbeCalls = 0;
     const hostOsFamily =
       platform() === "win32" ? "windows" : platform() === "darwin" ? "macos" : "linux";
     const driver: NativeComputerUseDriver = {
       osFamily: hostOsFamily,
       async probe() {
-        if (driverUnavailable) {
-          throw new Error("helper stopped");
-        }
-        return {
-          osFamily: hostOsFamily,
-          backendId: `${hostOsFamily}-test-helper`,
-          helperInstanceId: "helper-live-1",
-          serviceEpoch: 19,
-          displayFingerprint: "desktop:1",
-          ...(hostOsFamily === "linux"
-            ? { linuxTarget: "ubuntu-24.04-gnome-wayland" as const }
-            : {}),
-          checks,
-        };
+        interactiveProbeCalls += 1;
+        throw new Error("heartbeat inventory must remain non-interactive");
       },
       async observe() {
         throw new Error("not used");
@@ -241,29 +299,6 @@ describe("Worker Computer Use capability composition", () => {
       assert.deepEqual((await runtime.heartbeat()).readiness, {
         daemon: "healthy",
         session: "ready",
-        desktop: "available",
-        permissions: {
-          accessibility: "granted",
-          input: "granted",
-          screenCapture: "granted",
-        },
-      });
-
-      checks = [
-        check("interactive-session"),
-        check("unlocked-session", "fail"),
-        check("screen-capture"),
-        check("accessibility"),
-        check("input"),
-        check("helper-authentication"),
-      ];
-      assert.equal((await runtime.heartbeat()).readiness.session, "locked");
-      assert.equal((await runtime.heartbeat()).readiness.desktop, "locked");
-
-      driverUnavailable = true;
-      assert.deepEqual((await runtime.heartbeat()).readiness, {
-        daemon: "healthy",
-        session: "unavailable",
         desktop: "unavailable",
         permissions: {
           accessibility: "unknown",
@@ -271,6 +306,8 @@ describe("Worker Computer Use capability composition", () => {
           screenCapture: "unknown",
         },
       });
+      await runtime.heartbeat();
+      assert.equal(interactiveProbeCalls, 0);
     } finally {
       await runtime.close();
       await composition.close();

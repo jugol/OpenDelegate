@@ -134,6 +134,7 @@ export interface WindowsServiceDpapiSecretHandoffConfig {
   readonly handoffRoot: string;
   readonly hostPlatform?: NodeJS.Platform;
   readonly maximumSecretBytes?: number;
+  readonly expectedIdentitySid?: string;
   readonly powershellPath?: string;
   readonly runner?: NativeSecretCommandRunner;
   readonly serviceSid: string;

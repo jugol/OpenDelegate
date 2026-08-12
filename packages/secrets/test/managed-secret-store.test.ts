@@ -355,6 +355,8 @@ class HostileDpapiRunner implements NativeSecretCommandRunner {
 
 class WindowsServiceDpapiFixtureRunner implements NativeSecretCommandRunner {
   public readonly requests: NativeSecretCommandRequest[] = [];
+  public currentUserDpapiAvailable = true;
+  public serviceDpapiNgUnprotectAvailable = true;
   public serviceDpapiUnprotectAvailable = true;
   public serviceIdentityAvailable = true;
   /** 1 seals to the service SID, 2 is the workgroup machine fallback. */
@@ -390,7 +392,9 @@ class WindowsServiceDpapiFixtureRunner implements NativeSecretCommandRunner {
       };
     }
     if (script.includes("OpenDelegate Windows service DPAPI-NG unprotect v1")) {
-      return { exitCode: 0, stdout: Buffer.from(this.#plaintext) };
+      return this.serviceDpapiNgUnprotectAvailable
+        ? { exitCode: 0, stdout: Buffer.from(this.#plaintext) }
+        : { exitCode: 52, stdout: Buffer.alloc(0) };
     }
     if (script.includes("DirectorySecurity")) {
       return {
@@ -399,10 +403,14 @@ class WindowsServiceDpapiFixtureRunner implements NativeSecretCommandRunner {
       };
     }
     if (script.includes("OpenDelegate DPAPI probe")) {
-      return { exitCode: 0, stdout: Buffer.from("ready") };
+      return this.currentUserDpapiAvailable
+        ? { exitCode: 0, stdout: Buffer.from("ready") }
+        : { exitCode: 52, stdout: Buffer.alloc(0) };
     }
     if (script.includes("ProtectedData]::Protect")) {
-      return { exitCode: 0, stdout: Buffer.from("sealed-service-dpapi-record") };
+      return this.currentUserDpapiAvailable
+        ? { exitCode: 0, stdout: Buffer.from("sealed-service-dpapi-record") }
+        : { exitCode: 52, stdout: Buffer.alloc(0) };
     }
     if (script.includes("ProtectedData]::Unprotect")) {
       return this.serviceDpapiUnprotectAvailable
@@ -843,7 +851,44 @@ test("a workgroup host seals to the machine and says so, and the blob still open
   }
 });
 
-test("a Windows service handoff moves a Secret into service-identity CurrentUser DPAPI", async () => {
+test("the Windows service vault survives restart without a loaded CurrentUser profile", async () => {
+  const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-profileless-");
+  const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
+  const alias = "identity-p256.profileless-service-key";
+  const secret = Buffer.from("profile-independent-service-secret", "utf8");
+  const runner = new WindowsServiceDpapiFixtureRunner(secret);
+  const configuration = {
+    deviceId: "device-windows-profileless-service",
+    handoffRoot: join(fixtureRoot, "handoff"),
+    hostPlatform: "win32" as const,
+    powershellPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    runner,
+    serviceSid,
+    sourceCheckoutRoot: join(fixtureRoot, "checkout"),
+    vaultRoot: join(fixtureRoot, "service"),
+  };
+  const handoff = new WindowsServiceDpapiSecretHandoff(configuration);
+
+  try {
+    await handoff.stage(alias, secret);
+    runner.currentUserDpapiAvailable = false;
+    const first = new WindowsServiceDpapiSecretStore(configuration);
+    assert.deepEqual(await first.availability(alias), { alias, ready: true });
+    await first.executeWithSecretBytes(alias, (value) => assert.deepEqual(value, secret));
+
+    const restarted = new WindowsServiceDpapiSecretStore(configuration);
+    assert.deepEqual(await restarted.availability(alias), { alias, ready: true });
+    await restarted.executeWithSecretBytes(alias, (value) => assert.deepEqual(value, secret));
+    assert.equal(
+      runner.requests.some((request) => request.args.at(-1)?.includes("OpenDelegate DPAPI probe")),
+      false,
+    );
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
+});
+
+test("a Windows service handoff moves a Secret into its profile-independent DPAPI-NG vault", async () => {
   const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-dpapi-");
   const sourceCheckoutRoot = join(fixtureRoot, "checkout");
   const ownerVaultRoot = join(fixtureRoot, "owner-secrets");
@@ -933,7 +978,7 @@ test("a Windows service handoff moves a Secret into service-identity CurrentUser
   }
 });
 
-test("a restarted Windows service keeps its CurrentUser DPAPI record over a stale handoff", async () => {
+test("a restarted Windows service keeps its DPAPI-NG vault record over a stale handoff", async () => {
   const fixtureRoot = await canonicalTemporaryDirectory("opendelegate-service-dpapi-restart-");
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
   const alias = "identity-p256.service-restart-key";
@@ -962,6 +1007,10 @@ test("a restarted Windows service keeps its CurrentUser DPAPI record over a stal
       runner.requests.some((request) =>
         request.args.at(-1)?.includes("OpenDelegate Windows service DPAPI-NG unprotect v1"),
       ),
+      true,
+    );
+    assert.equal(
+      runner.requests.some((request) => request.args.at(-1)?.includes("OpenDelegate DPAPI probe")),
       false,
     );
   } finally {
@@ -990,6 +1039,8 @@ test("a corrupt service DPAPI destination fails closed without deleting its reco
   try {
     await handoff.stage(alias, secret);
     await new WindowsServiceDpapiSecretStore(configuration).store(alias, secret);
+    runner.serviceDpapiNgUnprotectAvailable = false;
+    runner.currentUserDpapiAvailable = false;
     runner.serviceDpapiUnprotectAvailable = false;
     const restarted = new WindowsServiceDpapiSecretStore(configuration);
 

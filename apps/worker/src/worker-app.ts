@@ -46,7 +46,6 @@ import {
   ComputerUseOsBackend,
   type ComputerUseReadinessReport,
   type DesktopAuthorityPort,
-  type DesktopLeasePort,
   type NativeComputerUseDriver,
   type ReadinessCheckName,
   type ReadinessCheckStatus,
@@ -1449,29 +1448,14 @@ export async function createWorkerComputerUseRuntime(input: {
               latestReadiness = unavailableComputerUseReadiness();
               return Object.freeze({ verification: "unavailable" as const });
             }
-            const readinessBackend = new ComputerUseOsBackend({
-              osFamily: hostOsFamily,
-              driver: runtimeLease.driver,
-              authority: runtimeLease.authority,
-              leases: readinessOnlyDesktopLeasePort(),
-              startHistory,
-              authorizer: readinessOnlyComputerUseAuthorizer(),
-              clock: { now: () => Date.now() },
-              logger: { write() {} },
-            });
-            const report = await readinessBackend.readiness({
-              deviceId: input.configuration.deviceId,
-              ...runtimeLease.binding,
-            });
-            latestReadiness = projectComputerUseReadiness(report);
-            return Object.freeze({
-              verification:
-                report.status === "ready" && report.checks.every((check) => check.status === "pass")
-                  ? ("verified" as const)
-                  : report.checks.some((check) => check.status === "pass")
-                    ? ("degraded" as const)
-                    : ("unavailable" as const),
-            });
+            // Scheduling inventory is a background operation. The mutually
+            // authenticated live helper proves that this Device can accept a
+            // Computer Use Work Order; invoking the native driver here can open
+            // an OS permission or capture picker without an owner-requested Run.
+            // Exact desktop and permission readiness is checked when the Run
+            // acquires its exclusive desktop-session lease.
+            latestReadiness = connectedComputerUseReadiness();
+            return Object.freeze({ verification: "verified" as const });
           } catch (error) {
             latestReadiness = unavailableComputerUseReadiness();
             throw error;
@@ -1554,6 +1538,19 @@ function unavailableComputerUseReadiness(): WorkerRuntimeReadiness {
   });
 }
 
+function connectedComputerUseReadiness(): WorkerRuntimeReadiness {
+  return Object.freeze({
+    daemon: "healthy",
+    session: "ready",
+    desktop: "unavailable",
+    permissions: Object.freeze({
+      accessibility: "unknown",
+      input: "unknown",
+      screenCapture: "unknown",
+    }),
+  });
+}
+
 async function acquireComputerUseRuntimeLease(
   port: WorkerComputerUseRuntimePort,
   hostOsFamily: "linux" | "macos" | "windows",
@@ -1584,37 +1581,6 @@ async function acquireComputerUseRuntimeLease(
       "The authenticated Computer Use helper returned an invalid runtime lease.",
     );
   }
-}
-
-function readinessOnlyDesktopLeasePort(): DesktopLeasePort {
-  return Object.freeze({
-    async verify() {
-      return {
-        status: "unavailable" as const,
-        reason: "No Run-scoped desktop lease is available during readiness probing.",
-        verifiedAtMs: Date.now(),
-      };
-    },
-  });
-}
-
-function readinessOnlyComputerUseAuthorizer() {
-  return Object.freeze({
-    authorize(request: {
-      readonly authorizationRequestId: string;
-      readonly fingerprint: `sha256:${string}`;
-    }) {
-      return {
-        decision: "deny" as const,
-        authorizationId: `readiness-only:${request.authorizationRequestId}`,
-        fingerprint: request.fingerprint,
-        reason: "Readiness probing cannot authorize native input.",
-      };
-    },
-    consume() {
-      throw new Error("Readiness probing cannot consume native input authority.");
-    },
-  });
 }
 
 function unavailableComputerUseCapabilityProvider(): WorkerRunCapabilityProvider {

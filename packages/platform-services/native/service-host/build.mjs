@@ -5,6 +5,12 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import {
+  WINDOWS_CUI_SUBSYSTEM,
+  WINDOWS_GUI_SUBSYSTEM,
+  setWindowsPeSubsystem,
+} from "../../../../tooling/windows-pe-subsystem.mjs";
+
 const execFileAsync = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const checkoutDirectory = resolve(scriptDirectory, "..", "..", "..", "..");
@@ -54,6 +60,10 @@ export async function buildNativeServiceHosts(options = {}) {
     coreExecutable = join(directory, "opendelegate-service-host.exe");
     helperExecutable = join(directory, "opendelegate-session-helper.exe");
     await copyFile(coreExecutable, helperExecutable);
+    await setWindowsPeSubsystem(helperExecutable, {
+      expected: WINDOWS_CUI_SUBSYSTEM,
+      subsystem: WINDOWS_GUI_SUBSYSTEM,
+    });
   } else {
     const directory = join(outputRoot, "Release", architecture);
     await mkdir(directory, { recursive: true, mode: 0o755 });

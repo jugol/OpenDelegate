@@ -3043,3 +3043,34 @@ Windows sandbox ACLs. The owner authenticates once, service runs observe the sam
 credential file, and provider sessions or helper binaries are not copied into the
 owner's interactive runtime. One finite runtime-document migration and one narrowly
 validated credential link are added to Windows lifecycle preparation.
+
+## D-143 — Background desktop discovery never opens an owner-interaction surface
+
+**Decision:** A live, mutually authenticated user-session helper is sufficient to
+advertise the Device's Computer Use capability to scheduling inventory. Background
+inventory, heartbeats, service startup, and helper reconnects must not start an
+interactive native desktop driver, open a capture picker, request an OS permission,
+or create a console window. Exact desktop, permission, capture-target, and input
+readiness is evaluated only after an owner-requested Computer Use Run acquires its
+exclusive `desktop-session` lease.
+
+On Windows, the scheduled session-helper launcher and its Computer Use native child
+are packaged as GUI-subsystem executables while retaining explicit redirected logs.
+The SCM core launcher remains a console-subsystem executable because it never enters
+the interactive desktop. Windows service Secrets are persisted in the existing
+DPAPI-NG service vault with its service-only ACL rather than depending on a loaded
+virtual-account `CurrentUser` profile; the legacy CurrentUser record is accepted only
+as a one-time, exact in-service migration source.
+
+**Rationale:** Live reboot testing showed three coupled user-facing failures: Task
+Scheduler opened a permanent Windows Terminal for the session helper, capability
+inventory repeatedly opened `GraphicsCapturePicker`, and the core could not restart
+when the virtual service account's CurrentUser profile was not loaded. None of those
+actions was initiated by an owner Computer Use request, and the last one violated
+the always-on requirement.
+
+**Consequence:** Login and reboot recovery remain quiet, a Device stays schedulable
+without claiming that its desktop is already authorized, and the first actual
+Computer Use Run may still surface the required owner interaction. Service Secrets
+remain encrypted at rest and reboot-stable on workgroup hosts under D-073's declared
+machine-sealing fallback and restrictive service-vault ACL.
