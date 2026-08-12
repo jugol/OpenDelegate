@@ -96,6 +96,7 @@ class FakeTaskPort implements DiscordTaskPort {
 class FakeDiscordApi implements DiscordApiPort {
   public online = true;
   public reconciliationError: DiscordApiError | undefined;
+  public deferInteractionError: DiscordApiError | undefined;
   public editDeferredError: DiscordApiError | undefined;
   public probe: DiscordInstallationProbe = {
     applicationId: "100000000000000006",
@@ -321,6 +322,9 @@ class FakeDiscordApi implements DiscordApiPort {
     ephemeral: boolean;
   }): Promise<{ responseRef: string }> {
     this.#assertOnline();
+    if (this.deferInteractionError !== undefined) {
+      throw this.deferInteractionError;
+    }
     if (this.acknowledgedInteractions.has(input.interactionId)) {
       throw new DiscordApiError("NOT_FOUND", "Discord already acknowledged this interaction.");
     }
@@ -2490,6 +2494,41 @@ test("an already late approve-once interaction resolves the exact Approval once"
     repository
       .snapshot()
       .inbound.find((record) => record.key === "discord-interaction:400000000000000004")?.state,
+    "completed",
+  );
+});
+
+test("a failed interaction acknowledgement still resolves the exact Approval once", async () => {
+  const { adapter, api, tasks, repository } = fixture();
+  const thread = forumThread("300000000000000067");
+  const starter = ownerMessage(thread.id, thread.id, "Approve despite a failed acknowledgement");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  api.deferInteractionError = new DiscordApiError("OFFLINE", "Acknowledgement unavailable.");
+  const interaction = interactionDispatch(2, {
+    id: "400000000000000017",
+    token: "failed-approval-interaction-secret",
+    guildId: GUILD_ID,
+    channelId: thread.id,
+    messageId: "900",
+    customId: "od:v1:approve:approval-live-1",
+    author: { id: OWNER_ID, bot: false, roleIds: [] },
+    receivedAtMs: 1_000,
+  });
+
+  await adapter.handleGatewayDispatch(interaction);
+  await adapter.handleGatewayDispatch(interaction);
+
+  const approvals = tasks.calls.filter((call) => call["kind"] === "approval");
+  assert.equal(api.acknowledgedInteractions.has("400000000000000017"), false);
+  assert.equal(approvals.length, 1);
+  assert.equal(approvals[0]?.["approvalId"], "approval-live-1");
+  assert.equal(approvals[0]?.["decision"], "approve");
+  assert.equal(
+    repository
+      .snapshot()
+      .inbound.find((record) => record.key === "discord-interaction:400000000000000017")?.state,
     "completed",
   );
 });

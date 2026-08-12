@@ -991,7 +991,14 @@ export class DiscordForumAdapter {
           interactionId: interaction.id,
           error: errorText(deferred.error),
         });
+        const applied = await this.#handleUnacknowledgedInteraction(interaction, key);
         await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
+        if (applied) {
+          this.#recordDiagnostic("discord.interaction_applied_without_ack", {
+            interactionId: interaction.id,
+            latencyMs: acknowledgementLatencyMs,
+          });
+        }
         return;
       }
       record = await this.#repository.acknowledgeInbound({
