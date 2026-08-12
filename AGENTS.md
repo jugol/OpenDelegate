@@ -14,6 +14,22 @@ order:
 These documents are the canonical source of truth. Do not infer a conflicting
 product behavior from an earlier chat summary or from implementation convenience.
 
+### Runtime delegation fast path
+
+The required-context preflight above applies to planning, implementing, reviewing,
+or diagnosing OpenDelegate source and product behavior. It does not apply merely
+because an ordinary owner-assigned runtime Task happens to use the OpenDelegate
+repository as its registered Workspace.
+
+- For file authoring, Artifact creation, builds, reports, or other explicitly scoped
+  runtime work, read only the files needed to perform that Task. Do not inventory or
+  read the canonical planning documents, research corpus, repository history, or
+  unrelated source before starting.
+- Do not run repository-wide tests, status surveys, or documentation audits for a
+  runtime Task unless its requested outcome actually changes or reviews source.
+- If the Task does ask to modify, review, or diagnose OpenDelegate itself, follow the
+  full required-context preflight before making that source change.
+
 ## Change discipline
 
 - The owner approved the specification and authorized implementation on 2026-07-24.
