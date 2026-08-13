@@ -378,6 +378,39 @@ test("programmatic adapters receive the exact-action bridge and a writable sandb
   assert.throws(() => resolveWorkerAgentPermissions({ approvalBridge: true }), WorkerAppError);
 });
 
+test("workspace file-authoring Runs decline unnecessary sandbox escalation locally", async () => {
+  let forwarded = 0;
+  const permissions = resolveWorkerAgentPermissions(
+    { approvalBridge: true },
+    {
+      authorizeAndConsume: () => {
+        forwarded += 1;
+        return Promise.resolve({
+          decision: "allow" as const,
+          reasonCode: "POLICY_OWNER_APPROVED",
+        });
+      },
+    },
+    { automaticWorkspaceFileAuthoring: true },
+  );
+
+  const decision = await permissions.actionAuthorization?.authorizeAndConsume({
+    authorizationRequestId: "agent-action-workspace-file",
+    actionCategory: "sandbox-boundary-escalation",
+    actionType: "shell",
+    actionFingerprint: `sha256:${"1".repeat(64)}`,
+    actionDescriptor: { provider: "codex", tool: "shell" },
+    requestedAtMs: 1_000,
+    signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(decision, {
+    decision: "deny",
+    reasonCode: "POLICY_WORKSPACE_ESCALATION_UNNECESSARY",
+  });
+  assert.equal(forwarded, 0);
+});
+
 test("Worker CLI exposes the bounded join boundary and never accepts a raw token option", () => {
   assert.deepEqual(
     parseWorkerArguments([

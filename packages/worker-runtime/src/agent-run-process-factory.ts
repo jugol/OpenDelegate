@@ -1685,7 +1685,7 @@ function appendWorkspaceWritePolicy(prompt: string, maximumBytes: number): strin
     "",
     "## Workspace mutation policy",
     "",
-    "The assigned Workspace is already bounded by the Worker-managed Worktree and provider sandbox. Ordinary file work does not require owner approval merely to create or edit files inside it. Use the configured sandbox and do not request sandbox-boundary escalation for an action that fits within this Workspace. Actions outside that sandbox and OpenDelegate protected-action categories still require their normal deterministic Policy decision.",
+    "The assigned Workspace is already bounded by the Worker-managed Worktree and provider sandbox. Ordinary file work does not require owner approval merely to create or edit files inside it. Use the provider's file-change or patch mechanism for Workspace file mutations and do not request sandbox-boundary escalation or an elevated shell for an action that fits within this Workspace. A redundant escalation is denied locally without creating an owner Approval. Actions outside that sandbox and OpenDelegate protected-action categories still require their normal deterministic Policy decision.",
   ].join("\n");
   if (Buffer.byteLength(instructions, "utf8") > maximumBytes) {
     throw new AgentRunBridgeError(

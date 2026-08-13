@@ -34,6 +34,7 @@ import {
   resolveOwnerProviderHome,
   upgradeAgentProvider,
   type AgentActionAuthorizationPort,
+  type AgentActionAuthorizationRequest,
   type AgentAdapterRemediation,
   type AgentProviderHomeOwner,
   type AgentAdapter,
@@ -1235,7 +1236,13 @@ export async function createWorkerRuntime(
             approvalBridge: probe.capabilities.approvalBridge,
             provider: adapter.provider,
           }),
-          permissions: resolveWorkerAgentPermissions(probe.capabilities, actionAuthorization),
+          permissions: resolveWorkerAgentPermissions(probe.capabilities, actionAuthorization, {
+            automaticWorkspaceFileAuthoring:
+              assignment.workOrder.requiredCapabilities.length > 0 &&
+              assignment.workOrder.requiredCapabilities.every(
+                (capability) => capability === "file-authoring" || capability === "artifact-upload",
+              ),
+          }),
           environment: agentEnvironment,
           limits: {
             wallTimeoutMs: 2 * 60 * 60_000,
@@ -4299,6 +4306,7 @@ function workerServiceMode(
 export function resolveWorkerAgentPermissions(
   capabilities: Pick<AgentAdapterProbe["capabilities"], "approvalBridge">,
   actionAuthorization?: AgentActionAuthorizationPort,
+  options: { readonly automaticWorkspaceFileAuthoring?: boolean } = {},
 ): AgentPermissionInput {
   if (typeof capabilities.approvalBridge !== "boolean") {
     throw appError("CONFIG_INVALID", "Agent approval capability metadata is invalid.");
@@ -4315,6 +4323,23 @@ export function resolveWorkerAgentPermissions(
       "An Agent approval bridge requires the exact-action authorization port.",
     );
   }
+  if (
+    options.automaticWorkspaceFileAuthoring !== undefined &&
+    typeof options.automaticWorkspaceFileAuthoring !== "boolean"
+  ) {
+    throw appError("CONFIG_INVALID", "Workspace file-authoring policy metadata is invalid.");
+  }
+  const effectiveActionAuthorization = options.automaticWorkspaceFileAuthoring
+    ? Object.freeze({
+        authorizeAndConsume: (request: AgentActionAuthorizationRequest) =>
+          request.actionCategory === "sandbox-boundary-escalation"
+            ? Promise.resolve({
+                decision: "deny" as const,
+                reasonCode: "POLICY_WORKSPACE_ESCALATION_UNNECESSARY",
+              })
+            : actionAuthorization.authorizeAndConsume(request),
+      })
+    : actionAuthorization;
   return Object.freeze({
     mode: "allow-listed" as const,
     allowedTools: Object.freeze([
@@ -4333,7 +4358,7 @@ export function resolveWorkerAgentPermissions(
       "shell",
       "file-change",
     ]),
-    actionAuthorization,
+    actionAuthorization: effectiveActionAuthorization,
   });
 }
 
