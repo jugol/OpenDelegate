@@ -200,3 +200,88 @@ test("Artifact MCP exposes only bounded write and commit schemas without host pa
   assert.ok(written.result);
   assert.equal(fixture.calls.length, 1);
 });
+
+test("Artifact MCP accepts the standard UTF-8 media type emitted by a live Agent", async () => {
+  const fixture = options();
+  const server = new ArtifactMcpServer(fixture);
+  await server.handleLine(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "1.0.0" },
+      },
+    }),
+  );
+  await server.handleLine(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }));
+
+  const committed = JSON.parse(
+    (await server.handleLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "artifact_commit",
+          arguments: {
+            commandId: "commit-alpha89-qa24-73b0d6e4-0001",
+            artifacts: [
+              {
+                relativePath: "opendelegate-windows-alpha89-qa24-73b0d6e4.txt",
+                mediaType: "text/plain; charset=utf-8",
+                originalFilename: "opendelegate-windows-alpha89-qa24-73b0d6e4.txt",
+                requestedPresentation: "download",
+              },
+            ],
+          },
+        },
+      }),
+    )) ?? "",
+  ) as { readonly result?: unknown };
+
+  assert.ok(committed.result);
+  assert.deepEqual(fixture.calls, [
+    {
+      kind: "commit",
+      input: {
+        commandId: "commit-alpha89-qa24-73b0d6e4-0001",
+        artifacts: [
+          {
+            relativePath: "opendelegate-windows-alpha89-qa24-73b0d6e4.txt",
+            mediaType: "text/plain",
+            originalFilename: "opendelegate-windows-alpha89-qa24-73b0d6e4.txt",
+            requestedPresentation: "download",
+          },
+        ],
+      },
+    },
+  ]);
+
+  const unsupportedParameter = JSON.parse(
+    (await server.handleLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "artifact_commit",
+          arguments: {
+            commandId: "commit-unsupported-parameter-0001",
+            artifacts: [
+              {
+                relativePath: "unsafe.txt",
+                mediaType: "text/plain; boundary=unsafe",
+                originalFilename: "unsafe.txt",
+              },
+            ],
+          },
+        },
+      }),
+    )) ?? "",
+  ) as { readonly error?: unknown };
+  assert.ok(unsupportedParameter.error);
+  assert.equal(fixture.calls.length, 1);
+});

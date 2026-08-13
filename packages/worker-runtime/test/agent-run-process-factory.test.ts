@@ -1688,6 +1688,10 @@ test("Task identity isolates native sessions while policy, limits, and Workspace
     });
     assert.deepEqual(adapter.starts[1]?.limits, AGENT_LIMITS);
     assert.equal(adapter.starts[1]?.workspace.cwd, workspacePath);
+    assert.match(
+      adapter.starts[1]?.prompt ?? "",
+      /does not require owner approval merely to create or edit files inside it/u,
+    );
   } finally {
     sessionStore.close();
     await rm(root, { recursive: true, force: true });

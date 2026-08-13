@@ -588,6 +588,7 @@ describe("Worker Computer Use capability composition", () => {
         {
           provider: "codex",
           adapterId: "codex-cli",
+          toolUse: "authorized",
           readiness: "ready",
           compatibility: "tested",
           version: "1.2.3",

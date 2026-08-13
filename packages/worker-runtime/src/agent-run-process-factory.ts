@@ -358,8 +358,12 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       prepared.plan.deterministicContext,
       this.#limits.maxPromptBytes,
     );
+    const promptWithWorkspacePolicy =
+      prepared.plan.sandbox === "workspace-write"
+        ? appendWorkspaceWritePolicy(basePrompt, this.#limits.maxPromptBytes)
+        : basePrompt;
     const promptWithSteering = appendPendingSteeringInstructions(
-      basePrompt,
+      promptWithWorkspacePolicy,
       prepared.pendingSteering,
       this.#limits.maxPromptBytes,
     );
@@ -1670,6 +1674,23 @@ function appendArtifactOutputContract(prompt: string, maximumBytes: number): str
     throw new AgentRunBridgeError(
       "ARTIFACT_PREPARATION_FAILED",
       "The bounded Artifact output contract exceeds the Agent prompt limit.",
+    );
+  }
+  return instructions;
+}
+
+function appendWorkspaceWritePolicy(prompt: string, maximumBytes: number): string {
+  const instructions = [
+    prompt,
+    "",
+    "## Workspace mutation policy",
+    "",
+    "The assigned Workspace is already bounded by the Worker-managed Worktree and provider sandbox. Ordinary file work does not require owner approval merely to create or edit files inside it. Use the configured sandbox and do not request sandbox-boundary escalation for an action that fits within this Workspace. Actions outside that sandbox and OpenDelegate protected-action categories still require their normal deterministic Policy decision.",
+  ].join("\n");
+  if (Buffer.byteLength(instructions, "utf8") > maximumBytes) {
+    throw new AgentRunBridgeError(
+      "INVALID_EXECUTION_PLAN",
+      "The bounded Workspace mutation policy exceeds the Agent prompt limit.",
     );
   }
   return instructions;
