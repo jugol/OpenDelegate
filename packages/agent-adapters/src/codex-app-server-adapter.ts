@@ -1298,7 +1298,7 @@ function codexTurnSandboxPolicy(
     return Object.freeze({
       type: "workspaceWrite",
       writableRoots: Object.freeze([cwd]),
-      networkAccess: "restricted",
+      networkAccess: false,
     });
   }
   return Object.freeze({ type: "readOnly", networkAccess: false });

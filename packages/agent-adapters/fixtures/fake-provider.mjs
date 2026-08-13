@@ -231,7 +231,7 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         if (
           sandboxPolicy?.type !== process.env.FIXTURE_EXPECT_TURN_SANDBOX ||
           (sandboxPolicy.type === "workspaceWrite" &&
-            (sandboxPolicy.networkAccess !== "restricted" ||
+            (sandboxPolicy.networkAccess !== false ||
               !Array.isArray(sandboxPolicy.writableRoots) ||
               !sandboxPolicy.writableRoots.includes(process.cwd())))
         ) {
