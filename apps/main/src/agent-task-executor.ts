@@ -1202,13 +1202,8 @@ function statementRequiresComputerUse(statement: string): boolean {
     return false;
   }
 
-  return (
-    /(?:\b(?:invoke|use|execute|perform|run|require)\b.{0,48}\bcomputer[ -]use\b|\bcomputer[ -]use\b.{0,48}\b(?:is\s+)?(?:invoked|used|executed|required|performed)\b)/iu.test(
-      normalized,
-    ) ||
-    /(?:computer[ -]use[^\n,;，；·/]{0,48}(?:사용|실행|호출|조작)|(?:사용|실행|호출|조작)[^\n,;，；·/]{0,48}computer[ -]use)/iu.test(
-      normalized,
-    )
+  return /(?:computer[ -]use[^\n,;，；·/]{0,48}(?:사용|실행|호출|조작)|(?:사용|실행|호출|조작)[^\n,;，；·/]{0,48}computer[ -]use)/iu.test(
+    normalized,
   );
 }
 
