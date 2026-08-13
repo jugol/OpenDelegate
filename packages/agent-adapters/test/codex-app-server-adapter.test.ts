@@ -94,6 +94,7 @@ test("Codex App Server accepts its tested notification catalog without losing a 
       },
       environment: {
         FIXTURE_EXPECT_MODEL: "gpt-5.6-sol",
+        FIXTURE_EXPECT_TURN_SANDBOX: "workspaceWrite",
         FIXTURE_EXPECT_NATIVE_SUBAGENTS: "disabled",
         FIXTURE_EMIT_REMOTE_CONTROL_STATUS: "1",
         FIXTURE_CODEX_EMIT_SKILLS_CHANGED: "1",

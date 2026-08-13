@@ -226,6 +226,19 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         send({ id: message.id, error: { code: -32602, message: "unexpected effort" } });
         continue;
       }
+      if (process.env.FIXTURE_EXPECT_TURN_SANDBOX) {
+        const sandboxPolicy = message.params.sandboxPolicy;
+        if (
+          sandboxPolicy?.type !== process.env.FIXTURE_EXPECT_TURN_SANDBOX ||
+          (sandboxPolicy.type === "workspaceWrite" &&
+            (sandboxPolicy.networkAccess !== "restricted" ||
+              !Array.isArray(sandboxPolicy.writableRoots) ||
+              !sandboxPolicy.writableRoots.includes(process.cwd())))
+        ) {
+          send({ id: message.id, error: { code: -32602, message: "sandbox policy mismatch" } });
+          continue;
+        }
+      }
       send({
         id: message.id,
         result: {

@@ -754,6 +754,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
         ...(request.effort === undefined ? {} : { effort: request.effort }),
         approvalPolicy: request.permissions.mode === "deny" ? "never" : "on-request",
         approvalsReviewer: "user",
+        sandboxPolicy: codexTurnSandboxPolicy(request.sandbox, cwd),
       });
       while (turnResult === undefined) {
         await connection.nextMessage();
@@ -1284,6 +1285,23 @@ function codexThreadParameters(
         : {}),
     },
   };
+}
+
+function codexTurnSandboxPolicy(
+  sandbox: AgentStartRequest["sandbox"],
+  cwd: string,
+): Readonly<Record<string, unknown>> {
+  if (sandbox === "danger-full-access") {
+    return Object.freeze({ type: "dangerFullAccess" });
+  }
+  if (sandbox === "workspace-write") {
+    return Object.freeze({
+      type: "workspaceWrite",
+      writableRoots: Object.freeze([cwd]),
+      networkAccess: "restricted",
+    });
+  }
+  return Object.freeze({ type: "readOnly", networkAccess: false });
 }
 
 function codexNativeSubagentsEnabled(request: AgentStartRequest | AgentResumeRequest): boolean {
