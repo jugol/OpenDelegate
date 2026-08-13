@@ -4330,12 +4330,17 @@ export function resolveWorkerAgentPermissions(
   const effectiveActionAuthorization = options.automaticWorkspaceFileAuthoring
     ? Object.freeze({
         authorizeAndConsume: (request: AgentActionAuthorizationRequest) =>
-          request.actionCategory === "sandbox-boundary-escalation"
+          request.actionType === "file-change"
             ? Promise.resolve({
-                decision: "deny" as const,
-                reasonCode: "POLICY_WORKSPACE_ESCALATION_UNNECESSARY",
+                decision: "allow" as const,
+                reasonCode: "POLICY_WORKSPACE_FILE_AUTHORING_AUTOMATIC",
               })
-            : actionAuthorization.authorizeAndConsume(request),
+            : request.actionCategory === "sandbox-boundary-escalation"
+              ? Promise.resolve({
+                  decision: "deny" as const,
+                  reasonCode: "POLICY_WORKSPACE_ESCALATION_UNNECESSARY",
+                })
+              : actionAuthorization.authorizeAndConsume(request),
       })
     : actionAuthorization;
   return Object.freeze({

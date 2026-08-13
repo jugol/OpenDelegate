@@ -379,7 +379,7 @@ test("programmatic adapters receive the exact-action bridge and a writable sandb
   assert.throws(() => resolveWorkerAgentPermissions({ approvalBridge: true }), WorkerAppError);
 });
 
-test("workspace file-authoring Runs decline unnecessary sandbox escalation locally", async () => {
+test("workspace file-authoring Runs allow only provider file changes locally", async () => {
   assert.equal(isAutomaticWorkspaceFileAuthoringWorkOrder(["file-authoring", "windows"]), true);
   assert.equal(
     isAutomaticWorkspaceFileAuthoringWorkOrder(["file-authoring", "artifact-upload", "windows"]),
@@ -404,8 +404,17 @@ test("workspace file-authoring Runs decline unnecessary sandbox escalation local
     { automaticWorkspaceFileAuthoring: true },
   );
 
-  const decision = await permissions.actionAuthorization?.authorizeAndConsume({
+  const fileChangeDecision = await permissions.actionAuthorization?.authorizeAndConsume({
     authorizationRequestId: "agent-action-workspace-file",
+    actionCategory: "sandbox-boundary-escalation",
+    actionType: "file-change",
+    actionFingerprint: `sha256:${"0".repeat(64)}`,
+    actionDescriptor: { provider: "codex", tool: "file-change" },
+    requestedAtMs: 999,
+    signal: new AbortController().signal,
+  });
+  const escalationDecision = await permissions.actionAuthorization?.authorizeAndConsume({
+    authorizationRequestId: "agent-action-workspace-shell",
     actionCategory: "sandbox-boundary-escalation",
     actionType: "shell",
     actionFingerprint: `sha256:${"1".repeat(64)}`,
@@ -414,7 +423,11 @@ test("workspace file-authoring Runs decline unnecessary sandbox escalation local
     signal: new AbortController().signal,
   });
 
-  assert.deepEqual(decision, {
+  assert.deepEqual(fileChangeDecision, {
+    decision: "allow",
+    reasonCode: "POLICY_WORKSPACE_FILE_AUTHORING_AUTOMATIC",
+  });
+  assert.deepEqual(escalationDecision, {
     decision: "deny",
     reasonCode: "POLICY_WORKSPACE_ESCALATION_UNNECESSARY",
   });
