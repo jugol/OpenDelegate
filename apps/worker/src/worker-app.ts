@@ -139,6 +139,7 @@ import { WorkerComputerUseRunCapabilityProvider } from "./computer-use-run-capab
 import { SqliteComputerUseStartHistory } from "./computer-use-start-history.ts";
 import { SqliteWorkerDesktopLeaseAuthority } from "./desktop-lease-authority.ts";
 import { WorkerKnowledgeRunCapabilityProvider } from "./knowledge-run-capability.ts";
+import { WorkerWorkspaceFileRunCapabilityProvider } from "./workspace-file-run-capability.ts";
 import {
   WorkerPlatformMutationRunCapabilityProvider,
   bindPlatformMutationProcessRunnerToWorkspace,
@@ -1178,6 +1179,11 @@ export async function createWorkerRuntime(
         toolServerCommand: toolServerLaunch.command,
         toolServerArgsPrefix: toolServerLaunch.argsPrefix,
       }),
+      new WorkerWorkspaceFileRunCapabilityProvider({
+        broker: runCapabilityBroker,
+        toolServerCommand: toolServerLaunch.command,
+        toolServerArgsPrefix: toolServerLaunch.argsPrefix,
+      }),
       new WorkerKnowledgeRunCapabilityProvider({
         broker: runCapabilityBroker,
         knowledge,
@@ -1199,10 +1205,7 @@ export async function createWorkerRuntime(
           workspaceRegistry,
           assignment.workOrder.workspaceId ?? (await resolveCurrentDefaultWorkspaceId()),
         );
-        const workstreamId = resolveWorkerWorkstreamId(
-          assignment,
-          workspaceContext?.workspaceId,
-        );
+        const workstreamId = resolveWorkerWorkstreamId(assignment, workspaceContext?.workspaceId);
         const actionAuthorization = probe.capabilities.approvalBridge
           ? new WorkerAgentActionAuthorizer({
               assignment,
@@ -4485,6 +4488,14 @@ export function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string
           `- Adapter: ${assignment.agentRequirement.adapterId ?? "provider default"}`,
           `- Model: ${assignment.agentRequirement.modelId ?? "adapter default"}`,
         ]),
+    ...(order.requiredCapabilities.includes("file-authoring")
+      ? [
+          "",
+          "## Workspace file verification",
+          "- After every create or edit, call workspace_file_inspect with the exact relative path.",
+          "- Use its actual text, byte count, SHA-256, BOM, UTF-8, and final-LF result as completion evidence; do not report payload assumptions as verification.",
+        ]
+      : []),
     "",
     "## Completion report contract",
     "- Finish the work before reporting. Report only the observable result and explicit evidence for every completion criterion.",

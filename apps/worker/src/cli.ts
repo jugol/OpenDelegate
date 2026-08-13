@@ -9,8 +9,10 @@ import { runKnowledgeMcpStdioServer } from "@opendelegate/knowledge-mcp";
 
 import {
   runArtifactMcpStdioServer,
+  runWorkspaceFileMcpStdioServer,
   WorkerAppError,
   consumeArtifactRunCapabilityFile,
+  consumeWorkspaceFileRunCapabilityFile,
   consumeComputerUseRunCapabilityFile,
   consumeKnowledgeRunCapabilityFile,
   consumePlatformMutationRunCapabilityFile,
@@ -63,7 +65,8 @@ export type WorkerCliCommand =
   | "windows-service-secret-stage"
   | "workspace-list"
   | "workspace-register"
-  | "workspace-set-isolation";
+  | "workspace-set-isolation"
+  | "workspace-file-mcp-bridge";
 
 export interface ParsedWorkerArguments {
   readonly command: WorkerCliCommand;
@@ -151,7 +154,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "windows-service-secret-stage" &&
     command !== "workspace-list" &&
     command !== "workspace-register" &&
-    command !== "workspace-set-isolation"
+    command !== "workspace-set-isolation" &&
+    command !== "workspace-file-mcp-bridge"
   ) {
     throw new WorkerAppError("CONFIG_INVALID", `Unknown Worker command: ${rawCommand}.`);
   }
@@ -414,7 +418,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     (command === "artifact-mcp-bridge" ||
       command === "mcp-bridge" ||
       command === "knowledge-mcp-bridge" ||
-      command === "platform-mutation-mcp-bridge") &&
+      command === "platform-mutation-mcp-bridge" ||
+      command === "workspace-file-mcp-bridge") &&
     capabilityFile === undefined
   ) {
     throw new WorkerAppError(
@@ -427,6 +432,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "mcp-bridge" &&
     command !== "knowledge-mcp-bridge" &&
     command !== "platform-mutation-mcp-bridge" &&
+    command !== "workspace-file-mcp-bridge" &&
     capabilityFile !== undefined
   ) {
     throw new WorkerAppError(
@@ -599,7 +605,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       command === "artifact-mcp-bridge" ||
       command === "mcp-bridge" ||
       command === "knowledge-mcp-bridge" ||
-      command === "platform-mutation-mcp-bridge") &&
+      command === "platform-mutation-mcp-bridge" ||
+      command === "workspace-file-mcp-bridge") &&
     home !== undefined
   ) {
     throw new WorkerAppError(
@@ -779,6 +786,18 @@ async function run(arguments_: readonly string[]): Promise<void> {
     const capability = await consumeArtifactRunCapabilityFile(parsed.capabilityFile!);
     try {
       await runArtifactMcpStdioServer({
+        authority: capability.authority,
+        port: capability.port,
+      });
+    } finally {
+      await capability.close();
+    }
+    return;
+  }
+  if (parsed.command === "workspace-file-mcp-bridge") {
+    const capability = await consumeWorkspaceFileRunCapabilityFile(parsed.capabilityFile!);
+    try {
+      await runWorkspaceFileMcpStdioServer({
         authority: capability.authority,
         port: capability.port,
       });
@@ -1072,7 +1091,8 @@ function isInternalMcpBridge(command: WorkerCliCommand): boolean {
     command === "artifact-mcp-bridge" ||
     command === "knowledge-mcp-bridge" ||
     command === "mcp-bridge" ||
-    command === "platform-mutation-mcp-bridge"
+    command === "platform-mutation-mcp-bridge" ||
+    command === "workspace-file-mcp-bridge"
   );
 }
 

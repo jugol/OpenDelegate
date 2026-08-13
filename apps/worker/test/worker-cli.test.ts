@@ -676,6 +676,32 @@ test("Worker CLI exposes the one-use Artifact bridge only through a capability f
   );
 });
 
+test("Worker CLI exposes the one-use Workspace file bridge only through a capability file", () => {
+  assert.deepEqual(
+    parseWorkerArguments([
+      "workspace-file-mcp-bridge",
+      "--capability-file",
+      "workspace-file.capability",
+    ]),
+    {
+      command: "workspace-file-mcp-bridge",
+      capabilityFile: resolve("workspace-file.capability"),
+    },
+  );
+  assert.throws(() => parseWorkerArguments(["workspace-file-mcp-bridge"]), WorkerAppError);
+  assert.throws(
+    () =>
+      parseWorkerArguments([
+        "workspace-file-mcp-bridge",
+        "--capability-file",
+        "workspace-file.capability",
+        "--home",
+        "worker-home",
+      ]),
+    WorkerAppError,
+  );
+});
+
 test("internal MCP bridge subprocesses clear their inherited environment", () => {
   const environment = {
     PATH: "C:\\trusted-tools",

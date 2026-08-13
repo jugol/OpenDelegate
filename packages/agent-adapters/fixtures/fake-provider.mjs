@@ -326,6 +326,22 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
       if (process.env.FIXTURE_CODEX_WAIT_FOR_STEER === "1") {
         continue;
       }
+      if (process.env.FIXTURE_CODEX_EMIT_PHASED_MESSAGES === "1") {
+        send({
+          method: "item/completed",
+          params: {
+            threadId,
+            turnId,
+            completedAtMs: Date.now(),
+            item: {
+              type: "agentMessage",
+              id: "message-commentary-1",
+              text: "Creating the requested file now.",
+              phase: "commentary",
+            },
+          },
+        });
+      }
       if (process.env.FIXTURE_EMIT_NATIVE_SUBAGENTS === "1") {
         const childCount = Number(process.env.FIXTURE_NATIVE_SUBAGENT_COUNT ?? "1");
         for (let index = 0; index < childCount; index += 1) {
@@ -496,6 +512,9 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
             type: "agentMessage",
             id: "message-1",
             text: "Finished through App Server",
+            ...(process.env.FIXTURE_CODEX_EMIT_PHASED_MESSAGES === "1"
+              ? { phase: "final_answer" }
+              : {}),
           },
         },
       });

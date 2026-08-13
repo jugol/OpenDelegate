@@ -121,6 +121,27 @@ export {
   type ArtifactMcpServerOptions,
 } from "./artifact-mcp.ts";
 export {
+  WORKSPACE_FILE_INSPECT_TOOL_NAME,
+  WORKSPACE_FILE_TOOL_NAMES,
+  WorkspaceFileToolError,
+  WorkerWorkspaceFileRunCapabilityProvider,
+  consumeWorkspaceFileRunCapabilityFile,
+  parseWorkspaceFileInspectInput,
+  type ConsumedWorkspaceFileRunCapability,
+  type WorkerWorkspaceFileRunCapabilityProviderOptions,
+  type WorkspaceFileInspectInput,
+  type WorkspaceFileInspectResult,
+  type WorkspaceFileRunAuthority,
+  type WorkspaceFileToolContext,
+  type WorkspaceFileToolErrorCode,
+  type WorkspaceFileToolPort,
+} from "./workspace-file-run-capability.ts";
+export {
+  WorkspaceFileMcpServer,
+  runWorkspaceFileMcpStdioServer,
+  type WorkspaceFileMcpServerOptions,
+} from "./workspace-file-mcp.ts";
+export {
   createLinuxWorkerComputerUseComposition,
   type LinuxWorkerComputerUseComposition,
   type LinuxWorkerComputerUseCompositionOptions,

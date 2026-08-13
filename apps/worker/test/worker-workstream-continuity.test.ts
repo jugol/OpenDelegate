@@ -11,10 +11,7 @@ import { renderWorkOrderPrompt, resolveWorkerWorkstreamId } from "../src/worker-
 test("a single related Worker follow-up reuses its prior Task workstream", () => {
   const assignment = workerAssignment([workerSession("work-initial")]);
 
-  assert.equal(
-    resolveWorkerWorkstreamId(assignment, "workspace-repository"),
-    "work-initial",
-  );
+  assert.equal(resolveWorkerWorkstreamId(assignment, "workspace-repository"), "work-initial");
 });
 
 test("an ambiguous follow-up does not merge unrelated prior workstreams", () => {
@@ -23,19 +20,13 @@ test("an ambiguous follow-up does not merge unrelated prior workstreams", () => 
     workerSession("work-parallel"),
   ]);
 
-  assert.equal(
-    resolveWorkerWorkstreamId(assignment, "workspace-repository"),
-    "work-follow-up",
-  );
+  assert.equal(resolveWorkerWorkstreamId(assignment, "workspace-repository"), "work-follow-up");
 });
 
 test("a truncated checkpoint never guesses the related prior workstream", () => {
   const assignment = workerAssignment([workerSession("work-initial")], 1);
 
-  assert.equal(
-    resolveWorkerWorkstreamId(assignment, "workspace-repository"),
-    "work-follow-up",
-  );
+  assert.equal(resolveWorkerWorkstreamId(assignment, "workspace-repository"), "work-follow-up");
 });
 
 test("the production Worker prompt requires evidence for every completion criterion", () => {
@@ -44,6 +35,8 @@ test("the production Worker prompt requires evidence for every completion criter
   assert.match(prompt, /Report only the observable result/u);
   assert.match(prompt, /explicit evidence for every completion criterion/u);
   assert.match(prompt, /Do not add preambles, promises, or narration/u);
+  assert.match(prompt, /call workspace_file_inspect with the exact relative path/u);
+  assert.match(prompt, /actual text, byte count, SHA-256, BOM, UTF-8, and final-LF/u);
 });
 
 function workerAssignment(

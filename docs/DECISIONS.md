@@ -3220,3 +3220,45 @@ background-service product contract.
 **Consequence:** Persistent orchestration stays visually silent while the owner is not actively
 using Computer Use. Security boundaries remain visible when required: OS permission prompts,
 capture selection, login, MFA, and human-only handoffs are not hidden or automated away.
+
+## D-150 — File-authoring Runs verify Workspace bytes without shell authority
+
+**Decision:** A Worker Work Order that explicitly requires `file-authoring` receives one
+read-only, exact-Run Workspace file inspector in addition to the provider's file-change mechanism.
+The Agent supplies only a portable relative path. The Worker binds the root from the already
+resolved Workspace, accepts only a stable regular non-link file of at most 1 MiB, revalidates the
+current lease and fencing authority before and after the read, and applies the Run egress guard
+before returning actual UTF-8 text, byte count, SHA-256, BOM, and final-LF evidence. The inspector
+has no shell, host-absolute path, mutation, network, Secret, or Approval authority.
+
+**Rationale:** Live Discord-to-Windows file-authoring QA proved that the provider file-change
+mechanism could create the requested bytes but exposed no shell-free read mechanism. The Worker
+therefore had to report that create-new, encoding, newline, and hash criteria were unverified, and
+Main correctly rejected an otherwise successful file mutation. Asking the owner to approve a
+shell merely to inspect an ordinary Task-owned text file would add friction without improving the
+boundary.
+
+**Consequence:** Routine create and edit Tasks can produce deterministic completion evidence with
+no owner prompt, while arbitrary host inspection remains impossible. Path traversal, absolute
+paths, symbolic links or reparse points, changed files, oversized files, stale Runs, and protected
+egress all fail closed.
+
+## D-151 — Provider commentary is progress, not completion evidence
+
+**Decision:** When Codex App Server explicitly marks an assistant message as `commentary`, the
+adapter emits only a generic Run progress event and excludes that text from the Worker completion
+report. A `final_answer` message remains public completion evidence. A missing or null phase keeps
+the legacy compatibility behavior because supported providers do not all emit phases consistently;
+an unknown explicit phase fails as malformed provider output. Persisted-turn reconciliation applies
+the same rule.
+
+**Rationale:** A live file-authoring Run followed its completion-report prompt but emitted a short
+“creating the file” commentary item before using the provider patch tool. The adapter flattened
+that item together with the final evidence, so Main correctly treated the resulting report as
+containing a prohibited preamble. The App Server protocol already carries the semantic distinction;
+discarding it made deterministic verification less accurate.
+
+**Consequence:** Owner-visible Run progress remains available without being mistaken for proof of
+completion, and final Worker reports contain the provider's actual final answer. Older compatible
+providers keep working, while new unsupported phase values fail closed instead of silently changing
+report semantics.

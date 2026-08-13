@@ -100,6 +100,7 @@ test("Codex App Server accepts its tested notification catalog without losing a 
         FIXTURE_CODEX_EMIT_SKILLS_CHANGED: "1",
         FIXTURE_EMIT_THREAD_GOAL_CLEARED: "1",
         FIXTURE_CODEX_EMIT_V0146_NOTIFICATIONS: "1",
+        FIXTURE_CODEX_EMIT_PHASED_MESSAGES: "1",
       },
       limits,
     };
@@ -127,6 +128,19 @@ test("Codex App Server accepts its tested notification catalog without losing a 
       ),
     );
     assert.ok(events.some((event) => event.type === "tool_result" && event.toolName === "shell"));
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "progress" &&
+          event.message === "Codex reported task progress inside this Worker Run.",
+      ),
+    );
+    assert.equal(JSON.stringify(events).includes("Creating the requested file now."), false);
+    assert.ok(
+      events.some(
+        (event) => event.type === "public_message" && event.text === "Finished through App Server",
+      ),
+    );
     assert.ok(
       events.some(
         (event) => event.type === "diagnostic" && event.code === "CODEX_PROVIDER_RETRYING",

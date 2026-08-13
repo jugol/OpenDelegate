@@ -580,7 +580,16 @@ export class CodexAppServerAdapter implements AgentAdapter {
           return;
         }
         if (item["type"] === "agentMessage") {
-          finalText = readStringField(item, "text");
+          const messageText = readStringField(item, "text");
+          const phase = parseCodexMessagePhase(item["phase"]);
+          if (phase === "commentary") {
+            await emit({
+              kind: "progress",
+              message: "Codex reported task progress inside this Worker Run.",
+            });
+            return;
+          }
+          finalText = messageText;
           await emit({ kind: "public_message", text: finalText });
           return;
         }
@@ -1733,7 +1742,10 @@ function parsePersistedCodexTurn(
   let finalText: string | undefined;
   for (const item of items) {
     if (isRecord(item) && item["type"] === "agentMessage" && typeof item["text"] === "string") {
-      finalText = item["text"];
+      const phase = parseCodexMessagePhase(item["phase"]);
+      if (phase !== "commentary") {
+        finalText = item["text"];
+      }
     }
   }
   const error =
@@ -1745,6 +1757,19 @@ function parsePersistedCodexTurn(
     ...(error === undefined ? {} : { error }),
     ...(finalText === undefined ? {} : { finalText }),
   };
+}
+
+function parseCodexMessagePhase(value: unknown): "commentary" | "final_answer" | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === "commentary" || value === "final_answer") {
+    return value;
+  }
+  throw new AgentAdapterError(
+    "MALFORMED_PROVIDER_OUTPUT",
+    "Codex App Server emitted an unsupported assistant message phase.",
+  );
 }
 
 function parseCodexTurnStatus(value: unknown): CodexTurnResult["status"] {
