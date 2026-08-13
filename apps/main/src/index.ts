@@ -1537,6 +1537,7 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
                       configuration: artifacts.configuration,
                       store: artifacts.store,
                     }),
+                    artifactAttachments: artifacts.store,
                   }),
               onStatusChange: observeRuntimeStatus,
             }),

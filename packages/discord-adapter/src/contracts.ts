@@ -4,6 +4,10 @@ export const DISCORD_GATEWAY_INTENTS = (1 << 0) | (1 << 9) | (1 << 15);
 
 export const DISCORD_COMPONENTS_V2_FLAG = 1 << 15;
 
+// Discord's documented baseline upload limit for apps. Larger results retain
+// their Artifact Gateway action instead of risking a permanently rejected outbox item.
+export const DISCORD_NATIVE_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+
 export type DiscordIntent = "GUILDS" | "GUILD_MESSAGES" | "MESSAGE_CONTENT";
 
 export type DiscordPermission =
@@ -211,12 +215,45 @@ export interface DiscordContainer {
   readonly components: readonly (DiscordTextDisplay | DiscordSeparator | DiscordActionRow)[];
 }
 
+export interface DiscordFileComponent {
+  readonly type: 13;
+  readonly file: {
+    readonly url: string;
+  };
+  readonly spoiler?: boolean;
+}
+
 export interface DiscordMessagePayload {
   readonly flags: typeof DISCORD_COMPONENTS_V2_FLAG;
-  readonly components: readonly (DiscordContainer | DiscordTextDisplay | DiscordActionRow)[];
+  readonly components: readonly (
+    DiscordContainer | DiscordTextDisplay | DiscordActionRow | DiscordFileComponent
+  )[];
   readonly allowed_mentions: {
     readonly parse: readonly string[];
   };
+}
+
+export interface DiscordMessageAttachmentUpload {
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly bytes: Uint8Array;
+}
+
+export interface DiscordArtifactAttachmentContentPort {
+  read(artifactId: string): Promise<{
+    readonly metadata: {
+      readonly artifactId: string;
+      readonly taskId: string;
+      readonly originalFilename: string;
+      readonly mediaType: string;
+      readonly sizeBytes: number;
+      readonly checksum: {
+        readonly algorithm: "sha256";
+        readonly value: string;
+      };
+    };
+    readonly bytes: Uint8Array;
+  }>;
 }
 
 export interface DiscordApiPort {
@@ -282,6 +319,7 @@ export interface DiscordApiPort {
     threadId: string;
     requestKey: string;
     payload: DiscordMessagePayload;
+    attachment?: DiscordMessageAttachmentUpload;
   }): Promise<{ readonly messageId: string }>;
   editMessage(input: {
     threadId: string;
@@ -425,6 +463,13 @@ export interface TaskChannelProjection {
   readonly artifact?: {
     readonly label: string;
     readonly url: string;
+    readonly nativeAttachment?: {
+      readonly artifactId: string;
+      readonly filename: string;
+      readonly mediaType: string;
+      readonly sizeBytes: number;
+      readonly sha256: string;
+    };
   };
   readonly inspectUrl?: string;
   readonly activity?: {
@@ -679,4 +724,5 @@ export interface DiscordForumAdapterOptions {
   readonly tasks: DiscordTaskPort;
   readonly clock: DiscordClock;
   readonly gateway?: DiscordGatewayPort;
+  readonly artifactAttachments?: DiscordArtifactAttachmentContentPort;
 }

@@ -71,6 +71,13 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Delivered a completed Task's small safe `download` Artifact as a Discord-native Components v2
+  File. The durable outbox retains only Task-bound integrity metadata; Main rereads and verifies the
+  available bytes before a nonce-protected multipart upload, while oversized or incompatible files
+  keep their stable Artifact Gateway action.
+- Made Discord review results historical, inactive surfaces. They no longer retain Pause or Cancel
+  controls after execution has stopped; an owner reply remains the durable way to start the next
+  review cycle.
 - Tolerated a runtime-owned transient lock disappearing between managed-tree enumeration and
   permission inspection. Main still fails closed for links, special files, permission errors, and
   every other unstable-path result, but ordinary session-lock release no longer aborts startup with

@@ -3303,3 +3303,43 @@ reported `TASK_CHECKPOINT_UNAVAILABLE` and hid the original retryable Artifact f
 **Consequence:** Long-lived Task continuity no longer makes its own checkpoint invalid. A retry or
 later owner message receives one unambiguous latest session reference, while the durable Event
 Store still retains every accepted Work Order observation for audit.
+
+## D-154 — Small final Artifacts use verified Discord-native File delivery
+
+**Decision:** When a Discord-bound Task completes with an available `download` Artifact whose
+safe filename, media type, and size fit Discord's documented baseline 10 MiB upload limit, the
+final Components v2 result includes one native File component as well as its stable Artifact
+action. The durable Discord projection stores only the Task-bound Artifact ID, filename, media
+type, byte count, and SHA-256. Immediately before multipart delivery, Main rereads the available
+Artifact, verifies its Task ownership, metadata, byte count, and checksum, and sends it with the
+existing enforced Discord nonce. Larger, interactive, or protocol-incompatible results keep only
+their Artifact Gateway action.
+
+**Rationale:** Live Discord-to-NAS-to-Windows QA successfully promoted the requested text file to
+Main and rendered `Open report`, but Discord contained no attached file. The external
+private-network link also depended on a changing viewer address. Native File presentation is the
+product's intended primary path for small results, while putting raw bytes in the durable outbox
+would bloat state and make integrity or retention changes invisible at delivery time.
+
+**Consequence:** A routine small file result is downloadable directly in the authorized Task
+thread without an extra browser or a viewer-IP allowlist. The Task binding—not possession of an
+Artifact ID—provides the Discord delivery context, and the Artifact Gateway exposure policy still
+governs the separate stable action. Lost HTTP responses remain retry-safe through the existing
+nonce; byte drift, cross-Task substitution, unavailable storage, or Discord rejection cannot
+silently produce a mismatched attachment.
+
+## D-155 — Discord review results are inactive historical surfaces
+
+**Decision:** A chronological Discord update for a Task in `review` carries no Pause or Cancel
+control. Review has no active Worker execution to pause, and D-147 defines an ordinary owner reply
+as the durable transition into a new execution cycle. Live activity, approval, failure, paused,
+and active execution surfaces retain only the controls appropriate to their current state.
+
+**Rationale:** Live Artifact QA completed after a corrected follow-up, but the earlier review
+result still displayed Pause and Cancel buttons. Even though a stale click would be rejected by
+the authoritative Task state, the old controls made the completed Task look active and invited an
+operation that no longer described reality.
+
+**Consequence:** Review history remains readable without masquerading as a current control panel.
+Follow-up work still starts naturally by replying in the same Task, and completed Tasks cannot
+appear active merely because an older review result remains in the Discord timeline.

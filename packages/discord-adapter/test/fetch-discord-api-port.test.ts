@@ -8,6 +8,7 @@ import {
   InMemoryDiscordInteractionTokenVault,
   type DiscordBotCredentialProvider,
   type DiscordFetch,
+  type DiscordMessagePayload,
 } from "../src/index.ts";
 
 const APPLICATION_ID = "100000000000000001";
@@ -308,6 +309,64 @@ test("Components v2 writes use a deterministic enforced nonce no longer than 25 
   assert.equal(createBody["flags"], DISCORD_COMPONENTS_V2_FLAG);
   assert.equal("nonce" in editBody, false);
   assert.equal("enforce_nonce" in editBody, false);
+});
+
+test("Components v2 result messages upload one native file with an enforced nonce", async () => {
+  const bytes = new TextEncoder().encode("OpenDelegate native attachment\n");
+  let observed = false;
+  const fetch: DiscordFetch = async (input, init) => {
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input : input.url,
+    );
+    assert.equal(url.pathname, `/api/v10/channels/${THREAD_ID}/messages`);
+    assert.equal(init?.method, "POST");
+    assert.equal(new Headers(init?.headers).get("Content-Type"), null);
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bot attachment-secret");
+    assert.ok(init?.body instanceof FormData);
+    const payloadValue = init.body.get("payload_json");
+    assert.equal(typeof payloadValue, "string");
+    const payload = JSON.parse(payloadValue as string) as Record<string, unknown>;
+    assert.equal(payload["flags"], DISCORD_COMPONENTS_V2_FLAG);
+    assert.equal(payload["enforce_nonce"], true);
+    assert.equal(typeof payload["nonce"], "string");
+    assert.deepEqual(payload["attachments"], [{ id: 0, filename: "result.txt" }]);
+    const file = init.body.get("files[0]");
+    assert.ok(file instanceof Blob);
+    assert.equal(file.type, "text/plain");
+    assert.equal("name" in file ? file.name : undefined, "result.txt");
+    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), bytes);
+    observed = true;
+    return json({ id: "100000000000000093" });
+  };
+  const api = new FetchDiscordApiPort({
+    applicationId: APPLICATION_ID,
+    productVersion: PRODUCT_VERSION,
+    credentialProvider: credentialProviderFor("attachment-secret"),
+    fetch,
+    interactionTokenVault: new InMemoryDiscordInteractionTokenVault({
+      createReference: () => "discord-interaction-ref:attachment",
+      nowMs: () => 1_000,
+    }),
+  });
+  const payload: DiscordMessagePayload = {
+    flags: DISCORD_COMPONENTS_V2_FLAG,
+    components: [
+      { type: 10, content: "Result ready" },
+      { type: 13, file: { url: "attachment://result.txt" } },
+    ],
+    allowed_mentions: { parse: [] },
+  };
+
+  assert.deepEqual(
+    await api.createMessage({
+      threadId: THREAD_ID,
+      requestKey: "task-result:attachment",
+      payload,
+      attachment: { filename: "result.txt", mediaType: "text/plain", bytes },
+    }),
+    { messageId: "100000000000000093" },
+  );
+  assert.equal(observed, true);
 });
 
 test("owner-message acknowledgement uses an in-place reaction and Discord typing", async () => {

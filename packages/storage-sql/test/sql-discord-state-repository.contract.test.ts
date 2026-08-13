@@ -539,6 +539,44 @@ test("SQLite persists structured sequential Discord Approval presentation across
   }
 });
 
+test("SQLite persists a bounded native Discord Artifact reference across restart", async () => {
+  const fixture = await createSqliteFixture();
+  let repository: SqlDiscordStateRepository | undefined;
+  const action: DiscordOutboxAction = {
+    kind: "post-task-update",
+    taskId: "task-1",
+    projection: {
+      taskId: "task-1",
+      state: "completed",
+      objective: "Create a text result.",
+      summary: "The text result is ready.",
+      sourceEventId: "event_native_attachment_completed",
+      significance: "final",
+      artifact: {
+        label: "Open report",
+        url: "https://artifacts.example.test/artifacts/artifact-text-result",
+        nativeAttachment: {
+          artifactId: "artifact-text-result",
+          filename: "result.txt",
+          mediaType: "text/plain",
+          sizeBytes: 142,
+          sha256: "a".repeat(64),
+        },
+      },
+    },
+  };
+  try {
+    repository = await fixture.open("apply");
+    await repository.enqueueOutbox(outbox("native-attachment", 1_000, action));
+    await repository.close();
+    repository = await fixture.open("verify");
+    assert.deepEqual((await repository.listOutbox())[0]?.action, action);
+  } finally {
+    await repository?.close();
+    await fixture.cleanup();
+  }
+});
+
 test("SQLite persists a durable Discord cancellation-resolution action across restart", async () => {
   const fixture = await createSqliteFixture();
   let repository: SqlDiscordStateRepository | undefined;

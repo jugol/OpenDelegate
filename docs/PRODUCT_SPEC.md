@@ -535,7 +535,9 @@ through a secure handoff and resumes the same Task afterward.
    is a final chronological reply with an optional Retry control. Once Retry starts,
    that cancellation reply becomes a control-free historical receipt just like a
    recovered failure; a later cancellation may then create one new current recovery
-   surface.
+   surface. A review result is also historical and carries no Pause or Cancel
+   control; an ordinary owner reply is the only transition into its next execution
+   cycle.
 9. Buttons and menus offer pause, cancel, retry, approve once, reject, inspect Runs,
    and open Artifact actions where Discord permits. A Discord Approval decision
    resolves the exact same durable Approval service record shown in Admin Web; it
@@ -916,6 +918,12 @@ may request a transition but cannot manufacture a state outside the transition r
 17. Credentials or provider tokens retained after owner authorization remain in the
     relevant Device Secret Store under Policy; only a non-secret capability
     reference may enter Task state.
+18. A completed Discord-bound Task presents an available `download` Artifact of at
+    most Discord's baseline 10 MiB limit as a native Components v2 File when its
+    filename and media type are safe for that protocol. The durable Discord outbox
+    stores only the Task-bound Artifact identity and integrity metadata; Main rereads
+    and verifies the bytes immediately before upload. Larger or incompatible results
+    retain their Artifact Gateway action.
 
 ### FR-15 — Admin Web
 

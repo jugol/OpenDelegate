@@ -1315,9 +1315,50 @@ function validateProjection(value: unknown): asserts value is TaskChannelProject
   }
   if (projection["artifact"] !== undefined) {
     const artifact = assertPlainRecord(projection["artifact"], "Task artifact");
-    assertOnlyKeys(artifact, ["label", "url"]);
+    assertOnlyKeys(artifact, ["label", "url", "nativeAttachment"]);
     requireBoundedString(artifact["label"], "Artifact label", 512);
     requireSafeHttpUrl(artifact["url"], "Artifact URL");
+    if (artifact["nativeAttachment"] !== undefined) {
+      const attachment = assertPlainRecord(
+        artifact["nativeAttachment"],
+        "Discord native Artifact attachment",
+      );
+      assertOnlyKeys(attachment, ["artifactId", "filename", "mediaType", "sizeBytes", "sha256"]);
+      const artifactId = requireBoundedString(
+        attachment["artifactId"],
+        "Discord native Artifact ID",
+        160,
+      );
+      const filename = requireBoundedString(
+        attachment["filename"],
+        "Discord native Artifact filename",
+        255,
+      );
+      const mediaType = requireBoundedString(
+        attachment["mediaType"],
+        "Discord native Artifact media type",
+        127,
+      );
+      const sizeBytes = requireSafeNonNegative(
+        attachment["sizeBytes"],
+        "Discord native Artifact size",
+      );
+      const sha256 = requireBoundedString(
+        attachment["sha256"],
+        "Discord native Artifact checksum",
+        64,
+      );
+      if (
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(artifactId) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(filename) ||
+        new TextEncoder().encode(filename).byteLength > 255 ||
+        !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/u.test(mediaType) ||
+        sizeBytes > 10 * 1024 * 1024 ||
+        !/^[a-f0-9]{64}$/u.test(sha256)
+      ) {
+        throw persistenceConflict();
+      }
+    }
   }
   if (projection["inspectUrl"] !== undefined) {
     requireSafeHttpUrl(projection["inspectUrl"], "Task inspection URL");

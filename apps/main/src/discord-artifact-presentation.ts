@@ -1,5 +1,10 @@
 import type { ArtifactStore, StoredArtifactMetadata } from "@opendelegate/artifact-store";
-import type { TaskChannelProjection } from "@opendelegate/discord-adapter";
+import {
+  DISCORD_NATIVE_ATTACHMENT_MAX_BYTES,
+  isDiscordNativeAttachmentFilename,
+  isDiscordNativeAttachmentMediaType,
+  type TaskChannelProjection,
+} from "@opendelegate/discord-adapter";
 
 import type { MainArtifactConfiguration } from "./artifact-runtime.ts";
 import type { DiscordArtifactPresentationPort } from "./discord-runtime.ts";
@@ -47,6 +52,7 @@ export class DiscordArtifactPresentation implements DiscordArtifactPresentationP
     if (metadata === undefined) {
       return undefined;
     }
+    const nativeAttachment = nativeDiscordAttachment(metadata);
     return Object.freeze({
       label:
         metadata.presentation === "interactive-html" ? "Open interactive result" : "Open report",
@@ -55,8 +61,29 @@ export class DiscordArtifactPresentation implements DiscordArtifactPresentationP
         metadata.exposurePolicy.mode === "private-network"
           ? directArtifactUrl(this.#configuration, metadata)
           : adminArtifactUrl(this.#adminOrigin, metadata.artifactId),
+      ...(nativeAttachment === undefined ? {} : { nativeAttachment }),
     });
   }
+}
+
+function nativeDiscordAttachment(
+  metadata: StoredArtifactMetadata,
+): NonNullable<NonNullable<TaskChannelProjection["artifact"]>["nativeAttachment"]> | undefined {
+  if (
+    metadata.presentation !== "download" ||
+    metadata.sizeBytes > DISCORD_NATIVE_ATTACHMENT_MAX_BYTES ||
+    !isDiscordNativeAttachmentFilename(metadata.originalFilename) ||
+    !isDiscordNativeAttachmentMediaType(metadata.mediaType)
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    artifactId: metadata.artifactId,
+    filename: metadata.originalFilename,
+    mediaType: metadata.mediaType,
+    sizeBytes: metadata.sizeBytes,
+    sha256: metadata.checksum.value,
+  });
 }
 
 function newestAvailableArtifact(

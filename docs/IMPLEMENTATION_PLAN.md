@@ -647,7 +647,14 @@ Make Discord the complete primary Task interface.
 - Present interactive Artifacts with a distinct owner action label. Never place a
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.
+- Present a completed Task's small safe `download` Artifact as one native Components
+  v2 File. Persist only its Task-bound Artifact ID, filename, media type, size, and
+  checksum in the outbox; reread and verify those bytes at delivery, use Discord's
+  enforced nonce with multipart upload, and retain the Gateway action as the stable
+  fallback for files above the baseline 10 MiB limit or incompatible filenames.
 - Implement pause, resume, cancel, retry, approval, denial, and inspect interactions.
+  Review-result messages are historical and expose no Pause or Cancel control; the
+  owner's next ordinary reply starts the next durable execution cycle.
   After a Task command succeeds, delete its deferred ephemeral response and let the
   resulting durable Task surface confirm the transition. Keep owner-safe ephemeral
   text for rejected, unauthorized, or stale controls.
@@ -890,6 +897,9 @@ Turn Worker output into durable, useful, safely viewable results.
   Tailscale-reachable laptop without direct Worker access.
 - Discord shows a useful native summary and labels report and interactive-result
   actions distinctly.
+- A small safe download result appears as a Discord-native File with the same bytes
+  and checksum as Main's available Artifact; restart/retry does not duplicate it,
+  while an oversized result remains a Gateway action.
 - The reference Owner Handoff opens through Main, expires or revokes cleanly, leaks
   no credential or raw Worker endpoint, and resumes the same Task after the owner
   replies.

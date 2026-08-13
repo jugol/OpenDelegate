@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -7,6 +8,7 @@ import {
   DiscordForumAdapter,
   DiscordTaskPortError,
   InMemoryDiscordStateRepository,
+  type DiscordArtifactAttachmentContentPort,
   type DiscordApiPort,
   type DiscordGatewayDispatch,
   type DiscordGatewayPort,
@@ -264,6 +266,7 @@ class FakeDiscordApi implements DiscordApiPort {
     threadId: string;
     requestKey: string;
     payload: DiscordMessagePayload;
+    attachment?: Parameters<DiscordApiPort["createMessage"]>[0]["attachment"];
   }): Promise<{ messageId: string }> {
     this.#assertOnline();
     const existing = this.#messageByRequestKey.get(input.requestKey);
@@ -393,6 +396,7 @@ function fixture(options?: {
   clock?: FakeClock;
   gateway?: FakeGateway;
   presentationLocale?: "en" | "ko";
+  artifactAttachments?: DiscordArtifactAttachmentContentPort;
 }) {
   const repository = options?.repository ?? new InMemoryDiscordStateRepository();
   const api = options?.api ?? new FakeDiscordApi();
@@ -415,6 +419,9 @@ function fixture(options?: {
     tasks,
     clock,
     ...(options?.gateway === undefined ? {} : { gateway: options.gateway }),
+    ...(options?.artifactAttachments === undefined
+      ? {}
+      : { artifactAttachments: options.artifactAttachments }),
   });
   return { adapter, api, tasks, repository, clock };
 }
@@ -1106,6 +1113,71 @@ test("Task projection retires its bootstrap panel when chronological work begins
   assert.equal((await repository.getBindingByTask("task-1"))?.externalState, "available");
 });
 
+test("a completed Task uploads its verified small Artifact as one native Discord file", async () => {
+  const bytes = new TextEncoder().encode("Native Discord result\n");
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  let reads = 0;
+  const { adapter, api } = fixture({
+    artifactAttachments: {
+      read: async (artifactId) => {
+        reads += 1;
+        assert.equal(artifactId, "artifact-native-result");
+        return {
+          metadata: {
+            artifactId,
+            taskId: "task-1",
+            originalFilename: "result.txt",
+            mediaType: "text/plain",
+            sizeBytes: bytes.byteLength,
+            checksum: { algorithm: "sha256", value: sha256 },
+          },
+          bytes,
+        };
+      },
+    },
+  });
+  const thread = forumThread("300000000000000032");
+  const starter = ownerMessage(thread.id, thread.id, "Create a text result");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  const projection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "completed",
+    objective: "Create a text result",
+    summary: "The text result is ready.",
+    sourceEventId: "event_native_result_completed",
+    significance: "final",
+    artifact: {
+      label: "Open report",
+      url: "https://artifacts.example.test/artifacts/artifact-native-result",
+      nativeAttachment: {
+        artifactId: "artifact-native-result",
+        filename: "result.txt",
+        mediaType: "text/plain",
+        sizeBytes: bytes.byteLength,
+        sha256,
+      },
+    },
+  };
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+
+  const messages = api.operations.filter((operation) => operation["kind"] === "message");
+  assert.equal(messages.length, 1);
+  assert.equal(reads, 1);
+  assert.deepEqual(messages[0]?.["attachment"], {
+    filename: "result.txt",
+    mediaType: "text/plain",
+    bytes,
+  });
+  assert.match(JSON.stringify(messages[0]?.["payload"]), /attachment:\/\/result\.txt/u);
+  assert.match(JSON.stringify(messages[0]?.["payload"]), /Open report/u);
+});
+
 test("one bounded live activity message is edited and closed for a Task cycle", async () => {
   const { adapter, api, repository } = fixture();
   const thread = forumThread("300000000000000041");
@@ -1566,6 +1638,20 @@ test("a completed Task without links renders valid Components v2 without an empt
     container?.type === 17 && container.components.some((component) => component.type === 1),
     false,
   );
+});
+
+test("a review result is historical and carries no active pause or cancel controls", () => {
+  const payload = renderTaskUpdate({
+    taskId: "task-review-inactive",
+    state: "review",
+    objective: "Review the generated result.",
+    summary: "The result is ready for owner review.",
+    sourceEventId: "event_review_inactive",
+    significance: "decision",
+  });
+  const rendered = JSON.stringify(payload);
+  assert.doesNotMatch(rendered, /od:v1:pause/u);
+  assert.doesNotMatch(rendered, /od:v1:cancel/u);
 });
 
 test("the stable status panel does not repeat the Forum title or chronological owner question", () => {

@@ -78,6 +78,52 @@ test("credentialed Artifact modes use a stable credential-free Admin deep link",
   }
 });
 
+test("a small download Artifact carries a verified native Discord attachment reference", async () => {
+  const download = {
+    ...BASE_METADATA,
+    artifactId: "artifact-text-result",
+    mediaType: "text/plain",
+    originalFilename: "result.txt",
+    sizeBytes: 142,
+    checksum: { algorithm: "sha256" as const, value: "b".repeat(64) },
+    presentation: "download" as const,
+  };
+
+  assert.deepEqual(await presentation([download]).forTask("task-report"), {
+    label: "Open report",
+    url: "https://static.example.test/artifacts/artifact-text-result",
+    nativeAttachment: {
+      artifactId: "artifact-text-result",
+      filename: "result.txt",
+      mediaType: "text/plain",
+      sizeBytes: 142,
+      sha256: "b".repeat(64),
+    },
+  });
+});
+
+test("large or URL-unsafe download Artifacts keep their Gateway action without native upload", async () => {
+  for (const candidate of [
+    {
+      ...BASE_METADATA,
+      presentation: "download" as const,
+      sizeBytes: 10 * 1024 * 1024 + 1,
+      mediaType: "text/plain",
+    },
+    {
+      ...BASE_METADATA,
+      presentation: "download" as const,
+      originalFilename: "결과.txt",
+      mediaType: "text/plain",
+    },
+  ]) {
+    assert.deepEqual(await presentation([candidate]).forTask("task-report"), {
+      label: "Open report",
+      url: "https://static.example.test/artifacts/artifact-report",
+    });
+  }
+});
+
 test("a Task without an available Artifact has no Discord report link", async () => {
   assert.equal(
     await presentation([{ ...BASE_METADATA, state: "expired" }]).forTask("task-report"),

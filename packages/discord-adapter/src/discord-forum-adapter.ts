@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   DISCORD_API_VERSION,
   DISCORD_GATEWAY_INTENTS,
+  type DiscordArtifactAttachmentContentPort,
   type DiscordApiPort,
   type DiscordClock,
   type DiscordDiagnostic,
@@ -15,6 +16,7 @@ import {
   type DiscordInstallationStatus,
   type DiscordInteraction,
   type DiscordMessage,
+  type DiscordMessageAttachmentUpload,
   type DiscordOutboxAction,
   type DiscordOutboxItem,
   type DiscordStateRepository,
@@ -34,6 +36,12 @@ import {
   workflowStatusForTaskState,
 } from "./presentation.ts";
 import { redactDiscordSecrets } from "./redaction.ts";
+import {
+  isDiscordNativeAttachmentFilename,
+  isDiscordNativeAttachmentMediaType,
+  isDiscordNativeAttachmentSize,
+  isSha256Hex,
+} from "./native-attachment.ts";
 
 const REQUIRED_INTENTS = ["GUILDS", "GUILD_MESSAGES", "MESSAGE_CONTENT"] as const;
 const REQUIRED_PERMISSIONS = [
@@ -61,6 +69,7 @@ export class DiscordForumAdapter {
   readonly #tasks: DiscordTaskPort;
   readonly #clock: DiscordClock;
   readonly #gateway: DiscordForumAdapterOptions["gateway"];
+  readonly #artifactAttachments: DiscordArtifactAttachmentContentPort | undefined;
   readonly #diagnostics: DiscordDiagnostic[] = [];
   readonly #threadWork = new Map<string, Promise<void>>();
   readonly #knownThreads = new Map<string, DiscordThread>();
@@ -81,6 +90,7 @@ export class DiscordForumAdapter {
     this.#tasks = options.tasks;
     this.#clock = options.clock;
     this.#gateway = options.gateway;
+    this.#artifactAttachments = options.artifactAttachments;
   }
 
   async verifyInstallation(): Promise<DiscordInstallationStatus> {
@@ -1609,10 +1619,16 @@ export class DiscordForumAdapter {
         if (binding.failureSurface?.requestKey === item.id) {
           return;
         }
+        const attachment = await this.#loadNativeAttachment(action.projection);
         const result = await this.#api.createMessage({
           threadId: binding.threadId,
           requestKey: item.id,
-          payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
+          payload: renderTaskUpdate(
+            action.projection,
+            this.#config.presentationLocale,
+            attachment?.filename,
+          ),
+          ...(attachment === undefined ? {} : { attachment }),
         });
         if (isRetrySurfaceProjection(action.projection)) {
           const sourceEventId = action.projection.sourceEventId;
@@ -2013,6 +2029,60 @@ export class DiscordForumAdapter {
         await this.#dismissDeferredInteraction(action.responseRef);
         return;
     }
+  }
+
+  async #loadNativeAttachment(
+    projection: TaskChannelProjection,
+  ): Promise<DiscordMessageAttachmentUpload | undefined> {
+    const reference = projection.artifact?.nativeAttachment;
+    if (
+      reference === undefined ||
+      projection.state !== "completed" ||
+      projection.significance !== "final"
+    ) {
+      return undefined;
+    }
+    if (
+      !isDiscordNativeAttachmentFilename(reference.filename) ||
+      !isDiscordNativeAttachmentMediaType(reference.mediaType) ||
+      !isDiscordNativeAttachmentSize(reference.sizeBytes) ||
+      !isSha256Hex(reference.sha256)
+    ) {
+      throw new DiscordApiError("INVALID_RESPONSE", "The Discord Artifact reference is invalid.");
+    }
+    const source = this.#artifactAttachments;
+    if (source === undefined) {
+      throw new DiscordApiError("OFFLINE", "The Discord Artifact source is unavailable.");
+    }
+    let content: Awaited<ReturnType<DiscordArtifactAttachmentContentPort["read"]>>;
+    try {
+      content = await source.read(reference.artifactId);
+    } catch {
+      throw new DiscordApiError("OFFLINE", "The Discord Artifact bytes are unavailable.");
+    }
+    const metadata = content.metadata;
+    if (
+      !(content.bytes instanceof Uint8Array) ||
+      metadata.artifactId !== reference.artifactId ||
+      metadata.taskId !== projection.taskId ||
+      metadata.originalFilename !== reference.filename ||
+      metadata.mediaType !== reference.mediaType ||
+      metadata.sizeBytes !== reference.sizeBytes ||
+      metadata.checksum.algorithm !== "sha256" ||
+      metadata.checksum.value !== reference.sha256 ||
+      content.bytes.byteLength !== reference.sizeBytes ||
+      createHash("sha256").update(content.bytes).digest("hex") !== reference.sha256
+    ) {
+      throw new DiscordApiError(
+        "INVALID_RESPONSE",
+        "The Discord Artifact bytes do not match their durable reference.",
+      );
+    }
+    return Object.freeze({
+      filename: reference.filename,
+      mediaType: reference.mediaType,
+      bytes: content.bytes,
+    });
   }
 
   async #finishDeferredInteraction(

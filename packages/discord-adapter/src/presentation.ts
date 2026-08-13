@@ -10,6 +10,12 @@ import {
   type TaskChannelProjection,
 } from "./contracts.ts";
 import { DiscordAdapterError } from "./errors.ts";
+import {
+  isDiscordNativeAttachmentFilename,
+  isDiscordNativeAttachmentMediaType,
+  isDiscordNativeAttachmentSize,
+  isSha256Hex,
+} from "./native-attachment.ts";
 
 const APPROVAL_ACTION_CATEGORIES = new Set([
   "read-only-observation",
@@ -160,8 +166,16 @@ function statusPanelSummary(
 export function renderTaskUpdate(
   projection: TaskChannelProjection,
   locale: DiscordPresentationLocale = "en",
+  nativeAttachmentFilename?: string,
 ): DiscordMessagePayload {
   validateProjection(projection);
+  if (
+    nativeAttachmentFilename !== undefined &&
+    (!isDiscordNativeAttachmentFilename(nativeAttachmentFilename) ||
+      projection.artifact?.nativeAttachment?.filename !== nativeAttachmentFilename)
+  ) {
+    throw invalidProjection();
+  }
   const status = workflowStatusForTaskState(projection.state);
   const headline = taskUpdateHeadline(projection.significance, locale);
   const buttons = controlButtons(projection, locale);
@@ -194,6 +208,14 @@ export function renderTaskUpdate(
           : [Object.freeze({ type: 14 as const, divider: true, spacing: 1 as const }), buttons]),
       ]),
     }),
+    ...(nativeAttachmentFilename === undefined
+      ? []
+      : [
+          Object.freeze({
+            type: 13 as const,
+            file: Object.freeze({ url: `attachment://${nativeAttachmentFilename}` }),
+          }),
+        ]),
   ]);
   return Object.freeze({
     flags: DISCORD_COMPONENTS_V2_FLAG,
@@ -425,7 +447,6 @@ function controlButtons(
       case "queued":
       case "running":
       case "waiting_resource":
-      case "review":
         buttons.push(actionButton(locale === "ko" ? "일시정지" : "Pause", 2, "od:v1:pause"));
         break;
       case "paused":
@@ -436,6 +457,7 @@ function controlButtons(
         buttons.push(actionButton(locale === "ko" ? "다시 시도" : "Retry", 1, "od:v1:retry"));
         break;
       case "waiting_user":
+      case "review":
       case "completed":
         break;
     }
@@ -443,7 +465,8 @@ function controlButtons(
   if (
     projection.state !== "completed" &&
     projection.state !== "failed" &&
-    projection.state !== "cancelled"
+    projection.state !== "cancelled" &&
+    projection.state !== "review"
   ) {
     buttons.push(actionButton(locale === "ko" ? "취소" : "Cancel", 4, "od:v1:cancel"));
   }
@@ -729,6 +752,19 @@ function validateProjection(projection: TaskChannelProjection): void {
     (projection.artifact.label.trim().length === 0 ||
       projection.artifact.label.length > 38 ||
       projection.artifact.label.includes("\u0000"))
+  ) {
+    throw invalidProjection();
+  }
+  const nativeAttachment = projection.artifact?.nativeAttachment;
+  if (
+    nativeAttachment !== undefined &&
+    (nativeAttachment.artifactId.length === 0 ||
+      nativeAttachment.artifactId.length > 160 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(nativeAttachment.artifactId) ||
+      !isDiscordNativeAttachmentFilename(nativeAttachment.filename) ||
+      !isDiscordNativeAttachmentMediaType(nativeAttachment.mediaType) ||
+      !isDiscordNativeAttachmentSize(nativeAttachment.sizeBytes) ||
+      !isSha256Hex(nativeAttachment.sha256))
   ) {
     throw invalidProjection();
   }

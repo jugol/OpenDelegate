@@ -7,6 +7,7 @@ import {
   WsDiscordGatewayPort,
   assertResponseReference,
   createDiscordTaskPort,
+  type DiscordArtifactAttachmentContentPort,
   type DiscordApiPort,
   type DiscordBotCredentialProvider,
   type DiscordClock,
@@ -155,6 +156,7 @@ export interface CreateProductionDiscordRuntimeOptions {
   readonly scheduler?: DiscordRuntimeScheduler;
   readonly synchronizationIntervalMs?: number;
   readonly artifactPresentation?: DiscordArtifactPresentationPort;
+  readonly artifactAttachments?: DiscordArtifactAttachmentContentPort;
   readonly taskActivity?: DiscordTaskActivityProjectionPort;
   readonly taskApproval?: DiscordTaskApprovalProjectionPort;
   readonly interactionTokenVault?: DiscordInteractionTokenVault;
@@ -794,6 +796,9 @@ export async function createProductionDiscordRuntime(
       tasks: createDiscordTaskPort(taskService),
       clock,
       gateway,
+      ...(options.artifactAttachments === undefined
+        ? {}
+        : { artifactAttachments: options.artifactAttachments }),
     });
     const runtime = new DiscordMainRuntime({
       adapter,
