@@ -71,6 +71,10 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Tolerated a runtime-owned transient lock disappearing between managed-tree enumeration and
+  permission inspection. Main still fails closed for links, special files, permission errors, and
+  every other unstable-path result, but ordinary session-lock release no longer aborts startup with
+  a raw `ENOENT`.
 - Composed the live external-HTTPS verifier into production Main startup whenever an Artifact
   listener uses the accepted reverse-proxy mode. The same bounded Artifact runtime errors now keep
   their public diagnostic code and message at the CLI boundary instead of collapsing to an opaque

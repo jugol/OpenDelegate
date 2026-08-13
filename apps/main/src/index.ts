@@ -65,6 +65,7 @@ import type { DeviceIdentitySecretStore } from "@opendelegate/device-identity";
 import type { ManagedSecretStore } from "@opendelegate/secrets";
 
 import type { RuntimeReleaseIdentity } from "./release-identity.ts";
+import { inspectExistingRuntimePath } from "./internal/runtime-path-inspection.ts";
 
 import {
   AgentBackedConfigurationAgent,
@@ -2879,11 +2880,23 @@ async function assertPrivateDirectory(path: string, label: string): Promise<void
 async function assertManagedTreeHasNoLinks(
   root: string,
   opaqueDirectories: readonly string[] = [],
+  allowMissing = false,
 ): Promise<void> {
-  const entries = await readdir(root, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (allowMissing && isNotFound(error)) {
+      return;
+    }
+    throw error;
+  }
   for (const entry of entries) {
     const path = join(root, entry.name);
-    const metadata = await lstat(path);
+    const metadata = await inspectExistingRuntimePath(path);
+    if (metadata === undefined) {
+      continue;
+    }
     if (metadata.isSymbolicLink()) {
       throw new MainRuntimeError(
         "RUNTIME_PATH_UNSAFE",
@@ -2894,7 +2907,7 @@ async function assertManagedTreeHasNoLinks(
       if (opaqueDirectories.some((opaque) => sameRuntimePath(path, opaque))) {
         continue;
       }
-      await assertManagedTreeHasNoLinks(path, opaqueDirectories);
+      await assertManagedTreeHasNoLinks(path, opaqueDirectories, true);
     }
   }
 }
@@ -2909,6 +2922,10 @@ function sameRuntimePath(left: string, right: string): boolean {
 
 function isAlreadyExists(error: unknown): boolean {
   return error !== null && typeof error === "object" && "code" in error && error.code === "EEXIST";
+}
+
+function isNotFound(error: unknown): boolean {
+  return error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
 }
 
 function validateMainConfiguration(input: unknown): MainConfiguration {
