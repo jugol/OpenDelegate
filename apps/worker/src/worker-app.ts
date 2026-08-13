@@ -1199,6 +1199,10 @@ export async function createWorkerRuntime(
           workspaceRegistry,
           assignment.workOrder.workspaceId ?? (await resolveCurrentDefaultWorkspaceId()),
         );
+        const workstreamId = resolveWorkerWorkstreamId(
+          assignment,
+          workspaceContext?.workspaceId,
+        );
         const actionAuthorization = probe.capabilities.approvalBridge
           ? new WorkerAgentActionAuthorizer({
               assignment,
@@ -1216,7 +1220,7 @@ export async function createWorkerRuntime(
           ...(assignment.agentRequirement?.effort === undefined
             ? {}
             : { effort: assignment.agentRequirement.effort }),
-          workstreamId: assignment.workOrder.workOrderId,
+          workstreamId,
           prompt: renderWorkOrderPrompt(assignment),
           deterministicContext: renderWorkerRuntimeContext({
             deviceId: configuration.deviceId,
@@ -4460,7 +4464,7 @@ export async function selectAgentAdapter(
   );
 }
 
-function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
+export function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
   const order = assignment.workOrder;
   return [
     `# ${order.title}`,
@@ -4482,6 +4486,11 @@ function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
           `- Model: ${assignment.agentRequirement.modelId ?? "adapter default"}`,
         ]),
     "",
+    "## Completion report contract",
+    "- Finish the work before reporting. Report only the observable result and explicit evidence for every completion criterion.",
+    "- Do not add preambles, promises, or narration about what you will do or how you intend to do it.",
+    "- If any criterion cannot be verified, state exactly what remains incomplete and why; never imply success from an attempted action.",
+    "",
     "## Local child-Agent delegation",
     "- If the selected provider exposes Agent or Task delegation, you may use it only when independent local work benefits from parallelism.",
     "- Create at most four native child Agents in this Run and only one nesting level.",
@@ -4492,6 +4501,37 @@ function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
     `Task ID: ${assignment.taskId}`,
     `Work Order ID: ${order.workOrderId}`,
   ].join("\n");
+}
+
+/**
+ * A single owner follow-up for one prior Device/Workspace workstream is the
+ * deterministic related-work case. Reuse that workstream so its managed
+ * worktree and provider-native session survive the new durable Work Order ID.
+ * Parallel or otherwise ambiguous prior workstreams remain isolated.
+ */
+export function resolveWorkerWorkstreamId(
+  assignment: WorkerRunAssignmentV1,
+  workspaceId: string | undefined,
+): string {
+  const currentWorkstreamId = assignment.workOrder.workOrderId;
+  const checkpoint = assignment.continuationCheckpoint;
+  if (
+    checkpoint === undefined ||
+    workspaceId === undefined ||
+    checkpoint.omitted.pendingWorkOrders !== 0 ||
+    checkpoint.omitted.sessions !== 0 ||
+    checkpoint.pendingWorkOrders.length !== 1 ||
+    checkpoint.pendingWorkOrders[0]?.workOrderId !== currentWorkstreamId
+  ) {
+    return currentWorkstreamId;
+  }
+  const related = checkpoint.sessions.filter(
+    (session) =>
+      session.scope === "worker" &&
+      session.deviceId === assignment.deviceId &&
+      session.workspaceId === workspaceId,
+  );
+  return related.length === 1 ? related[0]!.workstreamId : currentWorkstreamId;
 }
 
 export function renderWorkerRuntimeContext(input: {
