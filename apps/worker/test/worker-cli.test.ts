@@ -47,6 +47,7 @@ import {
   readWorkerSessionHelperOwnerKeyBinding,
   registerWorkerWorkspace,
   setWorkerWorkspaceIsolation,
+  isAutomaticWorkspaceFileAuthoringWorkOrder,
   resolveWorkerAgentPermissions,
   resolveWorkerAgentSandbox,
   resolveWorkerPaths,
@@ -379,6 +380,15 @@ test("programmatic adapters receive the exact-action bridge and a writable sandb
 });
 
 test("workspace file-authoring Runs decline unnecessary sandbox escalation locally", async () => {
+  assert.equal(isAutomaticWorkspaceFileAuthoringWorkOrder(["file-authoring", "windows"]), true);
+  assert.equal(
+    isAutomaticWorkspaceFileAuthoringWorkOrder(["file-authoring", "artifact-upload", "windows"]),
+    true,
+  );
+  assert.equal(
+    isAutomaticWorkspaceFileAuthoringWorkOrder(["file-authoring", "code-development"]),
+    false,
+  );
   let forwarded = 0;
   const permissions = resolveWorkerAgentPermissions(
     { approvalBridge: true },

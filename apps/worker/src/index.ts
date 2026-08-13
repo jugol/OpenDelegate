@@ -33,6 +33,7 @@ export {
   registerWorkerWorkspace,
   setWorkerWorkspaceIsolation,
   resolveWorkerAgentPermissions,
+  isAutomaticWorkspaceFileAuthoringWorkOrder,
   resolveWorkerAgentSandbox,
   resolveWorkerPaths,
   renderWorkerRuntimeContext,

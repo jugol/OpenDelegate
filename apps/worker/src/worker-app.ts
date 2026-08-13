@@ -1237,11 +1237,9 @@ export async function createWorkerRuntime(
             provider: adapter.provider,
           }),
           permissions: resolveWorkerAgentPermissions(probe.capabilities, actionAuthorization, {
-            automaticWorkspaceFileAuthoring:
-              assignment.workOrder.requiredCapabilities.length > 0 &&
-              assignment.workOrder.requiredCapabilities.every(
-                (capability) => capability === "file-authoring" || capability === "artifact-upload",
-              ),
+            automaticWorkspaceFileAuthoring: isAutomaticWorkspaceFileAuthoringWorkOrder(
+              assignment.workOrder.requiredCapabilities,
+            ),
           }),
           environment: agentEnvironment,
           limits: {
@@ -4360,6 +4358,22 @@ export function resolveWorkerAgentPermissions(
     ]),
     actionAuthorization: effectiveActionAuthorization,
   });
+}
+
+export function isAutomaticWorkspaceFileAuthoringWorkOrder(
+  requiredCapabilities: readonly string[],
+): boolean {
+  const workspaceFileCapabilities = new Set([
+    "artifact-upload",
+    "file-authoring",
+    "linux",
+    "macos",
+    "windows",
+  ]);
+  return (
+    requiredCapabilities.includes("file-authoring") &&
+    requiredCapabilities.every((capability) => workspaceFileCapabilities.has(capability))
+  );
 }
 
 export function resolveWorkerAgentSandbox(input: {
