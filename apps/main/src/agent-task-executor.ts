@@ -1182,7 +1182,9 @@ function statementRequiresComputerUse(statement: string): boolean {
     return true;
   }
 
-  for (const match of normalized.matchAll(/computer[ -]use.{0,48}?(?:사용|실행|호출|조작)/giu)) {
+  for (const match of normalized.matchAll(
+    /computer[ -]use[^\n,;，；·/]{0,48}?(?:사용|실행|호출|조작)/giu,
+  )) {
     const trailing = normalized.slice((match.index ?? 0) + match[0].length);
     if (!/^(?:하지|해서는?\s*안|하면\s*안|해서\s*안|할\s+수\s+없)/u.test(trailing)) {
       return true;
@@ -1204,7 +1206,7 @@ function statementRequiresComputerUse(statement: string): boolean {
     /(?:\b(?:invoke|use|execute|perform|run|require)\b.{0,48}\bcomputer[ -]use\b|\bcomputer[ -]use\b.{0,48}\b(?:is\s+)?(?:invoked|used|executed|required|performed)\b)/iu.test(
       normalized,
     ) ||
-    /(?:computer[ -]use.{0,48}(?:사용|실행|호출|조작)|(?:사용|실행|호출|조작).{0,48}computer[ -]use)/iu.test(
+    /(?:computer[ -]use[^\n,;，；·/]{0,48}(?:사용|실행|호출|조작)|(?:사용|실행|호출|조작)[^\n,;，；·/]{0,48}computer[ -]use)/iu.test(
       normalized,
     )
   );

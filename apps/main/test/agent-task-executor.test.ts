@@ -1390,6 +1390,7 @@ class FakeAgentAdapter implements AgentAdapter {
                 "Computer Use를 실행해서는 안 된다.",
                 "Computer Use를 사용하면 안 됩니다.",
                 "shell, OS API, 일반 filesystem, browser, Computer Use, 외부 network, 설치, 삭제를 사용하지 않는다.",
+                "기존 파일 수정·삭제, Artifact 생성, Computer Use, shell 사용, 권한 상승, sandbox-boundary escalation, Owner Approval, 서비스 또는 네트워크 변경이 발생하지 않는다.",
               ],
               requiredCapabilities: ["codex"],
             },
