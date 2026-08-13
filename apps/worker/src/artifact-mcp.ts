@@ -313,7 +313,13 @@ function toolDefinitions(): readonly Readonly<Record<string, unknown>>[] {
               required: ["relativePath", "mediaType", "originalFilename"],
               properties: {
                 relativePath: { type: "string", minLength: 1, maxLength: 1_024 },
-                mediaType: { type: "string", minLength: 3, maxLength: 255 },
+                mediaType: {
+                  type: "string",
+                  minLength: 3,
+                  maxLength: 255,
+                  description:
+                    "Internet media type. A UTF-8 charset parameter is accepted and normalized; other parameters are invalid.",
+                },
                 originalFilename: { type: "string", minLength: 1, maxLength: 255 },
                 requestedPresentation: {
                   type: "string",

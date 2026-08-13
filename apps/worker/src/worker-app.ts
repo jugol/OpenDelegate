@@ -6,6 +6,8 @@ import {
   generateKeyPairSync,
   randomBytes,
   randomUUID,
+  timingSafeEqual,
+  X509Certificate,
 } from "node:crypto";
 import { constants as fileConstants, type BigIntStats } from "node:fs";
 import {
@@ -32,6 +34,7 @@ import {
   resolveOwnerProviderHome,
   upgradeAgentProvider,
   type AgentActionAuthorizationPort,
+  type AgentActionAuthorizationRequest,
   type AgentAdapterRemediation,
   type AgentProviderHomeOwner,
   type AgentAdapter,
@@ -42,12 +45,15 @@ import {
 } from "@opendelegate/agent-adapters";
 import {
   ComputerUseOsBackend,
+  type ComputerUseReadinessReport,
   type DesktopAuthorityPort,
-  type DesktopLeasePort,
   type NativeComputerUseDriver,
+  type ReadinessCheckName,
+  type ReadinessCheckStatus,
 } from "@opendelegate/computer-use-os";
 import {
   DeviceCertificateUnusableError,
+  DeviceChannelClientError,
   EnrollmentClientError,
   EnrollmentGrantExecutorFailure,
   EnrollmentGrantFileError,
@@ -116,6 +122,7 @@ import {
   type WorkerRouteIncidentCode,
   type WorkerRunLeaseAuthority,
   type WorkerRunCapabilityProvider,
+  type WorkerRuntimeReadiness,
   type WorkerSchedulingInventoryProvider,
   type WorkerSchedulingInventoryV1,
   type WorkspaceRecord,
@@ -132,6 +139,7 @@ import { WorkerComputerUseRunCapabilityProvider } from "./computer-use-run-capab
 import { SqliteComputerUseStartHistory } from "./computer-use-start-history.ts";
 import { SqliteWorkerDesktopLeaseAuthority } from "./desktop-lease-authority.ts";
 import { WorkerKnowledgeRunCapabilityProvider } from "./knowledge-run-capability.ts";
+import { WorkerWorkspaceFileRunCapabilityProvider } from "./workspace-file-run-capability.ts";
 import {
   WorkerPlatformMutationRunCapabilityProvider,
   bindPlatformMutationProcessRunnerToWorkspace,
@@ -147,6 +155,26 @@ const MAXIMUM_CONFIG_BYTES = 1_048_576;
 const MAXIMUM_SECRET_BACKEND_CONFIG_BYTES = 65_536;
 const MAXIMUM_ENCRYPTED_CREDENTIAL_BYTES = 262_144;
 const PRIVATE_KEY_ALIAS_PREFIX = "identity-p256.";
+const WORKER_AGENT_ENVIRONMENT_KEYS = Object.freeze([
+  "PATH",
+  "PATHEXT",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "HOME",
+  "USERPROFILE",
+  "LOCALAPPDATA",
+  "APPDATA",
+  "TMP",
+  "TEMP",
+  "SHELL",
+  "LANG",
+  "LC_ALL",
+  "TERM",
+  "NO_COLOR",
+  "CODEX_HOME",
+  "CLAUDE_CONFIG_DIR",
+] as const);
 const PLATFORM_MUTATION_EXECUTABLE_IDS = new Set<PlatformMutationExecutableId>([
   "npm",
   "pnpm",
@@ -270,6 +298,13 @@ export type WorkerSecretBackendConfiguration =
       readonly expectedHelperSha256: string;
     }
   | {
+      readonly backend: "macos-system-keychain";
+      readonly bindingPath: string;
+      readonly helperPath: string;
+      readonly expectedHelperSha256: string;
+      readonly servicePreparation: WorkerMacOsServicePreparation;
+    }
+  | {
       readonly backend: "linux-secret-service";
       readonly secretToolPath: string;
     }
@@ -310,6 +345,23 @@ export interface WorkerLinuxHeadlessServicePreparation {
   };
   readonly ipcTrust: {
     readonly core: WorkerLocalIpcPublicKeyPin;
+  };
+}
+
+export interface WorkerMacOsServicePreparation {
+  readonly schemaVersion: 1;
+  readonly serviceIdentity: {
+    readonly userName: string;
+    readonly groupName: string;
+  };
+  readonly ownerHelperSecretBinding: {
+    readonly backend: "macos-keychain";
+    readonly helperPath: string;
+    readonly expectedHelperSha256: string;
+  };
+  readonly ipcTrust: {
+    readonly core: WorkerLocalIpcPublicKeyPin;
+    readonly helper: WorkerLocalIpcPublicKeyPin;
   };
 }
 
@@ -455,6 +507,26 @@ export interface PrepareWindowsServiceSecretBackendOptions {
   readonly vaultRoot: string;
 }
 
+export interface PrepareMacOsServiceSecretBackendOptions {
+  readonly bindingPath: string;
+  readonly hostPlatform?: NodeJS.Platform;
+  readonly paths: WorkerPaths;
+  readonly runner?: NativeSecretCommandRunner;
+  readonly serviceGroup: string;
+  readonly serviceUser: string;
+  readonly sudoPath?: string;
+  /** Stable root-owned helper path used by the LaunchDaemon across releases. */
+  readonly systemHelperPath: string;
+}
+
+export interface MacOsServiceSecretBackendPreparation {
+  readonly backend: Extract<
+    WorkerSecretBackendConfiguration,
+    { readonly backend: "macos-system-keychain" }
+  >;
+  readonly migratedAliases: number;
+}
+
 /** The durable backend and its persisted effective handoff sealing strength. */
 export interface WindowsServiceSecretBackendPreparation {
   readonly backend: Extract<WorkerSecretBackendConfiguration, { backend: "windows-service-dpapi" }>;
@@ -481,6 +553,7 @@ export interface WorkerDiagnosticSnapshot {
   readonly serviceMode?: "headless";
   readonly secretStoreStatus: "ready" | "unavailable";
   readonly identityKeyReady: boolean;
+  readonly identityKeyStatus: "invalid" | "mismatch" | "ready" | "unavailable";
   readonly agents: readonly {
     readonly adapterId: string;
     readonly provider: AgentProviderName;
@@ -882,8 +955,14 @@ export async function loadWorkerConfiguration(
   let bytes: Buffer;
   try {
     bytes = await readStableWorkerFile(paths.configFile, MAXIMUM_CONFIG_BYTES);
-  } catch {
-    throw appError("CONFIG_MISSING", "Worker is not enrolled. Run worker join first.");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw appError("CONFIG_MISSING", "Worker is not enrolled. Run worker join first.");
+    }
+    throw appError(
+      "CONFIG_PATH_UNSAFE",
+      "Worker configuration could not be read safely by the current process. Check the Worker home and service-state ownership; compose a service document from an elevated shell when the staged home is service-private.",
+    );
   }
   try {
     return validateWorkerConfigurationDocument(JSON.parse(bytes.toString("utf8")));
@@ -963,6 +1042,7 @@ export async function createWorkerRuntime(
   const configuration = await loadWorkerConfiguration(options.paths);
   await prepareRuntimeDirectories(options.paths);
   const environment = options.environment ?? process.env;
+  const agentEnvironment = projectWorkerAgentEnvironment(environment);
   const releaseVersion = options.releaseVersion;
   if (!validRuntimeIdentifier(releaseVersion)) {
     throw appError("CONFIG_INVALID", "The Worker release version is invalid.");
@@ -1033,6 +1113,7 @@ export async function createWorkerRuntime(
     configuration.agent,
     options.paths,
     nativeSessionLeaseStore,
+    environment,
   );
   const artifactChannel: {
     current?: Pick<WorkerDeviceChannelClient, "prepareArtifact">;
@@ -1076,7 +1157,12 @@ export async function createWorkerRuntime(
         },
       },
       uploader: new WorkerArtifactUploader({
-        transport: new FetchWorkerArtifactUploadTransport(),
+        transport: new FetchWorkerArtifactUploadTransport({
+          mainTlsTrust: {
+            certificateAuthorityPem: configuration.certificateAuthorityPem,
+            expectedMainSpkiSha256: configuration.expectedMainSpkiSha256,
+          },
+        }),
       }),
     }),
   });
@@ -1098,6 +1184,11 @@ export async function createWorkerRuntime(
         toolServerCommand: toolServerLaunch.command,
         toolServerArgsPrefix: toolServerLaunch.argsPrefix,
       }),
+      new WorkerWorkspaceFileRunCapabilityProvider({
+        broker: runCapabilityBroker,
+        toolServerCommand: toolServerLaunch.command,
+        toolServerArgsPrefix: toolServerLaunch.argsPrefix,
+      }),
       new WorkerKnowledgeRunCapabilityProvider({
         broker: runCapabilityBroker,
         knowledge,
@@ -1113,11 +1204,13 @@ export async function createWorkerRuntime(
           adapters,
           configuration.agent,
           assignment.agentRequirement,
+          agentEnvironment,
         );
         const workspaceContext = await resolveWorkerPromptWorkspaceContext(
           workspaceRegistry,
           assignment.workOrder.workspaceId ?? (await resolveCurrentDefaultWorkspaceId()),
         );
+        const workstreamId = resolveWorkerWorkstreamId(assignment, workspaceContext?.workspaceId);
         const actionAuthorization = probe.capabilities.approvalBridge
           ? new WorkerAgentActionAuthorizer({
               assignment,
@@ -1135,7 +1228,7 @@ export async function createWorkerRuntime(
           ...(assignment.agentRequirement?.effort === undefined
             ? {}
             : { effort: assignment.agentRequirement.effort }),
-          workstreamId: assignment.workOrder.workOrderId,
+          workstreamId,
           prompt: renderWorkOrderPrompt(assignment),
           deterministicContext: renderWorkerRuntimeContext({
             deviceId: configuration.deviceId,
@@ -1155,7 +1248,12 @@ export async function createWorkerRuntime(
             approvalBridge: probe.capabilities.approvalBridge,
             provider: adapter.provider,
           }),
-          permissions: resolveWorkerAgentPermissions(probe.capabilities, actionAuthorization),
+          permissions: resolveWorkerAgentPermissions(probe.capabilities, actionAuthorization, {
+            automaticWorkspaceFileAuthoring: isAutomaticWorkspaceFileAuthoringWorkOrder(
+              assignment.workOrder.requiredCapabilities,
+            ),
+          }),
+          environment: agentEnvironment,
           limits: {
             wallTimeoutMs: 2 * 60 * 60_000,
             idleTimeoutMs: 20 * 60_000,
@@ -1180,6 +1278,7 @@ export async function createWorkerRuntime(
     actionChannel,
     identityChannel,
     agentAdapters: adapters,
+    agentEnvironment,
     runLeaseAuthorities,
     runtime: () => runtimeReference.current,
   });
@@ -1198,6 +1297,9 @@ export async function createWorkerRuntime(
     processFactory,
     transportResolver,
     maximumConcurrentRuns: DEFAULT_MAXIMUM_CONCURRENT_RUNS,
+    ...(computerUse === undefined
+      ? {}
+      : { healthProvider: { snapshot: () => computerUse.healthSnapshot() } }),
     inventoryProvider: createWorkerSchedulingInventoryProvider({
       adapters,
       ...(computerUse === undefined ? {} : { computerUseProbe: computerUse.probe }),
@@ -1245,16 +1347,17 @@ export async function createWorkerRuntime(
   };
 }
 
-interface WorkerComputerUseRuntimeComposition {
+export interface WorkerComputerUseRuntimeComposition {
   readonly provider: WorkerRunCapabilityProvider;
   readonly probe: WorkerComputerUseCapabilityProbe;
+  healthSnapshot(): WorkerRuntimeReadiness;
   resourceLockProjection(): Promise<
     NonNullable<WorkerSchedulingInventoryV1["resourceLocks"]>[number]
   >;
   close(): Promise<void>;
 }
 
-async function createWorkerComputerUseRuntime(input: {
+export async function createWorkerComputerUseRuntime(input: {
   readonly configuration: WorkerConfigurationDocument;
   readonly paths: WorkerPaths;
   readonly broker: LocalRunCapabilityBroker;
@@ -1347,41 +1450,34 @@ async function createWorkerComputerUseRuntime(input: {
         }
       },
     });
+    let latestReadiness = unavailableComputerUseReadiness();
     let closed = false;
     return Object.freeze({
       provider,
+      healthSnapshot: () => latestReadiness,
       resourceLockProjection: () => desktopAuthority.resourceLockProjection(),
       probe: Object.freeze({
         async probe() {
-          const runtimeLease = await acquireComputerUseRuntimeLease(runtimePort, hostOsFamily);
-          if (runtimeLease === undefined) {
-            return Object.freeze({ verification: "unavailable" as const });
-          }
+          let runtimeLease: WorkerComputerUseRuntimeLease | undefined;
           try {
-            const readinessBackend = new ComputerUseOsBackend({
-              osFamily: hostOsFamily,
-              driver: runtimeLease.driver,
-              authority: runtimeLease.authority,
-              leases: readinessOnlyDesktopLeasePort(),
-              startHistory,
-              authorizer: readinessOnlyComputerUseAuthorizer(),
-              clock: { now: () => Date.now() },
-              logger: { write() {} },
-            });
-            const report = await readinessBackend.readiness({
-              deviceId: input.configuration.deviceId,
-              ...runtimeLease.binding,
-            });
-            return Object.freeze({
-              verification:
-                report.status === "ready" && report.checks.every((check) => check.status === "pass")
-                  ? ("verified" as const)
-                  : report.checks.some((check) => check.status === "pass")
-                    ? ("degraded" as const)
-                    : ("unavailable" as const),
-            });
+            runtimeLease = await acquireComputerUseRuntimeLease(runtimePort, hostOsFamily);
+            if (runtimeLease === undefined) {
+              latestReadiness = unavailableComputerUseReadiness();
+              return Object.freeze({ verification: "unavailable" as const });
+            }
+            // Scheduling inventory is a background operation. The mutually
+            // authenticated live helper proves that this Device can accept a
+            // Computer Use Work Order; invoking the native driver here can open
+            // an OS permission or capture picker without an owner-requested Run.
+            // Exact desktop and permission readiness is checked when the Run
+            // acquires its exclusive desktop-session lease.
+            latestReadiness = connectedComputerUseReadiness();
+            return Object.freeze({ verification: "verified" as const });
+          } catch (error) {
+            latestReadiness = unavailableComputerUseReadiness();
+            throw error;
           } finally {
-            await runtimeLease.release().catch(() => undefined);
+            await runtimeLease?.release().catch(() => undefined);
           }
         },
       }),
@@ -1399,6 +1495,77 @@ async function createWorkerComputerUseRuntime(input: {
     desktopAuthority.close();
     throw error;
   }
+}
+
+export function projectComputerUseReadiness(
+  report: ComputerUseReadinessReport,
+): WorkerRuntimeReadiness {
+  if (report.backendId === `${report.osFamily}-native-driver-unavailable`) {
+    return unavailableComputerUseReadiness();
+  }
+  const status = (name: ReadinessCheckName): ReadinessCheckStatus | undefined =>
+    report.checks.find((check) => check.name === name)?.status;
+  const session =
+    status("interactive-session") === "fail"
+      ? ("logged-out" as const)
+      : status("unlocked-session") === "fail"
+        ? ("locked" as const)
+        : [
+              "interactive-session",
+              "unlocked-session",
+              "helper-authentication",
+              "service-epoch",
+            ].every((name) => status(name as ReadinessCheckName) === "pass")
+          ? ("ready" as const)
+          : ("unavailable" as const);
+  const permission = (name: "accessibility" | "input" | "screen-capture") =>
+    status(name) === "pass" ? "granted" : status(name) === "fail" ? "denied" : "unknown";
+  const desktop =
+    session === "locked"
+      ? ("locked" as const)
+      : session === "ready" &&
+          report.status === "ready" &&
+          ["screen-capture", "accessibility", "input"].every(
+            (name) => status(name as ReadinessCheckName) === "pass",
+          )
+        ? ("available" as const)
+        : ("unavailable" as const);
+  return Object.freeze({
+    daemon: "healthy",
+    session,
+    desktop,
+    permissions: Object.freeze({
+      accessibility: permission("accessibility"),
+      input: permission("input"),
+      screenCapture: permission("screen-capture"),
+    }),
+  });
+}
+
+function unavailableComputerUseReadiness(): WorkerRuntimeReadiness {
+  return Object.freeze({
+    daemon: "healthy",
+    session: "unavailable",
+    desktop: "unavailable",
+    permissions: Object.freeze({
+      accessibility: "unknown",
+      input: "unknown",
+      screenCapture: "unknown",
+    }),
+  });
+}
+
+function connectedComputerUseReadiness(): WorkerRuntimeReadiness {
+  return Object.freeze({
+    daemon: "healthy",
+    session: "ready",
+    desktop: "unavailable",
+    permissions: Object.freeze({
+      accessibility: "unknown",
+      input: "unknown",
+      screenCapture: "unknown",
+    }),
+  });
 }
 
 async function acquireComputerUseRuntimeLease(
@@ -1431,37 +1598,6 @@ async function acquireComputerUseRuntimeLease(
       "The authenticated Computer Use helper returned an invalid runtime lease.",
     );
   }
-}
-
-function readinessOnlyDesktopLeasePort(): DesktopLeasePort {
-  return Object.freeze({
-    async verify() {
-      return {
-        status: "unavailable" as const,
-        reason: "No Run-scoped desktop lease is available during readiness probing.",
-        verifiedAtMs: Date.now(),
-      };
-    },
-  });
-}
-
-function readinessOnlyComputerUseAuthorizer() {
-  return Object.freeze({
-    authorize(request: {
-      readonly authorizationRequestId: string;
-      readonly fingerprint: `sha256:${string}`;
-    }) {
-      return {
-        decision: "deny" as const,
-        authorizationId: `readiness-only:${request.authorizationRequestId}`,
-        fingerprint: request.fingerprint,
-        reason: "Readiness probing cannot authorize native input.",
-      };
-    },
-    consume() {
-      throw new Error("Readiness probing cannot consume native input authority.");
-    },
-  });
 }
 
 function unavailableComputerUseCapabilityProvider(): WorkerRunCapabilityProvider {
@@ -1636,45 +1772,57 @@ export async function diagnoseWorker(input: {
   readonly environment?: Readonly<Record<string, string | undefined>>;
 }): Promise<WorkerDiagnosticSnapshot> {
   const configuration = await loadWorkerConfiguration(input.paths);
+  const environment = input.environment ?? process.env;
+  const agentEnvironment = projectWorkerAgentEnvironment(environment);
   const managedSecrets = createWorkerManagedSecretStore(
     configuration.secretBackend,
     configuration.deviceId,
     input.paths,
-    input.environment ?? process.env,
+    environment,
   );
-  const [health, keyAvailability] = await Promise.all([
+  const [health, identityKeyStatus] = await Promise.all([
     managedSecrets.health(),
-    managedSecrets.availability(`${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`),
+    inspectWorkerIdentityKey(
+      managedSecrets,
+      `${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`,
+      configuration.certificatePem,
+    ),
   ]);
   const providerHomes = {
     claude:
       configuration.agent.claudeHome ??
-      defaultProviderHome("claude", input.paths, input.environment),
-    codex:
-      configuration.agent.codexHome ?? defaultProviderHome("codex", input.paths, input.environment),
+      defaultProviderHome("claude", input.paths, agentEnvironment),
+    codex: resolveWorkerCodexProviderHome(
+      configuration.agent,
+      input.paths,
+      environment,
+      agentEnvironment,
+    ),
   };
   const agents = await Promise.all(
-    createWorkerAgentAdapters(configuration.agent, input.paths).map(async (adapter) => {
-      const probe = await adapter.probe();
-      return {
-        adapterId: adapter.adapterId,
-        provider: adapter.provider,
-        installed: probe.installed,
-        authState: probe.auth.state,
-        ...(probe.compatibility === undefined ? {} : { compatibility: probe.compatibility }),
-        ...(probe.version === undefined ? {} : { version: probe.version }),
-        ...(adapter.provider === "claude" || adapter.provider === "codex"
-          ? { providerHome: providerHomes[adapter.provider] }
-          : {}),
-        ...(probe.remediation === undefined ? {} : { remediation: probe.remediation }),
-        // The adapters already explain every unready state; dropping them left the
-        // owner with a bare "not_ready" and nowhere to look.
-        diagnostics: probe.diagnostics.map((diagnostic) => ({
-          code: diagnostic.code,
-          message: diagnostic.message,
-        })),
-      };
-    }),
+    createWorkerAgentAdapters(configuration.agent, input.paths, undefined, environment).map(
+      async (adapter) => {
+        const probe = await adapter.probe({ environment: agentEnvironment });
+        return {
+          adapterId: adapter.adapterId,
+          provider: adapter.provider,
+          installed: probe.installed,
+          authState: probe.auth.state,
+          ...(probe.compatibility === undefined ? {} : { compatibility: probe.compatibility }),
+          ...(probe.version === undefined ? {} : { version: probe.version }),
+          ...(adapter.provider === "claude" || adapter.provider === "codex"
+            ? { providerHome: providerHomes[adapter.provider] }
+            : {}),
+          ...(probe.remediation === undefined ? {} : { remediation: probe.remediation }),
+          // The adapters already explain every unready state; dropping them left the
+          // owner with a bare "not_ready" and nowhere to look.
+          diagnostics: probe.diagnostics.map((diagnostic) => ({
+            code: diagnostic.code,
+            message: diagnostic.message,
+          })),
+        };
+      },
+    ),
   );
   return deepFreeze({
     enrolled: true,
@@ -1693,9 +1841,75 @@ export async function diagnoseWorker(input: {
       ? { serviceMode: configuration.secretBackend.servicePreparation.mode }
       : {}),
     secretStoreStatus: health.status,
-    identityKeyReady: keyAvailability.ready,
+    identityKeyReady: identityKeyStatus === "ready",
+    identityKeyStatus,
     agents,
   });
+}
+
+/**
+ * Reads only the configured Device identity boundary. Native service hosts use
+ * this narrow probe so a reconnect failure can distinguish a broken local key
+ * from a transport failure without probing Agent providers or exposing key
+ * material.
+ */
+export async function inspectConfiguredWorkerIdentityKey(input: {
+  readonly paths: WorkerPaths;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+}): Promise<WorkerDiagnosticSnapshot["identityKeyStatus"]> {
+  const configuration = await loadWorkerConfiguration(input.paths);
+  const managedSecrets = createWorkerManagedSecretStore(
+    configuration.secretBackend,
+    configuration.deviceId,
+    input.paths,
+    input.environment ?? process.env,
+  );
+  if ((await managedSecrets.health()).status !== "ready") {
+    return "unavailable";
+  }
+  return inspectWorkerIdentityKey(
+    managedSecrets,
+    `${PRIVATE_KEY_ALIAS_PREFIX}${configuration.keyId}`,
+    configuration.certificatePem,
+  );
+}
+
+export async function inspectWorkerIdentityKey(
+  managedSecrets: Pick<ManagedSecretStore, "executeWithSecretBytes">,
+  alias: string,
+  certificatePem: string,
+): Promise<WorkerDiagnosticSnapshot["identityKeyStatus"]> {
+  let expectedPublicKey: Buffer;
+  try {
+    expectedPublicKey = Buffer.from(
+      new X509Certificate(certificatePem).publicKey.export({ format: "der", type: "spki" }),
+    );
+  } catch {
+    return "invalid";
+  }
+
+  let status: WorkerDiagnosticSnapshot["identityKeyStatus"] | undefined;
+  try {
+    await managedSecrets.executeWithSecretBytes(alias, (value) => {
+      const privateBytes = Buffer.from(value);
+      try {
+        const privateKey = createPrivateKey({ key: privateBytes, format: "der", type: "pkcs8" });
+        const actualPublicKey = Buffer.from(
+          createPublicKey(privateKey).export({ format: "der", type: "spki" }),
+        );
+        status = actualPublicKey.equals(expectedPublicKey) ? "ready" : "mismatch";
+      } catch {
+        status = "invalid";
+      } finally {
+        privateBytes.fill(0);
+      }
+    });
+  } catch {
+    return "unavailable";
+  } finally {
+    expectedPublicKey.fill(0);
+  }
+  return status ?? "invalid";
 }
 
 export async function runWorkerDaemon(options: RunWorkerDaemonOptions): Promise<void> {
@@ -1850,6 +2064,7 @@ export interface WorkerConnectionDiagnostic {
 
 const BLOCKING_CONNECTION_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Set([
   "CERTIFICATE_EXPIRED",
+  "IDENTITY_KEY_INVALID",
   "PEER_IDENTITY_MISMATCH",
 ]);
 
@@ -1861,6 +2076,8 @@ const CONNECTION_DIAGNOSTIC_CODES: ReadonlySet<WorkerRouteIncidentCode> = new Se
   "EHOSTUNREACH",
   "ENETUNREACH",
   "ETIMEDOUT",
+  "IDENTITY_KEY_INVALID",
+  "LOCAL_SECRET_UNAVAILABLE",
   "PEER_IDENTITY_MISMATCH",
   "TLS_HANDSHAKE_FAILED",
   "TRANSPORT_BOUNDARY_ERROR",
@@ -2052,6 +2269,329 @@ export async function provisionHeadlessLinuxSecretBackend(
     key.fill(0);
     encrypted?.fill(0);
   }
+}
+
+/**
+ * Moves only core-owned Secrets from the interactive login Keychain into a
+ * root-prepared System Keychain binding. The owner helper receives a distinct
+ * key in the login Keychain; neither private key crosses back after the durable
+ * configuration switch.
+ */
+export async function prepareMacOsServiceSecretBackend(
+  options: PrepareMacOsServiceSecretBackendOptions,
+): Promise<MacOsServiceSecretBackendPreparation> {
+  if ((options.hostPlatform ?? process.platform) !== "darwin") {
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      "macOS service Secret preparation is available only on macOS.",
+    );
+  }
+  if (
+    !/^_?[A-Za-z][A-Za-z0-9_-]{0,30}$/u.test(options.serviceUser) ||
+    !/^_?[A-Za-z][A-Za-z0-9_-]{0,30}$/u.test(options.serviceGroup)
+  ) {
+    throw appError("CONFIG_INVALID", "The macOS service identity is invalid.");
+  }
+  const configuration = await loadWorkerConfiguration(options.paths);
+  const bindingPath = requireAbsolutePath(options.bindingPath, "System Keychain binding");
+  const systemHelperPath = requireAbsolutePath(
+    options.systemHelperPath,
+    "persistent System Keychain helper",
+  );
+  const sudoPath = requireAbsolutePath(options.sudoPath ?? "/usr/bin/sudo", "sudo executable");
+  const runner = options.runner ?? new NodeNativeSecretCommandRunner();
+
+  if (configuration.secretBackend.backend === "macos-system-keychain") {
+    const preparation = configuration.secretBackend.servicePreparation;
+    if (
+      configuration.secretBackend.bindingPath !== bindingPath ||
+      configuration.secretBackend.helperPath !== systemHelperPath ||
+      preparation.serviceIdentity.userName !== options.serviceUser ||
+      preparation.serviceIdentity.groupName !== options.serviceGroup
+    ) {
+      throw appError(
+        "CONFIG_INVALID",
+        "This Worker is already bound to a different macOS persistent-service identity.",
+      );
+    }
+    const serviceStore = createPlatformManagedSecretStore({
+      backend: "macos-system-keychain",
+      bindingPath,
+      deviceId: configuration.deviceId,
+      expectedHelperSha256: configuration.secretBackend.expectedHelperSha256,
+      helperPath: systemHelperPath,
+      hostPlatform: "darwin",
+      runner,
+      sudoPath,
+    });
+    const aliases = workerCoreSecretAliases(configuration.keyId);
+    for (const alias of aliases) {
+      if (!(await serviceStore.availability(alias)).ready) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "The persistent macOS System Keychain binding is incomplete.",
+        );
+      }
+    }
+    return { backend: configuration.secretBackend, migratedAliases: aliases.length };
+  }
+  if (configuration.secretBackend.backend !== "macos-keychain") {
+    throw appError(
+      "CONFIG_INVALID",
+      "Only an interactive macOS login-Keychain enrollment can be prepared for launchd.",
+    );
+  }
+
+  const preparationHelperPath = requireAbsolutePath(
+    join(options.paths.sourceCheckoutRoot, "runtime", "native", "opendelegate-keychain-helper"),
+    "packaged macOS Keychain helper",
+  );
+  let preparationHelperBytes: Buffer | undefined;
+  try {
+    preparationHelperBytes = await readStableWorkerFile(preparationHelperPath, 67_108_864);
+    const expectedHelperSha256 = `sha256:${createHash("sha256")
+      .update(preparationHelperBytes)
+      .digest("hex")}`;
+    const preparationStore = createPlatformManagedSecretStore({
+      backend: "macos-keychain",
+      deviceId: configuration.deviceId,
+      expectedHelperSha256,
+      helperPath: preparationHelperPath,
+      hostPlatform: "darwin",
+      runner,
+    });
+    if ((await preparationStore.health()).status !== "ready") {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The packaged signed macOS Keychain helper is unavailable in this owner session.",
+      );
+    }
+
+    const service = `io.opendelegate.secret.${createHash("sha256")
+      .update(configuration.deviceId)
+      .digest("hex")
+      .slice(0, 32)}`;
+    const prepared = await runner.run({
+      args: [
+        "--",
+        preparationHelperPath,
+        "prepare-system-binding",
+        "--binding",
+        bindingPath,
+        "--service-user",
+        options.serviceUser,
+        "--trusted-helper",
+        systemHelperPath,
+        "--service",
+        service,
+        "--keychain",
+        "/Library/Keychains/System.keychain",
+      ],
+      environment: macOsSecretEnvironment(process.env),
+      executable: sudoPath,
+      maximumStdoutBytes: 16,
+      stdin: new Uint8Array(),
+      timeoutMs: 120_000,
+    });
+    const bindingReady = prepared.exitCode === 0 && prepared.stdout.equals(Buffer.from("ready"));
+    prepared.stdout.fill(0);
+    if (!bindingReady) {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The elevated System Keychain binding preparation did not complete.",
+      );
+    }
+
+    const sourceStore = createPlatformManagedSecretStore({
+      backend: "macos-keychain",
+      deviceId: configuration.deviceId,
+      expectedHelperSha256: configuration.secretBackend.expectedHelperSha256,
+      helperPath: configuration.secretBackend.helperPath,
+      hostPlatform: "darwin",
+      runner,
+    });
+    if ((await sourceStore.health()).status !== "ready") {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The enrolled login Keychain is unavailable in this owner session.",
+      );
+    }
+    const coreIpc = await readWorkerComputerUseCoreKeyBinding(sourceStore);
+
+    const ownerStore = createPlatformManagedSecretStore({
+      backend: "macos-keychain",
+      deviceId: configuration.deviceId,
+      expectedHelperSha256,
+      helperPath: systemHelperPath,
+      hostPlatform: "darwin",
+      runner,
+    });
+    if ((await ownerStore.health()).status !== "ready") {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The installed owner-session Keychain helper is unavailable.",
+      );
+    }
+    let durableOwnerKeyReady = false;
+    let durableOwnerKeyFailure: unknown;
+    try {
+      durableOwnerKeyReady = (
+        await ownerStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)
+      ).ready;
+    } catch (error) {
+      durableOwnerKeyFailure = error;
+    }
+    if (!durableOwnerKeyReady) {
+      let legacyOwnerKeyReady = false;
+      try {
+        legacyOwnerKeyReady = (
+          await sourceStore.availability(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS)
+        ).ready;
+      } catch {
+        // The stable helper may already own this login-Keychain item, in which
+        // case the superseded helper is intentionally unable to inspect it.
+      }
+      if (legacyOwnerKeyReady) {
+        await sourceStore.delete(WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS);
+      } else if (durableOwnerKeyFailure !== undefined) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "The persistent owner-session Keychain identity could not be recovered safely.",
+        );
+      }
+    }
+    const helperIpc = durableOwnerKeyReady
+      ? await readWorkerSessionHelperOwnerKeyBinding(ownerStore)
+      : await provisionWorkerSessionHelperOwnerSigningSecret(ownerStore);
+    const systemStore = createPlatformManagedSecretStore({
+      backend: "macos-system-keychain",
+      bindingPath,
+      deviceId: configuration.deviceId,
+      expectedHelperSha256,
+      helperPath: systemHelperPath,
+      hostPlatform: "darwin",
+      runner,
+      sudoPath,
+    });
+    if ((await systemStore.health()).status !== "ready") {
+      throw appError(
+        "SECRET_BACKEND_UNAVAILABLE",
+        "The prepared System Keychain is not readable through its service binding.",
+      );
+    }
+
+    const coreAliases = workerCoreSecretAliases(configuration.keyId);
+    for (const alias of coreAliases) {
+      const sourceReady = (await sourceStore.availability(alias)).ready;
+      const targetReady = (await systemStore.availability(alias)).ready;
+      if (sourceReady && !targetReady) {
+        await sourceStore.executeWithSecretBytes(alias, async (value) => {
+          await systemStore.store(alias, value);
+        });
+      } else if (!sourceReady && !targetReady) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "A required core Secret is unavailable from both macOS Keychain planes.",
+        );
+      } else if (sourceReady && targetReady) {
+        let equal = false;
+        await sourceStore.executeWithSecretBytes(alias, async (sourceValue) => {
+          await systemStore.executeWithSecretBytes(alias, (targetValue) => {
+            equal =
+              sourceValue.byteLength === targetValue.byteLength &&
+              timingSafeEqual(sourceValue, targetValue);
+          });
+        });
+        if (!equal) {
+          throw appError(
+            "CONFIG_INVALID",
+            "The System Keychain already contains a different persistent Device identity.",
+          );
+        }
+      }
+    }
+    for (const alias of coreAliases) {
+      if (!(await systemStore.availability(alias)).ready) {
+        throw appError(
+          "SECRET_BACKEND_UNAVAILABLE",
+          "The System Keychain migration is incomplete.",
+        );
+      }
+    }
+
+    const servicePreparation: WorkerMacOsServicePreparation = Object.freeze({
+      schemaVersion: 1,
+      serviceIdentity: Object.freeze({
+        userName: options.serviceUser,
+        groupName: options.serviceGroup,
+      }),
+      ownerHelperSecretBinding: Object.freeze({
+        backend: "macos-keychain",
+        helperPath: systemHelperPath,
+        expectedHelperSha256,
+      }),
+      ipcTrust: Object.freeze({
+        core: Object.freeze({
+          keyId: coreIpc.keyId,
+          publicKeySpkiBase64Url: coreIpc.publicKeySpkiBase64Url,
+        }),
+        helper: Object.freeze({
+          keyId: helperIpc.keyId,
+          publicKeySpkiBase64Url: helperIpc.publicKeySpkiBase64Url,
+        }),
+      }),
+    });
+    const backend = Object.freeze({
+      backend: "macos-system-keychain" as const,
+      bindingPath,
+      helperPath: systemHelperPath,
+      expectedHelperSha256,
+      servicePreparation,
+    });
+    await writeConfiguration(
+      options.paths.configFile,
+      validateWorkerConfigurationDocument({ ...configuration, secretBackend: backend }),
+    );
+    for (const alias of coreAliases) {
+      if ((await sourceStore.availability(alias)).ready) {
+        await sourceStore.delete(alias);
+      }
+    }
+    return { backend, migratedAliases: coreAliases.length };
+  } catch (error) {
+    if (error instanceof WorkerAppError) {
+      throw error;
+    }
+    throw appError(
+      "SECRET_BACKEND_UNAVAILABLE",
+      error instanceof SecretError && error.detail !== undefined
+        ? `The macOS System Keychain migration did not complete. ${error.detail}`
+        : "The macOS System Keychain migration did not complete.",
+    );
+  } finally {
+    preparationHelperBytes?.fill(0);
+  }
+}
+
+function workerCoreSecretAliases(keyId: string): readonly string[] {
+  return Object.freeze([
+    `${PRIVATE_KEY_ALIAS_PREFIX}${keyId}`,
+    WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
+    WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
+  ]);
+}
+
+function macOsSecretEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string>> {
+  return Object.freeze(
+    Object.fromEntries(
+      ["LANG", "LC_ALL"].flatMap((name) => {
+        const value = environment[name];
+        return value === undefined ? [] : [[name, value]];
+      }),
+    ),
+  );
 }
 
 export async function prepareWindowsServiceSecretBackend(
@@ -2824,19 +3364,22 @@ export async function renewWorkerDeviceCertificate(input: {
 export async function applyProviderUpgrade(
   adapters: readonly AgentAdapter[],
   adapterId: string,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<WorkerProviderUpgradeResultV1> {
   const adapter = adapters.find((candidate) => candidate.adapterId === adapterId);
   if (adapter === undefined) {
     return { adapterId, status: "failed", code: "ADAPTER_UNKNOWN" };
   }
-  const probe = await adapter.probe();
+  const agentEnvironment = projectWorkerAgentEnvironment(environment);
+  const probe = await adapter.probe({ environment: agentEnvironment });
   if (probe.remediation === undefined) {
     return { adapterId, status: "failed", code: "NO_UPGRADE_AVAILABLE" };
   }
   const outcome = await upgradeAgentProvider({
     adapterId,
     remediation: probe.remediation,
-    reprobe: () => adapter.probe(),
+    environment: agentEnvironment,
+    reprobe: () => adapter.probe({ environment: agentEnvironment }),
   });
   return outcome.status === "upgraded"
     ? {
@@ -2863,6 +3406,7 @@ function createWorkerTransportResolver(input: {
     current?: Pick<WorkerDeviceChannelClient, "activateIdentity" | "rotateIdentity">;
   };
   readonly agentAdapters: readonly AgentAdapter[];
+  readonly agentEnvironment: Readonly<Record<string, string>>;
   readonly runLeaseAuthorities: Map<string, CalibratedWorkerRunLeaseAuthority>;
   readonly runtime: () => WorkerRuntime | undefined;
 }): TransportResolver<WorkerMainConnection> {
@@ -2891,7 +3435,8 @@ function createWorkerTransportResolver(input: {
               certificateAuthorityPem: input.configuration.certificateAuthorityPem,
               certificateGeneration: input.configuration.certificateGeneration,
               executeWithPrivateKeyBytes: (executor) =>
-                input.managedSecrets.executeWithSecretBytes(
+                executeWorkerPrivateKey(
+                  input.managedSecrets,
                   `${PRIVATE_KEY_ALIAS_PREFIX}${input.configuration.keyId}`,
                   executor,
                 ),
@@ -2907,7 +3452,11 @@ function createWorkerTransportResolver(input: {
               await input.runtime()?.setOperationalState("revoked", "Main revoked this Device.");
             },
             onProviderUpgrade: async (frame) =>
-              applyProviderUpgrade(input.agentAdapters, frame.payload.adapterId),
+              applyProviderUpgrade(
+                input.agentAdapters,
+                frame.payload.adapterId,
+                input.agentEnvironment,
+              ),
           });
           for (const [runId, authority] of input.runLeaseAuthorities) {
             if (!authority.attach(client)) {
@@ -2965,12 +3514,11 @@ function createWorkerTransportResolver(input: {
 }
 
 /**
- * A lapsed Device credential and an unreachable Main both surface as a failed
- * connect, but only one of them is worth retrying. Naming the credential case
- * keeps the owner from reading an unrecoverable identity problem as a network
- * outage.
+ * Local identity access, a lapsed credential, and an unreachable Main can all
+ * surface as a failed connect. Preserve their bounded codes so the owner is sent
+ * to the boundary that actually failed without exposing native error text.
  */
-function classifyChannelConnectFailure(error: unknown): {
+export function classifyChannelConnectFailure(error: unknown): {
   readonly outcome: TransportAttemptTrace["outcome"];
   readonly diagnostic: { readonly code: WorkerRouteIncidentCode };
 } {
@@ -2980,10 +3528,53 @@ function classifyChannelConnectFailure(error: unknown): {
       diagnostic: { code: "CERTIFICATE_EXPIRED" },
     };
   }
+  if (error instanceof SecretError) {
+    if (
+      error.code === "SECRET_ALIAS_UNAVAILABLE" ||
+      error.code === "SECRET_BACKEND_UNAVAILABLE" ||
+      error.code === "SECRET_STORE_ACCESS_FAILED"
+    ) {
+      return {
+        outcome: "identity-rejected",
+        diagnostic: { code: "LOCAL_SECRET_UNAVAILABLE" },
+      };
+    }
+    if (error.code === "SECRET_CORRUPTED") {
+      return {
+        outcome: "identity-rejected",
+        diagnostic: { code: "IDENTITY_KEY_INVALID" },
+      };
+    }
+  }
+  if (error instanceof DeviceChannelClientError && error.diagnosticCode !== undefined) {
+    return {
+      outcome: "identity-rejected",
+      diagnostic: { code: error.diagnosticCode },
+    };
+  }
   return {
     outcome: "connect-failed",
     diagnostic: { code: "TRANSPORT_BOUNDARY_ERROR" },
   };
+}
+
+async function executeWorkerPrivateKey(
+  managedSecrets: Pick<ManagedSecretStore, "executeWithSecretBytes">,
+  alias: string,
+  executor: (value: Uint8Array) => unknown | Promise<unknown>,
+): Promise<void> {
+  const noFailure = Symbol("no private-key executor failure");
+  let executorFailure: unknown | typeof noFailure = noFailure;
+  await managedSecrets.executeWithSecretBytes(alias, async (value) => {
+    try {
+      await executor(value);
+    } catch (error) {
+      executorFailure = error;
+    }
+  });
+  if (executorFailure !== noFailure) {
+    throw executorFailure;
+  }
 }
 
 async function verifyInitialWorkerChannel(input: {
@@ -3015,7 +3606,8 @@ async function verifyInitialWorkerChannel(input: {
             certificateAuthorityPem: input.configuration.certificateAuthorityPem,
             certificateGeneration: input.configuration.certificateGeneration,
             executeWithPrivateKeyBytes: (executor) =>
-              input.managedSecrets.executeWithSecretBytes(
+              executeWorkerPrivateKey(
+                input.managedSecrets,
                 `${PRIVATE_KEY_ALIAS_PREFIX}${input.configuration.keyId}`,
                 executor,
               ),
@@ -3128,22 +3720,49 @@ export function createWorkerNativeSessionLeaseStore(paths: WorkerPaths): FileSes
   });
 }
 
+/**
+ * Projects a service or foreground environment onto the non-secret variables an
+ * Agent provider is allowed to inherit. Windows variable names are
+ * case-insensitive, so a native `Path` entry is deliberately canonicalized to
+ * `PATH` before it reaches adapter executable discovery.
+ */
+export function projectWorkerAgentEnvironment(
+  environment: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string>> {
+  const caseInsensitive = platform() === "win32";
+  const values = new Map<string, string>();
+  for (const [key, value] of Object.entries(environment)) {
+    if (typeof value === "string") {
+      values.set(caseInsensitive ? key.toLocaleUpperCase("en-US") : key, value);
+    }
+  }
+  const result: Record<string, string> = {};
+  for (const key of WORKER_AGENT_ENVIRONMENT_KEYS) {
+    const value = values.get(caseInsensitive ? key.toLocaleUpperCase("en-US") : key);
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return Object.freeze(result);
+}
+
 export function createWorkerAgentAdapters(
   configuration: WorkerAgentConfiguration,
   paths: WorkerPaths,
   leaseStore: SessionLeaseStore = createWorkerNativeSessionLeaseStore(paths),
+  environment?: Readonly<Record<string, string | undefined>>,
 ): readonly AgentAdapter[] {
-  const codexHome =
-    configuration.codexHome === undefined
-      ? defaultProviderHome("codex", paths)
-      : requireExternalProvisioningPath(
-          configuration.codexHome,
-          paths.sourceCheckoutRoot,
-          "Codex provider home",
-        );
+  const rawEnvironment = environment ?? process.env;
+  const agentEnvironment = projectWorkerAgentEnvironment(rawEnvironment);
+  const codexHome = resolveWorkerCodexProviderHome(
+    configuration,
+    paths,
+    rawEnvironment,
+    agentEnvironment,
+  );
   const claudeHome =
     configuration.claudeHome === undefined
-      ? defaultProviderHome("claude", paths)
+      ? defaultProviderHome("claude", paths, agentEnvironment)
       : requireExternalProvisioningPath(
           configuration.claudeHome,
           paths.sourceCheckoutRoot,
@@ -3152,6 +3771,7 @@ export function createWorkerAgentAdapters(
   return Object.freeze([
     new CodexAppServerAdapter({
       codexHome,
+      environment: agentEnvironment,
       leaseStore,
       ...(configuration.codexExecutable === undefined
         ? {}
@@ -3170,6 +3790,7 @@ export function createWorkerAgentAdapters(
     }),
     new CodexCliAdapter({
       codexHome,
+      environment: agentEnvironment,
       leaseStore,
       ...(configuration.codexExecutable === undefined
         ? {}
@@ -3185,6 +3806,25 @@ export function createWorkerAgentAdapters(
       allowUntestedVersion: configuration.allowUntestedVersion,
     }),
   ]);
+}
+
+function resolveWorkerCodexProviderHome(
+  configuration: WorkerAgentConfiguration,
+  paths: WorkerPaths,
+  rawEnvironment: Readonly<Record<string, string | undefined>>,
+  agentEnvironment = projectWorkerAgentEnvironment(rawEnvironment),
+): string {
+  const serviceCodexHome =
+    platform() === "win32" && rawEnvironment["OPENDELEGATE_SERVICE_MODE"] === "system-service"
+      ? agentEnvironment["CODEX_HOME"]
+      : undefined;
+  return requireExternalProvisioningPath(
+    serviceCodexHome ??
+      configuration.codexHome ??
+      defaultProviderHome("codex", paths, agentEnvironment),
+    paths.sourceCheckoutRoot,
+    serviceCodexHome === undefined ? "Codex provider home" : "Codex service home",
+  );
 }
 
 interface WorkerWakeOnLanCapabilityProbe {
@@ -3215,6 +3855,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
   if (!Number.isSafeInteger(probeCacheMs) || probeCacheMs < 0 || probeCacheMs > 3_600_000) {
     throw appError("CONFIG_INVALID", "Worker capability probe cache duration is invalid.");
   }
+  const agentEnvironment = projectWorkerAgentEnvironment(input.environment);
   let cached:
     | {
         readonly expiresAt: number;
@@ -3230,7 +3871,10 @@ export function createWorkerSchedulingInventoryProvider(input: {
     snapshot: async (): Promise<WorkerSchedulingInventoryV1> => {
       const now = Date.now();
       if (cached === undefined || cached.expiresAt <= now) {
-        const outcomes = await Promise.allSettled(input.adapters.map((adapter) => adapter.probe()));
+        const previousModelCatalogs = cached?.modelCatalogs;
+        const outcomes = await Promise.allSettled(
+          input.adapters.map((adapter) => adapter.probe({ environment: agentEnvironment })),
+        );
         const probes: AgentAdapterProbe[] = [];
         const failedAdapters: Pick<AgentAdapter, "adapterId" | "provider">[] = [];
         outcomes.forEach((outcome, index) => {
@@ -3267,17 +3911,31 @@ export function createWorkerSchedulingInventoryProvider(input: {
             ) {
               return undefined;
             }
-            return await adapter.listModels();
+            return await adapter.listModels({ environment: agentEnvironment });
           }),
         );
         const modelCatalogs = new Map<string, AgentModelCatalog>();
         catalogOutcomes.forEach((outcome, index) => {
+          const adapter = input.adapters[index]!;
+          const identity = agentAdapterIdentity(adapter.provider, adapter.adapterId);
           if (outcome.status === "fulfilled" && outcome.value !== undefined) {
-            const adapter = input.adapters[index]!;
-            modelCatalogs.set(
-              agentAdapterIdentity(adapter.provider, adapter.adapterId),
-              outcome.value,
-            );
+            modelCatalogs.set(identity, outcome.value);
+            return;
+          }
+          const probe = probes.find(
+            (candidate) =>
+              candidate.provider === adapter.provider && candidate.adapterId === adapter.adapterId,
+          );
+          if (
+            outcome.status === "rejected" &&
+            adapter.listModels !== undefined &&
+            probe !== undefined &&
+            adapterReadiness(probe) === "ready"
+          ) {
+            const previous = previousModelCatalogs?.get(identity);
+            if (previous !== undefined) {
+              modelCatalogs.set(identity, previous);
+            }
           }
         });
         const wakeOnLan = await probeWakeOnLanCapability(input.wakeOnLanProbe, now);
@@ -3366,6 +4024,9 @@ export function createWorkerSchedulingInventoryProvider(input: {
           return Object.freeze({
             provider: schedulingProvider(probe.provider),
             adapterId: probe.adapterId,
+            toolUse: probe.capabilities.approvalBridge
+              ? ("authorized" as const)
+              : ("text-only" as const),
             readiness: adapterReadiness(probe),
             compatibility: probe.compatibility,
             ...(blockedBy === undefined ? {} : { blockedBy }),
@@ -3402,6 +4063,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
           Object.freeze({
             provider: schedulingProvider(adapter.provider),
             adapterId: adapter.adapterId,
+            toolUse: "text-only" as const,
             readiness: "unavailable" as const,
             compatibility: "untested" as const,
             blockedBy: "probe-failed" as const,
@@ -3669,6 +4331,7 @@ function workerServiceMode(
 export function resolveWorkerAgentPermissions(
   capabilities: Pick<AgentAdapterProbe["capabilities"], "approvalBridge">,
   actionAuthorization?: AgentActionAuthorizationPort,
+  options: { readonly automaticWorkspaceFileAuthoring?: boolean } = {},
 ): AgentPermissionInput {
   if (typeof capabilities.approvalBridge !== "boolean") {
     throw appError("CONFIG_INVALID", "Agent approval capability metadata is invalid.");
@@ -3685,6 +4348,28 @@ export function resolveWorkerAgentPermissions(
       "An Agent approval bridge requires the exact-action authorization port.",
     );
   }
+  if (
+    options.automaticWorkspaceFileAuthoring !== undefined &&
+    typeof options.automaticWorkspaceFileAuthoring !== "boolean"
+  ) {
+    throw appError("CONFIG_INVALID", "Workspace file-authoring policy metadata is invalid.");
+  }
+  const effectiveActionAuthorization = options.automaticWorkspaceFileAuthoring
+    ? Object.freeze({
+        authorizeAndConsume: (request: AgentActionAuthorizationRequest) =>
+          request.actionType === "file-change"
+            ? Promise.resolve({
+                decision: "allow" as const,
+                reasonCode: "POLICY_WORKSPACE_FILE_AUTHORING_AUTOMATIC",
+              })
+            : request.actionCategory === "sandbox-boundary-escalation"
+              ? Promise.resolve({
+                  decision: "deny" as const,
+                  reasonCode: "POLICY_WORKSPACE_ESCALATION_UNNECESSARY",
+                })
+              : actionAuthorization.authorizeAndConsume(request),
+      })
+    : actionAuthorization;
   return Object.freeze({
     mode: "allow-listed" as const,
     allowedTools: Object.freeze([
@@ -3703,8 +4388,24 @@ export function resolveWorkerAgentPermissions(
       "shell",
       "file-change",
     ]),
-    actionAuthorization,
+    actionAuthorization: effectiveActionAuthorization,
   });
+}
+
+export function isAutomaticWorkspaceFileAuthoringWorkOrder(
+  requiredCapabilities: readonly string[],
+): boolean {
+  const workspaceFileCapabilities = new Set([
+    "artifact-upload",
+    "file-authoring",
+    "linux",
+    "macos",
+    "windows",
+  ]);
+  return (
+    requiredCapabilities.includes("file-authoring") &&
+    requiredCapabilities.every((capability) => workspaceFileCapabilities.has(capability))
+  );
 }
 
 export function resolveWorkerAgentSandbox(input: {
@@ -3727,7 +4428,9 @@ export async function selectAgentAdapter(
   adapters: readonly AgentAdapter[],
   configuration: WorkerAgentConfiguration,
   requirement: WorkerRunAssignmentV1["agentRequirement"],
+  environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<{ readonly adapter: AgentAdapter; readonly probe: AgentAdapterProbe }> {
+  const agentEnvironment = projectWorkerAgentEnvironment(environment);
   const ordered =
     requirement === undefined
       ? configuration.provider === "auto"
@@ -3744,7 +4447,7 @@ export async function selectAgentAdapter(
     requirement?.allowedCompatibilities ?? (["tested"] as const),
   );
   for (const adapter of ordered) {
-    const probe = await adapter.probe();
+    const probe = await adapter.probe({ environment: agentEnvironment });
     if (
       probe.contractVersion === 1 &&
       probe.adapterId === adapter.adapterId &&
@@ -3765,7 +4468,7 @@ export async function selectAgentAdapter(
         }
         let catalog;
         try {
-          catalog = await adapter.listModels();
+          catalog = await adapter.listModels({ environment: agentEnvironment });
         } catch {
           continue;
         }
@@ -3784,7 +4487,7 @@ export async function selectAgentAdapter(
   );
 }
 
-function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
+export function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
   const order = assignment.workOrder;
   return [
     `# ${order.title}`,
@@ -3805,6 +4508,19 @@ function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
           `- Adapter: ${assignment.agentRequirement.adapterId ?? "provider default"}`,
           `- Model: ${assignment.agentRequirement.modelId ?? "adapter default"}`,
         ]),
+    ...(order.requiredCapabilities.includes("file-authoring")
+      ? [
+          "",
+          "## Workspace file verification",
+          "- After every create or edit, call workspace_file_inspect with the exact relative path.",
+          "- Use its actual text, byte count, SHA-256, BOM, UTF-8, and final-LF result as completion evidence; do not report payload assumptions as verification.",
+        ]
+      : []),
+    "",
+    "## Completion report contract",
+    "- Finish the work before reporting. Report only the observable result and explicit evidence for every completion criterion.",
+    "- Do not add preambles, promises, or narration about what you will do or how you intend to do it.",
+    "- If any criterion cannot be verified, state exactly what remains incomplete and why; never imply success from an attempted action.",
     "",
     "## Local child-Agent delegation",
     "- If the selected provider exposes Agent or Task delegation, you may use it only when independent local work benefits from parallelism.",
@@ -3816,6 +4532,37 @@ function renderWorkOrderPrompt(assignment: WorkerRunAssignmentV1): string {
     `Task ID: ${assignment.taskId}`,
     `Work Order ID: ${order.workOrderId}`,
   ].join("\n");
+}
+
+/**
+ * A single owner follow-up for one prior Device/Workspace workstream is the
+ * deterministic related-work case. Reuse that workstream so its managed
+ * worktree and provider-native session survive the new durable Work Order ID.
+ * Parallel or otherwise ambiguous prior workstreams remain isolated.
+ */
+export function resolveWorkerWorkstreamId(
+  assignment: WorkerRunAssignmentV1,
+  workspaceId: string | undefined,
+): string {
+  const currentWorkstreamId = assignment.workOrder.workOrderId;
+  const checkpoint = assignment.continuationCheckpoint;
+  if (
+    checkpoint === undefined ||
+    workspaceId === undefined ||
+    checkpoint.omitted.pendingWorkOrders !== 0 ||
+    checkpoint.omitted.sessions !== 0 ||
+    checkpoint.pendingWorkOrders.length !== 1 ||
+    checkpoint.pendingWorkOrders[0]?.workOrderId !== currentWorkstreamId
+  ) {
+    return currentWorkstreamId;
+  }
+  const related = checkpoint.sessions.filter(
+    (session) =>
+      session.scope === "worker" &&
+      session.deviceId === assignment.deviceId &&
+      session.workspaceId === workspaceId,
+  );
+  return related.length === 1 ? related[0]!.workstreamId : currentWorkstreamId;
 }
 
 export function renderWorkerRuntimeContext(input: {
@@ -3902,6 +4649,15 @@ export function createWorkerManagedSecretStore(
     case "macos-keychain":
       backend = {
         backend: "macos-keychain",
+        deviceId,
+        helperPath: configuration.helperPath,
+        expectedHelperSha256: configuration.expectedHelperSha256,
+      };
+      break;
+    case "macos-system-keychain":
+      backend = {
+        backend: "macos-system-keychain",
+        bindingPath: configuration.bindingPath,
         deviceId,
         helperPath: configuration.helperPath,
         expectedHelperSha256: configuration.expectedHelperSha256,
@@ -4279,6 +5035,30 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
         helperPath: requireAbsolutePath(text(record["helperPath"]), "Keychain helper"),
         expectedHelperSha256: text(record["expectedHelperSha256"]),
       };
+    case "macos-system-keychain":
+      assertExactKeys(record, [
+        "backend",
+        "bindingPath",
+        "helperPath",
+        "expectedHelperSha256",
+        "servicePreparation",
+      ]);
+      if (!/^sha256:[0-9a-f]{64}$/u.test(text(record["expectedHelperSha256"]))) {
+        throw appError("CONFIG_INVALID", "macOS system helper fingerprint is invalid.");
+      }
+      return {
+        backend: "macos-system-keychain",
+        bindingPath: requirePosixAbsolutePath(
+          text(record["bindingPath"]),
+          "System Keychain binding",
+        ),
+        helperPath: requirePosixAbsolutePath(
+          text(record["helperPath"]),
+          "persistent Keychain helper",
+        ),
+        expectedHelperSha256: text(record["expectedHelperSha256"]),
+        servicePreparation: validateMacOsServicePreparation(record["servicePreparation"]),
+      };
     case "linux-secret-service":
       assertExactKeys(record, ["backend", "secretToolPath"]);
       return {
@@ -4310,6 +5090,54 @@ function validateSecretBackend(value: unknown): WorkerSecretBackendConfiguration
     default:
       throw appError("CONFIG_INVALID", "Worker Secret Store configuration is invalid.");
   }
+}
+
+function validateMacOsServicePreparation(value: unknown): WorkerMacOsServicePreparation {
+  const record = readRecord(value);
+  assertExactKeys(record, [
+    "schemaVersion",
+    "serviceIdentity",
+    "ownerHelperSecretBinding",
+    "ipcTrust",
+  ]);
+  if (record["schemaVersion"] !== 1) {
+    throw appError("CONFIG_INVALID", "macOS service preparation version is unsupported.");
+  }
+  const identity = readRecord(record["serviceIdentity"]);
+  assertExactKeys(identity, ["userName", "groupName"]);
+  const userName = unixAccountName(identity["userName"], "macOS service user");
+  const groupName = unixAccountName(identity["groupName"], "macOS service group");
+  if (userName === "root") {
+    throw appError("CONFIG_INVALID", "The macOS core service identity must not be root.");
+  }
+  const ownerHelper = readRecord(record["ownerHelperSecretBinding"]);
+  assertExactKeys(ownerHelper, ["backend", "helperPath", "expectedHelperSha256"]);
+  if (
+    ownerHelper["backend"] !== "macos-keychain" ||
+    !/^sha256:[0-9a-f]{64}$/u.test(text(ownerHelper["expectedHelperSha256"]))
+  ) {
+    throw appError("CONFIG_INVALID", "The macOS owner Keychain binding is invalid.");
+  }
+  const ipcTrust = readRecord(record["ipcTrust"]);
+  assertExactKeys(ipcTrust, ["core", "helper"]);
+  const core = validateWorkerLocalIpcPublicKeyPin(ipcTrust["core"]);
+  const helper = validateWorkerLocalIpcPublicKeyPin(ipcTrust["helper"]);
+  if (core.keyId === helper.keyId) {
+    throw appError("CONFIG_INVALID", "Core and owner-session helper must use distinct keys.");
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    serviceIdentity: Object.freeze({ userName, groupName }),
+    ownerHelperSecretBinding: Object.freeze({
+      backend: "macos-keychain",
+      helperPath: requirePosixAbsolutePath(
+        text(ownerHelper["helperPath"]),
+        "owner Keychain helper",
+      ),
+      expectedHelperSha256: text(ownerHelper["expectedHelperSha256"]),
+    }),
+    ipcTrust: Object.freeze({ core, helper }),
+  });
 }
 
 function validateLinuxHeadlessServicePreparation(

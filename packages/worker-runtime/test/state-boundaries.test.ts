@@ -123,6 +123,31 @@ test("diagnostic sanitization copies only allowlisted inert values", () => {
       retryable: true,
     },
   );
+  assert.deepEqual(
+    sanitizeWorkerDiagnostic({
+      code: "ARTIFACT_PROMOTION_FAILED",
+      stage: "artifact",
+      retryable: false,
+      localPath: "private/runtime/report.md",
+    }),
+    {
+      code: "ARTIFACT_PROMOTION_FAILED",
+      stage: "artifact",
+      retryable: false,
+    },
+  );
+  assert.deepEqual(
+    sanitizeWorkerDiagnostic({
+      code: "ARTIFACT_EGRESS_DENIED",
+      stage: "artifact",
+      retryable: false,
+    }),
+    {
+      code: "ARTIFACT_EGRESS_DENIED",
+      stage: "artifact",
+      retryable: false,
+    },
+  );
 });
 
 test("the local repository refuses an incompatible durable state document", async () => {

@@ -152,11 +152,46 @@ opendelegate worker service-document --output ABSOLUTE_NEW_PATH \
 opendelegate service plan install --config ABSOLUTE_NEW_PATH
 ```
 
-This production-shaped path is wired for staged Windows, explicitly headless
-systemd Linux Workers, and a headless Main derived from its co-located Worker.
-macOS and graphical Linux fail closed until their separate
-service-account and owner-session Secret migration is implemented; a hand-authored
-document is not a substitute.
+On macOS, first run the owner-session preparation from Terminal.app while the login
+Keychain is unlocked; `sudo` may request the owner's password:
+
+```text
+opendelegate worker macos-service-secret-stage --home ABSOLUTE_WORKER_HOME \
+  --binding-path "/Library/Application Support/OpenDelegate/INSTANCE/system-keychain-binding.json" \
+  --system-helper "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-INSTANCE" \
+  --service-user _opendelegate --service-group _opendelegate
+```
+
+When an already-enrolled owner Worker is migrated into `DATA_ROOT/state`, the
+ordering is security-sensitive:
+
+1. Run `macos-service-secret-stage` from the signed-in owner session.
+2. Copy the complete Worker home to `DATA_ROOT/state` while it is still readable by
+   the process that will compose the document.
+3. Compose the create-new service document before recursively adopting the copied
+   tree for the service identity. If the tree is already service-private, run only
+   `worker service-document` from an elevated shell; it reads public configuration
+   and writes no Secret values.
+4. Make both `DATA_ROOT` traversable by the service identity and the copied state
+   tree owned by that identity before launchd starts it. The owner remains a member
+   of the service group for bounded read access.
+5. Place the internal-preview publisher key at the verifier's canonical
+   `STATE_ROOT/trust/publisher-ed25519.pem` path. `DATA_ROOT/trust` is not used.
+6. Review `service plan install`, then run the elevated install with a stable
+   command ID.
+
+Automation must not change ownership first and then invoke `service-document` as
+the unprivileged owner. An unreadable configuration is reported as
+`CONFIG_PATH_UNSAFE`, not as a missing enrollment, and must be recovered in place;
+it is never a reason to issue a new Enrollment Grant.
+
+This production-shaped path is wired for staged Windows, prepared two-plane macOS,
+explicitly headless systemd Linux Workers, and a headless Main derived from its
+co-located Worker. macOS composition refuses an unprepared login-Keychain Worker or
+a target bundle whose helper digest differs from the prepared stable helper.
+Graphical Linux still fails closed until its separate service-account and
+owner-session Secret migration is implemented; a hand-authored document is not a
+substitute.
 
 ## Read-only commands
 

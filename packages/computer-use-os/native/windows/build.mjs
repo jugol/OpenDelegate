@@ -5,6 +5,12 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import {
+  WINDOWS_CUI_SUBSYSTEM,
+  WINDOWS_GUI_SUBSYSTEM,
+  setWindowsPeSubsystem,
+} from "../../../../tooling/windows-pe-subsystem.mjs";
+
 const execFileAsync = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const checkoutDirectory = resolve(scriptDirectory, "..", "..", "..", "..");
@@ -52,6 +58,10 @@ export async function buildWindowsComputerUseNative(options = {}) {
   const helperExecutable = join(outputDirectory, "opendelegate-windows-computer-use-helper.exe");
   const fixtureExecutable = join(outputDirectory, "opendelegate-windows-computer-use-fixture.exe");
   await Promise.all([access(helperExecutable), access(fixtureExecutable)]);
+  await setWindowsPeSubsystem(helperExecutable, {
+    expected: WINDOWS_CUI_SUBSYSTEM,
+    subsystem: WINDOWS_GUI_SUBSYSTEM,
+  });
   await execFileAsync(helperExecutable, ["crypto-self-test"], {
     cwd: outputDirectory,
     encoding: "utf8",

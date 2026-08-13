@@ -25,7 +25,7 @@ const limits: AgentRunLimits = {
   maxDiagnosticBytes: 4 * 1024,
 };
 
-test("Codex App Server ignores benign status, goal, and skill notifications", async () => {
+test("Codex App Server accepts its tested notification catalog without losing a completed turn", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
   try {
     const cwd = await realpath(process.cwd());
@@ -94,10 +94,13 @@ test("Codex App Server ignores benign status, goal, and skill notifications", as
       },
       environment: {
         FIXTURE_EXPECT_MODEL: "gpt-5.6-sol",
+        FIXTURE_EXPECT_TURN_SANDBOX: "workspaceWrite",
         FIXTURE_EXPECT_NATIVE_SUBAGENTS: "disabled",
         FIXTURE_EMIT_REMOTE_CONTROL_STATUS: "1",
         FIXTURE_CODEX_EMIT_SKILLS_CHANGED: "1",
         FIXTURE_EMIT_THREAD_GOAL_CLEARED: "1",
+        FIXTURE_CODEX_EMIT_V0146_NOTIFICATIONS: "1",
+        FIXTURE_CODEX_EMIT_PHASED_MESSAGES: "1",
       },
       limits,
     };
@@ -125,6 +128,25 @@ test("Codex App Server ignores benign status, goal, and skill notifications", as
       ),
     );
     assert.ok(events.some((event) => event.type === "tool_result" && event.toolName === "shell"));
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "progress" &&
+          event.message === "Codex reported task progress inside this Worker Run.",
+      ),
+    );
+    assert.equal(JSON.stringify(events).includes("Creating the requested file now."), false);
+    assert.ok(
+      events.some(
+        (event) => event.type === "public_message" && event.text === "Finished through App Server",
+      ),
+    );
+    assert.ok(
+      events.some(
+        (event) => event.type === "diagnostic" && event.code === "CODEX_PROVIDER_RETRYING",
+      ),
+    );
+    assert.equal(JSON.stringify(events).includes("private fixture provider detail"), false);
 
     assert.ok(first.session);
     const resumed = await adapter.resume({
@@ -420,6 +442,58 @@ test("Codex App Server fails closed when persisted state cannot prove terminal c
       events.some((event) => event.type === "diagnostic" && event.code === "CODEX_TURN_RECONCILED"),
       false,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex App Server contains EPIPE when the provider exits during owner authorization", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "opendelegate-codex-app-server-")));
+  try {
+    const cwd = await realpath(process.cwd());
+    const adapter = new CodexAppServerAdapter({
+      codexHome: join(root, "codex-home"),
+      executable: process.execPath,
+      prefixArgs: [fixturePath, "codex-app-server"],
+    });
+    const handle = await adapter.start({
+      operation: "start",
+      requestId: "request-provider-exit-during-approval",
+      runId: "run-provider-exit-during-approval",
+      taskId: "task-provider-exit-during-approval",
+      workstreamId: "implementation",
+      sessionKey: "task-provider-exit-during-approval/implementation",
+      deviceId: "device-windows",
+      prompt: "Run one bounded command.",
+      workspace: {
+        workspaceId: "workspace-app-server",
+        cwd,
+        isolation: "none",
+      },
+      sandbox: "workspace-write",
+      permissions: {
+        mode: "allow-listed",
+        allowedTools: ["shell"],
+        actionAuthorization: {
+          authorizeAndConsume: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            return { decision: "allow", reasonCode: "POLICY_TEST" };
+          },
+        },
+      },
+      environment: {
+        FIXTURE_CODEX_EXIT_AFTER_APPROVAL_REQUEST: "1",
+        FIXTURE_CODEX_RECONCILED_TURN_STATUS: "inProgress",
+      },
+      limits,
+    });
+    for await (const event of handle.events) {
+      void event;
+    }
+    const result = await handle.result;
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.error?.code, "PROVIDER_CONNECTION_CLOSED");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

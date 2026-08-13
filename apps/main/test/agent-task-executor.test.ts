@@ -418,6 +418,10 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
     /login, MFA, CAPTCHA, legal confirmation, or OS permission/u,
   );
   assert.match(adapter.starts[0]?.prompt ?? "", /never invent a handoff URL/u);
+  assert.match(
+    adapter.starts[0]?.prompt ?? "",
+    /Do not require Worker-authored text to attest post-turn Main promotion or Discord presentation/u,
+  );
 
   const verified = await reasoner.verify({
     task,
@@ -443,6 +447,11 @@ test("Main Agent plans Work Orders and verifies completion only from authoritati
   assert.match(
     adapter.resumes[0]?.prompt ?? "",
     /Discord summary, file, Artifact, hosted result, or Git reference/u,
+  );
+  assert.match(adapter.resumes[0]?.prompt ?? "", /"state":"promoted-to-main-durable-store"/u);
+  assert.match(
+    adapter.resumes[0]?.prompt ?? "",
+    /stronger than Worker-authored report text written before promotion/u,
   );
 });
 
@@ -898,6 +907,24 @@ test("Main planning exposes only verified capabilities and never Device instruct
             { name: "UNVERIFIED_CAPABILITY_SENTINEL", verification: "detected" },
             { name: "DEGRADED_CAPABILITY_SENTINEL", verification: "degraded" },
           ],
+          agentAdapters: [
+            {
+              provider: "codex",
+              adapterId: "codex-app-server",
+              readiness: "ready",
+              compatibility: "tested",
+              observedAtMs: 9_900,
+              models: [],
+            },
+            {
+              provider: "claude",
+              adapterId: "claude-cli",
+              readiness: "ready",
+              compatibility: "tested",
+              observedAtMs: 9_900,
+              models: [],
+            },
+          ],
           workspaceIds: ["workspace-build"],
           wakeOnLan: {
             targetState: "enabled",
@@ -922,6 +949,9 @@ test("Main planning exposes only verified capabilities and never Device instruct
   const prompt = adapter.starts[0]?.prompt ?? "";
   assert.match(prompt, /"capabilities":\["codex"\]/u);
   assert.match(prompt, /"workspaceIds":\["workspace-build"\]/u);
+  assert.match(prompt, /"adapterId":"codex-app-server","toolUse":"authorized"/u);
+  assert.match(prompt, /"adapterId":"claude-cli","toolUse":"text-only"/u);
+  assert.match(prompt, /Never pin a text-only adapter for work that needs any of those effects/u);
   assert.match(prompt, /multiple Workspaces require an explicit choice/u);
   assert.match(
     prompt,
@@ -967,6 +997,39 @@ test("Main planning rejects Computer Use work that omits its exact authority cap
   assert.match(
     adapter.starts[0]?.prompt ?? "",
     /requiredCapabilities is an execution-authority gate/u,
+  );
+});
+
+test("Main planning does not turn explicit Computer Use prohibitions into input authority", async () => {
+  const adapter = new FakeAgentAdapter("orchestration-forbidden-computer-use");
+  const reasoner = new AgentBackedTaskExecutor({
+    adapter,
+    sessionRepository: new EventStoreMainNativeSessionRepository(
+      new InMemoryEventStore({ clock: { now: () => NOW } }),
+    ),
+    checkpoints: checkpointProvider(),
+    deviceId: "device_main",
+    workspace: {
+      workspaceId: "workspace_main_coordinator",
+      cwd: await realpath("."),
+      isolation: "none",
+    },
+    sandbox: "read-only",
+    permissions: { mode: "deny" },
+    limits,
+  });
+
+  const planned = await reasoner.plan({
+    task: request(1).task,
+    attempt: 1,
+    executionKey: "computer-use-prohibition",
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(planned.state, "ready");
+  assert.deepEqual(
+    planned.state === "ready" ? planned.plan.workOrders[0]?.requiredCapabilities : undefined,
+    ["codex"],
   );
 });
 
@@ -1200,6 +1263,7 @@ type FakeAgentMode =
   | "placement-question"
   | "outcome-platform-question"
   | "orchestration"
+  | "orchestration-forbidden-computer-use"
   | "orchestration-missing-computer-use"
   | "orchestration-omitted-secret-refs"
   | "orchestration-dependencies"
@@ -1302,6 +1366,33 @@ class FakeAgentAdapter implements AgentAdapter {
               ...releaseWorkOrder(),
               brief: "Invoke Computer Use to type a marker in Notepad.",
               completionCriteria: ["Computer Use is invoked and the marker is visible."],
+              requiredCapabilities: ["codex"],
+            },
+          ],
+        },
+      });
+    }
+    if (this.#mode === "orchestration-forbidden-computer-use") {
+      return handle(session(input), {
+        schemaVersion: 1,
+        state: "ready",
+        plan: {
+          protocolVersion: "v1",
+          taskId: input.taskId,
+          workOrders: [
+            {
+              ...releaseWorkOrder(),
+              constraints: [
+                "Computer Use, browser automation, and external network access are forbidden.",
+                "Computer Use is not used for this Work Order.",
+                "Computer Use must never be invoked by this Work Order.",
+                "No use Computer Use for this Work Order.",
+                "Computer Use를 실행해서는 안 된다.",
+                "Computer Use를 사용하면 안 됩니다.",
+                "shell, OS API, 일반 filesystem, browser, Computer Use, 외부 network, 설치, 삭제를 사용하지 않는다.",
+                "기존 파일 수정·삭제, Artifact 생성, Computer Use, shell 사용, 권한 상승, sandbox-boundary escalation, Owner Approval, 서비스 또는 네트워크 변경이 발생하지 않는다.",
+                "Use the provider file-change/patch mechanism only; do not use shell, Computer Use, privilege elevation, sandbox-boundary escalation, Owner Approval, service changes, network changes, or automatic retries.",
+              ],
               requiredCapabilities: ["codex"],
             },
           ],

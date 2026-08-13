@@ -535,7 +535,9 @@ through a secure handoff and resumes the same Task afterward.
    is a final chronological reply with an optional Retry control. Once Retry starts,
    that cancellation reply becomes a control-free historical receipt just like a
    recovered failure; a later cancellation may then create one new current recovery
-   surface.
+   surface. A review result is also historical and carries no Pause or Cancel
+   control; an ordinary owner reply is the only transition into its next execution
+   cycle.
 9. Buttons and menus offer pause, cancel, retry, approve once, reject, inspect Runs,
    and open Artifact actions where Discord permits. A Discord Approval decision
    resolves the exact same durable Approval service record shown in Admin Web; it
@@ -548,6 +550,11 @@ through a secure handoff and resumes the same Task afterward.
    interaction response; the new durable Task surface is the confirmation. This
    prevents ephemeral receipts from pointing at an activity message that the bounded
    surface lifecycle has already superseded and deleted.
+   Gateway records an interaction's deadline clock at socket ingress, before ordered dispatch or
+   Task work. If head-of-line delay has already made the private acknowledgement impossible,
+   an authorized current control still resolves its exact idempotent Task command or Approval
+   once. The durable Task surface becomes the confirmation; stale, unauthorized, malformed,
+   and replayed controls remain inert or idempotent.
 10. Closed or auto-archived posts do not complete or delete Tasks. New activity may
     resume the Task and reopen the external conversation when permitted.
 11. If the external post is deleted, Task data remains in Main and the binding is
@@ -856,6 +863,9 @@ may request a transition but cannot manufacture a state outside the transition r
 12. When an eligible interactive surface exists, Main presents a bounded Owner
     Handoff. After the owner returns control through the same Task, execution resumes
     from durable state and the existing session lineage where possible.
+13. A persistent user-session helper and its native Computer Use child run without a
+    console or provider window. Explicit OS picker, consent, login, MFA, and handoff
+    surfaces may appear only when the current owner-requested Run requires them.
 
 ### FR-13 — Knowledge-aware capability development
 
@@ -908,6 +918,12 @@ may request a transition but cannot manufacture a state outside the transition r
 17. Credentials or provider tokens retained after owner authorization remain in the
     relevant Device Secret Store under Policy; only a non-secret capability
     reference may enter Task state.
+18. A completed Discord-bound Task presents an available `download` Artifact of at
+    most Discord's baseline 10 MiB limit as a native Components v2 File when its
+    filename and media type are safe for that protocol. The durable Discord outbox
+    stores only the Task-bound Artifact identity and integrity metadata; Main rereads
+    and verifies the bytes immediately before upload. Larger or incompatible results
+    retain their Artifact Gateway action.
 
 ### FR-15 — Admin Web
 
@@ -1085,10 +1101,11 @@ may request a transition but cannot manufacture a state outside the transition r
     the action. Stateless preview or evaluation cannot authorize it, and a consumed
     or replayed grant fails closed across process restart.
 11. Discord and Admin Web show the proposed action, reason, target, risk, and
-    evidence. Discord uses an owner-safe summary on the current live Task surface
-    and offers approve-once or reject; Admin Web retains the complete normalized
-    Approval detail and broader grant scopes. Multiple pending Worker actions are
-    serialized visibly rather than collapsed or duplicated.
+    evidence. Discord uses a localized owner-safe summary on the current live Task
+    surface, identifies sequential protected actions by a stable Task-local ordinal,
+    and offers explicitly labelled approve-once or reject; Admin Web retains the
+    complete normalized Approval detail and broader grant scopes. Multiple pending
+    Worker actions are serialized visibly rather than collapsed or duplicated.
 12. The executor rejects actions outside the approved scope even if an Agent claims
     approval exists.
 13. More permissive owner configuration is supported and clearly surfaced.

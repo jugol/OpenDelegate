@@ -141,6 +141,7 @@ export {
   type ServiceIdentity,
   type ServiceOperation,
   type ServicePlaneArtifact,
+  type WindowsAgentProviderAccessConfiguration,
   type WindowsAgentSandboxConfiguration,
   type WindowsServiceConfiguration,
   type WindowsServiceSecretBinding,
@@ -152,6 +153,7 @@ export {
   type ReadOnlyCommandRunner,
   type WindowsHostValidationReport,
 } from "./windows-host-validation.ts";
+export { isCanonicalLocalWindowsPath, parseWindowsOwnerHome } from "./windows-owner-home.ts";
 export {
   NativeBoundaryError,
   createNodeNativeServiceBoundaries,

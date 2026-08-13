@@ -316,7 +316,7 @@ export class FileManifestWorkerArtifactLifecycle implements WorkerArtifactLifecy
           throw new WorkerArtifactPromotionError(
             "DELIVERY_FAILED",
             "A declared Artifact could not reach Main's durable store.",
-            true,
+            deliveryFailureRetryable(error),
             { cause: error },
           );
         }
@@ -338,6 +338,22 @@ export class FileManifestWorkerArtifactLifecycle implements WorkerArtifactLifecy
     } finally {
       await rm(sealedRoot, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+}
+
+function deliveryFailureRetryable(error: unknown): boolean {
+  if (error === null || typeof error !== "object") {
+    return true;
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, "retryable");
+    return descriptor !== undefined &&
+      "value" in descriptor &&
+      typeof descriptor.value === "boolean"
+      ? descriptor.value
+      : true;
+  } catch {
+    return true;
   }
 }
 

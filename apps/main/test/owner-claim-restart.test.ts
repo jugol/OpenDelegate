@@ -97,6 +97,10 @@ function startInit(input: {
       input.home,
       "--admin-root",
       input.adminRoot,
+      // Artifact startup has separate listener and recovery coverage. This
+      // process test isolates the Admin + adjacent local-claim restart pair.
+      "--artifacts",
+      "disabled",
       "--secret-backend-config",
       input.secretBackendConfigurationFile,
       "--listen-host",

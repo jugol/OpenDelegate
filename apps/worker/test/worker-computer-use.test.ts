@@ -1,18 +1,33 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { platform, tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import type { AgentAdapter } from "@opendelegate/agent-adapters";
 import {
   InMemoryComputerUseStartHistory,
+  type ComputerUseReadinessReport,
   type LinuxAuthenticatedHelperSession,
   type LinuxNativeHelperPort,
   type NativeDriverExecutionContext,
+  type NativeComputerUseDriver,
   type ReadinessCheckName,
 } from "@opendelegate/computer-use-os";
+import { PROTOCOL_VERSION } from "@opendelegate/protocol";
+import {
+  WorkerRuntime,
+  createSqliteWorkerStateRepository,
+  type WorkerConfiguration,
+} from "@opendelegate/worker-runtime";
 
 import {
   createLinuxWorkerComputerUseComposition,
+  createWorkerComputerUseRuntime,
   createWorkerSchedulingInventoryProvider,
+  projectComputerUseReadiness,
+  resolveWorkerPaths,
+  type WorkerConfigurationDocument,
 } from "../src/index.ts";
 
 const SESSION = Object.freeze({
@@ -24,6 +39,282 @@ const SESSION = Object.freeze({
 });
 
 describe("Worker Computer Use capability composition", () => {
+  it("keeps scheduling inventory non-interactive while proving an authenticated helper", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-passive-computer-use-"));
+    const sourceCheckoutRoot = join(root, "source");
+    const paths = resolveWorkerPaths({ sourceCheckoutRoot, home: join(root, "runtime") });
+    await mkdir(sourceCheckoutRoot, { recursive: true });
+    await mkdir(paths.stateDirectory, { recursive: true });
+    const hostOsFamily =
+      platform() === "win32" ? "windows" : platform() === "darwin" ? "macos" : "linux";
+    let interactiveProbeCalls = 0;
+    const composition = await createWorkerComputerUseRuntime({
+      configuration: { deviceId: "device-passive-helper" } as WorkerConfigurationDocument,
+      paths,
+      actionChannel: {},
+      broker: undefined as never,
+      toolServerLaunch: { command: process.execPath, argsPrefix: [] },
+      runtime: {
+        async acquire() {
+          return {
+            driver: {
+              osFamily: hostOsFamily,
+              async probe() {
+                interactiveProbeCalls += 1;
+                throw new Error("background inventory must not invoke the interactive driver");
+              },
+              async observe() {
+                throw new Error("not used");
+              },
+              async capture() {
+                throw new Error("not used");
+              },
+              async act() {
+                throw new Error("not used");
+              },
+              async cancel() {},
+              async emergencyStop() {},
+            },
+            authority: {
+              async verify() {
+                throw new Error("background inventory must not request active desktop authority");
+              },
+            },
+            binding: {
+              helperInstanceId: "helper-passive",
+              serviceEpoch: 7,
+              persistenceGeneration: 9,
+            },
+            async release() {},
+          };
+        },
+      },
+    });
+    assert.ok(composition);
+    try {
+      assert.deepEqual(await composition.probe.probe(), { verification: "verified" });
+      assert.equal(interactiveProbeCalls, 0);
+      assert.deepEqual(composition.healthSnapshot(), {
+        daemon: "healthy",
+        session: "ready",
+        desktop: "unavailable",
+        permissions: {
+          accessibility: "unknown",
+          input: "unknown",
+          screenCapture: "unknown",
+        },
+      });
+    } finally {
+      await composition.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("projects authenticated helper checks into the Worker heartbeat readiness", () => {
+    assert.deepEqual(projectComputerUseReadiness(readinessReport()), {
+      daemon: "healthy",
+      session: "ready",
+      desktop: "available",
+      permissions: {
+        accessibility: "granted",
+        input: "granted",
+        screenCapture: "granted",
+      },
+    });
+
+    assert.deepEqual(
+      projectComputerUseReadiness(
+        readinessReport({
+          status: "unavailable",
+          checks: [
+            check("interactive-session"),
+            check("unlocked-session", "fail"),
+            check("screen-capture"),
+            check("accessibility"),
+            check("input"),
+            check("helper-authentication"),
+            check("service-epoch"),
+          ],
+        }),
+      ),
+      {
+        daemon: "healthy",
+        session: "locked",
+        desktop: "locked",
+        permissions: {
+          accessibility: "granted",
+          input: "granted",
+          screenCapture: "granted",
+        },
+      },
+    );
+
+    assert.deepEqual(
+      projectComputerUseReadiness(
+        readinessReport({
+          status: "unavailable",
+          checks: [
+            check("interactive-session", "unknown"),
+            check("unlocked-session", "unknown"),
+            check("screen-capture", "unknown"),
+            check("accessibility", "fail"),
+            check("input", "unknown"),
+            check("helper-authentication"),
+            check("service-epoch"),
+          ],
+        }),
+      ),
+      {
+        daemon: "healthy",
+        session: "unavailable",
+        desktop: "unavailable",
+        permissions: {
+          accessibility: "denied",
+          input: "unknown",
+          screenCapture: "unknown",
+        },
+      },
+    );
+
+    assert.deepEqual(
+      projectComputerUseReadiness(
+        readinessReport({
+          status: "unavailable",
+          backendId: "windows-native-driver-unavailable",
+          displayFingerprint: null,
+          checks: [
+            check("interactive-session", "fail"),
+            check("unlocked-session", "fail"),
+            check("screen-capture", "fail"),
+            check("accessibility", "fail"),
+            check("input", "fail"),
+            check("helper-authentication", "fail"),
+            check("service-epoch", "fail"),
+          ],
+        }),
+      ),
+      {
+        daemon: "healthy",
+        session: "unavailable",
+        desktop: "unavailable",
+        permissions: {
+          accessibility: "unknown",
+          input: "unknown",
+          screenCapture: "unknown",
+        },
+      },
+    );
+  });
+
+  it("publishes authenticated helper presence without probing the interactive desktop", async () => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-computer-use-heartbeat-"));
+    const sourceCheckoutRoot = join(root, "source");
+    const paths = resolveWorkerPaths({
+      sourceCheckoutRoot,
+      home: join(root, "runtime"),
+    });
+    await mkdir(sourceCheckoutRoot, { recursive: true });
+    await mkdir(paths.stateDirectory, { recursive: true });
+    let interactiveProbeCalls = 0;
+    const hostOsFamily =
+      platform() === "win32" ? "windows" : platform() === "darwin" ? "macos" : "linux";
+    const driver: NativeComputerUseDriver = {
+      osFamily: hostOsFamily,
+      async probe() {
+        interactiveProbeCalls += 1;
+        throw new Error("heartbeat inventory must remain non-interactive");
+      },
+      async observe() {
+        throw new Error("not used");
+      },
+      async capture() {
+        throw new Error("not used");
+      },
+      async act() {
+        throw new Error("not used");
+      },
+      async cancel() {},
+      async emergencyStop() {},
+    };
+    const composition = await createWorkerComputerUseRuntime({
+      configuration: { deviceId: "device-worker-1" } as WorkerConfigurationDocument,
+      paths,
+      actionChannel: {},
+      broker: undefined as never,
+      toolServerLaunch: { command: process.execPath, argsPrefix: [] },
+      runtime: {
+        async acquire() {
+          return {
+            driver,
+            authority: {
+              async verify() {
+                return {
+                  status: "current" as const,
+                  helperInstanceId: "helper-live-1",
+                  serviceEpoch: 19,
+                  persistenceGeneration: 31,
+                  verifiedAtMs: 1_000,
+                };
+              },
+            },
+            binding: {
+              helperInstanceId: "helper-live-1",
+              serviceEpoch: 19,
+              persistenceGeneration: 31,
+            },
+            async release() {},
+          };
+        },
+      },
+    });
+    assert.ok(composition);
+    const runtime = await WorkerRuntime.create({
+      configuration: heartbeatConfiguration(),
+      repository: createSqliteWorkerStateRepository({ filename: paths.workerStateFile }),
+      processFactory: {
+        async start() {
+          throw new Error("not used");
+        },
+      },
+      inventoryProvider: {
+        async snapshot() {
+          await composition.probe.probe();
+          return {
+            deviceName: "Worker Device",
+            osFamily: hostOsFamily,
+            platformRelease: "test",
+            architecture: "test",
+            serviceMode: "system-service",
+            maximumConcurrentRuns: 4,
+            capabilities: [],
+            workspaceIds: [],
+            availableSecretRefs: [],
+          };
+        },
+      },
+      healthProvider: { snapshot: () => composition.healthSnapshot() },
+    });
+
+    try {
+      assert.deepEqual((await runtime.heartbeat()).readiness, {
+        daemon: "healthy",
+        session: "ready",
+        desktop: "unavailable",
+        permissions: {
+          accessibility: "unknown",
+          input: "unknown",
+          screenCapture: "unknown",
+        },
+      });
+      await runtime.heartbeat();
+      assert.equal(interactiveProbeCalls, 0);
+    } finally {
+      await runtime.close();
+      await composition.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reports verified only after the authenticated Linux helper and external authority pass", async () => {
     const composition = await createLinuxWorkerComputerUseComposition({
       authenticatedSession: SESSION,
@@ -297,6 +588,7 @@ describe("Worker Computer Use capability composition", () => {
         {
           provider: "codex",
           adapterId: "codex-cli",
+          toolUse: "authorized",
           readiness: "ready",
           compatibility: "tested",
           version: "1.2.3",
@@ -365,10 +657,54 @@ function readyHelper(session: LinuxAuthenticatedHelperSession): LinuxNativeHelpe
   };
 }
 
-function check(name: ReadinessCheckName) {
+function readinessReport(
+  overrides: Partial<ComputerUseReadinessReport> = {},
+): ComputerUseReadinessReport {
+  return {
+    status: "ready",
+    osFamily: "windows",
+    backendId: "windows-session-helper",
+    displayFingerprint: "desktop:1",
+    checks: [
+      check("interactive-session"),
+      check("unlocked-session"),
+      check("screen-capture"),
+      check("accessibility"),
+      check("input"),
+      check("helper-authentication"),
+      check("service-epoch"),
+    ],
+    ...overrides,
+  };
+}
+
+function heartbeatConfiguration(): WorkerConfiguration {
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    deviceId: "device-worker-1",
+    workerId: "worker-1",
+    mainDeviceId: "device-main",
+    transportProfile: {
+      deviceId: "device-main",
+      endpoints: [
+        {
+          endpointId: "route-main-wss",
+          label: "Private Main route",
+          kind: "wss",
+          url: "wss://main.example.test/worker",
+          credentialRef: "secret://device-certificate",
+        },
+      ],
+    },
+    maxOutboxEntries: 8,
+    cancelGraceMs: 10,
+  };
+}
+
+function check(name: ReadinessCheckName, status: "fail" | "pass" | "unknown" = "pass") {
   return {
     name,
-    status: "pass" as const,
-    evidence: `${name} passed.`,
+    status,
+    evidence: `${name} ${status}.`,
   };
 }

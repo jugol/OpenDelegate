@@ -1,5 +1,12 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  X509Certificate,
+  createPrivateKey,
+  createPublicKey,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import { realpath } from "node:fs/promises";
+import { createServer, type Server as HttpsServer } from "node:https";
 import { BlockList, isIP } from "node:net";
 import { platform } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -33,6 +40,7 @@ const MAXIMUM_CONFIGURATION_BYTES = 64 * 1024;
 const MAXIMUM_ARTIFACT_BYTES = 8 * 1024 * 1024 * 1024;
 const SIGNING_KEY_BYTES = 32;
 const MAXIMUM_SECRET_BYTES = 4_096;
+const MAXIMUM_TLS_FILE_BYTES = 1024 * 1024;
 const DEFAULT_STATIC_PORT_OFFSET = 2;
 const DEFAULT_INTERACTIVE_PORT_OFFSET = 3;
 const EXPOSURE_MODES = new Set([
@@ -47,6 +55,10 @@ export interface ArtifactListenerConfiguration {
   readonly host: string;
   readonly port: number;
   readonly origin: string;
+  readonly tls?: {
+    readonly certificatePath: string;
+    readonly privateKeyPath: string;
+  };
   readonly reverseProxy?: {
     readonly trustedProxyNetworks: readonly string[];
   };
@@ -56,6 +68,12 @@ export type MainArtifactSecretBackendConfiguration =
   | {
       readonly backend: "windows-dpapi";
       readonly vaultRoot: string;
+    }
+  | {
+      readonly backend: "windows-service-dpapi";
+      readonly vaultRoot: string;
+      readonly handoffRoot: string;
+      readonly serviceSid: string;
     }
   | {
       readonly backend: "macos-keychain";
@@ -140,7 +158,11 @@ export interface MainArtifactRuntime {
 }
 
 export type MainArtifactRuntimeErrorCode =
-  "CONFIG_INVALID" | "EXTERNAL_INGRESS_UNVERIFIED" | "RUNTIME_PATH_UNSAFE" | "SECRET_UNAVAILABLE";
+  | "CONFIG_INVALID"
+  | "EXTERNAL_INGRESS_UNVERIFIED"
+  | "LISTENER_UNAVAILABLE"
+  | "RUNTIME_PATH_UNSAFE"
+  | "SECRET_UNAVAILABLE";
 
 export interface ArtifactExternalIngressVerification {
   readonly status: "verified" | "unavailable";
@@ -472,7 +494,8 @@ export async function createProductionMainArtifactRuntime(input: {
       interactiveOrigin: configuration.listeners.interactive.origin,
       ...gatewayProxyOptions(configuration.listeners.interactive),
     });
-    const listenerFactory = input.listenerFactory ?? new FastifyArtifactListenerFactory();
+    const listenerFactory =
+      input.listenerFactory ?? new FastifyArtifactListenerFactory(resolvedSourceCheckout);
     staticListener = await listenerFactory.listen({
       plane: "static",
       configuration: configuration.listeners.static,
@@ -684,11 +707,20 @@ export class FetchArtifactExternalIngressVerifier implements ArtifactExternalIng
 }
 
 class FastifyArtifactListenerFactory implements ArtifactListenerFactory {
+  readonly #sourceCheckout: string;
+
+  public constructor(sourceCheckout: string) {
+    this.#sourceCheckout = sourceCheckout;
+  }
+
   public async listen(input: {
     readonly plane: ArtifactGatewayPlane;
     readonly configuration: ArtifactListenerConfiguration;
     readonly app: ArtifactGatewayApp;
   }): Promise<ArtifactListenerHandle> {
+    if (input.configuration.tls !== undefined) {
+      return this.#listenHttps(input);
+    }
     await input.app.listen({
       host: input.configuration.host,
       port: input.configuration.port,
@@ -703,6 +735,150 @@ class FastifyArtifactListenerFactory implements ArtifactListenerFactory {
       },
     });
   }
+
+  async #listenHttps(input: {
+    readonly plane: ArtifactGatewayPlane;
+    readonly configuration: ArtifactListenerConfiguration;
+    readonly app: ArtifactGatewayApp;
+  }): Promise<ArtifactListenerHandle> {
+    const tls = input.configuration.tls;
+    if (tls === undefined) {
+      throw configurationInvalid();
+    }
+    let certificate: Buffer | undefined;
+    let privateKey: Buffer | undefined;
+    let server: HttpsServer | undefined;
+    try {
+      [certificate, privateKey] = await Promise.all([
+        readArtifactTlsFile(tls.certificatePath, this.#sourceCheckout),
+        readArtifactTlsFile(tls.privateKeyPath, this.#sourceCheckout),
+      ]);
+      validateArtifactTlsIdentity(
+        certificate,
+        privateKey,
+        new URL(input.configuration.origin).hostname,
+      );
+      await input.app.ready();
+      server = createServer(
+        {
+          cert: certificate,
+          key: privateKey,
+          minVersion: "TLSv1.3",
+          maxVersion: "TLSv1.3",
+          requestCert: false,
+        },
+        input.app.routing,
+      );
+      await listenHttps(server, input.configuration.port, input.configuration.host);
+    } catch (error) {
+      server?.closeAllConnections();
+      throw new MainArtifactRuntimeError(
+        "LISTENER_UNAVAILABLE",
+        `The ${input.plane} Artifact HTTPS listener could not start.`,
+        { cause: error },
+      );
+    } finally {
+      privateKey?.fill(0);
+    }
+    if (server === undefined) {
+      throw new MainArtifactRuntimeError(
+        "LISTENER_UNAVAILABLE",
+        `The ${input.plane} Artifact HTTPS listener did not start.`,
+      );
+    }
+    const activeServer = server;
+    let closePromise: Promise<void> | undefined;
+    return Object.freeze({
+      address: input.configuration,
+      close: () => {
+        closePromise ??= closeHttpsArtifactListener(activeServer, input.app);
+        return closePromise;
+      },
+    });
+  }
+}
+
+async function readArtifactTlsFile(path: string, sourceCheckout: string): Promise<Buffer> {
+  const resolvedPath = resolve(path);
+  if (isWithin(sourceCheckout, resolvedPath)) {
+    throw new MainArtifactRuntimeError(
+      "RUNTIME_PATH_UNSAFE",
+      "Artifact TLS identity files must remain outside the source checkout.",
+    );
+  }
+  return readStableRegularFile(resolvedPath, MAXIMUM_TLS_FILE_BYTES);
+}
+
+function validateArtifactTlsIdentity(
+  certificatePem: Buffer,
+  privateKeyPem: Buffer,
+  advertisedHostname: string,
+): void {
+  const certificate = new X509Certificate(certificatePem);
+  const privateKey = createPrivateKey(privateKeyPem);
+  const certificatePublicKey = certificate.publicKey.export({
+    format: "der",
+    type: "spki",
+  });
+  const privatePublicKey = createPublicKey(privateKey).export({
+    format: "der",
+    type: "spki",
+  });
+  const now = Date.now();
+  const validFromMs = Date.parse(certificate.validFrom);
+  const validToMs = Date.parse(certificate.validTo);
+  const hostnameMatches =
+    isIP(advertisedHostname) === 0
+      ? certificate.checkHost(advertisedHostname) !== undefined
+      : certificate.checkIP(advertisedHostname) !== undefined;
+  if (
+    certificatePublicKey.byteLength !== privatePublicKey.byteLength ||
+    !timingSafeEqual(certificatePublicKey, privatePublicKey) ||
+    !Number.isFinite(validFromMs) ||
+    !Number.isFinite(validToMs) ||
+    now < validFromMs ||
+    now > validToMs ||
+    !hostnameMatches
+  ) {
+    throw new Error("Artifact TLS identity is invalid for its configured HTTPS origin.");
+  }
+}
+
+async function listenHttps(server: HttpsServer, port: number, host: string): Promise<void> {
+  await new Promise<void>((resolveListen, rejectListen) => {
+    const cleanup = (): void => {
+      server.off("error", onError);
+      server.off("listening", onListening);
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      rejectListen(error);
+    };
+    const onListening = (): void => {
+      cleanup();
+      resolveListen();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+}
+
+async function closeHttpsArtifactListener(
+  server: HttpsServer,
+  app: ArtifactGatewayApp,
+): Promise<void> {
+  server.closeAllConnections();
+  await new Promise<void>((resolveClose, rejectClose) => {
+    server.close((error) => {
+      if (error === undefined) {
+        resolveClose();
+      } else {
+        rejectClose(error);
+      }
+    });
+  });
+  await app.close();
 }
 
 class ManagedArtifactAuthorization implements ArtifactAuthorizationPort {
@@ -902,6 +1078,20 @@ function parseCidr(value: string): {
 
 function validateArtifactListener(input: unknown): ArtifactListenerConfiguration {
   const listener = validateListenerShape(input);
+  if (listener.tls !== undefined) {
+    const origin = parseOrigin(listener.origin);
+    if (
+      listener.reverseProxy !== undefined ||
+      origin.protocol !== "https:" ||
+      Number(origin.port || defaultPort(origin.protocol)) !== listener.port
+    ) {
+      throw new MainArtifactRuntimeError(
+        "CONFIG_INVALID",
+        "Direct Artifact TLS listeners require a matching HTTPS origin and no reverse proxy.",
+      );
+    }
+    return listener;
+  }
   if (listener.reverseProxy === undefined) {
     const origin = parseArtifactOrigin(listener.origin);
     if (
@@ -932,7 +1122,7 @@ function validateArtifactListener(input: unknown): ArtifactListenerConfiguration
 }
 
 function configuredArtifactOrigin(listener: ArtifactListenerConfiguration): URL {
-  return listener.reverseProxy === undefined
+  return listener.reverseProxy === undefined && listener.tls === undefined
     ? parseArtifactOrigin(listener.origin)
     : parseOrigin(listener.origin);
 }
@@ -949,10 +1139,14 @@ function validateAdminListener(input: unknown): ArtifactListenerConfiguration {
 function validateListenerShape(input: unknown): ArtifactListenerConfiguration {
   const record = requireRecord(input);
   const hasReverseProxy = Object.prototype.hasOwnProperty.call(record, "reverseProxy");
-  assertExactKeys(
-    record,
-    hasReverseProxy ? ["host", "port", "origin", "reverseProxy"] : ["host", "port", "origin"],
-  );
+  const hasTls = Object.prototype.hasOwnProperty.call(record, "tls");
+  assertExactKeys(record, [
+    "host",
+    "port",
+    "origin",
+    ...(hasTls ? ["tls"] : []),
+    ...(hasReverseProxy ? ["reverseProxy"] : []),
+  ]);
   if (
     typeof record["host"] !== "string" ||
     record["host"].length < 1 ||
@@ -965,6 +1159,15 @@ function validateListenerShape(input: unknown): ArtifactListenerConfiguration {
     typeof record["origin"] !== "string"
   ) {
     throw configurationInvalid();
+  }
+  let tls: ArtifactListenerConfiguration["tls"];
+  if (hasTls) {
+    const tlsRecord = requireRecord(record["tls"]);
+    assertExactKeys(tlsRecord, ["certificatePath", "privateKeyPath"]);
+    tls = Object.freeze({
+      certificatePath: requireAbsolutePath(tlsRecord["certificatePath"]),
+      privateKeyPath: requireAbsolutePath(tlsRecord["privateKeyPath"]),
+    });
   }
   let reverseProxy: ArtifactListenerConfiguration["reverseProxy"];
   if (hasReverseProxy) {
@@ -986,6 +1189,7 @@ function validateListenerShape(input: unknown): ArtifactListenerConfiguration {
     host: record["host"],
     port: record["port"],
     origin: record["origin"],
+    ...(tls === undefined ? {} : { tls }),
     ...(reverseProxy === undefined ? {} : { reverseProxy }),
   });
 }
@@ -1066,6 +1270,20 @@ function validateSecretBackend(input: unknown): MainArtifactSecretBackendConfigu
         backend: "windows-dpapi",
         vaultRoot: requireAbsolutePath(record["vaultRoot"]),
       });
+    case "windows-service-dpapi":
+      assertExactKeys(record, ["backend", "vaultRoot", "handoffRoot", "serviceSid"]);
+      if (
+        typeof record["serviceSid"] !== "string" ||
+        !/^S-1-(?:[0-9]+-){1,14}[0-9]+$/u.test(record["serviceSid"])
+      ) {
+        throw configurationInvalid();
+      }
+      return Object.freeze({
+        backend: "windows-service-dpapi",
+        vaultRoot: requireAbsolutePath(record["vaultRoot"]),
+        handoffRoot: requireAbsolutePath(record["handoffRoot"]),
+        serviceSid: record["serviceSid"],
+      });
     case "macos-keychain":
       assertExactKeys(record, ["backend", "helperPath", "expectedHelperSha256"]);
       if (
@@ -1110,6 +1328,15 @@ function secretStoreConfiguration(input: {
         deviceId: input.deviceId,
         sourceCheckoutRoot: input.sourceCheckout,
         vaultRoot: input.backend.vaultRoot,
+      };
+    case "windows-service-dpapi":
+      return {
+        backend: "windows-service-dpapi",
+        deviceId: input.deviceId,
+        sourceCheckoutRoot: input.sourceCheckout,
+        vaultRoot: input.backend.vaultRoot,
+        handoffRoot: input.backend.handoffRoot,
+        serviceSid: input.backend.serviceSid,
       };
     case "macos-keychain":
       return {

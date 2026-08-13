@@ -40,6 +40,7 @@ and a timeout. Secret bytes use stdin and are never placed in argv or environmen
 | Windows foreground owner | `windows-dpapi` | Current-user DPAPI ciphertext in a Device-local ACL-restricted vault | DPAPI, PowerShell, ACL hardening, or the owner profile is unavailable |
 | Windows SCM virtual service | `windows-service-dpapi` | Current-user DPAPI ciphertext under the exact service identity | SID-bound handoff, service identity, DPAPI, service profile, or ACL hardening is unavailable |
 | macOS foreground owner | `macos-keychain` | Non-synchronizing generic-password item in the signed-in owner's explicit default file-based login Keychain | helper path, SHA-256, code signature, owner login Keychain, interactive write access, or unlock state is unavailable |
+| macOS LaunchDaemon core | `macos-system-keychain` | Generic-password item in the explicit System Keychain through a stable root-owned helper ACL | binding ownership, helper path or digest, service identity, System Keychain, or item ACL is unavailable |
 | Ubuntu graphical user session | `linux-secret-service` | Secret Service item addressed by hashed Device and alias attributes | `secret-tool`, D-Bus session, collection unlock, or Secret Service is unavailable |
 | Headless systemd service | `linux-systemd-credential-vault` | AES-256-GCM ciphertext under the runtime home; the vault key is a systemd runtime credential | the exact 32-byte runtime credential or restrictive vault path is unavailable |
 
@@ -110,12 +111,16 @@ creating and immediately deleting a uniquely named, non-secret probe item, so an
 SSH, background, locked, or otherwise non-interactive session cannot be mistaken
 for a usable enrollment context merely because Keychain reads are available.
 
-This owner binding is not a persistent-daemon binding. A native macOS service needs
-a separately prepared System Keychain binding plus the owner-login binding used by
-the interactive helper. Service document generation remains fail-closed until that
-two-binding lifecycle is implemented and live-proven. Missing signing/notarization
-or real-host Keychain evidence likewise keeps macOS release support blocked; the
-TypeScript command-shape tests do not claim that proof.
+This owner binding is not a persistent-daemon binding. Before launchd installation,
+`worker macos-service-secret-stage` installs the exact bundled helper at a stable
+root-owned path, prepares its explicit System Keychain binding for the non-login
+service identity, migrates only core-owned Secrets, and persists the two public IPC
+pins. The Aqua LaunchAgent retains a distinct private identity in the owner's login
+Keychain. The operation is idempotent after an interrupted attempt, and service
+document generation fails closed if preparation is incomplete or the target bundle
+changes the pinned helper digest. Missing signing/notarization or clean-host
+restart/reboot evidence still keeps supported macOS release status blocked; source
+and command-shape tests do not claim that proof.
 
 ## Graphical Linux Secret Service
 
@@ -184,7 +189,8 @@ and the [`secret-tool` manual](https://manpages.ubuntu.com/manpages/noble/man1/s
 
 The default automated suite proves lifecycle semantics, binary identity-key
 persistence, path/link rejection, authenticated corruption rejection, hostile native
-output redaction, platform command shapes, and an actual DPAPI lifecycle on Windows.
+output redaction, platform command shapes, macOS two-plane migration replay, and an
+actual DPAPI lifecycle on Windows.
 It does not replace:
 
 - a signed and notarized macOS helper build plus real Keychain lifecycle;

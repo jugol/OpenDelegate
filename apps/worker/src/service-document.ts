@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { platform } from "node:os";
+import { platform, userInfo } from "node:os";
 import { isAbsolute, join, posix, resolve, win32 } from "node:path";
 
 import {
   composeServiceConfiguration,
+  parseWindowsOwnerHome,
   type PlatformFamily,
   type PlatformServiceConfiguration,
 } from "@opendelegate/platform-services";
@@ -65,12 +66,6 @@ export async function buildWorkerServiceDocument(
       "The current host platform has no native OpenDelegate service integration.",
     );
   }
-  if (family === "macos") {
-    throw new WorkerAppError(
-      "CONFIG_INVALID",
-      "Persistent macOS Worker preparation still lacks the separate core-service and owner-session Keychain migration required by the two-plane runtime. No install document was written.",
-    );
-  }
   for (const [label, value] of [
     ["bundle directory", options.bundleDirectory],
     ["install root", options.installRoot],
@@ -96,6 +91,82 @@ export async function buildWorkerServiceDocument(
     readBundleVersion(options.bundleDirectory),
     readBundleChecksum(options.bundleDirectory),
   ]);
+  if (family === "macos") {
+    if (configuration.secretBackend.backend !== "macos-system-keychain") {
+      throw new WorkerAppError(
+        "CONFIG_INVALID",
+        "Run macos-service-secret-stage from the signed-in owner session before composing a persistent macOS service document.",
+      );
+    }
+    const preparation = configuration.secretBackend.servicePreparation;
+    const ownerSession = requireUnixOwnerSession(options.ownerSession);
+    if (
+      options.serviceIdentity !== undefined &&
+      (options.serviceIdentity.userName !== preparation.serviceIdentity.userName ||
+        options.serviceIdentity.groupName !== preparation.serviceIdentity.groupName)
+    ) {
+      throw new WorkerAppError(
+        "CONFIG_INVALID",
+        "The requested macOS service identity does not match the System Keychain binding.",
+      );
+    }
+    const bundledHelperPath = join(
+      options.bundleDirectory,
+      "runtime",
+      "native",
+      "opendelegate-keychain-helper",
+    );
+    let bundledHelper: Buffer | undefined;
+    try {
+      bundledHelper = await readStableWorkerFile(bundledHelperPath, 67_108_864);
+      const digest = `sha256:${createHash("sha256").update(bundledHelper).digest("hex")}`;
+      if (digest !== configuration.secretBackend.expectedHelperSha256) {
+        throw new WorkerAppError(
+          "CONFIG_INVALID",
+          "The target bundle changes the pinned macOS Keychain helper. Rebind the System Keychain with this bundle before installation or upgrade.",
+        );
+      }
+    } finally {
+      bundledHelper?.fill(0);
+    }
+    return composeServiceConfiguration({
+      platform: "macos",
+      role: "worker",
+      instanceId: options.instanceId,
+      deviceId: configuration.deviceId,
+      bundle: { version, sourceDirectory: serviceBundleDirectory, checksum },
+      sourceCheckoutDirectory: platformPath(family, options.sourceCheckoutRoot),
+      installRoot: platformPath(family, options.installRoot),
+      dataRoot: platformPath(family, options.dataRoot),
+      ownerSession: {
+        ...ownerSession,
+        adminAutoOpen: { enabled: false },
+      },
+      serviceIdentity: preparation.serviceIdentity,
+      ipcTrust: {
+        core: preparation.ipcTrust.core,
+        helper: preparation.ipcTrust.helper,
+      },
+      secretReferences: {
+        coreIpcSigningKey: `secret://worker/${WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS}`,
+        helperIpcSigningKey: `secret://worker/${WORKER_SESSION_HELPER_OWNER_SIGNING_SECRET_ALIAS}`,
+      },
+      healthPort: options.healthPort,
+      macOsKeychainHelper: {
+        helperPath: preparation.ownerHelperSecretBinding.helperPath,
+        expectedHelperSha256: preparation.ownerHelperSecretBinding
+          .expectedHelperSha256 as `sha256:${string}`,
+      },
+      macOsSystemKeychain: {
+        bindingPath: configuration.secretBackend.bindingPath,
+        helperPath: configuration.secretBackend.helperPath,
+        expectedHelperSha256: configuration.secretBackend
+          .expectedHelperSha256 as `sha256:${string}`,
+        keychainPath: "/Library/Keychains/System.keychain",
+        serviceUserName: preparation.serviceIdentity.userName,
+      },
+    });
+  }
   if (family === "linux") {
     if (configuration.secretBackend.backend !== "linux-systemd-credential-vault") {
       throw new WorkerAppError(
@@ -166,10 +237,15 @@ export async function buildWorkerServiceDocument(
     );
   }
 
-  const ownerSession = options.ownerSession ?? (await resolveWindowsOwnerSession());
+  const ownerSession =
+    options.ownerSession ?? (await resolveWindowsOwnerSession(options.environment ?? process.env));
   const codexHome =
     configuration.agent.codexHome ??
     defaultProviderHome("codex", options.paths, options.environment ?? process.env);
+  const codexServiceHome = win32.join(options.paths.stateDirectory, "providers", "codex");
+  const claudeHome =
+    configuration.agent.claudeHome ??
+    defaultProviderHome("claude", options.paths, options.environment ?? process.env);
 
   return composeServiceConfiguration({
     platform: family,
@@ -183,6 +259,9 @@ export async function buildWorkerServiceDocument(
     ownerSession: {
       userName: ownerSession.userName,
       stableUserId: ownerSession.stableUserId,
+      ...(ownerSession.homeDirectory === undefined
+        ? {}
+        : { homeDirectory: platformPath(family, ownerSession.homeDirectory) }),
       // A Worker never opens Admin: the configuration reader rejects it outright.
       adminAutoOpen: { enabled: false },
     },
@@ -206,11 +285,19 @@ export async function buildWorkerServiceDocument(
       serviceSid: configuration.secretBackend.serviceSid,
       vaultRoot: platformPath(family, configuration.secretBackend.vaultRoot),
     },
+    windowsAgentProviderAccess: {
+      codexHomeDirectory: platformPath(family, codexHome),
+      codexServiceHomeDirectory: platformPath(family, codexServiceHome),
+      claudeHomeDirectory: platformPath(family, claudeHome),
+    },
     ...(configuration.agent.provider === "claude"
       ? {}
       : {
           windowsAgentSandbox: {
-            codexSandboxBinDirectory: win32.join(platformPath(family, codexHome), ".sandbox-bin"),
+            codexSandboxBinDirectory: win32.join(
+              platformPath(family, codexServiceHome),
+              ".sandbox-bin",
+            ),
           },
         }),
   });
@@ -235,7 +322,7 @@ function requireUnixOwnerSession(value: BuildWorkerServiceDocumentOptions["owner
   ) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
-      "Linux service-document requires the installation owner's user name, numeric UID, and home directory.",
+      "Unix service-document requires the installation owner's user name, numeric UID, and home directory.",
     );
   }
   return {
@@ -307,16 +394,20 @@ async function readBundleVersion(bundleDirectory: string): Promise<string> {
  * The owner account the session helper will run as.
  *
  * The SID is the stable identity — a renamed account keeps it, and the IPC peer
- * list is checked against the SID rather than the display name — so it is read
- * from the OS rather than from an environment variable Windows does not set.
+ * list is checked against the SID rather than the display name. The profile is
+ * independently read through Node's OS user API and must name the same effective
+ * account; mutable USERPROFILE input is never accepted as proof.
  */
-async function resolveWindowsOwnerSession(): Promise<{
+async function resolveWindowsOwnerSession(
+  environment: Readonly<Record<string, string | undefined>>,
+): Promise<{
   readonly userName: string;
   readonly stableUserId: string;
+  readonly homeDirectory?: string;
 }> {
   const output = await new Promise<string>((settle, fail) => {
     execFile(
-      join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "whoami.exe"),
+      join(environment["SystemRoot"] ?? "C:\\Windows", "System32", "whoami.exe"),
       ["/user", "/nh", "/fo", "csv"],
       { shell: false, windowsHide: true, timeout: 5_000, maxBuffer: 16 * 1024 },
       (error, stdout) => (error === null ? settle(stdout) : fail(error)),
@@ -341,7 +432,40 @@ async function resolveWindowsOwnerSession(): Promise<{
       "The owner account identity could not be read from this host.",
     );
   }
-  return { userName, stableUserId: sid };
+  let profile: { readonly username: string; readonly homedir: string };
+  try {
+    profile = userInfo();
+  } catch {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "The owner profile could not be read from this host.",
+    );
+  }
+  const homeDirectory = verifyWindowsOwnerProfile(userName, profile);
+  return {
+    userName,
+    stableUserId: sid,
+    homeDirectory,
+  };
+}
+
+export function verifyWindowsOwnerProfile(
+  accountName: string,
+  profile: { readonly username: string; readonly homedir: string },
+): string {
+  const accountLeaf = accountName.split("\\").at(-1);
+  const homeDirectory = parseWindowsOwnerHome(profile.homedir);
+  if (
+    accountLeaf === undefined ||
+    accountLeaf.toLocaleLowerCase("en-US") !== profile.username.toLocaleLowerCase("en-US") ||
+    homeDirectory === undefined
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "The owner profile does not match the effective Windows account.",
+    );
+  }
+  return homeDirectory;
 }
 
 function platformFamily(value: NodeJS.Platform): PlatformFamily | undefined {

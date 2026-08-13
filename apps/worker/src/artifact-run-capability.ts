@@ -61,6 +61,7 @@ const MAXIMUM_CHUNK_BYTES = 192 * 1024;
 const MAXIMUM_ARTIFACT_BYTES = 256 * 1024 * 1024;
 const MAXIMUM_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MEDIA_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/u;
+const UTF8_CHARSET_PARAMETER = /^charset\s*=\s*(?:utf-8|"utf-8")$/u;
 const COMMAND_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 
@@ -988,10 +989,23 @@ function requireFilename(value: unknown): string {
 }
 
 function requireMediaType(value: unknown): string {
-  if (typeof value !== "string" || !MEDIA_TYPE.test(value)) {
+  if (typeof value !== "string") {
     throw new ArtifactToolError("INVALID_REQUEST");
   }
-  return value;
+  const [mediaType, ...parameters] = value
+    .trim()
+    .toLowerCase()
+    .split(";")
+    .map((part) => part.trim());
+  if (
+    mediaType === undefined ||
+    !MEDIA_TYPE.test(mediaType) ||
+    (parameters.length > 0 &&
+      (parameters.length !== 1 || !UTF8_CHARSET_PARAMETER.test(parameters[0] ?? "")))
+  ) {
+    throw new ArtifactToolError("INVALID_REQUEST");
+  }
+  return mediaType;
 }
 
 function requirePresentation(

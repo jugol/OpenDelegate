@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
 
 import { createProviderToolAuthorizationRequest } from "./action-authorization.ts";
+import { resolveDefaultCodexCommand } from "./codex-command.ts";
 import {
   assertProviderHomeNotInSecretEnvironment,
   isDefaultProviderHome,
@@ -75,11 +74,28 @@ export const CODEX_NATIVE_SUBAGENT_MAX_CHILDREN = 4;
 const CODEX_NATIVE_SUBAGENT_MAX_THREADS = CODEX_NATIVE_SUBAGENT_MAX_CHILDREN + 1;
 const CODEX_NATIVE_SUBAGENT_MAX_DEPTH = 1;
 
-const BENIGN_NOTIFICATION_METHODS = new Set([
+// Keep this list aligned with the notifications exposed by the tested Codex App
+// Server catalog. Notifications are advisory JSON-RPC messages; the exact turn
+// outcome remains authoritative in turn/completed (or persisted thread state).
+// An actually unknown method still fails closed so provider protocol drift is
+// visible instead of being silently reinterpreted.
+const SUPPORTED_NOTIFICATION_METHODS = new Set([
+  "account/login/completed",
   "account/rateLimits/updated",
   "account/updated",
+  "app/list/updated",
+  "command/exec/outputDelta",
   "configWarning",
   "deprecationNotice",
+  "error",
+  "externalAgentConfig/import/completed",
+  "externalAgentConfig/import/progress",
+  "fs/changed",
+  "fuzzyFileSearch/sessionCompleted",
+  "fuzzyFileSearch/sessionUpdated",
+  "guardianWarning",
+  "hook/completed",
+  "hook/started",
   "item/agentMessage/delta",
   "item/autoApprovalReview/completed",
   "item/autoApprovalReview/started",
@@ -94,29 +110,48 @@ const BENIGN_NOTIFICATION_METHODS = new Set([
   "item/reasoning/summaryTextDelta",
   "item/reasoning/textDelta",
   "item/started",
+  "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
   "model/rerouted",
   "model/safetyBuffering/updated",
   "model/verification",
+  "process/exited",
+  "process/outputDelta",
   "rawResponse/completed",
   "rawResponseItem/completed",
   "remoteControl/status/changed",
   "serverRequest/resolved",
   "skills/changed",
+  "thread/archived",
+  "thread/closed",
   "thread/compacted",
+  "thread/deleted",
   "thread/environment/connected",
   "thread/environment/disconnected",
   "thread/goal/cleared",
+  "thread/goal/updated",
+  "thread/name/updated",
+  "thread/realtime/closed",
+  "thread/realtime/error",
+  "thread/realtime/itemAdded",
+  "thread/realtime/outputAudio/delta",
+  "thread/realtime/sdp",
+  "thread/realtime/started",
+  "thread/realtime/transcript/delta",
+  "thread/realtime/transcript/done",
   "thread/settings/updated",
   "thread/started",
   "thread/status/changed",
   "thread/tokenUsage/updated",
+  "thread/unarchived",
   "turn/completed",
   "turn/diff/updated",
   "turn/moderationMetadata",
   "turn/plan/updated",
   "turn/started",
   "warning",
+  "windows/worldWritableWarning",
+  "windowsSandbox/setupCompleted",
 ]);
 
 interface CodexTurnResult {
@@ -129,6 +164,7 @@ export interface CodexAppServerAdapterOptions {
   readonly codexHome: string;
   readonly executable?: string;
   readonly prefixArgs?: readonly string[];
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly testedVersions?: readonly string[];
   readonly allowUntestedVersion?: boolean;
   readonly leaseStore?: SessionLeaseStore;
@@ -151,7 +187,9 @@ export class CodexAppServerAdapter implements AgentAdapter {
   public constructor(options: CodexAppServerAdapterOptions) {
     const command =
       options.executable === undefined && options.prefixArgs === undefined
-        ? defaultCodexCommand()
+        ? resolveDefaultCodexCommand(
+            options.environment === undefined ? {} : { environment: options.environment },
+          )
         : {
             executable: options.executable ?? "codex",
             prefixArgs: options.prefixArgs ?? [],
@@ -260,7 +298,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
       cancellationGraceMs: 1_000,
     });
     connection.onServerMessage = async (message) => {
-      if (!isNotification(message) || !BENIGN_NOTIFICATION_METHODS.has(message.method)) {
+      if (!isNotification(message) || !SUPPORTED_NOTIFICATION_METHODS.has(message.method)) {
         throw new AgentAdapterError(
           "UNKNOWN_PROVIDER_MESSAGE",
           "Codex App Server emitted an unsupported message while listing models.",
@@ -483,7 +521,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
           "Codex App Server emitted an invalid JSON-RPC message.",
         );
       }
-      if (!BENIGN_NOTIFICATION_METHODS.has(message.method)) {
+      if (!SUPPORTED_NOTIFICATION_METHODS.has(message.method)) {
         throw new AgentAdapterError(
           "UNKNOWN_PROVIDER_MESSAGE",
           `Codex App Server emitted unsupported notification ${message.method}.`,
@@ -495,6 +533,25 @@ export class CodexAppServerAdapter implements AgentAdapter {
         }
         const delta = readStringField(message.params, "delta");
         await emit({ kind: "message_delta", text: delta });
+        return;
+      }
+      if (message.method === "error" || message.method === "thread/realtime/error") {
+        await emit({
+          kind: "diagnostic",
+          level: "warning",
+          code:
+            message.method === "error" &&
+            isRecord(message.params) &&
+            message.params["willRetry"] === true
+              ? "CODEX_PROVIDER_RETRYING"
+              : "CODEX_PROVIDER_ERROR_REPORTED",
+          message:
+            message.method === "error" &&
+            isRecord(message.params) &&
+            message.params["willRetry"] === true
+              ? "Codex reported a transient provider error and is retrying the same turn."
+              : "Codex reported a provider error; OpenDelegate is waiting for the authoritative turn outcome.",
+        });
         return;
       }
       if (message.method === "item/started") {
@@ -523,7 +580,16 @@ export class CodexAppServerAdapter implements AgentAdapter {
           return;
         }
         if (item["type"] === "agentMessage") {
-          finalText = readStringField(item, "text");
+          const messageText = readStringField(item, "text");
+          const phase = parseCodexMessagePhase(item["phase"]);
+          if (phase === "commentary") {
+            await emit({
+              kind: "progress",
+              message: "Codex reported task progress inside this Worker Run.",
+            });
+            return;
+          }
+          finalText = messageText;
           await emit({ kind: "public_message", text: finalText });
           return;
         }
@@ -697,6 +763,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
         ...(request.effort === undefined ? {} : { effort: request.effort }),
         approvalPolicy: request.permissions.mode === "deny" ? "never" : "on-request",
         approvalsReviewer: "user",
+        sandboxPolicy: codexTurnSandboxPolicy(request.sandbox, cwd),
       });
       while (turnResult === undefined) {
         await connection.nextMessage();
@@ -803,7 +870,7 @@ export class CodexAppServerAdapter implements AgentAdapter {
       cancellationGraceMs: request.limits.cancellationGraceMs,
     });
     connection.onServerMessage = async (message) => {
-      if (!isNotification(message) || !BENIGN_NOTIFICATION_METHODS.has(message.method)) {
+      if (!isNotification(message) || !SUPPORTED_NOTIFICATION_METHODS.has(message.method)) {
         throw new AgentAdapterError(
           "UNKNOWN_PROVIDER_MESSAGE",
           "Codex App Server emitted an unsupported message while reconciling a turn.",
@@ -886,7 +953,25 @@ class CodexJsonlConnection {
   #diagnosticPromise: Promise<void> | undefined;
   #readTail: Promise<void> = Promise.resolve();
   #closed = false;
+  #inputFailure: AgentAdapterError | undefined;
   #forceTimer: NodeJS.Timeout | undefined;
+  readonly #onInputError = (_error: Error): void => {
+    if (this.#closed || this.#inputFailure !== undefined) {
+      return;
+    }
+    this.#inputFailure = new AgentAdapterError(
+      "PROVIDER_CONNECTION_CLOSED",
+      "Codex App Server closed its protocol input unexpectedly.",
+      true,
+    );
+    for (const pending of this.#pending.values()) {
+      pending.reject(this.#inputFailure);
+    }
+    this.#pending.clear();
+    if (this.#options.child.exitCode === null && this.#options.child.signalCode === null) {
+      this.#options.child.kill();
+    }
+  };
 
   public constructor(options: CodexJsonlConnectionOptions) {
     this.#options = options;
@@ -902,6 +987,10 @@ class CodexJsonlConnection {
     this.#reader = readBoundedLines(this.#options.child.stdout, this.#options.maxLineBytes)[
       Symbol.asyncIterator
     ]();
+    // A provider may exit while an owner authorization is pending. Node emits
+    // EPIPE asynchronously on stdin in that race; without an error listener it
+    // becomes an uncaught process-level event and can terminate the Worker.
+    this.#options.child.stdin.on("error", this.#onInputError);
     this.#diagnosticPromise = drainBounded(
       this.#options.child.stderr,
       this.#options.maxDiagnosticBytes,
@@ -976,6 +1065,7 @@ class CodexJsonlConnection {
       waitForChild(this.#options.child),
       this.#diagnosticPromise ?? Promise.resolve(),
     ]);
+    this.#options.child.stdin.off("error", this.#onInputError);
   }
 
   async #pumpUntil(done: () => boolean): Promise<void> {
@@ -995,6 +1085,9 @@ class CodexJsonlConnection {
   async #readOneSerialized(): Promise<void> {
     const next = await this.#reader?.next();
     if (next === undefined || next.done) {
+      if (this.#inputFailure !== undefined) {
+        throw this.#inputFailure;
+      }
       throw new AgentAdapterError(
         "PROVIDER_CONNECTION_CLOSED",
         "Codex App Server closed its protocol stream unexpectedly.",
@@ -1049,6 +1142,9 @@ class CodexJsonlConnection {
   }
 
   #write(message: unknown): void {
+    if (this.#inputFailure !== undefined) {
+      throw this.#inputFailure;
+    }
     if (this.#closed || !this.#options.child.stdin.writable) {
       throw new AgentAdapterError(
         "PROVIDER_CONNECTION_CLOSED",
@@ -1198,6 +1294,23 @@ function codexThreadParameters(
         : {}),
     },
   };
+}
+
+function codexTurnSandboxPolicy(
+  sandbox: AgentStartRequest["sandbox"],
+  cwd: string,
+): Readonly<Record<string, unknown>> {
+  if (sandbox === "danger-full-access") {
+    return Object.freeze({ type: "dangerFullAccess" });
+  }
+  if (sandbox === "workspace-write") {
+    return Object.freeze({
+      type: "workspaceWrite",
+      writableRoots: Object.freeze([cwd]),
+      networkAccess: false,
+    });
+  }
+  return Object.freeze({ type: "readOnly", networkAccess: false });
 }
 
 function codexNativeSubagentsEnabled(request: AgentStartRequest | AgentResumeRequest): boolean {
@@ -1629,7 +1742,10 @@ function parsePersistedCodexTurn(
   let finalText: string | undefined;
   for (const item of items) {
     if (isRecord(item) && item["type"] === "agentMessage" && typeof item["text"] === "string") {
-      finalText = item["text"];
+      const phase = parseCodexMessagePhase(item["phase"]);
+      if (phase !== "commentary") {
+        finalText = item["text"];
+      }
     }
   }
   const error =
@@ -1641,6 +1757,19 @@ function parsePersistedCodexTurn(
     ...(error === undefined ? {} : { error }),
     ...(finalText === undefined ? {} : { finalText }),
   };
+}
+
+function parseCodexMessagePhase(value: unknown): "commentary" | "final_answer" | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (value === "commentary" || value === "final_answer") {
+    return value;
+  }
+  throw new AgentAdapterError(
+    "MALFORMED_PROVIDER_OUTPUT",
+    "Codex App Server emitted an unsupported assistant message phase.",
+  );
 }
 
 function parseCodexTurnStatus(value: unknown): CodexTurnResult["status"] {
@@ -1770,30 +1899,4 @@ async function waitForChild(child: ReturnType<typeof spawnCommand>): Promise<voi
     child.once("close", () => resolveChild());
     child.once("error", () => resolveChild());
   });
-}
-
-function defaultCodexCommand(): {
-  readonly executable: string;
-  readonly prefixArgs: readonly string[];
-} {
-  if (process.platform === "win32") {
-    const pathEntries = (process.env.PATH ?? "")
-      .split(delimiter)
-      .map((entry) => entry.trim().replace(/^"(.*)"$/u, "$1"))
-      .filter((entry) => entry.length > 0);
-    for (const directory of pathEntries) {
-      const entrypoint = join(directory, "node_modules", "@openai", "codex", "bin", "codex.js");
-      try {
-        if (statSync(entrypoint).isFile()) {
-          return {
-            executable: process.execPath,
-            prefixArgs: [realpathSync(entrypoint)],
-          };
-        }
-      } catch {
-        // Continue to the next PATH entry.
-      }
-    }
-  }
-  return { executable: "codex", prefixArgs: [] };
 }

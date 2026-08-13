@@ -4,6 +4,7 @@ export * from "./discord-forum-adapter.ts";
 export * from "./fetch-discord-api-port.ts";
 export * from "./errors.ts";
 export * from "./in-memory-repository.ts";
+export * from "./native-attachment.ts";
 export * from "./presentation.ts";
 export * from "./redaction.ts";
 export * from "./task-port-adapter.ts";

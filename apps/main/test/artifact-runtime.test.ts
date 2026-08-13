@@ -1,6 +1,10 @@
+import "reflect-metadata";
+
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -12,6 +16,11 @@ import type {
   ManagedSecretStoreHealth,
   SecretAvailability,
 } from "@opendelegate/secrets";
+import {
+  DeviceIdentityAuthority,
+  InMemoryDeviceIdentityRepository,
+  InMemoryDeviceIdentitySecretStore,
+} from "@opendelegate/device-identity";
 
 import {
   createProductionMainArtifactRuntime,
@@ -155,6 +164,94 @@ function checksum(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function issueArtifactTlsFixture(): Promise<{
+  readonly certificatePem: string;
+  readonly certificateAuthorityPem: string;
+  readonly privateKeyPem: string;
+}> {
+  const authority = new DeviceIdentityAuthority({
+    clock: { now: () => Date.now() },
+    repository: new InMemoryDeviceIdentityRepository(),
+    secrets: new InMemoryDeviceIdentitySecretStore(),
+  });
+  await authority.bootstrapCertificateAuthority({ instanceId: "instance-artifact-tls-test" });
+  const keys = await globalThis.crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const issued = await authority.issueMainServerCertificate({
+    publicKey: keys.publicKey,
+    hostnames: ["127.0.0.1", "localhost"],
+  });
+  const privateKeyDer = Buffer.from(
+    await globalThis.crypto.subtle.exportKey("pkcs8", keys.privateKey),
+  );
+  return {
+    certificatePem: issued.certificatePem,
+    certificateAuthorityPem: issued.certificateAuthorityPem,
+    privateKeyPem: `-----BEGIN PRIVATE KEY-----\n${
+      privateKeyDer
+        .toString("base64")
+        .match(/.{1,64}/gu)
+        ?.join("\n") ?? ""
+    }\n-----END PRIVATE KEY-----\n`,
+  };
+}
+
+async function availableLoopbackPort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    server.close();
+    throw new Error("A loopback test port was not assigned.");
+  }
+  await new Promise<void>((resolveClose, rejectClose) => {
+    server.close((error) => (error === undefined ? resolveClose() : rejectClose(error)));
+  });
+  return address.port;
+}
+
+async function requestArtifactHealth(input: {
+  readonly port: number;
+  readonly servername?: string;
+  readonly hostHeader: string;
+  readonly certificateAuthorityPem: string;
+}): Promise<{ readonly statusCode: number | undefined; readonly body: string }> {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const request = httpsRequest(
+      {
+        hostname: "127.0.0.1",
+        port: input.port,
+        path: "/health/live",
+        method: "GET",
+        ...(input.servername === undefined ? {} : { servername: input.servername }),
+        ca: input.certificateAuthorityPem,
+        minVersion: "TLSv1.3",
+        maxVersion: "TLSv1.3",
+        headers: { host: input.hostHeader },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        response.once("error", rejectRequest);
+        response.once("end", () => {
+          resolveRequest({
+            statusCode: response.statusCode,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    request.once("error", rejectRequest);
+    request.end();
+  });
+}
+
 test("default Artifact configuration is private, loopback-only, and uses distinct origins", async () => {
   const home = resolve(tmpdir(), "OpenDelegateRuntime");
   const configuration = await defaultMainArtifactConfiguration({
@@ -190,6 +287,23 @@ test("default Artifact configuration is private, loopback-only, and uses distinc
     backend: "windows-dpapi",
     vaultRoot: join(home, "secrets", "main"),
   });
+  assert.deepEqual(
+    validateMainArtifactConfiguration({
+      ...configuration,
+      secretBackend: {
+        backend: "windows-service-dpapi",
+        vaultRoot: join(home, "secrets", "service"),
+        handoffRoot: join(home, "state", "secrets"),
+        serviceSid: "S-1-5-80-1-2-3-4-5",
+      },
+    }).secretBackend,
+    {
+      backend: "windows-service-dpapi",
+      vaultRoot: join(home, "secrets", "service"),
+      handoffRoot: join(home, "state", "secrets"),
+      serviceSid: "S-1-5-80-1-2-3-4-5",
+    },
+  );
   assert.throws(
     () =>
       validateMainArtifactConfiguration({
@@ -219,6 +333,114 @@ test("default Artifact configuration is private, loopback-only, and uses distinc
       }),
     /TLS-capable listener composition/i,
   );
+});
+
+test("Main can bind directly authenticated Artifact planes over configured HTTPS", async () => {
+  const sourceCheckout = resolve(".");
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-artifact-tls-"));
+  const tls = await issueArtifactTlsFixture();
+  const certificatePath = join(home, "artifact-listener-certificate.pem");
+  const privateKeyPath = join(home, "artifact-listener-private-key.pem");
+  await Promise.all([
+    writeFile(certificatePath, tls.certificatePem, { encoding: "utf8", mode: 0o600 }),
+    writeFile(privateKeyPath, tls.privateKeyPem, { encoding: "utf8", mode: 0o600 }),
+  ]);
+  const staticPort = await availableLoopbackPort();
+  let interactivePort = await availableLoopbackPort();
+  while (interactivePort === staticPort) {
+    interactivePort = await availableLoopbackPort();
+  }
+  const configuration = validateMainArtifactConfiguration({
+    schemaVersion: 1,
+    enabled: true,
+    listeners: {
+      static: {
+        host: "127.0.0.1",
+        port: staticPort,
+        origin: `https://127.0.0.1:${String(staticPort)}`,
+        tls: { certificatePath, privateKeyPath },
+      },
+      interactive: {
+        host: "127.0.0.1",
+        port: interactivePort,
+        origin: `https://localhost:${String(interactivePort)}`,
+        tls: { certificatePath, privateKeyPath },
+      },
+    },
+    storage: { maximumArtifactBytes: 1024 * 1024 },
+    exposure: {
+      defaultMode: "private-network",
+      privateNetworks: ["127.0.0.0/8"],
+      authenticatedBearerAlias: "artifact.owner.bearer",
+      authenticatedSessionAlias: "artifact.owner.session",
+      customPolicyAliases: {},
+    },
+    signingKeyAlias: "artifact.signing.v1",
+    secretBackend: {
+      backend: "windows-dpapi",
+      vaultRoot: join(home, "secrets", "main"),
+    },
+  });
+  const secretStore = new TestManagedSecretStore("device-main");
+  let runtime: Awaited<ReturnType<typeof createProductionMainArtifactRuntime>> | undefined;
+  try {
+    runtime = await createProductionMainArtifactRuntime({
+      configuration,
+      home,
+      sourceCheckout,
+      deviceId: "device-main",
+      adminListeners: [
+        {
+          host: "127.0.0.1",
+          port: 4380,
+          origin: "http://admin.artifacts.localhost:4380",
+        },
+      ],
+      secretStore,
+    });
+    const [staticHealth, interactiveHealth] = await Promise.all([
+      requestArtifactHealth({
+        port: staticPort,
+        hostHeader: `127.0.0.1:${String(staticPort)}`,
+        certificateAuthorityPem: tls.certificateAuthorityPem,
+      }),
+      requestArtifactHealth({
+        port: interactivePort,
+        servername: "localhost",
+        hostHeader: `localhost:${String(interactivePort)}`,
+        certificateAuthorityPem: tls.certificateAuthorityPem,
+      }),
+    ]);
+    assert.equal(staticHealth.statusCode, 200);
+    assert.equal(interactiveHealth.statusCode, 200);
+    assert.equal(JSON.parse(staticHealth.body).service, "opendelegate-artifact-static");
+    assert.equal(JSON.parse(interactiveHealth.body).service, "opendelegate-artifact-interactive");
+
+    const uploadBytes = Buffer.from("remote Worker HTTPS upload", "utf8");
+    const grant = await runtime.issueWorkerUploadGrant({
+      artifactId: "artifact-direct-tls-upload",
+      taskId: "task-direct-tls",
+      producingRunId: "run-direct-tls",
+      mediaType: "text/plain",
+      originalFilename: "direct-tls.txt",
+      declaredSizeBytes: uploadBytes.byteLength,
+      expectedChecksum: { algorithm: "sha256", value: checksum(uploadBytes) },
+      createdAtMs: Date.now(),
+      retentionPolicy: { kind: "task" },
+      exposurePolicy: { mode: "private-network" },
+      provenance: { deviceId: "device-worker", source: "worker-upload" },
+      expiresAtMs: Date.now() + 60_000,
+      context: {
+        actor: { type: "system", id: "main-worker-dispatch" },
+        correlationId: "artifact-direct-tls-grant",
+      },
+    });
+    assert.equal(new URL(grant.uploadUrl).protocol, "https:");
+    assert.equal(new URL(grant.uploadUrl).port, String(staticPort));
+  } finally {
+    await runtime?.close();
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test("Main Artifact runtime isolates hostile content, authorization, and signed links across restart", async () => {

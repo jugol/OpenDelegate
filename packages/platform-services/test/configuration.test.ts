@@ -61,19 +61,33 @@ test("rejects relative or source-checkout runtime state paths", () => {
       ),
     (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
   );
+
+  for (const codexServiceHomeDirectory of [
+    "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\..\\escaped",
+    "C:\\Users\\owner\\.codex\\service",
+  ]) {
+    assert.throws(
+      () =>
+        createPlatformServiceDefinition(
+          windowsConfiguration({ agentProviderAccess: { codexServiceHomeDirectory } }),
+        ),
+      (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
+    );
+  }
 });
 
 test("accepts only the exact external Windows Codex sandbox helper directory", () => {
   const accepted = createPlatformServiceDefinition(
     windowsConfiguration({
       agentSandbox: {
-        codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+        codexSandboxBinDirectory:
+          "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
       },
     }),
   ).configuration;
   assert.equal(
     accepted.platform === "windows" ? accepted.agentSandbox?.codexSandboxBinDirectory : undefined,
-    "C:\\Users\\owner\\.codex\\.sandbox-bin",
+    "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
   );
 
   for (const codexSandboxBinDirectory of [
@@ -88,6 +102,190 @@ test("accepts only the exact external Windows Codex sandbox helper directory", (
       (error: unknown) =>
         error instanceof PlatformServiceError &&
         (error.code === "INVALID_PATH" || error.code === "PATH_INSIDE_CHECKOUT"),
+    );
+  }
+});
+
+test("accepts only bounded Windows Agent provider homes with a verified owner profile", () => {
+  const ownerWithoutHome = { ...windowsConfiguration().ownerSession };
+  Reflect.deleteProperty(ownerWithoutHome, "homeDirectory");
+  const accepted = createPlatformServiceDefinition(
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        homeDirectory: "C:\\Users\\owner",
+      },
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.codex",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+  ).configuration;
+  assert.deepEqual(accepted.platform === "windows" ? accepted.agentProviderAccess : undefined, {
+    codexHomeDirectory: "C:\\Users\\owner\\.codex",
+    codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+    claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+  });
+
+  for (const configuration of [
+    windowsConfiguration({
+      ownerSession: ownerWithoutHome,
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.codex",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.codex\\",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\AppData\\Roaming\\npm.\\codex-state",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\CON\\codex-state",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\COM¹\\codex-state",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        homeDirectory: "C:\\Users\\owner",
+      },
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        homeDirectory: "C:\\Users\\owner",
+      },
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\src\\OpenDelegate\\.codex",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Windows",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.local\\bin\\codex-state",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\AppData\\Roaming\\npm",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory:
+          "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    }),
+    windowsConfiguration({
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.agent-state",
+        claudeHomeDirectory: "C:\\Users\\owner\\.agent-state\\claude",
+      },
+    }),
+  ]) {
+    assert.throws(
+      () => createPlatformServiceDefinition(configuration),
+      (error: unknown) =>
+        error instanceof PlatformServiceError &&
+        ["INVALID_IDENTITY", "INVALID_PATH", "PATH_INSIDE_CHECKOUT"].includes(error.code),
+    );
+  }
+
+  assert.doesNotThrow(() =>
+    createPlatformServiceDefinition(
+      windowsConfiguration({
+        agentProviderAccess: {
+          codexHomeDirectory: "C:\\Users\\owner\\.codex",
+          claudeHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\claude",
+        },
+      }),
+    ),
+  );
+
+  assert.throws(
+    () =>
+      createPlatformServiceDefinition(
+        windowsConfiguration({
+          agentSandbox: {
+            codexSandboxBinDirectory: "C:\\Users\\owner\\other\\.sandbox-bin",
+          },
+        }),
+      ),
+    (error: unknown) => error instanceof PlatformServiceError && error.code === "INVALID_PATH",
+  );
+});
+
+test("accepts only a normalized non-root Windows owner home", () => {
+  const accepted = createPlatformServiceDefinition(
+    windowsConfiguration({
+      ownerSession: {
+        ...windowsConfiguration().ownerSession,
+        homeDirectory: "C:\\Users\\owner",
+      },
+    }),
+  ).configuration;
+  assert.equal(accepted.ownerSession.homeDirectory, "C:\\Users\\owner");
+
+  for (const homeDirectory of [
+    "C:\\",
+    "C:\\Users\\owner\\",
+    "C:\\Users\\owner.",
+    "C:\\Users\\owner \\profile",
+    "C:\\Users\\CON\\owner",
+    "C:\\Users\\LPT²\\owner",
+    "C:\\Users\\owner\\..\\other",
+    "relative\\owner",
+    "\\\\server\\share\\owner",
+    "\\\\?\\C:\\Users\\owner",
+    "\\\\.\\C:\\Users\\owner",
+  ]) {
+    assert.throws(
+      () =>
+        createPlatformServiceDefinition(
+          windowsConfiguration({
+            ownerSession: {
+              ...windowsConfiguration().ownerSession,
+              homeDirectory,
+            },
+          }),
+        ),
+      (error: unknown) =>
+        error instanceof PlatformServiceError &&
+        (error.code === "INVALID_PATH" || error.code === "INVALID_IDENTITY"),
     );
   }
 });

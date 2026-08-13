@@ -39,6 +39,7 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
     /--stderr-log C:\\ProgramData\\OpenDelegate\\logs\\helper\.stderr\.log/u,
   );
   assert.match(artifacts.helper.manifest.content, /<Interval>PT1M<\/Interval>/u);
+  assert.match(artifacts.helper.manifest.content, /<Hidden>true<\/Hidden>/u);
   assert.doesNotMatch(artifacts.helper.manifest.content, /<Interval>PT15S<\/Interval>/u);
 
   const createService = artifacts.installCommands.find(
@@ -87,11 +88,16 @@ test("renders an SCM boot service and least-privilege interactive logon helper o
   const runtimeFile = artifacts.files.find((file) => file.purpose === "runtime-configuration");
   assert.ok(runtimeFile);
   const runtime = JSON.parse(runtimeFile.content) as {
+    agentProviderAccess: {
+      codexHomeDirectory: string;
+      claudeHomeDirectory: string;
+    };
     logs: {
       core: { stdout: string };
       sessionHelper: { stderr: string };
     };
   };
+  assert.deepEqual(runtime.agentProviderAccess, windowsConfiguration().agentProviderAccess);
   assert.equal(runtime.logs.core.stdout, "C:\\ProgramData\\OpenDelegate\\logs\\core.stdout.log");
   assert.equal(
     runtime.logs.sessionHelper.stderr,
@@ -103,12 +109,28 @@ test("renders a LaunchDaemon and Aqua LaunchAgent with separate privilege planes
   const artifacts = renderPlatformServiceArtifacts(macOsConfiguration());
   assert.equal(artifacts.platform, "macos");
   assert.ok(artifacts.helper);
+  for (const manifest of [artifacts.core.manifest, artifacts.helper.manifest]) {
+    assert.match(manifest.content, /<true\/>/u);
+    assert.match(manifest.content, /<false\/>/u);
+    assert.doesNotMatch(manifest.content, /<(true|false)><\/\1>/u);
+  }
   const daemon = parseLaunchdPlist(artifacts.core.manifest.content);
   const agent = parseLaunchdPlist(artifacts.helper.manifest.content);
 
   assert.equal(daemon.Label, "dev.opendelegate.personal.core");
   assert.equal(daemon.UserName, "_opendelegate");
   assert.equal(daemon.GroupName, "_opendelegate");
+  assert.ok(
+    typeof daemon.EnvironmentVariables === "object" &&
+      daemon.EnvironmentVariables !== null &&
+      !Array.isArray(daemon.EnvironmentVariables),
+  );
+  const environmentVariables = daemon.EnvironmentVariables as Readonly<Record<string, unknown>>;
+  assert.deepEqual(Object.keys(environmentVariables), ["PATH"]);
+  assert.equal(
+    environmentVariables["PATH"],
+    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  );
   assert.equal(daemon.RunAtLoad, true);
   assert.equal(daemon.KeepAlive, true);
   assert.equal(daemon.AbandonProcessGroup, false);

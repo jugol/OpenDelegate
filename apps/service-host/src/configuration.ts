@@ -1,6 +1,11 @@
 import { createHash, createPublicKey } from "node:crypto";
 import { open, realpath } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, posix, resolve, win32 } from "node:path";
+
+import {
+  isCanonicalLocalWindowsPath,
+  parseWindowsOwnerHome,
+} from "@opendelegate/platform-services";
 
 const MAX_CONFIG_BYTES = 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
@@ -39,6 +44,11 @@ export interface ServiceHostConfiguration {
           readonly enabled: true;
           readonly url: string;
         };
+  };
+  readonly agentProviderAccess?: {
+    readonly codexHomeDirectory: string;
+    readonly codexServiceHomeDirectory: string;
+    readonly claudeHomeDirectory: string;
   };
   readonly helperSecretBinding:
     | {
@@ -85,7 +95,16 @@ export interface ServiceHostConfiguration {
     readonly endpoint: string;
     readonly timeoutMs: number;
   };
-  readonly serviceSecretBinding?: Readonly<Record<string, unknown>>;
+  readonly serviceSecretBinding?:
+    | {
+        readonly backend: "macos-system-keychain";
+        readonly bindingPath: string;
+        readonly helperPath: string;
+        readonly expectedHelperSha256: `sha256:${string}`;
+        readonly keychainPath: "/Library/Keychains/System.keychain";
+        readonly serviceUserName: string;
+      }
+    | Readonly<Record<string, unknown>>;
 }
 
 export interface ServiceHostIpcPlaneBinding {
@@ -209,7 +228,7 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
       "localIpc",
       "health",
     ],
-    ["serviceSecretBinding"],
+    ["agentProviderAccess", "serviceSecretBinding"],
     "service configuration",
   );
   if (
@@ -242,6 +261,19 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
     );
   }
   const logs = parseLogs(record["logs"], platform);
+  const serviceSecretBinding = parseServiceSecretBinding(record["serviceSecretBinding"], platform);
+  const windowsServiceSecretBinding =
+    platform === "windows" && serviceSecretBinding !== undefined
+      ? (serviceSecretBinding as Readonly<Record<string, unknown>>)
+      : undefined;
+  const sharedMacOsHelper =
+    platform === "macos" && serviceSecretBinding?.backend === "macos-system-keychain"
+      ? (serviceSecretBinding as {
+          readonly backend: "macos-system-keychain";
+          readonly helperPath: string;
+          readonly expectedHelperSha256: `sha256:${string}`;
+        })
+      : undefined;
   const helperSecretBinding = parseHelperSecretBinding(record["helperSecretBinding"], platform, {
     releaseRoot: record["releaseRoot"] as string,
     disjointRoots: [
@@ -254,13 +286,32 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
       logs.sessionHelper.stdout,
       logs.sessionHelper.stderr,
     ],
+    ...(sharedMacOsHelper === undefined ? {} : { sharedMacOsHelper }),
   });
+  const agentProviderAccess = parseAgentProviderAccess(
+    record["agentProviderAccess"],
+    platform,
+    ownerSession.homeDirectory,
+    record["stateRoot"] as string,
+    [
+      record["releaseRoot"] as string,
+      record["authorityRoot"] as string,
+      record["runtimeRoot"] as string,
+      logs.core.stdout,
+      logs.core.stderr,
+      logs.sessionHelper.stdout,
+      logs.sessionHelper.stderr,
+      ...(helperSecretBinding?.backend === "windows-dpapi" ? [helperSecretBinding.vaultRoot] : []),
+      ...(windowsServiceSecretBinding === undefined
+        ? []
+        : [
+            windowsServiceSecretBinding["handoffRoot"],
+            windowsServiceSecretBinding["vaultRoot"],
+          ].filter((value): value is string => typeof value === "string")),
+    ],
+  );
   const localIpc = parseLocalIpc(record["localIpc"], platform, helperSecretBinding !== null);
   const health = parseHealth(record["health"]);
-  const serviceSecretBinding =
-    record["serviceSecretBinding"] === undefined
-      ? undefined
-      : Object.freeze({ ...requireRecord(record["serviceSecretBinding"], "Secret binding") });
   return deepFreeze({
     schemaVersion: 3 as const,
     instanceId: record["instanceId"] as string,
@@ -273,11 +324,149 @@ export function parseServiceHostConfiguration(input: unknown): ServiceHostConfig
     authorityRoot: record["authorityRoot"] as string,
     runtimeRoot: record["runtimeRoot"] as string,
     ownerSession,
+    ...(agentProviderAccess === undefined ? {} : { agentProviderAccess }),
     helperSecretBinding,
     logs,
     localIpc,
     health,
     ...(serviceSecretBinding === undefined ? {} : { serviceSecretBinding }),
+  });
+}
+
+function parseAgentProviderAccess(
+  input: unknown,
+  platform: ServiceHostConfiguration["platform"],
+  ownerHome: string | undefined,
+  stateRoot: string,
+  protectedPaths: readonly string[],
+): ServiceHostConfiguration["agentProviderAccess"] {
+  if (platform !== "windows") {
+    if (input !== undefined) {
+      throw new ServiceHostError("Only Windows accepts an Agent provider-home binding.");
+    }
+    return undefined;
+  }
+  if (ownerHome === undefined) {
+    throw new ServiceHostError("The Windows owner profile binding is required.");
+  }
+  const record = requireRecord(input, "Windows Agent provider-home binding");
+  requireExactKeys(
+    record,
+    ["codexHomeDirectory", "codexServiceHomeDirectory", "claudeHomeDirectory"],
+    [],
+    "Windows Agent provider-home binding",
+  );
+  const homes = [
+    ["codex", record["codexHomeDirectory"]],
+    ["codex", record["codexServiceHomeDirectory"]],
+    ["claude", record["claudeHomeDirectory"]],
+  ] as const;
+  for (const [provider, value] of homes) {
+    requirePlatformPath("windows", value, `${provider} provider home`);
+    const home = value as string;
+    if (!isCanonicalLocalWindowsPath(home)) {
+      throw new ServiceHostError("A Windows Agent provider home path is invalid.");
+    }
+    const managedRoot = win32.resolve(stateRoot, "state", "providers", provider);
+    const belongsToManagedProvider =
+      configuredPathsEqual("windows", managedRoot, home) ||
+      isDescendantPath("windows", managedRoot, home);
+    if (!isDescendantPath("windows", ownerHome, home) && !belongsToManagedProvider) {
+      throw new ServiceHostError(
+        "A Windows Agent provider home must belong to the owner or its exact managed provider root.",
+      );
+    }
+    for (const protectedPath of [
+      ...protectedPaths,
+      win32.resolve(ownerHome, ".local", "bin"),
+      win32.resolve(ownerHome, "AppData", "Roaming", "npm"),
+    ]) {
+      if (pathsOverlap("windows", home, protectedPath)) {
+        throw new ServiceHostError(
+          "A Windows Agent provider home overlaps a protected service or launcher path.",
+        );
+      }
+    }
+    if (pathsOverlap("windows", home, stateRoot) && !belongsToManagedProvider) {
+      throw new ServiceHostError(
+        "A Windows Agent provider home may enter service state only through its managed root.",
+      );
+    }
+  }
+  const codexHomeDirectory = record["codexHomeDirectory"] as string;
+  const codexServiceHomeDirectory = record["codexServiceHomeDirectory"] as string;
+  const claudeHomeDirectory = record["claudeHomeDirectory"] as string;
+  const expectedCodexServiceHome = win32.resolve(stateRoot, "state", "providers", "codex");
+  if (!configuredPathsEqual("windows", codexServiceHomeDirectory, expectedCodexServiceHome)) {
+    throw new ServiceHostError(
+      "The Windows Codex service home must be the exact managed provider root.",
+    );
+  }
+  if (pathsOverlap("windows", codexHomeDirectory, codexServiceHomeDirectory)) {
+    throw new ServiceHostError("The owner and service Codex homes must be disjoint.");
+  }
+  if (pathsOverlap("windows", codexHomeDirectory, claudeHomeDirectory)) {
+    throw new ServiceHostError("The Windows Codex and Claude homes must be disjoint.");
+  }
+  if (pathsOverlap("windows", codexServiceHomeDirectory, claudeHomeDirectory)) {
+    throw new ServiceHostError("The service Codex and Claude homes must be disjoint.");
+  }
+  return Object.freeze({ codexHomeDirectory, codexServiceHomeDirectory, claudeHomeDirectory });
+}
+
+function parseServiceSecretBinding(
+  input: unknown,
+  platform: ServiceHostConfiguration["platform"],
+): ServiceHostConfiguration["serviceSecretBinding"] {
+  if (input === undefined) {
+    if (platform === "macos") {
+      throw new ServiceHostError("The macOS core System Keychain binding is required.");
+    }
+    return undefined;
+  }
+  const record = requireRecord(input, "Secret binding");
+  if (platform !== "macos") {
+    if (platform === "linux") {
+      throw new ServiceHostError("Linux does not accept a service Secret binding document.");
+    }
+    return Object.freeze({ ...record });
+  }
+  requireExactKeys(
+    record,
+    [
+      "backend",
+      "bindingPath",
+      "helperPath",
+      "expectedHelperSha256",
+      "keychainPath",
+      "serviceUserName",
+    ],
+    [],
+    "macOS System Keychain binding",
+  );
+  requirePlatformPath("macos", record["bindingPath"], "System Keychain binding document");
+  requirePlatformPath("macos", record["helperPath"], "System Keychain helper");
+  if (
+    record["backend"] !== "macos-system-keychain" ||
+    record["keychainPath"] !== "/Library/Keychains/System.keychain" ||
+    typeof record["expectedHelperSha256"] !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/u.test(record["expectedHelperSha256"]) ||
+    typeof record["serviceUserName"] !== "string" ||
+    !/^_?[A-Za-z][A-Za-z0-9_-]{0,30}$/u.test(record["serviceUserName"]) ||
+    !(record["bindingPath"] as string).startsWith("/Library/Application Support/OpenDelegate/") ||
+    !(record["helperPath"] as string).startsWith(
+      "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-",
+    )
+  ) {
+    throw new ServiceHostError("The macOS System Keychain binding is invalid.");
+  }
+  return Object.freeze({
+    backend: "macos-system-keychain" as const,
+    bindingPath: record["bindingPath"] as string,
+    helperPath: record["helperPath"] as string,
+    expectedHelperSha256: record["expectedHelperSha256"] as `sha256:${string}`,
+    keychainPath: "/Library/Keychains/System.keychain" as const,
+    serviceUserName: record["serviceUserName"] as string,
   });
 }
 
@@ -287,6 +476,10 @@ function parseHelperSecretBinding(
   roots: {
     readonly releaseRoot: string;
     readonly disjointRoots: readonly string[];
+    readonly sharedMacOsHelper?: {
+      readonly helperPath: string;
+      readonly expectedHelperSha256: `sha256:${string}`;
+    };
   },
 ): ServiceHostConfiguration["helperSecretBinding"] {
   if (input === null) {
@@ -320,18 +513,24 @@ function parseHelperSecretBinding(
       "owner helper Secret binding",
     );
     requirePlatformPath(platform, record["helperPath"], "pinned Keychain helper");
+    const helperPath = record["helperPath"] as string;
+    const expectedHelperSha256 = record["expectedHelperSha256"];
+    const sharedSystemHelper =
+      roots.sharedMacOsHelper !== undefined &&
+      samePath(roots.sharedMacOsHelper.helperPath, helperPath) &&
+      roots.sharedMacOsHelper.expectedHelperSha256 === expectedHelperSha256;
     if (
       record["backend"] !== "macos-keychain" ||
-      typeof record["expectedHelperSha256"] !== "string" ||
-      !/^sha256:[a-f0-9]{64}$/u.test(record["expectedHelperSha256"]) ||
-      !isDescendantPath(platform, roots.releaseRoot, record["helperPath"] as string)
+      typeof expectedHelperSha256 !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/u.test(expectedHelperSha256) ||
+      (!isDescendantPath(platform, roots.releaseRoot, helperPath) && !sharedSystemHelper)
     ) {
       throw new ServiceHostError("The macOS owner helper Secret binding is invalid.");
     }
     return {
       backend: "macos-keychain",
-      helperPath: record["helperPath"] as string,
-      expectedHelperSha256: record["expectedHelperSha256"] as `sha256:${string}`,
+      helperPath,
+      expectedHelperSha256: expectedHelperSha256 as `sha256:${string}`,
     };
   }
   requireExactKeys(record, ["backend", "secretToolPath"], [], "owner helper Secret binding");
@@ -369,8 +568,15 @@ function parseOwnerSession(
       throw new ServiceHostError("The Unix owner session identity is invalid.");
     }
     requirePlatformPath(platform, record["homeDirectory"], "owner home");
-  } else if (record["uid"] !== undefined || record["homeDirectory"] !== undefined) {
-    throw new ServiceHostError("The Windows owner session identity is invalid.");
+  } else {
+    if (record["uid"] !== undefined) {
+      throw new ServiceHostError("The Windows owner session identity is invalid.");
+    }
+    if (record["homeDirectory"] !== undefined) {
+      if (parseWindowsOwnerHome(record["homeDirectory"]) === undefined) {
+        throw new ServiceHostError("The Windows owner session identity is invalid.");
+      }
+    }
   }
   const adminAutoOpen = parseAdminAutoOpen(record["adminAutoOpen"]);
   return {
@@ -697,8 +903,8 @@ function requirePlatformPath(
     value !== value.trim() ||
     value.includes("\0") ||
     (platform === "windows"
-      ? !/^[A-Za-z]:\\[^<>:"|?*\r\n]+$/u.test(value)
-      : !value.startsWith("/") || value.includes("\\"))
+      ? !isCanonicalLocalWindowsPath(value)
+      : posix.normalize(value) !== value || !value.startsWith("/") || value.includes("\\"))
   ) {
     throw new ServiceHostError(`The ${label} path is invalid.`);
   }
@@ -719,6 +925,16 @@ function pathsOverlap(
     first.startsWith(`${second}${separator}`) ||
     second.startsWith(`${first}${separator}`)
   );
+}
+
+function configuredPathsEqual(
+  platform: ServiceHostConfiguration["platform"],
+  left: string,
+  right: string,
+): boolean {
+  const normalize = (value: string) =>
+    stripTrailingPathSeparators(platform === "windows" ? value.toLowerCase() : value);
+  return normalize(left) === normalize(right);
 }
 
 function isDescendantPath(

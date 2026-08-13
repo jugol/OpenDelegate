@@ -75,6 +75,9 @@ export function renderRuntimeConfiguration(
         ...configuration.ownerSession,
         adminAutoOpen: configuration.ownerSession.adminAutoOpen,
       },
+      ...(configuration.platform === "windows"
+        ? { agentProviderAccess: configuration.agentProviderAccess }
+        : {}),
       helperSecretBinding: configuration.helperSecretBinding,
       logs: {
         core: {
@@ -88,11 +91,10 @@ export function renderRuntimeConfiguration(
       },
       localIpc,
       health: configuration.health,
-      ...(configuration.platform !== "windows" || configuration.serviceSecretBinding === undefined
+      ...(!("serviceSecretBinding" in configuration) ||
+      configuration.serviceSecretBinding === undefined
         ? {}
-        : {
-            serviceSecretBinding: configuration.serviceSecretBinding,
-          }),
+        : { serviceSecretBinding: configuration.serviceSecretBinding }),
     }),
     encoding: "utf8",
     mode: "0640",

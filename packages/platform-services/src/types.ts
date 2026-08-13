@@ -95,10 +95,24 @@ export interface WindowsServiceConfiguration extends BaseServiceConfiguration {
    * must be able to secure before Codex can enter its Windows sandbox.
    */
   readonly agentSandbox?: WindowsAgentSandboxConfiguration;
+  /**
+   * Exact owner-authenticated provider homes that the persistent core may use.
+   * Lifecycle preparation preserves their existing ACLs and adds only this
+   * instance's virtual-service identity.
+   */
+  readonly agentProviderAccess: WindowsAgentProviderAccessConfiguration;
 }
 
 export interface WindowsAgentSandboxConfiguration {
   readonly codexSandboxBinDirectory: string;
+}
+
+export interface WindowsAgentProviderAccessConfiguration {
+  /** Owner-authenticated Codex home containing the one SSOT auth.json. */
+  readonly codexHomeDirectory: string;
+  /** Service-owned Codex execution home below the managed provider root. */
+  readonly codexServiceHomeDirectory: string;
+  readonly claudeHomeDirectory: string;
 }
 
 export interface WindowsOwnerHelperSecretBinding {
@@ -119,12 +133,22 @@ export interface MacOsServiceConfiguration extends BaseServiceConfiguration {
   readonly ipcTrust: LocalIpcTrustConfiguration;
   readonly serviceIdentity: ServiceIdentity;
   readonly helperSecretBinding: MacOsOwnerHelperSecretBinding;
+  readonly serviceSecretBinding: MacOsSystemKeychainSecretBinding;
 }
 
 export interface MacOsOwnerHelperSecretBinding {
   readonly backend: "macos-keychain";
   readonly helperPath: string;
   readonly expectedHelperSha256: `sha256:${string}`;
+}
+
+export interface MacOsSystemKeychainSecretBinding {
+  readonly backend: "macos-system-keychain";
+  readonly bindingPath: string;
+  readonly helperPath: string;
+  readonly expectedHelperSha256: `sha256:${string}`;
+  readonly keychainPath: "/Library/Keychains/System.keychain";
+  readonly serviceUserName: string;
 }
 
 export interface LinuxServiceConfiguration extends BaseServiceConfiguration {

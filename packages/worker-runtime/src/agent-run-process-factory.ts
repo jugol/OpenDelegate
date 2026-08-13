@@ -358,8 +358,12 @@ export class AgentRunProcessFactory implements RunProcessFactory {
       prepared.plan.deterministicContext,
       this.#limits.maxPromptBytes,
     );
+    const promptWithWorkspacePolicy =
+      prepared.plan.sandbox === "workspace-write"
+        ? appendWorkspaceWritePolicy(basePrompt, this.#limits.maxPromptBytes)
+        : basePrompt;
     const promptWithSteering = appendPendingSteeringInstructions(
-      basePrompt,
+      promptWithWorkspacePolicy,
       prepared.pendingSteering,
       this.#limits.maxPromptBytes,
     );
@@ -1127,7 +1131,7 @@ class AdapterRunProcess implements RunProcess {
             diagnostic: {
               code: egressDenied ? "ARTIFACT_EGRESS_DENIED" : "ARTIFACT_PROMOTION_FAILED",
               stage: "artifact",
-              retryable: !egressDenied,
+              retryable: artifactPromotionRetryable(error, egressDenied),
             },
             ...usageProperty(usage),
             ...agentSessionProperty(this.#agentSession),
@@ -1663,12 +1667,30 @@ function appendArtifactOutputContract(prompt: string, maximumBytes: number): str
     "## Artifact output contract",
     "",
     "If this Run produces durable files for the owner, use only the exact Run-scoped mcp__opendelegate-artifact__artifact_write_chunk tool to append bounded base64-encoded bytes at explicit offsets. After every file is complete, call mcp__opendelegate-artifact__artifact_commit once with the exact relative paths, media types, original filenames, and optional presentation modes. Do not attempt to discover or write an Artifact staging path directly. Do not include credentials, Device-local Knowledge, hidden reasoning, raw transcripts, or temporary files. If there are no durable files, do not call either Artifact tool.",
+    "artifact_commit seals only this Run's manifest. After the native Agent turn succeeds, deterministic Worker code promotes every committed file to Main's durable Artifact Store before the Worker success event can be accepted. That post-turn boundary is intentionally not observable from this Agent turn. After a successful commit, report the exact file facts and finish normally; do not wait for, claim, or deny later Main promotion or Discord presentation.",
     "relativePath must use forward slashes and remain within this Run capability. requestedPresentation may be omitted or be download, inline, static-html, or interactive-html.",
   ].join("\n");
   if (Buffer.byteLength(instructions, "utf8") > maximumBytes) {
     throw new AgentRunBridgeError(
       "ARTIFACT_PREPARATION_FAILED",
       "The bounded Artifact output contract exceeds the Agent prompt limit.",
+    );
+  }
+  return instructions;
+}
+
+function appendWorkspaceWritePolicy(prompt: string, maximumBytes: number): string {
+  const instructions = [
+    prompt,
+    "",
+    "## Workspace mutation policy",
+    "",
+    "The assigned Workspace is already bounded by the Worker-managed Worktree and provider sandbox. Ordinary file work does not require owner approval merely to create or edit files inside it. Use the provider's file-change or patch mechanism for Workspace file mutations and do not request sandbox-boundary escalation or an elevated shell for an action that fits within this Workspace. A redundant escalation is denied locally without creating an owner Approval. Actions outside that sandbox and OpenDelegate protected-action categories still require their normal deterministic Policy decision.",
+  ].join("\n");
+  if (Buffer.byteLength(instructions, "utf8") > maximumBytes) {
+    throw new AgentRunBridgeError(
+      "INVALID_EXECUTION_PLAN",
+      "The bounded Workspace mutation policy exceeds the Agent prompt limit.",
     );
   }
   return instructions;
@@ -1722,9 +1744,24 @@ function validatePromotedArtifactIds(value: readonly string[]): readonly string[
 }
 
 function isArtifactEgressDenied(error: unknown): boolean {
-  return (
-    error !== null && typeof error === "object" && "code" in error && error.code === "EGRESS_DENIED"
-  );
+  return readOwnDataProperty(error, "code") === "EGRESS_DENIED";
+}
+
+function artifactPromotionRetryable(error: unknown, egressDenied: boolean): boolean {
+  const retryable = readOwnDataProperty(error, "retryable");
+  return typeof retryable === "boolean" ? retryable : !egressDenied;
+}
+
+function readOwnDataProperty(input: unknown, key: string): unknown {
+  if (input === null || typeof input !== "object") {
+    return undefined;
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function isNormalizedAbsolutePath(value: unknown): value is string {

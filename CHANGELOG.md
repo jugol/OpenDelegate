@@ -71,6 +71,53 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Retained each ready Worker adapter's last successful model catalog when a later catalog refresh
+  fails transiently. A catalog probe no longer makes an otherwise online, authorized Worker appear
+  ineligible for one scheduling cycle; genuine adapter/authentication loss still clears the catalog.
+- Delivered a completed Task's small safe `download` Artifact as a Discord-native Components v2
+  File. The durable outbox retains only Task-bound integrity metadata; Main rereads and verifies the
+  available bytes before a nonce-protected multipart upload, while oversized or incompatible files
+  keep their stable Artifact Gateway action.
+- Made Discord review results historical, inactive surfaces. They no longer retain Pause or Cancel
+  controls after execution has stopped; an owner reply remains the durable way to start the next
+  review cycle.
+- Tolerated a runtime-owned transient lock disappearing between managed-tree enumeration and
+  permission inspection. Main still fails closed for links, special files, permission errors, and
+  every other unstable-path result, but ordinary session-lock release no longer aborts startup with
+  a raw `ENOENT`.
+- Composed the live external-HTTPS verifier into production Main startup whenever an Artifact
+  listener uses the accepted reverse-proxy mode. The same bounded Artifact runtime errors now keep
+  their public diagnostic code and message at the CLI boundary instead of collapsing to an opaque
+  `INTERNAL_ERROR`.
+- Added an explicit direct-TLS Artifact listener composition for remote Workers. Main validates
+  stable external certificate/key files and TLS identity before binding, while Workers reuse the
+  enrollment-pinned Main CA alongside public roots without disabling hostname verification or
+  installing machine-wide trust.
+- Deduplicated continued Worker native-session observations in Task checkpoints by the protocol
+  session identity, retaining the latest Work Order association so a retry cannot replace the
+  original resource failure with `TASK_CHECKPOINT_UNAVAILABLE`.
+- Preserved an authorized Discord button decision when Gateway head-of-line delay makes the
+  interaction too old for Discord's private acknowledgement. The exact idempotent Task command or
+  Approval now still crosses the durable authority boundary once, and the refreshed public Task
+  surface confirms the result instead of silently discarding the owner's click. Gateway records the
+  interaction clock at socket ingress rather than after its ordered dispatch queue drains, so an
+  already-expired acknowledgement cannot be mistaken for a fresh one and dropped on failure.
+- Made a new owner message on a Task in `review` durably queue a fresh execution cycle. Review
+  remains dormant across ordinary Main restarts, but an explicit Discord follow-up now reaches the
+  Coordinator and can create new owner-cycle-scoped Work Orders instead of merely reprojecting the
+  old review card.
+- Projected each ready Worker adapter's executable tool-authority class into Main planning and
+  prevented Auto or Prefer dispatch from silently falling through to a tool-less provider CLI. File,
+  shell, Artifact, network, native-child-Agent, package, and Computer Use work now stays on an
+  adapter with an OpenDelegate Policy callback unless the owner explicitly pins a text-only adapter.
+- Kept Windows provider-home access repair ahead of restart/upgrade downtime and limited routine
+  lifecycle repair to the canonical provider roots. Initial installation remains recursive, while
+  subsequent starts, restarts, and upgrades refresh inheritable access without rewalking entire
+  Codex and Claude state trees.
+- Allowed an immutable Run assignment to add the exact adapter model or effort selected by Main
+  while still proving that every Work Order Agent constraint is preserved and its compatibility
+  allowance is only narrowed. This prevents a valid resolved binding from poisoning durable Worker
+  channel replay after reconnect.
 - Added an explicit, durable `--codex-home` Main option so an owner can share one existing local
   Codex home as a Device SSOT while managed provider homes remain the default.
 - Made the fixed Main computer a normal co-located Worker Device under the same service lifecycle
@@ -114,6 +161,33 @@ represents a supported release or completed first milestone.
 
 ### Fixed
 
+- Kept Windows login and background capability inventory silent: the session-helper is packaged
+  without a console window, its native Computer Use child is spawned with hidden process creation,
+  the login Task is explicitly hidden, and OS capture/permission interaction is deferred until an
+  owner-requested Computer Use Run instead of running during heartbeat probes. Existing
+  installations accept only the exact prior Task manifest missing that one hidden flag during
+  upgrade, then atomically persist and force-refresh the native Task registration before restarting
+  either service plane.
+- Made the Windows virtual-service Secret vault reboot-stable by using its profile-independent
+  DPAPI-NG sealing and service-only ACL through the already trusted native service host instead of
+  starting Windows PowerShell inside the background service, with a bounded one-time migration from
+  legacy CurrentUser DPAPI records when that older profile is available.
+- Kept a native Worker service alive when Main or its VPN route is temporarily unavailable: an
+  active bounded reconnect loop now satisfies local service readiness, while Main continues to mark
+  the Device offline until its next authenticated heartbeat. Non-retryable identity failures still
+  fail startup closed.
+
+- Distinguished the Worker Agent's pre-promotion report from deterministic post-turn Artifact
+  evidence, so a successfully promoted file can complete its Task and be presented by Discord
+  instead of waiting for the Worker to observe a boundary that deliberately runs after its turn.
+- Localized the deterministic resource-wait suffix when it follows a Korean Agent explanation,
+  avoiding an English orchestration footer inside an otherwise Korean Discord status card.
+- Enabled a private loopback Artifact Gateway during ordinary new-Main initialization, added an
+  explicit enable/disable or custom reconfiguration boundary for existing Mains, and retained the
+  Windows service Secret backend so file delivery cannot disappear after service promotion.
+- Preserved bounded Artifact-stage Worker diagnostics and Main's explicit retry decision through
+  promotion and Discord localization, preventing terminal delivery refusals from becoming opaque
+  `WORKER_BOUNDARY_ERROR` retries.
 - Replaced noisy per-step Discord replies with one editable live Task-activity surface that
   aggregates Main planning, multi-Device dispatch, egress-inspected Worker milestones, Work Order
   completion, and verification. Terminal replies close it through a durable cross-cycle tombstone,

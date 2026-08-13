@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -7,6 +8,7 @@ import {
   DiscordForumAdapter,
   DiscordTaskPortError,
   InMemoryDiscordStateRepository,
+  type DiscordArtifactAttachmentContentPort,
   type DiscordApiPort,
   type DiscordGatewayDispatch,
   type DiscordGatewayPort,
@@ -18,6 +20,7 @@ import {
   type TaskChannelProjection,
   redactDiscordSecrets,
   renderStatusPanel,
+  renderTaskActivity,
   renderTaskUpdate,
 } from "../src/index.ts";
 
@@ -56,7 +59,9 @@ class FakeTaskPort implements DiscordTaskPort {
   public readonly calls: Array<Record<string, unknown>> = [];
   public readonly taskByIdempotency = new Map<string, string>();
   public blockCommands: Promise<void> | undefined;
+  public blockAppends: Promise<void> | undefined;
   public commandError: Error | undefined;
+  public beforeAppendTaskInput: (() => void) | undefined;
   public afterAppendTaskInput: (() => void) | undefined;
 
   public async createTask(input: Parameters<DiscordTaskPort["createTask"]>[0]) {
@@ -71,6 +76,8 @@ class FakeTaskPort implements DiscordTaskPort {
   }
 
   public async appendTaskInput(input: Parameters<DiscordTaskPort["appendTaskInput"]>[0]) {
+    this.beforeAppendTaskInput?.();
+    await this.blockAppends;
     this.calls.push({ kind: "append", ...input });
     this.afterAppendTaskInput?.();
   }
@@ -91,6 +98,7 @@ class FakeTaskPort implements DiscordTaskPort {
 class FakeDiscordApi implements DiscordApiPort {
   public online = true;
   public reconciliationError: DiscordApiError | undefined;
+  public deferInteractionError: DiscordApiError | undefined;
   public editDeferredError: DiscordApiError | undefined;
   public probe: DiscordInstallationProbe = {
     applicationId: "100000000000000006",
@@ -258,6 +266,7 @@ class FakeDiscordApi implements DiscordApiPort {
     threadId: string;
     requestKey: string;
     payload: DiscordMessagePayload;
+    attachment?: Parameters<DiscordApiPort["createMessage"]>[0]["attachment"];
   }): Promise<{ messageId: string }> {
     this.#assertOnline();
     const existing = this.#messageByRequestKey.get(input.requestKey);
@@ -316,6 +325,12 @@ class FakeDiscordApi implements DiscordApiPort {
     ephemeral: boolean;
   }): Promise<{ responseRef: string }> {
     this.#assertOnline();
+    if (this.deferInteractionError !== undefined) {
+      throw this.deferInteractionError;
+    }
+    if (this.acknowledgedInteractions.has(input.interactionId)) {
+      throw new DiscordApiError("NOT_FOUND", "Discord already acknowledged this interaction.");
+    }
     this.acknowledgedInteractions.add(input.interactionId);
     this.operations.push({
       kind: "defer",
@@ -381,6 +396,7 @@ function fixture(options?: {
   clock?: FakeClock;
   gateway?: FakeGateway;
   presentationLocale?: "en" | "ko";
+  artifactAttachments?: DiscordArtifactAttachmentContentPort;
 }) {
   const repository = options?.repository ?? new InMemoryDiscordStateRepository();
   const api = options?.api ?? new FakeDiscordApi();
@@ -403,6 +419,9 @@ function fixture(options?: {
     tasks,
     clock,
     ...(options?.gateway === undefined ? {} : { gateway: options.gateway }),
+    ...(options?.artifactAttachments === undefined
+      ? {}
+      : { artifactAttachments: options.artifactAttachments }),
   });
   return { adapter, api, tasks, repository, clock };
 }
@@ -1094,6 +1113,71 @@ test("Task projection retires its bootstrap panel when chronological work begins
   assert.equal((await repository.getBindingByTask("task-1"))?.externalState, "available");
 });
 
+test("a completed Task uploads its verified small Artifact as one native Discord file", async () => {
+  const bytes = new TextEncoder().encode("Native Discord result\n");
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  let reads = 0;
+  const { adapter, api } = fixture({
+    artifactAttachments: {
+      read: async (artifactId) => {
+        reads += 1;
+        assert.equal(artifactId, "artifact-native-result");
+        return {
+          metadata: {
+            artifactId,
+            taskId: "task-1",
+            originalFilename: "result.txt",
+            mediaType: "text/plain",
+            sizeBytes: bytes.byteLength,
+            checksum: { algorithm: "sha256", value: sha256 },
+          },
+          bytes,
+        };
+      },
+    },
+  });
+  const thread = forumThread("300000000000000032");
+  const starter = ownerMessage(thread.id, thread.id, "Create a text result");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+
+  const projection: TaskChannelProjection = {
+    taskId: "task-1",
+    state: "completed",
+    objective: "Create a text result",
+    summary: "The text result is ready.",
+    sourceEventId: "event_native_result_completed",
+    significance: "final",
+    artifact: {
+      label: "Open report",
+      url: "https://artifacts.example.test/artifacts/artifact-native-result",
+      nativeAttachment: {
+        artifactId: "artifact-native-result",
+        filename: "result.txt",
+        mediaType: "text/plain",
+        sizeBytes: bytes.byteLength,
+        sha256,
+      },
+    },
+  };
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection(projection);
+  await adapter.flushOutbox();
+
+  const messages = api.operations.filter((operation) => operation["kind"] === "message");
+  assert.equal(messages.length, 1);
+  assert.equal(reads, 1);
+  assert.deepEqual(messages[0]?.["attachment"], {
+    filename: "result.txt",
+    mediaType: "text/plain",
+    bytes,
+  });
+  assert.match(JSON.stringify(messages[0]?.["payload"]), /attachment:\/\/result\.txt/u);
+  assert.match(JSON.stringify(messages[0]?.["payload"]), /Open report/u);
+});
+
 test("one bounded live activity message is edited and closed for a Task cycle", async () => {
   const { adapter, api, repository } = fixture();
   const thread = forumThread("300000000000000041");
@@ -1131,7 +1215,15 @@ test("one bounded live activity message is edited and closed for a Task cycle", 
   await adapter.publishTaskProjection({
     ...base,
     approval: {
-      approvalId: "approval-worker-action",
+      approvalId: "approval-worker-action-first",
+      description: "Windows build workstation wants approval for one protected action.",
+    },
+  });
+  await adapter.flushOutbox();
+  await adapter.publishTaskProjection({
+    ...base,
+    approval: {
+      approvalId: "approval-worker-action-second",
       description: "Mac Studio wants to temporarily expand its sandbox for this Task.",
     },
     activity: {
@@ -1165,9 +1257,15 @@ test("one bounded live activity message is edited and closed for a Task cycle", 
       typeof operation["requestKey"] === "string" &&
       operation["requestKey"].startsWith("task-activity:"),
   );
-  assert.equal(activityWrites.length, 2);
+  assert.equal(activityWrites.length, 3);
   assert.equal(activityWrites[0]?.["messageId"], activityWrites[1]?.["messageId"]);
+  assert.equal(activityWrites[1]?.["messageId"], activityWrites[2]?.["messageId"]);
+  assert.match(JSON.stringify(activityWrites[1]?.["payload"]), /approval-worker-action-first/u);
   assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Mac Studio/u);
+  assert.match(
+    JSON.stringify(activityWrites.at(-1)?.["payload"]),
+    /approval-worker-action-second/u,
+  );
   assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Approval needed/u);
   assert.match(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Approve/u);
   assert.doesNotMatch(JSON.stringify(activityWrites.at(-1)?.["payload"]), /Pause/u);
@@ -1542,6 +1640,20 @@ test("a completed Task without links renders valid Components v2 without an empt
   );
 });
 
+test("a review result is historical and carries no active pause or cancel controls", () => {
+  const payload = renderTaskUpdate({
+    taskId: "task-review-inactive",
+    state: "review",
+    objective: "Review the generated result.",
+    summary: "The result is ready for owner review.",
+    sourceEventId: "event_review_inactive",
+    significance: "decision",
+  });
+  const rendered = JSON.stringify(payload);
+  assert.doesNotMatch(rendered, /od:v1:pause/u);
+  assert.doesNotMatch(rendered, /od:v1:cancel/u);
+});
+
 test("the stable status panel does not repeat the Forum title or chronological owner question", () => {
   const payload = renderStatusPanel({
     taskId: "task-waiting",
@@ -1604,6 +1716,72 @@ test("a localized Workspace wait does not leak deterministic English into Korean
   assert.match(rendered, /od:v1:cancel/u);
 });
 
+test("a Korean resource wait localizes the deterministic suffix after an Agent-authored explanation", () => {
+  const payload = renderStatusPanel(
+    {
+      taskId: "task-waiting-artifact",
+      state: "waiting_resource",
+      objective: "결과 파일을 전달해 줘.",
+      summary:
+        "Artifact 승격 증거를 기다리고 있습니다. OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget.",
+      significance: "status",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /Artifact 승격 증거를 기다리고 있습니다/u);
+  assert.match(rendered, /관련 기기나 리소스 상태가 바뀌면 OpenDelegate가 자동으로 계속합니다/u);
+  assert.match(rendered, /자동 재시도 횟수는 차감되지 않습니다/u);
+  assert.doesNotMatch(rendered, /relevant resource availability changes/u);
+});
+
+test("sequential Worker Approvals are localized and explicitly approve once", () => {
+  const payload = renderTaskActivity(
+    {
+      taskId: "task-sequential-approval",
+      state: "running",
+      objective: "Windows에서 결과 파일을 만들어 전달해 줘.",
+      summary: "OpenDelegate is working on this Task.",
+      significance: "status",
+      activity: {
+        cycleId: "activity-sequential-approval",
+        revision: 9,
+        updatedAtMs: 9_000,
+        phase: "working",
+        completedWorkOrders: 0,
+        totalWorkOrders: 1,
+        milestones: [
+          {
+            key: "worker:windows",
+            status: "active",
+            summary: "Worker Agent is waiting for owner approval.",
+            deviceLabel: "5090White",
+          },
+        ],
+      },
+      approval: {
+        approvalId: "approval-sequential-9",
+        description: "English fallback must not be shown in Korean.",
+        sequence: 9,
+        remaining: 1,
+        deviceLabel: "5090White",
+        actionCategory: "sandbox-boundary-escalation",
+        risk: "medium",
+      },
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /이 작업의 9번째 보호 동작/u);
+  assert.match(rendered, /5090White/u);
+  assert.match(rendered, /Task 전용 샌드박스 범위를 일시적으로 넓히려고 해요/u);
+  assert.match(rendered, /위험도: 보통/u);
+  assert.match(rendered, /추가 승인 요청 1개/u);
+  assert.match(rendered, /이 동작만 승인/u);
+  assert.doesNotMatch(rendered, /English fallback/u);
+  assert.doesNotMatch(rendered, /"label":"승인"/u);
+});
+
 test("a chronological failure update carries its Retry control", () => {
   const payload = renderTaskUpdate({
     taskId: "task-failed",
@@ -1618,6 +1796,48 @@ test("a chronological failure update carries its Retry control", () => {
   assert.match(rendered, /No eligible Worker is online/);
   assert.match(rendered, /Retry/);
   assert.match(rendered, /od:v1:retry/);
+});
+
+test("a Korean failure update localizes deterministic diagnostics without rewriting the Worker report", () => {
+  const payload = renderTaskUpdate(
+    {
+      taskId: "task-localized-worker-failure",
+      state: "failed",
+      objective: "Windows에서 결과 파일을 만들어 전달해 줘.",
+      summary:
+        "Worker Run failed during execution (PROCESS_FAILED). OpenDelegate did not automatically replay this process because its external outcome may be uncertain. Review Task Runs, then use Retry.\n\nLast Worker report (may be incomplete):\n파일을 만들기 전에 안전한 경로를 확인했습니다.",
+      sourceEventId: "event_localized_worker_failure",
+      significance: "failure",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /실행 단계에서 실패했습니다 \(PROCESS_FAILED\)/u);
+  assert.match(rendered, /자동으로 다시 실행하지 않았습니다/u);
+  assert.match(rendered, /마지막 Worker 보고\(불완전할 수 있음\)/u);
+  assert.match(rendered, /파일을 만들기 전에 안전한 경로를 확인했습니다/u);
+  assert.doesNotMatch(rendered, /Worker Run failed during/u);
+  assert.doesNotMatch(rendered, /Last Worker report/u);
+  assert.match(rendered, /다시 시도/u);
+});
+
+test("a Korean Artifact failure names the owner-facing delivery stage", () => {
+  const payload = renderTaskUpdate(
+    {
+      taskId: "task-localized-artifact-failure",
+      state: "failed",
+      objective: "결과 파일을 전달해 줘.",
+      summary:
+        "Worker Run encountered a retryable failure during artifact (ARTIFACT_PROMOTION_FAILED).\n\nLast Worker report (may be incomplete):\n파일 생성은 완료했습니다.",
+      sourceEventId: "event_localized_artifact_failure",
+      significance: "failure",
+    },
+    "ko",
+  );
+  const rendered = JSON.stringify(payload);
+  assert.match(rendered, /단계: 결과 파일 전달 · 코드: ARTIFACT_PROMOTION_FAILED/u);
+  assert.match(rendered, /파일 생성은 완료했습니다/u);
+  assert.doesNotMatch(rendered, /단계: artifact/u);
 });
 
 test("one failure card follows the current pending approval without creating message noise", async () => {
@@ -2214,6 +2434,191 @@ test("interactions defer before asynchronous Task controls and replay is idempot
   );
 });
 
+test("interactions defer before durable ingress and earlier work on the same Discord thread", async () => {
+  const { adapter, api, tasks, repository } = fixture();
+  const thread = forumThread("300000000000000052");
+  const starter = ownerMessage(thread.id, thread.id, "Serialize this thread");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  await adapter.publishTaskProjection({
+    taskId: "task-1",
+    state: "running",
+    objective: "Serialize this thread",
+    summary: "The Task is running.",
+    significance: "status",
+  });
+  await adapter.flushOutbox();
+
+  let releaseAppend!: () => void;
+  let markAppendStarted!: () => void;
+  const appendStarted = new Promise<void>((resolve) => {
+    markAppendStarted = resolve;
+  });
+  tasks.blockAppends = new Promise<void>((resolve) => {
+    releaseAppend = resolve;
+  });
+  tasks.beforeAppendTaskInput = markAppendStarted;
+  const followUp = ownerMessage("300000000000000053", thread.id, "Hold the thread lock.");
+  api.messages.set(thread.id, [starter, followUp]);
+  const blockedMessage = adapter.handleGatewayDispatch(messageDispatch(2, followUp));
+  await appendStarted;
+
+  const originalClaimInbound = repository.claimInbound.bind(repository);
+  let releaseInboundClaim!: () => void;
+  let markInboundClaimStarted!: () => void;
+  const inboundClaimStarted = new Promise<void>((resolve) => {
+    markInboundClaimStarted = resolve;
+  });
+  const blockedInboundClaim = new Promise<void>((resolve) => {
+    releaseInboundClaim = resolve;
+  });
+  Object.defineProperty(repository, "claimInbound", {
+    configurable: true,
+    value: async (input: Parameters<typeof originalClaimInbound>[0]) => {
+      markInboundClaimStarted();
+      await blockedInboundClaim;
+      return originalClaimInbound(input);
+    },
+  });
+
+  const interactionId = "400000000000000002";
+  const handlingInteraction = adapter.handleGatewayDispatch(
+    interactionDispatch(3, {
+      id: interactionId,
+      token: "thread-lock-interaction-secret",
+      guildId: GUILD_ID,
+      channelId: thread.id,
+      messageId: "900",
+      customId: "od:v1:pause",
+      author: { id: OWNER_ID, bot: false, roleIds: [] },
+      receivedAtMs: 1_000,
+    }),
+  );
+  await inboundClaimStarted;
+  assert.equal(api.acknowledgedInteractions.has(interactionId), true);
+
+  releaseInboundClaim();
+  releaseAppend();
+  await Promise.all([blockedMessage, handlingInteraction]);
+  await adapter.flushOutbox();
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "command").length, 1);
+});
+
+test("an already late unacknowledged interaction executes its durable control once", async () => {
+  const { adapter, api, tasks, repository, clock } = fixture();
+  const thread = forumThread("300000000000000054");
+  const starter = ownerMessage(thread.id, thread.id, "Retire late interactions");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  clock.value = 4_000;
+  const lateInteraction = interactionDispatch(2, {
+    id: "400000000000000003",
+    token: "expired-interaction-secret",
+    guildId: GUILD_ID,
+    channelId: thread.id,
+    messageId: "900",
+    customId: "od:v1:pause",
+    author: { id: OWNER_ID, bot: false, roleIds: [] },
+    receivedAtMs: 1_000,
+  });
+
+  await adapter.handleGatewayDispatch(lateInteraction);
+  await adapter.handleGatewayDispatch(lateInteraction);
+
+  assert.equal(api.acknowledgedInteractions.has("400000000000000003"), false);
+  assert.equal(tasks.calls.filter((call) => call["kind"] === "command").length, 1);
+  assert.equal(
+    repository
+      .snapshot()
+      .inbound.find((record) => record.key === "discord-interaction:400000000000000003")?.state,
+    "completed",
+  );
+  assert.equal(
+    (await adapter.getDiagnostics()).some(
+      (diagnostic) => diagnostic.event === "discord.interaction_ack_late",
+    ),
+    true,
+  );
+  assert.equal(
+    (await adapter.getDiagnostics()).some(
+      (diagnostic) => diagnostic.event === "discord.interaction_applied_without_ack",
+    ),
+    true,
+  );
+});
+
+test("an already late approve-once interaction resolves the exact Approval once", async () => {
+  const { adapter, api, tasks, repository, clock } = fixture();
+  const thread = forumThread("300000000000000055");
+  const starter = ownerMessage(thread.id, thread.id, "Approve one protected action");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  clock.value = 4_000;
+  const lateInteraction = interactionDispatch(2, {
+    id: "400000000000000004",
+    token: "expired-approval-interaction-secret",
+    guildId: GUILD_ID,
+    channelId: thread.id,
+    messageId: "900",
+    customId: "od:v1:approve:approval-live-1",
+    author: { id: OWNER_ID, bot: false, roleIds: [] },
+    receivedAtMs: 1_000,
+  });
+
+  await adapter.handleGatewayDispatch(lateInteraction);
+  await adapter.handleGatewayDispatch(lateInteraction);
+
+  const approvals = tasks.calls.filter((call) => call["kind"] === "approval");
+  assert.equal(api.acknowledgedInteractions.has("400000000000000004"), false);
+  assert.equal(approvals.length, 1);
+  assert.equal(approvals[0]?.["approvalId"], "approval-live-1");
+  assert.equal(approvals[0]?.["decision"], "approve");
+  assert.equal(
+    repository
+      .snapshot()
+      .inbound.find((record) => record.key === "discord-interaction:400000000000000004")?.state,
+    "completed",
+  );
+});
+
+test("a failed interaction acknowledgement still resolves the exact Approval once", async () => {
+  const { adapter, api, tasks, repository } = fixture();
+  const thread = forumThread("300000000000000067");
+  const starter = ownerMessage(thread.id, thread.id, "Approve despite a failed acknowledgement");
+  api.threads.set(thread.id, thread);
+  api.messages.set(thread.id, [starter]);
+  await adapter.handleGatewayDispatch(messageDispatch(1, starter));
+  api.deferInteractionError = new DiscordApiError("OFFLINE", "Acknowledgement unavailable.");
+  const interaction = interactionDispatch(2, {
+    id: "400000000000000017",
+    token: "failed-approval-interaction-secret",
+    guildId: GUILD_ID,
+    channelId: thread.id,
+    messageId: "900",
+    customId: "od:v1:approve:approval-live-1",
+    author: { id: OWNER_ID, bot: false, roleIds: [] },
+    receivedAtMs: 1_000,
+  });
+
+  await adapter.handleGatewayDispatch(interaction);
+  await adapter.handleGatewayDispatch(interaction);
+
+  const approvals = tasks.calls.filter((call) => call["kind"] === "approval");
+  assert.equal(api.acknowledgedInteractions.has("400000000000000017"), false);
+  assert.equal(approvals.length, 1);
+  assert.equal(approvals[0]?.["approvalId"], "approval-live-1");
+  assert.equal(approvals[0]?.["decision"], "approve");
+  assert.equal(
+    repository
+      .snapshot()
+      .inbound.find((record) => record.key === "discord-interaction:400000000000000017")?.state,
+    "completed",
+  );
+});
+
 test("approve/reject controls use the approval callback and unauthorized controls are inert", async () => {
   const { adapter, api, tasks } = fixture();
   const thread = forumThread("300000000000000061");
@@ -2275,6 +2680,18 @@ test("approve/reject controls use the approval callback and unauthorized control
   assert.equal(
     tasks.calls.some((call) => call["kind"] === "command"),
     false,
+  );
+  assert.equal(
+    api.operations.filter((operation) => operation["kind"] === "interaction-dismiss").length,
+    1,
+  );
+  assert.equal(
+    api.operations.filter(
+      (operation) =>
+        operation["kind"] === "interaction-result" &&
+        String(operation["responseRef"]).includes("400000000000000011"),
+    ).length,
+    0,
   );
 });
 

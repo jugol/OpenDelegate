@@ -47,11 +47,15 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <ControlFlowGuard>Guard</ControlFlowGuard>
-      <AdditionalDependencies>Advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Advapi32.lib;Ncrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="windows-launcher.cpp" />
+    <ClCompile Include="windows-secret-helper.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="windows-secret-helper.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

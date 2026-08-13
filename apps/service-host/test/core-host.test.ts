@@ -6,11 +6,12 @@ import { afterEach, describe, it, mock } from "node:test";
 import { isRunningCoreHealthResponseV1 } from "@opendelegate/platform-services";
 
 import {
-  buildWorkerServiceEnvironment,
+  buildCoreChildServiceEnvironment,
   CoreHealthServer,
   resolveWorkerReleaseRoot,
   startCoLocatedMainDeviceWorkload,
   waitForCoreWorkloadReadiness,
+  workerServiceReadinessDisposition,
   type CoreWorkloadHandle,
   type ServiceHostConfiguration,
 } from "../src/index.ts";
@@ -18,11 +19,79 @@ import {
 describe("native Worker service environment", () => {
   it("marks every native service host as a system service without mutating its input", () => {
     const input = { PATH: "C:\\tools", OPENDELEGATE_SERVICE_MODE: "foreground" };
-    const environment = buildWorkerServiceEnvironment(input);
+    const environment = buildCoreChildServiceEnvironment(input);
 
     assert.equal(environment["PATH"], "C:\\tools");
     assert.equal(environment["OPENDELEGATE_SERVICE_MODE"], "system-service");
     assert.equal(input.OPENDELEGATE_SERVICE_MODE, "foreground");
+  });
+
+  it("adds only bounded owner provider executable directories on Windows", () => {
+    const input = {
+      Path: "C:\\Windows\\System32;C:\\USERS\\OWNER\\.LOCAL\\BIN",
+      codex_home: "C:\\wrong-codex",
+      CLAUDE_CONFIG_DIR: "C:\\wrong-claude",
+      OPENDELEGATE_SERVICE_MODE: "foreground",
+    };
+    const environment = buildCoreChildServiceEnvironment(input, {
+      platform: "windows",
+      ownerSession: {
+        userName: "WORKSTATION\\owner",
+        stableUserId: "S-1-5-21-1000",
+        homeDirectory: "C:\\Users\\owner",
+        adminAutoOpen: { enabled: false },
+      },
+      agentProviderAccess: {
+        codexHomeDirectory: "C:\\Users\\owner\\.codex",
+        codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+        claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      },
+    });
+
+    assert.equal(
+      environment["Path"],
+      "C:\\Users\\owner\\.local\\bin;C:\\Users\\owner\\AppData\\Roaming\\npm;C:\\Windows\\System32",
+    );
+    assert.equal(input.Path, "C:\\Windows\\System32;C:\\USERS\\OWNER\\.LOCAL\\BIN");
+    assert.equal(
+      environment["CODEX_HOME"],
+      "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+    );
+    assert.equal(environment["CLAUDE_CONFIG_DIR"], "C:\\Users\\owner\\.claude");
+    assert.equal(Object.hasOwn(environment, "codex_home"), false);
+    assert.equal(input.codex_home, "C:\\wrong-codex");
+    assert.equal(environment["OPENDELEGATE_SERVICE_MODE"], "system-service");
+  });
+
+  it("provides the same bounded launcher path to a Windows Main control plane", () => {
+    const environment = buildCoreChildServiceEnvironment(
+      { PATH: "C:\\Windows\\System32" },
+      {
+        platform: "windows",
+        ownerSession: {
+          userName: "WORKSTATION\\owner",
+          stableUserId: "S-1-5-21-1000",
+          homeDirectory: "C:\\Users\\owner",
+          adminAutoOpen: { enabled: false },
+        },
+        agentProviderAccess: {
+          codexHomeDirectory: "C:\\Users\\owner\\.codex",
+          codexServiceHomeDirectory:
+            "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+          claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+        },
+      },
+    );
+
+    assert.equal(
+      environment["PATH"],
+      "C:\\Users\\owner\\.local\\bin;C:\\Users\\owner\\AppData\\Roaming\\npm;C:\\Windows\\System32",
+    );
+    assert.equal(
+      environment["CODEX_HOME"],
+      "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+    );
+    assert.equal(environment["CLAUDE_CONFIG_DIR"], "C:\\Users\\owner\\.claude");
   });
 });
 
@@ -200,6 +269,17 @@ describe("core workload readiness gate", () => {
         new AbortController().signal,
       ),
       /did not become ready before timeout/u,
+    );
+  });
+
+  it("accepts only retryable connection diagnostics as local service readiness", () => {
+    assert.equal(
+      workerServiceReadinessDisposition({ code: "TRANSPORT_BOUNDARY_ERROR", retryable: true }),
+      "ready",
+    );
+    assert.equal(
+      workerServiceReadinessDisposition({ code: "IDENTITY_KEY_INVALID", retryable: false }),
+      "blocked",
     );
   });
 });

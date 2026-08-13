@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   DISCORD_API_VERSION,
   DISCORD_GATEWAY_INTENTS,
+  type DiscordArtifactAttachmentContentPort,
   type DiscordApiPort,
   type DiscordClock,
   type DiscordDiagnostic,
@@ -15,6 +16,7 @@ import {
   type DiscordInstallationStatus,
   type DiscordInteraction,
   type DiscordMessage,
+  type DiscordMessageAttachmentUpload,
   type DiscordOutboxAction,
   type DiscordOutboxItem,
   type DiscordStateRepository,
@@ -34,6 +36,12 @@ import {
   workflowStatusForTaskState,
 } from "./presentation.ts";
 import { redactDiscordSecrets } from "./redaction.ts";
+import {
+  isDiscordNativeAttachmentFilename,
+  isDiscordNativeAttachmentMediaType,
+  isDiscordNativeAttachmentSize,
+  isSha256Hex,
+} from "./native-attachment.ts";
 
 const REQUIRED_INTENTS = ["GUILDS", "GUILD_MESSAGES", "MESSAGE_CONTENT"] as const;
 const REQUIRED_PERMISSIONS = [
@@ -61,6 +69,7 @@ export class DiscordForumAdapter {
   readonly #tasks: DiscordTaskPort;
   readonly #clock: DiscordClock;
   readonly #gateway: DiscordForumAdapterOptions["gateway"];
+  readonly #artifactAttachments: DiscordArtifactAttachmentContentPort | undefined;
   readonly #diagnostics: DiscordDiagnostic[] = [];
   readonly #threadWork = new Map<string, Promise<void>>();
   readonly #knownThreads = new Map<string, DiscordThread>();
@@ -81,6 +90,7 @@ export class DiscordForumAdapter {
     this.#tasks = options.tasks;
     this.#clock = options.clock;
     this.#gateway = options.gateway;
+    this.#artifactAttachments = options.artifactAttachments;
   }
 
   async verifyInstallation(): Promise<DiscordInstallationStatus> {
@@ -246,9 +256,7 @@ export class DiscordForumAdapter {
         }
         break;
       case "INTERACTION_CREATE":
-        await this.#withThread(dispatch.interaction.channelId, async () => {
-          await this.#handleInteraction(dispatch.interaction);
-        });
+        await this.#handleInteraction(dispatch.interaction);
         break;
     }
     if (cursorDurable) {
@@ -374,15 +382,15 @@ export class DiscordForumAdapter {
     });
     let authoritativeRequestKey = panelRequestKey;
     if (projection.activity !== undefined && keepsLiveActivityOpen(projection.state)) {
+      const projectedActivity = activityProjection(projection);
       const activityRequestKey = `${digestValue({
-        taskId: projection.taskId,
-        cycleId: projection.activity.cycleId,
-        revision: projection.activity.revision,
-      })}:025-activity`;
+        projection: projectedActivity,
+        presentationLocale: this.#config.presentationLocale ?? "en",
+      })}:025-activity-v2`;
       await this.#enqueueOutbox(activityRequestKey, {
         kind: "upsert-task-activity",
         taskId: projection.taskId,
-        projection: activityProjection(projection),
+        projection: projectedActivity,
       });
     }
     if (projection.significance !== "status") {
@@ -910,7 +918,7 @@ export class DiscordForumAdapter {
       return;
     }
     const key = `discord-interaction:${interaction.id}`;
-    const claim = await this.#repository.claimInbound({
+    const inbound = {
       key,
       digest: digestValue({
         id: interaction.id,
@@ -922,28 +930,94 @@ export class DiscordForumAdapter {
         authorId: interaction.author.id,
       }),
       nowMs: this.#clock.nowMs(),
-    });
+    };
+    const acknowledgementLatencyMs = this.#clock.nowMs() - interaction.receivedAtMs;
+    if (acknowledgementLatencyMs > 2_500) {
+      this.#recordDiagnostic("discord.interaction_ack_late", {
+        interactionId: interaction.id,
+        latencyMs: acknowledgementLatencyMs,
+      });
+      const lateClaim = await this.#repository.claimInbound(inbound);
+      if (lateClaim.outcome === "completed") {
+        return;
+      }
+      const applied = await this.#handleUnacknowledgedInteraction(interaction, key);
+      await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
+      if (applied) {
+        this.#recordDiagnostic("discord.interaction_applied_without_ack", {
+          interactionId: interaction.id,
+          latencyMs: acknowledgementLatencyMs,
+        });
+      }
+      return;
+    }
+
+    // Discord's three-second response deadline is an external liveness boundary,
+    // not authority to execute the control. Start the ephemeral acknowledgement
+    // before a contended SQL write can delay it; the Task/Approval mutation still
+    // waits for the durable inbound claim and response reference below.
+    const deferredPromise = this.#api
+      .deferInteraction({
+        interactionId: interaction.id,
+        interactionToken: interaction.token,
+        ephemeral: true,
+      })
+      .then(
+        (deferred) => ({ outcome: "acknowledged" as const, deferred }),
+        (error: unknown) => ({ outcome: "failed" as const, error }),
+      );
+    const claimPromise = this.#repository.claimInbound(inbound);
+    let claim: Awaited<typeof claimPromise>;
+    try {
+      claim = await claimPromise;
+    } catch (error) {
+      const deferred = await deferredPromise;
+      if (deferred.outcome === "acknowledged") {
+        try {
+          await this.#finishDeferredInteraction(
+            deferred.deferred.responseRef,
+            "OpenDelegate could not safely record this control. Nothing was changed; use the current Task control again.",
+            false,
+          );
+        } catch (responseError) {
+          this.#recordDiagnostic("discord.interaction_claim_result_unavailable", {
+            responseError: errorText(responseError),
+          });
+        }
+      }
+      throw error;
+    }
+    const deferred = await deferredPromise;
     if (claim.outcome === "completed") {
+      if (deferred.outcome === "acknowledged") {
+        await this.#dismissDeferredInteraction(deferred.deferred.responseRef);
+      }
       return;
     }
     let record: DiscordInboundRecord = claim.record;
     if (!record.acknowledged) {
-      if (this.#clock.nowMs() - interaction.receivedAtMs > 2_500) {
-        this.#recordDiagnostic("discord.interaction_ack_late", {
+      if (deferred.outcome === "failed") {
+        this.#recordDiagnostic("discord.interaction_ack_failed", {
           interactionId: interaction.id,
-          latencyMs: this.#clock.nowMs() - interaction.receivedAtMs,
+          error: errorText(deferred.error),
         });
+        const applied = await this.#handleUnacknowledgedInteraction(interaction, key);
+        await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
+        if (applied) {
+          this.#recordDiagnostic("discord.interaction_applied_without_ack", {
+            interactionId: interaction.id,
+            latencyMs: acknowledgementLatencyMs,
+          });
+        }
+        return;
       }
-      const deferred = await this.#api.deferInteraction({
-        interactionId: interaction.id,
-        interactionToken: interaction.token,
-        ephemeral: true,
-      });
       record = await this.#repository.acknowledgeInbound({
         key,
-        responseRef: deferred.responseRef,
+        responseRef: deferred.deferred.responseRef,
         nowMs: this.#clock.nowMs(),
       });
+    } else if (deferred.outcome === "acknowledged") {
+      await this.#dismissDeferredInteraction(deferred.deferred.responseRef);
     }
     if (record.responseRef === undefined) {
       throw new DiscordAdapterError(
@@ -951,15 +1025,81 @@ export class DiscordForumAdapter {
         "An acknowledged Discord interaction has no response reference.",
       );
     }
+    const responseRef = record.responseRef;
     if (!this.#isAuthorized(interaction.author.id, interaction.author.roleIds)) {
       await this.#finishDeferredInteraction(
-        record.responseRef,
+        responseRef,
         "This Discord identity is not allowed to control OpenDelegate.",
         false,
       );
       await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
       return;
     }
+    await this.#withThread(interaction.channelId, async () => {
+      await this.#handleAcknowledgedInteraction(interaction, key, responseRef);
+    });
+  }
+
+  async #handleUnacknowledgedInteraction(
+    interaction: DiscordInteraction,
+    key: string,
+  ): Promise<boolean> {
+    if (!this.#isAuthorized(interaction.author.id, interaction.author.roleIds)) {
+      return false;
+    }
+    let applied = false;
+    await this.#withThread(interaction.channelId, async () => {
+      const binding = await this.#repository.getBindingByThread(interaction.channelId);
+      if (
+        binding === undefined ||
+        binding.externalState !== "available" ||
+        interaction.messageAuthorId !== this.#config.botUserId
+      ) {
+        return;
+      }
+      const parsed = parseControl(interaction.customId);
+      if (parsed === undefined) {
+        return;
+      }
+      const principalId = `discord:${interaction.author.id}`;
+      try {
+        if (parsed.kind === "command") {
+          await this.#tasks.commandTask({
+            taskId: binding.taskId,
+            principalId,
+            command: parsed.command,
+            idempotencyKey: key,
+          });
+          applied = true;
+        } else {
+          await this.#tasks.resolveApproval({
+            taskId: binding.taskId,
+            approvalId: parsed.approvalId,
+            principalId,
+            idempotencyKey: key,
+            decision: parsed.decision,
+          });
+          applied = true;
+        }
+      } catch (error) {
+        if (error instanceof DiscordTaskPortError) {
+          this.#recordDiagnostic("discord.late_task_callback_rejected", {
+            interactionId: interaction.id,
+            errorCode: error.code,
+          });
+          return;
+        }
+        throw error;
+      }
+    });
+    return applied;
+  }
+
+  async #handleAcknowledgedInteraction(
+    interaction: DiscordInteraction,
+    key: string,
+    responseRef: string,
+  ): Promise<void> {
     const binding = await this.#repository.getBindingByThread(interaction.channelId);
     if (
       binding === undefined ||
@@ -967,7 +1107,7 @@ export class DiscordForumAdapter {
       interaction.messageAuthorId !== this.#config.botUserId
     ) {
       await this.#finishDeferredInteraction(
-        record.responseRef,
+        responseRef,
         "This Task control is no longer available.",
         false,
       );
@@ -977,7 +1117,7 @@ export class DiscordForumAdapter {
     const parsed = parseControl(interaction.customId);
     if (parsed === undefined) {
       await this.#finishDeferredInteraction(
-        record.responseRef,
+        responseRef,
         "This Task control is not recognized.",
         false,
       );
@@ -993,7 +1133,7 @@ export class DiscordForumAdapter {
             principalId,
             command: parsed.command,
             idempotencyKey: key,
-            responseRef: record.responseRef,
+            responseRef,
           }
         : {
             kind: "approval-decision",
@@ -1002,7 +1142,7 @@ export class DiscordForumAdapter {
             approvalId: parsed.approvalId,
             decision: parsed.decision,
             idempotencyKey: key,
-            responseRef: record.responseRef,
+            responseRef,
           };
     await this.#enqueueOutbox(`${digestValue(action)}:interaction`, action);
     await this.#repository.completeInbound({ key, nowMs: this.#clock.nowMs() });
@@ -1479,10 +1619,16 @@ export class DiscordForumAdapter {
         if (binding.failureSurface?.requestKey === item.id) {
           return;
         }
+        const attachment = await this.#loadNativeAttachment(action.projection);
         const result = await this.#api.createMessage({
           threadId: binding.threadId,
           requestKey: item.id,
-          payload: renderTaskUpdate(action.projection, this.#config.presentationLocale),
+          payload: renderTaskUpdate(
+            action.projection,
+            this.#config.presentationLocale,
+            attachment?.filename,
+          ),
+          ...(attachment === undefined ? {} : { attachment }),
         });
         if (isRetrySurfaceProjection(action.projection)) {
           const sourceEventId = action.projection.sourceEventId;
@@ -1622,7 +1768,12 @@ export class DiscordForumAdapter {
         const binding = await requiredBinding(this.#repository, action.taskId);
         const current = binding.activitySurface;
         if (current?.cycleId === activity.cycleId) {
-          if (current.state !== "open" || current.revision >= activity.revision) {
+          if (
+            current.state !== "open" ||
+            current.revision > activity.revision ||
+            (current.revision === activity.revision &&
+              current.outboxCreatedAtMs >= item.createdAtMs)
+          ) {
             return;
           }
         } else if (current !== undefined && current.outboxCreatedAtMs >= item.createdAtMs) {
@@ -1875,14 +2026,63 @@ export class DiscordForumAdapter {
           idempotencyKey: action.idempotencyKey,
           decision: action.decision,
         });
-        await this.#finishDeferredInteraction(
-          action.responseRef,
-          action.decision === "approve"
-            ? "The approval was granted for its exact recorded scope."
-            : "The approval was rejected.",
-        );
+        await this.#dismissDeferredInteraction(action.responseRef);
         return;
     }
+  }
+
+  async #loadNativeAttachment(
+    projection: TaskChannelProjection,
+  ): Promise<DiscordMessageAttachmentUpload | undefined> {
+    const reference = projection.artifact?.nativeAttachment;
+    if (
+      reference === undefined ||
+      projection.state !== "completed" ||
+      projection.significance !== "final"
+    ) {
+      return undefined;
+    }
+    if (
+      !isDiscordNativeAttachmentFilename(reference.filename) ||
+      !isDiscordNativeAttachmentMediaType(reference.mediaType) ||
+      !isDiscordNativeAttachmentSize(reference.sizeBytes) ||
+      !isSha256Hex(reference.sha256)
+    ) {
+      throw new DiscordApiError("INVALID_RESPONSE", "The Discord Artifact reference is invalid.");
+    }
+    const source = this.#artifactAttachments;
+    if (source === undefined) {
+      throw new DiscordApiError("OFFLINE", "The Discord Artifact source is unavailable.");
+    }
+    let content: Awaited<ReturnType<DiscordArtifactAttachmentContentPort["read"]>>;
+    try {
+      content = await source.read(reference.artifactId);
+    } catch {
+      throw new DiscordApiError("OFFLINE", "The Discord Artifact bytes are unavailable.");
+    }
+    const metadata = content.metadata;
+    if (
+      !(content.bytes instanceof Uint8Array) ||
+      metadata.artifactId !== reference.artifactId ||
+      metadata.taskId !== projection.taskId ||
+      metadata.originalFilename !== reference.filename ||
+      metadata.mediaType !== reference.mediaType ||
+      metadata.sizeBytes !== reference.sizeBytes ||
+      metadata.checksum.algorithm !== "sha256" ||
+      metadata.checksum.value !== reference.sha256 ||
+      content.bytes.byteLength !== reference.sizeBytes ||
+      createHash("sha256").update(content.bytes).digest("hex") !== reference.sha256
+    ) {
+      throw new DiscordApiError(
+        "INVALID_RESPONSE",
+        "The Discord Artifact bytes do not match their durable reference.",
+      );
+    }
+    return Object.freeze({
+      filename: reference.filename,
+      mediaType: reference.mediaType,
+      bytes: content.bytes,
+    });
   }
 
   async #finishDeferredInteraction(

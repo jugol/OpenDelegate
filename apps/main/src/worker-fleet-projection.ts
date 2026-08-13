@@ -281,6 +281,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
                   agentAdapters: inventory.agentAdapters.map((adapter) => ({
                     provider: adapter.provider,
                     adapterId: adapter.adapterId,
+                    ...(adapter.toolUse === undefined ? {} : { toolUse: adapter.toolUse }),
                     readiness: adapter.readiness,
                     compatibility: adapter.compatibility,
                     ...(adapter.blockedBy === undefined ? {} : { blockedBy: adapter.blockedBy }),
@@ -444,6 +445,7 @@ export class MainWorkerFleetProjection implements WorkerCandidateSource {
           Object.freeze({
             provider: adapter.provider === "generic-command" ? "generic" : adapter.provider,
             adapterId: adapter.adapterId,
+            ...(adapter.toolUse === undefined ? {} : { toolUse: adapter.toolUse }),
             readiness: adapter.readiness,
             compatibility: adapter.compatibility,
             models: Object.freeze(

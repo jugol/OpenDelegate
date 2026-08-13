@@ -1582,6 +1582,12 @@ route no longer kills the Worker process. Authentication rejection and exhausted
 routes keep their existing diagnostics, while ordinary unavailability follows the
 bounded reconnect backoff. The mTLS integration test exercises a refused endpoint
 before the successful channel exchange so a duplicate rejection cannot regress.
+For a native service, the first retryable connection diagnostic also proves that
+local initialization reached this bounded reconnect loop and therefore satisfies
+the service-host readiness gate. This does not make the Device schedulable: Main
+continues to show it offline until an authenticated heartbeat arrives. A
+non-retryable certificate, key, or peer-identity diagnostic still fails startup
+closed.
 
 ## D-081 — Worker reconnect replay advances at durable acknowledgment boundaries
 
@@ -2030,6 +2036,8 @@ failures use a stable owner-safe diagnostic rather than the generic process-star
 code.
 
 ## D-100 — Windows Codex service sandbox access is exact and lifecycle-repaired
+
+**Status:** Superseded by [D-142](#d-142--windows-services-isolate-codex-execution-state-while-sharing-owner-authentication).
 
 Implementation detail:
 [ADR-0052](adr/0052-windows-codex-service-sandbox-directory.md).
@@ -2498,3 +2506,840 @@ Worker restart, while ambiguous selection remains fail-closed. The lookup transm
 no Device-local path or Workspace content, does not rewrite configuration, and keeps
 the existing stable native-session Workspace binding after a Run begins. This
 refines D-099 and ADR-0051.
+
+## D-121 — Sequential Discord Approvals stay distinct and quiet
+
+Implementation detail:
+[ADR-0059](adr/0059-discord-sequential-approval-clarity.md).
+
+**Decision:** Discord continues to grant only the exact protected action once, but
+the live Task surface identifies its Task-local ordinal, normalized action, Device,
+risk, and remaining pending count in the binding's deterministic presentation
+locale. The positive control is explicitly labelled `Approve once`. A successful
+approve or reject dismisses its private deferred response; the one durable live Task
+surface advances instead of leaving a chronological stack of success receipts.
+
+**Rationale:** Live Windows file-delivery QA required several distinct provider
+command decisions. Identical English summaries and one private success card per
+click made correct sequential execution look like an ignored Approval loop.
+
+**Consequence:** Owners can tell that OpenDelegate moved to a new exact action
+without widening Discord authority or exposing private command data. Successful
+interaction noise disappears, while stale, unauthorized, and failed decisions keep
+their bounded private diagnostics.
+
+Only an Approval whose exact originating Worker Run still passes Main's current
+lease and fencing check is actionable on Discord. A terminal, expired, or replaced
+Run leaves its Approval record available for audit but removes its controls; late
+interactions fail closed.
+
+## D-122 — Worker failures lead with actionable diagnostics
+
+Implementation detail:
+[ADR-0060](adr/0060-worker-failures-lead-with-diagnostics.md).
+
+**Decision:** An authoritative Worker failure message begins with its bounded
+diagnostic stage, code, and retry behavior. The final public Worker report may be
+included only as explicitly labelled, potentially incomplete context and cannot
+replace the failure explanation.
+
+**Rationale:** A provider process can emit a progress sentence immediately before
+failing. Presenting that sentence alone hid `PROCESS_FAILED`, made continued work
+look likely, and gave the owner no concrete inspection or Retry path.
+
+**Consequence:** Discord and Admin Web expose an actionable, deterministic failure
+cause without unsafe automatic replay. Owner-safe Worker prose remains available as
+secondary context within the existing public-message bound. Discord localizes the
+closed diagnostic wrapper in the binding's presentation locale while preserving the
+Agent-authored Worker report and diagnostic code verbatim.
+
+## D-123 — Discord interactions acknowledge before thread work
+
+Implementation detail:
+[ADR-0061](adr/0061-discord-interactions-ack-before-thread-work.md).
+
+**Decision:** Main starts a Discord interaction's ephemeral defer request before a
+durable inbound claim or prior work on the same Forum thread can delay it. The
+durable claim begins concurrently, and no Task or Approval operation can execute
+until the acknowledgement response reference is durable. Binding validation and the
+idempotent operation retain per-thread serialization. An unacknowledged interaction
+already older than 2.5 seconds, or one whose defer fails, is completed without
+executing its control.
+
+**Rationale:** Live Approval QA first proved that a slow in-place activity edit could
+hold the thread lock long enough for Discord's three-second response deadline to
+expire. A later retained-history run proved that a contended SQL claim could do the
+same before the thread lock, even though the Approval decision itself remained
+pending and safe.
+
+**Consequence:** Progress delivery and durable-ingress contention no longer
+head-of-line block the acknowledgement request. Acknowledgement alone never grants
+authority. Expired or failed replays cannot execute after Discord reports failure or
+wedge Gateway cursor progress, while current controls remain available for a fresh
+owner decision.
+
+The late-interaction retirement rule in this decision is superseded by D-148. The
+acknowledgement-first path and its authority separation remain in force.
+
+## D-124 — Device-channel cumulative acknowledgement stays bounded
+
+Implementation detail:
+[ADR-0062](adr/0062-device-channel-prefix-acknowledgement-is-bounded.md).
+
+**Decision:** Main derives each Worker's cumulative handled prefix with one SQL
+aggregate result that verifies inbox/effect counts and sequence bounds, then returns
+the first unhandled sequence. It does not materialize the full per-generation frame
+history in JavaScript on every channel operation.
+
+**Rationale:** A live personal Main retained more than fifty thousand normal
+heartbeat frames. Re-reading that entire history for every subsequent frame caused
+quadratic CPU and allocation growth, multi-second health responses, and missed
+Discord interaction deadlines.
+
+**Consequence:** Protocol semantics from D-081 remain unchanged and corruption still
+fails closed at the durable prefix boundary, while old heartbeat history no longer
+slows unrelated owner controls. Retention or deletion of handled history is a
+separate audited lifecycle decision.
+
+## D-125 — Tested Codex notifications cannot invalidate a completed turn
+
+Implementation detail:
+[ADR-0063](adr/0063-codex-app-server-notification-catalog.md).
+
+**Decision:** The Codex App Server adapter's supported notification catalog exactly
+matches the generated experimental notification union of its pinned tested version.
+Catalogued notifications are advisory unless explicitly projected. Provider error
+notifications become bounded diagnostics and do not override the authoritative
+`turn/completed` outcome. A genuinely unknown method still fails closed. Every Codex
+version promotion must regenerate and compare the protocol catalog before it can be
+declared tested.
+
+**Rationale:** Live Windows Artifact QA proved that Codex could persist a completed
+native turn and commit Run-scoped files while OpenDelegate misclassified a normal new
+notification as a protocol violation. The resulting Worker failure skipped the
+success-only Artifact promotion boundary and left Discord without the files.
+
+**Consequence:** Normal provider evolution and transient retries no longer discard a
+successful Run or its Artifact output, provider-private error text remains local,
+and future schema drift produces a deterministic pre-promotion failure rather than a
+sporadic owner-facing Task failure.
+
+## D-126 — Worker identity readiness requires a usable matching key
+
+Implementation detail:
+[ADR-0064](adr/0064-worker-identity-key-diagnostics.md).
+
+**Decision:** Worker diagnosis proves that the local Device identity Secret is
+readable and that its derived public key matches the enrolled certificate. Local
+Secret access and invalid-key failures receive distinct bounded route codes and
+owner remedies. Channel-executor failures are preserved outside the managed Secret
+callback instead of being relabelled as Secret-executor failures.
+
+**Rationale:** Live macOS reconnect QA showed a valid, active certificate and a
+reachable Main while the login-Keychain item was visible but unreadable from the
+background Worker. The old existence-only probe reported ready, and the generic CLI
+remedy falsely blamed Main.
+
+**Consequence:** `worker diagnose` distinguishes `ready`, `unavailable`, `invalid`,
+and `mismatch` without exposing private material. A transient locked or inaccessible
+store can recover through retry; an invalid or mismatched key stays fail-closed. The
+foreground-versus-persistent macOS Keychain boundary in D-119 is unchanged.
+
+## D-127 — Artifact delivery is part of normal Main initialization
+
+Implementation detail:
+[ADR-0065](adr/0065-artifact-gateway-installation-and-worker-diagnostics.md).
+
+**Decision:** A new Main receives a private, authenticated, loopback-only Artifact
+Gateway unless the owner explicitly disables it or supplies a complete custom
+configuration. An explicit Artifact option on a later `init` atomically changes only
+that top-level configuration, while a normal restart preserves existing state.
+Worker diagnostics retain safe Artifact-stage codes and the delivery boundary's
+explicit retry decision.
+
+**Rationale:** Live Linux file-transfer QA proved that a successful Agent turn and
+committed Run manifest could never reach Main when ordinary initialization omitted
+the Gateway. The Worker then erased the useful delivery failure at its redaction
+boundary, causing blind automatic retries and an opaque owner result.
+
+**Consequence:** Co-located file delivery works without a hidden optional setup
+step, existing installations are never silently migrated, and remote Worker upload
+still requires an explicit owner-approved HTTPS route. Artifact failures remain
+bounded and actionable without exposing paths, endpoints, or provider internals.
+
+## D-128 — Promoted Artifact IDs outrank pre-promotion Agent uncertainty
+
+Implementation detail:
+[ADR-0066](adr/0066-post-turn-artifact-evidence.md).
+
+**Decision:** A Worker Agent commits only its Run-scoped manifest and returns from
+the native turn. Deterministic Worker code then promotes the declared files before
+emitting a successful terminal event. Artifact IDs accepted from that event are
+therefore post-turn Main-promotion evidence for Task verification. Worker-authored
+text cannot be required to attest, and cannot negate, that later boundary. Discord
+presentation remains a deterministic adapter responsibility after the Artifact is
+available.
+
+**Rationale:** Live alpha.58 QA stored the exact file in Main, recorded its checksum
+and provenance, and rendered an `Open report` action, yet the Main Agent left the
+Task waiting because the earlier Worker prose correctly said it could not observe
+post-turn promotion. The evidence package did not explain the temporal boundary.
+
+**Consequence:** Worker prompts finish normally after a successful manifest commit;
+verification labels promoted Artifact IDs with their deterministic meaning; and a
+Task can complete without asking an Agent to observe work that runs only after that
+Agent's turn. Discord still must reconcile and present the available Artifact, and
+an Artifact ID does not grant a credential or bypass exposure Policy.
+
+## D-129 — macOS service preparation owns a stable System-Keychain helper
+
+Implementation detail:
+[ADR-0017](adr/0017-device-local-secret-store-backends.md).
+
+**Decision:** `worker macos-service-secret-stage` runs from the signed-in owner's
+Terminal session and invokes one fixed elevated native operation. That operation
+installs the exact bundled helper at a stable root-owned path, creates a root-owned
+binding to `/Library/Keychains/System.keychain`, and grants that helper access for
+the configured non-login service identity. Core-owned Device identity, desktop
+authority, and core IPC Secrets move to the System Keychain. A distinct helper IPC
+identity remains in the owner's login Keychain. Only the two public IPC pins enter
+the durable service document.
+
+**Rationale:** A boot-persistent LaunchDaemon cannot depend on the owner's login
+Keychain, while the Aqua LaunchAgent must not receive the daemon's private identity.
+Pinning one stable helper path and digest makes Keychain ACL behavior independent of
+immutable release-directory changes and keeps an interrupted migration replayable.
+
+**Consequence:** macOS service-document generation is enabled only after the exact
+two-plane preparation is durable and every required System-Keychain alias is
+readable. A changed helper digest, service identity, binding path, inaccessible
+Keychain item, or conflicting replay fails before launchd mutation. This implements
+the source and command-shape portion of D-119; supported-release status still
+requires signed/notarized clean-host install, logout/login, restart, and reboot
+evidence on the declared macOS target.
+
+## D-130 — macOS Worker-home adoption is a recoverable two-phase transition
+
+**Decision:** Migration of an enrolled macOS Worker into a launchd service root
+copies state and composes the no-Secret service document while that configuration
+is readable, then adopts the copied tree and its parent for the non-login service
+identity before activation. If adoption has already made the state private, only
+document composition runs elevated and the same durable enrollment is reused.
+Configuration I/O distinguishes an absent file from an unreadable or unsafe path.
+
+**Rationale:** Live alpha.59 installation successfully migrated three core Secrets
+to the System Keychain, then changed the copied state to mode `0700` before invoking
+`service-document` as the owner. The generic loader reported the resulting access
+failure as a missing enrollment, even though the state and enrollment were intact.
+The parent data root also remained owner-private, preventing the service identity
+from traversing its own state.
+
+**Consequence:** Install automation must preserve the documented two-phase order,
+make the complete service path traversable, and recover an interrupted transition
+in place. `CONFIG_PATH_UNSAFE` directs an operator to ownership repair or elevated
+document composition; it never recommends a new Grant for an access failure.
+
+The internal-preview publisher key remains at the verifier's canonical
+`STATE_ROOT/trust/publisher-ed25519.pem` path; `DATA_ROOT/trust` is not an equivalent
+location.
+
+## D-131 — macOS service-account inspection accepts native dscl attribute names
+
+**Decision:** Existing macOS service identities are validated from both standard
+`Attribute: value` output and the `dsAttrTypeNative:Attribute: value` form returned
+by `dscl` for native attributes such as `IsHidden`. The value and every account
+invariant remain exact; only the attribute namespace spelling is normalized.
+
+**Rationale:** Live alpha.59 installation created a correct hidden, non-interactive
+`_opendelegate` identity. macOS returned `dsAttrTypeNative:IsHidden: 1`, while the
+runtime parser searched only for `IsHidden: 1` and rejected the account before any
+launchd mutation.
+
+**Consequence:** A newly created account remains idempotently acceptable on the
+same host, reinstallation no longer fails at `ensure-service-account`, and malformed
+or missing identity attributes continue to fail closed.
+
+## D-132 — launchd booleans use canonical self-closing plist elements
+
+**Decision:** macOS service manifests render boolean values only as `<true/>` and
+`<false/>`. The bounded internal parser accepts that canonical form while retaining
+support for previously rendered expanded elements during inspection.
+
+**Rationale:** On macOS 26, `plutil -lint` accepted `<true></true>`, but
+`launchctl bootstrap` rejected the same minimal manifest with exit code 5 and
+launchd error 109. An otherwise identical probe using `<true/>` loaded successfully.
+Live alpha.60 therefore rolled back at `start-core` even though preflight and local
+plist parsing had passed.
+
+**Consequence:** Rendered LaunchDaemons and LaunchAgents are accepted by launchd's
+actual parser, tests assert the canonical byte form, and rollback remains clean for
+older failed install attempts.
+
+## D-133 — POSIX release staging assigns canonical service-group access recursively
+
+**Decision:** Linux and macOS release staging makes the immutable copy root and
+every descendant owned by the platform installer and the Device service group
+before verification and activation. Directories and executable files use `0750`;
+regular non-executable files use `0640`. Existing verified staging or release trees
+encountered during an idempotent replay receive the same bounded, link-free access
+normalization before reuse.
+
+**Rationale:** Live macOS alpha.61 installation copied a valid signed release below
+a correctly secured install root, but the newly created release tree retained the
+installer's default group. Both launchd planes then failed `access(..., X_OK)` with
+`errno 13` for their promoted host executables. Checking executability as elevated
+installer had not proved that either runtime identity could traverse the tree.
+
+**Consequence:** The boot daemon and owner-session helper can both traverse the
+stable `current` target through their shared service group without granting world
+access or write access. File executability remains derived from the signed source
+mode, data files do not become executable, and symbolic links or special files
+continue to fail closed.
+
+## D-134 — Existing provider homes keep deliberate service-sharing access
+
+**Decision:** Agent adapters create a missing managed provider home privately, but
+they do not rewrite the mode of an existing safe provider home. An existing path
+must still be an exact, canonical directory and may not be world-writable. A
+persistent Device may therefore grant its dedicated service identity access to the
+owner's exact Codex or Claude home without the first adapter probe reverting that
+access to owner-only mode.
+
+**Rationale:** The macOS launchd core runs as `_opendelegate`, while D-076 binds its
+Agent adapters to the owner's already authenticated `.codex` and `.claude` homes.
+The adapter's unconditional `chmod 0700` both prevented that service identity from
+using the home and destroyed any narrowly prepared group access at every probe.
+
+**Consequence:** Newly invented provider state remains private by default, existing
+owner-authenticated state can be shared with the Device's dedicated service group,
+and unsafe aliases or world-write access continue to fail closed. Platform service
+preparation owns the explicit access grant; adapters validate and preserve it rather
+than silently broadening or narrowing it.
+
+## D-135 — POSIX service launchers prove their installed-root resolution
+
+**Decision:** Every Linux and macOS native service-host build executes a second
+self-test that resolves and prints the release root from the real executable path.
+The build accepts the host only when that canonical root is exactly two directories
+above the compiled launcher. On macOS, a successful `_NSGetExecutablePath` call is
+accepted without interpreting its in/out buffer-capacity value as a returned path
+length; `realpath` remains the canonical-path boundary.
+
+**Rationale:** Live macOS alpha.63 installation successfully staged, verified,
+promoted, registered, and started both launchd planes, but each native host exited
+before Node startup with `OpenDelegate service installation root is unavailable`.
+The existing `--self-test` returned before exercising path discovery. On successful
+macOS calls, `_NSGetExecutablePath` may leave the supplied capacity unchanged, so
+comparing that value with the capacity falsely rejected every valid executable.
+
+**Consequence:** Release construction now rejects a launcher that cannot locate its
+own installed tree on the target POSIX host. launchd no longer enters a restart loop
+for this defect, while an actually missing, unresolvable, or overlong executable
+path still fails closed before a bundled runtime can start.
+
+## D-136 — macOS activation links retain service-group traversal
+
+**Decision:** Before an atomic macOS activation switch, the temporary `current`
+symbolic link receives mode `0750` without dereferencing it. An idempotent switch to
+the already selected release also inspects and repairs that link mode before it may
+report `unchanged`. Linux keeps its existing link behavior because Linux does not
+authorize symlink traversal from symlink mode; Windows continues to use junctions.
+
+**Rationale:** Live alpha.64 activation produced a correctly grouped release tree
+and a correctly grouped `current` link, but the invoking install script's `umask
+077` made the macOS link itself `0700`. Both the boot daemon and owner-session
+helper then failed `realpath` through the stable path even though their executable
+targets were `0750`. Direct bundle root self-tests passed, while the installed-path
+self-test failed with permission denied.
+
+**Consequence:** The stable pointer no longer inherits a caller's restrictive umask
+on macOS, both runtime identities can traverse it through the dedicated service
+group, and an interrupted older installation is repaired on replay. The link target
+is still canonicalized, switched atomically, and never followed while its own mode
+is changed.
+
+## D-137 — A shared macOS Keychain helper has one exact cross-plane pin
+
+**Decision:** A macOS service configuration may bind the owner-session helper to
+the root-owned helper under `/Library/PrivilegedHelperTools` only when its path and
+SHA-256 pin exactly match the already validated System Keychain service binding.
+An immutable-release helper remains valid as before. Any other external helper path
+or mismatched digest fails closed.
+
+**Rationale:** The platform service configuration deliberately supports one pinned
+helper shared by the owner-session and core planes. The service host parser instead
+accepted only helpers below the immutable release root, so the exact document
+composed by the installer passed preflight but both launchd planes rejected it at
+startup as an invalid owner helper binding.
+
+**Consequence:** The service host and installer now enforce the same trust model.
+The shared root-owned helper can start both native planes without weakening path or
+digest verification, while substitution and cross-instance helper reuse remain
+rejected.
+
+## D-138 — macOS lifecycle waits for launchd to finish each bootout
+
+**Decision:** After a successful macOS `launchctl bootout`, the service runtime
+polls the same launchd domain and label until `launchctl print` reports that the
+service is absent. Only then may a restart bootstrap that plane again. The poll is
+bounded by the original lifecycle-command timeout and treats transient inspection
+failures as unknown rather than as proof of absence.
+
+**Rationale:** `launchctl bootout` can return before launchd has completely removed
+the job. Live alpha.66 restart immediately ran `bootstrap`; launchd briefly reported
+the old job as loaded, then removed it before `kickstart`, leaving the core plane
+absent and the lifecycle rollback incomplete.
+
+**Consequence:** Restart preserves the required helper-before-core stop and
+core-before-helper start order without racing launchd's asynchronous removal. A
+genuinely stuck unload fails within a deterministic timeout, and the runtime never
+mistakes an unrelated process-launch failure for successful removal.
+
+## D-139 — macOS core services receive a bounded provider executable path
+
+**Decision:** The macOS LaunchDaemon declares the fixed executable search path
+`/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`. It never inherits
+an interactive shell's mutable `PATH`. During upgrade, the installer accepts the
+one exact legacy OpenDelegate core manifest that lacks this dictionary and replaces
+it with the current signed rendering; any other byte drift still fails closed.
+
+**Rationale:** Live alpha.67 ran a healthy permanent Worker and could authenticate
+its Device channel, but launchd did not supply the path used by owner-installed
+Codex. An explicit diagnostic shell found Codex while the same adapter probe inside
+the boot service reported `probe-failed`, so Main could see the Device but could not
+route Agent work to it.
+
+**Consequence:** Apple Silicon Homebrew, `/usr/local`, and system-installed Agent
+CLIs are discoverable after boot without copying an owner's complete shell
+environment into the service. The Worker still runs as its least-privilege identity,
+provider homes remain explicitly bound, and existing installations have a narrow,
+auditable migration into the new manifest. The upgrade plan writes that manifest
+atomically while the core is stopped; rollback retains the bounded path while it
+returns the stable activation link to the previous release.
+
+## D-140 — Windows core services receive bounded owner provider executable paths
+
+See [ADR-0067](adr/0067-windows-owner-agent-launcher-path.md).
+
+**Decision:** A Windows service document records the installation owner's canonical,
+non-root local DOS-drive profile directory when the owner shell can prove it. UNC,
+device-namespace, trailing-separator, trailing-dot/space component, and reserved DOS
+device-name aliases are rejected. The same canonical local-path rule applies to each
+provider home before any elevated lifecycle mutation. The Worker child then
+prepends only that profile's `.local\bin` and `AppData\Roaming\npm` directories to
+the service's existing system `PATH`, with case-insensitive deduplication. It never
+copies the owner's complete interactive `PATH`. During upgrade, the installer accepts
+only an exact legacy runtime configuration missing the owner-home field, the provider-
+home binding, or both. These finite additions compose with the separately authorized
+D-118 credential migration when one predecessor requires both. Every other installed
+byte drift still fails closed.
+
+The same service document must bind the exact resolved Codex and Claude home directories
+into both the lifecycle ACL plan and the core runtime's provider-home variables.
+Before install, start, restart, or upgrade starts the core, the elevated lifecycle
+executor preserves every existing ACL entry and grants only the instance service
+identity inheritable Modify access to those two homes. Initial installation applies
+that grant recursively to existing descendants; later lifecycle operations refresh the
+canonical root without repeatedly walking the entire tree, as refined by D-146. It
+likewise grants that identity inheritable Read & Execute access to the two bounded
+launcher directories, when they exist. A declared home must be a strict descendant of
+the verified owner profile or the exact provider's managed state root, may not overlap
+either launcher tree or the other provider home, and must remain disjoint from source,
+bundle, install, authority, runtime, log, owner-helper vault, and service-Secret roots.
+It may not be omitted from a persistent Windows service document. Missing owner-managed
+paths and their Codex sandbox child are skipped rather than created; links and special
+entries fail closed. The executor never disables inheritance or resets a provider tree
+while adding these service-specific entries.
+
+The sandbox child and its exact parent are canonically revalidated immediately before
+ACL mutation whether the child was pre-existing or newly created. Its `icacls`
+operations use link-local `/L` semantics, so a replacement race cannot redirect the
+owner or DACL mutation into the link target. Owner-managed sandbox children use only
+the bounded recovery in D-141; every other access denial fails closed and never enters
+the protected-service-vault recovery path.
+
+Start and restart compare the installed runtime-configuration bytes with the supplied
+canonical configuration before any Agent-home ACL repair. The provider homes receiving
+access therefore cannot differ from the homes the restarted core will actually use.
+
+When an upgrade or reconfiguration rewrites a rendered service file, the executor
+snapshots its exact pre-mutation bytes after preflight and marks the rollback action
+to restore that snapshot. A schema migration therefore cannot roll an older binary
+back onto a newly rendered configuration it does not understand.
+
+**Rationale:** The live Windows Worker ran correctly under its virtual service
+account, but Claude was installed at the owner's `.local\bin\claude.exe`. An owner
+shell diagnostic therefore reported Claude ready while the persistent Worker reported
+`probe-failed`. The service identity needs a stable executable lookup boundary without
+inheriting aliases, temporary directories, or mutable shell-specific entries.
+
+**Consequence:** Owner-installed Codex and Claude launchers in the two supported
+Windows user package locations remain discoverable after boot, while provider homes,
+authentication, service identity, and approval policy stay unchanged. Existing
+installations have one narrow, auditable migration into the new runtime document.
+The persistent service can read and update the owner's SSOT provider state without
+copying credentials or replacing owner/provider ACLs, and every lifecycle start refreshes
+only its own exact inheritable root access entries if an installer or provider recreated
+those paths.
+
+## D-141 — Windows sandbox owner recovery is bounded and link-local
+
+**Status:** Superseded for normal service execution by
+[D-142](#d-142--windows-services-isolate-codex-execution-state-while-sharing-owner-authentication).
+The bounded recovery remains historical compatibility evidence only.
+
+**Decision:** When the exact existing Codex `.sandbox-bin` child rejects an elevated
+link-local `icacls /setowner`, the lifecycle executor may recover that one child with
+`takeown /A /R /D N /SKIPSL`. Immediately before and after that command it must prove
+that the declared Codex home and sandbox child are ordinary directories resolving to
+their exact canonical paths. The subsequent owner and DACL mutations retain `icacls
+/L`. This exception is unavailable to provider homes, launcher directories, a
+missing child, a noncanonical parent, or any child that changes identity; those cases
+fail before ownership recovery.
+
+**Rationale:** A live Windows host denied `icacls /setowner` even though the existing
+sandbox directory already had the intended interactive owner and the installer was
+elevated. Refusing recovery made every otherwise valid upgrade roll back. The current
+Windows `takeown` supports `/SKIPSL` only together with recursive mode, so the bounded
+command is the native recovery that can repair inherited descendants without following
+symbolic links.
+
+**Consequence:** Existing owner-managed Codex sandbox state can be repaired on real
+hosts without granting OpenDelegate a general owner-tree takeover primitive. A link
+or directory replacement before recovery, after recovery, or before the final
+link-local ACL mutation remains a deterministic failure.
+
+## D-142 — Windows services isolate Codex execution state while sharing owner authentication
+
+See [ADR-0068](adr/0068-windows-codex-service-home.md).
+
+**Decision:** A persistent Windows core never uses the interactive owner's Codex home
+as its effective `CODEX_HOME`. The signed service document binds both that owner home
+and one OpenDelegate-managed service home below the instance state root. Lifecycle
+install, start, restart, and upgrade create the managed home and its `.sandbox-bin`
+with the exact virtual-service identity as owner. Administrators and SYSTEM retain
+Full Control; no interactive process shares that sandbox helper directory.
+
+The managed home's `auth.json` is an exact file symbolic link to
+`<owner-codex-home>\auth.json`. OpenDelegate never copies credential bytes. The
+elevated lifecycle executor creates or verifies only that one link after proving the
+source home, managed home, link path, and target path are the canonical paths declared
+by the service document. A non-link occupant, different target, replacement race, or
+path alias fails closed. A missing owner authentication file may leave the exact link
+dangling so a later owner login becomes visible without re-copying credentials.
+
+The service host projects the managed home as `CODEX_HOME`; a foreground Worker keeps
+using the owner-configured home. This service binding overrides a persisted foreground
+`agent.codexHome` only when the signed host environment says `system-service`.
+Provider-native sessions, configuration, and sandbox state therefore remain durable
+but service-local, while login and token refresh retain one owner SSOT.
+
+D-142 supersedes the D-140/D-141 requirement to repair the owner's `.sandbox-bin` for
+the service. Existing owner-home access remains bounded to the declared provider home
+for the shared authentication target, but lifecycle never resets or takes ownership
+of the interactive sandbox. Upgrade accepts only the exact prior runtime document
+missing the new service-home field, including when that addition must compose with the
+already accepted D-118 credential migration; unrelated drift remains a hard failure.
+
+**Rationale:** Live Windows execution proved that Codex sandbox setup replaces the
+helper DACL with its sandbox group, SYSTEM, Administrators, and the current caller.
+When the helper was owned by the interactive user, the virtual-service caller lost
+`WRITE_DAC`; a later harmless read failed `SetNamedSecurityInfoW`, requested spurious
+owner approvals, and provider cancellation then exposed an independent `EPIPE` crash.
+Additive ACL repair on one shared helper cannot remain stable against that provider-
+owned rewrite. Giving the service its own helper, owned by the service identity,
+preserves the caller's owner right across provider DACL refreshes.
+
+**Consequence:** Interactive Codex and OpenDelegate no longer corrupt each other's
+Windows sandbox ACLs. The owner authenticates once, service runs observe the same
+credential file, and provider sessions or helper binaries are not copied into the
+owner's interactive runtime. One finite runtime-document migration and one narrowly
+validated credential link are added to Windows lifecycle preparation.
+
+## D-143 — Background desktop discovery never opens an owner-interaction surface
+
+**Decision:** A live, mutually authenticated user-session helper is sufficient to
+advertise the Device's Computer Use capability to scheduling inventory. Background
+inventory, heartbeats, service startup, and helper reconnects must not start an
+interactive native desktop driver, open a capture picker, request an OS permission,
+or create a console window. Exact desktop, permission, capture-target, and input
+readiness is evaluated only after an owner-requested Computer Use Run acquires its
+exclusive `desktop-session` lease.
+
+On Windows, the scheduled session-helper launcher and its Computer Use native child
+are packaged as GUI-subsystem executables while retaining explicit redirected logs,
+and the login Task is marked hidden as a second defense against visible console chrome.
+Upgrade may migrate only the exact predecessor Task bytes missing that one setting;
+all other installed Task drift remains a hard preflight failure. The migration writes
+the canonical manifest and force-replaces the stopped native Task registration before
+either service plane restarts. This hidden-registration hardening is monotonic: a later
+release rollback does not deliberately restore the visible predecessor Task.
+The SCM core launcher remains a console-subsystem executable because it never enters
+the interactive desktop. Windows service Secrets are persisted in the existing
+DPAPI-NG service vault with its service-only ACL through a bounded mode of the already
+trusted native service host. Normal boot and restart do not start PowerShell for
+identity, ACL, sealing, or unsealing, and do not depend on a loaded virtual-account
+`CurrentUser` profile; the legacy CurrentUser record is accepted only as a one-time,
+exact in-service migration source.
+
+**Rationale:** Live reboot testing showed three coupled user-facing failures: Task
+Scheduler opened a permanent Windows Terminal for the session helper, capability
+inventory repeatedly opened `GraphicsCapturePicker`, and the core could not restart
+when the virtual service account's CurrentUser profile was not loaded. None of those
+actions was initiated by an owner Computer Use request, and the last one violated
+the always-on requirement.
+
+**Consequence:** Login and reboot recovery remain quiet, a Device stays schedulable
+without claiming that its desktop is already authorized, and the first actual
+Computer Use Run may still surface the required owner interaction. Service Secrets
+remain encrypted at rest and reboot-stable on workgroup hosts under D-073's declared
+machine-sealing fallback and restrictive service-vault ACL.
+
+## D-144 — Resolved Run Agent bindings may only specialize Work Order constraints
+
+**Decision:** A Work Order Agent requirement is a hard lower bound, not a byte-identical
+copy of the eventual Run binding. Main may add the exact adapter, provider-native model,
+or effort selected from the authenticated Device catalog when the Work Order left that
+field open. It may also narrow the allowed compatibility set. It may never change an
+explicit provider, adapter, model, or effort, or broaden the effective compatibility
+allowance; omission of that allowance continues to mean tested-only. Worker validates
+this relationship before accepting or recording the Run.
+
+**Rationale:** Deterministic target resolution necessarily specializes a provider or
+adapter constraint into one executable binding. Treating the two objects as serialized
+byte-equal caused a valid `claude/claude-cli` Work Order to reject the selected
+`claude/claude-cli/opus[1m]` Run. Because the rejected dispatch remained durable and
+unacknowledged, every reconnect replayed the same poison frame and the Device appeared
+offline despite successful mutual TLS.
+
+**Consequence:** Exact binding selection remains fail-closed while valid specialization
+survives disconnect and replay. A rejected substitution or compatibility broadening
+still fails before provider execution.
+
+## D-145 — Worker planning distinguishes authorized tool runtimes from text-only fallbacks
+
+**Decision:** Every Worker adapter observation may expose the bounded execution class
+`authorized` or `text-only`. The value comes from the adapter's executable approval-bridge
+capability and contains no provider diagnostic or credential data. Main includes that class in
+its bounded Device planning snapshot. Auto mode and an ordinary Prefer fallback may select only
+an `authorized` adapter; a text-only provider CLI remains available only when an exact Work Order
+adapter requirement or a Pinned Device profile explicitly chooses it.
+
+Provider CLI fallbacks continue to run with every shell, file mutation, Artifact write, package,
+web/network, native child Agent, and Computer Use tool denied. Main never upgrades them to tool
+authority merely because the provider executable itself supports an unattended mode.
+
+**Rationale:** A live Windows Artifact round-trip was dispatched to `claude-cli`. That adapter
+truthfully had no approval bridge, so it emitted prose describing a Bash call without creating the
+file. Deterministic verification rejected completion, but scheduling should have prevented a
+text-only fallback from receiving ordinary outcome work in the first place.
+
+**Consequence:** Default orchestration selects Codex App Server, Claude Agent SDK, or another
+Policy-bridged adapter for work that may need effects. Explicit text-only use remains possible for
+owners who deliberately want it, exact bindings still fail closed, and older Worker observations
+without the new field are conservatively classified from the built-in adapter identity during a
+rolling upgrade.
+
+## D-146 — Routine Windows lifecycle access repair does not recursively walk provider state
+
+**Decision:** Initial Windows service installation recursively grants the exact virtual-service
+identity its declared additive access to existing Codex, Claude, and launcher trees. Later start,
+restart, and upgrade operations revalidate each canonical non-link root and refresh the same
+inheritable root ACE without `/T`. Restart and upgrade perform that repair before stopping the
+healthy core. Service-owned Codex state and its sandbox retain their separate exact-owner repair.
+
+**Rationale:** Real upgrades spent several minutes walking the complete owner `.codex` and
+`.claude` trees while the Worker was already stopped. The installed service document had not
+changed those roots, and the recursive walk dominated both upgrade time and avoidable outage.
+
+**Consequence:** A normal upgrade no longer takes the Worker offline during a full provider-state
+walk and does not repeat that walk on every lifecycle command. New descendants inherit the root
+grant. An explicitly protected descendant still fails at the point the service actually needs it;
+repairing arbitrary provider-owned protected ACLs is not hidden inside every routine restart.
+
+## D-147 — Owner input advances a reviewed Task into a new execution cycle
+
+**Decision:** Appending a new owner message to an Auto Task in `review` durably transitions the
+Task to `queued` and schedules a new Coordinator execution cycle. Merely restarting Main does not
+make a reviewed Task executable; the transition occurs only as part of the accepted owner-input
+event. The new cycle retains the Task conversation and native-session lineage while D-103 gives
+any newly planned Work Orders a distinct owner-cycle-scoped identity.
+
+**Rationale:** Live Discord Artifact QA accepted and persisted an explicit instruction to rerun a
+reviewed Task with a corrected Worker adapter, then only reprojected the existing Review surface.
+The Task service left `review` unchanged, and the execution coordinator correctly refused to run a
+dormant review state. As a result, the owner-visible acknowledgement did not correspond to any new
+Agent turn or Work Order.
+
+**Consequence:** A review follow-up behaves like the long-lived Task continuation promised by the
+product specification and can plan additional work without losing context. Review remains stable
+while the owner is silent, restart reconciliation cannot create unsolicited work, and duplicate
+Discord delivery remains idempotent through the existing input event identity.
+
+## D-148 — A late Discord interaction preserves the owner's durable control
+
+**Decision:** Main still attempts to defer every Discord Task-control interaction before doing
+thread work. Gateway timestamps the frame at socket ingress and carries that clock through its
+ordered dispatch lane; dequeue time must never replace external arrival time. If serialized
+Gateway delivery has already made that private acknowledgement
+impossible, Main must not silently retire an otherwise valid owner control. It durably claims the
+interaction, verifies the configured owner or allowed role, validates the current bot-authored
+Task binding and control payload, and executes the exact idempotent Task command or global Approval
+decision once. The next durable Task surface is the confirmation. Deterministic stale-state
+refusals complete without retry; unexpected persistence or Task-port failures remain retryable
+behind the Gateway cursor.
+
+**Rationale:** Live Windows Artifact QA repeatedly delivered valid Approval button events 3.5 to
+4.2 seconds after their Discord snowflake timestamps while the Gateway dispatch lane was busy.
+The Gateway originally stamped `receivedAtMs` only after prior dispatch work drained. The adapter
+therefore misclassified an expired interaction as fresh, attempted an acknowledgement Discord
+could no longer accept, and completed the inbound record without reaching the late-control path.
+D-123 correctly prevented an unacknowledged action from executing, but that made the visible button
+discard every owner click and left the Worker permanently waiting. The interaction already carries
+Discord-authenticated identity and an exact, current approval ID; the Task and Approval services
+provide the authoritative state check and idempotency boundary.
+
+**Consequence:** A delayed Discord client may still show Discord's own acknowledgement-timeout
+toast, but OpenDelegate no longer loses the owner's intent: the live Task card advances and confirms
+the result. Unauthorized, malformed, wrong-bot, wrong-thread, stale, and duplicate interactions do
+not gain authority. The normal acknowledged path remains preferred and keeps its private failure
+feedback when Discord's deadline is available.
+
+## D-149 — Persistent Windows helpers own no console surface
+
+**Decision:** The per-user Windows session helper and its native Computer Use child run as hidden
+background processes. The child may create only an explicit Run-scoped OS picker, consent, or
+Owner Handoff surface. Login, reboot, idle health, capability inventory, and ordinary headless work
+must not open a console window or launch provider UI.
+
+**Rationale:** A live Windows Worker left an OpenDelegate terminal visible and could surface a
+capture-related window while no owner interaction was intended. The scheduled Task itself was
+hidden, but its native child was explicitly spawned with `windowsHide: false`, defeating the
+background-service product contract.
+
+**Consequence:** Persistent orchestration stays visually silent while the owner is not actively
+using Computer Use. Security boundaries remain visible when required: OS permission prompts,
+capture selection, login, MFA, and human-only handoffs are not hidden or automated away.
+
+## D-150 — File-authoring Runs verify Workspace bytes without shell authority
+
+**Decision:** A Worker Work Order that explicitly requires `file-authoring` receives one
+read-only, exact-Run Workspace file inspector in addition to the provider's file-change mechanism.
+The Agent supplies only a portable relative path. The Worker binds the root from the already
+resolved Workspace, accepts only a stable regular non-link file of at most 1 MiB, revalidates the
+current lease and fencing authority before and after the read, and applies the Run egress guard
+before returning actual UTF-8 text, byte count, SHA-256, BOM, and final-LF evidence. The inspector
+has no shell, host-absolute path, mutation, network, Secret, or Approval authority.
+
+**Rationale:** Live Discord-to-Windows file-authoring QA proved that the provider file-change
+mechanism could create the requested bytes but exposed no shell-free read mechanism. The Worker
+therefore had to report that create-new, encoding, newline, and hash criteria were unverified, and
+Main correctly rejected an otherwise successful file mutation. Asking the owner to approve a
+shell merely to inspect an ordinary Task-owned text file would add friction without improving the
+boundary.
+
+**Consequence:** Routine create and edit Tasks can produce deterministic completion evidence with
+no owner prompt, while arbitrary host inspection remains impossible. Path traversal, absolute
+paths, symbolic links or reparse points, changed files, oversized files, stale Runs, and protected
+egress all fail closed.
+
+## D-151 — Provider commentary is progress, not completion evidence
+
+**Decision:** When Codex App Server explicitly marks an assistant message as `commentary`, the
+adapter emits only a generic Run progress event and excludes that text from the Worker completion
+report. A `final_answer` message remains public completion evidence. A missing or null phase keeps
+the legacy compatibility behavior because supported providers do not all emit phases consistently;
+an unknown explicit phase fails as malformed provider output. Persisted-turn reconciliation applies
+the same rule.
+
+**Rationale:** A live file-authoring Run followed its completion-report prompt but emitted a short
+“creating the file” commentary item before using the provider patch tool. The adapter flattened
+that item together with the final evidence, so Main correctly treated the resulting report as
+containing a prohibited preamble. The App Server protocol already carries the semantic distinction;
+discarding it made deterministic verification less accurate.
+
+**Consequence:** Owner-visible Run progress remains available without being mistaken for proof of
+completion, and final Worker reports contain the provider's actual final answer. Older compatible
+providers keep working, while new unsupported phase values fail closed instead of silently changing
+report semantics.
+
+## D-152 — Remote Artifact ingress may terminate on Main's pinned TLS identity
+
+Implementation detail:
+[ADR-0069](adr/0069-direct-artifact-tls-and-main-ca-trust.md).
+
+**Decision:** An explicitly configured Artifact plane may bind direct HTTPS in addition to the
+existing loopback HTTP and verified reverse-proxy compositions. Main accepts only stable
+certificate and private-key files outside the source checkout, validates their equality, current
+validity, and advertised hostname, and serves TLS 1.3. An enrolled Worker verifies its stored Main
+CA against the enrollment-time SPKI pin and adds only that CA to the ordinary public trust roots
+for Artifact HTTPS; hostname verification and redirect rejection remain mandatory.
+
+**Rationale:** Live Discord-to-Windows Artifact QA reached a valid Run-scoped manifest, but Main
+issued a loopback upload URL to a remote Worker. That Worker correctly contacted its own
+`localhost`, so deterministic promotion could never reach NAS Main. A private authenticated route
+already existed for the Device channel, and requiring a separate reverse proxy added no security
+when the same pinned instance identity could terminate the exact Artifact listener.
+
+**Consequence:** An owner can explicitly expose Artifact upload on a selected LAN, VPN, or
+Tailscale address without disabling TLS verification, installing a machine-wide CA, or adding a
+second proxy. Existing loopback configurations stay private. Invalid keys, expired or wrong-host
+certificates, unpinned CAs, cleartext remote origins, and ambiguous direct-plus-proxy declarations
+fail closed.
+
+## D-153 — A continuation checkpoint projects one latest record per native session
+
+**Decision:** When one Worker native session and workstream continue across multiple owner cycles
+or Work Orders, the Task continuation checkpoint keeps only the latest accepted observation for
+the protocol identity `(scope, Device, workstream, native session)`. That record carries the latest
+Work Order ID. Different native sessions remain separate, and the omission accounting and bounded
+session limit remain unchanged.
+
+**Rationale:** The Worker correctly reused one Codex App Server session and managed worktree for a
+Discord follow-up. Checkpoint construction keyed intermediate observations by Work Order, then the
+protocol rejected the resulting duplicate native-session identities. Automatic retries therefore
+reported `TASK_CHECKPOINT_UNAVAILABLE` and hid the original retryable Artifact failure.
+
+**Consequence:** Long-lived Task continuity no longer makes its own checkpoint invalid. A retry or
+later owner message receives one unambiguous latest session reference, while the durable Event
+Store still retains every accepted Work Order observation for audit.
+
+## D-154 — Small final Artifacts use verified Discord-native File delivery
+
+**Decision:** When a Discord-bound Task completes with an available `download` Artifact whose
+safe filename, media type, and size fit Discord's documented baseline 10 MiB upload limit, the
+final Components v2 result includes one native File component as well as its stable Artifact
+action. The durable Discord projection stores only the Task-bound Artifact ID, filename, media
+type, byte count, and SHA-256. Immediately before multipart delivery, Main rereads the available
+Artifact, verifies its Task ownership, metadata, byte count, and checksum, and sends it with the
+existing enforced Discord nonce. Larger, interactive, or protocol-incompatible results keep only
+their Artifact Gateway action.
+
+**Rationale:** Live Discord-to-NAS-to-Windows QA successfully promoted the requested text file to
+Main and rendered `Open report`, but Discord contained no attached file. The external
+private-network link also depended on a changing viewer address. Native File presentation is the
+product's intended primary path for small results, while putting raw bytes in the durable outbox
+would bloat state and make integrity or retention changes invisible at delivery time.
+
+**Consequence:** A routine small file result is downloadable directly in the authorized Task
+thread without an extra browser or a viewer-IP allowlist. The Task binding—not possession of an
+Artifact ID—provides the Discord delivery context, and the Artifact Gateway exposure policy still
+governs the separate stable action. Lost HTTP responses remain retry-safe through the existing
+nonce; byte drift, cross-Task substitution, unavailable storage, or Discord rejection cannot
+silently produce a mismatched attachment.
+
+## D-155 — Discord review results are inactive historical surfaces
+
+**Decision:** A chronological Discord update for a Task in `review` carries no Pause or Cancel
+control. Review has no active Worker execution to pause, and D-147 defines an ordinary owner reply
+as the durable transition into a new execution cycle. Live activity, approval, failure, paused,
+and active execution surfaces retain only the controls appropriate to their current state.
+
+**Rationale:** Live Artifact QA completed after a corrected follow-up, but the earlier review
+result still displayed Pause and Cancel buttons. Even though a stale click would be rejected by
+the authoritative Task state, the old controls made the completed Task look active and invited an
+operation that no longer described reality.
+
+**Consequence:** Review history remains readable without masquerading as a current control panel.
+Follow-up work still starts naturally by replying in the same Task, and completed Tasks cannot
+appear active merely because an older review result remains in the Discord timeline.

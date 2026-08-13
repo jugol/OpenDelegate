@@ -1,9 +1,15 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { access, copyFile, mkdir, mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+
+import {
+  WINDOWS_CUI_SUBSYSTEM,
+  WINDOWS_GUI_SUBSYSTEM,
+  setWindowsPeSubsystem,
+} from "../../../../tooling/windows-pe-subsystem.mjs";
 
 const execFileAsync = promisify(execFile);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
@@ -54,6 +60,10 @@ export async function buildNativeServiceHosts(options = {}) {
     coreExecutable = join(directory, "opendelegate-service-host.exe");
     helperExecutable = join(directory, "opendelegate-session-helper.exe");
     await copyFile(coreExecutable, helperExecutable);
+    await setWindowsPeSubsystem(helperExecutable, {
+      expected: WINDOWS_CUI_SUBSYSTEM,
+      subsystem: WINDOWS_GUI_SUBSYSTEM,
+    });
   } else {
     const directory = join(outputRoot, "Release", architecture);
     await mkdir(directory, { recursive: true, mode: 0o755 });
@@ -102,8 +112,118 @@ export async function buildNativeServiceHosts(options = {}) {
     if (result.stdout.trim() !== "OpenDelegate native service launcher 1") {
       throw new Error("The native service launcher self-test failed.");
     }
+    if (platform !== "win32") {
+      const rootResult = await execFileAsync(executable, ["--root-self-test"], {
+        cwd: dirname(executable),
+        encoding: "utf8",
+        maxBuffer: 64 * 1024,
+        timeout: 10_000,
+        windowsHide: true,
+      });
+      const expectedRoot = await realpath(dirname(dirname(executable)));
+      if (rootResult.stdout.trim() !== expectedRoot) {
+        throw new Error("The native service launcher installation-root self-test failed.");
+      }
+    }
+  }
+  if (platform === "win32") {
+    await verifyWindowsSecretHelper(coreExecutable);
   }
   return Object.freeze({ platform, architecture, coreExecutable, helperExecutable });
+}
+
+async function verifyWindowsSecretHelper(executable) {
+  const systemRoot = process.env.SYSTEMROOT ?? process.env.WINDIR;
+  if (systemRoot === undefined) {
+    throw new Error("The Windows system root is unavailable for the native Secret self-test.");
+  }
+  const { stdout } = await execFileAsync(join(systemRoot, "System32", "whoami.exe"), ["/user"], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024,
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  const sid = stdout.match(/S-1-5-(?:[0-9]+-)*[0-9]+/u)?.[0];
+  if (sid === undefined) {
+    throw new Error("The native Secret self-test could not resolve the current Windows SID.");
+  }
+  const binding = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
+  const secret = Buffer.from("OpenDelegate native service Secret self-test", "utf8");
+  const sidBytes = Buffer.from(sid, "utf8");
+  const header = Buffer.alloc(2);
+  header.writeUInt16LE(sidBytes.byteLength);
+  const sealed = await runBinaryCommand(
+    executable,
+    ["--secret-helper", "protect"],
+    Buffer.concat([header, sidBytes, binding, secret]),
+  );
+  if (
+    sealed.exitCode !== 0 ||
+    sealed.stdout.byteLength <= 1 ||
+    ![1, 2].includes(sealed.stdout[0])
+  ) {
+    sealed.stdout.fill(0);
+    throw new Error("The native Windows Secret protection self-test failed.");
+  }
+  const opened = await runBinaryCommand(
+    executable,
+    ["--secret-helper", "unprotect"],
+    Buffer.concat([binding, sealed.stdout.subarray(1)]),
+  );
+  sealed.stdout.fill(0);
+  const exact = opened.exitCode === 0 && opened.stdout.equals(secret);
+  opened.stdout.fill(0);
+  secret.fill(0);
+  binding.fill(0);
+  if (!exact) {
+    throw new Error("The native Windows Secret unprotection self-test failed.");
+  }
+}
+
+function runBinaryCommand(executable, args, input) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const output = [];
+    let outputBytes = 0;
+    let settled = false;
+    const child = spawn(executable, args, {
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      rejectPromise(error);
+    };
+    const timer = setTimeout(
+      () => fail(new Error("The native Windows Secret self-test timed out.")),
+      10_000,
+    );
+    child.once("error", fail);
+    child.stdin.once("error", fail);
+    child.stdout.on("data", (chunk) => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > 4 * 1024 * 1024) {
+        fail(new Error("The native Windows Secret self-test returned too much output."));
+        return;
+      }
+      output.push(chunk);
+    });
+    child.stderr.resume();
+    child.once("close", (exitCode) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise({ exitCode, stdout: Buffer.concat(output, outputBytes) });
+    });
+    child.stdin.end(input);
+  });
 }
 
 export function createPosixCompilerOptions() {

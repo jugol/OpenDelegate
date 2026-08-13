@@ -10,6 +10,34 @@ import {
   type TaskChannelProjection,
 } from "./contracts.ts";
 import { DiscordAdapterError } from "./errors.ts";
+import {
+  isDiscordNativeAttachmentFilename,
+  isDiscordNativeAttachmentMediaType,
+  isDiscordNativeAttachmentSize,
+  isSha256Hex,
+} from "./native-attachment.ts";
+
+const APPROVAL_ACTION_CATEGORIES = new Set([
+  "read-only-observation",
+  "opendelegate-process-retry",
+  "opendelegate-process-restart",
+  "project-dependency-install",
+  "configured-official-package-install",
+  "computer-use-input",
+  "sandbox-boundary-escalation",
+  "package-repository-addition",
+  "remote-installer-script",
+  "untrusted-installer",
+  "driver-installation",
+  "kernel-extension-installation",
+  "os-network-change",
+  "vpn-change",
+  "firewall-change",
+  "policy-relaxation",
+  "secret-export",
+  "cross-device-knowledge-transfer",
+  "policy-bypass-attempt",
+] as const);
 
 const STATUS_LABELS: Readonly<
   Record<DiscordPresentationLocale, Readonly<Record<DiscordWorkflowStatus, string>>>
@@ -81,7 +109,7 @@ export function renderStatusPanel(
   if (projection.approval !== undefined) {
     detailLines.push(
       `${locale === "ko" ? "승인 필요" : "Approval needed"}: ${safeMarkdown(
-        localizeKnownText(projection.approval.description, locale),
+        approvalDescription(projection.approval, locale),
         500,
       )}`,
     );
@@ -138,8 +166,16 @@ function statusPanelSummary(
 export function renderTaskUpdate(
   projection: TaskChannelProjection,
   locale: DiscordPresentationLocale = "en",
+  nativeAttachmentFilename?: string,
 ): DiscordMessagePayload {
   validateProjection(projection);
+  if (
+    nativeAttachmentFilename !== undefined &&
+    (!isDiscordNativeAttachmentFilename(nativeAttachmentFilename) ||
+      projection.artifact?.nativeAttachment?.filename !== nativeAttachmentFilename)
+  ) {
+    throw invalidProjection();
+  }
   const status = workflowStatusForTaskState(projection.state);
   const headline = taskUpdateHeadline(projection.significance, locale);
   const buttons = controlButtons(projection, locale);
@@ -153,7 +189,7 @@ export function renderTaskUpdate(
       ? []
       : [
           `⚠️ **${locale === "ko" ? "승인 필요" : "Approval needed"}** — ${safeMarkdown(
-            localizeKnownText(projection.approval.description, locale),
+            approvalDescription(projection.approval, locale),
             450,
           )}`,
         ]),
@@ -172,6 +208,14 @@ export function renderTaskUpdate(
           : [Object.freeze({ type: 14 as const, divider: true, spacing: 1 as const }), buttons]),
       ]),
     }),
+    ...(nativeAttachmentFilename === undefined
+      ? []
+      : [
+          Object.freeze({
+            type: 13 as const,
+            file: Object.freeze({ url: `attachment://${nativeAttachmentFilename}` }),
+          }),
+        ]),
   ]);
   return Object.freeze({
     flags: DISCORD_COMPONENTS_V2_FLAG,
@@ -236,7 +280,7 @@ export function renderTaskActivity(
             ? []
             : [
                 `⚠️ **${locale === "ko" ? "승인 필요" : "Approval needed"}** — ${safeMarkdown(
-                  localizeKnownText(projection.approval.description, locale),
+                  approvalDescription(projection.approval, locale),
                   500,
                 )}`,
               ]),
@@ -387,7 +431,7 @@ function controlButtons(
   if (projection.approval !== undefined) {
     buttons.push(
       actionButton(
-        locale === "ko" ? "승인" : "Approve",
+        locale === "ko" ? "이 동작만 승인" : "Approve once",
         3,
         `od:v1:approve:${safeCustomIdSegment(projection.approval.approvalId)}`,
       ),
@@ -403,7 +447,6 @@ function controlButtons(
       case "queued":
       case "running":
       case "waiting_resource":
-      case "review":
         buttons.push(actionButton(locale === "ko" ? "일시정지" : "Pause", 2, "od:v1:pause"));
         break;
       case "paused":
@@ -414,6 +457,7 @@ function controlButtons(
         buttons.push(actionButton(locale === "ko" ? "다시 시도" : "Retry", 1, "od:v1:retry"));
         break;
       case "waiting_user":
+      case "review":
       case "completed":
         break;
     }
@@ -421,7 +465,8 @@ function controlButtons(
   if (
     projection.state !== "completed" &&
     projection.state !== "failed" &&
-    projection.state !== "cancelled"
+    projection.state !== "cancelled" &&
+    projection.state !== "review"
   ) {
     buttons.push(actionButton(locale === "ko" ? "취소" : "Cancel", 4, "od:v1:cancel"));
   }
@@ -513,10 +558,17 @@ const KOREAN_CLOSED_TEXT = Object.freeze({
     "현재 작업 상태에서는 이 버튼을 사용할 수 없어요. 최신 작업 업데이트를 확인하거나 새 메시지를 보내 주세요.",
   "This approval is no longer available in the Task's current state. Use the latest Task update.":
     "현재 작업 상태에서는 이 승인을 처리할 수 없어요. 최신 작업 업데이트를 확인해 주세요.",
+  "OpenDelegate could not safely record this control. Nothing was changed; use the current Task control again.":
+    "이 요청을 안전하게 기록하지 못해 아무것도 변경하지 않았어요. 현재 작업 버튼을 다시 사용해 주세요.",
   "This Task control conflicts with an already processed request. Use the latest Task update.":
     "이미 처리된 요청과 충돌하는 버튼이에요. 최신 작업 업데이트를 확인해 주세요.",
   "This Task is no longer available.": "이 작업은 더 이상 사용할 수 없어요.",
 } satisfies Readonly<Record<string, string>>);
+
+const RESOURCE_WAIT_SUFFIX =
+  "OpenDelegate will continue automatically when relevant resource availability changes. Waiting does not consume the automatic retry Budget.";
+const KOREAN_RESOURCE_WAIT_SUFFIX =
+  "관련 기기나 리소스 상태가 바뀌면 OpenDelegate가 자동으로 계속합니다. 기다리는 동안 자동 재시도 횟수는 차감되지 않습니다.";
 
 function localizeKnownText(value: string, locale: DiscordPresentationLocale): string {
   if (locale === "en") {
@@ -526,7 +578,153 @@ function localizeKnownText(value: string, locale: DiscordPresentationLocale): st
   if (preparedWorkOrders !== null) {
     return `Main이 Worker에 배정할 작업 ${preparedWorkOrders[1]}개를 준비했어요.`;
   }
-  return KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT] ?? value;
+  const terminalWorkerFailure =
+    /^Worker Run failed during ([^\n()]{1,80}) \(([A-Z0-9_]{1,80})\)\. OpenDelegate did not automatically replay this process because its external outcome may be uncertain\. Review Task Runs, then use Retry\.\n\nLast Worker report \(may be incomplete\):\n([\s\S]+)$/u.exec(
+      value,
+    );
+  if (terminalWorkerFailure !== null) {
+    const stage = localizeWorkerStage(terminalWorkerFailure[1] ?? "unknown");
+    return `Worker Run이 ${stage} 단계에서 실패했습니다 (${terminalWorkerFailure[2]}). 외부 작업이 실제로 어디까지 실행됐는지 확실하지 않아 OpenDelegate가 자동으로 다시 실행하지 않았습니다. 실행 내역을 확인한 뒤 다시 시도해 주세요.\n\n마지막 Worker 보고(불완전할 수 있음):\n${terminalWorkerFailure[3]}`;
+  }
+  const retryableWorkerFailure =
+    /^Worker Run encountered a retryable failure during ([^\n()]{1,80}) \(([A-Z0-9_]{1,80})\)\.\n\nLast Worker report \(may be incomplete\):\n([\s\S]+)$/u.exec(
+      value,
+    );
+  if (retryableWorkerFailure !== null) {
+    const stage = localizeWorkerStage(retryableWorkerFailure[1] ?? "unknown");
+    return `Worker Run에서 다시 시도할 수 있는 오류가 발생했습니다. 단계: ${stage} · 코드: ${retryableWorkerFailure[2]}.\n\n마지막 Worker 보고(불완전할 수 있음):\n${retryableWorkerFailure[3]}`;
+  }
+  const closedText = KOREAN_CLOSED_TEXT[value as keyof typeof KOREAN_CLOSED_TEXT];
+  if (closedText !== undefined) {
+    return closedText;
+  }
+  if (value.endsWith(RESOURCE_WAIT_SUFFIX)) {
+    const explanation = value.slice(0, -RESOURCE_WAIT_SUFFIX.length).trimEnd();
+    return `${explanation} ${KOREAN_RESOURCE_WAIT_SUFFIX}`;
+  }
+  return value;
+}
+
+function localizeWorkerStage(stage: string): string {
+  switch (stage) {
+    case "artifact":
+      return "결과 파일 전달";
+    case "execution":
+      return "실행";
+    default:
+      return stage;
+  }
+}
+
+function approvalDescription(
+  approval: NonNullable<TaskChannelProjection["approval"]>,
+  locale: DiscordPresentationLocale,
+): string {
+  if (!hasStructuredApprovalPresentation(approval)) {
+    return localizeKnownText(approval.description, locale);
+  }
+  const action = approvalActionLabel(approval.actionCategory, locale);
+  const risk = approvalRiskLabel(approval.risk, locale);
+  if (locale === "ko") {
+    const remaining =
+      approval.remaining === 0
+        ? ""
+        : ` 현재 뒤에 추가 승인 요청 ${approval.remaining.toString()}개가 기다리고 있어요.`;
+    return `이 작업의 ${approval.sequence.toString()}번째 보호 동작입니다. ${approval.deviceLabel}에서 ${action}. 위험도: ${risk}. 이 버튼은 표시된 동작 한 번만 승인하며, 이후의 다른 보호 동작은 별도 승인이 필요할 수 있어요.${remaining}`;
+  }
+  const remaining =
+    approval.remaining === 0
+      ? ""
+      : ` ${approval.remaining.toString()} additional approval request(s) are already waiting.`;
+  return `Protected action ${approval.sequence.toString()} for this Task. ${approval.deviceLabel} wants to ${action}. Risk: ${risk}. This approves only the exact action shown; a later protected action may require a separate decision.${remaining}`;
+}
+
+function hasStructuredApprovalPresentation(
+  approval: NonNullable<TaskChannelProjection["approval"]>,
+): approval is NonNullable<TaskChannelProjection["approval"]> & {
+  readonly sequence: number;
+  readonly remaining: number;
+  readonly deviceLabel: string;
+  readonly actionCategory: NonNullable<
+    NonNullable<TaskChannelProjection["approval"]>["actionCategory"]
+  >;
+  readonly risk: NonNullable<NonNullable<TaskChannelProjection["approval"]>["risk"]>;
+} {
+  return (
+    approval.sequence !== undefined &&
+    approval.remaining !== undefined &&
+    approval.deviceLabel !== undefined &&
+    approval.actionCategory !== undefined &&
+    approval.risk !== undefined
+  );
+}
+
+function approvalActionLabel(
+  action: NonNullable<NonNullable<TaskChannelProjection["approval"]>["actionCategory"]>,
+  locale: DiscordPresentationLocale,
+): string {
+  const labels: Record<typeof action, readonly [english: string, korean: string]> = {
+    "read-only-observation": [
+      "perform a protected observation",
+      "보호된 상태 확인을 수행하려고 해요",
+    ],
+    "opendelegate-process-retry": [
+      "retry an OpenDelegate process",
+      "OpenDelegate 프로세스를 다시 시도하려고 해요",
+    ],
+    "opendelegate-process-restart": [
+      "restart an OpenDelegate process",
+      "OpenDelegate 프로세스를 다시 시작하려고 해요",
+    ],
+    "project-dependency-install": [
+      "install a Task dependency",
+      "작업에 필요한 패키지를 설치하려고 해요",
+    ],
+    "configured-official-package-install": [
+      "install an official package",
+      "공식 패키지를 설치하려고 해요",
+    ],
+    "computer-use-input": [
+      "control the desktop for this Task",
+      "이 작업을 위해 데스크톱을 조작하려고 해요",
+    ],
+    "sandbox-boundary-escalation": [
+      "temporarily expand its sandbox for this Task",
+      "Task 전용 샌드박스 범위를 일시적으로 넓히려고 해요",
+    ],
+    "package-repository-addition": ["add a package repository", "패키지 저장소를 추가하려고 해요"],
+    "remote-installer-script": ["run a remote installer", "원격 설치 스크립트를 실행하려고 해요"],
+    "untrusted-installer": [
+      "run an untrusted installer",
+      "검증되지 않은 설치 프로그램을 실행하려고 해요",
+    ],
+    "driver-installation": ["install a driver", "드라이버를 설치하려고 해요"],
+    "kernel-extension-installation": ["install a kernel extension", "커널 확장을 설치하려고 해요"],
+    "os-network-change": ["change OS networking", "운영 체제 네트워크 설정을 바꾸려고 해요"],
+    "vpn-change": ["change VPN configuration", "VPN 설정을 바꾸려고 해요"],
+    "firewall-change": ["change firewall configuration", "방화벽 설정을 바꾸려고 해요"],
+    "policy-relaxation": ["relax an execution policy", "실행 정책을 완화하려고 해요"],
+    "secret-export": ["export protected Secret material", "보호된 Secret을 내보내려고 해요"],
+    "cross-device-knowledge-transfer": [
+      "transfer Device-local Knowledge",
+      "Device-local Knowledge를 전송하려고 해요",
+    ],
+    "policy-bypass-attempt": [
+      "perform an action blocked by policy",
+      "정책에서 차단된 동작을 수행하려고 해요",
+    ],
+  };
+  return labels[action][locale === "ko" ? 1 : 0];
+}
+
+function approvalRiskLabel(
+  risk: NonNullable<NonNullable<TaskChannelProjection["approval"]>["risk"]>,
+  locale: DiscordPresentationLocale,
+): string {
+  if (locale === "en") {
+    return risk;
+  }
+  return { low: "낮음", medium: "보통", high: "높음", critical: "매우 높음" }[risk];
 }
 
 function validateProjection(projection: TaskChannelProjection): void {
@@ -554,6 +752,19 @@ function validateProjection(projection: TaskChannelProjection): void {
     (projection.artifact.label.trim().length === 0 ||
       projection.artifact.label.length > 38 ||
       projection.artifact.label.includes("\u0000"))
+  ) {
+    throw invalidProjection();
+  }
+  const nativeAttachment = projection.artifact?.nativeAttachment;
+  if (
+    nativeAttachment !== undefined &&
+    (nativeAttachment.artifactId.length === 0 ||
+      nativeAttachment.artifactId.length > 160 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(nativeAttachment.artifactId) ||
+      !isDiscordNativeAttachmentFilename(nativeAttachment.filename) ||
+      !isDiscordNativeAttachmentMediaType(nativeAttachment.mediaType) ||
+      !isDiscordNativeAttachmentSize(nativeAttachment.sizeBytes) ||
+      !isSha256Hex(nativeAttachment.sha256))
   ) {
     throw invalidProjection();
   }
@@ -616,10 +827,40 @@ function validateProjection(projection: TaskChannelProjection): void {
     projection.approval !== undefined &&
     (projection.approval.approvalId.length === 0 ||
       projection.approval.approvalId.length > 70 ||
-      !/^[A-Za-z0-9._-]+$/.test(projection.approval.approvalId))
+      !/^[A-Za-z0-9._-]+$/.test(projection.approval.approvalId) ||
+      !validStructuredApprovalPresentation(projection.approval))
   ) {
     throw invalidProjection();
   }
+}
+
+function validStructuredApprovalPresentation(
+  approval: NonNullable<TaskChannelProjection["approval"]>,
+): boolean {
+  const values = [
+    approval.sequence,
+    approval.remaining,
+    approval.deviceLabel,
+    approval.actionCategory,
+    approval.risk,
+  ];
+  if (values.every((value) => value === undefined)) {
+    return true;
+  }
+  return (
+    Number.isSafeInteger(approval.sequence) &&
+    approval.sequence! >= 1 &&
+    Number.isSafeInteger(approval.remaining) &&
+    approval.remaining! >= 0 &&
+    typeof approval.deviceLabel === "string" &&
+    approval.deviceLabel.trim().length > 0 &&
+    approval.deviceLabel.length <= 253 &&
+    !approval.deviceLabel.includes("\0") &&
+    approval.actionCategory !== undefined &&
+    APPROVAL_ACTION_CATEGORIES.has(approval.actionCategory) &&
+    approval.risk !== undefined &&
+    ["low", "medium", "high", "critical"].includes(approval.risk)
+  );
 }
 
 function safeCustomIdSegment(value: string): string {

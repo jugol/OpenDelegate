@@ -2134,7 +2134,14 @@ function readAgentAdapters(
       requireExactInventoryKeys(
         entry,
         ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-        ["version", "blockedBy", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
+        [
+          "toolUse",
+          "version",
+          "blockedBy",
+          "availableUpgrade",
+          "modelCatalogObservedAtMs",
+          "models",
+        ],
       );
       const provider = entry["provider"];
       const readiness = entry["readiness"];
@@ -2150,6 +2157,13 @@ function readAgentAdapters(
         throw new WorkerRuntimeError("INVALID_CONFIGURATION", "Worker Agent adapters are invalid.");
       }
       const adapterId = readInventoryText(entry["adapterId"], "Agent adapter ID", 160);
+      const toolUse = entry["toolUse"];
+      if (toolUse !== undefined && toolUse !== "authorized" && toolUse !== "text-only") {
+        throw new WorkerRuntimeError(
+          "INVALID_CONFIGURATION",
+          "Worker Agent adapter tool-use authority is invalid.",
+        );
+      }
       const blockedBy = entry["blockedBy"];
       if (
         blockedBy !== undefined &&
@@ -2201,6 +2215,7 @@ function readAgentAdapters(
       return Object.freeze({
         provider,
         adapterId,
+        ...(toolUse === undefined ? {} : { toolUse }),
         readiness,
         compatibility,
         ...(blockedBy === undefined ? {} : { blockedBy }),

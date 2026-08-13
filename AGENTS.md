@@ -14,6 +14,22 @@ order:
 These documents are the canonical source of truth. Do not infer a conflicting
 product behavior from an earlier chat summary or from implementation convenience.
 
+### Runtime delegation fast path
+
+The required-context preflight above applies to planning, implementing, reviewing,
+or diagnosing OpenDelegate source and product behavior. It does not apply merely
+because an ordinary owner-assigned runtime Task happens to use the OpenDelegate
+repository as its registered Workspace.
+
+- For file authoring, Artifact creation, builds, reports, or other explicitly scoped
+  runtime work, read only the files needed to perform that Task. Do not inventory or
+  read the canonical planning documents, research corpus, repository history, or
+  unrelated source before starting.
+- Do not run repository-wide tests, status surveys, or documentation audits for a
+  runtime Task unless its requested outcome actually changes or reviews source.
+- If the Task does ask to modify, review, or diagnose OpenDelegate itself, follow the
+  full required-context preflight before making that source change.
+
 ## Change discipline
 
 - The owner approved the specification and authorized implementation on 2026-07-24.
@@ -31,6 +47,23 @@ product behavior from an earlier chat summary or from implementation convenience
 - Do not reduce the first milestone to a two-device or single-platform prototype. Its
   release gate includes macOS, Windows, Linux, and Computer Use support as defined in
   the implementation plan.
+
+## Operator-safe diagnostics
+
+- Never load, replay, summarize, or parse an entire archived Codex rollout or prior
+  large Task transcript. Continue from a curated checkpoint and the canonical
+  repository documents. If a missing fact must be recovered, query one exact file
+  for one exact pattern, cap the displayed result at 20 concise matches, and do not
+  resume the archived Task.
+- Keep interactive diagnostic output bounded. Filter at the source and emit at most
+  20 concise records or a short aggregate; never stream an unbounded log, process
+  list, event log, database dump, or recursive search into the desktop client.
+- When more evidence is required, write the full sanitized capture outside the
+  source checkout and show only its path, record count, and the few lines carrying
+  the signal. Redact credentials and private owner data before any display or saved
+  capture.
+- Prefer one narrow query per hypothesis. Check the projected row count or byte size
+  before display, and tighten the query when it can exceed the interactive bound.
 
 ## Product boundary
 

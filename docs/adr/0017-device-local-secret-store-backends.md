@@ -108,13 +108,17 @@ one-use enrollment Grant is submitted to Main.
 The owner backend is not reused by the persistent core daemon. Apple documents that
 programs outside a user login context, including a `launchd` daemon, must target a
 file-based Keychain and that the system context's default is the System Keychain.
-The persistent macOS Worker therefore requires a separate System-Keychain binding
-prepared through the elevated native-service boundary, plus an owner-login binding
-for the interactive helper. Until that migration and its access-control lifecycle
-are implemented and proven, native macOS service document generation remains
-fail-closed. No Data Protection Keychain fallback is attempted: a standalone helper
-lacks the provisioned application context required by that Keychain class, and the
-Data Protection Keychain is unavailable to the core daemon's system context.
+The persistent macOS Worker therefore uses a separate System-Keychain binding
+prepared through `worker macos-service-secret-stage`, plus an owner-login binding
+for the interactive helper. The elevated native operation installs the exact
+bundled helper at a stable root-owned path and grants that helper access for the
+configured non-login service identity. Core-owned Secrets move to the System
+Keychain; the owner helper's distinct IPC key stays in the login Keychain. Native
+service document generation remains fail-closed until that durable preparation is
+complete and its pinned helper digest matches the target bundle. No Data Protection
+Keychain fallback is attempted: a standalone helper lacks the provisioned
+application context required by that Keychain class, and the Data Protection
+Keychain is unavailable to the core daemon's system context.
 
 ### Graphical Linux
 
@@ -206,8 +210,9 @@ different declared configurations.
 ### `/usr/bin/security` without a native helper
 
 Rejected. Its non-interactive password write interface would expose the value in
-argv. The safe result is a narrowly scoped, pinned, signed helper; until that helper
-is built and proven on a real release host, macOS Secret support remains gated.
+argv. The implemented result is a narrowly scoped, pinned helper. Supported macOS
+release status remains gated on the signed/notarized clean-host lifecycle and the
+real-host service evidence named below.
 
 ### OS-native non-exportable P-256 keys only
 
@@ -258,12 +263,13 @@ Automated implementation evidence covers:
 - Windows virtual-service SID resolution, DPAPI-NG handoff command shape,
   foreground-record retirement, service-identity verification, restart-safe import,
   and pre-mutation native-service binding checks;
-- macOS signed-helper path/hash/command contracts and tamper rejection;
+- macOS signed-helper path/hash/command contracts, tamper rejection, System-Keychain
+  binding command shape, two-plane Secret migration, and idempotent replay;
 - graphical Linux Secret Service command/environment contracts;
 - registered-value encoding and common credential-form redaction; and
 - P-256 create, restart, non-extractable import, and signing continuity.
 
-These tests do not claim the required clean-host macOS Keychain, Ubuntu GNOME
+These tests do not claim the required clean-host macOS launchd/Keychain lifecycle, Ubuntu GNOME
 Secret Service, headless systemd encrypted-credential reboot, service-account,
 signing/notarization, or full three-Device leakage proof. The acceptance ledger must
 remain incomplete until those live results exist.

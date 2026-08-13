@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { arch, platform } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 
 import { isMainServiceReadyMessage, loadMainConfiguration } from "@opendelegate/main";
+import { parseWindowsOwnerHome } from "@opendelegate/platform-services";
 import {
   createNodeSessionHelperIpcTransport,
   type SessionHelperIpcEndpoint,
@@ -18,6 +19,7 @@ import {
   WORKER_DESKTOP_AUTHORITY_SECRET_ALIAS,
   WORKER_SESSION_HELPER_CORE_SIGNING_SECRET_ALIAS,
   createWorkerManagedSecretStore,
+  inspectConfiguredWorkerIdentityKey,
   loadWorkerConfiguration,
   readWorkerComputerUseCoreKeyBinding,
   resolveWorkerPaths,
@@ -175,7 +177,7 @@ async function startMainControlPlaneWorkload(
   const entryPath = join(configuration.releaseRoot, "apps", "main", "opendelegate.mjs");
   const child = spawn(nodePath, [entryPath, "serve", "--home", configuration.stateRoot], {
     cwd: configuration.releaseRoot,
-    env: scrubIdentityEnvironment(process.env),
+    env: buildCoreChildServiceEnvironment(scrubIdentityEnvironment(process.env), configuration),
     stdio: ["ignore", "inherit", "inherit", "ipc"],
     windowsHide: true,
   });
@@ -217,6 +219,14 @@ async function startWorkerWorkload(
     sourceCheckoutRoot: workerReleaseRoot,
     home: configuration.stateRoot,
   });
+  await verifyWorkerServiceSecretBinding(configuration, paths);
+  const identityKeyStatus = await inspectConfiguredWorkerIdentityKey({
+    paths,
+    environment: buildCoreChildServiceEnvironment(process.env, configuration),
+  });
+  writeWorkerServiceEvent("worker.identity-key-diagnostic", {
+    status: identityKeyStatus,
+  });
   const computerUseRuntime = await tryStartWorkerComputerUseRuntime(
     configuration,
     paths,
@@ -243,7 +253,7 @@ async function startWorkerWorkload(
   const completed = runWorkerDaemon({
     paths,
     releaseVersion: configuration.releaseVersion,
-    environment: buildWorkerServiceEnvironment(process.env),
+    environment: buildCoreChildServiceEnvironment(process.env, configuration),
     signal: workerController.signal,
     onReady: resolveReady,
     onConnectionDiagnostic: (diagnostic: WorkerConnectionDiagnostic) => {
@@ -251,7 +261,12 @@ async function startWorkerWorkload(
         code: diagnostic.code,
         retryable: diagnostic.retryable,
       });
-      if (!diagnostic.retryable) {
+      if (workerServiceReadinessDisposition(diagnostic) === "ready") {
+        // The reconnect loop itself is the healthy persistent workload while
+        // Main or its route is temporarily unavailable. Main still treats this
+        // Device as offline until an authenticated heartbeat arrives.
+        resolveReady();
+      } else {
         rejectReady(new ServiceHostError(`The Worker connection is blocked (${diagnostic.code}).`));
       }
     },
@@ -291,15 +306,90 @@ async function startWorkerWorkload(
   };
 }
 
+export function workerServiceReadinessDisposition(
+  diagnostic: WorkerConnectionDiagnostic,
+): "blocked" | "ready" {
+  return diagnostic.retryable ? "ready" : "blocked";
+}
+
+async function verifyWorkerServiceSecretBinding(
+  configuration: ServiceHostConfiguration,
+  paths: ReturnType<typeof resolveWorkerPaths>,
+): Promise<void> {
+  if (configuration.platform !== "macos") {
+    return;
+  }
+  const worker = await loadWorkerConfiguration(paths);
+  const runtimeBinding = configuration.serviceSecretBinding;
+  if (
+    runtimeBinding === undefined ||
+    runtimeBinding["backend"] !== "macos-system-keychain" ||
+    worker.secretBackend.backend !== "macos-system-keychain" ||
+    worker.secretBackend.bindingPath !== runtimeBinding["bindingPath"] ||
+    worker.secretBackend.helperPath !== runtimeBinding["helperPath"] ||
+    worker.secretBackend.expectedHelperSha256 !== runtimeBinding["expectedHelperSha256"] ||
+    worker.secretBackend.servicePreparation.serviceIdentity.userName !==
+      runtimeBinding["serviceUserName"]
+  ) {
+    throw new ServiceHostError(
+      "The Worker System Keychain binding does not match its native service configuration.",
+    );
+  }
+}
+
 /**
  * Native service hosts must not look like foreground Workers to Main. Keep the
  * marker explicit because Windows SCM and launchd do not expose systemd's
  * INVOCATION_ID convention.
  */
-export function buildWorkerServiceEnvironment(
+export function buildCoreChildServiceEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
+  configuration?: Pick<
+    ServiceHostConfiguration,
+    "agentProviderAccess" | "ownerSession" | "platform"
+  >,
 ): Readonly<Record<string, string | undefined>> {
-  return Object.freeze({ ...environment, OPENDELEGATE_SERVICE_MODE: "system-service" });
+  const result: Record<string, string | undefined> = {
+    ...environment,
+    OPENDELEGATE_SERVICE_MODE: "system-service",
+  };
+  const ownerHome = parseWindowsOwnerHome(configuration?.ownerSession.homeDirectory);
+  if (configuration?.platform === "windows" && ownerHome !== undefined) {
+    const setBoundValue = (name: string, value: string): void => {
+      for (const key of Object.keys(result)) {
+        if (key !== name && key.toLowerCase() === name.toLowerCase()) {
+          delete result[key];
+        }
+      }
+      result[name] = value;
+    };
+    if (configuration.agentProviderAccess !== undefined) {
+      setBoundValue("CODEX_HOME", configuration.agentProviderAccess.codexServiceHomeDirectory);
+      setBoundValue("CLAUDE_CONFIG_DIR", configuration.agentProviderAccess.claudeHomeDirectory);
+    }
+    const pathKey = Object.keys(result).find((key) => key.toLowerCase() === "path") ?? "PATH";
+    const existingEntries = (result[pathKey] ?? "")
+      .split(";")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+    const entries = [
+      win32.join(ownerHome, ".local", "bin"),
+      win32.join(ownerHome, "AppData", "Roaming", "npm"),
+      ...existingEntries,
+    ];
+    const observed = new Set<string>();
+    result[pathKey] = entries
+      .filter((entry) => {
+        const key = win32.normalize(entry).toLocaleLowerCase("en-US");
+        if (observed.has(key)) {
+          return false;
+        }
+        observed.add(key);
+        return true;
+      })
+      .join(";");
+  }
+  return Object.freeze(result);
 }
 
 function writeWorkerServiceEvent(event: string, fields: Readonly<Record<string, unknown>>): void {

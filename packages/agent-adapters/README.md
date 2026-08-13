@@ -46,6 +46,13 @@ Claude SDK pin weekly. Codex and Claude CLI candidates still require schema revi
 where available, adapter conformance, and the affected release gates before their
 tested-version constants may change.
 
+Before promoting a Codex version, install that exact candidate and run
+`corepack pnpm providers:verify-codex-protocol`. The verifier generates the App
+Server TypeScript protocol into a temporary directory and requires its complete
+notification catalog to match the adapter exactly. This catches benign provider
+additions before they can invalidate an otherwise completed Worker Run while still
+failing closed for genuinely unreviewed protocol drift.
+
 CLI bindings reuse their provider's authenticated programmatic model-catalog
 discovery, so an exact model is verified before CLI execution instead of being
 accepted as an unchecked string.
@@ -54,9 +61,11 @@ Every first-class Codex and Claude adapter uses an absolute, explicitly configur
 provider home and rejects ambient or per-Run attempts to override it. The default
 Device paths are `state/providers/codex` and `state/providers/claude`. Existing
 authentication is never copied. An owner may explicitly select an existing local
-Codex home as the Device's shared source of truth; otherwise the owner authenticates
-the managed home through the provider's normal interactive login. Keep every
-provider home outside the checkout and restrict it to the runtime identity.
+Codex home as the Device's shared source of truth. Persistent Windows services use a
+separate managed execution home whose exact `auth.json` links to that SSOT; session
+and sandbox state remain service-local. Other managed homes use the provider's normal
+interactive login. Keep every provider home outside the checkout and restrict it to
+the runtime identity.
 
 Claude SDK also ignores ambient settings, skills, and plugins and requires its
 fail-closed sandbox. Native Windows Claude SDK execution is reported incompatible

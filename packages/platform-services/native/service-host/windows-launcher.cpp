@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "windows-secret-helper.hpp"
+
 namespace {
 
 SERVICE_STATUS_HANDLE service_status_handle = nullptr;
@@ -523,6 +525,9 @@ void WINAPI service_main(DWORD argument_count, wchar_t** arguments) {
 
 int wmain(int argc, wchar_t** argv) {
   original_arguments.assign(argv, argv + argc);
+  if (argc == 3 && std::wcscmp(argv[1], L"--secret-helper") == 0) {
+    return run_windows_secret_helper(argv[2]);
+  }
   if (argc == 2 &&
       std::wcscmp(argv[1], L"--self-test-contained-child") == 0) {
     Sleep(INFINITE);

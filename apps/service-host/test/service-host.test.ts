@@ -50,6 +50,12 @@ describe("native two-plane JavaScript host", () => {
       enabled: true,
       url: "http://127.0.0.1:43180/",
     });
+    assert.equal(configuration.ownerSession.homeDirectory, "C:\\Users\\owner");
+    assert.deepEqual(configuration.agentProviderAccess, {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+    });
     assert.equal(
       configuration.localIpc.core.privateKeyReference,
       "secret://windows/core-ipc-signing-v2",
@@ -78,6 +84,43 @@ describe("native two-plane JavaScript host", () => {
     const logOverlap = validConfiguration();
     logOverlap.helperSecretBinding.vaultRoot = "C:\\ProgramData\\OpenDelegate\\logs";
     assert.throws(() => parseServiceHostConfiguration(logOverlap), /helper Secret binding/u);
+
+    const missingProviderBinding = { ...validConfiguration() };
+    Reflect.deleteProperty(missingProviderBinding, "agentProviderAccess");
+    assert.throws(
+      () => parseServiceHostConfiguration(missingProviderBinding),
+      /provider-home binding/u,
+    );
+    const broadProviderBinding = validConfiguration();
+    broadProviderBinding.agentProviderAccess.codexHomeDirectory = "C:\\Users\\owner";
+    assert.throws(() => parseServiceHostConfiguration(broadProviderBinding), /provider home/u);
+    const aliasedProviderBinding = validConfiguration();
+    aliasedProviderBinding.agentProviderAccess.codexHomeDirectory =
+      "C:\\Users\\owner\\.codex\\..\\escaped";
+    assert.throws(
+      () => parseServiceHostConfiguration(aliasedProviderBinding),
+      /provider home path is invalid/u,
+    );
+    const trailingProviderBinding = validConfiguration();
+    trailingProviderBinding.agentProviderAccess.codexHomeDirectory = "C:\\Users\\owner\\.codex\\";
+    assert.throws(
+      () => parseServiceHostConfiguration(trailingProviderBinding),
+      /provider home path is invalid/u,
+    );
+    const win32AliasProviderBinding = validConfiguration();
+    win32AliasProviderBinding.agentProviderAccess.codexHomeDirectory =
+      "C:\\Users\\owner\\AppData\\Roaming\\npm.\\codex-state";
+    assert.throws(
+      () => parseServiceHostConfiguration(win32AliasProviderBinding),
+      /provider home path is invalid/u,
+    );
+    const reservedProviderBinding = validConfiguration();
+    reservedProviderBinding.agentProviderAccess.codexHomeDirectory =
+      "C:\\Users\\owner\\COM³\\codex-state";
+    assert.throws(
+      () => parseServiceHostConfiguration(reservedProviderBinding),
+      /provider home path is invalid/u,
+    );
   });
 
   it("accepts an explicit headless Linux core without inventing helper authority", () => {
@@ -92,12 +135,52 @@ describe("native two-plane JavaScript host", () => {
       () =>
         parseServiceHostConfiguration({
           ...headlessLinuxConfiguration(),
+          agentProviderAccess: {
+            codexHomeDirectory: "/home/owner/.codex",
+            claudeHomeDirectory: "/home/owner/.claude",
+          },
+        }),
+      /Only Windows/u,
+    );
+
+    assert.throws(
+      () =>
+        parseServiceHostConfiguration({
+          ...headlessLinuxConfiguration(),
           helperSecretBinding: {
             backend: "linux-secret-service",
             secretToolPath: "/usr/bin/secret-tool",
           },
         }),
       /local IPC configuration/u,
+    );
+  });
+
+  it("accepts the root-owned macOS helper only when both Secret bindings pin it exactly", () => {
+    const configuration = parseServiceHostConfiguration(macOsConfiguration());
+    assert.equal(configuration.platform, "macos");
+    assert.equal(configuration.helperSecretBinding?.backend, "macos-keychain");
+    if (configuration.helperSecretBinding?.backend !== "macos-keychain") {
+      assert.fail("fixture must use the macOS Keychain helper");
+    }
+    assert.equal(
+      configuration.helperSecretBinding.helperPath,
+      "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal",
+    );
+
+    const mismatchedDigest = macOsConfiguration();
+    mismatchedDigest.helperSecretBinding.expectedHelperSha256 = `sha256:${"b".repeat(64)}`;
+    assert.throws(
+      () => parseServiceHostConfiguration(mismatchedDigest),
+      /owner helper Secret binding/u,
+    );
+
+    const unrelatedExternalHelper = macOsConfiguration();
+    unrelatedExternalHelper.helperSecretBinding.helperPath =
+      "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-other";
+    assert.throws(
+      () => parseServiceHostConfiguration(unrelatedExternalHelper),
+      /owner helper Secret binding/u,
     );
   });
 
@@ -132,10 +215,16 @@ function validConfiguration() {
     ownerSession: {
       userName: "WORKSTATION\\owner",
       stableUserId: "S-1-5-21-1000",
+      homeDirectory: "C:\\Users\\owner",
       adminAutoOpen: {
         enabled: true,
         url: "http://127.0.0.1:43180/",
       },
+    },
+    agentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
     helperSecretBinding: {
       backend: "windows-dpapi",
@@ -227,6 +316,78 @@ function headlessLinuxConfiguration() {
         publicKeySpkiBase64Url: "MCowBQYDK2VwAyEAjBmMzBDNPDdi86mu7kAWdhSpEsUBySgfGN0q2ganv5I",
       },
       allowedPeers: ["opendelegate"],
+      socketMode: "0660",
+    },
+    health: {
+      endpoint: "http://127.0.0.1:43190/health/live",
+      timeoutMs: 30_000,
+    },
+  };
+}
+
+function macOsConfiguration() {
+  const ipc = validConfiguration().localIpc;
+  const helperDigest = `sha256:${"a".repeat(64)}`;
+  const helperPath = "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal";
+  return {
+    schemaVersion: 3,
+    instanceId: "personal",
+    deviceId: "device-macos-personal",
+    platform: "macos",
+    role: "worker",
+    releaseVersion: "1.2.3",
+    releaseRoot: "/Library/Application Support/OpenDelegate/personal/install/current",
+    stateRoot: "/Users/Shared/OpenDelegate/personal/state",
+    authorityRoot: "/Users/Shared/OpenDelegate/personal/authority",
+    runtimeRoot: "/Users/Shared/OpenDelegate/personal/run",
+    ownerSession: {
+      userName: "owner",
+      stableUserId: "501",
+      uid: 501,
+      homeDirectory: "/Users/owner",
+      adminAutoOpen: { enabled: false },
+    },
+    helperSecretBinding: {
+      backend: "macos-keychain",
+      helperPath,
+      expectedHelperSha256: helperDigest,
+    },
+    serviceSecretBinding: {
+      backend: "macos-system-keychain",
+      bindingPath:
+        "/Library/Application Support/OpenDelegate/personal/system-keychain-binding.json",
+      helperPath,
+      expectedHelperSha256: helperDigest,
+      keychainPath: "/Library/Keychains/System.keychain",
+      serviceUserName: "_opendelegate",
+    },
+    logs: {
+      core: {
+        stdout: "/Users/Shared/OpenDelegate/personal/logs/core.stdout.log",
+        stderr: "/Users/Shared/OpenDelegate/personal/logs/core.stderr.log",
+      },
+      sessionHelper: {
+        stdout: "/Users/Shared/OpenDelegate/personal/logs/helper.stdout.log",
+        stderr: "/Users/Shared/OpenDelegate/personal/logs/helper.stderr.log",
+      },
+    },
+    localIpc: {
+      ...ipc,
+      kind: "unix-domain-socket",
+      endpoint: "/Users/Shared/OpenDelegate/personal/run/session-helper.sock",
+      credentialReferenceDocument:
+        "/Users/Shared/OpenDelegate/personal/state/config/secret-references.json",
+      core: {
+        ...ipc.core,
+        privateKeyReference: "secret://macos/core-ipc-signing-v2",
+        peerIdentity: "501",
+      },
+      helper: {
+        ...ipc.helper,
+        privateKeyReference: "secret://macos/helper-ipc-signing-v2",
+        peerIdentity: "_opendelegate",
+      },
+      allowedPeers: ["_opendelegate", "501"],
       socketMode: "0660",
     },
     health: {

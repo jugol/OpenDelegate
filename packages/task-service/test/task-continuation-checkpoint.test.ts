@@ -211,6 +211,86 @@ test("durable checkpoint is deterministic across restart and excludes private ex
   assert.deepEqual(await restarted.build(task.taskId), checkpoint);
 });
 
+test("checkpoint keeps only the latest Work Order observation for one reused Worker session", async () => {
+  let tick = 0;
+  const eventStore = new InMemoryEventStore({
+    clock: { now: () => new Date(Date.UTC(2026, 6, 25, 0, 30, tick++)).toISOString() },
+  });
+  const tasks = new TaskService({
+    clock: { now: () => new Date(Date.UTC(2026, 6, 25, 0, 30, tick++)).toISOString() },
+    eventStore,
+  });
+  const task = await tasks.create({
+    principalId: "owner",
+    idempotencyKey: "reused-worker-session-task",
+    objective: "Continue one Worker workstream across owner follow-ups.",
+    completionCriteria: ["The latest Worker session observation remains resumable."],
+    constraints: [],
+    selectedInputRefs: [],
+    mode: "auto",
+  });
+  const agentSession = {
+    provider: "codex" as const,
+    adapterId: "codex-app-server",
+    adapterVersion: "0.146.0",
+    nativeSessionId: "native-reused-worker",
+    workstreamId: "work-original-cycle",
+    workspaceId: "workspace-worker",
+    lineage: { lineageId: "lineage-reused-worker" },
+  };
+  await eventStore.append({
+    streamId: "task-worker-run:reused-session",
+    expectedVersion: 0,
+    events: [
+      {
+        eventId: "event-reused-session-first",
+        type: "task.worker-event-accepted",
+        payload: {
+          taskId: task.taskId,
+          workOrderId: "work-original-cycle",
+          event: {
+            senderDeviceId: "device-worker",
+            type: "worker.run.succeeded",
+            payload: {
+              taskId: task.taskId,
+              workOrderId: "work-original-cycle",
+              artifactIds: [],
+              agentSession,
+            },
+          },
+        },
+      },
+      {
+        eventId: "event-reused-session-follow-up",
+        type: "task.worker-event-accepted",
+        payload: {
+          taskId: task.taskId,
+          workOrderId: "work-follow-up-cycle",
+          event: {
+            senderDeviceId: "device-worker",
+            type: "worker.run.failed",
+            payload: {
+              taskId: task.taskId,
+              workOrderId: "work-follow-up-cycle",
+              agentSession,
+            },
+          },
+        },
+      },
+    ],
+  });
+
+  const checkpoint = await new DurableTaskContinuationCheckpointService({
+    eventStore,
+    tasks,
+  }).build(task.taskId);
+
+  assert.equal(checkpoint.sessions.length, 1);
+  assert.equal(checkpoint.sessions[0]?.nativeSessionId, "native-reused-worker");
+  assert.equal(checkpoint.sessions[0]?.workOrderId, "work-follow-up-cycle");
+  assert.doesNotThrow(() => validateTaskContinuationCheckpoint(checkpoint));
+});
+
 test("checkpoint construction is strictly isolated to the requested Task", async () => {
   let tick = 0;
   const eventStore = new InMemoryEventStore({

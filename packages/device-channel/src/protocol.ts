@@ -7,6 +7,7 @@ import {
   validateTaskContinuationCheckpoint,
   type ArtifactUploadGrantV1,
   type RedactedDiagnosticV1,
+  type WorkerAgentRequirementV1,
 } from "@opendelegate/protocol";
 import type {
   SequencedWorkerEventV1,
@@ -1124,7 +1125,7 @@ function parseWorkerAgentAdapters(
     assertExactKeys(
       adapter,
       ["provider", "adapterId", "readiness", "compatibility", "observedAtMs"],
-      ["blockedBy", "version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
+      ["toolUse", "blockedBy", "version", "availableUpgrade", "modelCatalogObservedAtMs", "models"],
     );
     const provider = readEnum(
       adapter["provider"],
@@ -1175,6 +1176,15 @@ function parseWorkerAgentAdapters(
     return {
       provider,
       adapterId,
+      ...(adapter["toolUse"] === undefined
+        ? {}
+        : {
+            toolUse: readEnum(
+              adapter["toolUse"],
+              ["authorized", "text-only"] as const,
+              "Agent adapter tool-use authority",
+            ),
+          }),
       readiness,
       compatibility: readEnum(
         adapter["compatibility"],
@@ -1900,7 +1910,7 @@ function parseAssignment(input: unknown): WorkerRunAssignmentV1 {
   if (
     workOrder.requiredAgent !== undefined &&
     (agentRequirement === undefined ||
-      JSON.stringify(agentRequirement) !== JSON.stringify(workOrder.requiredAgent))
+      !agentRequirementPreservesConstraint(agentRequirement, workOrder.requiredAgent))
   ) {
     throw protocolError(
       "FRAME_INVALID",
@@ -1932,6 +1942,26 @@ function parseAssignment(input: unknown): WorkerRunAssignmentV1 {
     fencingToken: readPositiveInteger(record["fencingToken"], "fencing token"),
     leaseExpiresAtMs: readTimestampInteger(record["leaseExpiresAtMs"], "lease expiry"),
   };
+}
+
+function agentRequirementPreservesConstraint(
+  assigned: WorkerAgentRequirementV1,
+  required: WorkerAgentRequirementV1,
+): boolean {
+  if (
+    assigned.provider !== required.provider ||
+    (required.adapterId !== undefined && assigned.adapterId !== required.adapterId) ||
+    (required.modelId !== undefined && assigned.modelId !== required.modelId) ||
+    (required.effort !== undefined && assigned.effort !== required.effort)
+  ) {
+    return false;
+  }
+
+  const requiredCompatibilities = new Set(required.allowedCompatibilities ?? (["tested"] as const));
+  const assignedCompatibilities = assigned.allowedCompatibilities ?? (["tested"] as const);
+  return assignedCompatibilities.every((compatibility) =>
+    requiredCompatibilities.has(compatibility),
+  );
 }
 
 function parseMainControl(input: unknown): MainControlFrameV1["payload"] {

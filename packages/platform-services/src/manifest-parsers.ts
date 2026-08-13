@@ -63,6 +63,7 @@ const WINDOWS_TASK_ELEMENTS = new Set([
   "Enabled",
   "Exec",
   "ExecutionTimeLimit",
+  "Hidden",
   "Interval",
   "LogonTrigger",
   "LogonType",
@@ -96,6 +97,7 @@ const WINDOWS_TASK_CHILDREN = new Map<string, readonly string[]>([
   [
     "Settings",
     [
+      "Hidden",
       "MultipleInstancesPolicy",
       "DisallowStartIfOnBatteries",
       "StopIfGoingOnBatteries",
@@ -105,6 +107,7 @@ const WINDOWS_TASK_CHILDREN = new Map<string, readonly string[]>([
       "RestartOnFailure",
     ],
   ],
+  ["Hidden", []],
   ["MultipleInstancesPolicy", []],
   ["DisallowStartIfOnBatteries", []],
   ["StopIfGoingOnBatteries", []],
@@ -126,6 +129,7 @@ const WINDOWS_TASK_FIXED_TEXT = new Map<string, string>([
   ["Enabled", "true"],
   ["LogonType", "InteractiveToken"],
   ["RunLevel", "LeastPrivilege"],
+  ["Hidden", "true"],
   ["MultipleInstancesPolicy", "IgnoreNew"],
   ["DisallowStartIfOnBatteries", "false"],
   ["StopIfGoingOnBatteries", "false"],
@@ -438,7 +442,7 @@ function tokenizePlist(xml: string): XmlToken[] {
     .replace(/^<\?xml[^?]*\?>\s*/, "")
     .replace(/^<!DOCTYPE plist PUBLIC "[^"]+" "[^"]+">\s*/, "");
   const tokenPattern =
-    /<plist version="1\.0">|<\/?(?:array|dict|false|integer|key|plist|string|true)>|[^<]+/gy;
+    /<plist version="1\.0">|<(?:false|true)\/>|<\/?(?:array|dict|false|integer|key|plist|string|true)>|[^<]+/gy;
   const tokens: XmlToken[] = [];
   let offset = 0;
   while (offset < body.length) {
@@ -457,6 +461,11 @@ function tokenizePlist(xml: string): XmlToken[] {
     }
     if (raw === '<plist version="1.0">') {
       tokens.push({ type: "open", name: "plist" });
+      continue;
+    }
+    if (raw.endsWith("/>")) {
+      const name = raw.slice(1, -2);
+      tokens.push({ type: "open", name }, { type: "close", name });
       continue;
     }
     const close = raw.startsWith("</");

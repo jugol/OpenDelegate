@@ -306,6 +306,40 @@ test("the Worker assignment boundary preserves only a valid Task-scoped checkpoi
   }
 });
 
+test("a resolved Run binding may narrow and specialize its Work Order Agent requirement", () => {
+  const workOrder: WorkOrderV1 = {
+    ...WORK_ORDER,
+    requiredAgent: {
+      provider: "claude",
+      adapterId: "claude-cli",
+      allowedCompatibilities: ["tested", "compatible"],
+    },
+  };
+  const selected = {
+    provider: "claude" as const,
+    adapterId: "claude-cli",
+    modelId: "opus[1m]",
+    allowedCompatibilities: ["tested" as const],
+  };
+
+  assert.deepEqual(
+    parseWorkerAssignmentMessage(assignment({ workOrder, agentRequirement: selected })).payload
+      .agentRequirement,
+    selected,
+  );
+
+  for (const agentRequirement of [
+    { ...selected, provider: "codex" as const },
+    { ...selected, adapterId: "claude-agent-sdk" },
+    { ...selected, allowedCompatibilities: ["untested" as const] },
+  ]) {
+    assert.throws(
+      () => parseWorkerAssignmentMessage(assignment({ workOrder, agentRequirement })),
+      (error: unknown) => error instanceof WorkerRuntimeError && error.code === "INVALID_MESSAGE",
+    );
+  }
+});
+
 test("normalized Run progress is durable, deduplicated, and rate limited", async () => {
   const directory = await mkdtemp(join(tmpdir(), "opendelegate-worker-progress-"));
   const repository = createSqliteWorkerStateRepository({

@@ -9,8 +9,10 @@ import { runKnowledgeMcpStdioServer } from "@opendelegate/knowledge-mcp";
 
 import {
   runArtifactMcpStdioServer,
+  runWorkspaceFileMcpStdioServer,
   WorkerAppError,
   consumeArtifactRunCapabilityFile,
+  consumeWorkspaceFileRunCapabilityFile,
   consumeComputerUseRunCapabilityFile,
   consumeKnowledgeRunCapabilityFile,
   consumePlatformMutationRunCapabilityFile,
@@ -20,6 +22,7 @@ import {
   listWorkerWorkspaces,
   loadWorkerConfiguration,
   loadWorkerSecretBackendConfiguration,
+  prepareMacOsServiceSecretBackend,
   prepareWindowsServiceSecretBackend,
   provisionHeadlessLinuxSecretBackend,
   restoreWindowsServiceSecretBackend,
@@ -49,6 +52,7 @@ export type WorkerCliCommand =
   | "help"
   | "join"
   | "knowledge-mcp-bridge"
+  | "macos-service-secret-stage"
   | "mcp-bridge"
   | "platform-mutation-mcp-bridge"
   | "run"
@@ -61,7 +65,8 @@ export type WorkerCliCommand =
   | "windows-service-secret-stage"
   | "workspace-list"
   | "workspace-register"
-  | "workspace-set-isolation";
+  | "workspace-set-isolation"
+  | "workspace-file-mcp-bridge";
 
 export interface ParsedWorkerArguments {
   readonly command: WorkerCliCommand;
@@ -81,6 +86,12 @@ export interface ParsedWorkerArguments {
     readonly handoffRoot: string;
     readonly instanceId: string;
     readonly vaultRoot: string;
+  };
+  readonly macOsServiceProvisioning?: {
+    readonly bindingPath: string;
+    readonly serviceGroup: string;
+    readonly serviceUser: string;
+    readonly systemHelperPath: string;
   };
   /** Foreground vault a staged Worker is returned to. */
   readonly windowsServiceRestoreVaultRoot?: string;
@@ -130,6 +141,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "help" &&
     command !== "join" &&
     command !== "knowledge-mcp-bridge" &&
+    command !== "macos-service-secret-stage" &&
     command !== "mcp-bridge" &&
     command !== "platform-mutation-mcp-bridge" &&
     command !== "run" &&
@@ -142,7 +154,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "windows-service-secret-stage" &&
     command !== "workspace-list" &&
     command !== "workspace-register" &&
-    command !== "workspace-set-isolation"
+    command !== "workspace-set-isolation" &&
+    command !== "workspace-file-mcp-bridge"
   ) {
     throw new WorkerAppError("CONFIG_INVALID", `Unknown Worker command: ${rawCommand}.`);
   }
@@ -166,6 +179,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
   let ownerHome: string | undefined;
   let serviceUser: string | undefined;
   let serviceGroup: string | undefined;
+  let bindingPath: string | undefined;
+  let systemHelperPath: string | undefined;
   let workspaceId: string | undefined;
   let workspaceAlias: string | undefined;
   let workspaceType: "directory" | "git" | "mounted-storage" | undefined;
@@ -213,7 +228,9 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       option !== "--owner-uid" &&
       option !== "--owner-home" &&
       option !== "--service-user" &&
-      option !== "--service-group"
+      option !== "--service-group" &&
+      option !== "--binding-path" &&
+      option !== "--system-helper"
     ) {
       throw new WorkerAppError("CONFIG_INVALID", `Unknown Worker option: ${String(option)}.`);
     }
@@ -289,6 +306,12 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
         break;
       case "--service-group":
         serviceGroup = target;
+        break;
+      case "--binding-path":
+        bindingPath = resolve(target);
+        break;
+      case "--system-helper":
+        systemHelperPath = resolve(target);
         break;
       case "--systemd-creds":
         systemdCredsPath = resolve(target);
@@ -395,7 +418,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     (command === "artifact-mcp-bridge" ||
       command === "mcp-bridge" ||
       command === "knowledge-mcp-bridge" ||
-      command === "platform-mutation-mcp-bridge") &&
+      command === "platform-mutation-mcp-bridge" ||
+      command === "workspace-file-mcp-bridge") &&
     capabilityFile === undefined
   ) {
     throw new WorkerAppError(
@@ -408,6 +432,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     command !== "mcp-bridge" &&
     command !== "knowledge-mcp-bridge" &&
     command !== "platform-mutation-mcp-bridge" &&
+    command !== "workspace-file-mcp-bridge" &&
     capabilityFile !== undefined
   ) {
     throw new WorkerAppError(
@@ -459,9 +484,7 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     healthPort !== undefined ||
     ownerUser !== undefined ||
     ownerUid !== undefined ||
-    ownerHome !== undefined ||
-    serviceUser !== undefined ||
-    serviceGroup !== undefined;
+    ownerHome !== undefined;
   if (command !== "service-document" && hasServiceDocumentOption) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
@@ -492,12 +515,43 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
     );
   }
   if (
-    command === "service-document" &&
+    (command === "service-document" || command === "macos-service-secret-stage") &&
     [serviceUser, serviceGroup].filter((value) => value !== undefined).length === 1
   ) {
     throw new WorkerAppError(
       "CONFIG_INVALID",
-      "Linux service identity requires --service-user and --service-group together.",
+      "Service identity requires --service-user and --service-group together.",
+    );
+  }
+  if (
+    command !== "service-document" &&
+    command !== "macos-service-secret-stage" &&
+    (serviceUser !== undefined || serviceGroup !== undefined)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "Service identity options are accepted only by macOS service preparation or service-document.",
+    );
+  }
+  if (
+    command !== "macos-service-secret-stage" &&
+    (bindingPath !== undefined || systemHelperPath !== undefined)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "System Keychain options are accepted only by macos-service-secret-stage.",
+    );
+  }
+  if (
+    command === "macos-service-secret-stage" &&
+    (bindingPath === undefined ||
+      systemHelperPath === undefined ||
+      serviceUser === undefined ||
+      serviceGroup === undefined)
+  ) {
+    throw new WorkerAppError(
+      "CONFIG_INVALID",
+      "macos-service-secret-stage requires --binding-path, --system-helper, --service-user, and --service-group.",
     );
   }
   if (
@@ -551,7 +605,8 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
       command === "artifact-mcp-bridge" ||
       command === "mcp-bridge" ||
       command === "knowledge-mcp-bridge" ||
-      command === "platform-mutation-mcp-bridge") &&
+      command === "platform-mutation-mcp-bridge" ||
+      command === "workspace-file-mcp-bridge") &&
     home !== undefined
   ) {
     throw new WorkerAppError(
@@ -648,6 +703,16 @@ export function parseWorkerArguments(values: readonly string[]): ParsedWorkerArg
             vaultRoot: vaultRoot!,
           },
         }),
+    ...(command !== "macos-service-secret-stage"
+      ? {}
+      : {
+          macOsServiceProvisioning: {
+            bindingPath: bindingPath!,
+            serviceGroup: serviceGroup!,
+            serviceUser: serviceUser!,
+            systemHelperPath: systemHelperPath!,
+          },
+        }),
     ...(command !== "windows-service-secret-restore"
       ? {}
       : { windowsServiceRestoreVaultRoot: vaultRoot! }),
@@ -729,6 +794,18 @@ async function run(arguments_: readonly string[]): Promise<void> {
     }
     return;
   }
+  if (parsed.command === "workspace-file-mcp-bridge") {
+    const capability = await consumeWorkspaceFileRunCapabilityFile(parsed.capabilityFile!);
+    try {
+      await runWorkspaceFileMcpStdioServer({
+        authority: capability.authority,
+        port: capability.port,
+      });
+    } finally {
+      await capability.close();
+    }
+    return;
+  }
   if (parsed.command === "mcp-bridge") {
     const capability = await consumeComputerUseRunCapabilityFile(parsed.capabilityFile!);
     try {
@@ -782,6 +859,23 @@ async function run(arguments_: readonly string[]): Promise<void> {
     return;
   }
   const paths = pathsFor(parsed);
+  if (parsed.command === "macos-service-secret-stage") {
+    const prepared = await prepareMacOsServiceSecretBackend({
+      ...parsed.macOsServiceProvisioning!,
+      paths,
+    });
+    writeJson({
+      event: "worker.macos-service-secret.staged",
+      backend: prepared.backend.backend,
+      bindingPath: prepared.backend.bindingPath,
+      helperPath: prepared.backend.helperPath,
+      migratedAliases: prepared.migratedAliases,
+      servicePreparation: prepared.backend.servicePreparation,
+      nextStep:
+        "Copy this Worker home to DATA_ROOT/state before making that tree service-private. Compose the service document while the copied configuration is readable (or from an elevated shell after adoption), then install the reviewed launchd service document from an elevated shell.",
+    });
+    return;
+  }
   if (parsed.command === "service-document") {
     const request = parsed.serviceDocument!;
     const configuration = await buildWorkerServiceDocument({
@@ -997,7 +1091,8 @@ function isInternalMcpBridge(command: WorkerCliCommand): boolean {
     command === "artifact-mcp-bridge" ||
     command === "knowledge-mcp-bridge" ||
     command === "mcp-bridge" ||
-    command === "platform-mutation-mcp-bridge"
+    command === "platform-mutation-mcp-bridge" ||
+    command === "workspace-file-mcp-bridge"
   );
 }
 
@@ -1059,9 +1154,18 @@ async function runForeground(paths: WorkerPaths): Promise<void> {
 }
 
 function connectionRemedy(code: WorkerConnectionDiagnostic["code"]): string {
-  return code === "CERTIFICATE_EXPIRED"
-    ? "This Device certificate has expired. Issue a new enrollment grant from Admin Web and run 'opendelegate worker join --grant-file <path>' on this Device."
-    : "Main rejected this Device's credential. Inspect the Device in Admin Web before reconnecting.";
+  switch (code) {
+    case "CERTIFICATE_EXPIRED":
+      return "This Device certificate has expired. Issue a new enrollment grant from Admin Web and run 'opendelegate worker join --grant-file <path>' on this Device.";
+    case "IDENTITY_KEY_INVALID":
+      return "The stored Device identity key is invalid or does not match its certificate. Stop the Worker, inspect 'opendelegate worker diagnose', and re-credential this Device if the matching key cannot be restored.";
+    case "LOCAL_SECRET_UNAVAILABLE":
+      return "This Worker cannot read its Device identity key from the local Secret Store. Unlock or repair that store, then run 'opendelegate worker diagnose'. On macOS, the foreground Worker must run in the signed-in desktop session that owns the login Keychain.";
+    case "PEER_IDENTITY_MISMATCH":
+      return "Main rejected this Device identity. Inspect the Device record in Admin Web before reconnecting.";
+    default:
+      return "The route to Main failed before OpenDelegate could authenticate it. Check the configured VPN or network route and Main's Worker-channel listener, then retry.";
+  }
 }
 
 async function readProductVersion(): Promise<string> {
@@ -1099,6 +1203,10 @@ Usage:
     --vault-root ABSOLUTE_PATH [--home <path>]
   opendelegate worker windows-service-secret-restore
     --vault-root ABSOLUTE_PATH [--home <path>]
+  opendelegate worker macos-service-secret-stage
+    --binding-path "/Library/Application Support/OpenDelegate/INSTANCE/system-keychain.json"
+    --system-helper /Library/PrivilegedHelperTools/opendelegate-keychain-helper-INSTANCE
+    --service-user USER --service-group GROUP [--home <path>]
   opendelegate worker service-document --output ABSOLUTE_PATH
     --bundle ABSOLUTE_PATH --install-root ABSOLUTE_PATH --data-root ABSOLUTE_PATH
     --health-port PORT [--instance-id INSTANCE_ID] [--home <path>]
@@ -1121,14 +1229,17 @@ The one-use Enrollment Grant token is accepted only inside the protected grant
 file. It is never accepted in argv or environment variables. Worker state,
 Device-local Knowledge, and managed credentials remain outside the installation.
 
-service-document composes a staged Windows Worker or an explicitly headless Linux
-Worker from durable public IPC bindings and the bundle checksum manifest. Linux
-requires the owner arguments shown above and deliberately emits no graphical helper.
-The optional service-account arguments only verify the identity captured at join.
+service-document composes a staged Windows or macOS Worker, or an explicitly
+headless Linux Worker, from durable public IPC bindings and the bundle checksum
+manifest. macos-service-secret-stage must run from Terminal.app in the signed-in
+owner session; it prompts through sudo, moves only core Secrets to the System
+Keychain, and retains a distinct login-Keychain helper identity. Linux requires the
+owner arguments shown above and deliberately emits no graphical helper. The
+optional service-account arguments only verify the identity captured at preparation.
 It writes only a create-new document and never elevates or
-registers a service. Graphical Linux and macOS remain fail-closed until their
-separate owner-session Secret migration is implemented. Installing the reviewed
-document is a separate, elevated step:
+registers a service. Graphical Linux remains fail-closed until its separate
+owner-session Secret migration is implemented. Installing the reviewed document is
+a separate, elevated step:
 'opendelegate service install --config <path> --command-id <id>'.
 `);
 }

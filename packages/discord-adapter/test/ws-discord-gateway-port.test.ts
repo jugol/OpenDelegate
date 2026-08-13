@@ -383,6 +383,72 @@ test("the Gateway wire mapper accepts only reviewed thread and component-interac
   await connection.close();
 });
 
+test("an interaction keeps its socket-receive clock while earlier dispatch work is blocked", async () => {
+  const fixture = gatewayFixture();
+  const dispatches: DiscordGatewayDispatch[] = [];
+  let releaseMessage!: () => void;
+  const messageBlocked = new Promise<void>((resolve) => {
+    releaseMessage = resolve;
+  });
+  await fixture.gateway.connect({
+    apiVersion: DISCORD_API_VERSION,
+    intentBitfield: DISCORD_GATEWAY_INTENTS,
+    resume: undefined,
+    onDispatch: async (dispatch) => {
+      dispatches.push(dispatch);
+      if (dispatch.type === "MESSAGE_CREATE") {
+        await messageBlocked;
+      }
+    },
+    onSessionEstablished: async () => undefined,
+    onReconcileRequired: async () => undefined,
+  });
+  const socket = fixture.factory.sockets[0];
+  assert.ok(socket);
+  socket.emitOpen();
+  socket.emitJson({ op: 10, d: { heartbeat_interval: 1_000 } });
+  socket.emitJson({
+    op: 0,
+    s: 1,
+    t: "READY",
+    d: { session_id: SESSION_ID, resume_gateway_url: RESUME_URL },
+  });
+  await fixture.flush();
+
+  socket.emitJson({
+    op: 0,
+    s: 2,
+    t: "MESSAGE_CREATE",
+    d: rawMessage("100000000000000030", "Block the ordered dispatch tail"),
+  });
+  await fixture.flush();
+  fixture.scheduler.setNow(1_500);
+  socket.emitJson({
+    op: 0,
+    s: 3,
+    t: "INTERACTION_CREATE",
+    d: {
+      id: "100000000000000031",
+      token: "transient-interaction-token",
+      guild_id: GUILD_ID,
+      channel_id: THREAD_ID,
+      type: 3,
+      data: { custom_id: "od:v1:pause" },
+      message: { id: "100000000000000032", author: { id: BOT_ID, bot: true } },
+      member: { user: { id: "100000000000000004", bot: false }, roles: [] },
+    },
+  });
+  fixture.scheduler.setNow(5_000);
+  releaseMessage();
+  await fixture.flush();
+
+  const interaction = dispatches.find((dispatch) => dispatch.type === "INTERACTION_CREATE");
+  assert.equal(
+    interaction?.type === "INTERACTION_CREATE" && interaction.interaction.receivedAtMs,
+    1_500,
+  );
+});
+
 test("fatal Discord close codes stop reconnect loops and diagnostics never contain credentials", async () => {
   const fixture = gatewayFixture();
   await fixture.gateway.connect({
@@ -573,13 +639,18 @@ class ManualScheduler implements DiscordGatewayScheduler {
   readonly #randomValue: number;
   readonly #scheduled: Scheduled[] = [];
   #nextId = 1;
+  #nowMs = 1_000;
 
   constructor(randomValue: number) {
     this.#randomValue = randomValue;
   }
 
   nowMs(): number {
-    return 1_000;
+    return this.#nowMs;
+  }
+
+  setNow(value: number): void {
+    this.#nowMs = value;
   }
 
   random(): number {

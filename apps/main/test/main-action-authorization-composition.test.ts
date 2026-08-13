@@ -381,7 +381,7 @@ function heartbeat(): WorkerHeartbeatV1 {
       agentAdapters: [
         {
           provider: "codex",
-          adapterId: "codex-cli",
+          adapterId: "codex-app-server",
           readiness: "ready",
           compatibility: "tested",
           version: "0.146.0",

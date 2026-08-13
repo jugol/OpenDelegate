@@ -94,6 +94,7 @@ const heartbeat = {
         {
           provider: "codex",
           adapterId: "codex-cli",
+          toolUse: "text-only",
           readiness: "ready",
           compatibility: "tested",
           version: "1.2.3",
@@ -925,6 +926,39 @@ describe("Device channel protocol", () => {
     assert.deepEqual(
       decodeDeviceChannelFrame(JSON.stringify(dispatch), "main-device-1", "main-to-worker"),
       dispatch,
+    );
+    const refinedDispatch = {
+      ...dispatch,
+      payload: {
+        ...dispatch.payload,
+        agentRequirement: {
+          ...dispatch.payload.agentRequirement,
+          modelId: "opus[1m]",
+        },
+      },
+    };
+    assert.deepEqual(
+      decodeDeviceChannelFrame(JSON.stringify(refinedDispatch), "main-device-1", "main-to-worker"),
+      refinedDispatch,
+    );
+    assert.throws(
+      () =>
+        decodeDeviceChannelFrame(
+          JSON.stringify({
+            ...dispatch,
+            payload: {
+              ...dispatch.payload,
+              agentRequirement: {
+                ...dispatch.payload.agentRequirement,
+                allowedCompatibilities: ["tested", "compatible"],
+              },
+            },
+          }),
+          "main-device-1",
+          "main-to-worker",
+        ),
+      (error: unknown) =>
+        error instanceof DeviceChannelProtocolError && error.code === "FRAME_INVALID",
     );
     assert.deepEqual(
       decodeDeviceChannelFrame(JSON.stringify(terminal), "worker-1", "worker-to-main"),

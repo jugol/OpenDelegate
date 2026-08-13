@@ -82,7 +82,9 @@ export class WindowsServiceDpapiSecretHandoff {
   readonly #deviceId: string;
   readonly #environment: Readonly<Record<string, string>>;
   readonly #maximumSecretBytes: number;
-  readonly #powershellPath: string;
+  readonly #expectedIdentitySid: string | undefined;
+  readonly #helperExecutablePath: string;
+  readonly #nativeHelper: boolean;
   readonly #runner: NativeSecretCommandRunner;
   readonly #serviceSid: string;
   readonly #vault: SecureFileVault;
@@ -93,11 +95,39 @@ export class WindowsServiceDpapiSecretHandoff {
     assertWindowsHost(config.hostPlatform ?? process.platform);
     this.#deviceId = config.deviceId;
     this.#serviceSid = validateWindowsServiceSid(config.serviceSid);
+    this.#expectedIdentitySid =
+      config.expectedIdentitySid === undefined
+        ? undefined
+        : validateWindowsServiceSid(config.expectedIdentitySid);
     this.#maximumSecretBytes = validateMaximumSecretBytes(
       config.maximumSecretBytes ?? DEFAULT_MAXIMUM_SECRET_BYTES,
     );
-    this.#powershellPath = config.powershellPath ?? defaultWindowsPowerShellPath();
-    if (!win32.isAbsolute(this.#powershellPath) || this.#powershellPath.includes("\0")) {
+    const defaultNativeHelperPath = win32.join(
+      config.sourceCheckoutRoot,
+      "bin",
+      "opendelegate-service-host.exe",
+    );
+    const nativeHelperPath =
+      config.nativeHelperPath ??
+      (config.runner === undefined && config.powershellPath === undefined
+        ? defaultNativeHelperPath
+        : undefined);
+    if (
+      nativeHelperPath !== undefined &&
+      (!win32.isAbsolute(nativeHelperPath) ||
+        nativeHelperPath.includes("\0") ||
+        win32.normalize(nativeHelperPath).toLowerCase() !==
+          win32.normalize(defaultNativeHelperPath).toLowerCase())
+    ) {
+      throw configurationInvalid();
+    }
+    this.#nativeHelper = nativeHelperPath !== undefined;
+    this.#helperExecutablePath =
+      nativeHelperPath ?? config.powershellPath ?? defaultWindowsPowerShellPath();
+    if (
+      !win32.isAbsolute(this.#helperExecutablePath) ||
+      this.#helperExecutablePath.includes("\0")
+    ) {
       throw configurationInvalid();
     }
     this.#environment = validateWindowsEnvironment(
@@ -171,11 +201,29 @@ export class WindowsServiceDpapiSecretHandoff {
   }
 
   async #initializeOnce(): Promise<void> {
+    if (this.#expectedIdentitySid !== undefined) {
+      const identityInput = Buffer.from(this.#expectedIdentitySid, "utf8");
+      try {
+        const result = await this.#runHelper(
+          "identity-probe",
+          WINDOWS_SERVICE_IDENTITY_PROBE_SCRIPT,
+          identityInput,
+          16,
+        );
+        const ready = result.exitCode === 0 && result.stdout.equals(Buffer.from("ready"));
+        result.stdout.fill(0);
+        if (!ready) {
+          throw backendUnavailable();
+        }
+      } finally {
+        identityInput.fill(0);
+      }
+    }
     await this.#vault.initialize();
     const handoffPath = this.#vault.rootPath();
     const input = encodeSidAndPath(this.#serviceSid, handoffPath);
     try {
-      const result = await this.#runPowerShell(WINDOWS_HANDOFF_ACL_SCRIPT, input, 0);
+      const result = await this.#runHelper("acl", WINDOWS_HANDOFF_ACL_SCRIPT, input, 0);
       result.stdout.fill(0);
       if (result.exitCode !== 0) {
         throw backendUnavailable(
@@ -203,7 +251,8 @@ export class WindowsServiceDpapiSecretHandoff {
     serviceSid.fill(0);
     binding.fill(0);
     try {
-      const result = await this.#runPowerShell(
+      const result = await this.#runHelper(
+        "protect",
         DPAPI_NG_PROTECT_SCRIPT,
         input,
         this.#maximumSecretBytes + NATIVE_OVERHEAD_BYTES,
@@ -236,7 +285,8 @@ export class WindowsServiceDpapiSecretHandoff {
     const input = Buffer.concat([binding, protectedValue]);
     binding.fill(0);
     try {
-      const result = await this.#runPowerShell(
+      const result = await this.#runHelper(
+        "unprotect",
         DPAPI_NG_UNPROTECT_SCRIPT,
         input,
         this.#maximumSecretBytes,
@@ -267,12 +317,19 @@ export class WindowsServiceDpapiSecretHandoff {
       .digest();
   }
 
-  async #runPowerShell(script: string, stdin: Uint8Array, maximumStdoutBytes: number) {
+  async #runHelper(
+    operation: "acl" | "identity-probe" | "protect" | "unprotect",
+    powershellScript: string,
+    stdin: Uint8Array,
+    maximumStdoutBytes: number,
+  ) {
     try {
       return await this.#runner.run({
-        args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        args: this.#nativeHelper
+          ? ["--secret-helper", operation]
+          : ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powershellScript],
         environment: this.#environment,
-        executable: this.#powershellPath,
+        executable: this.#helperExecutablePath,
         maximumStdoutBytes,
         stdin,
         timeoutMs: COMMAND_TIMEOUT_MS,
@@ -288,14 +345,36 @@ export class WindowsServiceDpapiSecretHandoff {
 
 export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
   public readonly backend = "windows-service-dpapi" as const;
-  readonly #delegate: WindowsDpapiSecretStore;
+  readonly #delegate: WindowsServiceDpapiSecretHandoff;
   readonly #deviceId: string;
   readonly #handoff: WindowsServiceDpapiSecretHandoff;
+  readonly #legacyDelegate: WindowsDpapiSecretStore;
   readonly #migrations = new Map<string, Promise<boolean>>();
 
   public constructor(config: WindowsServiceDpapiSecretStoreConfig) {
     this.#deviceId = config.deviceId;
-    this.#delegate = new WindowsDpapiSecretStore({
+    this.#delegate = new WindowsServiceDpapiSecretHandoff({
+      deviceId: config.deviceId,
+      ...(config.environment === undefined ? {} : { environment: config.environment }),
+      expectedIdentitySid: config.serviceSid,
+      handoffRoot: config.vaultRoot,
+      serviceSid: config.serviceSid,
+      sourceCheckoutRoot: config.sourceCheckoutRoot,
+      ...(config.hostPlatform === undefined ? {} : { hostPlatform: config.hostPlatform }),
+      ...(config.maximumSecretBytes === undefined
+        ? {}
+        : { maximumSecretBytes: config.maximumSecretBytes }),
+      ...(config.nativeHelperPath === undefined
+        ? {}
+        : { nativeHelperPath: config.nativeHelperPath }),
+      ...(config.powershellPath === undefined ? {} : { powershellPath: config.powershellPath }),
+      ...(config.runner === undefined ? {} : { runner: config.runner }),
+    });
+    // Compatibility only: older releases moved service Secrets into
+    // CurrentUser DPAPI. It is consulted only when the profile-independent
+    // DPAPI-NG read fails, then the exact plaintext is immediately re-sealed
+    // into the current service vault.
+    this.#legacyDelegate = new WindowsDpapiSecretStore({
       deviceId: config.deviceId,
       ...(config.environment === undefined ? {} : { environment: config.environment }),
       expectedIdentitySid: config.serviceSid,
@@ -303,6 +382,9 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
       ...(config.maximumSecretBytes === undefined
         ? {}
         : { maximumSecretBytes: config.maximumSecretBytes }),
+      ...(config.nativeHelperPath === undefined
+        ? {}
+        : { nativeHelperPath: config.nativeHelperPath }),
       ...(config.powershellPath === undefined ? {} : { powershellPath: config.powershellPath }),
       ...(config.runner === undefined ? {} : { runner: config.runner }),
       sourceCheckoutRoot: config.sourceCheckoutRoot,
@@ -328,19 +410,21 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
   }
 
   public async health(): Promise<ManagedSecretStoreHealth> {
-    const health = await this.#delegate.health();
-    return health.status === "ready"
-      ? Object.freeze({
-          backend: this.backend,
-          deviceId: this.#deviceId,
-          status: "ready" as const,
-        })
-      : Object.freeze({
-          backend: this.backend,
-          deviceId: this.#deviceId,
-          reasonCode: "service-identity-or-dpapi-unavailable",
-          status: "unavailable" as const,
-        });
+    try {
+      await this.#delegate.availability("opendelegate.service-vault-health");
+      return Object.freeze({
+        backend: this.backend,
+        deviceId: this.#deviceId,
+        status: "ready" as const,
+      });
+    } catch {
+      return Object.freeze({
+        backend: this.backend,
+        deviceId: this.#deviceId,
+        reasonCode: "service-identity-or-dpapi-unavailable",
+        status: "unavailable" as const,
+      });
+    }
   }
 
   public async availability(alias: string): Promise<SecretAvailability> {
@@ -353,11 +437,13 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
   }
 
   public async store(alias: string, value: Uint8Array): Promise<ManagedSecretMutation> {
-    return await this.#delegate.store(alias, value);
+    const result = await this.#delegate.stage(alias, value);
+    return Object.freeze({ status: result.status === "staged" ? "stored" : "rotated" });
   }
 
   public async rotate(alias: string, value: Uint8Array): Promise<ManagedSecretMutation> {
-    return await this.#delegate.rotate(alias, value);
+    await this.#delegate.stage(alias, value);
+    return Object.freeze({ status: "rotated" as const });
   }
 
   public async delete(alias: string): Promise<ManagedSecretDeletion> {
@@ -373,7 +459,16 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
     if (!(await this.#ensureAvailable(alias))) {
       throw aliasUnavailable();
     }
-    await this.#delegate.executeWithSecretBytes(alias, executor);
+    const material = await this.#delegate.consume(alias);
+    try {
+      try {
+        await executor(material);
+      } catch {
+        throw new SecretError("SECRET_EXECUTOR_FAILED", "The scoped Secret executor failed.");
+      }
+    } finally {
+      material.fill(0);
+    }
   }
 
   async #ensureAvailable(alias: string): Promise<boolean> {
@@ -392,7 +487,25 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
 
   async #migrate(alias: string): Promise<boolean> {
     if ((await this.#delegate.availability(alias)).ready) {
-      await this.#delegate.executeWithSecretBytes(alias, () => undefined);
+      try {
+        const material = await this.#delegate.consume(alias);
+        material.fill(0);
+      } catch (currentError) {
+        let migrated = false;
+        try {
+          await this.#legacyDelegate.executeWithSecretBytes(alias, async (value) => {
+            await this.#delegate.stage(alias, value);
+            migrated = true;
+          });
+        } catch {
+          throw currentError;
+        }
+        if (!migrated) {
+          throw currentError;
+        }
+        const verified = await this.#delegate.consume(alias);
+        verified.fill(0);
+      }
       if ((await this.#handoff.availability(alias)).ready) {
         await this.#handoff.delete(alias);
       }
@@ -403,7 +516,7 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
     }
     const material = await this.#handoff.consume(alias);
     try {
-      await this.#delegate.store(alias, material);
+      await this.#delegate.stage(alias, material);
     } finally {
       material.fill(0);
     }
@@ -411,6 +524,18 @@ export class WindowsServiceDpapiSecretStore implements ManagedSecretStore {
     return true;
   }
 }
+
+const WINDOWS_SERVICE_IDENTITY_PROBE_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "$marker='OpenDelegate Windows service identity probe v1'",
+  "$inputStream=[Console]::OpenStandardInput()",
+  "$memory=New-Object IO.MemoryStream",
+  "$inputStream.CopyTo($memory)",
+  "$expected=[Text.Encoding]::UTF8.GetString($memory.ToArray())",
+  "$actual=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+  "if($actual -cne $expected){exit 41}",
+  "[Console]::OpenStandardOutput().Write([Text.Encoding]::ASCII.GetBytes('ready'),0,5)",
+].join(";");
 
 const DPAPI_NG_NATIVE_TYPE = [
   "using System;",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 
 import { AgentAdapterError } from "@opendelegate/agent-adapters";
@@ -57,3 +57,80 @@ test("Worker composes every native provider behind one restart-durable session l
     ["codex-app-server", "claude-agent-sdk", "codex-cli", "claude-cli"],
   );
 });
+
+test(
+  "Windows service composition discovers the real Codex adapters in the owner npm path",
+  { skip: process.platform !== "win32" },
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-worker-codex-path-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const npmDirectory = join(root, "owner", "AppData", "Roaming", "npm");
+    const codexEntrypoint = join(
+      npmDirectory,
+      "node_modules",
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js",
+    );
+    const fixtureUrl = new URL(
+      "../../../packages/agent-adapters/fixtures/fake-provider.mjs",
+      import.meta.url,
+    );
+    const ownerCodexHome = join(root, "owner", ".codex");
+    const serviceCodexHome = join(root, "service-state", "providers", "codex");
+    await mkdir(dirname(codexEntrypoint), { recursive: true });
+    await writeFile(
+      codexEntrypoint,
+      `process.env.FIXTURE_EXPECT_CODEX_HOME = ${JSON.stringify(serviceCodexHome)};\nprocess.argv.splice(2, 0, "codex");\nimport(${JSON.stringify(fixtureUrl.href)}).catch(() => process.exit(1));\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const paths = resolveWorkerPaths({
+      sourceCheckoutRoot: resolve("."),
+      home: join(root, "worker"),
+    });
+    const environment = {
+      PATH: `${npmDirectory};C:\\Windows\\System32`,
+      CODEX_HOME: serviceCodexHome,
+      OPENDELEGATE_SERVICE_MODE: "system-service",
+    };
+    const adapters = createWorkerAgentAdapters(
+      {
+        provider: "auto",
+        allowUntestedVersion: false,
+        codexHome: ownerCodexHome,
+      },
+      paths,
+      undefined,
+      environment,
+    ).filter((adapter) => adapter.provider === "codex");
+
+    const probes = await Promise.all(adapters.map((adapter) => adapter.probe({ environment })));
+
+    assert.deepEqual(
+      probes.map((probe) => ({
+        adapterId: probe.adapterId,
+        installed: probe.installed,
+        version: probe.version,
+        compatibility: probe.compatibility,
+        auth: probe.auth.state,
+      })),
+      [
+        {
+          adapterId: "codex-app-server",
+          installed: true,
+          version: "0.146.0",
+          compatibility: "tested",
+          auth: "ready",
+        },
+        {
+          adapterId: "codex-cli",
+          installed: true,
+          version: "0.146.0",
+          compatibility: "tested",
+          auth: "ready",
+        },
+      ],
+    );
+  },
+);

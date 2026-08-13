@@ -136,6 +136,41 @@ test("approval is required before an exact permit can be durably consumed", asyn
   }
 });
 
+test("Discord presentation can prove whether a pending Approval still belongs to the current Run", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-main-action-current-"));
+  let runCurrent = true;
+  let id = 0;
+  const runtime = await createRuntime(join(root, "actions.sqlite3"), () => 10_000, undefined, {
+    runAuthority: {
+      async authorizeWorkerActionRun() {
+        return runCurrent ? { authorized: true, leaseExpiresAtMs: 20_000 } : { authorized: false };
+      },
+    },
+  });
+  const approvals = new ApprovalService({
+    repository: new InMemoryApprovalRepository(),
+    executor: runtime,
+    clock: { now: () => 10_000 },
+    idSource: { nextId: () => `approval-current-${++id}` },
+  });
+  runtime.attachApprovalService(approvals);
+  try {
+    assert.equal(
+      (await runtime.authorize(authorizationInput("current-run-action"))).decision,
+      "require-approval",
+    );
+    const approval = (await approvals.list({ state: "pending" }))[0]!;
+    assert.equal(await runtime.isApprovalCurrent(approval), true);
+
+    runCurrent = false;
+    assert.equal(await runtime.isApprovalCurrent(approval), false);
+    assert.equal((await approvals.get(approval.approvalId)).state, "pending");
+  } finally {
+    await runtime.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("separate runtime connections atomically consume one exact authorization", async () => {
   const root = await mkdtemp(join(tmpdir(), "opendelegate-main-action-race-"));
   const filename = join(root, "actions.sqlite3");

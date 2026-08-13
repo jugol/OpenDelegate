@@ -42,6 +42,7 @@ function windowsInput(
     ownerSession: {
       userName: "WORKSTATION\\owner",
       stableUserId: "S-1-5-21-1000",
+      homeDirectory: "C:\\Users\\owner",
       adminAutoOpen: { enabled: false },
     },
     ipcTrust: { core: CORE_PIN, helper: HELPER_PIN },
@@ -51,6 +52,11 @@ function windowsInput(
     },
     windowsOwnerHelperVaultRoot:
       "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
+    windowsAgentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+    },
     healthPort: 43_190,
     ...overrides,
   };
@@ -117,6 +123,12 @@ describe("native service configuration composition", () => {
       configuration.platform === "windows" ? configuration.helperSecretBinding.vaultRoot : "",
       "C:\\Users\\owner\\AppData\\Local\\OpenDelegate\\worker\\secrets\\dpapi",
     );
+  });
+
+  it("requires the exact Windows provider-home binding", () => {
+    const missingBinding = { ...windowsInput() };
+    Reflect.deleteProperty(missingBinding, "windowsAgentProviderAccess");
+    assert.throws(() => composeServiceConfiguration(missingBinding), /provider-home binding/u);
   });
 
   it("carries the Device's own signing pins through untouched", () => {

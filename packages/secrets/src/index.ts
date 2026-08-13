@@ -5,6 +5,7 @@ export type {
   IssueSecretLease,
   LinuxSecretServiceSecretStoreConfig,
   MacOsKeychainSecretStoreConfig,
+  MacOsSystemKeychainSecretStoreConfig,
   ManagedSecretBackend,
   ManagedSecretDeletion,
   ManagedSecretMutation,

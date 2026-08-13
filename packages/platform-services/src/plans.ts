@@ -61,11 +61,34 @@ export type PlanAction =
       readonly path: string;
       readonly mode: "0700" | "0750" | "0770";
       readonly access: DirectoryAccessPolicy;
+      /**
+       * Skip this owner-managed child when its exact canonical parent does not
+       * already exist. The lifecycle executor never creates the parent.
+       */
+      readonly requiredExistingParent?: string;
+    }
+  | {
+      readonly kind: "directory.access-grant";
+      readonly path: string;
+      readonly principal: string;
+      readonly permission: "read-execute" | "read-write";
+      readonly recursive: boolean;
+      readonly preserveExistingAccess: true;
+      readonly missingPathPolicy: "skip";
     }
   | {
       readonly kind: "file.write";
       readonly file: RenderedFile;
       readonly atomic: true;
+      /** Rollback-only: restore the exact bytes observed before the forward write. */
+      readonly restoreOriginalBytes?: true;
+    }
+  | {
+      readonly kind: "file.symbolic-link.ensure";
+      readonly path: string;
+      readonly target: string;
+      readonly platform: "windows";
+      readonly targetType: "file";
     }
   | {
       readonly kind: "health.check";
@@ -280,7 +303,8 @@ function installPlan(artifacts: PlatformServiceArtifacts): ServicePlan {
       "0700",
       directoryAccess(configuration, "installer-only"),
     ),
-    ...windowsAgentSandboxSteps(configuration),
+    ...windowsAgentProviderAccessSteps(configuration),
+    ...windowsCodexServiceHomeSteps(configuration),
     ...releaseInstallSteps(artifacts),
     ...artifacts.files.map((file): ServicePlanStep => ({
       id: `write-${file.purpose}`,
@@ -320,7 +344,8 @@ function lifecyclePlan(
   const steps =
     operation === "start"
       ? [
-          ...windowsAgentSandboxSteps(artifacts.definition.configuration),
+          ...windowsAgentProviderAccessSteps(artifacts.definition.configuration, false),
+          ...windowsCodexServiceHomeSteps(artifacts.definition.configuration),
           supervisorStep("start-core", artifacts, "core", "start", "stop"),
           ...(hasSessionHelper(artifacts)
             ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
@@ -344,11 +369,15 @@ function restartPlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     "restart",
     artifacts,
     [
+      // Provider homes can contain thousands of files. Repair their additive
+      // service access while the current core is still available so the normal
+      // restart outage is limited to the actual service-plane switch.
+      ...windowsAgentProviderAccessSteps(artifacts.definition.configuration, false),
       ...(hasSessionHelper(artifacts)
         ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
         : []),
       supervisorStep("stop-core", artifacts, "core", "stop", "start"),
-      ...windowsAgentSandboxSteps(artifacts.definition.configuration),
+      ...windowsCodexServiceHomeSteps(artifacts.definition.configuration),
       supervisorStep("start-core", artifacts, "core", "start", "stop"),
       ...(hasSessionHelper(artifacts)
         ? [supervisorStep("start-helper", artifacts, "session-helper", "start", "stop")]
@@ -396,6 +425,7 @@ function reconfigurePlan(
           kind: "file.write",
           file: previousRuntimeConfiguration,
           atomic: true,
+          restoreOriginalBytes: true,
         },
       },
       supervisorStep("start-helper", artifacts, "session-helper", "start", "stop"),
@@ -424,14 +454,15 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     activeVersion,
   );
   const targetRuntimeConfiguration = requireRenderedFile(artifacts, "runtime-configuration");
+  const previousArtifacts = renderPlatformServiceArtifacts({
+    ...definition.configuration,
+    bundle: {
+      ...definition.configuration.bundle,
+      version: activeVersion,
+    },
+  });
   const previousRuntimeConfiguration = requireRenderedFile(
-    renderPlatformServiceArtifacts({
-      ...definition.configuration,
-      bundle: {
-        ...definition.configuration.bundle,
-        version: activeVersion,
-      },
-    }),
+    previousArtifacts,
     "runtime-configuration",
   );
   const steps: ServicePlanStep[] = [
@@ -484,11 +515,28 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
           ),
         ]
       : []),
+    // This additive ACL repair is intentionally outside the service outage. A
+    // failure leaves the currently healthy release running.
+    ...windowsAgentProviderAccessSteps(definition.configuration, false),
     ...(hasSessionHelper(artifacts)
       ? [supervisorStep("stop-helper", artifacts, "session-helper", "stop", "start")]
       : []),
+    ...(definition.configuration.platform === "windows" && hasSessionHelper(artifacts)
+      ? [
+          {
+            id: "write-windows-helper-manifest",
+            description: "Persist the monotonic hidden Windows owner-session helper definition.",
+            action: {
+              kind: "file.write" as const,
+              file: requireRenderedFile(artifacts, "helper-manifest"),
+              atomic: true as const,
+            },
+          },
+          windowsHelperRegistrationRefreshStep(artifacts),
+        ]
+      : []),
     supervisorStep("stop-core", artifacts, "core", "stop", "start"),
-    ...windowsAgentSandboxSteps(definition.configuration),
+    ...windowsCodexServiceHomeSteps(definition.configuration),
     ...(definition.configuration.platform === "windows"
       ? [
           windowsServiceSidRepairStep(artifacts),
@@ -499,6 +547,25 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
               kind: "file.write" as const,
               file: requireRenderedFile(artifacts, "core-manifest"),
               atomic: true as const,
+            },
+          },
+        ]
+      : []),
+    ...(definition.configuration.platform === "macos"
+      ? [
+          {
+            id: "write-macos-core-manifest",
+            description: "Persist the bounded macOS core service environment.",
+            action: {
+              kind: "file.write" as const,
+              file: requireRenderedFile(artifacts, "core-manifest"),
+              atomic: true as const,
+            },
+            rollback: {
+              kind: "file.write" as const,
+              file: requireRenderedFile(previousArtifacts, "core-manifest"),
+              atomic: true as const,
+              restoreOriginalBytes: true as const,
             },
           },
         ]
@@ -515,6 +582,7 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
         kind: "file.write",
         file: previousRuntimeConfiguration,
         atomic: true,
+        restoreOriginalBytes: true,
       },
     },
     {
@@ -549,6 +617,11 @@ function upgradePlan(artifacts: PlatformServiceArtifacts, activeVersion: string)
     steps,
     [
       "A failed post-activation health check stops the new release, restores the previous current pointer, and restarts the previous release.",
+      ...(definition.configuration.platform === "windows" && hasSessionHelper(artifacts)
+        ? [
+            "The Windows owner-session helper registration is monotonically migrated to hidden mode and is not reverted to a visible console during release rollback.",
+          ]
+        : []),
       `The healthy active release plus ${String(definition.configuration.retainPreviousVersions)} previous version(s) are retained.`,
     ],
     activeVersion,
@@ -808,6 +881,26 @@ function supervisorStep(
   };
 }
 
+function windowsHelperRegistrationRefreshStep(
+  artifacts: PlatformServiceArtifacts,
+): ServicePlanStep {
+  const operation = supervisorOperation(artifacts, "session-helper", "install");
+  return {
+    id: "refresh-windows-helper-registration",
+    description: "Replace the Windows owner-session helper registration in hidden mode.",
+    action: {
+      kind: "supervisor.invoke",
+      command: {
+        ...operation,
+        invocations: operation.invocations.map((invocation) => ({
+          ...invocation,
+          arguments: [...invocation.arguments, "/F"],
+        })),
+      },
+    },
+  };
+}
+
 function supervisorOperation(
   artifacts: PlatformServiceArtifacts,
   plane: RuntimePlane,
@@ -925,7 +1018,13 @@ function directoryStep(
 function directoryAccess(
   configuration: PlatformServiceConfiguration,
   profile:
-    "installer-only" | "provider-sandbox" | "read-execute" | "service-secret" | "shared" | "state",
+    | "installer-only"
+    | "provider-sandbox"
+    | "provider-service-home"
+    | "read-execute"
+    | "service-secret"
+    | "shared"
+    | "state",
 ): DirectoryAccessPolicy {
   const installer =
     configuration.platform === "windows" ? "BUILTIN\\Administrators" : "platform-installer";
@@ -938,7 +1037,7 @@ function directoryAccess(
       ? configuration.ownerSession.stableUserId
       : configuration.ownerSession.userName;
   const grants: DirectoryAccessGrant[] = [{ principal: installer, permission: "full-control" }];
-  if (profile === "provider-sandbox") {
+  if (profile === "provider-sandbox" || profile === "provider-service-home") {
     if (configuration.platform !== "windows") {
       throw new PlatformServiceError(
         "INVALID_CONFIGURATION",
@@ -947,11 +1046,11 @@ function directoryAccess(
     }
     grants.push(
       { principal: "S-1-5-18", permission: "full-control" },
-      { principal: owner, permission: "full-control" },
+      { principal: owner, permission: "read-execute" },
       { principal: core, permission: "full-control" },
     );
     return {
-      owner,
+      owner: core,
       grants,
       denyUnlisted: true,
     };
@@ -981,20 +1080,117 @@ function directoryAccess(
   };
 }
 
-function windowsAgentSandboxSteps(
+function windowsCodexServiceHomeSteps(
   configuration: PlatformServiceConfiguration,
 ): readonly ServicePlanStep[] {
-  if (configuration.platform !== "windows" || configuration.agentSandbox === undefined) {
+  if (configuration.platform !== "windows") {
     return [];
   }
-  return [
-    directoryStep(
-      "ensure-codex-sandbox-helper",
-      configuration.agentSandbox.codexSandboxBinDirectory,
-      "0700",
-      directoryAccess(configuration, "provider-sandbox"),
-    ),
+  const serviceHome = configuration.agentProviderAccess.codexServiceHomeDirectory;
+  const steps: ServicePlanStep[] = [
+    {
+      id: "ensure-codex-service-home",
+      description: `Ensure the service-owned Codex home ${serviceHome}.`,
+      action: {
+        kind: "directory.ensure",
+        path: serviceHome,
+        mode: "0700",
+        access: directoryAccess(configuration, "provider-service-home"),
+      },
+    },
   ];
+  if (configuration.agentSandbox !== undefined) {
+    steps.push({
+      id: "ensure-codex-sandbox-helper",
+      description: `Ensure external runtime directory ${configuration.agentSandbox.codexSandboxBinDirectory}.`,
+      action: {
+        kind: "directory.ensure",
+        path: configuration.agentSandbox.codexSandboxBinDirectory,
+        mode: "0700",
+        access: directoryAccess(configuration, "provider-sandbox"),
+        requiredExistingParent: win32.dirname(configuration.agentSandbox.codexSandboxBinDirectory),
+      },
+    });
+  }
+  steps.push({
+    id: "ensure-codex-auth-ssot-link",
+    description: "Bind the service Codex home to the owner's exact authentication SSOT.",
+    action: {
+      kind: "file.symbolic-link.ensure",
+      path: win32.join(serviceHome, "auth.json"),
+      target: win32.join(configuration.agentProviderAccess.codexHomeDirectory, "auth.json"),
+      platform: "windows",
+      targetType: "file",
+    },
+  });
+  return steps;
+}
+
+function windowsAgentProviderAccessSteps(
+  configuration: PlatformServiceConfiguration,
+  recursive = true,
+): readonly ServicePlanStep[] {
+  if (configuration.platform !== "windows") {
+    return [];
+  }
+  const ownerHome = configuration.ownerSession.homeDirectory;
+  if (ownerHome === undefined) {
+    throw new PlatformServiceError(
+      "INVALID_CONFIGURATION",
+      "Windows Agent provider access requires the verified owner profile directory.",
+    );
+  }
+  const principal = `NT SERVICE\\OpenDelegate-${configuration.instanceId}`;
+  const grants = new Map<
+    string,
+    {
+      readonly id: string;
+      readonly path: string;
+      permission: "read-execute" | "read-write";
+    }
+  >();
+  const add = (id: string, path: string, permission: "read-execute" | "read-write"): void => {
+    const key = win32.resolve(path).toLocaleLowerCase("en-US");
+    const existing = grants.get(key);
+    if (existing === undefined) {
+      grants.set(key, { id, path, permission });
+    } else if (permission === "read-write") {
+      existing.permission = permission;
+    }
+  };
+  add(
+    "grant-codex-home-service-access",
+    configuration.agentProviderAccess.codexHomeDirectory,
+    "read-write",
+  );
+  add(
+    "grant-claude-home-service-access",
+    configuration.agentProviderAccess.claudeHomeDirectory,
+    "read-write",
+  );
+  add(
+    "grant-owner-local-bin-service-access",
+    win32.join(ownerHome, ".local", "bin"),
+    "read-execute",
+  );
+  add(
+    "grant-owner-npm-bin-service-access",
+    win32.join(ownerHome, "AppData", "Roaming", "npm"),
+    "read-execute",
+  );
+  return [...grants.values()].map((grant): ServicePlanStep => ({
+    id: grant.id,
+    description: `Preserve existing access and grant the core service ${grant.permission} access to ${grant.path}.`,
+    action: {
+      kind: "directory.access-grant",
+      path: grant.path,
+      principal,
+      permission: grant.permission,
+      recursive,
+      preserveExistingAccess: true,
+      missingPathPolicy: "skip",
+    },
+  }));
 }
 
 function plan(

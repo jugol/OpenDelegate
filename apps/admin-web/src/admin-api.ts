@@ -93,6 +93,7 @@ export interface DeviceSummary {
   readonly agentAdapters?: readonly {
     readonly provider: "codex" | "claude" | "generic-command";
     readonly adapterId: string;
+    readonly toolUse?: "authorized" | "text-only";
     readonly readiness: "ready" | "degraded" | "unavailable";
     readonly compatibility: "tested" | "compatible" | "untested" | "incompatible";
     readonly blockedBy?:

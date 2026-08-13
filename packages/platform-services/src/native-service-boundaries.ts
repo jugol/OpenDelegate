@@ -5,6 +5,7 @@ import {
   chmod,
   chown,
   copyFile,
+  lchmod,
   lstat,
   mkdir,
   open,
@@ -17,7 +18,7 @@ import {
   symlink,
 } from "node:fs/promises";
 import { platform as hostPlatform } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
 import { spawn } from "node:child_process";
 
 import type { PlatformFamily } from "./types.ts";
@@ -31,6 +32,7 @@ export interface NativePathMetadata {
   readonly kind: NativePathKind;
   readonly size?: number;
   readonly modifiedAtMs?: number;
+  readonly mode?: number;
 }
 
 export interface NativeDirectoryEntry {
@@ -43,7 +45,11 @@ export interface NativeFileSystemBoundary {
   realPath(path: string): Promise<string>;
   list(path: string): Promise<readonly NativeDirectoryEntry[]>;
   read(path: string, maximumBytes: number): Promise<Buffer>;
-  ensureDirectory(path: string, mode: number): Promise<"changed" | "unchanged">;
+  ensureDirectory(
+    path: string,
+    mode: number,
+    recursive?: boolean,
+  ): Promise<"changed" | "unchanged">;
   writeAtomic(path: string, bytes: Buffer, mode: number): Promise<"changed" | "unchanged">;
   copyRegularFile(source: string, destination: string): Promise<void>;
   renameAtomic(source: string, destination: string, replace: boolean): Promise<void>;
@@ -53,6 +59,12 @@ export interface NativeFileSystemBoundary {
     platform: PlatformFamily,
   ): Promise<"changed" | "unchanged">;
   readDirectoryLink(path: string): Promise<string | undefined>;
+  createFileLinkAtomic(
+    target: string,
+    linkPath: string,
+    platform: "windows",
+  ): Promise<"changed" | "unchanged">;
+  readFileLink(path: string): Promise<string | undefined>;
   remove(path: string, recursive: boolean): Promise<"changed" | "unchanged">;
   setPosixOwnershipAndMode(path: string, uid: number, gid: number, mode: number): Promise<void>;
   sameVolume(left: string, right: string): Promise<boolean>;
@@ -169,6 +181,7 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
               : "special",
         size: metadata.size,
         modifiedAtMs: metadata.mtimeMs,
+        mode: metadata.mode & 0o777,
       };
     } catch (error) {
       if (isErrorCode(error, "ENOENT")) {
@@ -202,7 +215,11 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
     return await readStableRegularFile(path, maximumBytes);
   }
 
-  public async ensureDirectory(path: string, mode: number): Promise<"changed" | "unchanged"> {
+  public async ensureDirectory(
+    path: string,
+    mode: number,
+    recursive = true,
+  ): Promise<"changed" | "unchanged"> {
     const before = await this.inspect(path);
     if (before.kind === "directory") {
       await chmod(path, mode);
@@ -211,7 +228,7 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
     if (before.kind !== "missing") {
       throw unsafePath("A native service directory path is occupied by a non-directory.");
     }
-    await mkdir(path, { recursive: true, mode });
+    await mkdir(path, { recursive, mode });
     const after = await this.inspect(path);
     if (after.kind !== "directory") {
       throw unsafePath("A native service directory was replaced during creation.");
@@ -288,19 +305,27 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
   ): Promise<"changed" | "unchanged"> {
     const currentTarget = await this.readDirectoryLink(linkPath);
     const normalizedTarget = resolve(target);
+    const existing = await this.inspect(linkPath);
     if (
       currentTarget !== undefined &&
       resolve(dirname(linkPath), currentTarget) === normalizedTarget
     ) {
+      if (platform === "macos" && existing.mode !== 0o750) {
+        await lchmod(linkPath, 0o750);
+        await syncNativeDirectory(dirname(linkPath));
+        return "changed";
+      }
       return "unchanged";
     }
-    const existing = await this.inspect(linkPath);
     if (existing.kind !== "missing" && existing.kind !== "symbolic-link") {
       throw unsafePath("The stable service activation path is not a directory link.");
     }
     const temporary = `${linkPath}.${randomUUID()}.opendelegate-link`;
     try {
       await symlink(target, temporary, platform === "windows" ? "junction" : "dir");
+      if (platform === "macos") {
+        await lchmod(temporary, 0o750);
+      }
       if (platform === "windows" && existing.kind === "symbolic-link") {
         await replaceWindowsDirectoryLink(temporary, linkPath);
       } else {
@@ -320,6 +345,57 @@ class NodeNativeFileSystemBoundary implements NativeFileSystemBoundary {
     }
     if (metadata.kind !== "symbolic-link") {
       throw unsafePath("The stable service activation path is not a symbolic directory link.");
+    }
+    return await readlink(path);
+  }
+
+  public async createFileLinkAtomic(
+    target: string,
+    linkPath: string,
+    platform: "windows",
+  ): Promise<"changed" | "unchanged"> {
+    const existing = await this.inspect(linkPath);
+    const currentTarget = await this.readFileLink(linkPath);
+    const normalize = platform === "windows" ? win32.resolve : resolve;
+    const parent = platform === "windows" ? win32.dirname(linkPath) : dirname(linkPath);
+    const targetKey = (value: string): string =>
+      platform === "windows"
+        ? normalize(value).toLocaleLowerCase("en-US")
+        : normalize(value);
+    if (
+      currentTarget !== undefined &&
+      targetKey(normalize(parent, currentTarget)) === targetKey(target)
+    ) {
+      return "unchanged";
+    }
+    if (existing.kind !== "missing") {
+      throw unsafePath("The Codex authentication alias is occupied or targets another file.");
+    }
+    const temporary = `${linkPath}.${randomUUID()}.opendelegate-link`;
+    try {
+      await symlink(target, temporary, "file");
+      await rename(temporary, linkPath);
+      const installedTarget = await this.readFileLink(linkPath);
+      if (
+        installedTarget === undefined ||
+        targetKey(normalize(parent, installedTarget)) !== targetKey(target)
+      ) {
+        throw unsafePath("The Codex authentication alias changed during creation.");
+      }
+      await syncNativeDirectory(dirname(linkPath));
+      return "changed";
+    } finally {
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+
+  public async readFileLink(path: string): Promise<string | undefined> {
+    const metadata = await this.inspect(path);
+    if (metadata.kind === "missing") {
+      return undefined;
+    }
+    if (metadata.kind !== "symbolic-link") {
+      throw unsafePath("The Codex authentication alias is not a symbolic file link.");
     }
     return await readlink(path);
   }

@@ -97,6 +97,40 @@ describe("session-helper production runtime", () => {
     await helper.close();
   });
 
+  it("does not leave an unhandled rejection when the helper disconnects during request delivery", async () => {
+    const send = deferred<void>();
+    const receive = deferred<SessionHelperCapabilityResponse>();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    const channel: CoreSessionHelperChannel = {
+      binding: BINDING,
+      isClosed: false,
+      send: () => send.promise,
+      receive: () => receive.promise,
+      close() {},
+    };
+    const client = new SessionHelperCoreClient({
+      channel,
+      osFamily: "windows",
+      backendId: "session-helper-runtime-test",
+      requestTimeoutMs: 2_000,
+    });
+    try {
+      const request = assert.rejects(client.probe(), /disconnected/u);
+      await Promise.resolve();
+      receive.reject(new Error("helper disconnected"));
+      await delay(0);
+      send.resolve();
+      await request;
+      await delay(0);
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      client.close();
+    }
+  });
+
   it("persists monotonic epochs, fences replacement, and refuses cloned or corrupt authority", async () => {
     const authorityRoot = await mkdtemp(join(tmpdir(), "opendelegate-authority-"));
     const cloneRoot = await mkdtemp(join(tmpdir(), "opendelegate-authority-clone-"));
@@ -285,4 +319,22 @@ function queue<T>() {
       }
     },
   };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

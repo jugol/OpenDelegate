@@ -24,7 +24,7 @@ static int is_safe_plane(const char *value) {
 static int executable_path(char *output, size_t capacity) {
 #if defined(__APPLE__)
   uint32_t size = (uint32_t)capacity;
-  if (_NSGetExecutablePath(output, &size) != 0 || size >= capacity) {
+  if (_NSGetExecutablePath(output, &size) != 0) {
     return -1;
   }
   char canonical[PATH_MAX];
@@ -53,6 +53,14 @@ static char *parent_directory(char *path) {
   }
   *separator = '\0';
   return path;
+}
+
+static int installation_root(char *output, size_t capacity) {
+  if (executable_path(output, capacity) != 0 || parent_directory(output) == NULL ||
+      parent_directory(output) == NULL) {
+    return -1;
+  }
+  return 0;
 }
 
 #if !defined(__APPLE__)
@@ -107,6 +115,15 @@ int main(int argc, char **argv) {
     puts("OpenDelegate native service launcher 1");
     return 0;
   }
+  if (argc == 2 && strcmp(argv[1], "--root-self-test") == 0) {
+    char self_test_root[PATH_MAX];
+    if (installation_root(self_test_root, sizeof(self_test_root)) != 0) {
+      fputs("OpenDelegate service installation root is unavailable.\n", stderr);
+      return 70;
+    }
+    puts(self_test_root);
+    return 0;
+  }
 
   const char *plane = NULL;
   const char *role = NULL;
@@ -123,8 +140,7 @@ int main(int argc, char **argv) {
   }
 
   char root[PATH_MAX];
-  if (executable_path(root, sizeof(root)) != 0 || parent_directory(root) == NULL ||
-      parent_directory(root) == NULL) {
+  if (installation_root(root, sizeof(root)) != 0) {
     fputs("OpenDelegate service installation root is unavailable.\n", stderr);
     return 70;
   }

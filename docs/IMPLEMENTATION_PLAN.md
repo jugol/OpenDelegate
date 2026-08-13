@@ -437,24 +437,30 @@ Make Main and Worker roles truly persistent on all target operating systems.
   available.
 - Provide a supervised foreground fallback for Linux without systemd.
 - Implement authenticated local IPC between daemon and user-session helper.
+- Keep the persistent helper and native Computer Use child background-only. Spawn no
+  console or provider window at login, idle health, or capability inventory; explicit
+  owner picker/consent/handoff UI remains Run-scoped.
 - Report service, logged-in session, desktop unlocked state, and OS permissions
   separately.
 - Implement install, start, stop, restart, upgrade, rollback, diagnostics, and
   uninstall operations.
-- On Windows, prepare only the active owner's exact Codex `.sandbox-bin` helper
-  directory for the virtual-service identity. Install, start, restart, and upgrade
-  reassert an inheritance-free ACL granting Full Control to Administrators, SYSTEM,
-  the owner SID, and the exact OpenDelegate service SID; no broader provider home or
-  source checkout is opened.
+- On Windows, bind the owner's exact Codex home only as the authentication SSOT and
+  prepare a separate managed service `CODEX_HOME` below instance state. Its exact
+  `auth.json` is a validated symbolic link to the owner file rather than a credential
+  copy. Install, start, restart, and upgrade make the virtual-service identity the
+  owner of the managed `.sandbox-bin`, while Administrators and SYSTEM retain Full
+  Control; the interactive Codex helper and source checkout are never shared.
 - Implement a Device-local service-preparation boundary for every persistent shape.
   A graphical Device migrates core-owned Secrets to the native service identity,
   leaves the owner-session key in its separate store, and durably exports only the
   two public IPC pins into a create-new install document. Windows is implemented by
   D-088. D-089 implements the distinct headless Linux shape by enrolling directly
   under the final systemd identity, exporting the core public pin and that exact
-  non-root identity, and omitting the unavailable helper entirely. macOS and
-  graphical Linux remain required and must fail closed until their equivalent
-  two-plane migration exists.
+  non-root identity, and omitting the unavailable helper entirely. D-129 implements
+  the macOS equivalent with a stable root-owned System Keychain helper for the core
+  and a separate owner-login Keychain identity for the Aqua LaunchAgent. Graphical
+  Linux remains required and fail-closed until its equivalent two-plane migration
+  exists.
 - Compose a headless Linux Main document from its co-located Worker's already
   prepared core-only document rather than accepting a second hand-authored
   topology. Bind the durable Instance, Device, state root, systemd credential, and
@@ -473,10 +479,12 @@ Make Main and Worker roles truly persistent on all target operating systems.
 - The core daemon remains available while no user is logged in.
 - User-session helper loss removes graphical Capabilities without dropping headless
   work.
+- Login and reboot leave no persistent OpenDelegate console or provider window; an
+  owner-visible native surface appears only for a requesting Computer Use Run.
 - Failed upgrades roll back to a healthy version.
-- A Windows Codex Run can initialize its sandbox helper from the installed service
-  identity, while an ACL probe proves that sibling provider-home content was not
-  widened.
+- A Windows Codex Run can initialize and refresh its service-owned sandbox helper
+  repeatedly, sees the owner's existing authentication through the exact SSOT link,
+  and cannot mutate the interactive Codex helper or sibling provider-home content.
 - A bundle build completes while an existing Main remains healthy on its configured
   listeners, without changing its process, service definition, or active version.
 
@@ -639,16 +647,31 @@ Make Discord the complete primary Task interface.
 - Present interactive Artifacts with a distinct owner action label. Never place a
   credential, signed bearer value, raw Worker desktop address, or browser-debug
   endpoint in a Discord message.
+- Present a completed Task's small safe `download` Artifact as one native Components
+  v2 File. Persist only its Task-bound Artifact ID, filename, media type, size, and
+  checksum in the outbox; reread and verify those bytes at delivery, use Discord's
+  enforced nonce with multipart upload, and retain the Gateway action as the stable
+  fallback for files above the baseline 10 MiB limit or incompatible filenames.
 - Implement pause, resume, cancel, retry, approval, denial, and inspect interactions.
+  Review-result messages are historical and expose no Pause or Cancel control; the
+  owner's next ordinary reply starts the next durable execution cycle.
   After a Task command succeeds, delete its deferred ephemeral response and let the
   resulting durable Task surface confirm the transition. Keep owner-safe ephemeral
   text for rejected, unauthorized, or stale controls.
+- Capture the Discord interaction clock at socket ingress, before ordered Gateway dispatch work. If
+  Gateway dispatch backlog has already exhausted Discord's acknowledgement window, preserve the
+  authorized owner's exact idempotent control and confirm it through the next durable Task surface
+  instead of retiring the click without executing it. Keep malformed, unauthorized, stale, and
+  duplicate controls fail-closed or idempotent.
 - Project a pending protected Worker action into that same live activity message
   with an owner-safe Device/action/risk/evidence summary and approve-once/reject
   controls. Resolve the global durable Approval record—not a parallel Task approval—
-  and reveal multiple pending actions one at a time. Provider approval events map to
-  a bounded `waiting-approval` progress category so a long Run remains visibly alive
-  without an arbitrary execution timeout.
+  and reveal multiple pending actions one at a time with a stable Task-local ordinal.
+  Localize the closed Approval vocabulary from structured fields, label the narrow
+  positive control `Approve once`, and dismiss successful private interaction
+  responses so the one durable live surface remains authoritative. Provider approval
+  events map to a bounded `waiting-approval` progress category so a long Run remains
+  visibly alive without an arbitrary execution timeout.
 - Implement system incident and recommendation post creation.
 - Handle archive, lock, reopen, delete, permission loss, rate limit, and reconnect.
 - Implement owner-approved live add, extension, replacement, and disable for the
@@ -874,6 +897,9 @@ Turn Worker output into durable, useful, safely viewable results.
   Tailscale-reachable laptop without direct Worker access.
 - Discord shows a useful native summary and labels report and interactive-result
   actions distinctly.
+- A small safe download result appears as a Discord-native File with the same bytes
+  and checksum as Main's available Artifact; restart/retry does not duplicate it,
+  while an oversized result remains a Gateway action.
 - The reference Owner Handoff opens through Main, expires or revokes cleanly, leaks
   no credential or raw Worker endpoint, and resumes the same Task after the owner
   replies.

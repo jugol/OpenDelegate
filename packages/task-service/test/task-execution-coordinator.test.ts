@@ -661,6 +661,45 @@ test("a reply through the same interface resumes waiting execution exactly once"
   await coordinator.close();
 });
 
+test("owner input after review starts a fresh execution cycle", async () => {
+  const taskService = fixture();
+  let calls = 0;
+  const coordinator = new TaskExecutionCoordinator({
+    taskService,
+    executor: {
+      async execute(request) {
+        calls += 1;
+        return calls === 1
+          ? {
+              state: "review",
+              publicMessage: "The first result does not satisfy the Task yet.",
+            }
+          : {
+              state: "completed",
+              verifiedCompletionCriteria: [...request.task.completionCriteria],
+            };
+      },
+    },
+    retryDelayMs: 0,
+  });
+  const task = await coordinator.create(taskInput("review-reply", "Review reply"));
+  await coordinator.waitForIdle();
+  assert.equal((await coordinator.get(task.taskId)).state, "review");
+
+  await coordinator.appendInput({
+    taskId: task.taskId,
+    principalId: "owner-1",
+    idempotencyKey: "review-reply-input",
+    message: "Run this again with the corrected Worker binding.",
+    selectedInputRefs: [],
+  });
+  await coordinator.waitForIdle();
+
+  assert.equal(calls, 2);
+  assert.equal((await coordinator.get(task.taskId)).state, "completed");
+  await coordinator.close();
+});
+
 test("an owner reply resets an expired idle Budget before resuming execution", async () => {
   let now = Date.parse("2026-07-25T12:00:00.000Z");
   const eventStore = new InMemoryEventStore({

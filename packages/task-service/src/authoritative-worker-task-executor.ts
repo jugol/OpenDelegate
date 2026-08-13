@@ -2829,8 +2829,27 @@ function failureFrom(
   const retryable = isRecord(diagnostic) && diagnostic["retryable"] === true;
   return {
     state: retryable ? "waiting_resource" : "failed",
-    publicMessage: terminal.event.payload.report,
+    publicMessage: workerFailurePublicMessage(terminal.event.payload.report, diagnostic, retryable),
   };
+}
+
+function workerFailurePublicMessage(
+  report: string,
+  diagnostic: unknown,
+  retryable: boolean,
+): string {
+  const record = isRecord(diagnostic) ? diagnostic : {};
+  const stage = ownerSafeDiagnosticLabel(record["stage"], "execution");
+  const code = ownerSafeDiagnosticLabel(record["code"], "WORKER_RUN_FAILED");
+  const summary = retryable
+    ? `Worker Run encountered a retryable failure during ${stage} (${code}).`
+    : `Worker Run failed during ${stage} (${code}). OpenDelegate did not automatically replay this process because its external outcome may be uncertain. Review Task Runs, then use Retry.`;
+  const candidate = `${summary}\n\nLast Worker report (may be incomplete):\n${validatePublicMessage(report).trim()}`;
+  return Buffer.byteLength(candidate, "utf8") <= MAXIMUM_PUBLIC_MESSAGE_BYTES ? candidate : summary;
+}
+
+function ownerSafeDiagnosticLabel(value: unknown, fallback: string): string {
+  return typeof value === "string" && /^[A-Za-z0-9._-]{1,80}$/u.test(value) ? value : fallback;
 }
 
 function validateVerifierResult(

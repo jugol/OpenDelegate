@@ -15,6 +15,7 @@ import {
   NativeBoundaryError,
   type NativeClockBoundary,
   type NativeFileSystemBoundary,
+  type NativePathMetadata,
   type NativeProcessBoundary,
   type NativeProcessRequest,
   type NativeProcessResult,
@@ -28,6 +29,7 @@ import {
 } from "./plans.ts";
 import { evaluateSessionHelperReadiness } from "./readiness.ts";
 import { stableJson } from "./render-common.ts";
+import { MACOS_SERVICE_EXECUTABLE_PATH } from "./render-macos.ts";
 import {
   assertMatchingNativeReleaseVerification,
   createNativeReleaseVerifier,
@@ -273,6 +275,12 @@ export async function preflightNativeServiceOperation(input: {
       input.boundaries.fileSystem,
     );
   }
+  if (
+    configuration.platform === "windows" &&
+    (input.plan.operation === "start" || input.plan.operation === "restart")
+  ) {
+    await assertRuntimeConfigurationMatchesInstalled(configuration, input.boundaries.fileSystem);
+  }
   const definition = createPlatformServiceDefinition(configuration);
   if (
     !(await input.boundaries.fileSystem.sameVolume(
@@ -355,13 +363,79 @@ function createNativeFilesystemAdapter(
   tools: NativeTools,
 ): ServiceFilesystemAdapter {
   const fileSystem = boundaries.fileSystem;
+  const originalRenderedFiles = new Map<string, Buffer | null>();
   return {
     async perform(action: FilesystemAction, context) {
       assertFilesystemActionAllowed(configuration, action);
       switch (action.kind) {
+        case "directory.access-grant": {
+          if (configuration.platform !== "windows") {
+            throw uncertain("Additive provider-directory access is available only on Windows.");
+          }
+          const existing = await fileSystem.inspect(action.path);
+          if (existing.kind === "missing" && action.missingPathPolicy === "skip") {
+            return { disposition: "unchanged" };
+          }
+          if (existing.kind !== "directory") {
+            throw uncertain("An owner-managed Agent access path is not a canonical directory.");
+          }
+          const canonicalPath = await fileSystem.realPath(action.path);
+          if (!equalPath("windows", canonicalPath, action.path)) {
+            throw uncertain("An owner-managed Agent access path resolves through a link.");
+          }
+          await runRequired(boundaries.process, {
+            executable: tools.icacls,
+            arguments: [
+              action.path,
+              "/grant:r",
+              `${windowsPrincipal(action.principal)}:${windowsPermission(action.permission)}`,
+              ...(action.recursive ? ["/T"] : []),
+              "/L",
+              "/Q",
+            ],
+            timeoutMs: 120_000,
+          });
+          return { disposition: "changed" };
+        }
         case "directory.ensure": {
+          if (action.requiredExistingParent !== undefined) {
+            if (
+              configuration.platform !== "windows" ||
+              !equalPath("windows", win32.dirname(action.path), action.requiredExistingParent)
+            ) {
+              throw uncertain("An owner-managed child directory has an invalid parent binding.");
+            }
+            const parent = await fileSystem.inspect(action.requiredExistingParent);
+            if (parent.kind === "missing") {
+              return { disposition: "unchanged" };
+            }
+            if (parent.kind !== "directory") {
+              throw uncertain("An owner-managed parent path is not a canonical directory.");
+            }
+            const canonicalParent = await fileSystem.realPath(action.requiredExistingParent);
+            if (!equalPath("windows", canonicalParent, action.requiredExistingParent)) {
+              throw uncertain("An owner-managed parent path resolves through a link.");
+            }
+          }
           const existing = await fileSystem.inspect(action.path);
           if (configuration.platform === "windows" && existing.kind === "directory") {
+            if (action.requiredExistingParent !== undefined) {
+              const parent = await fileSystem.inspect(action.requiredExistingParent);
+              const child = await fileSystem.inspect(action.path);
+              if (parent.kind !== "directory" || child.kind !== "directory") {
+                throw uncertain("An owner-managed child directory lost its exact parent binding.");
+              }
+              const [canonicalParent, canonicalChild] = await Promise.all([
+                fileSystem.realPath(action.requiredExistingParent),
+                fileSystem.realPath(action.path),
+              ]);
+              if (
+                !equalPath("windows", canonicalParent, action.requiredExistingParent) ||
+                !equalPath("windows", canonicalChild, action.path)
+              ) {
+                throw uncertain("An owner-managed child directory changed through a link.");
+              }
+            }
             // A running service-owned Secret Store intentionally removes the
             // interactive administrator from its DACL. Reinstallation must let
             // elevated icacls restore the canonical ACL before any Node chmod or
@@ -374,6 +448,8 @@ function createNativeFilesystemAdapter(
               boundaries,
               tools,
               true,
+              action.requiredExistingParent !== undefined,
+              action.requiredExistingParent,
             );
             if ((await fileSystem.inspect(action.path)).kind !== "directory") {
               throw uncertain("A native service directory changed during access repair.");
@@ -383,7 +459,31 @@ function createNativeFilesystemAdapter(
           const disposition = await fileSystem.ensureDirectory(
             action.path,
             Number.parseInt(action.mode, 8),
+            action.requiredExistingParent === undefined,
           );
+          if (action.requiredExistingParent !== undefined) {
+            const parent = await fileSystem.inspect(action.requiredExistingParent);
+            const child = await fileSystem.inspect(action.path);
+            if (parent.kind !== "directory" || child.kind !== "directory") {
+              if (disposition === "changed") {
+                await fileSystem.remove(action.path, false).catch(() => undefined);
+              }
+              throw uncertain("An owner-managed child directory lost its exact parent binding.");
+            }
+            const [canonicalParent, canonicalChild] = await Promise.all([
+              fileSystem.realPath(action.requiredExistingParent),
+              fileSystem.realPath(action.path),
+            ]);
+            if (
+              !equalPath("windows", canonicalParent, action.requiredExistingParent) ||
+              !equalPath("windows", canonicalChild, action.path)
+            ) {
+              if (disposition === "changed") {
+                await fileSystem.remove(action.path, false).catch(() => undefined);
+              }
+              throw uncertain("An owner-managed child directory changed through a link.");
+            }
+          }
           await applyDirectoryAccess(
             configuration,
             action.path,
@@ -391,10 +491,102 @@ function createNativeFilesystemAdapter(
             action.access.owner,
             boundaries,
             tools,
+            false,
+            action.requiredExistingParent !== undefined,
+            action.requiredExistingParent,
           );
           return { disposition };
         }
+        case "file.symbolic-link.ensure": {
+          if (configuration.platform !== "windows" || action.platform !== "windows") {
+            throw uncertain("Codex authentication linking is available only on Windows.");
+          }
+          const sourceHome = configuration.agentProviderAccess.codexHomeDirectory;
+          const serviceHome = configuration.agentProviderAccess.codexServiceHomeDirectory;
+          const expectedPath = win32.join(serviceHome, "auth.json");
+          const expectedTarget = win32.join(sourceHome, "auth.json");
+          if (
+            !equalPath("windows", action.path, expectedPath) ||
+            !equalPath("windows", action.target, expectedTarget) ||
+            !equalPath("windows", win32.dirname(action.path), serviceHome) ||
+            !equalPath("windows", win32.dirname(action.target), sourceHome)
+          ) {
+            throw uncertain("The Codex authentication link escaped its declared homes.");
+          }
+          const [sourceParent, serviceParent, source] = await Promise.all([
+            fileSystem.inspect(sourceHome),
+            fileSystem.inspect(serviceHome),
+            fileSystem.inspect(action.target),
+          ]);
+          if (sourceParent.kind === "missing") {
+            return { disposition: "unchanged" };
+          }
+          if (sourceParent.kind !== "directory" || serviceParent.kind !== "directory") {
+            throw uncertain("A declared Codex home is unavailable during authentication linking.");
+          }
+          if (source.kind !== "missing" && source.kind !== "regular-file") {
+            throw uncertain("The owner Codex authentication source is not a regular file.");
+          }
+          const [canonicalSourceHome, canonicalServiceHome] = await Promise.all([
+            fileSystem.realPath(sourceHome),
+            fileSystem.realPath(serviceHome),
+          ]);
+          if (
+            !equalPath("windows", canonicalSourceHome, sourceHome) ||
+            !equalPath("windows", canonicalServiceHome, serviceHome)
+          ) {
+            throw uncertain("A declared Codex home resolves through a link.");
+          }
+          return {
+            disposition: await fileSystem.createFileLinkAtomic(
+              action.target,
+              action.path,
+              action.platform,
+            ),
+          };
+        }
         case "file.write": {
+          if (context.phase === "forward") {
+            if (action.restoreOriginalBytes === true) {
+              throw uncertain("A forward file write cannot request original-byte restoration.");
+            }
+            if (!originalRenderedFiles.has(action.file.path)) {
+              const original = await fileSystem.inspect(action.file.path);
+              if (original.kind === "missing") {
+                originalRenderedFiles.set(action.file.path, null);
+              } else if (
+                original.kind === "regular-file" &&
+                original.size !== undefined &&
+                original.size <= MAXIMUM_RENDERED_FILE_BYTES
+              ) {
+                originalRenderedFiles.set(
+                  action.file.path,
+                  Buffer.from(await fileSystem.read(action.file.path, MAXIMUM_RENDERED_FILE_BYTES)),
+                );
+              } else {
+                throw uncertain("A rendered service file could not be snapshotted safely.");
+              }
+            }
+          }
+          if (context.phase === "rollback" && action.restoreOriginalBytes === true) {
+            if (!originalRenderedFiles.has(action.file.path)) {
+              throw uncertain("The exact pre-mutation service file is unavailable for rollback.");
+            }
+            const original = originalRenderedFiles.get(action.file.path);
+            if (original === null) {
+              return { disposition: await fileSystem.remove(action.file.path, false) };
+            }
+            if (original === undefined) {
+              throw uncertain("The exact pre-mutation service file is unavailable for rollback.");
+            }
+            const disposition = await fileSystem.writeAtomic(
+              action.file.path,
+              original,
+              Number.parseInt(action.file.mode, 8),
+            );
+            await applyRenderedFileAccess(configuration, action.file, boundaries, tools);
+            return { disposition };
+          }
           const bytes = encodeRenderedFile(action.file);
           const disposition = await fileSystem.writeAtomic(
             action.file.path,
@@ -405,8 +597,17 @@ function createNativeFilesystemAdapter(
           return { disposition };
         }
         case "release.stage": {
+          const posixAccess = await resolvePosixReleaseAccess(configuration, boundaries, tools);
           const existing = await fileSystem.inspect(action.stagingDirectory);
           if (existing.kind === "directory") {
+            if (posixAccess !== undefined) {
+              await applyPosixReleaseTreeAccess(
+                configuration.platform,
+                action.stagingDirectory,
+                fileSystem,
+                posixAccess,
+              );
+            }
             await releaseVerifier.verifyStaged(
               configuration,
               action.stagingDirectory,
@@ -429,6 +630,14 @@ function createNativeFilesystemAdapter(
           }
           await fileSystem.ensureDirectory(temporary, 0o700);
           try {
+            if (posixAccess !== undefined) {
+              await fileSystem.setPosixOwnershipAndMode(
+                temporary,
+                posixAccess.uid,
+                posixAccess.gid,
+                0o750,
+              );
+            }
             const sourceRealPath = await fileSystem.realPath(action.sourceDirectory);
             await copyReleaseTree(
               configuration.platform,
@@ -436,6 +645,7 @@ function createNativeFilesystemAdapter(
               temporary,
               fileSystem,
               sourceRealPath,
+              posixAccess,
             );
             await releaseVerifier.verifyStaged(
               configuration,
@@ -466,6 +676,15 @@ function createNativeFilesystemAdapter(
         case "release.promote": {
           const release = await fileSystem.inspect(action.releaseDirectory);
           if (release.kind === "directory") {
+            const posixAccess = await resolvePosixReleaseAccess(configuration, boundaries, tools);
+            if (posixAccess !== undefined) {
+              await applyPosixReleaseTreeAccess(
+                configuration.platform,
+                action.releaseDirectory,
+                fileSystem,
+                posixAccess,
+              );
+            }
             await releaseVerifier.verifyStaged(
               configuration,
               action.releaseDirectory,
@@ -1082,6 +1301,8 @@ async function applyDirectoryAccess(
   boundaries: NativeServiceBoundaries,
   tools: NativeTools,
   recoverProtectedOwner = false,
+  doNotFollowLinks = false,
+  requiredExistingParent?: string,
 ): Promise<void> {
   if (configuration.platform === "windows") {
     const action = findDirectoryAccess(configuration, path);
@@ -1097,7 +1318,12 @@ async function applyDirectoryAccess(
     // real Windows host even though mocked process boundaries accept it.
     const ownerRequest: NativeProcessRequest = {
       executable: tools.icacls,
-      arguments: [path, "/setowner", windowsPrincipal(action.owner)],
+      arguments: [
+        path,
+        "/setowner",
+        windowsPrincipal(action.owner),
+        ...(doNotFollowLinks ? ["/L"] : []),
+      ],
       timeoutMs: 30_000,
     };
     let ownerNeedsFinalTransfer = false;
@@ -1107,11 +1333,20 @@ async function applyDirectoryAccess(
         throw new NativeSupervisorError("A protected Windows directory owner repair timed out.");
       }
       if (ownerResult.exitCode !== 0) {
+        if (requiredExistingParent !== undefined) {
+          await assertOwnerManagedChildBinding(boundaries.fileSystem, requiredExistingParent, path);
+        }
         await runRequired(boundaries.process, {
           executable: tools.takeown,
-          arguments: ["/F", path, "/A"],
+          arguments:
+            requiredExistingParent === undefined
+              ? ["/F", path, "/A"]
+              : ["/F", path, "/A", "/R", "/D", "N", "/SKIPSL"],
           timeoutMs: 30_000,
         });
+        if (requiredExistingParent !== undefined) {
+          await assertOwnerManagedChildBinding(boundaries.fileSystem, requiredExistingParent, path);
+        }
         ownerNeedsFinalTransfer = true;
       }
     } else {
@@ -1124,6 +1359,9 @@ async function applyDirectoryAccess(
         `${windowsPrincipal(grant.principal)}:${windowsPermission(grant.permission)}`,
       );
     }
+    if (doNotFollowLinks) {
+      arguments_.push("/L");
+    }
     await runRequired(boundaries.process, {
       executable: tools.icacls,
       arguments: arguments_,
@@ -1135,7 +1373,7 @@ async function applyDirectoryAccess(
     if (resetReleaseTree) {
       await runRequired(boundaries.process, {
         executable: tools.icacls,
-        arguments: [path, "/reset", "/T", "/C", "/Q"],
+        arguments: [path, "/reset", "/T", "/C", "/Q", ...(doNotFollowLinks ? ["/L"] : [])],
         timeoutMs: 30_000,
       });
     }
@@ -1159,6 +1397,33 @@ async function applyDirectoryAccess(
     serviceGid,
     mode,
   );
+}
+
+async function assertOwnerManagedChildBinding(
+  fileSystem: NativeServiceBoundaries["fileSystem"],
+  parentPath: string,
+  childPath: string,
+): Promise<void> {
+  if (!equalPath("windows", win32.dirname(childPath), parentPath)) {
+    throw uncertain("An owner-managed child directory has an invalid parent binding.");
+  }
+  const [parent, child] = await Promise.all([
+    fileSystem.inspect(parentPath),
+    fileSystem.inspect(childPath),
+  ]);
+  if (parent.kind !== "directory" || child.kind !== "directory") {
+    throw uncertain("An owner-managed child directory lost its exact parent binding.");
+  }
+  const [canonicalParent, canonicalChild] = await Promise.all([
+    fileSystem.realPath(parentPath),
+    fileSystem.realPath(childPath),
+  ]);
+  if (
+    !equalPath("windows", canonicalParent, parentPath) ||
+    !equalPath("windows", canonicalChild, childPath)
+  ) {
+    throw uncertain("An owner-managed child directory changed through a link.");
+  }
 }
 
 async function applyRenderedFileAccess(
@@ -1206,6 +1471,7 @@ async function copyReleaseTree(
   destination: string,
   fileSystem: NativeFileSystemBoundary,
   sourceRootRealPath: string,
+  posixAccess?: PosixReleaseAccess,
 ): Promise<void> {
   const currentRealPath = await fileSystem.realPath(source);
   if (
@@ -1222,15 +1488,100 @@ async function copyReleaseTree(
     }
     if (entry.kind === "directory") {
       await fileSystem.ensureDirectory(destinationPath, 0o750);
-      await copyReleaseTree(platform, sourcePath, destinationPath, fileSystem, sourceRootRealPath);
+      if (posixAccess !== undefined) {
+        await fileSystem.setPosixOwnershipAndMode(
+          destinationPath,
+          posixAccess.uid,
+          posixAccess.gid,
+          0o750,
+        );
+      }
+      await copyReleaseTree(
+        platform,
+        sourcePath,
+        destinationPath,
+        fileSystem,
+        sourceRootRealPath,
+        posixAccess,
+      );
     } else {
       const fileRealPath = await fileSystem.realPath(sourcePath);
       if (!isDescendant(platform, sourceRootRealPath, fileRealPath)) {
         throw uncertain("Release staging detected a file escaping its verified root.");
       }
       await fileSystem.copyRegularFile(sourcePath, destinationPath);
+      if (posixAccess !== undefined) {
+        const metadata = await fileSystem.inspect(sourcePath);
+        await fileSystem.setPosixOwnershipAndMode(
+          destinationPath,
+          posixAccess.uid,
+          posixAccess.gid,
+          canonicalPosixReleaseFileMode(metadata),
+        );
+      }
     }
   }
+}
+
+interface PosixReleaseAccess {
+  readonly uid: number;
+  readonly gid: number;
+}
+
+async function resolvePosixReleaseAccess(
+  configuration: PlatformServiceConfiguration,
+  boundaries: NativeServiceBoundaries,
+  tools: NativeTools,
+): Promise<PosixReleaseAccess | undefined> {
+  if (configuration.platform === "windows") {
+    return undefined;
+  }
+  return {
+    uid: 0,
+    gid: await resolveUnixId(
+      boundaries.process,
+      tools.id,
+      "-g",
+      configuration.serviceIdentity.userName,
+    ),
+  };
+}
+
+async function applyPosixReleaseTreeAccess(
+  platform: PlatformFamily,
+  root: string,
+  fileSystem: NativeFileSystemBoundary,
+  access: PosixReleaseAccess,
+): Promise<void> {
+  const rootMetadata = await fileSystem.inspect(root);
+  if (rootMetadata.kind !== "directory") {
+    throw uncertain("Release access normalization requires a regular directory root.");
+  }
+  await fileSystem.setPosixOwnershipAndMode(root, access.uid, access.gid, 0o750);
+  for (const entry of await fileSystem.list(root)) {
+    const path = pathJoin(platform, root, entry.name);
+    if (entry.kind === "symbolic-link" || entry.kind === "special") {
+      throw uncertain("Release access normalization refused a symbolic link or special file.");
+    }
+    if (entry.kind === "directory") {
+      await applyPosixReleaseTreeAccess(platform, path, fileSystem, access);
+      continue;
+    }
+    const metadata = await fileSystem.inspect(path);
+    await fileSystem.setPosixOwnershipAndMode(
+      path,
+      access.uid,
+      access.gid,
+      canonicalPosixReleaseFileMode(metadata),
+    );
+  }
+}
+
+function canonicalPosixReleaseFileMode(metadata: NativePathMetadata): number {
+  if (metadata.kind !== "regular-file" || metadata.mode === undefined) {
+    throw uncertain("Release access normalization could not inspect a regular file mode.");
+  }
+  return (metadata.mode & 0o111) === 0 ? 0o640 : 0o750;
 }
 
 async function pruneReleases(
@@ -1446,10 +1797,25 @@ async function runSupervisorInvocation(
         helperPresencePath: win32.join(configuration.paths.runtimeRoot, "helper-plane-v2.json"),
       });
     }
+    if (
+      configuration.platform === "macos" &&
+      invocation.executable === "/bin/launchctl" &&
+      invocation.arguments[0] === "bootout" &&
+      result.exitCode === 0 &&
+      !result.timedOut
+    ) {
+      await waitForMacOsLaunchdBootout({
+        configuration,
+        invocation,
+        process,
+        clock,
+        tools,
+      });
+    }
     return result;
   }
   if (configuration.platform === "macos") {
-    return await process.run({
+    const result = await process.run({
       executable: tools.launchctl,
       arguments: [
         "asuser",
@@ -1460,6 +1826,21 @@ async function runSupervisorInvocation(
       timeoutMs: invocation.timeoutMs,
       environment: ownerEnvironment(configuration),
     });
+    if (
+      invocation.executable === "/bin/launchctl" &&
+      invocation.arguments[0] === "bootout" &&
+      result.exitCode === 0 &&
+      !result.timedOut
+    ) {
+      await waitForMacOsLaunchdBootout({
+        configuration,
+        invocation,
+        process,
+        clock,
+        tools,
+      });
+    }
+    return result;
   }
   return await process.run({
     executable: tools.runuser,
@@ -1473,6 +1854,53 @@ async function runSupervisorInvocation(
     timeoutMs: invocation.timeoutMs,
     environment: ownerEnvironment(configuration),
   });
+}
+
+async function waitForMacOsLaunchdBootout(input: {
+  readonly configuration: Extract<PlatformServiceConfiguration, { readonly platform: "macos" }>;
+  readonly invocation: CommandInvocation;
+  readonly process: NativeProcessBoundary;
+  readonly clock: NativeClockBoundary;
+  readonly tools: NativeTools;
+}): Promise<void> {
+  const target = input.invocation.arguments[1];
+  if (target === undefined) {
+    throw new NativeSupervisorError("A macOS launchd bootout command has no service target.");
+  }
+  const deadline = input.clock.now().getTime() + input.invocation.timeoutMs;
+  for (;;) {
+    const remainingMs = deadline - input.clock.now().getTime();
+    if (remainingMs <= 0) {
+      throw new NativeSupervisorError("The macOS launchd service did not unload before timeout.");
+    }
+    let status: NativeProcessResult | undefined;
+    try {
+      status = await input.process.run({
+        executable: input.tools.launchctl,
+        arguments:
+          input.invocation.privilege === "owner-session"
+            ? [
+                "asuser",
+                String(input.configuration.ownerSession.uid),
+                input.tools.launchctl,
+                "print",
+                target,
+              ]
+            : ["print", target],
+        timeoutMs: Math.max(1, Math.min(5_000, remainingMs)),
+        ...(input.invocation.privilege === "owner-session"
+          ? { environment: ownerEnvironment(input.configuration) }
+          : {}),
+      });
+    } catch {
+      // A transient status-process failure is not proof that launchd unloaded the
+      // service. Retry within the original bounded lifecycle timeout.
+    }
+    if (status !== undefined && !status.timedOut && status.exitCode === 113) {
+      return;
+    }
+    await input.clock.sleep(Math.max(1, Math.min(250, remainingMs)));
+  }
 }
 
 export async function waitForWindowsScheduledTaskStopped(input: {
@@ -1884,6 +2312,7 @@ async function assertMutationTopologySafe(
     configuration.paths.logRoot,
     nativeServiceJournalRoot(configuration),
   ]);
+  const allowedLeafLinks = new Set<string>();
   if (plan.operation === "install" || plan.operation === "upgrade") {
     paths.add(configuration.bundle.sourceDirectory);
     paths.add(`${configuration.bundle.sourceDirectory}.publisher-attestation.json`);
@@ -1903,8 +2332,14 @@ async function assertMutationTopologySafe(
   }
   for (const step of plan.steps) {
     collectActionPaths(step.action, paths);
+    if (step.action.kind === "file.symbolic-link.ensure") {
+      allowedLeafLinks.add(normalizedPathKey(configuration.platform, step.action.path));
+    }
     if (step.rollback !== undefined) {
       collectActionPaths(step.rollback, paths);
+      if (step.rollback.kind === "file.symbolic-link.ensure") {
+        allowedLeafLinks.add(normalizedPathKey(configuration.platform, step.rollback.path));
+      }
     }
   }
   for (const path of paths) {
@@ -1912,7 +2347,8 @@ async function assertMutationTopologySafe(
       configuration.platform,
       path,
       fileSystem,
-      path.endsWith(`${pathSeparator(configuration.platform)}current`),
+      path.endsWith(`${pathSeparator(configuration.platform)}current`) ||
+        allowedLeafLinks.has(normalizedPathKey(configuration.platform, path)),
     );
   }
 }
@@ -2013,6 +2449,34 @@ async function assertReconfigurationMatchesInstalled(
   }
 }
 
+async function assertRuntimeConfigurationMatchesInstalled(
+  configuration: PlatformServiceConfiguration,
+  fileSystem: NativeFileSystemBoundary,
+): Promise<void> {
+  const expected = renderPlatformServiceArtifacts(configuration).files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  if (expected === undefined) {
+    failPreflight("The canonical runtime configuration is unavailable.");
+  }
+  let existing: Buffer;
+  try {
+    existing = await fileSystem.read(expected.path, MAXIMUM_RENDERED_FILE_BYTES);
+  } catch (error) {
+    throw new ServiceCommandExecutionError(
+      "SERVICE_COMMAND_PREFLIGHT_FAILED",
+      "Windows start and restart require the installed runtime configuration to be readable.",
+      false,
+      { cause: error },
+    );
+  }
+  if (!existing.equals(encodeRenderedFile(expected))) {
+    failPreflight(
+      "Windows start and restart refused installed runtime-configuration drift before Agent access repair.",
+    );
+  }
+}
+
 async function assertUpgradeConfigurationMatchesInstalled(
   configuration: PlatformServiceConfiguration,
   activeVersion: string,
@@ -2048,6 +2512,10 @@ async function assertUpgradeConfigurationMatchesInstalled(
     if (
       !existing.equals(expected) &&
       !matchesLegacyWindowsRestrictedSidManifest(configuration, installedFile, existing) &&
+      !matchesLegacyWindowsVisibleHelperTask(configuration, installedFile, existing) &&
+      !matchesLegacyMacOsManifestWithoutServicePath(configuration, installedFile, existing) &&
+      !matchesCombinedWindowsRuntimeMigrations(configuration, installedFile, existing) &&
+      !matchesLegacyWindowsRuntimeWithoutOwnerBindings(configuration, installedFile, existing) &&
       !matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
         configuration,
         installedFile,
@@ -2059,6 +2527,127 @@ async function assertUpgradeConfigurationMatchesInstalled(
       );
     }
   }
+}
+
+function matchesLegacyWindowsVisibleHelperTask(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "windows" ||
+    installedFile.purpose !== "helper-manifest" ||
+    installedFile.encoding !== "utf16le-bom"
+  ) {
+    return false;
+  }
+  const hiddenSetting = "    <Hidden>true</Hidden>\n";
+  const markerOffset = installedFile.content.indexOf(hiddenSetting);
+  if (markerOffset < 0 || markerOffset !== installedFile.content.lastIndexOf(hiddenSetting)) {
+    return false;
+  }
+  const legacyContent =
+    installedFile.content.slice(0, markerOffset) +
+    installedFile.content.slice(markerOffset + hiddenSetting.length);
+  return existing.equals(
+    encodeRenderedFile({
+      ...installedFile,
+      content: legacyContent,
+    }),
+  );
+}
+
+function matchesLegacyWindowsRuntimeWithoutOwnerBindings(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  const migrated = migrateLegacyWindowsRuntimeOwnerBindings(configuration, installedFile, existing);
+  return migrated !== undefined && migrated.equals(encodeRenderedFile(installedFile));
+}
+
+function matchesCombinedWindowsRuntimeMigrations(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  const ownerBindingMigration = migrateLegacyWindowsRuntimeOwnerBindings(
+    configuration,
+    installedFile,
+    existing,
+  );
+  return (
+    ownerBindingMigration !== undefined &&
+    matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
+      configuration,
+      installedFile,
+      ownerBindingMigration,
+    )
+  );
+}
+
+function migrateLegacyWindowsRuntimeOwnerBindings(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): Buffer | undefined {
+  if (
+    configuration.platform !== "windows" ||
+    installedFile.purpose !== "runtime-configuration" ||
+    installedFile.encoding !== "utf8" ||
+    configuration.ownerSession.homeDirectory === undefined
+  ) {
+    return undefined;
+  }
+  let previous: Record<string, unknown>;
+  let expected: Record<string, unknown>;
+  try {
+    previous = requireJsonRecord(JSON.parse(existing.toString("utf8")) as unknown);
+    expected = requireJsonRecord(JSON.parse(installedFile.content) as unknown);
+  } catch {
+    return undefined;
+  }
+  const previousOwner = nestedRecord(previous, "ownerSession");
+  const expectedOwner = nestedRecord(expected, "ownerSession");
+  if (
+    previousOwner === undefined ||
+    expectedOwner === undefined ||
+    existing.toString("utf8") !== stableJson(previous)
+  ) {
+    return undefined;
+  }
+  let migrated = false;
+  if (!Object.hasOwn(previousOwner, "homeDirectory")) {
+    if (expectedOwner["homeDirectory"] !== configuration.ownerSession.homeDirectory) {
+      return undefined;
+    }
+    previousOwner["homeDirectory"] = expectedOwner["homeDirectory"];
+    migrated = true;
+  }
+  if (!Object.hasOwn(previous, "agentProviderAccess")) {
+    if (!Object.hasOwn(expected, "agentProviderAccess")) {
+      return undefined;
+    }
+    previous["agentProviderAccess"] = expected["agentProviderAccess"];
+    migrated = true;
+  } else {
+    const previousAccess = nestedRecord(previous, "agentProviderAccess");
+    const expectedAccess = nestedRecord(expected, "agentProviderAccess");
+    if (previousAccess === undefined || expectedAccess === undefined) {
+      return undefined;
+    }
+    if (!Object.hasOwn(previousAccess, "codexServiceHomeDirectory")) {
+      if (
+        expectedAccess["codexServiceHomeDirectory"] !==
+        configuration.agentProviderAccess.codexServiceHomeDirectory
+      ) {
+        return undefined;
+      }
+      previousAccess["codexServiceHomeDirectory"] = expectedAccess["codexServiceHomeDirectory"];
+      migrated = true;
+    }
+  }
+  return migrated ? Buffer.from(stableJson(previous), "utf8") : undefined;
 }
 
 function matchesWindowsWorkerCredentialMigrationRuntimeConfiguration(
@@ -2228,6 +2817,37 @@ function matchesLegacyWindowsRestrictedSidManifest(
   return existing.equals(encodeRenderedFile(legacyFile));
 }
 
+function matchesLegacyMacOsManifestWithoutServicePath(
+  configuration: PlatformServiceConfiguration,
+  installedFile: RenderedFile,
+  existing: Buffer,
+): boolean {
+  if (
+    configuration.platform !== "macos" ||
+    installedFile.purpose !== "core-manifest" ||
+    installedFile.encoding !== "utf8"
+  ) {
+    return false;
+  }
+  const declared = [
+    "  <key>EnvironmentVariables</key>",
+    "  <dict>",
+    "    <key>PATH</key>",
+    `    <string>${MACOS_SERVICE_EXECUTABLE_PATH}</string>`,
+    "  </dict>",
+    "",
+  ].join("\n");
+  const first = installedFile.content.indexOf(declared);
+  if (first < 0 || installedFile.content.indexOf(declared, first + declared.length) >= 0) {
+    return false;
+  }
+  const legacyFile: RenderedFile = {
+    ...installedFile,
+    content: `${installedFile.content.slice(0, first)}${installedFile.content.slice(first + declared.length)}`,
+  };
+  return existing.equals(encodeRenderedFile(legacyFile));
+}
+
 function assertCanonicalPlan(
   configuration: PlatformServiceConfiguration,
   actual: ServicePlan,
@@ -2328,26 +2948,32 @@ function assertFilesystemActionAllowed(
     configuration,
   }).steps;
   for (const step of artifacts) {
-    if (step.action.kind === "directory.ensure") {
+    if (step.action.kind === "directory.ensure" || step.action.kind === "directory.access-grant") {
       allowedExact.add(step.action.path);
     } else if (step.action.kind === "file.write") {
       allowedExact.add(step.action.file.path);
+    } else if (step.action.kind === "file.symbolic-link.ensure") {
+      allowedExact.add(step.action.path);
     }
   }
   const path =
-    action.kind === "directory.ensure" || action.kind === "path.remove"
+    action.kind === "directory.ensure" ||
+    action.kind === "directory.access-grant" ||
+    action.kind === "path.remove"
       ? action.path
       : action.kind === "file.write"
         ? action.file.path
-        : action.kind === "release.remove"
-          ? action.releaseDirectory
-          : action.kind === "release.stage" || action.kind === "release.verify"
-            ? action.stagingDirectory
-            : action.kind === "release.promote"
-              ? action.releaseDirectory
-              : action.kind === "release.prune"
-                ? action.releasesRoot
-                : action.activeDirectory;
+        : action.kind === "file.symbolic-link.ensure"
+          ? action.path
+          : action.kind === "release.remove"
+            ? action.releaseDirectory
+            : action.kind === "release.stage" || action.kind === "release.verify"
+              ? action.stagingDirectory
+              : action.kind === "release.promote"
+                ? action.releaseDirectory
+                : action.kind === "release.prune"
+                  ? action.releasesRoot
+                  : action.activeDirectory;
   if (
     !allowedExact.has(path) &&
     !isDescendant(
@@ -2367,12 +2993,17 @@ function assertFilesystemActionAllowed(
 
 function collectActionPaths(action: PlanAction, paths: Set<string>): void {
   switch (action.kind) {
+    case "directory.access-grant":
     case "directory.ensure":
     case "path.remove":
       paths.add(action.path);
       return;
     case "file.write":
       paths.add(action.file.path);
+      return;
+    case "file.symbolic-link.ensure":
+      paths.add(action.path);
+      paths.add(action.target);
       return;
     case "activation.switch":
       paths.add(action.activeDirectory);
@@ -2401,6 +3032,11 @@ function collectActionPaths(action: PlanAction, paths: Set<string>): void {
     case "supervisor.invoke":
       return;
   }
+}
+
+function normalizedPathKey(platform: PlatformFamily, path: string): string {
+  const normalized = (platform === "windows" ? win32 : posix).normalize(path);
+  return platform === "windows" ? normalized.toLocaleLowerCase("en-US") : normalized;
 }
 
 interface NativeTools {
@@ -2468,6 +3104,9 @@ function requiredNativeTools(
       } else {
         required.add(tools.id);
       }
+    }
+    if (step.action.kind === "directory.access-grant") {
+      required.add(tools.icacls);
     }
     if (step.action.kind === "file.write" && configuration.platform !== "windows") {
       required.add(tools.id);
@@ -2632,14 +3271,15 @@ async function readMacAttribute(
     arguments: [".", "-read", path, attribute],
     timeoutMs: 10_000,
   });
-  const prefix = `${attribute}:`;
-  const line = result.stdout
-    .split(/\r?\n/u)
-    .find((candidate) => candidate.trimStart().startsWith(prefix));
-  if (line === undefined) {
-    throw uncertain("A macOS service identity is missing a required attribute.");
+  const prefixes = [`${attribute}:`, `dsAttrTypeNative:${attribute}:`];
+  for (const candidate of result.stdout.split(/\r?\n/u)) {
+    const line = candidate.trimStart();
+    const prefix = prefixes.find((value) => line.startsWith(value));
+    if (prefix !== undefined) {
+      return line.slice(prefix.length).trim();
+    }
   }
-  return line.trimStart().slice(prefix.length).trim();
+  throw uncertain("A macOS service identity is missing a required attribute.");
 }
 
 function findDirectoryAccess(

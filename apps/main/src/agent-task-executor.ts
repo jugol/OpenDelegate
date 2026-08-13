@@ -30,6 +30,8 @@ import {
   type TaskContinuationCheckpointV1,
 } from "@opendelegate/protocol";
 
+import { classifyAgentAdapterToolUse } from "./agent-adapter-tool-use.ts";
+
 interface StoredSessionEvent {
   readonly eventId: string;
   readonly streamVersion: number;
@@ -673,6 +675,16 @@ const OUTCOME_ORCHESTRATION_INSTRUCTIONS = Object.freeze([
 const OUTCOME_PRESENTATION_INSTRUCTION =
   "Present the verified outcome in the most useful available form: Discord summary, file, Artifact, hosted result, or Git reference. Mention only results supported by authoritative Worker reports.";
 
+const ARTIFACT_PLANNING_INSTRUCTIONS = Object.freeze([
+  "A Worker Agent may write and commit a Run-scoped Artifact manifest, but deterministic Worker code performs Main promotion only after that native turn succeeds.",
+  "Do not require Worker-authored text to attest post-turn Main promotion or Discord presentation. Plan the file creation and manifest commit; OpenDelegate records promoted Artifact IDs in the authenticated terminal evidence and the Discord adapter presents available results afterward.",
+]);
+
+const ARTIFACT_VERIFICATION_INSTRUCTIONS = Object.freeze([
+  "Each entry in an authoritative report's artifactEvidence array is deterministic post-turn evidence that the named Artifact reached Main's durable store. Its state \"promoted-to-main-durable-store\" is stronger than Worker-authored report text written before promotion.",
+  "Do not treat a Worker report's uncertainty about later Main promotion or Discord presentation as contradicting non-empty artifactEvidence. When the Task asks to return a file in this Task, promoted Artifact evidence satisfies the delivery boundary; the Discord adapter owns its subsequent owner-visible presentation.",
+]);
+
 function buildCoordinatorPrompt(
   request: TaskExecutionRequest,
   maximumBytes: number,
@@ -768,6 +780,7 @@ function buildPlanningPrompt(
         "Use only the versioned, hash-verified public checkpoint below. Omitted counts are explicit; do not invent omitted details or import another Task's context.",
         "Deterministic OpenDelegate code validates dependencies, selects eligible Devices, issues authority, dispatches Runs, and enforces Policy.",
         ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+        ...ARTIFACT_PLANNING_INSTRUCTIONS,
         "Do not claim execution happened. Do not expose private chain-of-thought.",
         ...planningContextInstructions(deviceContext),
         "Return one exact JSON object and no Markdown fence.",
@@ -786,6 +799,7 @@ function buildPlanningPrompt(
     "You are the OpenDelegate Main Agent planning exactly one durable Task.",
     "Return a bounded Work Order plan. Deterministic OpenDelegate code will validate dependencies, select eligible Devices, issue leases, dispatch Runs, and enforce Policy.",
     ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+    ...ARTIFACT_PLANNING_INSTRUCTIONS,
     "Do not claim any execution happened. Do not expose private chain-of-thought.",
     ...planningContextInstructions(deviceContext),
     "Return one exact JSON object and no Markdown fence.",
@@ -839,6 +853,11 @@ function buildVerificationPrompt(
     runId: report.runId,
     report: boundedContinuationEvidence(report.report),
     artifactIds: report.artifactIds,
+    artifactEvidence: report.artifactIds.map((artifactId) => ({
+      artifactId,
+      state: "promoted-to-main-durable-store" as const,
+      source: "deterministic-worker-terminal-event" as const,
+    })),
     ...(report.agentSession === undefined ? {} : { agentSession: report.agentSession }),
   }));
   const orders = workOrders.map((order) => ({
@@ -855,6 +874,7 @@ function buildVerificationPrompt(
       "Lease, fencing, route, credential, local-path, Knowledge, and private transcript data are intentionally absent.",
       "Judge only whether the evidence satisfies every exact completion criterion in the checkpoint. Never invent omitted evidence.",
       ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+      ...ARTIFACT_VERIFICATION_INSTRUCTIONS,
       OUTCOME_PRESENTATION_INSTRUCTION,
       "Return one exact JSON object and no Markdown fence.",
       'If every criterion is satisfied: {"schemaVersion":1,"state":"completed","publicMessage":"owner-visible synthesis","verifiedCompletionCriteria":["copy every exact Task criterion"]}.',
@@ -879,6 +899,7 @@ function buildVerificationPrompt(
     "Every record below was accepted by deterministic OpenDelegate code from the authenticated, current, unexpired Worker Run named in that record.",
     "You cannot manufacture, alter, or infer execution evidence. Judge only whether these authoritative reports satisfy every exact Task completion criterion.",
     ...OUTCOME_ORCHESTRATION_INSTRUCTIONS,
+    ...ARTIFACT_VERIFICATION_INSTRUCTIONS,
     OUTCOME_PRESENTATION_INSTRUCTION,
     "Return one exact JSON object and no Markdown fence.",
     'If every criterion is satisfied: {"schemaVersion":1,"state":"completed","publicMessage":"owner-visible synthesis","verifiedCompletionCriteria":["copy every exact Task criterion"]}.',
@@ -1129,17 +1150,61 @@ function workOrderRequiresComputerUse(
   >["plan"]["workOrders"][number],
 ): boolean {
   const statements = [workOrder.brief, ...workOrder.completionCriteria, ...workOrder.constraints];
-  return statements.some((statement) => {
-    const normalized = statement.normalize("NFKC");
-    return (
-      /(?:\b(?:invoke|use|execute|perform|run|require)\b.{0,48}\bcomputer[ -]use\b|\bcomputer[ -]use\b.{0,48}\b(?:is\s+)?(?:invoked|used|executed|required|performed)\b)/iu.test(
-        normalized,
-      ) ||
-      /(?:computer[ -]use.{0,48}(?:사용|실행|호출|조작)|(?:사용|실행|호출|조작).{0,48}computer[ -]use)/iu.test(
-        normalized,
-      )
-    );
-  });
+  return statements.some(statementRequiresComputerUse);
+}
+
+/**
+ * Detect an affirmative Computer Use requirement without promoting an explicit
+ * prohibition into input authority. Coordinator constraints commonly enumerate
+ * several forbidden tools in one sentence (for example, "Computer Use, browser,
+ * and network access are forbidden" or "Computer Use ... 사용하지 않는다"). A
+ * keyword-only matcher interpreted both forms as a request to control the desktop.
+ */
+function statementRequiresComputerUse(statement: string): boolean {
+  const normalized = statement.normalize("NFKC");
+
+  for (const match of normalized.matchAll(
+    /\b(?:invoke|use|execute|perform|run|require)\b.{0,48}\bcomputer[ -]use\b/giu,
+  )) {
+    const leading = normalized.slice(Math.max(0, (match.index ?? 0) - 24), match.index);
+    if (
+      !/(?:\bdo\s+not|\bdon't|\bnever|\bmust\s+not|\bmay\s+not|\bwithout|\bno)\s*$/iu.test(leading)
+    ) {
+      return true;
+    }
+  }
+
+  if (
+    /\bcomputer[ -]use\b\s+(?:(?:is|must\s+be|should\s+be|will\s+be)\s+)?(?:invoked|used|executed|required|performed)\b/iu.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  for (const match of normalized.matchAll(
+    /computer[ -]use[^\n,;，；·/]{0,48}?(?:사용|실행|호출|조작)/giu,
+  )) {
+    const trailing = normalized.slice((match.index ?? 0) + match[0].length);
+    if (!/^(?:하지|해서는?\s*안|하면\s*안|해서\s*안|할\s+수\s+없)/u.test(trailing)) {
+      return true;
+    }
+  }
+
+  if (
+    /(?:\b(?:do\s+not|don't|never|must\s+not|may\s+not|no)\s+(?:invoke|use|execute|perform|run|require)\s+(?:the\s+)?computer[ -]use\b|\bwithout\s+(?:using\s+)?computer[ -]use\b|\bcomputer[ -]use\b.{0,72}\b(?:(?:must|should|may)\s+(?:not|never)\s+(?:be\s+)?(?:invoked|used|executed|required|performed)|(?:is|are)\s+(?:not\s+(?:invoked|used|executed|required|performed)|(?:strictly\s+)?(?:forbidden|prohibited|disallowed|not\s+allowed)))\b)/iu.test(
+      normalized,
+    ) ||
+    /(?:computer[ -]use.{0,72}(?:(?:사용|실행|호출|조작)(?:하지\s*(?:마|않|못)|해서는?\s*안|하면\s*안|해서\s*안|할\s+수\s+없)|금지|제외|불가)|computer[ -]use\s*없이)/iu.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+
+  return /(?:computer[ -]use[^\n,;，；·/]{0,48}(?:사용|실행|호출|조작)|(?:사용|실행|호출|조작)[^\n,;，；·/]{0,48}computer[ -]use)/iu.test(
+    normalized,
+  );
 }
 
 function applyAuthorityReducingPlanningDefaults(plan: Record<string, unknown>): unknown {
@@ -1210,6 +1275,7 @@ interface PlanningDeviceObservation {
   readonly readyAgentAdapters: readonly {
     readonly provider: string;
     readonly adapterId: string;
+    readonly toolUse: "authorized" | "text-only";
   }[];
   readonly workerAgentProfile?: DeviceSummaryV1["agentExecutionProfile"];
   readonly wakeOnLan?: {
@@ -1283,6 +1349,8 @@ function projectPlanningDeviceContext(
             Object.freeze({
               provider: adapter.provider,
               adapterId: adapter.adapterId,
+              toolUse:
+                adapter.toolUse ?? classifyAgentAdapterToolUse(adapter.provider, adapter.adapterId),
             }),
           ),
       ),
@@ -1326,6 +1394,7 @@ function planningContextInstructions(
   return Object.freeze([
     "The following JSON is a current, bounded, Main-owned, owner-safe Device snapshot for planning target preferences. Only verified capability names are included:",
     "Workspace IDs are opaque registered execution roots. Set workspaceId when an outcome requires a specific Workspace. When a Device has exactly one registered Workspace, OpenDelegate can select that singleton deterministically if workspaceId is omitted; multiple Workspaces require an explicit choice.",
+    'Each readyAgentAdapters entry declares toolUse. "authorized" means its tool calls pass through OpenDelegate Policy; "text-only" means every shell, file mutation, Artifact write, package install, web/network, native child Agent, and Computer Use tool is denied. Never pin a text-only adapter for work that needs any of those effects. Omit requiredAgent when provider or model choice does not change the outcome.',
     "For an offline Worker, wakeOnLan is its last authenticated target observation. relay-required means the target reported magic-packet wake enabled, but OpenDelegate has no verified online relay and must not claim that it can wake the Device.",
     JSON.stringify({ schemaVersion: 1, devices }),
   ]);

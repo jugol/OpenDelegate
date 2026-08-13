@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
 
+import { resolveDefaultCodexCommand } from "./codex-command.ts";
 import {
   type AgentAdapter,
   type AgentModelCatalog,
@@ -83,6 +82,7 @@ export interface CodexCliAdapterOptions {
   readonly codexHome: string;
   readonly executable?: string;
   readonly prefixArgs?: readonly string[];
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly testedVersions?: readonly string[];
   readonly allowUntestedVersion?: boolean;
   readonly skipGitRepositoryCheck?: boolean;
@@ -108,7 +108,9 @@ export class CodexCliAdapter implements AgentAdapter {
     this.#codexHome = resolveControlledProviderHome(options.codexHome, "Codex");
     const command =
       options.executable === undefined && options.prefixArgs === undefined
-        ? defaultCodexCommand()
+        ? resolveDefaultCodexCommand(
+            options.environment === undefined ? {} : { environment: options.environment },
+          )
         : {
             executable: options.executable ?? "codex",
             prefixArgs: options.prefixArgs ?? [],
@@ -331,32 +333,6 @@ function codexToolServerArguments(toolServers: readonly AgentToolServer[] | unde
       `${prefix}.tool_timeout_sec=${String(Math.ceil(server.toolTimeoutMs / 1_000))}`,
     ];
   });
-}
-
-function defaultCodexCommand(): {
-  readonly executable: string;
-  readonly prefixArgs: readonly string[];
-} {
-  if (process.platform === "win32") {
-    const pathEntries = (process.env.PATH ?? "")
-      .split(delimiter)
-      .map((entry) => entry.trim().replace(/^"(.*)"$/u, "$1"))
-      .filter((entry) => entry.length > 0);
-    for (const directory of pathEntries) {
-      const entrypoint = join(directory, "node_modules", "@openai", "codex", "bin", "codex.js");
-      try {
-        if (statSync(entrypoint).isFile()) {
-          return {
-            executable: process.execPath,
-            prefixArgs: [realpathSync(entrypoint)],
-          };
-        }
-      } catch {
-        // Continue to the next PATH entry.
-      }
-    }
-  }
-  return { executable: "codex", prefixArgs: [] };
 }
 
 function parseCodexVersion(output: string): string {

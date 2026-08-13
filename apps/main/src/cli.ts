@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { lstat } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +16,8 @@ import {
   createMainManagedSecretStore,
   createMainRuntime,
   createMainServiceReadyMessage,
+  defaultMainArtifactConfiguration,
+  defaultMainSecretBackendConfiguration,
   initializeMainHome,
   inspectPersistedMainConfiguration,
   listenMainRuntime,
@@ -23,11 +26,13 @@ import {
   loadMainConfiguration,
   loadMainSecretBackendConfigurationSource,
   MainDiscordConfigurationError,
+  MainArtifactRuntimeError,
   MainRuntimeError,
   MainSecretBackendConfigurationError,
   provisionMainDiscordBotCredential,
   resolveRuntimePaths,
   validateMainSecretReference,
+  type MainArtifactSecretBackendConfiguration,
   type MainDatabaseConfiguration,
   type MainListenerConfiguration,
   type MainRuntime,
@@ -158,6 +163,7 @@ export interface ParsedArguments {
   readonly codexHome?: string;
   readonly claudeHome?: string;
   readonly adminAutoOpen?: boolean;
+  readonly artifactMode?: "enabled" | "disabled";
   readonly artifactConfigurationFile?: string;
   readonly discordConfigurationFile?: string;
   readonly discordTokenStdin?: true;
@@ -226,6 +232,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
   let codexHome: string | undefined;
   let claudeHome: string | undefined;
   let adminAutoOpen: boolean | undefined;
+  let artifactMode: "enabled" | "disabled" | undefined;
   let artifactConfigurationFile: string | undefined;
   let discordConfigurationFile: string | undefined;
   let discordTokenStdin = false;
@@ -263,6 +270,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       value === "--codex-home" ||
       value === "--claude-home" ||
       value === "--admin-auto-open" ||
+      value === "--artifacts" ||
       value === "--artifact-config" ||
       value === "--discord-config" ||
       value === "--device-channel-config" ||
@@ -337,6 +345,15 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
           }
           adminAutoOpen = target === "enabled";
           break;
+        case "--artifacts":
+          if (target !== "enabled" && target !== "disabled") {
+            throw new MainRuntimeError(
+              "CONFIG_INVALID",
+              "--artifacts must be enabled or disabled.",
+            );
+          }
+          artifactMode = target;
+          break;
         case "--artifact-config":
           artifactConfigurationFile = resolve(target);
           break;
@@ -396,6 +413,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       codexHome !== undefined ||
       claudeHome !== undefined ||
       adminAutoOpen !== undefined ||
+      artifactMode !== undefined ||
       artifactConfigurationFile !== undefined ||
       discordConfigurationFile !== undefined ||
       discordTokenStdin ||
@@ -426,6 +444,12 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
       "--discord-token-stdin requires --discord-config.",
     );
   }
+  if (artifactMode !== undefined && artifactConfigurationFile !== undefined) {
+    throw new MainRuntimeError(
+      "CONFIG_INVALID",
+      "Use either --artifacts or --artifact-config, not both.",
+    );
+  }
   if (databaseUriStdin && database?.adapter !== "postgresql") {
     throw new MainRuntimeError(
       "CONFIG_INVALID",
@@ -454,6 +478,7 @@ export function parseArguments(values: readonly string[]): ParsedArguments {
     ...(codexHome === undefined ? {} : { codexHome }),
     ...(claudeHome === undefined ? {} : { claudeHome }),
     ...(adminAutoOpen === undefined ? {} : { adminAutoOpen }),
+    ...(artifactMode === undefined ? {} : { artifactMode }),
     ...(artifactConfigurationFile === undefined ? {} : { artifactConfigurationFile }),
     ...(discordConfigurationFile === undefined ? {} : { discordConfigurationFile }),
     ...(secretBackendConfigurationFile === undefined ? {} : { secretBackendConfigurationFile }),
@@ -562,14 +587,54 @@ function parseListenerOptions(input: {
 }
 
 async function runInit(options: ParsedArguments, identity: RuntimeIdentity): Promise<void> {
-  const secretBackend: MainSecretBackendConfiguration | undefined =
+  const paths = resolveRuntimePaths({
+    ...(options.home === undefined ? {} : { home: options.home }),
+    sourceCheckout: installationRoot,
+  });
+  const persistedConfiguration = (await pathExists(paths.configurationFile))
+    ? await loadMainConfiguration(paths.configurationFile)
+    : undefined;
+  let secretBackend: MainSecretBackendConfiguration | undefined =
     options.secretBackendConfigurationFile === undefined
       ? undefined
       : await loadMainSecretBackendConfigurationSource(options.secretBackendConfigurationFile);
-  const artifacts =
+  let artifacts =
     options.artifactConfigurationFile === undefined
-      ? undefined
+      ? options.artifactMode === "disabled"
+        ? null
+        : undefined
       : await loadMainArtifactConfigurationSource(options.artifactConfigurationFile);
+  if (
+    artifacts === undefined &&
+    (persistedConfiguration === undefined || options.artifactMode === "enabled")
+  ) {
+    if (secretBackend === undefined && persistedConfiguration === undefined) {
+      secretBackend = await defaultMainSecretBackendConfiguration({
+        home: paths.home,
+        sourceCheckout: installationRoot,
+      });
+    }
+    const mainSecretBackend = persistedConfiguration?.secretBackend ?? secretBackend;
+    if (mainSecretBackend === undefined) {
+      throw new MainRuntimeError(
+        "CONFIG_INVALID",
+        "Artifact setup requires the persisted or requested Main Secret backend.",
+      );
+    }
+    artifacts = await defaultMainArtifactConfiguration({
+      home: paths.home,
+      installationRoot,
+      mainListener:
+        persistedConfiguration?.main ??
+        options.listener ??
+        ({
+          host: "127.0.0.1",
+          port: 4380,
+          origin: "http://127.0.0.1:4380",
+        } satisfies MainListenerConfiguration),
+      secretBackend: artifactSecretBackendFromMain(mainSecretBackend),
+    });
+  }
   const discord =
     options.discordConfigurationFile === undefined
       ? undefined
@@ -691,6 +756,52 @@ async function runInit(options: ParsedArguments, identity: RuntimeIdentity): Pro
     openBrowser(claimListener.origin);
   }
   await waitForShutdown(runtime, claimListener?.close);
+}
+
+function artifactSecretBackendFromMain(
+  backend: MainSecretBackendConfiguration,
+): MainArtifactSecretBackendConfiguration {
+  switch (backend.backend) {
+    case "windows-dpapi":
+      return { backend: backend.backend, vaultRoot: backend.vaultRoot };
+    case "windows-service-dpapi":
+      return {
+        backend: backend.backend,
+        vaultRoot: backend.vaultRoot,
+        handoffRoot: backend.handoffRoot,
+        serviceSid: backend.serviceSid,
+      };
+    case "macos-keychain":
+      return {
+        backend: backend.backend,
+        helperPath: backend.helperPath,
+        expectedHelperSha256: backend.expectedHelperSha256,
+      };
+    case "linux-secret-service":
+      return { backend: backend.backend, secretToolPath: backend.secretToolPath };
+    case "linux-systemd-credential-vault":
+      return {
+        backend: backend.backend,
+        credentialName: backend.credentialName,
+        vaultRoot: backend.vaultRoot,
+      };
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === "object" &&
+      Object.getOwnPropertyDescriptor(error, "code")?.value === "ENOENT"
+    ) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function runServe(options: ParsedArguments, identity: RuntimeIdentity): Promise<void> {
@@ -1539,6 +1650,7 @@ function sanitizeCliError(error: unknown): {
   }
   if (
     error instanceof MainRuntimeError ||
+    error instanceof MainArtifactRuntimeError ||
     error instanceof MainDiscordConfigurationError ||
     error instanceof MainSecretBackendConfigurationError ||
     error instanceof DeviceEnrollmentCliError ||
@@ -1597,7 +1709,7 @@ Usage:
     [--codex-home ABSOLUTE_PATH]
     [--claude-home ABSOLUTE_PATH]
     [--admin-auto-open enabled|disabled]
-    [--artifact-config ABSOLUTE_PATH]
+    [--artifacts enabled|disabled | --artifact-config ABSOLUTE_PATH]
     [--discord-config ABSOLUTE_PATH [--discord-token-stdin]]
     [--device-channel-config ABSOLUTE_PATH]
     [--secret-backend-config ABSOLUTE_PATH]
@@ -1621,6 +1733,8 @@ Runtime state and credentials are never written into the source checkout.
 Bounded stdin Secret provisioning accepts one Secret per init invocation and never
 uses argv or the process environment.
 Artifact configuration contains listener, exposure, and Secret Store aliases only.
+New Main initialization enables a private loopback Artifact Gateway by default.
+An explicit Artifact option atomically changes only that setting on an existing Main.
 Discord configuration contains IDs, tag bindings, backend paths, and a Secret Store alias only.
 Device channel configuration contains listener paths and a managed Secret Store backend only.
 Run "opendelegate backup help" for metadata scope, integrity, and fresh-target restore details.

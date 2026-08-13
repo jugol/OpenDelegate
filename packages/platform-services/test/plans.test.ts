@@ -126,8 +126,9 @@ test("Windows install grants the virtual service temporary full control of its D
   );
 });
 
-test("Windows lifecycle plans repair only the Codex sandbox helper ACL before start", () => {
-  const sandboxDirectory = "C:\\Users\\owner\\.codex\\.sandbox-bin";
+test("Windows lifecycle plans prepare an isolated service Codex home before start", () => {
+  const serviceHome = "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex";
+  const sandboxDirectory = `${serviceHome}\\.sandbox-bin`;
   const configuration = windowsConfiguration({
     agentSandbox: { codexSandboxBinDirectory: sandboxDirectory },
   });
@@ -149,16 +150,120 @@ test("Windows lifecycle plans repair only the Codex sandbox helper ACL before st
     assert.ok(sandbox);
     assert.equal(sandbox.action.kind, "directory.ensure");
     assert.equal(sandbox.action.path, sandboxDirectory);
-    assert.equal(sandbox.action.access.owner, "S-1-5-21-1000");
+    assert.equal(sandbox.action.requiredExistingParent, serviceHome);
+    assert.equal(sandbox.action.access.owner, "NT SERVICE\\OpenDelegate-personal");
     assert.deepEqual(sandbox.action.access.grants, [
       { principal: "BUILTIN\\Administrators", permission: "full-control" },
       { principal: "S-1-5-18", permission: "full-control" },
-      { principal: "S-1-5-21-1000", permission: "full-control" },
+      { principal: "S-1-5-21-1000", permission: "read-execute" },
       { principal: "NT SERVICE\\OpenDelegate-personal", permission: "full-control" },
     ]);
+    const service = plan.steps.find((step) => step.id === "ensure-codex-service-home");
+    assert.ok(service);
+    assert.equal(service.action.kind, "directory.ensure");
+    assert.equal(service.action.path, serviceHome);
+    assert.equal(service.action.access.owner, "NT SERVICE\\OpenDelegate-personal");
+    const auth = plan.steps.find((step) => step.id === "ensure-codex-auth-ssot-link");
+    assert.ok(auth);
+    assert.equal(auth.action.kind, "file.symbolic-link.ensure");
+    assert.equal(auth.action.path, `${serviceHome}\\auth.json`);
+    assert.equal(auth.action.target, "C:\\Users\\owner\\.codex\\auth.json");
     assert.ok(
       plan.steps.findIndex((step) => step.id === "ensure-codex-sandbox-helper") <
         plan.steps.findIndex((step) => step.id === "start-core"),
+    );
+  }
+});
+
+test("Windows lifecycle plans preserve provider ACLs while granting exact service access", () => {
+  const ownerSession = {
+    ...windowsConfiguration().ownerSession,
+    homeDirectory: "C:\\Users\\owner",
+  };
+  const access = {
+    codexHomeDirectory: "C:\\Users\\owner\\.codex",
+    codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+    claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+  };
+  for (const input of [
+    {
+      operation: "install" as const,
+      configuration: windowsConfiguration({
+        ownerSession,
+        agentProviderAccess: access,
+        agentSandbox: {
+          codexSandboxBinDirectory: `${access.codexServiceHomeDirectory}\\.sandbox-bin`,
+        },
+      }),
+    },
+    {
+      operation: "start" as const,
+      configuration: windowsConfiguration({
+        ownerSession,
+        agentProviderAccess: access,
+        agentSandbox: {
+          codexSandboxBinDirectory: `${access.codexServiceHomeDirectory}\\.sandbox-bin`,
+        },
+      }),
+      activeVersion: "1.2.3",
+    },
+    {
+      operation: "restart" as const,
+      configuration: windowsConfiguration({
+        ownerSession,
+        agentProviderAccess: access,
+        agentSandbox: {
+          codexSandboxBinDirectory: `${access.codexServiceHomeDirectory}\\.sandbox-bin`,
+        },
+      }),
+      activeVersion: "1.2.3",
+    },
+    {
+      operation: "upgrade" as const,
+      configuration: windowsConfiguration({
+        ownerSession,
+        agentProviderAccess: access,
+        agentSandbox: {
+          codexSandboxBinDirectory: `${access.codexServiceHomeDirectory}\\.sandbox-bin`,
+        },
+        bundle: { ...windowsConfiguration().bundle, version: "1.2.4" },
+      }),
+      activeVersion: "1.2.3",
+    },
+  ]) {
+    const plan = createServicePlan(input);
+    const grants = plan.steps.filter((step) => step.action.kind === "directory.access-grant");
+    assert.deepEqual(
+      grants.map((step) =>
+        step.action.kind === "directory.access-grant"
+          ? [step.action.path, step.action.permission]
+          : [],
+      ),
+      [
+        ["C:\\Users\\owner\\.codex", "read-write"],
+        ["C:\\Users\\owner\\.claude", "read-write"],
+        ["C:\\Users\\owner\\.local\\bin", "read-execute"],
+        ["C:\\Users\\owner\\AppData\\Roaming\\npm", "read-execute"],
+      ],
+    );
+    for (const grant of grants) {
+      assert.equal(grant.action.kind, "directory.access-grant");
+      assert.equal(grant.action.principal, "NT SERVICE\\OpenDelegate-personal");
+      assert.equal(grant.action.preserveExistingAccess, true);
+      assert.equal(grant.action.missingPathPolicy, "skip");
+      assert.equal(grant.action.recursive, input.operation === "install");
+      assert.ok(
+        plan.steps.indexOf(grant) < plan.steps.findIndex((step) => step.id === "start-core"),
+      );
+      if (input.operation === "restart" || input.operation === "upgrade") {
+        assert.ok(
+          plan.steps.indexOf(grant) < plan.steps.findIndex((step) => step.id === "stop-core"),
+        );
+      }
+    }
+    assert.ok(
+      Math.max(...grants.map((grant) => plan.steps.indexOf(grant))) <
+        plan.steps.findIndex((step) => step.id === "ensure-codex-sandbox-helper"),
     );
   }
 });
@@ -267,6 +372,11 @@ test("upgrade atomically activates a staged release and rolls back after failed 
   });
 
   const activation = plan.steps.find((step) => step.action.kind === "activation.switch");
+  const runtimeWrite = plan.steps.find((step) => step.id === "write-runtime-configuration");
+  assert.equal(runtimeWrite?.rollback?.kind, "file.write");
+  if (runtimeWrite?.rollback?.kind === "file.write") {
+    assert.equal(runtimeWrite.rollback.restoreOriginalBytes, true);
+  }
   assert.ok(activation);
   assert.equal(activation.action.kind, "activation.switch");
   assert.match(activation.action.targetReleaseDirectory, /1\.3\.0$/);
@@ -322,10 +432,20 @@ test("Windows upgrade repairs the declared service SID definition before restart
   });
 
   const stopCoreIndex = plan.steps.findIndex((step) => step.id === "stop-core");
+  const stopHelperIndex = plan.steps.findIndex((step) => step.id === "stop-helper");
+  const helperManifestIndex = plan.steps.findIndex(
+    (step) => step.id === "write-windows-helper-manifest",
+  );
+  const helperRegistrationIndex = plan.steps.findIndex(
+    (step) => step.id === "refresh-windows-helper-registration",
+  );
   const repairIndex = plan.steps.findIndex((step) => step.id === "repair-windows-service-sid");
   const manifestIndex = plan.steps.findIndex((step) => step.id === "write-windows-core-manifest");
   const startCoreIndex = plan.steps.findIndex((step) => step.id === "start-core");
   assert.ok(stopCoreIndex >= 0);
+  assert.ok(stopHelperIndex < helperManifestIndex);
+  assert.ok(helperManifestIndex < helperRegistrationIndex);
+  assert.ok(helperRegistrationIndex < stopCoreIndex);
   assert.ok(stopCoreIndex < repairIndex);
   assert.ok(repairIndex < manifestIndex);
   assert.ok(manifestIndex < startCoreIndex);
@@ -355,6 +475,69 @@ test("Windows upgrade repairs the declared service SID definition before restart
     assert.match(manifest.action.file.content, /"serviceSidType": "unrestricted"/u);
   }
   assert.equal(manifest?.rollback, undefined);
+
+  const helperManifest = plan.steps[helperManifestIndex];
+  assert.equal(helperManifest?.action.kind, "file.write");
+  if (helperManifest?.action.kind === "file.write") {
+    assert.equal(helperManifest.action.file.purpose, "helper-manifest");
+    assert.match(helperManifest.action.file.content, /<Hidden>true<\/Hidden>/u);
+  }
+  assert.equal(helperManifest?.rollback, undefined);
+
+  const helperRegistration = plan.steps[helperRegistrationIndex];
+  assert.equal(helperRegistration?.action.kind, "supervisor.invoke");
+  if (helperRegistration?.action.kind === "supervisor.invoke") {
+    assert.deepEqual(helperRegistration.action.command.invocations, [
+      {
+        executable: "schtasks.exe",
+        arguments: [
+          "/Create",
+          "/TN",
+          "\\OpenDelegate-personal-SessionHelper",
+          "/XML",
+          "C:\\ProgramData\\OpenDelegate\\state\\manifests\\OpenDelegate-personal.session-helper.task.xml",
+          "/F",
+        ],
+        plane: "session-helper",
+        verb: "install",
+        privilege: "elevated",
+        availabilityPolicy: "required",
+        timeoutMs: 30_000,
+        expectedExitCodes: [0],
+      },
+    ]);
+  }
+  assert.equal(helperRegistration?.rollback, undefined);
+  assert.ok(plan.notes.some((note) => /not reverted to a visible console/u.test(note)));
+});
+
+test("macOS upgrade persists its bounded service PATH before restarting core", () => {
+  const base = macOsConfiguration();
+  const configuration = macOsConfiguration({
+    bundle: {
+      ...base.bundle,
+      version: "1.3.0",
+    },
+  });
+  const plan = createServicePlan({
+    operation: "upgrade",
+    configuration,
+    activeVersion: "1.2.3",
+  });
+  const stopCoreIndex = plan.steps.findIndex((step) => step.id === "stop-core");
+  const manifestIndex = plan.steps.findIndex((step) => step.id === "write-macos-core-manifest");
+  const startCoreIndex = plan.steps.findIndex((step) => step.id === "start-core");
+  assert.ok(stopCoreIndex >= 0);
+  assert.ok(stopCoreIndex < manifestIndex);
+  assert.ok(manifestIndex < startCoreIndex);
+  const manifest = plan.steps[manifestIndex];
+  assert.equal(manifest?.action.kind, "file.write");
+  if (manifest?.action.kind === "file.write") {
+    assert.equal(manifest.action.file.purpose, "core-manifest");
+    assert.match(manifest.action.file.content, /<key>EnvironmentVariables<\/key>/u);
+    assert.match(manifest.action.file.content, /\/opt\/homebrew\/bin/u);
+  }
+  assert.equal(manifest?.rollback?.kind, "file.write");
 });
 
 test("failed install health removes newly registered supervisor planes", async () => {

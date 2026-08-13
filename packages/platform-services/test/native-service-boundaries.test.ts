@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  lchmod,
+  lstat,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readlink,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -91,5 +101,58 @@ test(
     assert.equal(resolve(root, await readlink(current)), resolve(next));
     assert.deepEqual((await readdir(root)).sort(), ["current", "next", "previous"]);
     assert.equal(await fileSystem.createDirectoryLinkAtomic(next, current, "windows"), "unchanged");
+  },
+);
+
+test(
+  "the Windows native filesystem boundary creates one exact Codex authentication link",
+  { skip: process.platform !== "win32" },
+  async (context) => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-native-auth-link-"));
+    context.after(async () => {
+      await rm(root, { force: true, recursive: true });
+    });
+    const ownerAuth = join(root, "owner-auth.json");
+    const serviceAuth = join(root, "service-auth.json");
+    const occupied = join(root, "occupied.json");
+    await writeFile(ownerAuth, "fixture-auth");
+    await writeFile(occupied, "do-not-replace");
+    const fileSystem = createNodeNativeServiceBoundaries().fileSystem;
+
+    assert.equal(
+      await fileSystem.createFileLinkAtomic(ownerAuth, serviceAuth, "windows"),
+      "changed",
+    );
+    assert.equal(resolve(root, await readlink(serviceAuth)), resolve(ownerAuth));
+    assert.equal(
+      await fileSystem.createFileLinkAtomic(ownerAuth, serviceAuth, "windows"),
+      "unchanged",
+    );
+    await assert.rejects(
+      fileSystem.createFileLinkAtomic(ownerAuth, occupied, "windows"),
+      (error: unknown) =>
+        error instanceof NativeBoundaryError && error.code === "NATIVE_FILESYSTEM_UNSAFE",
+    );
+  },
+);
+
+test(
+  "the macOS activation link repairs service-group traversal on an unchanged target",
+  { skip: process.platform !== "darwin" },
+  async (context) => {
+    const root = await mkdtemp(join(tmpdir(), "opendelegate-native-activation-link-"));
+    context.after(async () => {
+      await rm(root, { force: true, recursive: true });
+    });
+    const release = join(root, "release");
+    const current = join(root, "current");
+    await mkdir(release);
+    await symlink(release, current, "dir");
+    await lchmod(current, 0o700);
+
+    const fileSystem = createNodeNativeServiceBoundaries().fileSystem;
+    assert.equal(await fileSystem.createDirectoryLinkAtomic(release, current, "macos"), "changed");
+    assert.equal((await lstat(current)).mode & 0o777, 0o750);
+    assert.equal(resolve(root, await readlink(current)), resolve(release));
   },
 );

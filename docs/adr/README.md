@@ -75,6 +75,18 @@ approved product specification.
 52. [`0055-owner-cycle-scoped-work-order-ids.md`](0055-owner-cycle-scoped-work-order-ids.md)
 53. [`0056-authority-reducing-work-order-default.md`](0056-authority-reducing-work-order-default.md)
 54. [`0057-production-managed-worktree-composition.md`](0057-production-managed-worktree-composition.md)
+55. [`0058-discord-single-current-localized-surface.md`](0058-discord-single-current-localized-surface.md)
+56. [`0059-discord-sequential-approval-clarity.md`](0059-discord-sequential-approval-clarity.md)
+57. [`0060-worker-failures-lead-with-diagnostics.md`](0060-worker-failures-lead-with-diagnostics.md)
+58. [`0061-discord-interactions-ack-before-thread-work.md`](0061-discord-interactions-ack-before-thread-work.md)
+59. [`0062-device-channel-prefix-acknowledgement-is-bounded.md`](0062-device-channel-prefix-acknowledgement-is-bounded.md)
+60. [`0063-codex-app-server-notification-catalog.md`](0063-codex-app-server-notification-catalog.md)
+61. [`0064-worker-identity-key-diagnostics.md`](0064-worker-identity-key-diagnostics.md)
+62. [`0065-artifact-gateway-installation-and-worker-diagnostics.md`](0065-artifact-gateway-installation-and-worker-diagnostics.md)
+63. [`0066-post-turn-artifact-evidence.md`](0066-post-turn-artifact-evidence.md)
+64. [`0067-windows-owner-agent-launcher-path.md`](0067-windows-owner-agent-launcher-path.md)
+65. [`0068-windows-codex-service-home.md`](0068-windows-codex-service-home.md)
+66. [`0069-direct-artifact-tls-and-main-ca-trust.md`](0069-direct-artifact-tls-and-main-ca-trust.md)
 
 ## Proposed ADRs
 

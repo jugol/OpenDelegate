@@ -226,6 +226,19 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         send({ id: message.id, error: { code: -32602, message: "unexpected effort" } });
         continue;
       }
+      if (process.env.FIXTURE_EXPECT_TURN_SANDBOX) {
+        const sandboxPolicy = message.params.sandboxPolicy;
+        if (
+          sandboxPolicy?.type !== process.env.FIXTURE_EXPECT_TURN_SANDBOX ||
+          (sandboxPolicy.type === "workspaceWrite" &&
+            (sandboxPolicy.networkAccess !== false ||
+              !Array.isArray(sandboxPolicy.writableRoots) ||
+              !sandboxPolicy.writableRoots.includes(process.cwd())))
+        ) {
+          send({ id: message.id, error: { code: -32602, message: "sandbox policy mismatch" } });
+          continue;
+        }
+      }
       send({
         id: message.id,
         result: {
@@ -243,6 +256,37 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         send({
           method: "skills/changed",
           params: { threadId },
+        });
+      }
+      if (process.env.FIXTURE_CODEX_EMIT_V0146_NOTIFICATIONS === "1") {
+        send({
+          method: "thread/name/updated",
+          params: { threadId, threadName: "Fixture Task" },
+        });
+        send({
+          method: "hook/started",
+          params: { threadId, turnId, run: { id: "hook-fixture" } },
+        });
+        send({
+          method: "hook/completed",
+          params: { threadId, turnId, run: { id: "hook-fixture", status: "completed" } },
+        });
+        send({
+          method: "fs/changed",
+          params: { paths: [] },
+        });
+        send({
+          method: "error",
+          params: {
+            threadId,
+            turnId,
+            willRetry: true,
+            error: {
+              message: "private fixture provider detail",
+              codexErrorInfo: null,
+              additionalDetails: null,
+            },
+          },
         });
       }
       if (process.env.FIXTURE_CODEX_EMIT_UNSUPPORTED_AFTER_TURN_STARTED === "1") {
@@ -281,6 +325,22 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
       }
       if (process.env.FIXTURE_CODEX_WAIT_FOR_STEER === "1") {
         continue;
+      }
+      if (process.env.FIXTURE_CODEX_EMIT_PHASED_MESSAGES === "1") {
+        send({
+          method: "item/completed",
+          params: {
+            threadId,
+            turnId,
+            completedAtMs: Date.now(),
+            item: {
+              type: "agentMessage",
+              id: "message-commentary-1",
+              text: "Creating the requested file now.",
+              phase: "commentary",
+            },
+          },
+        });
       }
       if (process.env.FIXTURE_EMIT_NATIVE_SUBAGENTS === "1") {
         const childCount = Number(process.env.FIXTURE_NATIVE_SUBAGENT_COUNT ?? "1");
@@ -389,6 +449,9 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
         },
       });
       approvalPending = true;
+      if (process.env.FIXTURE_CODEX_EXIT_AFTER_APPROVAL_REQUEST === "1") {
+        process.exit(0);
+      }
       continue;
     }
     if (message.id === approvalRequestId && approvalPending) {
@@ -449,6 +512,9 @@ if (provider === "codex-app-server" || (provider === "codex" && args[0] === "app
             type: "agentMessage",
             id: "message-1",
             text: "Finished through App Server",
+            ...(process.env.FIXTURE_CODEX_EMIT_PHASED_MESSAGES === "1"
+              ? { phase: "final_answer" }
+              : {}),
           },
         },
       });

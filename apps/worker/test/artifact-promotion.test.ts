@@ -11,7 +11,10 @@ import {
   type WorkerRunAssignmentV1,
 } from "@opendelegate/worker-runtime";
 
-import { FileManifestWorkerArtifactLifecycle } from "../src/artifact-promotion.ts";
+import {
+  FileManifestWorkerArtifactLifecycle,
+  WorkerArtifactPromotionError,
+} from "../src/artifact-promotion.ts";
 
 function assignment(): WorkerRunAssignmentV1 {
   const workOrder: WorkOrderV1 = {
@@ -154,6 +157,91 @@ test("a valid per-Run manifest promotes regular files with immutable assignment 
     assert.notEqual(delivered[0]?.sourcePath, await realpath(originalArtifactPath));
     assert.match(delivered[0]?.sourcePath ?? "", /\.sealed-artifacts-/u);
     assert.equal(delivered[0]?.bytes, "durable report\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Artifact delivery preserves an explicit retry decision and defaults unknown transport failures to retryable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-artifact-delivery-failure-"));
+  const checkout = join(root, "checkout");
+  const workspaceDirectory = join(root, "workspace");
+  await Promise.all([mkdir(checkout), mkdir(workspaceDirectory)]);
+  const workspace = {
+    workspaceId: "workspace-reports",
+    cwd: await realpath(workspaceDirectory),
+    isolation: "none" as const,
+  };
+
+  try {
+    for (const variant of [
+      {
+        name: "explicit-terminal",
+        error: Object.assign(new Error("Main rejected the Artifact."), { retryable: false }),
+        expectedRetryable: false,
+      },
+      {
+        name: "unknown-transport",
+        error: new Error("The connection closed."),
+        expectedRetryable: true,
+      },
+    ] as const) {
+      const staging = join(root, variant.name, "artifact-staging");
+      await mkdir(staging, { recursive: true });
+      const lifecycle = await FileManifestWorkerArtifactLifecycle.create({
+        stagingRoot: staging,
+        sourceCheckoutRoot: checkout,
+        delivery: {
+          deliver() {
+            return Promise.reject(variant.error);
+          },
+        },
+      });
+      const currentAssignment = assignment();
+      const assignmentFingerprint = workerArtifactAssignmentFingerprint(
+        currentAssignment,
+        workspace.workspaceId,
+      );
+      const plan = await lifecycle.prepare({
+        assignment: currentAssignment,
+        workspace,
+        assignmentFingerprint,
+      });
+      await writeFile(join(plan.outputRoot, "report.md"), "durable report\n");
+      await writeFile(
+        plan.manifestPath,
+        JSON.stringify({
+          schemaVersion: 1,
+          assignmentFingerprint,
+          artifacts: [
+            {
+              relativePath: "report.md",
+              mediaType: "text/markdown",
+              originalFilename: "report.md",
+            },
+          ],
+        }),
+      );
+
+      await assert.rejects(
+        lifecycle.promote({
+          assignment: currentAssignment,
+          workspace,
+          plan,
+          egressGuard: WorkerEgressGuard.empty(),
+          isExecutionCurrent: () => Promise.resolve(true),
+        }),
+        (error: unknown) => {
+          assert.equal(error instanceof WorkerArtifactPromotionError, true);
+          assert.equal((error as WorkerArtifactPromotionError).code, "DELIVERY_FAILED");
+          assert.equal(
+            (error as WorkerArtifactPromotionError).retryable,
+            variant.expectedRetryable,
+          );
+          return true;
+        },
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

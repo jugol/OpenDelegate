@@ -107,6 +107,7 @@ const allowedTransitions = {
   waiting_user: ["queued", "running", "waiting_resource", "failed", "paused", "cancelled"],
   waiting_resource: ["queued", "running", "waiting_user", "failed", "paused", "cancelled"],
   review: [
+    "queued",
     "running",
     "waiting_user",
     "waiting_resource",

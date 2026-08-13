@@ -5,6 +5,7 @@ import type {
   DiscordInstallationProbe,
   DiscordIntent,
   DiscordMessage,
+  DiscordMessageAttachmentUpload,
   DiscordMessagePayload,
   DiscordPermission,
   DiscordThread,
@@ -22,6 +23,11 @@ import {
   requireSnowflakeArray,
 } from "./discord-wire.ts";
 import { DiscordApiError } from "./errors.ts";
+import {
+  isDiscordNativeAttachmentFilename,
+  isDiscordNativeAttachmentMediaType,
+  isDiscordNativeAttachmentSize,
+} from "./native-attachment.ts";
 
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
@@ -424,6 +430,7 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     threadId: string;
     requestKey: string;
     payload: DiscordMessagePayload;
+    attachment?: DiscordMessageAttachmentUpload;
   }): Promise<{ readonly messageId: string }> {
     assertSnowflake(input.threadId, "Discord thread ID");
     assertRequestKey(input.requestKey);
@@ -431,6 +438,7 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       input.threadId,
       input.requestKey,
       validateMessagePayload(input.payload),
+      input.attachment === undefined ? undefined : validateAttachmentUpload(input.attachment),
     );
   }
 
@@ -602,16 +610,57 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
     threadId: string,
     requestKey: string,
     payload: DiscordMessagePayload,
+    attachment?: DiscordMessageAttachmentUpload,
   ): Promise<{ readonly messageId: string }> {
+    const body = {
+      ...payload,
+      nonce: nonceForRequestKey(requestKey),
+      enforce_nonce: true,
+    };
     const response = requireRecord(
-      await this.#botJson("POST", `/channels/${threadId}/messages`, {
-        ...payload,
-        nonce: nonceForRequestKey(requestKey),
-        enforce_nonce: true,
-      }),
+      attachment === undefined
+        ? await this.#botJson("POST", `/channels/${threadId}/messages`, body)
+        : await this.#botMultipart(`/channels/${threadId}/messages`, body, attachment),
       "created message",
     );
     return Object.freeze({ messageId: requireSnowflake(response, "id") });
+  }
+
+  async #botMultipart(
+    path: string,
+    body: Record<string, unknown>,
+    attachment: DiscordMessageAttachmentUpload,
+  ): Promise<unknown> {
+    try {
+      return await this.#credentialProvider.withBotToken(async (botToken) => {
+        assertTransientToken(botToken);
+        const payloadText = encodeRequestJson({
+          ...body,
+          attachments: [{ id: 0, filename: attachment.filename }],
+        });
+        const form = new FormData();
+        form.append("payload_json", payloadText);
+        form.append(
+          "files[0]",
+          new Blob([Uint8Array.from(attachment.bytes)], { type: attachment.mediaType }),
+          attachment.filename,
+        );
+        return this.#request(
+          {
+            method: "POST",
+            path,
+            authenticated: true,
+          },
+          botToken,
+          form,
+        );
+      });
+    } catch (error) {
+      if (error instanceof DiscordApiError) {
+        throw error;
+      }
+      throw new DiscordApiError("OFFLINE", "The Discord bot credential provider is unavailable.");
+    }
   }
 
   async #botJson(method: DiscordRequest["method"], path: string, body?: unknown): Promise<unknown> {
@@ -669,6 +718,20 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
 
   async #json(request: DiscordRequest, botToken?: string): Promise<unknown> {
     const bodyText = request.body === undefined ? undefined : encodeRequestJson(request.body);
+    return this.#request(
+      request,
+      botToken,
+      bodyText,
+      bodyText === undefined ? undefined : "application/json",
+    );
+  }
+
+  async #request(
+    request: DiscordRequest,
+    botToken: string | undefined,
+    requestBody: RequestInit["body"] | undefined,
+    contentType?: string,
+  ): Promise<unknown> {
     const controller = new AbortController();
     let timeout: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<never>((_resolve, reject) => {
@@ -683,21 +746,21 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
         headers: {
           Accept: "application/json",
           "User-Agent": this.#userAgent,
-          ...(bodyText === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(contentType === undefined ? {} : { "Content-Type": contentType }),
           ...(request.authenticated
             ? { Authorization: `Bot ${botToken ?? unreachableCredential()}` }
             : {}),
         },
-        ...(bodyText === undefined ? {} : { body: bodyText }),
+        ...(requestBody === undefined ? {} : { body: requestBody }),
         signal: controller.signal,
       });
 
-      const body = await readBoundedBody(response, this.#maximumResponseBytes);
+      const responseBody = await readBoundedBody(response, this.#maximumResponseBytes);
       if (response.status === 429) {
         throw new DiscordApiError(
           "RATE_LIMIT",
           "Discord rate limited the request.",
-          retryAfterMs(response, body),
+          retryAfterMs(response, responseBody),
         );
       }
       if (response.status === 403) {
@@ -714,11 +777,13 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
             : "Discord rejected the request.",
         );
       }
-      if (body.byteLength === 0) {
+      if (responseBody.byteLength === 0) {
         return undefined;
       }
       try {
-        return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)) as unknown;
+        return JSON.parse(
+          new TextDecoder("utf-8", { fatal: true }).decode(responseBody),
+        ) as unknown;
       } catch {
         throw invalidResponse("Discord returned an invalid JSON response.");
       }
@@ -736,6 +801,24 @@ export class FetchDiscordApiPort implements DiscordApiPort, DiscordGatewayDiscov
       }
     }
   }
+}
+
+function validateAttachmentUpload(
+  attachment: DiscordMessageAttachmentUpload,
+): DiscordMessageAttachmentUpload {
+  if (
+    !isDiscordNativeAttachmentFilename(attachment.filename) ||
+    !isDiscordNativeAttachmentMediaType(attachment.mediaType) ||
+    !(attachment.bytes instanceof Uint8Array) ||
+    !isDiscordNativeAttachmentSize(attachment.bytes.byteLength)
+  ) {
+    throw invalidResponse("The Discord attachment upload is invalid.");
+  }
+  return Object.freeze({
+    filename: attachment.filename,
+    mediaType: attachment.mediaType,
+    bytes: Uint8Array.from(attachment.bytes),
+  });
 }
 
 async function readBoundedBody(response: Response, maximumBytes: number): Promise<Uint8Array> {

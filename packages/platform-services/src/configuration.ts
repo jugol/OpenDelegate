@@ -7,6 +7,7 @@ import {
   type PlatformServiceConfiguration,
   type PlatformServiceDefinition,
 } from "./types.ts";
+import { isCanonicalLocalWindowsPath, parseWindowsOwnerHome } from "./windows-owner-home.ts";
 
 const BASE_KEYS = new Set([
   "platform",
@@ -45,7 +46,20 @@ const WINDOWS_SERVICE_SECRET_BINDING_KEYS = new Set([
 ]);
 const WINDOWS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "vaultRoot"]);
 const WINDOWS_AGENT_SANDBOX_KEYS = new Set(["codexSandboxBinDirectory"]);
+const WINDOWS_AGENT_PROVIDER_ACCESS_KEYS = new Set([
+  "codexHomeDirectory",
+  "codexServiceHomeDirectory",
+  "claudeHomeDirectory",
+]);
 const MACOS_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "helperPath", "expectedHelperSha256"]);
+const MACOS_SERVICE_SECRET_BINDING_KEYS = new Set([
+  "backend",
+  "bindingPath",
+  "helperPath",
+  "expectedHelperSha256",
+  "keychainPath",
+  "serviceUserName",
+]);
 const LINUX_HELPER_SECRET_BINDING_KEYS = new Set(["backend", "secretToolPath"]);
 const HEALTH_KEYS = new Set(["endpoint", "timeoutMs"]);
 const CORE_IPC_TRUST_KEYS = new Set(["protocolVersion", "core"]);
@@ -101,7 +115,9 @@ export function parsePlatformServiceConfiguration(input: unknown): PlatformServi
 function validateConfiguration(input: PlatformServiceConfiguration): void {
   assertRecord(input, "configuration");
   const expectedKeys =
-    input.platform === "windows" ? BASE_KEYS : new Set([...BASE_KEYS, "serviceIdentity"]);
+    input.platform === "windows"
+      ? new Set([...BASE_KEYS, "agentProviderAccess"])
+      : new Set([...BASE_KEYS, "serviceIdentity"]);
   assertExactKeys(
     input,
     expectedKeys,
@@ -109,7 +125,7 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       ? new Set(["systemdCredential"])
       : input.platform === "windows"
         ? new Set(["agentSandbox", "serviceSecretBinding"])
-        : undefined,
+        : new Set(["serviceSecretBinding"]),
   );
 
   if (!["windows", "macos", "linux"].includes(input.platform)) {
@@ -218,6 +234,20 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
     }
     if (!/^S-\d(?:-\d+)+$/.test(input.ownerSession.stableUserId)) {
       throw new PlatformServiceError("INVALID_IDENTITY", "Windows owner session requires a SID.");
+    }
+    if (input.ownerSession.uid !== undefined) {
+      throw new PlatformServiceError(
+        "INVALID_IDENTITY",
+        "Windows owner session cannot declare a Unix UID.",
+      );
+    }
+    if (input.ownerSession.homeDirectory !== undefined) {
+      if (parseWindowsOwnerHome(input.ownerSession.homeDirectory) === undefined) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          "ownerSession.homeDirectory must be a normalized absolute non-root Windows path.",
+        );
+      }
     }
     assertRecord(input.helperSecretBinding, "helperSecretBinding");
     assertExactKeys(input.helperSecretBinding, WINDOWS_HELPER_SECRET_BINDING_KEYS);
@@ -332,6 +362,152 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
         );
       }
     }
+    assertRecord(input.agentProviderAccess, "agentProviderAccess");
+    assertExactKeys(input.agentProviderAccess, WINDOWS_AGENT_PROVIDER_ACCESS_KEYS);
+    const ownerHome = input.ownerSession.homeDirectory;
+    if (ownerHome === undefined) {
+      throw new PlatformServiceError(
+        "INVALID_IDENTITY",
+        "Windows Agent provider access requires the verified owner profile directory.",
+      );
+    }
+    const launcherDirectories = [
+      ["owner .local launcher directory", win32.join(ownerHome, ".local", "bin")],
+      ["owner npm launcher directory", win32.join(ownerHome, "AppData", "Roaming", "npm")],
+    ] as const;
+    const providerHomes = [
+      [
+        "codex",
+        "agentProviderAccess.codexHomeDirectory",
+        input.agentProviderAccess.codexHomeDirectory,
+      ],
+      [
+        "codex",
+        "agentProviderAccess.codexServiceHomeDirectory",
+        input.agentProviderAccess.codexServiceHomeDirectory,
+      ],
+      [
+        "claude",
+        "agentProviderAccess.claudeHomeDirectory",
+        input.agentProviderAccess.claudeHomeDirectory,
+      ],
+    ] as const;
+    for (const [provider, name, providerHome] of providerHomes) {
+      if (!isCanonicalLocalWindowsPath(providerHome)) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          `${name} must be a canonical local DOS-drive path without Win32 aliases.`,
+        );
+      }
+      if (win32.dirname(providerHome) === providerHome) {
+        throw new PlatformServiceError("INVALID_PATH", `${name} cannot be a volume root.`);
+      }
+      const managedProviderRoot = win32.join(input.paths.stateRoot, "state", "providers", provider);
+      const belongsToOwner = isDescendantPath("windows", ownerHome, providerHome);
+      const belongsToManagedProvider =
+        samePath("windows", managedProviderRoot, providerHome) ||
+        isDescendantPath("windows", managedProviderRoot, providerHome);
+      if (!belongsToOwner && !belongsToManagedProvider) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          `${name} must be inside the verified owner profile or its exact managed provider root.`,
+        );
+      }
+      const protectedRoots = [
+        ["source checkout", input.paths.sourceCheckoutDirectory],
+        ["release bundle", input.bundle.sourceDirectory],
+        ["install root", input.paths.installRoot],
+        ["desktop authority root", input.paths.authorityRoot],
+        ["runtime root", input.paths.runtimeRoot],
+        ["log root", input.paths.logRoot],
+        ["owner helper Secret vault", input.helperSecretBinding.vaultRoot],
+        ...(belongsToManagedProvider
+          ? []
+          : ([["service state root", input.paths.stateRoot]] as const)),
+        ...(input.serviceSecretBinding === undefined
+          ? []
+          : ([
+              ["service Secret handoff root", input.serviceSecretBinding.handoffRoot],
+              ["service Secret vault", input.serviceSecretBinding.vaultRoot],
+            ] as const)),
+        ...launcherDirectories,
+      ] as const;
+      for (const [protectedName, protectedPath] of protectedRoots) {
+        if (pathsOverlap("windows", protectedPath, providerHome)) {
+          throw new PlatformServiceError(
+            protectedName === "source checkout" ? "PATH_INSIDE_CHECKOUT" : "INVALID_PATH",
+            `${name} must remain disjoint from the ${protectedName}.`,
+          );
+        }
+      }
+    }
+    const expectedCodexServiceHome = win32.join(
+      input.paths.stateRoot,
+      "state",
+      "providers",
+      "codex",
+    );
+    if (
+      !samePath(
+        "windows",
+        input.agentProviderAccess.codexServiceHomeDirectory,
+        expectedCodexServiceHome,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "agentProviderAccess.codexServiceHomeDirectory must be the exact managed Codex provider root.",
+      );
+    }
+    if (
+      pathsOverlap(
+        "windows",
+        input.agentProviderAccess.codexHomeDirectory,
+        input.agentProviderAccess.codexServiceHomeDirectory,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The owner and service Codex homes must be disjoint.",
+      );
+    }
+    if (
+      pathsOverlap(
+        "windows",
+        input.agentProviderAccess.codexHomeDirectory,
+        input.agentProviderAccess.claudeHomeDirectory,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The Codex and Claude provider homes must be disjoint.",
+      );
+    }
+    if (
+      pathsOverlap(
+        "windows",
+        input.agentProviderAccess.codexServiceHomeDirectory,
+        input.agentProviderAccess.claudeHomeDirectory,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The service Codex and Claude homes must be disjoint.",
+      );
+    }
+    if (
+      input.agentSandbox !== undefined &&
+      !samePath(
+        "windows",
+        win32.dirname(input.agentSandbox.codexSandboxBinDirectory),
+        input.agentProviderAccess.codexServiceHomeDirectory,
+      )
+    ) {
+      throw new PlatformServiceError(
+        "INVALID_PATH",
+        "The Codex sandbox helper must be the direct child of the bound Codex home.",
+      );
+    }
   } else {
     assertAccountName(input.ownerSession.userName, "owner session user");
     if (!Number.isSafeInteger(input.ownerSession.uid) || (input.ownerSession.uid ?? -1) < 0) {
@@ -371,6 +547,52 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
       throw new PlatformServiceError("INVALID_IDENTITY", "The core service must not run as root.");
     }
     if (input.platform === "macos") {
+      assertRecord(input.serviceSecretBinding, "serviceSecretBinding");
+      assertExactKeys(input.serviceSecretBinding, MACOS_SERVICE_SECRET_BINDING_KEYS);
+      if (
+        input.serviceSecretBinding.backend !== "macos-system-keychain" ||
+        input.serviceSecretBinding.keychainPath !== "/Library/Keychains/System.keychain" ||
+        input.serviceSecretBinding.serviceUserName !== input.serviceIdentity.userName ||
+        !/^sha256:[a-f0-9]{64}$/u.test(input.serviceSecretBinding.expectedHelperSha256)
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_CONFIGURATION",
+          "The macOS System Keychain service binding is invalid.",
+        );
+      }
+      assertSafeAbsolutePath(
+        "macos",
+        input.serviceSecretBinding.bindingPath,
+        "serviceSecretBinding.bindingPath",
+      );
+      assertSafeAbsolutePath(
+        "macos",
+        input.serviceSecretBinding.helperPath,
+        "serviceSecretBinding.helperPath",
+      );
+      if (
+        !input.serviceSecretBinding.bindingPath.startsWith(
+          "/Library/Application Support/OpenDelegate/",
+        ) ||
+        !input.serviceSecretBinding.helperPath.startsWith(
+          "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-",
+        ) ||
+        samePath(
+          "macos",
+          input.paths.sourceCheckoutDirectory,
+          input.serviceSecretBinding.helperPath,
+        ) ||
+        isDescendantPath(
+          "macos",
+          input.paths.sourceCheckoutDirectory,
+          input.serviceSecretBinding.helperPath,
+        )
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_PATH",
+          "The macOS System Keychain binding must use the root-owned OpenDelegate locations.",
+        );
+      }
       assertRecord(input.helperSecretBinding, "helperSecretBinding");
       assertExactKeys(input.helperSecretBinding, MACOS_HELPER_SECRET_BINDING_KEYS);
       if (
@@ -388,11 +610,30 @@ function validateConfiguration(input: PlatformServiceConfiguration): void {
         "helperSecretBinding.helperPath",
       );
       if (
-        !isDescendantPath("macos", input.paths.installRoot, input.helperSecretBinding.helperPath)
+        !isDescendantPath("macos", input.paths.installRoot, input.helperSecretBinding.helperPath) &&
+        !samePath(
+          "macos",
+          input.serviceSecretBinding.helperPath,
+          input.helperSecretBinding.helperPath,
+        )
       ) {
         throw new PlatformServiceError(
           "INVALID_PATH",
           "The pinned macOS Keychain helper must be inside the immutable installation.",
+        );
+      }
+      if (
+        samePath(
+          "macos",
+          input.serviceSecretBinding.helperPath,
+          input.helperSecretBinding.helperPath,
+        ) &&
+        input.serviceSecretBinding.expectedHelperSha256 !==
+          input.helperSecretBinding.expectedHelperSha256
+      ) {
+        throw new PlatformServiceError(
+          "INVALID_CONFIGURATION",
+          "The shared macOS Keychain helper must have one pinned digest.",
         );
       }
     } else if (input.helperSecretBinding !== null) {
@@ -695,6 +936,14 @@ function samePath(platform: PlatformFamily, left: string, right: string): boolea
     return win32.normalize(left).toLowerCase() === win32.normalize(right).toLowerCase();
   }
   return posix.normalize(left) === posix.normalize(right);
+}
+
+function pathsOverlap(platform: PlatformFamily, left: string, right: string): boolean {
+  return (
+    samePath(platform, left, right) ||
+    isDescendantPath(platform, left, right) ||
+    isDescendantPath(platform, right, left)
+  );
 }
 
 function isDescendantPath(platform: PlatformFamily, parent: string, candidate: string): boolean {

@@ -48,6 +48,14 @@ export interface ComposeServiceConfigurationInput {
     readonly helperPath: string;
     readonly expectedHelperSha256: `sha256:${string}`;
   };
+  /** Root-prepared System Keychain binding used only by the LaunchDaemon core. */
+  readonly macOsSystemKeychain?: {
+    readonly bindingPath: string;
+    readonly helperPath: string;
+    readonly expectedHelperSha256: `sha256:${string}`;
+    readonly keychainPath: "/Library/Keychains/System.keychain";
+    readonly serviceUserName: string;
+  };
   /** Required only on graphical Linux, where owner Secrets use Secret Service. */
   readonly linuxSecretToolPath?: string;
   /**
@@ -64,6 +72,11 @@ export interface ComposeServiceConfigurationInput {
   };
   readonly windowsAgentSandbox?: {
     readonly codexSandboxBinDirectory: string;
+  };
+  readonly windowsAgentProviderAccess?: {
+    readonly codexHomeDirectory: string;
+    readonly codexServiceHomeDirectory: string;
+    readonly claudeHomeDirectory: string;
   };
   /** Existing owner DPAPI vault that retains only the session-helper identity. */
   readonly windowsOwnerHelperVaultRoot?: string;
@@ -147,6 +160,10 @@ export function composeServiceConfiguration(
       ...(input.windowsAgentSandbox === undefined
         ? {}
         : { agentSandbox: input.windowsAgentSandbox }),
+      agentProviderAccess: required(
+        input.windowsAgentProviderAccess,
+        "The exact Windows Agent provider-home binding is required.",
+      ),
     });
   }
   const serviceIdentity = required(
@@ -159,6 +176,10 @@ export function composeServiceConfiguration(
       input.macOsKeychainHelper,
       "The pinned macOS Keychain helper is required.",
     );
+    const systemKeychain = required(
+      input.macOsSystemKeychain,
+      "The prepared macOS System Keychain binding is required.",
+    );
     return parsePlatformServiceConfiguration({
       platform: "macos",
       ...base,
@@ -167,6 +188,14 @@ export function composeServiceConfiguration(
         backend: "macos-keychain",
         helperPath: helper.helperPath,
         expectedHelperSha256: helper.expectedHelperSha256,
+      },
+      serviceSecretBinding: {
+        backend: "macos-system-keychain",
+        bindingPath: systemKeychain.bindingPath,
+        helperPath: systemKeychain.helperPath,
+        expectedHelperSha256: systemKeychain.expectedHelperSha256,
+        keychainPath: systemKeychain.keychainPath,
+        serviceUserName: systemKeychain.serviceUserName,
       },
     });
   }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign as signPayload } from "node:crypto";
+import { posix, win32 } from "node:path";
 import test from "node:test";
 
 import {
@@ -64,10 +65,17 @@ class MemoryJournal implements ServiceCommandJournal {
 class FakeFileSystem implements NativeFileSystemBoundary {
   public readonly kinds = new Map<string, NativePathKind>();
   public readonly files = new Map<string, Buffer>();
+  public readonly modes = new Map<string, number>();
   public readonly links = new Map<string, string>();
   public readonly removed: string[] = [];
   public readonly directories = new Map<string, NativeDirectoryEntry[]>();
   public readonly reads: string[] = [];
+  public readonly posixAccessChanges: {
+    readonly path: string;
+    readonly uid: number;
+    readonly gid: number;
+    readonly mode: number;
+  }[] = [];
 
   public async inspect(path: string) {
     const kind =
@@ -82,7 +90,11 @@ class FakeFileSystem implements NativeFileSystemBoundary {
     return {
       kind,
       ...(kind === "regular-file"
-        ? { size: this.files.get(path)?.length ?? 0, modifiedAtMs: 1 }
+        ? {
+            size: this.files.get(path)?.length ?? 0,
+            modifiedAtMs: 1,
+            mode: this.modes.get(path) ?? 0o640,
+          }
         : {}),
     };
   }
@@ -104,8 +116,16 @@ class FakeFileSystem implements NativeFileSystemBoundary {
     return bytes;
   }
 
-  public async ensureDirectory(path: string, _mode: number): Promise<"changed" | "unchanged"> {
+  public async ensureDirectory(
+    path: string,
+    _mode: number,
+    recursive = true,
+  ): Promise<"changed" | "unchanged"> {
     const before = await this.inspect(path);
+    const parent = path.includes("\\") ? win32.dirname(path) : posix.dirname(path);
+    if (!recursive && (await this.inspect(parent)).kind !== "directory") {
+      throw new Error("missing exact parent");
+    }
     this.kinds.set(path, "directory");
     return before.kind === "directory" ? "unchanged" : "changed";
   }
@@ -128,6 +148,7 @@ class FakeFileSystem implements NativeFileSystemBoundary {
     }
     this.files.set(destination, Buffer.from(sourceBytes));
     this.kinds.set(destination, "regular-file");
+    this.modes.set(destination, this.modes.get(source) ?? 0o640);
   }
 
   public async renameAtomic(source: string, destination: string, _replace: boolean): Promise<void> {
@@ -153,21 +174,45 @@ class FakeFileSystem implements NativeFileSystemBoundary {
     return this.links.get(path);
   }
 
+  public async createFileLinkAtomic(
+    target: string,
+    linkPath: string,
+    _platform: "windows",
+  ): Promise<"changed" | "unchanged"> {
+    if (this.links.get(linkPath) === target) {
+      return "unchanged";
+    }
+    if ((await this.inspect(linkPath)).kind !== "missing") {
+      throw new Error("occupied file link");
+    }
+    this.links.set(linkPath, target);
+    this.kinds.set(linkPath, "symbolic-link");
+    return "changed";
+  }
+
+  public async readFileLink(path: string): Promise<string | undefined> {
+    return this.links.get(path);
+  }
+
   public async remove(path: string, _recursive: boolean): Promise<"changed" | "unchanged"> {
     const before = await this.inspect(path);
     this.kinds.set(path, "missing");
     this.files.delete(path);
+    this.modes.delete(path);
     this.links.delete(path);
     this.removed.push(path);
     return before.kind === "missing" ? "unchanged" : "changed";
   }
 
   public async setPosixOwnershipAndMode(
-    _path: string,
-    _uid: number,
-    _gid: number,
-    _mode: number,
-  ): Promise<void> {}
+    path: string,
+    uid: number,
+    gid: number,
+    mode: number,
+  ): Promise<void> {
+    this.posixAccessChanges.push({ path, uid, gid, mode });
+    this.modes.set(path, mode);
+  }
 
   public async sameVolume(_left: string, _right: string): Promise<boolean> {
     return true;
@@ -435,8 +480,17 @@ test("Windows Worker install accepts the release and staging root actions after 
   const serviceSid = "S-1-5-80-611375048-4065716985-2142524325-1255325421-3479547702";
   const configuration = windowsConfiguration({
     role: "worker",
+    ownerSession: {
+      ...windowsConfiguration().ownerSession,
+      homeDirectory: "C:\\Users\\owner",
+    },
     agentSandbox: {
-      codexSandboxBinDirectory: "C:\\Users\\owner\\.codex\\.sandbox-bin",
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
+    },
+    agentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
     },
     serviceSecretBinding: {
       backend: "windows-service-dpapi",
@@ -537,10 +591,39 @@ test("Windows Worker install accepts the release and staging root actions after 
   assert.ok(
     icaclsRequests.some(
       (request) =>
-        request.arguments[0] === "C:\\Users\\owner\\.codex\\.sandbox-bin" &&
+        request.arguments[0] ===
+          "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin" &&
         request.arguments.includes("NT SERVICE\\OpenDelegate-personal:(OI)(CI)F"),
     ),
   );
+  assert.ok(
+    icaclsRequests.findIndex((request) => request.arguments[0] === "C:\\Users\\owner\\.codex") <
+      icaclsRequests.findIndex(
+        (request) =>
+          request.arguments[0] ===
+          "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
+      ),
+  );
+  for (const [path, permission] of [
+    ["C:\\Users\\owner\\.codex", "(OI)(CI)M"],
+    ["C:\\Users\\owner\\.claude", "(OI)(CI)M"],
+    ["C:\\Users\\owner\\.local\\bin", "(OI)(CI)RX"],
+    ["C:\\Users\\owner\\AppData\\Roaming\\npm", "(OI)(CI)RX"],
+  ] as const) {
+    const grant = icaclsRequests.find((request) => request.arguments[0] === path);
+    assert.ok(grant, path);
+    assert.deepEqual(grant.arguments, [
+      path,
+      "/grant:r",
+      `NT SERVICE\\OpenDelegate-personal:${permission}`,
+      "/T",
+      "/L",
+      "/Q",
+    ]);
+    assert.equal(grant.arguments.includes("/inheritance:r"), false);
+    assert.equal(grant.arguments.includes("/reset"), false);
+    assert.equal(grant.arguments.includes("/setowner"), false);
+  }
   assert.equal(
     icaclsRequests.some(
       (request) =>
@@ -560,7 +643,433 @@ test("Windows Worker install accepts the release and staging root actions after 
   );
   assert.equal(
     icaclsRequests.some(
-      (request) => request.arguments.includes("/grant:r") && request.arguments.includes("/T"),
+      (request) =>
+        request.arguments[0] ===
+          "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin" &&
+        request.arguments.includes("/grant:r") &&
+        request.arguments.includes("/T"),
+    ),
+    false,
+  );
+});
+
+test("Windows provider access skips missing paths and rejects linked roots before ACL mutation", async () => {
+  const configuration = windowsConfiguration({
+    ownerSession: {
+      ...windowsConfiguration().ownerSession,
+      homeDirectory: "C:\\Users\\owner",
+    },
+    agentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+    },
+    agentSandbox: {
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
+    },
+    serviceSecretBinding: {
+      backend: "windows-service-dpapi",
+      handoffRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\handoff",
+      serviceName: "OpenDelegate-personal",
+      serviceSid: WINDOWS_SERVICE_SID,
+      vaultRoot: "C:\\ProgramData\\OpenDelegate\\state\\secrets\\service",
+    },
+  });
+  const plan = createServicePlan({
+    operation: "start",
+    configuration,
+    activeVersion: "1.2.3",
+  });
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
+  fileSystem.kinds.set("C:\\Users\\owner\\.codex", "missing");
+  const serviceCodexHome = configuration.agentProviderAccess.codexServiceHomeDirectory;
+  const serviceSandbox = configuration.agentSandbox?.codexSandboxBinDirectory;
+  assert.ok(serviceSandbox);
+  fileSystem.kinds.set(serviceCodexHome, "missing");
+  fileSystem.kinds.set(serviceSandbox, "missing");
+  const process = new FakeProcess();
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const skipped = await executor.execute({
+    commandId: "service-start-provider-access-missing",
+    configuration,
+    plan,
+  });
+  assert.equal(skipped.report.outcome, "succeeded");
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") &&
+        request.arguments[0] === "C:\\Users\\owner\\.codex",
+    ),
+    false,
+  );
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") &&
+        request.arguments[0] === "C:\\Users\\owner\\.claude",
+    ),
+    true,
+  );
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") &&
+        request.arguments[0] === "C:\\Users\\owner\\.claude" &&
+        request.arguments.includes("/T"),
+    ),
+    false,
+  );
+  assert.equal(fileSystem.kinds.get(serviceCodexHome), "directory");
+  assert.equal(fileSystem.kinds.get(serviceSandbox), "directory");
+  assert.equal(fileSystem.links.get(`${serviceCodexHome}\\auth.json`), undefined);
+
+  fileSystem.kinds.set("C:\\Users\\owner\\.claude", "symbolic-link");
+  process.requests.length = 0;
+  const linkedExecutor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  });
+
+  await assert.rejects(
+    linkedExecutor.execute({
+      commandId: "service-start-provider-access-link",
+      configuration,
+      plan,
+    }),
+    (error: unknown) => error instanceof ServiceCommandExecutionError,
+  );
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") &&
+        ["C:\\Users\\owner\\.codex", "C:\\Users\\owner\\.claude"].includes(
+          request.arguments[0] ?? "",
+        ),
+    ),
+    false,
+  );
+});
+
+test("Windows start rejects provider-home drift before ACL mutation", async () => {
+  const configuration = windowsConfiguration();
+  const fileSystem = new FakeFileSystem();
+  const runtime = renderPlatformServiceArtifacts(configuration).files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtime);
+  const drifted = JSON.parse(runtime.content) as {
+    agentProviderAccess: { codexHomeDirectory: string };
+  };
+  drifted.agentProviderAccess.codexHomeDirectory = "C:\\Users\\owner\\.other-codex";
+  fileSystem.files.set(runtime.path, Buffer.from(`${JSON.stringify(drifted, undefined, 2)}\n`));
+  fileSystem.kinds.set(runtime.path, "regular-file");
+  const process = new FakeProcess();
+  const journal = new MemoryJournal();
+  const { boundaries, mutations } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  await assert.rejects(
+    executor.execute({
+      commandId: "service-start-provider-home-drift",
+      configuration,
+      plan: createServicePlan({
+        operation: "start",
+        configuration,
+        activeVersion: "1.2.3",
+      }),
+    }),
+    isPreflightFailure,
+  );
+  assert.equal(journal.claims, 0);
+  assert.equal(mutations(), 0);
+  assert.equal(process.requests.length, 0);
+});
+
+test("Windows sandbox repair never recreates a provider home that disappears", async () => {
+  const configuration = windowsConfiguration({
+    agentSandbox: {
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
+  const codexHome = configuration.agentProviderAccess.codexServiceHomeDirectory;
+  const sandbox = configuration.agentSandbox?.codexSandboxBinDirectory;
+  assert.ok(sandbox);
+  fileSystem.kinds.set(sandbox, "missing");
+  const ensureDirectory = fileSystem.ensureDirectory.bind(fileSystem);
+  fileSystem.ensureDirectory = async (path, mode, recursive) => {
+    if (path === sandbox) {
+      fileSystem.kinds.set(codexHome, "missing");
+    }
+    return await ensureDirectory(path, mode, recursive);
+  };
+  const process = new FakeProcess();
+  process.handler = () => processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-start-sandbox-parent-disappeared",
+    configuration,
+    plan: createServicePlan({
+      operation: "start",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "failed");
+  assert.equal(result.report.failedStepId, "ensure-codex-sandbox-helper");
+  assert.equal(fileSystem.kinds.get(codexHome), "missing");
+  assert.equal(fileSystem.kinds.get(sandbox), "missing");
+});
+
+test("Windows sandbox repair revalidates an existing child before link-local ACL mutation", async () => {
+  const configuration = windowsConfiguration({
+    agentSandbox: {
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
+    },
+  });
+  const sandbox = configuration.agentSandbox?.codexSandboxBinDirectory;
+  assert.ok(sandbox);
+
+  const successfulFileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(successfulFileSystem, configuration);
+  const successfulProcess = new FakeProcess();
+  successfulProcess.handler = () => processResult(0);
+  const successfulBoundaries = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem: successfulFileSystem,
+    process: successfulProcess,
+  }).boundaries;
+  const successful = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries: successfulBoundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-sandbox-link-local-acl",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+  assert.equal(successful.report.outcome, "succeeded");
+  const sandboxAclRequests = successfulProcess.requests.filter(
+    (request) =>
+      request.executable.toLowerCase().endsWith("icacls.exe") && request.arguments[0] === sandbox,
+  );
+  assert.ok(sandboxAclRequests.length > 0);
+  assert.equal(
+    sandboxAclRequests.every((request) => request.arguments.includes("/L")),
+    true,
+  );
+
+  const racedFileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(racedFileSystem, configuration);
+  const racedJournal = new MemoryJournal();
+  const realPath = racedFileSystem.realPath.bind(racedFileSystem);
+  racedFileSystem.realPath = async (path) =>
+    path === sandbox && racedJournal.claims > 0
+      ? "C:\\Users\\owner\\redirected-sandbox"
+      : await realPath(path);
+  const racedProcess = new FakeProcess();
+  racedProcess.handler = () => processResult(0);
+  const racedBoundaries = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem: racedFileSystem,
+    process: racedProcess,
+  }).boundaries;
+  const raced = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries: racedBoundaries,
+    journalFactory: { create: () => racedJournal },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-existing-sandbox-race",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+  assert.equal(raced.report.outcome, "failed");
+  assert.equal(raced.report.failedStepId, "ensure-codex-sandbox-helper");
+  assert.equal(
+    racedProcess.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("icacls.exe") && request.arguments[0] === sandbox,
+    ),
+    false,
+  );
+
+  const ownerRaceFileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(ownerRaceFileSystem, configuration);
+  let ownerRaceAttempted = false;
+  const ownerRaceRealPath = ownerRaceFileSystem.realPath.bind(ownerRaceFileSystem);
+  ownerRaceFileSystem.realPath = async (path) =>
+    path === sandbox && ownerRaceAttempted
+      ? "C:\\Users\\owner\\redirected-after-owner-denial"
+      : await ownerRaceRealPath(path);
+  const ownerRaceProcess = new FakeProcess();
+  ownerRaceProcess.handler = (request) => {
+    if (
+      request.executable.toLowerCase().endsWith("icacls.exe") &&
+      request.arguments[0] === sandbox &&
+      request.arguments.includes("/setowner")
+    ) {
+      ownerRaceAttempted = true;
+      return processResult(5);
+    }
+    return processResult(0);
+  };
+  const ownerRace = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries: fakeBoundaries({
+      platform: "windows",
+      elevated: true,
+      loggedIn: false,
+      fileSystem: ownerRaceFileSystem,
+      process: ownerRaceProcess,
+    }).boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-sandbox-owner-race",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+  assert.equal(ownerRace.report.outcome, "failed");
+  assert.equal(ownerRace.report.failedStepId, "ensure-codex-sandbox-helper");
+  assert.equal(
+    ownerRaceProcess.requests.some((request) =>
+      request.executable.toLowerCase().endsWith("takeown.exe"),
+    ),
+    false,
+  );
+
+  const deniedFileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(deniedFileSystem, configuration);
+  const deniedProcess = new FakeProcess();
+  let deniedOwnerAttempts = 0;
+  deniedProcess.handler = (request) => {
+    if (
+      request.executable.toLowerCase().endsWith("icacls.exe") &&
+      request.arguments[0] === sandbox &&
+      request.arguments.includes("/setowner")
+    ) {
+      deniedOwnerAttempts += 1;
+      return processResult(deniedOwnerAttempts === 1 ? 5 : 0);
+    }
+    return processResult(0);
+  };
+  const deniedBoundaries = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem: deniedFileSystem,
+    process: deniedProcess,
+  }).boundaries;
+  const denied = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries: deniedBoundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-sandbox-owner-denied",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+  assert.equal(denied.report.outcome, "succeeded", JSON.stringify(denied.report));
+  assert.equal(deniedOwnerAttempts, 2);
+  assert.deepEqual(
+    deniedProcess.requests.find((request) =>
+      request.executable.toLowerCase().endsWith("takeown.exe"),
+    )?.arguments,
+    ["/F", sandbox, "/A", "/R", "/D", "N", "/SKIPSL"],
+  );
+});
+
+test("Windows Codex authentication linking rejects a different existing target", async () => {
+  const configuration = windowsConfiguration({
+    agentSandbox: {
+      codexSandboxBinDirectory:
+        "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex\\.sandbox-bin",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
+  const alias = `${configuration.agentProviderAccess.codexServiceHomeDirectory}\\auth.json`;
+  fileSystem.links.set(alias, "C:\\Users\\owner\\other-auth.json");
+  fileSystem.kinds.set(alias, "symbolic-link");
+  const process = new FakeProcess();
+  process.handler = () => processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+  });
+  const result = await createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  }).execute({
+    commandId: "service-start-wrong-codex-auth-link",
+    configuration,
+    plan: createServicePlan({ operation: "start", configuration, activeVersion: "1.2.3" }),
+  });
+
+  assert.equal(result.report.outcome, "failed");
+  assert.equal(result.report.failedStepId, "ensure-codex-auth-ssot-link");
+  assert.equal(fileSystem.links.get(alias), "C:\\Users\\owner\\other-auth.json");
+  assert.equal(
+    process.requests.some(
+      (request) =>
+        request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "start",
     ),
     false,
   );
@@ -935,6 +1444,337 @@ test("Windows upgrade accepts and repairs only the exact legacy restricted SID m
   );
 });
 
+test("Windows upgrade accepts only the exact predecessor helper Task without Hidden", async () => {
+  const configuration = windowsConfigurationWithServiceBinding("worker");
+  const installedConfiguration = windowsConfiguration({
+    ...configuration,
+    bundle: {
+      ...configuration.bundle,
+      version: "1.2.2",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    const content =
+      file.purpose === "helper-manifest"
+        ? file.content.replace("    <Hidden>true</Hidden>\n", "")
+        : file.content;
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: true,
+    healthRole: "worker",
+  });
+  const plan = createServicePlan({
+    operation: "upgrade",
+    configuration,
+    activeVersion: "1.2.2",
+  });
+  const helperManifest = installedArtifacts.files.find(
+    (file) => file.purpose === "helper-manifest",
+  );
+  assert.ok(helperManifest);
+  const exactPredecessor = fileSystem.files.get(helperManifest.path);
+  assert.ok(exactPredecessor);
+
+  fileSystem.files.set(
+    helperManifest.path,
+    Buffer.concat([exactPredecessor, Buffer.from(" ", "utf8")]),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration,
+      plan,
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+
+  fileSystem.files.set(helperManifest.path, exactPredecessor);
+  await preflightNativeServiceOperation({
+    platform: "windows",
+    boundaries,
+    configuration,
+    plan,
+    releaseVerifier: trustedRelease(),
+  });
+});
+
+test("macOS upgrade accepts only the exact legacy core manifest without the service PATH", async () => {
+  const configuration = macOsConfiguration();
+  const installedConfiguration = macOsConfiguration({
+    ...configuration,
+    bundle: {
+      ...configuration.bundle,
+      version: "1.2.2",
+    },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  const servicePathEntry = [
+    "  <key>EnvironmentVariables</key>",
+    "  <dict>",
+    "    <key>PATH</key>",
+    "    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>",
+    "  </dict>",
+    "",
+  ].join("\n");
+  for (const file of installedArtifacts.files) {
+    const content =
+      file.purpose === "core-manifest" ? file.content.replace(servicePathEntry, "") : file.content;
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  const legacyCoreManifest = installedArtifacts.files.find(
+    (file) => file.purpose === "core-manifest",
+  );
+  assert.ok(legacyCoreManifest);
+  const exactLegacyCoreBytes = fileSystem.files.get(legacyCoreManifest.path);
+  assert.ok(exactLegacyCoreBytes);
+  assert.doesNotMatch(exactLegacyCoreBytes.toString("utf8"), /EnvironmentVariables/u);
+  const { boundaries } = fakeBoundaries({
+    platform: "macos",
+    elevated: true,
+    loggedIn: true,
+    fileSystem,
+    process: new FakeProcess(),
+    healthy: true,
+    healthRole: "worker",
+  });
+  const plan = createServicePlan({
+    operation: "upgrade",
+    configuration,
+    activeVersion: "1.2.2",
+  });
+
+  fileSystem.files.set(
+    legacyCoreManifest.path,
+    Buffer.concat([exactLegacyCoreBytes, Buffer.from(" ", "utf8")]),
+  );
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "macos",
+      boundaries,
+      configuration,
+      plan,
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+
+  fileSystem.files.set(legacyCoreManifest.path, exactLegacyCoreBytes);
+  await preflightNativeServiceOperation({
+    platform: "macos",
+    boundaries,
+    configuration,
+    plan,
+    releaseVerifier: trustedRelease(),
+  });
+});
+
+test("Windows Worker upgrade accepts only the exact legacy runtime without owner bindings", async () => {
+  const base = windowsConfigurationWithServiceBinding("worker");
+  const configuration = windowsConfiguration({
+    ...base,
+    ownerSession: {
+      ...base.ownerSession,
+      homeDirectory: "C:\\Users\\owner",
+    },
+  });
+  const installedConfiguration = windowsConfiguration({
+    ...configuration,
+    bundle: { ...configuration.bundle, version: "1.2.2" },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    const content =
+      file.purpose === "runtime-configuration"
+        ? `${JSON.stringify(
+            (() => {
+              const legacy = JSON.parse(file.content) as {
+                ownerSession: { homeDirectory?: string };
+                agentProviderAccess?: unknown;
+              };
+              delete legacy.ownerSession.homeDirectory;
+              delete legacy.agentProviderAccess;
+              return legacy;
+            })(),
+            undefined,
+            2,
+          )}\n`
+        : file.content;
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: true,
+    healthRole: "worker",
+  });
+  const runtimeFile = installedArtifacts.files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtimeFile);
+  const exactLegacyBytes = fileSystem.files.get(runtimeFile.path);
+  assert.ok(exactLegacyBytes);
+
+  fileSystem.files.set(runtimeFile.path, Buffer.concat([exactLegacyBytes, Buffer.from(" ")]));
+  await assert.rejects(
+    preflightNativeServiceOperation({
+      platform: "windows",
+      boundaries,
+      configuration,
+      plan: createServicePlan({ operation: "upgrade", configuration, activeVersion: "1.2.2" }),
+      releaseVerifier: trustedRelease(),
+    }),
+    isPreflightFailure,
+  );
+
+  fileSystem.files.set(runtimeFile.path, exactLegacyBytes);
+  await preflightNativeServiceOperation({
+    platform: "windows",
+    boundaries,
+    configuration,
+    plan: createServicePlan({ operation: "upgrade", configuration, activeVersion: "1.2.2" }),
+    releaseVerifier: trustedRelease(),
+  });
+
+  const previousWithoutServiceHome = JSON.parse(runtimeFile.content) as {
+    agentProviderAccess: { codexServiceHomeDirectory?: string };
+  };
+  delete previousWithoutServiceHome.agentProviderAccess.codexServiceHomeDirectory;
+  fileSystem.files.set(
+    runtimeFile.path,
+    Buffer.from(`${JSON.stringify(previousWithoutServiceHome, undefined, 2)}\n`, "utf8"),
+  );
+  await preflightNativeServiceOperation({
+    platform: "windows",
+    boundaries,
+    configuration,
+    plan: createServicePlan({ operation: "upgrade", configuration, activeVersion: "1.2.2" }),
+    releaseVerifier: trustedRelease(),
+  });
+
+  const previousWithoutProviderHomes = JSON.parse(runtimeFile.content) as {
+    agentProviderAccess?: unknown;
+  };
+  delete previousWithoutProviderHomes.agentProviderAccess;
+  fileSystem.files.set(
+    runtimeFile.path,
+    Buffer.from(`${JSON.stringify(previousWithoutProviderHomes, undefined, 2)}\n`, "utf8"),
+  );
+  await preflightNativeServiceOperation({
+    platform: "windows",
+    boundaries,
+    configuration,
+    plan: createServicePlan({ operation: "upgrade", configuration, activeVersion: "1.2.2" }),
+    releaseVerifier: trustedRelease(),
+  });
+});
+
+test("Windows upgrade rollback restores the exact pre-migration runtime bytes", async () => {
+  const base = windowsConfigurationWithServiceBinding("worker");
+  const configuration = windowsConfiguration({
+    ...base,
+    health: {
+      ...base.health,
+      timeoutMs: 1_000,
+    },
+  });
+  const installedConfiguration = windowsConfiguration({
+    ...configuration,
+    bundle: { ...configuration.bundle, version: "1.2.2" },
+  });
+  const fileSystem = new FakeFileSystem();
+  const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
+  for (const file of installedArtifacts.files) {
+    let content = file.content;
+    if (file.purpose === "runtime-configuration") {
+      const legacy = JSON.parse(file.content) as { agentProviderAccess?: unknown };
+      delete legacy.agentProviderAccess;
+      content = `${JSON.stringify(legacy, undefined, 2)}\n`;
+    }
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
+    fileSystem.kinds.set(file.path, "regular-file");
+  }
+  fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
+    { name: "1.2.2", kind: "directory" },
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const runtimeFile = installedArtifacts.files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtimeFile);
+  const exactLegacyBytes = Buffer.from(fileSystem.files.get(runtimeFile.path)!);
+  const process = new FakeProcess();
+  process.handler = (request) =>
+    request.executable.toLowerCase().endsWith("sc.exe") && request.arguments[0] === "showsid"
+      ? processResult(0, `SERVICE SID: ${WINDOWS_SERVICE_SID}`)
+      : processResult(0);
+  const { boundaries } = fakeBoundaries({
+    platform: "windows",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthy: false,
+    healthRole: "worker",
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "windows",
+    boundaries,
+    journalFactory: { create: () => new MemoryJournal() },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-upgrade-legacy-runtime-rollback",
+    configuration,
+    plan: createServicePlan({
+      operation: "upgrade",
+      configuration,
+      activeVersion: "1.2.2",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "rolled-back", JSON.stringify(result.report));
+  assert.equal(result.report.failedStepId, "health-core");
+  assert.deepEqual(fileSystem.files.get(runtimeFile.path), exactLegacyBytes);
+  assert.doesNotMatch(exactLegacyBytes.toString("utf8"), /agentProviderAccess/u);
+});
+
 test("Windows Worker upgrade accepts only a coherent staged credential migration", async () => {
   const targetConfiguration = windowsConfigurationWithServiceBinding("worker");
   const previousCore = {
@@ -959,7 +1799,13 @@ test("Windows Worker upgrade accepts only a coherent staged credential migration
   const fileSystem = new FakeFileSystem();
   const installedArtifacts = renderPlatformServiceArtifacts(installedConfiguration);
   for (const file of installedArtifacts.files) {
-    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, file.content));
+    let content = file.content;
+    if (file.purpose === "runtime-configuration") {
+      const predecessor = JSON.parse(file.content) as { agentProviderAccess?: unknown };
+      delete predecessor.agentProviderAccess;
+      content = `${JSON.stringify(predecessor, undefined, 2)}\n`;
+    }
+    fileSystem.files.set(file.path, renderedFileBytes(file.encoding, content));
     fileSystem.kinds.set(file.path, "regular-file");
   }
   fileSystem.directories.set("C:\\Program Files\\OpenDelegate\\releases", [
@@ -1224,11 +2070,202 @@ test("Linux install rejects an existing service account with a mismatched primar
   assert.equal(mutations(), 0);
 });
 
+test("macOS install accepts the native-prefixed hidden-account attribute", async () => {
+  const configuration = macOsConfiguration({ role: "worker" });
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (request.executable === "/usr/bin/dscl") {
+      const attribute = request.arguments[3];
+      if (attribute === "PrimaryGroupID") {
+        return processResult(0, "PrimaryGroupID: 490\n");
+      }
+      if (attribute === "UserShell") {
+        return processResult(0, "UserShell: /usr/bin/false\n");
+      }
+      if (attribute === "NFSHomeDirectory") {
+        return processResult(0, "NFSHomeDirectory: /var/empty\n");
+      }
+      if (attribute === "UniqueID") {
+        return processResult(0, "UniqueID: 490\n");
+      }
+      if (attribute === "IsHidden") {
+        return processResult(0, "dsAttrTypeNative:IsHidden: 1\n");
+      }
+      return processResult(0);
+    }
+    if (request.executable === "/usr/sbin/dseditgroup") {
+      return processResult(0, "yes owner is a member of _opendelegate\n");
+    }
+    if (request.executable === "/usr/bin/id") {
+      return processResult(0, "490\n");
+    }
+    return processResult(0);
+  };
+  const journal = new MemoryJournal();
+  const fileSystem = new FakeFileSystem();
+  fileSystem.directories.set("/Library/OpenDelegate/releases", [
+    { name: "1.2.3", kind: "directory" },
+  ]);
+  const { boundaries } = fakeBoundaries({
+    platform: "macos",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthRole: "worker",
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "macos",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-install-existing-macos-account",
+    configuration,
+    plan: createServicePlan({ operation: "install", configuration }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+});
+
+test("macOS staging grants the service group access to every copied release path", async () => {
+  const configuration = macOsConfiguration({ role: "worker" });
+  const plan = createServicePlan({ operation: "install", configuration });
+  const stageStep = plan.steps.find((step) => step.action.kind === "release.stage");
+  const promoteStep = plan.steps.find((step) => step.action.kind === "release.promote");
+  assert.equal(stageStep?.action.kind, "release.stage");
+  assert.equal(promoteStep?.action.kind, "release.promote");
+  if (
+    stageStep?.action.kind !== "release.stage" ||
+    promoteStep?.action.kind !== "release.promote"
+  ) {
+    throw new Error("expected release staging and promotion steps");
+  }
+  const stagingDirectory = stageStep.action.stagingDirectory;
+  const releaseDirectory = promoteStep.action.releaseDirectory;
+
+  const process = new FakeProcess();
+  process.handler = (request) => {
+    if (request.executable === "/usr/bin/dscl") {
+      const attribute = request.arguments[3];
+      if (attribute === "PrimaryGroupID") {
+        return processResult(0, "PrimaryGroupID: 490\n");
+      }
+      if (attribute === "UserShell") {
+        return processResult(0, "UserShell: /usr/bin/false\n");
+      }
+      if (attribute === "NFSHomeDirectory") {
+        return processResult(0, "NFSHomeDirectory: /var/empty\n");
+      }
+      if (attribute === "UniqueID") {
+        return processResult(0, "UniqueID: 490\n");
+      }
+      if (attribute === "IsHidden") {
+        return processResult(0, "dsAttrTypeNative:IsHidden: 1\n");
+      }
+    }
+    if (request.executable === "/usr/sbin/dseditgroup") {
+      return processResult(0, "yes owner is a member of _opendelegate\n");
+    }
+    if (request.executable === "/usr/bin/id") {
+      return processResult(0, "490\n");
+    }
+    return processResult(0);
+  };
+
+  const fileSystem = new FakeFileSystem();
+  const source = configuration.bundle.sourceDirectory;
+  const sourceBin = `${source}/bin`;
+  for (const [path, bytes, mode] of [
+    [`${sourceBin}/opendelegate-service-host`, Buffer.from("core"), 0o755],
+    [`${sourceBin}/opendelegate-session-helper`, Buffer.from("helper"), 0o755],
+    [`${source}/release-metadata.json`, Buffer.from("{}"), 0o644],
+  ] as const) {
+    fileSystem.files.set(path, bytes);
+    fileSystem.kinds.set(path, "regular-file");
+    fileSystem.modes.set(path, mode);
+  }
+  fileSystem.kinds.set(source, "directory");
+  fileSystem.kinds.set(sourceBin, "directory");
+  fileSystem.directories.set(source, [
+    { name: "bin", kind: "directory" },
+    { name: "release-metadata.json", kind: "regular-file" },
+  ]);
+  fileSystem.directories.set(sourceBin, [
+    { name: "opendelegate-service-host", kind: "regular-file" },
+    { name: "opendelegate-session-helper", kind: "regular-file" },
+  ]);
+  fileSystem.kinds.set(stagingDirectory, "missing");
+  fileSystem.kinds.set(releaseDirectory, "missing");
+  fileSystem.directories.set("/Library/OpenDelegate/releases", [
+    { name: configuration.bundle.version, kind: "directory" },
+  ]);
+
+  const originalInspect = fileSystem.inspect.bind(fileSystem);
+  fileSystem.inspect = async (path) => {
+    if (
+      !fileSystem.kinds.has(path) &&
+      path.startsWith(`${stagingDirectory}.`) &&
+      path.endsWith(".copying")
+    ) {
+      return { kind: "missing" as const };
+    }
+    return await originalInspect(path);
+  };
+
+  const journal = new MemoryJournal();
+  const { boundaries } = fakeBoundaries({
+    platform: "macos",
+    elevated: true,
+    loggedIn: false,
+    fileSystem,
+    process,
+    healthRole: "worker",
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "macos",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-install-macos-release-access",
+    configuration,
+    plan,
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  const copyRoot = fileSystem.posixAccessChanges.find(
+    (change) => change.path.startsWith(`${stagingDirectory}.`) && change.path.endsWith(".copying"),
+  )?.path;
+  assert.ok(copyRoot, "the staging copy root must receive canonical POSIX access");
+  assert.deepEqual(
+    fileSystem.posixAccessChanges
+      .filter((change) => change.path === copyRoot || change.path.startsWith(`${copyRoot}/`))
+      .map((change) => ({ ...change, path: change.path.slice(copyRoot.length) || "/" })),
+    [
+      { path: "/", uid: 0, gid: 490, mode: 0o750 },
+      { path: "/bin", uid: 0, gid: 490, mode: 0o750 },
+      { path: "/bin/opendelegate-service-host", uid: 0, gid: 490, mode: 0o750 },
+      { path: "/bin/opendelegate-session-helper", uid: 0, gid: 490, mode: 0o750 },
+      { path: "/release-metadata.json", uid: 0, gid: 490, mode: 0o640 },
+    ],
+  );
+});
+
 test("logged-out helpers defer while the core starts and exact replay does not invoke supervisors twice", async () => {
   const configuration = windowsConfiguration();
   const journal = new MemoryJournal();
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
   const process = new FakeProcess();
   process.handler = (request) => {
+    if (request.executable.toLowerCase().endsWith("icacls.exe")) {
+      return processResult(0);
+    }
     if (request.executable.toLowerCase().endsWith("sc.exe")) {
       return processResult(0);
     }
@@ -1238,6 +2275,7 @@ test("logged-out helpers defer while the core starts and exact replay does not i
     platform: "windows",
     elevated: true,
     loggedIn: false,
+    fileSystem,
     process,
     healthy: true,
   });
@@ -1279,6 +2317,7 @@ test("logged-in Windows helper health uses live presence when Task Scheduler tex
   const configuration = windowsConfiguration();
   const journal = new MemoryJournal();
   const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
   const process = new FakeProcess();
   const helperPresencePath = String.raw`C:\ProgramData\OpenDelegate\run\helper-plane-v2.json`;
   fileSystem.kinds.set(helperPresencePath, "regular-file");
@@ -1304,6 +2343,9 @@ test("logged-in Windows helper health uses live presence when Task Scheduler tex
     return helperProcessReads >= 3;
   };
   process.handler = (request) => {
+    if (request.executable.toLowerCase().endsWith("icacls.exe")) {
+      return processResult(0);
+    }
     if (request.executable.toLowerCase().endsWith("schtasks.exe")) {
       if (request.arguments[0]?.toLowerCase() === "/query") {
         return processResult(0, '"\\OpenDelegate-personal-SessionHelper","N/A","���� ��"\r\n');
@@ -1565,6 +2607,106 @@ test("owner-session command arguments remain discrete even when a path contains 
   assert.equal(bootstrap.arguments.filter((argument) => argument === "whoami").length, 0);
 });
 
+test("macOS restart waits for each launchd bootout before bootstrapping it again", async () => {
+  const configuration = macOsConfiguration();
+  const journal = new MemoryJournal();
+  const process = new FakeProcess();
+  const coreTarget = "system/dev.opendelegate.personal.core";
+  const helperTarget = "gui/501/dev.opendelegate.personal.session-helper";
+  const loaded = new Map<string, boolean>([
+    [coreTarget, true],
+    [helperTarget, true],
+  ]);
+  const pendingBootoutPolls = new Map<string, number>();
+  const launchctlArguments = (request: NativeProcessRequest): readonly string[] =>
+    request.arguments[0] === "asuser" ? request.arguments.slice(3) : request.arguments;
+
+  process.handler = (request) => {
+    if (request.executable !== "/bin/launchctl") {
+      return processResult(0);
+    }
+    const args = launchctlArguments(request);
+    const verb = args[0];
+    const target = args[1];
+    if (verb === "bootout" && target !== undefined) {
+      pendingBootoutPolls.set(target, 2);
+      return processResult(0);
+    }
+    if (verb === "print" && target !== undefined) {
+      const remaining = pendingBootoutPolls.get(target);
+      if (remaining !== undefined) {
+        if (remaining > 1) {
+          pendingBootoutPolls.set(target, remaining - 1);
+          return processResult(0, "state = running\n");
+        }
+        pendingBootoutPolls.delete(target);
+        loaded.set(target, false);
+        return processResult(113, "", "Could not find service");
+      }
+      return loaded.get(target) === true
+        ? processResult(0, "state = running\n")
+        : processResult(113, "", "Could not find service");
+    }
+    if (verb === "bootstrap") {
+      const manifest = args[2];
+      const bootstrapTarget = manifest?.includes("session-helper") ? helperTarget : coreTarget;
+      assert.equal(pendingBootoutPolls.has(bootstrapTarget), false);
+      loaded.set(bootstrapTarget, true);
+      return processResult(0);
+    }
+    if (verb === "kickstart") {
+      const kickstartTarget = args[2];
+      assert.ok(kickstartTarget !== undefined);
+      assert.equal(loaded.get(kickstartTarget), true);
+      return processResult(0);
+    }
+    return processResult(0);
+  };
+  const { boundaries } = fakeBoundaries({
+    platform: "macos",
+    elevated: true,
+    loggedIn: true,
+    process,
+    healthy: true,
+  });
+  const executor = createNativeServiceExecutor({
+    platform: "macos",
+    boundaries,
+    journalFactory: { create: () => journal },
+    releaseVerifier: trustedRelease(),
+  });
+
+  const result = await executor.execute({
+    commandId: "service-restart-macos-bootout-race",
+    configuration,
+    plan: createServicePlan({
+      operation: "restart",
+      configuration,
+      activeVersion: "1.2.3",
+    }),
+  });
+
+  assert.equal(result.report.outcome, "succeeded", JSON.stringify(result.report));
+  for (const target of [helperTarget, coreTarget]) {
+    const normalized = process.requests.map(launchctlArguments);
+    const bootout = normalized.findIndex((args) => args[0] === "bootout" && args[1] === target);
+    const bootstrap = normalized.findIndex(
+      (args, index) =>
+        index > bootout &&
+        args[0] === "bootstrap" &&
+        (target === helperTarget ? args[2]?.includes("session-helper") : args[2]?.includes("core")),
+    );
+    assert.ok(bootout >= 0);
+    assert.ok(bootstrap > bootout);
+    assert.equal(
+      normalized
+        .slice(bootout + 1, bootstrap)
+        .filter((args) => args[0] === "print" && args[1] === target).length,
+      2,
+    );
+  }
+});
+
 test("core health failure rolls a restart back through structured supervisor commands", async () => {
   const configuration = windowsConfiguration({
     health: {
@@ -1573,12 +2715,15 @@ test("core health failure rolls a restart back through structured supervisor com
     },
   });
   const journal = new MemoryJournal();
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
   const process = new FakeProcess();
   process.handler = () => processResult(0);
   const { boundaries } = fakeBoundaries({
     platform: "windows",
     elevated: true,
     loggedIn: false,
+    fileSystem,
     process,
     healthy: false,
   });
@@ -1615,6 +2760,8 @@ test("Windows restart reads localized service states before starting the replace
     },
   });
   const journal = new MemoryJournal();
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
   const process = new FakeProcess();
   let statusQueries = 0;
   process.handler = (request) => {
@@ -1637,6 +2784,7 @@ test("Windows restart reads localized service states before starting the replace
     platform: "windows",
     elevated: true,
     loggedIn: false,
+    fileSystem,
     process,
     healthy: true,
   });
@@ -1674,6 +2822,8 @@ test("Windows restart tolerates a transient service status process failure", asy
     },
   });
   const journal = new MemoryJournal();
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
   const process = new FakeProcess();
   let statusQueries = 0;
   process.handler = (request) => {
@@ -1694,6 +2844,7 @@ test("Windows restart tolerates a transient service status process failure", asy
     platform: "windows",
     elevated: true,
     loggedIn: false,
+    fileSystem,
     process,
     healthy: true,
   });
@@ -1726,6 +2877,8 @@ test("Windows restart tolerates a transient service status process failure", asy
 test("Windows restart compensates an uncertain service stop before reporting failure", async () => {
   const configuration = windowsConfiguration();
   const journal = new MemoryJournal();
+  const fileSystem = new FakeFileSystem();
+  seedInstalledRuntimeConfiguration(fileSystem, configuration);
   const process = new FakeProcess();
   process.handler = (request) => {
     if (
@@ -1743,6 +2896,7 @@ test("Windows restart compensates an uncertain service stop before reporting fai
     platform: "windows",
     elevated: true,
     loggedIn: false,
+    fileSystem,
     process,
     healthy: true,
   });
@@ -2428,6 +3582,18 @@ function trustedRelease(onPreflight?: () => void): NativeReleaseVerifier {
     },
     async verifyStaged() {},
   };
+}
+
+function seedInstalledRuntimeConfiguration(
+  fileSystem: FakeFileSystem,
+  configuration: PlatformServiceConfiguration,
+): void {
+  const runtime = renderPlatformServiceArtifacts(configuration).files.find(
+    (file) => file.purpose === "runtime-configuration",
+  );
+  assert.ok(runtime);
+  fileSystem.files.set(runtime.path, renderedFileBytes(runtime.encoding, runtime.content));
+  fileSystem.kinds.set(runtime.path, "regular-file");
 }
 
 function prepareReleaseTrack(

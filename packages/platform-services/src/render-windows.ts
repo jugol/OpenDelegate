@@ -224,6 +224,7 @@ function renderTaskXml(definition: PlatformServiceDefinition, ownerSid: string):
     </Principal>
   </Principals>
   <Settings>
+    <Hidden>true</Hidden>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>

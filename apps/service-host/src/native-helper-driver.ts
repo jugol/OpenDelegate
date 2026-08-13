@@ -27,7 +27,90 @@ interface NativeComponent {
   readonly sha256: `sha256:${string}`;
 }
 
+export interface DeferredNativeComputerUseDriverOptions {
+  readonly osFamily: NativeComputerUseDriver["osFamily"];
+  readonly start: () => Promise<NativeComputerUseDriver>;
+  readonly signal?: AbortSignal;
+}
+
 export async function createNativeSessionHelperDriver(
+  configuration: ServiceHostConfiguration,
+  binding: SessionHelperNativeDriverBinding,
+): Promise<NativeComputerUseDriver> {
+  return createDeferredNativeComputerUseDriver({
+    osFamily: configuration.platform,
+    signal: binding.signal,
+    start: async () => await startNativeSessionHelperDriver(configuration, binding),
+  });
+}
+
+export function createDeferredNativeComputerUseDriver(
+  options: DeferredNativeComputerUseDriverOptions,
+): NativeComputerUseDriver {
+  let driver: NativeComputerUseDriver | undefined;
+  let creation: Promise<NativeComputerUseDriver> | undefined;
+  let closed = false;
+  const isClosed = (): boolean => closed || options.signal?.aborted === true;
+
+  const requireDriver = async (): Promise<NativeComputerUseDriver> => {
+    if (isClosed()) {
+      throw new ServiceHostError("The native Computer Use helper is closed.");
+    }
+    if (driver !== undefined) {
+      return driver;
+    }
+    creation ??= options.start();
+    const started = await creation;
+    if (isClosed()) {
+      await closeNativeDriver(started);
+      throw new ServiceHostError("The native Computer Use helper closed while starting.");
+    }
+    driver = started;
+    return started;
+  };
+  const activeDriver = async (): Promise<NativeComputerUseDriver | undefined> => {
+    if (driver !== undefined) {
+      return driver;
+    }
+    return creation === undefined ? undefined : await creation.catch(() => undefined);
+  };
+  const close = async (): Promise<void> => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    const active = await activeDriver();
+    driver = undefined;
+    creation = undefined;
+    await (active === undefined ? Promise.resolve() : closeNativeDriver(active));
+  };
+  options.signal?.addEventListener("abort", () => void close(), { once: true });
+
+  const deferred: NativeComputerUseDriver = {
+    osFamily: options.osFamily,
+    async probe() {
+      return await (await requireDriver()).probe();
+    },
+    async observe(context) {
+      return await (await requireDriver()).observe(context);
+    },
+    async capture(context) {
+      return await (await requireDriver()).capture(context);
+    },
+    async act(context, action) {
+      return await (await requireDriver()).act(context, action);
+    },
+    async cancel(context) {
+      await (await activeDriver())?.cancel(context);
+    },
+    async emergencyStop(context) {
+      await (await activeDriver())?.emergencyStop(context);
+    },
+  };
+  return attachClose(deferred, close);
+}
+
+async function startNativeSessionHelperDriver(
   configuration: ServiceHostConfiguration,
   binding: SessionHelperNativeDriverBinding,
 ): Promise<NativeComputerUseDriver> {
@@ -108,12 +191,7 @@ async function startWindowsNativeDriver(
         "--parent-process-id",
         String(process.pid),
       ],
-      {
-        cwd: configuration.releaseRoot,
-        env: Object.freeze({}),
-        stdio: ["ignore", "ignore", "pipe", "pipe"],
-        windowsHide: false,
-      },
+      createWindowsNativeHelperSpawnOptions(configuration.releaseRoot),
     );
     await waitForSpawn(child);
     discardBounded(child.stderr, 64 * 1024);
@@ -168,6 +246,18 @@ async function startWindowsNativeDriver(
     }
     throw new ServiceHostError("The Windows native helper could not start safely.");
   }
+}
+
+export function createWindowsNativeHelperSpawnOptions(releaseRoot: string) {
+  return {
+    cwd: releaseRoot,
+    env: Object.freeze({}),
+    stdio: ["ignore", "ignore", "pipe", "pipe"] as ["ignore", "ignore", "pipe", "pipe"],
+    // The native helper owns no owner-facing console. Picker/consent UI is created
+    // explicitly by the helper when Computer Use needs it; the service child itself
+    // must stay background-only across login and reboot.
+    windowsHide: true,
+  };
 }
 
 async function loadComputerUseHelperComponent(
@@ -352,6 +442,11 @@ function attachClose(
     writable: false,
   });
   return driver;
+}
+
+async function closeNativeDriver(driver: NativeComputerUseDriver): Promise<void> {
+  const close = (driver as NativeComputerUseDriver & { close?: () => Promise<void> }).close;
+  await close?.call(driver).catch(() => undefined);
 }
 
 async function waitForSpawn(child: ChildProcess): Promise<void> {

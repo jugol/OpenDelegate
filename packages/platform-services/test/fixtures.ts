@@ -17,9 +17,17 @@ const IPC_TRUST = Object.freeze({
   }),
 });
 
+type WindowsConfigurationOverrides = Omit<
+  Partial<WindowsServiceConfiguration>,
+  "agentProviderAccess"
+> & {
+  readonly agentProviderAccess?: Partial<WindowsServiceConfiguration["agentProviderAccess"]>;
+};
+
 export function windowsConfiguration(
-  overrides: Partial<WindowsServiceConfiguration> = {},
+  overrides: WindowsConfigurationOverrides = {},
 ): WindowsServiceConfiguration {
+  const { agentProviderAccess, ...rest } = overrides;
   return {
     platform: "windows",
     instanceId: "personal",
@@ -41,9 +49,16 @@ export function windowsConfiguration(
     ownerSession: {
       userName: "WORKSTATION\\owner",
       stableUserId: "S-1-5-21-1000",
+      homeDirectory: "C:\\Users\\owner",
       adminAutoOpen: {
         enabled: false,
       },
+    },
+    agentProviderAccess: {
+      codexHomeDirectory: "C:\\Users\\owner\\.codex",
+      codexServiceHomeDirectory: "C:\\ProgramData\\OpenDelegate\\state\\state\\providers\\codex",
+      claudeHomeDirectory: "C:\\Users\\owner\\.claude",
+      ...agentProviderAccess,
     },
     helperSecretBinding: {
       backend: "windows-dpapi",
@@ -60,7 +75,7 @@ export function windowsConfiguration(
       timeoutMs: 30_000,
     },
     retainPreviousVersions: 2,
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -103,6 +118,15 @@ export function macOsConfiguration(
       backend: "macos-keychain",
       helperPath: "/Library/OpenDelegate/current/runtime/native/opendelegate-keychain-helper",
       expectedHelperSha256: `sha256:${"b".repeat(64)}`,
+    },
+    serviceSecretBinding: {
+      backend: "macos-system-keychain",
+      bindingPath:
+        "/Library/Application Support/OpenDelegate/personal/system-keychain-binding.json",
+      helperPath: "/Library/PrivilegedHelperTools/opendelegate-keychain-helper-personal",
+      expectedHelperSha256: `sha256:${"c".repeat(64)}`,
+      keychainPath: "/Library/Keychains/System.keychain",
+      serviceUserName: "_opendelegate",
     },
     secretReferences: {
       deviceIdentity: "secret://macos/device-identity",

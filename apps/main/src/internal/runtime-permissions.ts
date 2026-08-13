@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
-import { chmod, lstat, readdir } from "node:fs/promises";
+import { chmod, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+
+import { inspectExistingRuntimePath } from "./runtime-path-inspection.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,7 +68,11 @@ async function enforcePosixRuntimePermissions(
     if (path === undefined) {
       continue;
     }
-    const initialMetadata = await lstat(path);
+    const initialMetadata = await inspectExistingRuntimePath(path);
+    if (initialMetadata === undefined) {
+      assertTransientDescendant(path, root);
+      continue;
+    }
     if (initialMetadata.isSymbolicLink()) {
       throw new RuntimePermissionEnforcementError(
         "Runtime state cannot contain symlinks or reparse points.",
@@ -79,8 +85,20 @@ async function enforcePosixRuntimePermissions(
         "Runtime state may contain only regular files and directories.",
       );
     }
-    await chmod(path, expectedMode);
-    const sealedMetadata = await lstat(path);
+    try {
+      await chmod(path, expectedMode);
+    } catch (error) {
+      if (isNotFound(error)) {
+        assertTransientDescendant(path, root);
+        continue;
+      }
+      throw error;
+    }
+    const sealedMetadata = await inspectExistingRuntimePath(path);
+    if (sealedMetadata === undefined) {
+      assertTransientDescendant(path, root);
+      continue;
+    }
     if (
       sealedMetadata.isSymbolicLink() ||
       (expectedDirectory ? !sealedMetadata.isDirectory() : !sealedMetadata.isFile()) ||
@@ -95,11 +113,35 @@ async function enforcePosixRuntimePermissions(
       if (opaque.has(normalizeFilesystemPath(path))) {
         continue;
       }
-      for (const entry of await readdir(path)) {
+      let entries: string[];
+      try {
+        entries = await readdir(path);
+      } catch (error) {
+        if (isNotFound(error)) {
+          assertTransientDescendant(path, root);
+          continue;
+        }
+        throw error;
+      }
+      for (const entry of entries) {
         pending.push(join(path, entry));
       }
     }
   }
+}
+
+function assertTransientDescendant(path: string, root: string): void {
+  if (normalizeFilesystemPath(path) === normalizeFilesystemPath(root)) {
+    throw new RuntimePermissionEnforcementError(
+      "Runtime state disappeared during permission enforcement.",
+    );
+  }
+}
+
+function isNotFound(error: unknown): boolean {
+  return (
+    error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 async function enforceWindowsRuntimeAcl(
