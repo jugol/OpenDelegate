@@ -3871,6 +3871,7 @@ export function createWorkerSchedulingInventoryProvider(input: {
     snapshot: async (): Promise<WorkerSchedulingInventoryV1> => {
       const now = Date.now();
       if (cached === undefined || cached.expiresAt <= now) {
+        const previousModelCatalogs = cached?.modelCatalogs;
         const outcomes = await Promise.allSettled(
           input.adapters.map((adapter) => adapter.probe({ environment: agentEnvironment })),
         );
@@ -3915,12 +3916,26 @@ export function createWorkerSchedulingInventoryProvider(input: {
         );
         const modelCatalogs = new Map<string, AgentModelCatalog>();
         catalogOutcomes.forEach((outcome, index) => {
+          const adapter = input.adapters[index]!;
+          const identity = agentAdapterIdentity(adapter.provider, adapter.adapterId);
           if (outcome.status === "fulfilled" && outcome.value !== undefined) {
-            const adapter = input.adapters[index]!;
-            modelCatalogs.set(
-              agentAdapterIdentity(adapter.provider, adapter.adapterId),
-              outcome.value,
-            );
+            modelCatalogs.set(identity, outcome.value);
+            return;
+          }
+          const probe = probes.find(
+            (candidate) =>
+              candidate.provider === adapter.provider && candidate.adapterId === adapter.adapterId,
+          );
+          if (
+            outcome.status === "rejected" &&
+            adapter.listModels !== undefined &&
+            probe !== undefined &&
+            adapterReadiness(probe) === "ready"
+          ) {
+            const previous = previousModelCatalogs?.get(identity);
+            if (previous !== undefined) {
+              modelCatalogs.set(identity, previous);
+            }
           }
         });
         const wakeOnLan = await probeWakeOnLanCapability(input.wakeOnLanProbe, now);

@@ -469,7 +469,7 @@ async function requestWithMainTlsTrust(input: {
       {
         method: input.init.method,
         headers,
-        ca: input.trust.certificateAuthorities,
+        ca: [...input.trust.certificateAuthorities],
         minVersion: "TLSv1.3",
         maxVersion: "TLSv1.3",
         rejectUnauthorized: true,

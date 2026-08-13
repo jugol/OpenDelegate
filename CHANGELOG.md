@@ -71,6 +71,9 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Retained each ready Worker adapter's last successful model catalog when a later catalog refresh
+  fails transiently. A catalog probe no longer makes an otherwise online, authorized Worker appear
+  ineligible for one scheduling cycle; genuine adapter/authentication loss still clears the catalog.
 - Delivered a completed Task's small safe `download` Artifact as a Discord-native Components v2
   File. The durable outbox retains only Task-bound integrity metadata; Main rereads and verifies the
   available bytes before a nonce-protected multipart upload, while oversized or incompatible files

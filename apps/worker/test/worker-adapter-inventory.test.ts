@@ -96,6 +96,60 @@ describe("Worker agent adapter inventory", () => {
     assert.equal(snapshot.serviceMode, "system-service");
   });
 
+  it("retains the last successful model catalog across a transient refresh failure", async () => {
+    const base = stubAdapter("claude-service", {
+      installed: true,
+      version: "2.1.220",
+      compatibility: "tested",
+      auth: { state: "ready" },
+      diagnostics: [],
+    });
+    let catalogAttempts = 0;
+    let authenticated = true;
+    const adapter: AgentAdapter = {
+      ...base,
+      async probe(input) {
+        const probe = await base.probe(input);
+        return {
+          ...probe,
+          auth: { state: authenticated ? ("ready" as const) : ("not_ready" as const) },
+        };
+      },
+      async listModels() {
+        catalogAttempts += 1;
+        if (catalogAttempts > 1) {
+          throw new Error("Transient model discovery failure.");
+        }
+        return {
+          observedAt: "2026-08-11T00:00:00.000Z",
+          models: [{ modelId: "claude-opus-5", displayName: "Claude Opus 5" }],
+        };
+      },
+    };
+    const inventory = createWorkerSchedulingInventoryProvider({
+      adapters: [adapter],
+      environment: {},
+      workspaceRegistry,
+      probeCacheMs: 0,
+    });
+
+    const initial = await inventory.snapshot();
+    const afterTransientFailure = await inventory.snapshot();
+    authenticated = false;
+    const afterAuthenticationLoss = await inventory.snapshot();
+
+    assert.deepEqual(afterTransientFailure.agentAdapters?.[0]?.models, [
+      { modelId: "claude-opus-5", displayName: "Claude Opus 5" },
+    ]);
+    assert.equal(
+      afterTransientFailure.agentAdapters?.[0]?.modelCatalogObservedAtMs,
+      initial.agentAdapters?.[0]?.modelCatalogObservedAtMs,
+    );
+    assert.equal(afterAuthenticationLoss.agentAdapters?.[0]?.models, undefined);
+    assert.equal(afterAuthenticationLoss.agentAdapters?.[0]?.modelCatalogObservedAtMs, undefined);
+    assert.equal(catalogAttempts, 2);
+  });
+
   it("leaves out an adapter no owner action on this Device could make usable", async () => {
     // Advertising it would put a row on every surface whose only possible reading is
     // "incompatible", with no button that changes it.
