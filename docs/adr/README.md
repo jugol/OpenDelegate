@@ -86,6 +86,7 @@ approved product specification.
 63. [`0066-post-turn-artifact-evidence.md`](0066-post-turn-artifact-evidence.md)
 64. [`0067-windows-owner-agent-launcher-path.md`](0067-windows-owner-agent-launcher-path.md)
 65. [`0068-windows-codex-service-home.md`](0068-windows-codex-service-home.md)
+66. [`0069-direct-artifact-tls-and-main-ca-trust.md`](0069-direct-artifact-tls-and-main-ca-trust.md)
 
 ## Proposed ADRs
 

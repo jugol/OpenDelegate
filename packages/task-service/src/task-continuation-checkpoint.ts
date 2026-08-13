@@ -443,7 +443,12 @@ function sessionsForTask(
     if (entry.session === undefined) {
       continue;
     }
-    const key = `${entry.session.deviceId}\u0000${entry.session.workstreamId}\u0000${entry.workOrderId}`;
+    const key = [
+      entry.session.scope,
+      entry.session.deviceId,
+      entry.session.workstreamId,
+      entry.session.nativeSessionId,
+    ].join("\u0000");
     const prior = workers.get(key);
     if (prior === undefined || entry.position > prior.position) {
       workers.set(key, { position: entry.position, session: entry.session });

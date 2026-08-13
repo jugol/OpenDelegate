@@ -1,11 +1,19 @@
+import "reflect-metadata";
+
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { X509Certificate, createHash } from "node:crypto";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import {
+  DeviceIdentityAuthority,
+  InMemoryDeviceIdentityRepository,
+  InMemoryDeviceIdentitySecretStore,
+} from "@opendelegate/device-identity";
 import { parseArtifactUploadGrant, type ArtifactUploadProgressV1 } from "@opendelegate/protocol";
 
 import {
@@ -16,6 +24,47 @@ import {
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function issueMainTlsFixture(): Promise<{
+  readonly certificatePem: string;
+  readonly certificateAuthorityPem: string;
+  readonly expectedMainSpkiSha256: string;
+  readonly privateKeyPem: string;
+}> {
+  const authority = new DeviceIdentityAuthority({
+    clock: { now: () => Date.now() },
+    repository: new InMemoryDeviceIdentityRepository(),
+    secrets: new InMemoryDeviceIdentitySecretStore(),
+  });
+  const certificateAuthority = await authority.bootstrapCertificateAuthority({
+    instanceId: "instance-worker-artifact-tls-test",
+  });
+  const keys = await globalThis.crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const issued = await authority.issueMainServerCertificate({
+    publicKey: keys.publicKey,
+    hostnames: ["127.0.0.1"],
+  });
+  const privateKeyDer = Buffer.from(
+    await globalThis.crypto.subtle.exportKey("pkcs8", keys.privateKey),
+  );
+  const authorityCertificate = new X509Certificate(certificateAuthority.certificatePem);
+  const authoritySpki = authorityCertificate.publicKey.export({ format: "der", type: "spki" });
+  return {
+    certificatePem: issued.certificatePem,
+    certificateAuthorityPem: certificateAuthority.certificatePem,
+    expectedMainSpkiSha256: `sha256:${createHash("sha256").update(authoritySpki).digest("base64url")}`,
+    privateKeyPem: `-----BEGIN PRIVATE KEY-----\n${
+      privateKeyDer
+        .toString("base64")
+        .match(/.{1,64}/gu)
+        ?.join("\n") ?? ""
+    }\n-----END PRIVATE KEY-----\n`,
+  };
 }
 
 test("Worker probes durable progress after a lost response and never sends a chunk twice", async () => {
@@ -142,6 +191,71 @@ test("Worker refuses a changed or symlinked source before sending Artifact bytes
     assert.equal(networkCalls, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("production upload transport reuses the pinned Main CA for a direct private HTTPS listener", async () => {
+  const tls = await issueMainTlsFixture();
+  const credential = `u1.upload-private-main.${"c".repeat(43)}`;
+  const requests: { readonly authorization: string | undefined }[] = [];
+  const server = createHttpsServer(
+    {
+      cert: tls.certificatePem,
+      key: tls.privateKeyPem,
+      minVersion: "TLSv1.3",
+      maxVersion: "TLSv1.3",
+    },
+    (request, response) => {
+      requests.push({ authorization: request.headers.authorization });
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          protocolVersion: "v1",
+          uploadId: "upload-private-main",
+          artifactId: "artifact-private-main",
+          nextOffsetBytes: 0,
+          complete: false,
+          replayed: false,
+        }),
+      );
+    },
+  );
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  try {
+    const address = server.address();
+    assert.notEqual(address, null);
+    assert.equal(typeof address, "object");
+    const transport = new FetchWorkerArtifactUploadTransport({
+      timeoutMs: 5_000,
+      mainTlsTrust: {
+        certificateAuthorityPem: tls.certificateAuthorityPem,
+        expectedMainSpkiSha256: tls.expectedMainSpkiSha256,
+      },
+    });
+    const progress = await transport.probe({
+      url: `https://127.0.0.1:${String((address as { port: number }).port)}/worker-uploads/upload-private-main`,
+      credential,
+    });
+    assert.equal(progress.uploadId, "upload-private-main");
+    assert.deepEqual(requests, [{ authorization: `Bearer ${credential}` }]);
+
+    assert.throws(
+      () =>
+        new FetchWorkerArtifactUploadTransport({
+          mainTlsTrust: {
+            certificateAuthorityPem: tls.certificateAuthorityPem,
+            expectedMainSpkiSha256: `sha256:${"a".repeat(43)}`,
+          },
+        }),
+      { code: "REQUEST_REJECTED", retryable: false },
+    );
+  } finally {
+    await new Promise<void>((resolveClose, rejectClose) => {
+      server.close((error) => (error === undefined ? resolveClose() : rejectClose(error)));
+    });
   }
 });
 

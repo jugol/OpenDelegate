@@ -3262,3 +3262,44 @@ discarding it made deterministic verification less accurate.
 completion, and final Worker reports contain the provider's actual final answer. Older compatible
 providers keep working, while new unsupported phase values fail closed instead of silently changing
 report semantics.
+
+## D-152 — Remote Artifact ingress may terminate on Main's pinned TLS identity
+
+Implementation detail:
+[ADR-0069](adr/0069-direct-artifact-tls-and-main-ca-trust.md).
+
+**Decision:** An explicitly configured Artifact plane may bind direct HTTPS in addition to the
+existing loopback HTTP and verified reverse-proxy compositions. Main accepts only stable
+certificate and private-key files outside the source checkout, validates their equality, current
+validity, and advertised hostname, and serves TLS 1.3. An enrolled Worker verifies its stored Main
+CA against the enrollment-time SPKI pin and adds only that CA to the ordinary public trust roots
+for Artifact HTTPS; hostname verification and redirect rejection remain mandatory.
+
+**Rationale:** Live Discord-to-Windows Artifact QA reached a valid Run-scoped manifest, but Main
+issued a loopback upload URL to a remote Worker. That Worker correctly contacted its own
+`localhost`, so deterministic promotion could never reach NAS Main. A private authenticated route
+already existed for the Device channel, and requiring a separate reverse proxy added no security
+when the same pinned instance identity could terminate the exact Artifact listener.
+
+**Consequence:** An owner can explicitly expose Artifact upload on a selected LAN, VPN, or
+Tailscale address without disabling TLS verification, installing a machine-wide CA, or adding a
+second proxy. Existing loopback configurations stay private. Invalid keys, expired or wrong-host
+certificates, unpinned CAs, cleartext remote origins, and ambiguous direct-plus-proxy declarations
+fail closed.
+
+## D-153 — A continuation checkpoint projects one latest record per native session
+
+**Decision:** When one Worker native session and workstream continue across multiple owner cycles
+or Work Orders, the Task continuation checkpoint keeps only the latest accepted observation for
+the protocol identity `(scope, Device, workstream, native session)`. That record carries the latest
+Work Order ID. Different native sessions remain separate, and the omission accounting and bounded
+session limit remain unchanged.
+
+**Rationale:** The Worker correctly reused one Codex App Server session and managed worktree for a
+Discord follow-up. Checkpoint construction keyed intermediate observations by Work Order, then the
+protocol rejected the resulting duplicate native-session identities. Automatic retries therefore
+reported `TASK_CHECKPOINT_UNAVAILABLE` and hid the original retryable Artifact failure.
+
+**Consequence:** Long-lived Task continuity no longer makes its own checkpoint invalid. A retry or
+later owner message receives one unambiguous latest session reference, while the durable Event
+Store still retains every accepted Work Order observation for audit.

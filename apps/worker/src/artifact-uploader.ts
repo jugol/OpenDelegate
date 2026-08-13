@@ -1,7 +1,9 @@
-import { createHash } from "node:crypto";
+import { X509Certificate, createHash } from "node:crypto";
 import { constants as fileConstants, type BigIntStats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
+import { request as httpsRequest } from "node:https";
 import { isAbsolute, resolve } from "node:path";
+import { rootCertificates } from "node:tls";
 
 import {
   parseArtifactUploadGrant,
@@ -77,6 +79,16 @@ export interface WorkerArtifactUploaderOptions {
   readonly transport: WorkerArtifactUploadTransport;
   readonly clock?: WorkerArtifactUploaderClock;
   readonly maximumRecoveryAttempts?: number;
+}
+
+export interface WorkerArtifactMainTlsTrust {
+  readonly certificateAuthorityPem: string;
+  readonly expectedMainSpkiSha256: string;
+}
+
+export interface FetchWorkerArtifactUploadTransportOptions {
+  readonly timeoutMs?: number;
+  readonly mainTlsTrust?: WorkerArtifactMainTlsTrust;
 }
 
 export class WorkerArtifactUploader {
@@ -272,10 +284,20 @@ function sameArtifactSnapshot(left: BigIntStats, right: BigIntStats): boolean {
   );
 }
 
+interface ValidatedMainTlsTrust {
+  readonly certificateAuthorities: readonly string[];
+}
+
+interface BufferedArtifactResponse {
+  readonly status: number;
+  readonly body: string;
+}
+
 export class FetchWorkerArtifactUploadTransport implements WorkerArtifactUploadTransport {
   readonly #timeoutMs: number;
+  readonly #mainTlsTrust: ValidatedMainTlsTrust | undefined;
 
-  public constructor(options: { readonly timeoutMs?: number } = {}) {
+  public constructor(options: FetchWorkerArtifactUploadTransportOptions = {}) {
     const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 5 * 60 * 1_000) {
       throw new WorkerArtifactUploadTransportError(
@@ -285,6 +307,8 @@ export class FetchWorkerArtifactUploadTransport implements WorkerArtifactUploadT
       );
     }
     this.#timeoutMs = timeoutMs;
+    this.#mainTlsTrust =
+      options.mainTlsTrust === undefined ? undefined : validateMainTlsTrust(options.mainTlsTrust);
   }
 
   public async probe(input: {
@@ -322,14 +346,18 @@ export class FetchWorkerArtifactUploadTransport implements WorkerArtifactUploadT
   }
 
   async #request(url: string, init: RequestInit): Promise<ArtifactUploadProgressV1> {
-    let response: Response;
+    let response: BufferedArtifactResponse;
     try {
-      response = await fetch(url, {
-        ...init,
-        redirect: "error",
-        cache: "no-store",
-        signal: AbortSignal.timeout(this.#timeoutMs),
-      });
+      const parsedUrl = new URL(url);
+      response =
+        parsedUrl.protocol === "https:" && this.#mainTlsTrust !== undefined
+          ? await requestWithMainTlsTrust({
+              url: parsedUrl,
+              init,
+              timeoutMs: this.#timeoutMs,
+              trust: this.#mainTlsTrust,
+            })
+          : await fetchBufferedArtifactResponse(url, init, this.#timeoutMs);
     } catch {
       throw new WorkerArtifactUploadTransportError(
         "SERVICE_UNAVAILABLE",
@@ -340,9 +368,7 @@ export class FetchWorkerArtifactUploadTransport implements WorkerArtifactUploadT
     if (response.status !== 200 && response.status !== 201 && response.status !== 202) {
       let responseCode: string | undefined;
       try {
-        const problem = JSON.parse(
-          await readBoundedResponse(response, MAXIMUM_RESPONSE_BYTES),
-        ) as unknown;
+        const problem = JSON.parse(response.body) as unknown;
         if (
           typeof problem === "object" &&
           problem !== null &&
@@ -358,7 +384,7 @@ export class FetchWorkerArtifactUploadTransport implements WorkerArtifactUploadT
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await readBoundedResponse(response, MAXIMUM_RESPONSE_BYTES));
+      parsed = JSON.parse(response.body);
     } catch {
       throw new WorkerArtifactUploadTransportError(
         "REQUEST_REJECTED",
@@ -376,6 +402,117 @@ export class FetchWorkerArtifactUploadTransport implements WorkerArtifactUploadT
       );
     }
   }
+}
+
+function validateMainTlsTrust(input: WorkerArtifactMainTlsTrust): ValidatedMainTlsTrust {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    typeof input.certificateAuthorityPem !== "string" ||
+    typeof input.expectedMainSpkiSha256 !== "string" ||
+    !/^sha256:[A-Za-z0-9_-]{43}$/u.test(input.expectedMainSpkiSha256)
+  ) {
+    throw invalidMainTlsTrust();
+  }
+  let authority: X509Certificate;
+  try {
+    authority = new X509Certificate(input.certificateAuthorityPem);
+  } catch {
+    throw invalidMainTlsTrust();
+  }
+  const publicKey = authority.publicKey.export({ format: "der", type: "spki" });
+  const actualPin = `sha256:${createHash("sha256").update(publicKey).digest("base64url")}`;
+  if (actualPin !== input.expectedMainSpkiSha256) {
+    throw invalidMainTlsTrust();
+  }
+  return Object.freeze({
+    certificateAuthorities: Object.freeze([...rootCertificates, input.certificateAuthorityPem]),
+  });
+}
+
+function invalidMainTlsTrust(): WorkerArtifactUploadTransportError {
+  return new WorkerArtifactUploadTransportError(
+    "REQUEST_REJECTED",
+    false,
+    "The Main Artifact TLS trust configuration is invalid.",
+  );
+}
+
+async function fetchBufferedArtifactResponse(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<BufferedArtifactResponse> {
+  const response = await fetch(url, {
+    ...init,
+    redirect: "error",
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  return {
+    status: response.status,
+    body: await readBoundedResponse(response, MAXIMUM_RESPONSE_BYTES),
+  };
+}
+
+async function requestWithMainTlsTrust(input: {
+  readonly url: URL;
+  readonly init: RequestInit;
+  readonly timeoutMs: number;
+  readonly trust: ValidatedMainTlsTrust;
+}): Promise<BufferedArtifactResponse> {
+  const body = requestBody(input.init.body);
+  const headers = Object.fromEntries(new Headers(input.init.headers).entries());
+  return new Promise<BufferedArtifactResponse>((resolveRequest, rejectRequest) => {
+    const request = httpsRequest(
+      input.url,
+      {
+        method: input.init.method,
+        headers,
+        ca: input.trust.certificateAuthorities,
+        minVersion: "TLSv1.3",
+        maxVersion: "TLSv1.3",
+        rejectUnauthorized: true,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        let sizeBytes = 0;
+        response.on("data", (chunk: Buffer) => {
+          sizeBytes += chunk.byteLength;
+          if (sizeBytes > MAXIMUM_RESPONSE_BYTES) {
+            response.destroy(new Error("Artifact upload response exceeded its byte limit."));
+            return;
+          }
+          chunks.push(Buffer.from(chunk));
+        });
+        response.once("error", rejectRequest);
+        response.once("end", () => {
+          resolveRequest({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    request.setTimeout(input.timeoutMs, () => {
+      request.destroy(new Error("Main Artifact upload request timed out."));
+    });
+    request.once("error", rejectRequest);
+    if (body !== undefined) {
+      request.write(body);
+    }
+    request.end();
+  });
+}
+
+function requestBody(input: BodyInit | null | undefined): Buffer | undefined {
+  if (input === undefined || input === null) {
+    return undefined;
+  }
+  if (Buffer.isBuffer(input) || input instanceof Uint8Array) {
+    return Buffer.from(input);
+  }
+  throw new Error("The Artifact upload request body is unsupported.");
 }
 
 function requireSafeAbsolutePath(value: unknown): string {

@@ -71,6 +71,13 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Added an explicit direct-TLS Artifact listener composition for remote Workers. Main validates
+  stable external certificate/key files and TLS identity before binding, while Workers reuse the
+  enrollment-pinned Main CA alongside public roots without disabling hostname verification or
+  installing machine-wide trust.
+- Deduplicated continued Worker native-session observations in Task checkpoints by the protocol
+  session identity, retaining the latest Work Order association so a retry cannot replace the
+  original resource failure with `TASK_CHECKPOINT_UNAVAILABLE`.
 - Preserved an authorized Discord button decision when Gateway head-of-line delay makes the
   interaction too old for Discord's private acknowledgement. The exact idempotent Task command or
   Approval now still crosses the durable authority boundary once, and the refreshed public Task

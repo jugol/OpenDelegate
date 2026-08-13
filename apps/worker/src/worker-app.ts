@@ -1157,7 +1157,12 @@ export async function createWorkerRuntime(
         },
       },
       uploader: new WorkerArtifactUploader({
-        transport: new FetchWorkerArtifactUploadTransport(),
+        transport: new FetchWorkerArtifactUploadTransport({
+          mainTlsTrust: {
+            certificateAuthorityPem: configuration.certificateAuthorityPem,
+            expectedMainSpkiSha256: configuration.expectedMainSpkiSha256,
+          },
+        }),
       }),
     }),
   });
