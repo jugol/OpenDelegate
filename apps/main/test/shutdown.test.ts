@@ -4,7 +4,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { mapMainListenerError, reportCliFailure, shutdownMainRuntime } from "../src/cli.ts";
-import { MainRuntimeError } from "../src/index.ts";
+import { MainArtifactRuntimeError, MainRuntimeError } from "../src/index.ts";
 import {
   cleanupFailureFor,
   closeAfterPrimaryFailure,
@@ -316,6 +316,29 @@ test("a non-Error primary reports its cleanup failure separately without private
       ],
     );
     assert.doesNotMatch(errorOutput, /private primitive primary|private primitive cleanup/u);
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+});
+
+test("Artifact startup failures retain their bounded public diagnostic", async () => {
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  try {
+    const errorOutput = await captureWrite(process.stderr, () => {
+      reportCliFailure(
+        new MainArtifactRuntimeError(
+          "EXTERNAL_INGRESS_UNVERIFIED",
+          "The static Artifact reverse proxy did not pass live external HTTPS verification.",
+        ),
+      );
+    });
+    assert.equal(process.exitCode, 1);
+    assert.deepEqual(JSON.parse(errorOutput.trim()), {
+      level: "error",
+      code: "EXTERNAL_INGRESS_UNVERIFIED",
+      message: "The static Artifact reverse proxy did not pass live external HTTPS verification.",
+    });
   } finally {
     process.exitCode = previousExitCode;
   }

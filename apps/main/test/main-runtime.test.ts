@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer as createNetServer } from "node:net";
 import { arch, hostname, platform, release, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -419,6 +420,85 @@ test("an existing Main activates current bundle Admin assets without rewriting r
     ).adminRoot,
     previousAdminRoot,
   );
+});
+
+test("production Main composes the external Artifact ingress verifier", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "opendelegate-main-artifact-ingress-"));
+  const cleanup: { runtime?: Awaited<ReturnType<typeof createMainRuntime>> } = {};
+  t.after(async () => {
+    await cleanup.runtime?.close();
+    await rm(home, { force: true, recursive: true });
+  });
+  const staticPort = await availableLoopbackPort();
+  let interactivePort = await availableLoopbackPort();
+  while (interactivePort === staticPort) {
+    interactivePort = await availableLoopbackPort();
+  }
+  const adminRoot = await createAdminFixture(home);
+  const mainSecrets = createMainTestSecretContext(home);
+  const initialized = await initializeMainHome({
+    home,
+    adminRoot,
+    sourceCheckout: resolve("."),
+    secretBackend: mainSecrets.configuration,
+    managedSecretStore: mainSecrets.store,
+    artifacts: {
+      schemaVersion: 1,
+      enabled: true,
+      listeners: {
+        static: {
+          host: "127.0.0.1",
+          port: staticPort,
+          origin: "https://static-artifacts.example.test",
+          reverseProxy: { trustedProxyNetworks: ["127.0.0.0/8", "::1/128"] },
+        },
+        interactive: {
+          host: "127.0.0.1",
+          port: interactivePort,
+          origin: `http://interactive-artifacts.localhost:${interactivePort}`,
+        },
+      },
+      storage: { maximumArtifactBytes: 1024 * 1024 },
+      exposure: {
+        defaultMode: "private-network",
+        privateNetworks: ["127.0.0.0/8", "::1/128"],
+        authenticatedBearerAlias: "artifact.owner.bearer",
+        authenticatedSessionAlias: "artifact.owner.session",
+        customPolicyAliases: {},
+      },
+      signingKeyAlias: "artifact.signing.v1",
+      secretBackend: mainSecrets.configuration,
+    },
+  });
+  const verified: Array<{ plane: string; origin: string; expectedService: string }> = [];
+  const runtime = await createMainRuntime({
+    configuration: initialized.configuration,
+    home,
+    build: { version: "0.1.0-test", buildId: "artifact-ingress-composition" },
+    releaseIdentity: DEVELOPMENT_RELEASE_IDENTITY,
+    sourceCheckout: resolve("."),
+    managedSecretStore: mainSecrets.store,
+    artifactExternalIngressVerifier: {
+      async verify(input) {
+        verified.push({
+          plane: input.plane,
+          origin: input.externalOrigin,
+          expectedService: input.expectedService,
+        });
+        return { status: "verified", checkedAtMs: Date.now() };
+      },
+    },
+  });
+  cleanup.runtime = runtime;
+  assert.deepEqual(verified, [
+    {
+      plane: "static",
+      origin: "https://static-artifacts.example.test",
+      expectedService: "opendelegate-artifact-static",
+    },
+  ]);
+  assert.ok(runtime.artifacts !== undefined);
+  assert.equal((await runtime.artifacts.health()).code, "ARTIFACT_RUNTIME_READY");
 });
 
 test("a pre-dynamic Configuration database migrates Discord to explicit disabled state", async (t) => {
@@ -1544,6 +1624,23 @@ async function createAdminFixture(parent: string): Promise<string> {
   );
   await writeFile(join(root, "assets", "app.js"), "console.log('test');");
   return root;
+}
+
+async function availableLoopbackPort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    server.close();
+    throw new Error("A loopback test port was not assigned.");
+  }
+  await new Promise<void>((resolveClose, rejectClose) => {
+    server.close((error) => (error === undefined ? resolveClose() : rejectClose(error)));
+  });
+  return address.port;
 }
 
 function isRuntimeError(code: string) {

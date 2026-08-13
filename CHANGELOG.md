@@ -71,6 +71,10 @@ represents a supported release or completed first milestone.
 
 ### Changed
 
+- Composed the live external-HTTPS verifier into production Main startup whenever an Artifact
+  listener uses the accepted reverse-proxy mode. The same bounded Artifact runtime errors now keep
+  their public diagnostic code and message at the CLI boundary instead of collapsing to an opaque
+  `INTERNAL_ERROR`.
 - Added an explicit direct-TLS Artifact listener composition for remote Workers. Main validates
   stable external certificate/key files and TLS identity before binding, while Workers reuse the
   enrollment-pinned Main CA alongside public roots without disabling hostname verification or

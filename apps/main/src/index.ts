@@ -85,7 +85,9 @@ import {
 } from "./agent-task-executor.ts";
 import {
   createProductionMainArtifactRuntime,
+  FetchArtifactExternalIngressVerifier,
   validateMainArtifactConfiguration,
+  type ArtifactExternalIngressVerifier,
   type MainArtifactConfiguration,
   type MainArtifactRuntime,
 } from "./artifact-runtime.ts";
@@ -540,6 +542,7 @@ export interface CreateMainRuntimeOptions {
     readonly onStatusChange?: (status: DiscordBindingStatus) => void;
   };
   readonly artifactPreparePolicy?: MainArtifactPreparePolicyPort;
+  readonly artifactExternalIngressVerifier?: ArtifactExternalIngressVerifier;
   readonly deviceChannel?: {
     readonly identitySecrets: DeviceIdentitySecretStore;
     readonly listenerFactory?: MainDeviceChannelListenerFactory;
@@ -1431,6 +1434,8 @@ export async function createMainRuntime(options: CreateMainRuntimeOptions): Prom
           },
         ],
         environment,
+        externalIngressVerifier:
+          options.artifactExternalIngressVerifier ?? new FetchArtifactExternalIngressVerifier(),
         indexRepositoryFactory: () =>
           openArtifactIndexRepository(configuration.database, paths, "verify", managedSecretStore),
       });

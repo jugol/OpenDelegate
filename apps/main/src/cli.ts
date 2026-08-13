@@ -26,6 +26,7 @@ import {
   loadMainConfiguration,
   loadMainSecretBackendConfigurationSource,
   MainDiscordConfigurationError,
+  MainArtifactRuntimeError,
   MainRuntimeError,
   MainSecretBackendConfigurationError,
   provisionMainDiscordBotCredential,
@@ -1649,6 +1650,7 @@ function sanitizeCliError(error: unknown): {
   }
   if (
     error instanceof MainRuntimeError ||
+    error instanceof MainArtifactRuntimeError ||
     error instanceof MainDiscordConfigurationError ||
     error instanceof MainSecretBackendConfigurationError ||
     error instanceof DeviceEnrollmentCliError ||
