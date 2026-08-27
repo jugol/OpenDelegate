@@ -2,6 +2,11 @@
 
 Status: **Approved — implementation authorized 2026-07-24**
 
+> [!CAUTION]
+> **Legacy prototype plan.** Current OpenDelegate setup uses SSH to install and recover Device-local
+> Hermes Agents and uses Hermes peer connections for normal work. Follow `CONTEXT.md`, `README.md`,
+> and the project skills for current implementation work.
+
 Target: **First complete cross-platform milestone**
 
 Required platforms: **macOS, Windows, Linux**

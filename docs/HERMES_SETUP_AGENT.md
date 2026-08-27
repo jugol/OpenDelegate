@@ -1,12 +1,9 @@
-# Hermes setup Agent onboarding
+# Hermes setup Agent guide
 
-Use this guide when the owner wants Hermes Agent to install, initialize, repair, or join OpenDelegate. Hermes is the local **setup Agent** in this workflow: it reads the repository instructions, follows the project skills, runs deterministic checks, and asks for owner approval at protected boundaries.
+This guide describes how Hermes acts as the Origin setup Agent for OpenDelegate's SSH-first Device
+federation. It does not install or operate a separate OpenDelegate website.
 
-This guide does not add a Hermes runtime Agent Adapter to OpenDelegate. OpenDelegate runtime execution remains the separate Agent Adapter contract implemented for Codex, Claude, and generic command runners.
-
-## Happy path
-
-### 1. Install Hermes on each Device that needs local setup help
+## Install Hermes on Origin
 
 Windows PowerShell:
 
@@ -14,104 +11,101 @@ Windows PowerShell:
 iex (irm https://hermes-agent.nousresearch.com/install.ps1)
 ```
 
-macOS or Linux terminal:
+macOS or Linux:
 
 ```sh
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
 
-Open a new terminal after installation and run:
+Then:
 
 ```sh
 hermes doctor
-```
-
-Fix the exact item reported by `hermes doctor` and rerun it before continuing.
-
-### 2. Obtain or update OpenDelegate
-
-For a new source checkout:
-
-```sh
 git clone https://github.com/jugol/OpenDelegate.git
 cd OpenDelegate
-```
-
-For an existing source checkout:
-
-```sh
-git pull --ff-only
-```
-
-A verified release bundle is a separate supported input. Extract it into an owner-controlled directory. Do not run `git pull`, pnpm, or source-only scripts inside a release bundle.
-
-### 3. Keep state and credentials outside the project
-
-Before starting setup, require the effective `HERMES_HOME` and the selected OpenDelegate runtime home to resolve outside both the checkout and release bundle. Stop if either path is inside the project tree.
-
-Never synchronize, commit, attach, or paste the contents of `HERMES_HOME`, provider homes, OpenDelegate runtime homes, credentials, auth files, sessions, databases, logs, private keys, peer keys, Device Knowledge, generated Artifacts, or enrollment grants. Each Device keeps its own local state.
-
-### 4. Start Hermes with the correct skill path
-
-For a **source checkout**, run this once from the repository root:
-
-```sh
 hermes skills trust
-```
-
-Then close any existing conversation and start a fresh Hermes session from the same repository root:
-
-```sh
 hermes
 ```
 
-Trust only a checkout you intentionally obtained and reviewed. Hermes discovers these project skills after trust:
+Start a fresh Hermes session after trusting the repository.
 
-- `.agents/skills/opendelegate-init/SKILL.md`
-- `.agents/skills/opendelegate-join/SKILL.md`
+## Give Hermes the fleet setup request
 
-For a **release bundle**, start Hermes from the extracted bundle directory:
+Example:
+
+> Read CONTEXT.md and set up my Hermes fleet. This computer is Origin. Use my existing SSH aliases
+> `nas`, `mac-studio`, and `windows`. Verify each host identity, detect the OS, install or update
+> Hermes, write a Device-local DEVICE.md, configure and start the API Server gateway, register each
+> peer on Origin, and prove one request/reply. Keep all credentials and Hermes state Device-local.
+
+Hermes loads `.agents/skills/opendelegate-init/SKILL.md` for this request.
+
+## What Hermes may do automatically
+
+- inspect local SSH configuration without printing private keys;
+- probe approved SSH targets in BatchMode;
+- detect remote OS and Hermes installation;
+- run official Hermes install or update commands;
+- write non-secret Device metadata;
+- run `hermes gateway setup`, install, start, and status commands inside the approved scope;
+- register peers on Origin;
+- probe Tailscale presence and `/health`;
+- send a bounded peer request and verify the response.
+
+## What needs the owner
+
+- accepting a first-time SSH host key after verifying it;
+- entering an SSH password, MFA, sudo password, or other secret;
+- approving service installation or another privilege boundary;
+- selecting a route when several materially different private-network options exist;
+- resolving an unexpected host-key change.
+
+Hermes must never ask the owner to paste a password, private key, API key, or token into Agent chat.
+Use the native terminal prompt or secure local input.
+
+## Peer API configuration
+
+The target must run the Hermes `api_server` gateway platform with a strong `API_SERVER_KEY`.
+Use:
 
 ```sh
-hermes
+hermes gateway setup
+hermes gateway install --start-now --start-on-login
+hermes gateway status
 ```
 
-The bundled `AGENTS.md` routes Main work to `skills/opendelegate-init/SKILL.md` and Worker work to `skills/opendelegate-join/SKILL.md`. Project-skill trust is source-only; do not pretend a bundle is a Git checkout.
+Register it on Origin:
 
-## Main install prompt
+```sh
+hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key <API_SERVER_KEY>
+hermes peer list
+```
 
-Copy this into the fresh Hermes session:
+Normal Device work then uses:
 
-> Set up OpenDelegate on this computer as my fixed, always-on Main Device. Identify whether this is a source checkout or a verified release bundle, read AGENTS.md and the canonical documents it names, then read the matching init skill. Keep Hermes and OpenDelegate state outside the checkout or bundle. Never ask me to paste credentials, tokens, provider homes, sessions, databases, private keys, Device Knowledge, or grant contents into chat. Use provider-native authentication or OpenDelegate secure intake when a secret is required. Report the exact preview or release status, ask only for decisions that change my intent, and stop if a required safety check fails.
+```sh
+hermes peer dm --timeout 7200 DEVICE_NAME < REQUEST_FILE
+```
 
-## Worker join prompt
+## State boundary
 
-On Main, create a short-lived single-use Device grant. Transfer the unopened file to the Worker through an owner-controlled local or OS-secure handoff. Never open it in an editor or paste its contents into chat.
+Never synchronize, commit, or copy these between Devices:
 
-On the Worker Device, start a fresh Hermes session from its source checkout or verified bundle and send:
+- `HERMES_HOME`;
+- `config.yaml` or `.env`;
+- auth files and provider homes;
+- sessions and state databases;
+- peer keys and SSH keys;
+- locks, logs, or process state.
 
-> Join this computer to my fixed OpenDelegate Main as an outbound-only Worker using the unopened single-use grant file at `<absolute-path-to-grant-file>`. Identify the installation input, read AGENTS.md and the matching join skill, and pass only the grant file path to OpenDelegate tooling. Never print, paste, log, summarize, or copy the grant contents. Keep all Hermes state, Worker state, credentials, sessions, databases, private keys, Device Knowledge, and generated Artifacts outside the checkout or bundle. Ask before any protected network, firewall, VPN, service, package-source, driver, kernel, or privileged change.
+A shared library may carry human-readable knowledge, source files, and artifacts only.
 
-## Source checkout and bundle paths
+## Diagnose without confusing Device power and Agent readiness
 
-| Input | Main skill | Worker skill |
-| --- | --- | --- |
-| Source checkout | `.agents/skills/opendelegate-init/SKILL.md` | `.agents/skills/opendelegate-join/SKILL.md` |
-| Release bundle | `skills/opendelegate-init/SKILL.md` | `skills/opendelegate-join/SKILL.md` |
+1. Check Tailscale or network presence.
+2. Check the target host through SSH.
+3. Check `hermes gateway status` on the target.
+4. Check `/health` from Origin.
+5. Check `hermes peer list` and one `peer dm` request.
 
-The source tree has one canonical copy of each skill under `.agents/skills`. Release assembly copies those files into `skills/` inside the bundle. Intra-skill references are relative so they remain valid in both layouts.
-
-## Preview and release wording
-
-Read `supportStatus` and say exactly what the evidence supports. A status beginning with `internal-preview` is an **unsupported internal preview**, even when local smoke tests pass. A release candidate is still unsupported until the documented external promotion and supported-channel chain makes those exact bytes effectively released.
-
-Do not install an internal preview as an unattended production control plane. Do not infer service persistence, platform support, provider support, or Computer Use readiness from source code or fixture tests alone.
-
-## Rollback and troubleshooting
-
-- If Hermes cannot see the source project skills, confirm the terminal is at the Git repository root, rerun `hermes skills trust`, and start a new session.
-- If `HERMES_HOME` or an OpenDelegate runtime path resolves inside the checkout or bundle, stop and select an external absolute path before setup.
-- If Main initialization fails, reread the init skill and report the exact failing step, support status, and launcher output without secrets. Do not continue to persistent service installation after a failed gate.
-- If Worker join fails or the grant may have been consumed, inspect Main first and issue a new single-use grant. Never edit or replay the old grant.
-- Remove only a generated preview directory after confirming it contains no owner files or runtime state. Deleting the source checkout is not a runtime rollback.
-- Use the repository's service lifecycle and backup/restore guides for an installed release. Never replace their health check, journal, or rollback path with an improvised shell supervisor.
+A failed step identifies one boundary. It does not prove every earlier boundary failed.
