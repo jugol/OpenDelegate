@@ -2,6 +2,12 @@
 
 Status: **Approved — 2026-07-24**
 
+> [!CAUTION]
+> **Legacy prototype specification.** The current OpenDelegate direction is the SSH-first Hermes
+> federation defined in `CONTEXT.md`. Admin Web, enrollment grants, central Task storage, and the
+> website control-plane workflow below are retained for historical reference and possible reuse,
+> not as current owner instructions.
+
 Intended license: **Apache License 2.0**
 
 Default product and repository language: **English**

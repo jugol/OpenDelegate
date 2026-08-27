@@ -2,6 +2,10 @@
 
 Status: **Accepted; specification approved 2026-07-24**
 
+> [!CAUTION]
+> **Legacy prototype decision log.** These decisions describe the earlier Admin Web control-plane
+> product. The SSH-first Hermes federation in `CONTEXT.md` is the current owner-approved direction.
+
 This log captures durable decisions that must survive conversation compaction.
 Changing an accepted decision requires an explicit replacement entry and, once
 implementation begins, an ADR.
