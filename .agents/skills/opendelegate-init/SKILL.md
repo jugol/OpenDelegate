@@ -1,10 +1,8 @@
 ---
 name: opendelegate-init
-description:
-  Initialize or repair a personal OpenDelegate installation from its repository or release bundle.
-  Use when the owner asks to set up OpenDelegate, make this Device the fixed Main, choose SQLite or
-  PostgreSQL, configure startup or Admin auto-open behavior, claim owner access, enroll Devices,
-  bind Discord Forum, detect Codex or Claude, or resume an interrupted first-run setup.
+description: Initialize or repair an OpenDelegate Main Device.
+version: 0.1.0
+platforms: [linux, macos, windows]
 ---
 
 # Initialize OpenDelegate
@@ -421,7 +419,7 @@ The default lifetime is five minutes and the default bootstrap Role is `worker`.
 must not already exist and must remain outside the checkout. The CLI creates exactly one
 restrictively permissioned file, prints only redacted metadata, and never accepts the token through
 argv or an environment variable. Transfer that unopened file through an owner-controlled local or
-OS-secure handoff, then hand enrollment to `skills/opendelegate-join/SKILL.md`. Do not read, paste,
+OS-secure handoff, then hand enrollment to `../opendelegate-join/SKILL.md`. Do not read, paste,
 attach, or summarize the file in Configuration Chat, Discord, logs, or an Agent prompt. If it
 expires or is consumed, delete any retained handoff copy and issue a fresh grant rather than editing
 it.

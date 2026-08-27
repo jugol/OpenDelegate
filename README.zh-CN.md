@@ -57,7 +57,8 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
    也可以打开解压后的目录。Agent 会区分源代码和 bundle、检查 `supportStatus` 并核验
    `SHA256SUMS`。当前源代码只能生成标记明确的[内部预览版](#构建内部预览版)。
 2. 发送[交给 Agent 的推荐安装方式](#推荐安装交给你的-agent)中的请求。Agent 会自行找到
-   `AGENTS.md` 和 `skills/opendelegate-init/SKILL.md`，Owner 不需要了解内部文件结构。
+   source 中的 `.agents/skills/opendelegate-init/SKILL.md`，或 bundle 中的
+   `skills/opendelegate-init/SKILL.md`；Owner 不需要了解内部文件结构。
 3. 首次初始化 Main 时可以暂不配置 Discord。之后可在经过 Owner 身份验证的 Configuration Chat
    中添加、替换、扩展或禁用 Forum Binding。所需的 App、Forum、Tag 和 Permission 请参阅
    [Discord Forum 设置指南](docs/DISCORD_SETUP.md)。
@@ -68,7 +69,8 @@ OpenDelegate 由 Agent 协助安装；Owner 安装流程不需要运行 `npm run
    令牌只能输入安全凭据面板。
 6. 添加 Device 时，请通过 Configuration Chat 签发一份短期、一次性的 Device
    Grant。不要打开该文件；使用 Owner 控制的安全方式将其交给目标 Device，然后让该 Device 上的 Agent
-   将这台电脑连接为 Worker。Agent 会自行找到 `skills/opendelegate-join/SKILL.md`。
+   将这台电脑连接为 Worker。Agent 使用 source 中的 `.agents/skills/opendelegate-join/SKILL.md`，
+   或 bundle 中的 `skills/opendelegate-join/SKILL.md`。
 7. 如果已配置 Discord，请为每个独立 Task 创建一个 Forum 新帖子。同一帖子的回复会延续同一 Task 及其 native
    Agent Session；新帖子则从干净的 Context 开始。如果 Discord 已禁用或不可用，请选择 **Admin Web →
    Tasks → 新建任务**。
@@ -302,8 +304,8 @@ native session。系统绝不会隐式继承全局 home。
 - `packages/knowledge` 和 `packages/knowledge-mcp` —
   Device 本地 Markdown 发现、链接检索、索引与 Agent Tool。
 - `packages/acceptance` 和 `packages/simulator` — 确定性 Task 流程、重启场景与 replay fixture。
-- `skills/opendelegate-init` — 面向 Agent 的初始化 workflow，并具有明确的 `internal-preview` gate。
-- `skills/opendelegate-join` — 不暴露凭据的仅出站 Worker enrollment 与恢复 workflow。
+- `.agents/skills/opendelegate-init` — 面向 Agent 的初始化 workflow，并具有明确的 `internal-preview` gate。
+- `.agents/skills/opendelegate-join` — 不暴露凭据的仅出站 Worker enrollment 与恢复 workflow。
 - `docs` — 产品、架构、安全、设计、研究与 Release evidence。
 
 ## 规范性产品文档

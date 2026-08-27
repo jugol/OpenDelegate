@@ -102,6 +102,11 @@ stores, OS Secret Stores, and Worker-local Knowledge indexes.
 Agent-facing init and join skills, deterministic CLI operations, release installation,
 OS service registration, upgrade, diagnostics, and uninstall.
 
+The source checkout exposes those skills through the cross-tool `.agents/skills/`
+project convention. Release assembly retains the bundle `skills/` layout. Hermes may
+follow the setup skills after source trust or through bundled `AGENTS.md`; this does
+not make Hermes a runtime Agent Adapter.
+
 ### Acceptance Harness
 
 Fake adapters, network fault injection, deterministic clock and IDs, test desktop
@@ -790,6 +795,10 @@ Deliver the required visual setup, Device specification, and operational surface
   The init Agent chooses and explains the fixed always-on Main boundary; each join
   Agent completes one outbound Worker without requiring the owner to design the
   topology or placement policy.
+- Add a Hermes setup-Agent path that installs from official Hermes sources, requires
+  `hermes skills trust` and a fresh session for source, uses bundled `AGENTS.md` for a
+  release bundle, and verifies that `HERMES_HOME` plus OpenDelegate runtime state stay
+  outside both inputs. Keep runtime Agent Adapter support explicitly separate.
 - Keep English as the canonical Admin default and add complete, typed Korean,
   Japanese, French, Spanish, and Simplified Chinese presentation catalogs with an
   explicit pre-authentication and authenticated language selector.
@@ -802,9 +811,10 @@ Deliver the required visual setup, Device specification, and operational surface
 
 - A new owner completes setup through the init skill and Admin Web without reading
   source code.
-- The same owner can give the repository or verified bundle to Codex or Claude on
-  Main and each Worker and receive an accurate, resumable Main-versus-Worker setup
-  journey without manually translating documentation into commands.
+- The same owner can give the repository or verified bundle to Codex, Claude, or
+  Hermes as the setup Agent on Main and each Worker and receive an accurate,
+  resumable Main-versus-Worker setup journey without manually translating
+  documentation into commands. Hermes is not presented as a runtime Agent Adapter.
 - The required Device UI matches the product specification.
 - A configuration change can be proposed conversationally, previewed, policy-checked,
   applied, audited, and rolled back.

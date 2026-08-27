@@ -363,8 +363,9 @@ through a secure handoff and resumes the same Task afterward.
 
 ### FR-1 — Agent-first bootstrap
 
-1. The documented owner workflow begins inside a supported Codex or Claude
-   environment by invoking the OpenDelegate initialization skill.
+1. The documented owner workflow begins inside a capable local setup Agent
+   environment, including Codex, Claude, or Hermes, by invoking the OpenDelegate
+   initialization skill.
 2. The skill may call a deterministic bootstrap CLI internally. The owner is not
    required to run a development command such as `npm run start`.
 3. The bootstrap detects OS, architecture, service-manager availability, installed
@@ -390,6 +391,17 @@ through a secure handoff and resumes the same Task afterward.
 12. The init and join skills give separate, complete Main and Worker procedures so
     the owner does not need to translate a control-plane topology into manual
     commands.
+13. A source checkout keeps its canonical project skills under `.agents/skills/`.
+    Hermes requires `hermes skills trust` at the repository root and a fresh session
+    before those source skills load.
+14. A release bundle keeps its skills under `skills/`; the bundled `AGENTS.md` routes
+    Main setup to `skills/opendelegate-init/SKILL.md` and Worker setup to the matching
+    join skill without project-skill trust.
+15. Using Hermes as the setup Agent does not claim or implement a Hermes runtime
+    Agent Adapter. Runtime support still requires the FR-9 lifecycle contract and
+    accepted conformance evidence.
+16. Setup fails closed when the effective `HERMES_HOME` or an OpenDelegate runtime
+    home resolves inside a source checkout or release bundle.
 
 ### FR-2 — Device enrollment and identity
 

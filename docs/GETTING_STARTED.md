@@ -9,18 +9,19 @@ This guide takes one owner from an empty Main computer to a first isolated Task 
 Worker Device.
 
 The shortest honest setup request is to give this repository URL or an extracted, verified release
-bundle to Codex or Claude and say:
+bundle to Codex, Claude, or Hermes and say:
 
 > Install OpenDelegate from this repository. Discover and follow its Main installation instructions.
 > Set up this computer as my fixed, always-on Main, keep runtime state outside the checkout or
 > bundle, and guide me through only the owner decisions that affect my intent. Do not ask me to
 > choose a Device, OS, route, or Agent for future Tasks.
 
-That Agent owns the checklist below and discovers `AGENTS.md` plus
-`skills/opendelegate-init/SKILL.md` itself. On each additional computer, give the same repository or
-platform bundle plus the unopened, short-lived grant and ask its Agent to join that computer as a
-Worker; it discovers `skills/opendelegate-join/SKILL.md`. The owner should not have to translate
-this guide into shell commands or know the repository's internal file layout.
+That setup Agent owns the checklist below. A source checkout uses
+`.agents/skills/opendelegate-init/SKILL.md` and `.agents/skills/opendelegate-join/SKILL.md`; a release
+bundle uses `skills/opendelegate-init/SKILL.md` and `skills/opendelegate-join/SKILL.md`. When Hermes is
+the source setup Agent, run `hermes skills trust` in the repository root and start a fresh Hermes
+session there. See [Hermes setup Agent onboarding](HERMES_SETUP_AGENT.md). The owner should not have
+to translate this guide into shell commands or know the repository's internal file layout.
 
 > [!IMPORTANT]
 > Read `release-metadata.json` before setup. When `supportStatus` begins with `internal-preview`,
@@ -33,7 +34,7 @@ this guide into shell commands or know the repository's internal file layout.
 Prepare:
 
 - one computer that will remain the fixed **Main Device**;
-- Codex, Claude, or another capable local Agent on Main;
+- Codex, Claude, Hermes, or another capable local setup Agent on Main;
 - a private route from each future Worker to Main, such as LAN, Omada, Tailscale, or an
   owner-configured tunnel;
 - if you want Discord, a Community server where you can create an App, bot, and Forum Channel; and
@@ -56,6 +57,13 @@ Devices connect outbound to Main. They never need pairwise SSH trust or database
 
 Choose a Main that can stay on and that you can reach for recovery even when Discord is unavailable.
 Moving Main between computers is deliberately outside the first milestone.
+
+### Hermes as a setup Agent
+
+Install Hermes through its official installer, run `hermes doctor`, and follow
+[Hermes setup Agent onboarding](HERMES_SETUP_AGENT.md). Before setup, require the effective
+`HERMES_HOME` and the selected OpenDelegate runtime home to resolve outside the source checkout or
+release bundle. This is setup assistance, not first-class Hermes runtime Agent Adapter support.
 
 ## 1. Get an OpenDelegate bundle
 
@@ -80,7 +88,8 @@ under a release tag.
 
 ## 2. Initialize the fixed Main Device
 
-Open the extracted bundle directory as the workspace in Codex, or start Claude from that directory.
+Open the extracted bundle directory as the workspace in Codex, start Claude there, or start Hermes
+from that directory.
 Then send this prompt:
 
 > Install OpenDelegate from this directory. Discover and follow its Main installation instructions,
@@ -88,8 +97,9 @@ Then send this prompt:
 > every owner decision, keep runtime state outside this bundle, do not ask me to choose a Device,
 > OS, route, or Agent for future Tasks, and stop if a required safety check fails.
 
-The Agent discovers and follows `skills/opendelegate-init/SKILL.md`; the path is documented here for
-auditing, not because the owner must name it.
+The setup Agent follows `.agents/skills/opendelegate-init/SKILL.md` from source or
+`skills/opendelegate-init/SKILL.md` from a bundle; the path is documented here for auditing, not
+because the owner must name it.
 
 Before invoking the launcher for the first time, tell the Agent whether you want to configure
 Discord now, defer it until after owner claim, or keep it disabled. A prepared non-secret binding
@@ -316,8 +326,9 @@ On the new Device, open its bundle directory in Codex or Claude and send:
 > detect its capabilities, keep all Knowledge local, and ask before any network or privileged
 > change.
 
-The join Agent discovers `skills/opendelegate-join/SKILL.md` and passes only the file path to the
-packaged Worker. The Worker generates its own
+The join Agent follows `.agents/skills/opendelegate-join/SKILL.md` from source or
+`skills/opendelegate-join/SKILL.md` from a bundle and passes only the file path to the packaged
+Worker. The Worker generates its own
 Device-local key, validates Main's identity, consumes the grant, and confirms the mutual-TLS
 channel. If the grant expired or was consumed, delete any retained handoff copy and issue a new one;
 never edit or reuse it.

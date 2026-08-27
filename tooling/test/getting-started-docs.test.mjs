@@ -27,7 +27,7 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   const [readme, guide, initSkill, supportMatrix, heroImage] = await Promise.all([
     readRepositoryFile("README.md"),
     readRepositoryFile("docs/GETTING_STARTED.md"),
-    readRepositoryFile("skills/opendelegate-init/SKILL.md"),
+    readRepositoryFile(".agents/skills/opendelegate-init/SKILL.md"),
     readRepositoryFile("docs/release/SUPPORT_MATRIX.md"),
     stat(new URL("../../docs/design/opendelegate-orchestration-hero.png", import.meta.url)),
   ]);
@@ -44,15 +44,16 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   assert.match(readmeLead, /docs\/design\/opendelegate-orchestration-hero\.png/u);
   assertAppearsBefore(readme, "opendelegate-orchestration-hero.png", "**Start here:**");
   assert.match(readmeLead, /\[Complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
+  assert.match(readmeLead, /\[Hermes setup Agent guide\]\(docs\/HERMES_SETUP_AGENT\.md\)/u);
   assert.match(readmeLead, /\[Discord Forum setup\]\(docs\/DISCORD_SETUP\.md\)/u);
   assert.equal(readmeLead.includes(`(#${githubHeadingAnchor(recommendedHeading)})`), true);
   assertAppearsBefore(readme, "**Start here:**", recommendedHeading);
   assertAppearsBefore(readme, recommendedHeading, detailedHeading);
   assertAppearsBefore(readme, detailedHeading, "## Why OpenDelegate");
   assert.equal(
-    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 17,
+    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 18,
     true,
-    "The hero and recommended installation must be visible within the first 17 README lines",
+    "The hero and recommended installation must be visible within the first 18 README lines",
   );
   const setupJourney = readme.slice(
     readme.indexOf(recommendedHeading),
@@ -67,7 +68,7 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   assert.match(setupJourney, /\(docs\/DISCORD_SETUP\.md\)/u);
   assert.match(setupJourney, /skills\/opendelegate-init\/SKILL\.md/u);
   assert.match(setupJourney, /skills\/opendelegate-join\/SKILL\.md/u);
-  assert.match(setupJourney, /Give this repository URL to Codex or Claude/u);
+  assert.match(setupJourney, /Give this repository URL to Codex, Claude, or Hermes/u);
   const ownerPrompt = setupJourney.match(/> Set up OpenDelegate[\s\S]*?> finish there\./u)?.[0];
   assert.notEqual(
     ownerPrompt,

@@ -1,10 +1,8 @@
 ---
 name: opendelegate-join
-description:
-  Enroll or repair the current macOS, Windows, or Linux Device as an outbound-only OpenDelegate
-  Worker for a fixed Main. Use when the owner supplies a single-use enrollment grant, asks to add
-  this computer or NAS, rotate or recover its Device identity, configure its ordered Main routes,
-  install its Worker service, or diagnose a failed join without exposing credentials.
+description: Join or repair an OpenDelegate Worker Device.
+version: 0.1.0
+platforms: [linux, macos, windows]
 ---
 
 # Join an OpenDelegate Device

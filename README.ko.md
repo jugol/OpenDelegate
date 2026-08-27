@@ -11,14 +11,15 @@
 > [!TIP]
 > **여기서 시작하세요:** [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요) ·
 > [상세 설정](#상세-설정) ·
-> [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
+> [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) ·
+> [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
 
 ## 권장 설치: Agent에게 맡기세요
 
 **가장 짧고 권장되는 방법입니다. OpenDelegate 명령어부터 배울 필요가 없습니다.**
 
 1. 고정된 상시 가동 **Main Device**로 사용할 컴퓨터로 갑니다.
-2. 그 컴퓨터에서 Codex나 Claude 같은 유능한 로컬 Agent를 열고 이 저장소 URL을 줍니다.
+2. 그 컴퓨터에서 Codex나 Claude, Hermes 같은 유능한 로컬 setup Agent를 열고 이 저장소 URL을 줍니다.
 3. 다음과 같이 말합니다.
 
    > 이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 저장소의
@@ -30,6 +31,10 @@
 4. Agent가 묻는 내용에 답합니다. Agent는 저장소의 init skill을 스스로 찾고, 소스와 Release
    Bundle을 구분하고, 지원 상태를 확인하고, Runtime 데이터를 Checkout 밖에 보관하며, 사용자가 이
    README를 Shell 명령으로 옮겨 적지 않아도 Admin Web을 실행합니다.
+
+Hermes로 source checkout을 설정할 때는 먼저 [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md)에
+따라 저장소 루트에서 `hermes skills trust`를 실행한 뒤 그 위치에서 새 Hermes 세션을 시작합니다.
+검증된 bundle은 포함된 `AGENTS.md`와 `skills/` 경로를 사용하며 project-skill trust를 사용하지 않습니다.
 
 Admin Web이 열리면 우측 **Configuration Chat**에서 계속 설정하세요. 이미 설정된 내용을 먼저
 확인해 달라고 한 뒤, Device 평가, 내장 SQLite 또는 외부 PostgreSQL, Codex와 Claude, Discord
@@ -58,13 +63,13 @@ Agent에게 전달하세요. 그 Agent가 Worker Join 지침을 스스로 찾아
 
 OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run start`는 없습니다.
 
-1. Main으로 사용할 컴퓨터에서 이 저장소 URL을 Codex 또는 Claude에게 주십시오. 이미 지원되는 플랫폼
+1. Main으로 사용할 컴퓨터에서 이 저장소 URL을 Codex, Claude 또는 Hermes에게 주십시오. 이미 지원되는 플랫폼
    bundle이 있다면 압축을 푼 디렉터리를 대신 여십시오. Agent가 소스와 bundle을 구분하고
    `supportStatus`와 `SHA256SUMS`를 확인합니다. 현재 소스는 표시된
    [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
 2. [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요)의 문장을 보냅니다. Agent가
-   `AGENTS.md`와 `skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가 내부 파일 구조를
-   알 필요가 없습니다.
+   source에서는 `AGENTS.md`와 `.agents/skills/opendelegate-init/SKILL.md`, bundle에서는
+   `skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가 내부 파일 구조를 알 필요가 없습니다.
 3. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
    Forum Binding을 추가·교체·확장·비활성화할 수 있습니다. 필요한 App, Forum, Tag, Permission은
    [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따르세요.
@@ -75,8 +80,8 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
    Discord 토큰은 보안 인증 정보 패널에만 입력합니다.
 6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
    파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
-   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent가 `skills/opendelegate-join/SKILL.md`를
-   스스로 찾습니다.
+   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent가 source에서는
+   `.agents/skills/opendelegate-join/SKILL.md`, bundle에서는 `skills/opendelegate-join/SKILL.md`를 찾습니다.
 7. Discord를 설정했다면 독립된 Task마다 Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은
    동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
    Discord를 사용하지 않거나 사용할 수 없으면 **Admin Web → Tasks → 새 작업**에서 만듭니다.
@@ -88,7 +93,8 @@ OpenDelegate는 각 요청을 해당 Device의 검증된 모델 카탈로그와 
 모델 ID를 검토용으로 보여 주며, 변경은 새 native Session부터 적용합니다.
 
 Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
-[전체 설정 가이드(영문)](docs/GETTING_STARTED.md)를 참고하십시오.
+[전체 설정 가이드(영문)](docs/GETTING_STARTED.md)와
+[Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md)를 참고하십시오.
 
 ## OpenDelegate를 만드는 이유
 
@@ -105,6 +111,8 @@ Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
 - Worker는 Main에만 연결됩니다. NxN SSH 메시나 데이터베이스 직접 접근은 필요하지 않습니다.
 - Codex, Claude 및 사용자 정의 Runner는 Agent Adapter 계약 뒤에 배치되며, 유용한 Provider-native
   세션은 재개할 수 있습니다.
+- Hermes는 신뢰한 Project Skill을 읽고 설치를 돕는 setup Agent로 사용할 수 있지만, 이 저장소는
+  Hermes를 OpenDelegate 실행용 Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다.
 - 준비된 Codex 또는 Claude Worker는 하나의 Work Order 안에서 로컬 하위 Agent를 최대 4개까지
   사용할 수 있습니다. 이들은 같은 Run의 Workspace와 Policy 안에 머물며, Device 간 분배는 Main만
   수행합니다.
@@ -331,8 +339,8 @@ native session 저장소는 공유되지만 각 Task는 계속 별도의 native 
   Retrieval, Indexing 및 Agent Tool.
 - `packages/acceptance`, `packages/simulator` — 결정론적 Task Journey, Restart Case 및 Replay
   Fixture.
-- `skills/opendelegate-init` — 명시적인 Internal-preview Gate를 갖춘 Agent 대상 초기화 Workflow.
-- `skills/opendelegate-join` — 자격 증명을 노출하지 않는 Outbound-only Worker Enrollment 및 복구
+- `.agents/skills/opendelegate-init` — 명시적인 Internal-preview Gate를 갖춘 Agent 대상 초기화 Workflow.
+- `.agents/skills/opendelegate-join` — 자격 증명을 노출하지 않는 Outbound-only Worker Enrollment 및 복구
   Workflow.
 - `docs` — Product, Architecture, Security, Design, Research 및 Release Evidence.
 

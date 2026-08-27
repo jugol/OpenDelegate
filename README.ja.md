@@ -65,8 +65,8 @@ OpenDelegate は Agent とともにインストールします。Owner 向けの
    source と bundle を判定し、`supportStatus` と `SHA256SUMS` を確認します。現在の source が
    生成できるのは表示済みの[内部プレビュー](#内部プレビューのビルド)だけです。
 2. [Agent に任せる推奨インストール](#推奨インストールagent-に任せる)の依頼文を送信します。
-   Agent が `AGENTS.md` と `skills/opendelegate-init/SKILL.md` を自分で見つけるため、Owner が
-   内部のファイル構成を知る必要はありません。
+   Agent は source では `.agents/skills/opendelegate-init/SKILL.md`、bundle では
+   `skills/opendelegate-init/SKILL.md` を自分で見つけるため、Owner が内部構成を知る必要はありません。
 3. 最初の Main 初期化では Discord を省略できます。後から Owner 認証済みの Configuration Chat
    で Forum Binding を追加、置換、拡張、無効化できます。必要な App、Forum、Tag、Permission は
    [Discord Forum セットアップガイド](docs/DISCORD_SETUP.md)に従ってください。
@@ -78,8 +78,8 @@ OpenDelegate は Agent とともにインストールします。Owner 向けの
    Discord トークンは安全な認証情報パネルにのみ入力します。
 6. Device を追加する際は、Configuration Chat で有効期間の短い Single-use Device
    Grant を発行します。ファイルを開かずに Owner が管理する安全な方法で転送し、対象 Device の Agent
-   にこのコンピューターを Worker として接続するよう依頼してください。Agent が
-   `skills/opendelegate-join/SKILL.md` を自分で見つけます。
+   にこのコンピューターを Worker として接続するよう依頼してください。Agent は source では
+   `.agents/skills/opendelegate-join/SKILL.md`、bundle では `skills/opendelegate-join/SKILL.md` を見つけます。
 7. Discord を設定した場合は、独立した Task ごとに Forum へ新しい投稿を作成します。同じ投稿への返信は同じ Task と native
    Agent
    Session を継続し、新しい投稿はクリーンな Context から始まります。Discord を使用しない場合や利用できない場合は、**Admin
@@ -344,9 +344,9 @@ native session を使用します。グローバル home を暗黙に継承す�
   Retrieval、Indexing、および Agent Tool。
 - `packages/acceptance`、`packages/simulator` — 決定論的 Task Journey、Restart Case、Replay
   Fixture。
-- `skills/opendelegate-init` — 明示的な Internal-preview Gate を持つ Agent 向け Initialization
+- `.agents/skills/opendelegate-init` — 明示的な Internal-preview Gate を持つ Agent 向け Initialization
   Workflow。
-- `skills/opendelegate-join` — Credential を公開しない Outbound-only Worker
+- `.agents/skills/opendelegate-join` — Credential を公開しない Outbound-only Worker
   Enrollment と Recovery の Workflow。
 - `docs` — Product、Architecture、Security、Design、Research、Release Evidence。
 
