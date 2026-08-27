@@ -559,7 +559,7 @@ export const englishMessages = {
       "Open Codex or Claude on the new Device. Generating the grant below also produces a ready-made prompt; hand that prompt and the downloaded file's local path — never its contents — to that Agent.",
     agentPromptLabel: "Give this prompt to Codex or Claude on the new Device",
     agentPrompt:
-      "Install OpenDelegate Worker on this Device from https://github.com/jugol/OpenDelegate. Follow the repository README and skills/opendelegate-join/SKILL.md. Join it using the unopened grant file at <absolute-path-to/{filename}>. Never print, paste, or log the grant contents. Configure the native service for this OS, verify Main connectivity, and report when this Device appears in Admin Web.",
+      "Install OpenDelegate Worker on this Device from https://github.com/jugol/OpenDelegate. Follow the repository README and .agents/skills/opendelegate-join/SKILL.md. Join it using the unopened grant file at <absolute-path-to/{filename}>. Never print, paste, or log the grant contents. Configure the native service for this OS, verify Main connectivity, and report when this Device appears in Admin Web.",
     copyAgentPrompt: "Copy Agent prompt",
     afterJoin:
       "When the Device appears in the left list, open its Configuration Chat to assess it, choose a name, and set Roles and Instructions.",

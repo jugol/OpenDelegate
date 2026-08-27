@@ -63,7 +63,7 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
    `supportStatus`와 `SHA256SUMS`를 확인합니다. 현재 소스는 표시된
    [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
 2. [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요)의 문장을 보냅니다. Agent가
-   `AGENTS.md`와 `skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가 내부 파일 구조를
+   `AGENTS.md`와 `.agents/skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가 내부 파일 구조를
    알 필요가 없습니다.
 3. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
    Forum Binding을 추가·교체·확장·비활성화할 수 있습니다. 필요한 App, Forum, Tag, Permission은
@@ -75,7 +75,7 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
    Discord 토큰은 보안 인증 정보 패널에만 입력합니다.
 6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
    파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
-   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent가 `skills/opendelegate-join/SKILL.md`를
+   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent가 `.agents/skills/opendelegate-join/SKILL.md`를
    스스로 찾습니다.
 7. Discord를 설정했다면 독립된 Task마다 Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은
    동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
@@ -331,8 +331,8 @@ native session 저장소는 공유되지만 각 Task는 계속 별도의 native 
   Retrieval, Indexing 및 Agent Tool.
 - `packages/acceptance`, `packages/simulator` — 결정론적 Task Journey, Restart Case 및 Replay
   Fixture.
-- `skills/opendelegate-init` — 명시적인 Internal-preview Gate를 갖춘 Agent 대상 초기화 Workflow.
-- `skills/opendelegate-join` — 자격 증명을 노출하지 않는 Outbound-only Worker Enrollment 및 복구
+- `.agents/skills/opendelegate-init` — 명시적인 Internal-preview Gate를 갖춘 Agent 대상 초기화 Workflow.
+- `.agents/skills/opendelegate-join` — 자격 증명을 노출하지 않는 Outbound-only Worker Enrollment 및 복구
   Workflow.
 - `docs` — Product, Architecture, Security, Design, Research 및 Release Evidence.
 

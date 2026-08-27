@@ -72,7 +72,7 @@ OpenDelegate se instala con un Agent; el recorrido de instalación del Owner no 
    indicada.
 2. Envía la solicitud de la
    [instalación recomendada](#instalación-recomendada-pídeselo-a-tu-agent). El Agent descubre por sí
-   mismo `AGENTS.md` y `skills/opendelegate-init/SKILL.md`; el Owner no necesita conocer la
+   mismo `AGENTS.md` y `.agents/skills/opendelegate-init/SKILL.md`; el Owner no necesita conocer la
    estructura interna.
 3. Puedes omitir Discord durante la primera inicialización del Main. Después podrás añadir,
    sustituir, ampliar o desactivar el Binding de Forum desde Configuration Chat con autenticación
@@ -87,7 +87,7 @@ OpenDelegate se instala con un Agent; el recorrido de instalación del Owner no 
 6. Para añadir un Device, solicita en Configuration Chat un Device Grant de corta duración y un solo
    uso. Transfiere el archivo sin abrirlo mediante un mecanismo seguro controlado por el Owner y
    pide al Agent del Device de destino que conecte ese ordenador como Worker. El Agent descubre
-   `skills/opendelegate-join/SKILL.md` por sí mismo.
+   `.agents/skills/opendelegate-join/SKILL.md` por sí mismo.
 7. Si Discord está configurado, crea una publicación en el Forum para cada Task independiente. Las
    respuestas continúan la misma Task y su native Agent Session; una publicación nueva empieza con
    un Context limpio. Si Discord está desactivado o no está disponible, abre **Admin Web → Tasks →
@@ -365,9 +365,9 @@ Task conserva su propia native session. No se hereda implícitamente ningún hom
   recuperación enlazada, indexación y herramientas para Agents.
 - `packages/acceptance` y `packages/simulator` — recorridos deterministas de Tasks, casos de
   reinicio y fixtures de replay.
-- `skills/opendelegate-init` — workflow de inicialización para agentes con gate explícita de
+- `.agents/skills/opendelegate-init` — workflow de inicialización para agentes con gate explícita de
   `internal-preview`.
-- `skills/opendelegate-join` — workflow de inscripción y recuperación de un Worker solo saliente sin
+- `.agents/skills/opendelegate-join` — workflow de inscripción y recuperación de un Worker solo saliente sin
   exponer credenciales.
 - `docs` — producto, arquitectura, seguridad, diseño, investigación y evidencia de release.
 

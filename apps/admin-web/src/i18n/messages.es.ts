@@ -576,7 +576,7 @@ export const spanishMessages = {
       "Abre Codex o Claude en el dispositivo nuevo. Al generar el archivo abajo también aparece un texto listo para usar; entrega ese texto y la ruta local del archivo descargado —nunca su contenido— a ese Agent.",
     agentPromptLabel: "Texto para Codex o Claude en el dispositivo nuevo",
     agentPrompt:
-      "Instala OpenDelegate Worker en este dispositivo desde https://github.com/jugol/OpenDelegate. Sigue el README y skills/opendelegate-join/SKILL.md. Únelo usando el archivo de inscripción sin abrir <absolute-path-to/{filename}>. Nunca muestres, pegues ni registres su contenido. Configura el servicio nativo de este sistema operativo, verifica la conexión con Main e informa cuando el dispositivo aparezca en Admin Web.",
+      "Instala OpenDelegate Worker en este dispositivo desde https://github.com/jugol/OpenDelegate. Sigue el README y .agents/skills/opendelegate-join/SKILL.md. Únelo usando el archivo de inscripción sin abrir <absolute-path-to/{filename}>. Nunca muestres, pegues ni registres su contenido. Configura el servicio nativo de este sistema operativo, verifica la conexión con Main e informa cuando el dispositivo aparezca en Admin Web.",
     copyAgentPrompt: "Copiar texto para el Agent",
     afterJoin:
       "Cuando aparezca a la izquierda, abre su chat de configuración para evaluarlo y definir nombre, roles e instrucciones.",

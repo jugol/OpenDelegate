@@ -2252,7 +2252,7 @@ async function copyReleaseMaterials(staging, sourceRoot) {
   }
   await cp(join(sourceRoot, "docs"), join(staging, "docs"), { recursive: true });
   for (const skill of RELEASE_SKILL_DIRECTORIES) {
-    await cp(join(sourceRoot, "skills", skill), join(staging, "skills", skill), {
+    await cp(join(sourceRoot, ".agents", "skills", skill), join(staging, "skills", skill), {
       recursive: true,
     });
   }

@@ -12,6 +12,7 @@ phone or laptop may disconnect while a fixed always-on Main coordinates macOS, W
 > **Start here:** [Recommended installation](#recommended-installation-ask-your-agent) ·
 > [Detailed setup](#detailed-setup) ·
 > [Complete setup guide](docs/GETTING_STARTED.md) ·
+> [Hermes setup Agent guide](docs/HERMES_SETUP_AGENT.md) ·
 > [Discord Forum setup](docs/DISCORD_SETUP.md)
 
 ## Recommended installation: ask your Agent
@@ -20,7 +21,7 @@ phone or laptop may disconnect while a fixed always-on Main coordinates macOS, W
 first.**
 
 1. Go to the computer you want to keep as your fixed, always-on **Main Device**.
-2. Open a capable local Agent such as Codex or Claude and give it this repository URL.
+2. Open a capable local setup Agent such as Codex, Claude, or Hermes and give it this repository URL.
 3. Send this:
 
    > Set up OpenDelegate on this computer as my fixed, always-on Main Device. Follow the
@@ -62,13 +63,13 @@ discover the Worker join instructions.
 
 OpenDelegate is installed with an Agent; there is no `npm run start` owner workflow.
 
-1. Give this repository URL to Codex or Claude on the intended Main computer. If you already have a
+1. Give this repository URL to Codex, Claude, or Hermes on the intended Main computer. If you already have a
    supported platform bundle,
    open its extracted directory instead. The Agent will identify the source or bundle, inspect
    `supportStatus`, and verify `SHA256SUMS`; the current source can produce only the marked
    [internal preview described below](#build-an-internal-preview).
 2. Send the prompt from [Recommended installation](#recommended-installation-ask-your-agent). The
-   Agent discovers the repository contract and `skills/opendelegate-init/SKILL.md`; you do not need
+   setup Agent discovers the repository contract and `.agents/skills/opendelegate-init/SKILL.md`; you do not need
    to know its internal file layout.
 3. Discord is optional during first initialization. You can add, replace, extend, or disable its
    Forum binding later through the owner-authenticated Configuration Chat; use the
@@ -81,7 +82,7 @@ OpenDelegate is installed with an Agent; there is no `npm run start` owner workf
    credential panel.
 5. To add a computer, give its Agent this repository or the matching verified bundle plus the
    unopened short-lived Device grant, and ask it to join that computer as a Worker. The Agent
-   discovers `skills/opendelegate-join/SKILL.md`. Workers connect only to Main; you do not choose
+   discovers `.agents/skills/opendelegate-join/SKILL.md`. Workers connect only to Main; you do not choose
    future placement or build pairwise SSH trust.
 6. If Discord is configured, create a Discord Forum post containing the outcome you want. One post
    is one durable Task; replies
@@ -94,7 +95,7 @@ NAS.”_ Repeat on the Mac Studio with the GPT model you want. OpenDelegate reso
 against that target Device’s tested model catalog, shows the exact provider-native model ID for
 review, and applies it only to new native sessions.
 
-Read the [complete setup guide](docs/GETTING_STARTED.md), including owner recovery, additional
+Read the [complete setup guide](docs/GETTING_STARTED.md) and the [Hermes setup Agent guide](docs/HERMES_SETUP_AGENT.md), including owner recovery, additional
 Devices, the first Task, and troubleshooting.
 
 ## Why OpenDelegate
@@ -115,7 +116,8 @@ deterministic scheduling chooses the eligible Devices and routes.
   state transitions. Agents handle semantic judgment and assigned work.
 - Workers connect only to Main. They do not need an NxN SSH mesh or direct database access.
 - Codex, Claude, and custom runners sit behind Agent Adapter contracts while useful provider-native
-  sessions remain resumable.
+  sessions remain resumable. Hermes may guide setup from project skills, but this source tree does
+  not claim or implement Hermes as a first-class OpenDelegate runtime adapter.
 - A ready bridged Codex or Claude Worker may use up to four local child Agents for one Work Order;
   they stay inside that Run's Workspace and Policy, while only Main can delegate across Devices.
 - Each Device keeps its own selective, linked Markdown Knowledge. Main never receives its filenames,
@@ -357,9 +359,9 @@ session. Ambient global homes are never inherited.
   retrieval, indexing, and agent tools.
 - `packages/acceptance` and `packages/simulator` — deterministic Task journeys, restart cases, and
   replay fixtures.
-- `skills/opendelegate-init` — agent-facing initialization workflow with explicit internal-preview
+- `.agents/skills/opendelegate-init` — agent-facing initialization workflow with explicit internal-preview
   gating.
-- `skills/opendelegate-join` — credential-safe, outbound-only Worker enrollment and recovery
+- `.agents/skills/opendelegate-join` — credential-safe, outbound-only Worker enrollment and recovery
   workflow.
 - `docs` — product, architecture, security, design, research, and release evidence.
 
