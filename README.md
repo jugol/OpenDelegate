@@ -69,8 +69,9 @@ OpenDelegate is installed with an Agent; there is no `npm run start` owner workf
    `supportStatus`, and verify `SHA256SUMS`; the current source can produce only the marked
    [internal preview described below](#build-an-internal-preview).
 2. Send the prompt from [Recommended installation](#recommended-installation-ask-your-agent). The
-   setup Agent discovers the repository contract and `.agents/skills/opendelegate-init/SKILL.md`; you do not need
-   to know its internal file layout.
+   setup Agent reads `.agents/skills/opendelegate-init/SKILL.md` from a source checkout or
+   `skills/opendelegate-init/SKILL.md` from a verified bundle; you do not need to know its internal
+   file layout.
 3. Discord is optional during first initialization. You can add, replace, extend, or disable its
    Forum binding later through the owner-authenticated Configuration Chat; use the
    [Discord Forum setup guide](docs/DISCORD_SETUP.md) for the required App, Forum, tags, and
@@ -81,9 +82,10 @@ OpenDelegate is installed with an Agent; there is no `npm run start` owner workf
    Configuration Chat. Provider credentials never go into chat; Discord tokens use only the secure
    credential panel.
 5. To add a computer, give its Agent this repository or the matching verified bundle plus the
-   unopened short-lived Device grant, and ask it to join that computer as a Worker. The Agent
-   discovers `.agents/skills/opendelegate-join/SKILL.md`. Workers connect only to Main; you do not choose
-   future placement or build pairwise SSH trust.
+   unopened short-lived Device grant, and ask it to join that computer as a Worker. The Agent reads
+   `.agents/skills/opendelegate-join/SKILL.md` from a source checkout or
+   `skills/opendelegate-join/SKILL.md` from a verified bundle. Workers connect only to Main; you do
+   not choose future placement or build pairwise SSH trust.
 6. If Discord is configured, create a Discord Forum post containing the outcome you want. One post
    is one durable Task; replies
    continue its native Agent session, while a new post starts a clean context. If Discord is

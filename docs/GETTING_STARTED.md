@@ -16,13 +16,16 @@ bundle to Codex, Claude, or Hermes and say:
 > bundle, and guide me through only the owner decisions that affect my intent. Do not ask me to
 > choose a Device, OS, route, or Agent for future Tasks.
 
-That setup Agent owns the checklist below and discovers `AGENTS.md` plus
-`.agents/skills/opendelegate-init/SKILL.md` itself. If you want Hermes to be that setup Agent, follow
+That setup Agent owns the checklist below and first identifies whether the input is a source
+checkout or a verified release bundle. For Main setup it reads
+`.agents/skills/opendelegate-init/SKILL.md` from source or `skills/opendelegate-init/SKILL.md` from a
+bundle. If you want Hermes to be that setup Agent, follow
 [Hermes setup Agent onboarding](HERMES_SETUP_AGENT.md): install Hermes, run `hermes doctor`, then run
-`hermes skills trust` from the source checkout before starting a new session. On each additional computer, give the same repository or
-platform bundle plus the unopened, short-lived grant and ask its Agent to join that computer as a
-Worker; it discovers `.agents/skills/opendelegate-join/SKILL.md`. The owner should not have to translate
-this guide into shell commands or know the repository's internal file layout.
+`hermes skills trust` from the source checkout before starting a new session. On each additional
+computer, give the same repository or platform bundle plus the unopened, short-lived grant and ask
+its Agent to join that computer as a Worker; it reads `.agents/skills/opendelegate-join/SKILL.md`
+from source or `skills/opendelegate-join/SKILL.md` from a bundle. The owner should not have to
+translate this guide into shell commands or know the repository's internal file layout.
 
 > [!IMPORTANT]
 > Read `release-metadata.json` before setup. When `supportStatus` begins with `internal-preview`,

@@ -131,3 +131,47 @@ test("Korean README links Hermes setup guidance without runtime-adapter claims",
     /Hermes[^\n]{0,80}(?:runtime|Runtime)[^\n]{0,80}(?:adapter|Adapter)/u,
   );
 });
+
+test("setup docs route Main and Worker skills by input type", async () => {
+  const [readme, koreanReadme, guide] = await Promise.all([
+    readRepositoryFile("README.md"),
+    readRepositoryFile("README.ko.md"),
+    readRepositoryFile("docs/GETTING_STARTED.md"),
+  ]);
+
+  const readmeDetailedSetup = readme.slice(
+    readme.indexOf("## Detailed setup"),
+    readme.indexOf("Each Device defaults to"),
+  );
+  assert.match(
+    readmeDetailedSetup,
+    /\.agents\/skills\/opendelegate-init\/SKILL\.md` from a source checkout or\s+`skills\/opendelegate-init\/SKILL\.md` from a verified bundle/u,
+  );
+  assert.match(
+    readmeDetailedSetup,
+    /\.agents\/skills\/opendelegate-join\/SKILL\.md` from a source checkout or\s+`skills\/opendelegate-join\/SKILL\.md` from a verified bundle/u,
+  );
+
+  const koreanDetailedSetup = koreanReadme.slice(
+    koreanReadme.indexOf("## 상세 설정"),
+    koreanReadme.indexOf("각 Device의 기본값"),
+  );
+  assert.match(
+    koreanDetailedSetup,
+    /source\s+checkout이면 `\.agents\/skills\/opendelegate-init\/SKILL\.md`, 검증된 bundle이면\s+`skills\/opendelegate-init\/SKILL\.md`/u,
+  );
+  assert.match(
+    koreanDetailedSetup,
+    /source\s+checkout이면\s+`\.agents\/skills\/opendelegate-join\/SKILL\.md`, 검증된 bundle이면 `skills\/opendelegate-join\/SKILL\.md`/u,
+  );
+
+  const guideIntro = guide.slice(0, guide.indexOf("> [!IMPORTANT]"));
+  assert.match(
+    guideIntro,
+    /\.agents\/skills\/opendelegate-init\/SKILL\.md` from source or `skills\/opendelegate-init\/SKILL\.md` from a\s+bundle/u,
+  );
+  assert.match(
+    guideIntro,
+    /\.agents\/skills\/opendelegate-join\/SKILL\.md`\s+from source or `skills\/opendelegate-join\/SKILL\.md` from a bundle/u,
+  );
+});

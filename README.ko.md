@@ -63,9 +63,9 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
    bundle이 있다면 압축을 푼 디렉터리를 대신 여십시오. Agent가 소스와 bundle을 구분하고
    `supportStatus`와 `SHA256SUMS`를 확인합니다. 현재 소스는 표시된
    [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
-2. [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요)의 문장을 보냅니다. Agent가
-   `AGENTS.md`와 `.agents/skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가 내부 파일 구조를
-   알 필요가 없습니다.
+2. [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요)의 문장을 보냅니다. Agent는 source
+   checkout이면 `.agents/skills/opendelegate-init/SKILL.md`, 검증된 bundle이면
+   `skills/opendelegate-init/SKILL.md`를 읽으므로 사용자가 내부 파일 구조를 알 필요가 없습니다.
 3. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
    Forum Binding을 추가·교체·확장·비활성화할 수 있습니다. 필요한 App, Forum, Tag, Permission은
    [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따르세요.
@@ -76,8 +76,9 @@ OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run
    Discord 토큰은 보안 인증 정보 패널에만 입력합니다.
 6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
    파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
-   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent가 `.agents/skills/opendelegate-join/SKILL.md`를
-   스스로 찾습니다.
+   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent는 source checkout이면
+   `.agents/skills/opendelegate-join/SKILL.md`, 검증된 bundle이면 `skills/opendelegate-join/SKILL.md`를
+   읽습니다.
 7. Discord를 설정했다면 독립된 Task마다 Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은
    동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
    Discord를 사용하지 않거나 사용할 수 없으면 **Admin Web → Tasks → 새 작업**에서 만듭니다.
