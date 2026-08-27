@@ -103,3 +103,31 @@ test("localized source READMEs do not introduce Hermes runtime-adapter claims", 
   const docs = await readdir(join(repositoryRoot, "docs"));
   assert.equal(docs.includes("HERMES_SETUP_AGENT.md"), true);
 });
+
+test("Getting Started keeps source and bundle skill paths distinct", async () => {
+  const guide = await readRepositoryFile("docs/GETTING_STARTED.md");
+  const bundleInventory = guide.slice(
+    guide.indexOf("A bundle contains:"),
+    guide.indexOf("Obtain the checksum through the trusted publication channel"),
+  );
+  assert.match(bundleInventory, /skills\/opendelegate-init\/SKILL\.md/u);
+  assert.match(bundleInventory, /skills\/opendelegate-join\/SKILL\.md/u);
+  assert.doesNotMatch(bundleInventory, /\.agents\/skills/u);
+
+  assert.match(guide, /source or `skills\/opendelegate-init\/SKILL\.md` from a bundle/u);
+  assert.match(guide, /source or `skills\/opendelegate-join\/SKILL\.md` from a bundle/u);
+});
+
+test("Korean README links Hermes setup guidance without runtime-adapter claims", async () => {
+  const readme = await readRepositoryFile("README.ko.md");
+  assert.match(readme, /Hermes Setup Agent 가이드\(영문\)\]\(docs\/HERMES_SETUP_AGENT\.md\)/u);
+  assert.match(readme, /Codex나 Claude, Hermes 같은 유능한 로컬 setup Agent/u);
+  assert.match(
+    readme,
+    /Hermes를 OpenDelegate 실행용 Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다/u,
+  );
+  assert.doesNotMatch(
+    readme,
+    /Hermes[^\n]{0,80}(?:runtime|Runtime)[^\n]{0,80}(?:adapter|Adapter)/u,
+  );
+});

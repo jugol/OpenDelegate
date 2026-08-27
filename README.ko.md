@@ -11,14 +11,15 @@
 > [!TIP]
 > **여기서 시작하세요:** [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요) ·
 > [상세 설정](#상세-설정) ·
-> [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
+> [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) ·
+> [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
 
 ## 권장 설치: Agent에게 맡기세요
 
 **가장 짧고 권장되는 방법입니다. OpenDelegate 명령어부터 배울 필요가 없습니다.**
 
 1. 고정된 상시 가동 **Main Device**로 사용할 컴퓨터로 갑니다.
-2. 그 컴퓨터에서 Codex나 Claude 같은 유능한 로컬 Agent를 열고 이 저장소 URL을 줍니다.
+2. 그 컴퓨터에서 Codex나 Claude, Hermes 같은 유능한 로컬 setup Agent를 열고 이 저장소 URL을 줍니다.
 3. 다음과 같이 말합니다.
 
    > 이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 저장소의
@@ -58,7 +59,7 @@ Agent에게 전달하세요. 그 Agent가 Worker Join 지침을 스스로 찾아
 
 OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run start`는 없습니다.
 
-1. Main으로 사용할 컴퓨터에서 이 저장소 URL을 Codex 또는 Claude에게 주십시오. 이미 지원되는 플랫폼
+1. Main으로 사용할 컴퓨터에서 이 저장소 URL을 Codex, Claude 또는 Hermes에게 주십시오. 이미 지원되는 플랫폼
    bundle이 있다면 압축을 푼 디렉터리를 대신 여십시오. Agent가 소스와 bundle을 구분하고
    `supportStatus`와 `SHA256SUMS`를 확인합니다. 현재 소스는 표시된
    [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
@@ -88,7 +89,7 @@ OpenDelegate는 각 요청을 해당 Device의 검증된 모델 카탈로그와 
 모델 ID를 검토용으로 보여 주며, 변경은 새 native Session부터 적용합니다.
 
 Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
-[전체 설정 가이드(영문)](docs/GETTING_STARTED.md)를 참고하십시오.
+[전체 설정 가이드(영문)](docs/GETTING_STARTED.md)와 [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md)를 참고하십시오.
 
 ## OpenDelegate를 만드는 이유
 
@@ -105,6 +106,8 @@ Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
 - Worker는 Main에만 연결됩니다. NxN SSH 메시나 데이터베이스 직접 접근은 필요하지 않습니다.
 - Codex, Claude 및 사용자 정의 Runner는 Agent Adapter 계약 뒤에 배치되며, 유용한 Provider-native
   세션은 재개할 수 있습니다.
+- Hermes는 Project Skill을 읽고 설치를 돕는 setup Agent로 사용할 수 있지만, 이 저장소는
+  Hermes를 OpenDelegate 실행용 Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다.
 - 준비된 Codex 또는 Claude Worker는 하나의 Work Order 안에서 로컬 하위 Agent를 최대 4개까지
   사용할 수 있습니다. 이들은 같은 Run의 Workspace와 Policy 안에 머물며, Device 간 분배는 Main만
   수행합니다.

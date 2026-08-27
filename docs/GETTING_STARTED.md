@@ -75,7 +75,7 @@ A bundle contains:
 
 - `opendelegate.cmd` on Windows or `opendelegate` on macOS and Linux;
 - the audited Node.js runtime used by OpenDelegate;
-- `.agents/skills/opendelegate-init/SKILL.md` and `.agents/skills/opendelegate-join/SKILL.md`;
+- `skills/opendelegate-init/SKILL.md` and `skills/opendelegate-join/SKILL.md`;
 - `release-metadata.json`, `SHA256SUMS`, and the release evidence snapshot; and
 - Admin Web and the Main and Worker runtime payloads.
 
