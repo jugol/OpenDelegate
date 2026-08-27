@@ -2498,3 +2498,34 @@ Worker restart, while ambiguous selection remains fail-closed. The lookup transm
 no Device-local path or Workspace content, does not rewrite configuration, and keeps
 the existing stable native-session Workspace binding after a Run begins. This
 refines D-099 and ADR-0051.
+
+## D-121 — Hermes is a setup Agent, not a runtime Adapter
+
+Implementation detail:
+[ADR-0059](adr/0059-hermes-setup-agent-onboarding.md).
+
+**Decision:** The OpenDelegate source checkout stores its canonical init and join
+skills under `.agents/skills/`, where trusted project-aware Agent harnesses can load
+them. Hermes source onboarding requires `hermes skills trust` and a fresh session.
+Release assembly copies those same skill directories into the existing bundle
+`skills/` layout, and bundled `AGENTS.md` selects those paths without project trust.
+Relative intra-skill references must resolve in both layouts.
+
+Hermes is a supported setup Agent for this documented onboarding path only. This
+decision does not add or claim a Hermes runtime Agent Adapter; first-class runtime
+support still requires the lifecycle and conformance evidence in FR-9 and D-024.
+
+The effective `HERMES_HOME`, OpenDelegate runtime homes, credentials, provider homes,
+sessions, databases, logs, private keys, Device Knowledge, Artifacts, and enrollment
+grants remain outside source and bundle trees and outside Agent chat.
+
+**Rationale:** A newcomer should be able to clone or pull OpenDelegate and ask the
+local Agent to install Main or join a Worker without knowing repository internals.
+The old source `skills/` location was not a Hermes project-skill discovery path, while
+treating a release bundle as a Git project would prescribe the wrong trust and file
+layout.
+
+**Consequence:** Codex, Claude, and Hermes can share one source-of-truth installation
+procedure. Bundles retain their stable `skills/` contract. Release tests assemble the
+skills and verify their references. No Device protocol, provider login, service
+authority, or runtime execution behavior changes.

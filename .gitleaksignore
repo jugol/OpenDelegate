@@ -70,3 +70,7 @@ e953ec34a1150c4765949e7dfd65ba219d7519af:packages/platform-services/src/render-l
 978aa848f000b97869223e674994921a94c10659:apps/service-host/src/configuration.ts:generic-api-key:503
 978aa848f000b97869223e674994921a94c10659:packages/platform-services/src/render-linux.ts:generic-api-key:33
 978aa848f000b97869223e674994921a94c10659:packages/platform-services/src/render-linux.ts:generic-api-key:48
+# Reviewed test-only private-key fixtures from PR #73 history; both were removed
+# from current source. Exact commit, path, rule, and line remain fail-closed.
+32030dfccdf20e4771cba3303204051e89c8c5fc:apps/worker/test/artifact-uploader.test.ts:private-key:61
+32030dfccdf20e4771cba3303204051e89c8c5fc:apps/main/test/artifact-runtime.test.ts:private-key:193

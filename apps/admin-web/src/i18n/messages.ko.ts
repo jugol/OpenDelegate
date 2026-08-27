@@ -556,10 +556,10 @@ export const koreanMessages = {
     recommended: "권장",
     agentAssistedTitle: "새 장치의 Agent에게 설치 맡기기",
     agentAssistedDetail:
-      "새 장치에서 Codex 또는 Claude를 여세요. 아래에서 등록 파일을 생성하면 전달용 프롬프트가 함께 표시됩니다. 그 프롬프트와 내려받은 파일의 로컬 경로를 Agent에게 주세요. 파일 내용은 붙여넣지 마세요.",
-    agentPromptLabel: "새 장치의 Codex 또는 Claude에게 전달할 프롬프트",
+      "새 장치에서 Codex, Claude 또는 Hermes를 여세요. 아래에서 등록 파일을 생성하면 전달용 프롬프트가 함께 표시됩니다. 그 프롬프트와 내려받은 파일의 로컬 경로를 Agent에게 주세요. 파일 내용은 붙여넣지 마세요.",
+    agentPromptLabel: "새 장치의 Codex, Claude 또는 Hermes에게 전달할 프롬프트",
     agentPrompt:
-      "이 장치에 https://github.com/jugol/OpenDelegate 저장소의 OpenDelegate Worker를 설치하세요. README와 skills/opendelegate-join/SKILL.md를 따르세요. 열어보지 않은 등록 파일 <absolute-path-to/{filename}>을 사용해 이 장치를 연결하세요. 등록 파일 내용은 출력·붙여넣기·로그 기록하지 마세요. 이 OS의 네이티브 서비스를 설정하고 Main 연결을 검증한 뒤 Admin Web에 장치가 나타나면 보고하세요.",
+      "이 장치에 https://github.com/jugol/OpenDelegate 저장소의 OpenDelegate Worker를 설치하세요. README와 .agents/skills/opendelegate-join/SKILL.md를 따르세요. 열어보지 않은 등록 파일 <absolute-path-to/{filename}>을 사용해 이 장치를 연결하세요. 등록 파일 내용은 출력·붙여넣기·로그 기록하지 마세요. 이 OS의 네이티브 서비스를 설정하고 Main 연결을 검증한 뒤 Admin Web에 장치가 나타나면 보고하세요.",
     copyAgentPrompt: "Agent 프롬프트 복사",
     afterJoin:
       "왼쪽 목록에 장치가 나타나면 해당 장치의 환경설정 채팅을 열어 평가하고, 별명·역할·지침을 정하세요.",
@@ -574,7 +574,7 @@ export const koreanMessages = {
     statusExpired: "만료됨",
     statusRevoked: "취소됨",
     stepsTitle: "안전한 연결 흐름",
-    stepOne: "새 장치에서 Codex 또는 Claude를 열고 OpenDelegate Worker 준비를 요청합니다.",
+    stepOne: "새 장치에서 Codex, Claude 또는 Hermes를 열고 OpenDelegate Worker 준비를 요청합니다.",
     stepTwo:
       "여기서 일회용 등록 파일을 생성·다운로드한 뒤 인증된 연결이나 안전한 로컬 전달 방식으로 열지 않은 채 옮깁니다.",
     stepThree:

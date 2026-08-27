@@ -72,8 +72,8 @@ OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Ow
    distingue source et bundle, inspecte `supportStatus` et vérifie `SHA256SUMS`. Le source actuel ne
    produit que la [préversion interne](#construire-une-préversion-interne) indiquée.
 2. Envoyez la demande de l’[installation recommandée](#installation-recommandée-confiez-la-à-votre-agent).
-   L’Agent découvre lui-même `AGENTS.md` et `skills/opendelegate-init/SKILL.md` ; l’Owner n’a pas à
-   connaître l’arborescence interne.
+   L’Agent utilise `.agents/skills/opendelegate-init/SKILL.md` dans le source ou
+   `skills/opendelegate-init/SKILL.md` dans un bundle ; l’Owner n’a pas à connaître l’arborescence.
 3. Discord peut être omis lors de la première initialisation du Main. Vous pourrez ensuite ajouter,
    remplacer, étendre ou désactiver le Binding Forum dans Configuration Chat après authentification
    Owner. Suivez le [guide de configuration de Discord Forum](docs/DISCORD_SETUP.md) pour l’App, le
@@ -87,8 +87,8 @@ OpenDelegate s’installe avec un Agent ; le parcours d’installation de l’Ow
    panneau d’identifiants sécurisé.
 6. Pour ajouter un Device, demandez à Configuration Chat un Device Grant de courte durée et à usage
    unique. Transférez le fichier sans l’ouvrir par un moyen sûr contrôlé par l’Owner, puis demandez
-   à l’Agent du Device cible de connecter cet ordinateur comme Worker. Il découvre lui-même
-   `skills/opendelegate-join/SKILL.md`.
+   à l’Agent du Device cible de connecter cet ordinateur comme Worker. Il utilise
+   `.agents/skills/opendelegate-join/SKILL.md` dans le source ou `skills/opendelegate-join/SKILL.md` dans un bundle.
 7. Si Discord est configuré, créez une publication Forum pour chaque Task indépendante. Les réponses
    poursuivent la même Task et sa native Agent Session ; une nouvelle publication démarre avec un
    Context propre. Si Discord est désactivé ou indisponible, ouvrez **Admin Web → Tasks → Nouvelle
@@ -365,9 +365,9 @@ implicitement.
   récupération liée, indexation et outils pour Agents.
 - `packages/acceptance` et `packages/simulator` — parcours déterministes de Tasks, cas de
   redémarrage et fixtures de replay.
-- `skills/opendelegate-init` — workflow d’initialisation destiné aux agents avec gate
+- `.agents/skills/opendelegate-init` — workflow d’initialisation destiné aux agents avec gate
   `internal-preview` explicite.
-- `skills/opendelegate-join` — workflow d’enrôlement et de récupération d’un Worker sortant
+- `.agents/skills/opendelegate-join` — workflow d’enrôlement et de récupération d’un Worker sortant
   uniquement, sans exposer les identifiants.
 - `docs` — produit, architecture, sécurité, conception, recherche et preuves de release.
 

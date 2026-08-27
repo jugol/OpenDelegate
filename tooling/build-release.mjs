@@ -329,7 +329,7 @@ const bundleJoinAgentPrompt =
 const bundleReadmeCopy = Object.freeze({
   en: Object.freeze({
     addDeviceHeading: "Add another Device",
-    agentStep: "Open this directory in Codex or Claude and send this prompt:",
+    agentStep: "Open this directory in Codex, Claude, or Hermes and send this prompt:",
     candidateWarning:
       "This candidate is not a supported release until it is promoted through the documented release channel.",
     candidateDiscordStep:
@@ -352,15 +352,17 @@ const bundleReadmeCopy = Object.freeze({
     grantSafety:
       "Transfer the grant unopened through an owner-controlled secure handoff. Never paste it into a chat, Task, log, or command argument.",
     guides:
-      "Continue with `docs/GETTING_STARTED.md` for the complete owner journey and\n`docs/DISCORD_SETUP.md` for Discord App, bot, Forum, intent, permission, and first-Task setup.",
+      "Continue with `docs/GETTING_STARTED.md` for the complete owner journey,\n`docs/HERMES_SETUP_AGENT.md` for Hermes bundle guidance, and `docs/DISCORD_SETUP.md`\nfor Discord App, bot, Forum, intent, permission, and first-Task setup.",
     implementationLabel: "Implementation",
     initAgentPrompt:
       "Set up OpenDelegate on this computer as my fixed, always-on Main Device. Follow this bundle's own Main installation instructions and do everything you safely can. Ask me only when you need a decision or a secure owner-only action. Never ask me to paste credentials, tokens, or other secrets into chat; guide me through provider-native authentication or OpenDelegate's secure intake instead. Continue until Admin Web opens and setup is ready to finish there.",
+    initSkillStep:
+      "Hermes follows `skills/opendelegate-init/SKILL.md` through the bundled `AGENTS.md`; project-skill trust is not used in a bundle.",
     integrity:
       "Verify `SHA256SUMS` against a digest obtained through a trusted publication channel\nbefore relying on the payload. The enclosed manifest proves only internal\nconsistency, not publisher identity.",
     integrityStep:
       "Before running anything, verify `SHA256SUMS` against the digest from the trusted publication channel.",
-    joinStep: "On the new Device, open its matching bundle in Codex or Claude and send:",
+    joinStep: "On the new Device, open its matching bundle in Codex, Claude, or Hermes and send:",
     languageLabel: "Languages",
     ledgerIntroduction: "The acceptance ledger state recorded during assembly was:",
     liveProofLabel: "Live proof",
@@ -377,7 +379,7 @@ const bundleReadmeCopy = Object.freeze({
   }),
   ko: Object.freeze({
     addDeviceHeading: "다른 Device 추가",
-    agentStep: "이 디렉터리를 Codex 또는 Claude에서 열고 다음 문장을 그대로 보내세요.",
+    agentStep: "이 디렉터리를 Codex, Claude 또는 Hermes에서 열고 다음 문장을 그대로 보내세요.",
     candidateWarning:
       "이 후보는 문서화된 릴리스 채널을 통해 승격되기 전까지 지원 릴리스가 아닙니다.",
     candidateDiscordStep:
@@ -400,15 +402,18 @@ const bundleReadmeCopy = Object.freeze({
     grantSafety:
       "Grant를 열지 않은 채 Owner가 관리하는 안전한 방식으로 옮기세요. Chat, Task, Log 또는 명령 인수에 붙여 넣지 마세요.",
     guides:
-      "전체 Owner 여정은 `docs/GETTING_STARTED.md`, Discord App, Bot, Forum, Intent,\nPermission 및 첫 Task 설정은 `docs/DISCORD_SETUP.md`를 참고하세요.",
+      "전체 Owner 여정은 `docs/GETTING_STARTED.md`, Hermes bundle 안내는\n`docs/HERMES_SETUP_AGENT.md`, Discord 설정은 `docs/DISCORD_SETUP.md`를 참고하세요.",
     implementationLabel: "구현",
     initAgentPrompt:
       "이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 Bundle에 포함된 Main 설치 지침을 직접 찾아 따르고, 안전하게 할 수 있는 일은 모두 처리해 줘. 내 결정이나 Owner 전용 보안 작업이 필요할 때만 질문해 줘. 인증 정보, Token 등 비밀값을 채팅에 붙여 넣으라고 하지 말고 Provider의 기본 인증 절차나 OpenDelegate 보안 입력 화면으로 안내해 줘. Admin Web이 열려서 나머지 설정을 마칠 수 있을 때까지 계속 진행해 줘.",
+    initSkillStep:
+      "Hermes는 bundle의 `AGENTS.md`를 통해 `skills/opendelegate-init/SKILL.md`를 따르며 project-skill trust를 사용하지 않습니다.",
     integrity:
       "이 payload를 신뢰하기 전에 신뢰할 수 있는 배포 채널에서 얻은 digest와\n`SHA256SUMS`를 대조하세요. 포함된 manifest는 내부 일관성만 증명하며 게시자 신원은\n증명하지 않습니다.",
     integrityStep:
       "실행하기 전에 신뢰할 수 있는 게시 채널에서 얻은 digest로 `SHA256SUMS`를 검증하세요.",
-    joinStep: "새 Device에서 해당 플랫폼용 번들을 Codex 또는 Claude로 열고 다음 문장을 보내세요.",
+    joinStep:
+      "새 Device에서 해당 플랫폼용 번들을 Codex, Claude 또는 Hermes로 열고 다음 문장을 보내세요.",
     languageLabel: "언어",
     ledgerIntroduction: "조립 시 기록된 acceptance ledger 상태는 다음과 같습니다.",
     liveProofLabel: "실제 증거",
@@ -425,7 +430,8 @@ const bundleReadmeCopy = Object.freeze({
   }),
   ja: Object.freeze({
     addDeviceHeading: "別の Device を追加",
-    agentStep: "このディレクトリを Codex または Claude で開き、次の文をそのまま送信します。",
+    agentStep:
+      "このディレクトリを Codex、Claude、または Hermes で開き、次の文をそのまま送信します。",
     candidateWarning:
       "この候補は、文書化されたリリースチャネルを通じて昇格されるまで、サポート対象のリリースではありません。",
     candidateDiscordStep:
@@ -448,16 +454,18 @@ const bundleReadmeCopy = Object.freeze({
     grantSafety:
       "Grant を開かずに Owner が管理する安全な方法で転送します。Chat、Task、Log、コマンド引数には貼り付けないでください。",
     guides:
-      "Owner の全手順は `docs/GETTING_STARTED.md`、Discord App、Bot、Forum、Intent、\nPermission、最初の Task の設定は `docs/DISCORD_SETUP.md` を参照してください。",
+      "Owner の全手順は `docs/GETTING_STARTED.md`、Hermes bundle の案内は\n`docs/HERMES_SETUP_AGENT.md`、Discord 設定は `docs/DISCORD_SETUP.md` を参照してください。",
     implementationLabel: "実装",
     initAgentPrompt:
       "このコンピューターを、固定された常時稼働の OpenDelegate Main Device としてセットアップしてください。この Bundle に含まれる Main インストール手順を自分で見つけて従い、安全に実行できる作業はすべて進めてください。私の判断または Owner 専用の安全な操作が必要なときだけ質問してください。認証情報、Token、その他の Secret をチャットに貼り付けるよう求めず、Provider 本来の認証手順または OpenDelegate の安全な入力画面へ案内してください。Admin Web が開いて残りの設定を完了できる状態になるまで続けてください。",
+    initSkillStep:
+      "Hermes は bundle の `AGENTS.md` を通じて `skills/opendelegate-init/SKILL.md` に従い、project-skill trust は使用しません。",
     integrity:
       "この payload を信頼する前に、信頼できる公開チャネルから取得した digest と\n`SHA256SUMS` を照合してください。同梱の manifest が証明するのは内部整合性のみで、\n公開者の身元ではありません。",
     integrityStep:
       "実行前に、信頼できる公開チャネルから取得した digest と `SHA256SUMS` を照合します。",
     joinStep:
-      "新しい Device で、そのプラットフォーム用バンドルを Codex または Claude で開き、次の文を送信します。",
+      "新しい Device で、そのプラットフォーム用バンドルを Codex、Claude、または Hermes で開き、次の文を送信します。",
     languageLabel: "言語",
     ledgerIntroduction: "アセンブリ時に記録された acceptance ledger の状態は次のとおりです。",
     liveProofLabel: "実環境の証拠",
@@ -474,7 +482,7 @@ const bundleReadmeCopy = Object.freeze({
   }),
   fr: Object.freeze({
     addDeviceHeading: "Ajouter un autre Device",
-    agentStep: "Ouvrez ce répertoire dans Codex ou Claude, puis envoyez exactement :",
+    agentStep: "Ouvrez ce répertoire dans Codex, Claude ou Hermes, puis envoyez exactement :",
     candidateWarning:
       "Ce candidat n’est pas une version prise en charge tant qu’il n’a pas été promu par le canal de publication documenté.",
     candidateDiscordStep:
@@ -498,16 +506,18 @@ const bundleReadmeCopy = Object.freeze({
     grantSafety:
       "Transférez le Grant sans l’ouvrir par un moyen sûr contrôlé par l’Owner. Ne le collez jamais dans un Chat, une Task, un Log ou un argument de commande.",
     guides:
-      "Poursuivez avec `docs/GETTING_STARTED.md` pour le parcours complet de l’Owner et\n`docs/DISCORD_SETUP.md` pour configurer l’App, le Bot, le Forum, les Intents, les Permissions et la première Task.",
+      "Poursuivez avec `docs/GETTING_STARTED.md` pour le parcours complet,\n`docs/HERMES_SETUP_AGENT.md` pour Hermes et `docs/DISCORD_SETUP.md` pour Discord.",
     implementationLabel: "Implémentation",
     initAgentPrompt:
       "Configure OpenDelegate sur cet ordinateur comme mon Main Device fixe et toujours actif. Trouve et suis les instructions d’installation Main incluses dans ce bundle, puis réalise tout ce que tu peux faire en sécurité. Ne me sollicite que lorsqu’une décision ou une action sécurisée réservée à l’Owner est nécessaire. Ne me demande jamais de coller des identifiants, jetons ou autres secrets dans le chat ; oriente-moi vers l’authentification native du Provider ou la saisie sécurisée d’OpenDelegate. Continue jusqu’à l’ouverture d’Admin Web afin que nous puissions y terminer la configuration.",
+    initSkillStep:
+      "Hermes suit `skills/opendelegate-init/SKILL.md` via le fichier `AGENTS.md` du bundle ; project-skill trust n’est pas utilisé dans un bundle.",
     integrity:
       "Avant d’utiliser ce payload, comparez `SHA256SUMS` à un digest obtenu par un canal\nde publication fiable. Le manifest inclus prouve uniquement la cohérence interne,\npas l’identité de l’éditeur.",
     integrityStep:
       "Avant toute exécution, vérifiez `SHA256SUMS` avec le digest du canal de publication fiable.",
     joinStep:
-      "Sur le nouveau Device, ouvrez son bundle correspondant dans Codex ou Claude et envoyez :",
+      "Sur le nouveau Device, ouvrez son bundle correspondant dans Codex, Claude ou Hermes et envoyez :",
     languageLabel: "Langues",
     ledgerIntroduction: "L’état de l’acceptance ledger enregistré pendant l’assemblage était :",
     liveProofLabel: "Preuves réelles",
@@ -524,7 +534,7 @@ const bundleReadmeCopy = Object.freeze({
   }),
   es: Object.freeze({
     addDeviceHeading: "Añadir otro Device",
-    agentStep: "Abre este directorio en Codex o Claude y envía exactamente:",
+    agentStep: "Abre este directorio en Codex, Claude o Hermes y envía exactamente:",
     candidateWarning:
       "Este candidato no es una versión con soporte hasta que se promocione mediante el canal de publicación documentado.",
     candidateDiscordStep:
@@ -548,16 +558,18 @@ const bundleReadmeCopy = Object.freeze({
     grantSafety:
       "Transfiere el Grant sin abrirlo mediante un mecanismo seguro controlado por el Owner. No lo pegues nunca en un Chat, una Task, un Log ni un argumento de comando.",
     guides:
-      "Continúa con `docs/GETTING_STARTED.md` para el recorrido completo del Owner y con\n`docs/DISCORD_SETUP.md` para configurar la App, el Bot, el Forum, los Intents, los Permissions y la primera Task.",
+      "Continúa con `docs/GETTING_STARTED.md` para el recorrido completo,\n`docs/HERMES_SETUP_AGENT.md` para Hermes y `docs/DISCORD_SETUP.md` para Discord.",
     implementationLabel: "Implementación",
     initAgentPrompt:
       "Configura OpenDelegate en este ordenador como mi Main Device fijo y siempre encendido. Busca y sigue las instrucciones de instalación Main incluidas en este bundle y realiza todo lo que puedas hacer de forma segura. Pregúntame solo cuando haga falta una decisión o una acción segura reservada al Owner. No me pidas nunca que pegue credenciales, tokens u otros secretos en el chat; guíame a la autenticación nativa del Provider o a la entrada segura de OpenDelegate. Continúa hasta que se abra Admin Web y podamos terminar allí el resto de la configuración.",
+    initSkillStep:
+      "Hermes sigue `skills/opendelegate-init/SKILL.md` mediante el `AGENTS.md` del bundle; project-skill trust no se usa en un bundle.",
     integrity:
       "Antes de confiar en este payload, compara `SHA256SUMS` con un digest obtenido por\nun canal de publicación fiable. El manifest incluido solo demuestra la coherencia\ninterna, no la identidad de quien lo publica.",
     integrityStep:
       "Antes de ejecutar nada, verifica `SHA256SUMS` con el digest del canal de publicación de confianza.",
     joinStep:
-      "En el nuevo Device, abre su bundle correspondiente en Codex o Claude y envía lo siguiente:",
+      "En el nuevo Device, abre su bundle correspondiente en Codex, Claude o Hermes y envía lo siguiente:",
     languageLabel: "Idiomas",
     ledgerIntroduction: "El estado del acceptance ledger registrado durante el ensamblado fue:",
     liveProofLabel: "Evidencia real",
@@ -574,7 +586,7 @@ const bundleReadmeCopy = Object.freeze({
   }),
   "zh-CN": Object.freeze({
     addDeviceHeading: "添加另一台 Device",
-    agentStep: "在 Codex 或 Claude 中打开此目录，并原样发送以下内容：",
+    agentStep: "在 Codex、Claude 或 Hermes 中打开此目录，并原样发送以下内容：",
     candidateWarning: "在通过文档所述的发布渠道完成提升之前，此候选版本不属于受支持的 Release。",
     candidateDiscordStep:
       "如需使用 Discord，请在创建首个 Task 前按照 `docs/DISCORD_SETUP.md` 和此候选版本已验证的 Configuration Chat 流程完成设置。",
@@ -596,14 +608,16 @@ const bundleReadmeCopy = Object.freeze({
     grantSafety:
       "不要打开 Grant；使用 Owner 控制的安全方式传输。切勿将其粘贴到 Chat、Task、Log 或命令参数中。",
     guides:
-      "完整 Owner 流程请参阅 `docs/GETTING_STARTED.md`；Discord App、Bot、Forum、Intent、\nPermission 和首个 Task 的配置请参阅 `docs/DISCORD_SETUP.md`。",
+      "完整 Owner 流程请参阅 `docs/GETTING_STARTED.md`；Hermes bundle 指南请参阅\n`docs/HERMES_SETUP_AGENT.md`；Discord 设置请参阅 `docs/DISCORD_SETUP.md`。",
     implementationLabel: "实现",
     initAgentPrompt:
       "请把这台电脑设置为我固定且始终在线的 OpenDelegate Main Device。自行查找并遵循此 Bundle 中包含的 Main 安装说明，安全范围内能完成的工作都直接完成。只有在需要我做决定或执行仅限 Owner 的安全操作时才提问。切勿让我把凭据、令牌或其他秘密粘贴到聊天中；请引导我使用 Provider 原生认证或 OpenDelegate 的安全输入界面。请持续进行，直到 Admin Web 打开并可以在那里完成其余设置。",
+    initSkillStep:
+      "Hermes 通过 bundle 中的 `AGENTS.md` 遵循 `skills/opendelegate-init/SKILL.md`；bundle 不使用 project-skill trust。",
     integrity:
       "在信任此 payload 之前，请使用从可信发布渠道获得的 digest 校验 `SHA256SUMS`。\n随附的 manifest 只能证明内部一致性，不能证明发布者身份。",
     integrityStep: "运行任何内容之前，请使用可信发布渠道提供的 digest 验证 `SHA256SUMS`。",
-    joinStep: "在新 Device 上，用 Codex 或 Claude 打开其对应的捆绑包，并发送：",
+    joinStep: "在新 Device 上，用 Codex、Claude 或 Hermes 打开其对应的捆绑包，并发送：",
     languageLabel: "语言",
     ledgerIntroduction: "组装时记录的 acceptance ledger 状态如下：",
     liveProofLabel: "真实证据",
@@ -664,9 +678,10 @@ ${copy.supportStatusLabel}: \`${supportStatus}\`.
 
    > ${copy.initAgentPrompt}
 
-5. ${preview ? copy.discordStep : copy.claimStep}
-6. ${preview ? copy.claimStep : copy.candidateConfigurationStep}
-7. ${preview ? copy.configurationStep : copy.candidateDiscordStep}
+5. ${copy.initSkillStep}
+6. ${preview ? copy.discordStep : copy.claimStep}
+7. ${preview ? copy.claimStep : copy.candidateConfigurationStep}
+8. ${preview ? copy.configurationStep : copy.candidateDiscordStep}
 
 ## ${copy.addDeviceHeading}
 
@@ -2246,16 +2261,20 @@ export async function assertRuntimeExternalDependencies(directory, dependencies,
   }
 }
 
+export async function copyReleaseSkills(staging, sourceRoot) {
+  for (const skill of RELEASE_SKILL_DIRECTORIES) {
+    await cp(join(sourceRoot, ".agents", "skills", skill), join(staging, "skills", skill), {
+      recursive: true,
+    });
+  }
+}
+
 async function copyReleaseMaterials(staging, sourceRoot) {
   for (const file of ["AGENTS.md", "CHANGELOG.md", "CONTEXT.md", "LICENSE", "SECURITY.md"]) {
     await copyFile(join(sourceRoot, file), join(staging, file));
   }
   await cp(join(sourceRoot, "docs"), join(staging, "docs"), { recursive: true });
-  for (const skill of RELEASE_SKILL_DIRECTORIES) {
-    await cp(join(sourceRoot, "skills", skill), join(staging, "skills", skill), {
-      recursive: true,
-    });
-  }
+  await copyReleaseSkills(staging, sourceRoot);
 }
 
 async function copyRuntime(staging, sourceRoot) {

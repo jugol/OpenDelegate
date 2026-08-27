@@ -578,10 +578,10 @@ export const frenchMessages = {
     recommended: "Recommandé",
     agentAssistedTitle: "Confier l’installation à l’Agent du nouvel appareil",
     agentAssistedDetail:
-      "Ouvrez Codex ou Claude sur le nouvel appareil. La génération du fichier ci-dessous produit aussi une invite prête à l’emploi ; donnez cette invite et le chemin local du fichier téléchargé, jamais son contenu, à cet Agent.",
-    agentPromptLabel: "Invite pour Codex ou Claude sur le nouvel appareil",
+      "Ouvrez Codex, Claude ou Hermes sur le nouvel appareil. La génération du fichier ci-dessous produit aussi une invite prête à l’emploi ; donnez cette invite et le chemin local du fichier téléchargé, jamais son contenu, à cet Agent.",
+    agentPromptLabel: "Invite pour Codex, Claude ou Hermes sur le nouvel appareil",
     agentPrompt:
-      "Installe OpenDelegate Worker sur cet appareil depuis https://github.com/jugol/OpenDelegate. Suis le README et skills/opendelegate-join/SKILL.md. Rejoins Main avec le fichier d’inscription non ouvert <absolute-path-to/{filename}>. N’affiche, ne colle et ne journalise jamais son contenu. Configure le service natif de cet OS, vérifie la connexion à Main et signale quand l’appareil apparaît dans Admin Web.",
+      "Installe OpenDelegate Worker sur cet appareil depuis https://github.com/jugol/OpenDelegate. Suis le README et .agents/skills/opendelegate-join/SKILL.md. Rejoins Main avec le fichier d’inscription non ouvert <absolute-path-to/{filename}>. N’affiche, ne colle et ne journalise jamais son contenu. Configure le service natif de cet OS, vérifie la connexion à Main et signale quand l’appareil apparaît dans Admin Web.",
     copyAgentPrompt: "Copier l’invite Agent",
     afterJoin:
       "Quand l’appareil apparaît à gauche, ouvrez son chat de configuration pour l’évaluer et définir son nom, ses rôles et ses instructions.",
@@ -597,7 +597,7 @@ export const frenchMessages = {
     statusRevoked: "Révoqué",
     stepsTitle: "Parcours d’ajout sécurisé",
     stepOne:
-      "Ouvrez Codex ou Claude sur le nouvel appareil et demandez la préparation d’OpenDelegate Worker.",
+      "Ouvrez Codex, Claude ou Hermes sur le nouvel appareil et demandez la préparation d’OpenDelegate Worker.",
     stepTwo:
       "Générez ici le fichier à usage unique, puis transférez-le sans l’ouvrir via une liaison authentifiée ou un transfert local sûr.",
     stepThree:

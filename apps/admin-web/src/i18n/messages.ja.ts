@@ -562,10 +562,10 @@ export const japaneseMessages = {
     recommended: "推奨",
     agentAssistedTitle: "新しいデバイスの Agent にインストールを任せる",
     agentAssistedDetail:
-      "新しいデバイスで Codex または Claude を開きます。下で登録ファイルを生成すると、渡すためのプロンプトも一緒に表示されます。そのプロンプトとダウンロードしたファイルのローカルパスを Agent に渡してください。ファイルの内容は貼り付けないでください。",
-    agentPromptLabel: "新しいデバイスの Codex または Claude に渡すプロンプト",
+      "新しいデバイスで Codex、Claude、または Hermes を開きます。下で登録ファイルを生成すると、渡すためのプロンプトも一緒に表示されます。そのプロンプトとダウンロードしたファイルのローカルパスを Agent に渡してください。ファイルの内容は貼り付けないでください。",
+    agentPromptLabel: "新しいデバイスの Codex、Claude、または Hermes に渡すプロンプト",
     agentPrompt:
-      "https://github.com/jugol/OpenDelegate からこのデバイスに OpenDelegate Worker をインストールしてください。README と skills/opendelegate-join/SKILL.md に従い、未開封の登録ファイル <absolute-path-to/{filename}> で参加してください。登録ファイルの内容を表示、貼り付け、ログ記録しないでください。この OS のネイティブサービスを設定し、Main への接続を確認し、Admin Web に表示されたら報告してください。",
+      "https://github.com/jugol/OpenDelegate からこのデバイスに OpenDelegate Worker をインストールしてください。README と .agents/skills/opendelegate-join/SKILL.md に従い、未開封の登録ファイル <absolute-path-to/{filename}> で参加してください。登録ファイルの内容を表示、貼り付け、ログ記録しないでください。この OS のネイティブサービスを設定し、Main への接続を確認し、Admin Web に表示されたら報告してください。",
     copyAgentPrompt: "Agent プロンプトをコピー",
     afterJoin:
       "左の一覧に表示されたら、そのデバイスの設定チャットで評価、名前、ロール、指示を設定します。",
@@ -581,7 +581,7 @@ export const japaneseMessages = {
     statusRevoked: "取り消し済み",
     stepsTitle: "安全な参加フロー",
     stepOne:
-      "新しいデバイスで Codex または Claude を開き、OpenDelegate Worker の準備を依頼します。",
+      "新しいデバイスで Codex、Claude、または Hermes を開き、OpenDelegate Worker の準備を依頼します。",
     stepTwo:
       "ここで一回限りの登録ファイルを生成し、認証済み接続か安全なローカル受け渡しで未開封のまま移動します。",
     stepThree:

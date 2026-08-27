@@ -14,6 +14,22 @@ order:
 These documents are the canonical source of truth. Do not infer a conflicting
 product behavior from an earlier chat summary or from implementation convenience.
 
+## Installation request routing
+
+When the owner asks to install, initialize, repair, or join OpenDelegate, identify
+whether the input is a source checkout or a verified release bundle before planning:
+
+- Main installation or recovery uses `.agents/skills/opendelegate-init/SKILL.md` from
+  source or `skills/opendelegate-init/SKILL.md` from a bundle.
+- Worker or Device join uses `.agents/skills/opendelegate-join/SKILL.md` from source or
+  `skills/opendelegate-join/SKILL.md` from a bundle.
+
+Read the selected skill completely and preserve its support-status, credential,
+runtime-state, approval, and rollback boundaries. Report the support status exactly
+as the release evidence describes it. A local harness used as the setup Agent does
+not become an OpenDelegate runtime Agent Adapter; runtime support requires product
+code and the documented conformance evidence.
+
 ## Change discipline
 
 - The owner approved the specification and authorized implementation on 2026-07-24.

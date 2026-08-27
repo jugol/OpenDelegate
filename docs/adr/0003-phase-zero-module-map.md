@@ -32,7 +32,7 @@ boundaries become real, is:
 | Channel Adapters | `packages/discord-adapter` plus channel-neutral Task services | Durable Discord Forum synchronization core with production API v10 HTTP/Gateway drivers and injected Task, credential, vault, and persistence ports |
 | Admin Web | `apps/admin-web` | Authenticated Task control, owner recovery, and Device configuration surfaces |
 | Storage | `packages/event-store`, `packages/storage-sql`, `packages/artifact-store`, `apps/artifact-gateway` | SQLite/PostgreSQL metadata, local Artifact bytes, and isolated Artifact HTTP presentation |
-| Bootstrap and Service Management | `apps/main`, `apps/worker`, `apps/service-host`, `packages/platform-services`, `skills/opendelegate-init`, `skills/opendelegate-join`, `tooling/` | Bundled Main/init, Worker join/run, two-plane service entrypoints, guarded release builder, native rendering/plans, and an idempotent injected executor boundary; privileged platform acceptance remains gated |
+| Bootstrap and Service Management | `apps/main`, `apps/worker`, `apps/service-host`, `packages/platform-services`, `.agents/skills/opendelegate-init`, `.agents/skills/opendelegate-join`, `tooling/` | Bundled Main/init, Worker join/run, two-plane service entrypoints, guarded release builder, native rendering/plans, and an idempotent injected executor boundary; privileged platform acceptance remains gated |
 | Acceptance Harness | `packages/acceptance`, `packages/simulator` | Canonical public-contract journey plus lower-level event replay fixture |
 
 Process entrypoints are added only when their implementation phase begins. The

@@ -13,7 +13,7 @@
       "implementationStatus": "partial",
       "liveProofStatus": "not-run",
       "evidence": [
-        "skills/opendelegate-init/SKILL.md",
+        ".agents/skills/opendelegate-init/SKILL.md",
         "docs/adr/0010-reproducible-platform-bundles-and-provenance.md",
         "tooling/build-release.mjs",
         "tooling/test/build-release.test.mjs",
@@ -107,7 +107,7 @@
         "apps/worker/src/worker-app.ts",
         "apps/worker/src/cli.ts",
         "apps/worker/test/worker-cli.test.ts",
-        "skills/opendelegate-join/SKILL.md"
+        ".agents/skills/opendelegate-join/SKILL.md"
       ],
       "nextGate": "Build and sign the final platform bundles, invoke the packaged join skill, and use the composed enrollment HTTPS and mutual-TLS WSS runtime to enroll real macOS, Windows, and Linux Devices; include signed macOS helper and clean-host lifecycle proof."
     },

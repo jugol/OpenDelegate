@@ -283,7 +283,7 @@ test("secret scanning verifies a pinned Gitleaks binary against the full Git his
   assert.match(workflow, /sha256sum --check/u);
   assert.match(workflow, /gitleaks" git --no-banner --redact --log-opts="--all" \./u);
   assert.doesNotMatch(workflow, /gitleaks\/gitleaks-action@/u);
-  assert.equal(ignoredFingerprints.length, 66);
+  assert.equal(ignoredFingerprints.length, 68);
   assert.equal(new Set(ignoredFingerprints).size, ignoredFingerprints.length);
   const allowedCommits = new Map([
     ["a5ba2c415d8444471c6a554384e2af5f852b31fa", 0],
@@ -292,6 +292,7 @@ test("secret scanning verifies a pinned Gitleaks binary against the full Git his
     ["7a5ad34e1faa223e243fa1fe1f08148b091a0dbd", 0],
     ["e953ec34a1150c4765949e7dfd65ba219d7519af", 0],
     ["978aa848f000b97869223e674994921a94c10659", 0],
+    ["32030dfccdf20e4771cba3303204051e89c8c5fc", 0],
   ]);
   for (const fingerprint of ignoredFingerprints) {
     const match = fingerprint.match(
@@ -301,7 +302,7 @@ test("secret scanning verifies a pinned Gitleaks binary against the full Git his
     assert.equal(allowedCommits.has(match[1]), true);
     allowedCommits.set(match[1], allowedCommits.get(match[1]) + 1);
   }
-  assert.deepEqual([...allowedCommits.values()], [26, 26, 1, 1, 6, 6]);
+  assert.deepEqual([...allowedCommits.values()], [26, 26, 1, 1, 6, 6, 2]);
 });
 
 test("dependency review and audit reject moderate or higher advisories", async () => {

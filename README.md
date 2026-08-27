@@ -3,150 +3,175 @@
 Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](README.ja.md) ·
 [Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md)
 
-**Tell OpenDelegate the outcome you want in Discord; it decides where and how to run it.** Your
-phone or laptop may disconnect while a fixed always-on Main coordinates macOS, Windows, and Linux.
+**Set up one personal control plane for the AI Agents on all of your computers.** Clone or pull this
+repository, give it to a capable setup Agent, and let that Agent configure one always-on Main plus
+macOS, Windows, and Linux/NAS Worker Devices without making you design the topology yourself.
 
-![OpenDelegate routes one Discord request through an always-on Main to Windows, macOS, and Linux Devices](docs/design/opendelegate-orchestration-hero.png)
+![OpenDelegate coordinates an always-on Main and Worker Agents across Windows, macOS, and Linux Devices](docs/design/opendelegate-orchestration-hero.png)
 
 > [!TIP]
-> **Start here:** [Recommended installation](#recommended-installation-ask-your-agent) ·
-> [Detailed setup](#detailed-setup) ·
-> [Complete setup guide](docs/GETTING_STARTED.md) ·
-> [Discord Forum setup](docs/DISCORD_SETUP.md)
-
-## Recommended installation: ask your Agent
-
-**This is the shortest and recommended path. You do not need to learn OpenDelegate commands
-first.**
-
-1. Go to the computer you want to keep as your fixed, always-on **Main Device**.
-2. Open a capable local Agent such as Codex or Claude and give it this repository URL.
-3. Send this:
-
-   > Set up OpenDelegate on this computer as my fixed, always-on Main Device. Follow the
-   > repository's own Main installation instructions and do everything you safely can. Ask me only
-   > when you need a decision or a secure owner-only action. Never ask me to paste credentials,
-   > tokens, or other secrets into chat; guide me through provider-native authentication or
-   > OpenDelegate's secure intake instead. Continue until Admin Web opens and setup is ready to
-   > finish there.
-
-4. Follow the Agent's questions. It will discover the repository's init skill, distinguish source
-   from a release bundle, verify the support status, keep runtime data outside the checkout, and
-   bring up Admin Web without making you translate this README into shell commands.
-
-When Admin Web opens, continue in the **Configuration Chat** on the right. Ask the Agent to inspect
-what is already configured and guide you through the rest in natural language: Device assessment,
-embedded SQLite or external PostgreSQL, Codex and Claude, Discord Forum, connection routes, Agent
-models, Artifact exposure, service startup, and additional Devices. OpenDelegate shows reviewable
-structured changes in the conversation instead of expecting you to find every settings screen.
-
-![OpenDelegate Admin Web with Device assessment and Configuration Chat](docs/design/admin-configuration-chat-implemented.png)
-
-_Current Admin Web captured from deterministic browser fixtures. Start with **Assess device**, then
-use Configuration Chat for the remaining setup. The banner accurately marks this source build as
-unsupported; the image is not live-platform or release evidence._
-
-SQLite is already the zero-configuration local default, so it does not need a database URI.
-Provider credentials and Discord tokens never belong in chat: when one is genuinely needed,
-Configuration Chat explains why and exposes the dedicated secure intake form. After Main is ready,
-use **Add Device** and give each additional computer's Agent its single-use grant; that Agent will
-discover the Worker join instructions.
-
-## Detailed setup
+> **Start here:** [What it does](#what-opendelegate-does) ·
+> [5-minute setup](#5-minute-setup-recommended) · [Add Devices](#add-every-device) ·
+> [Use it](#use-opendelegate) · [Complete guide](docs/GETTING_STARTED.md) ·
+> [Hermes guide](docs/HERMES_SETUP_AGENT.md)
 
 > [!WARNING]
-> This repository currently builds an **unsupported internal preview**, not a supported OpenDelegate
-> release. Required live platform, provider, Discord, network, permission, and
-> packaging evidence is incomplete. Do not represent it as released or run it as an unattended
-> production control plane. See [Current source state](#current-source-state).
+> This repository is currently a **public source pre-alpha** that can build an unsupported internal
+> preview. No supported OpenDelegate release exists yet. Use it for review and controlled validation;
+> do not present it as a production-ready unattended control plane.
 
-OpenDelegate is installed with an Agent; there is no `npm run start` owner workflow.
+## What OpenDelegate does
 
-1. Give this repository URL to Codex or Claude on the intended Main computer. If you already have a
-   supported platform bundle,
-   open its extracted directory instead. The Agent will identify the source or bundle, inspect
-   `supportStatus`, and verify `SHA256SUMS`; the current source can produce only the marked
-   [internal preview described below](#build-an-internal-preview).
-2. Send the prompt from [Recommended installation](#recommended-installation-ask-your-agent). The
-   Agent discovers the repository contract and `skills/opendelegate-init/SKILL.md`; you do not need
-   to know its internal file layout.
-3. Discord is optional during first initialization. You can add, replace, extend, or disable its
-   Forum binding later through the owner-authenticated Configuration Chat; use the
-   [Discord Forum setup guide](docs/DISCORD_SETUP.md) for the required App, Forum, tags, and
-   permissions.
-4. Follow the Agent through owner claim, save the ten recovery codes, then select **Assess device**
-   in Admin Web. Review the deterministic Codex, Claude, browser automation, Computer Use, and
-   Knowledge result before finishing Device, Agent, route, Artifact, and optional Discord setup in
-   Configuration Chat. Provider credentials never go into chat; Discord tokens use only the secure
-   credential panel.
-5. To add a computer, give its Agent this repository or the matching verified bundle plus the
-   unopened short-lived Device grant, and ask it to join that computer as a Worker. The Agent
-   discovers `skills/opendelegate-join/SKILL.md`. Workers connect only to Main; you do not choose
-   future placement or build pairwise SSH trust.
-6. If Discord is configured, create a Discord Forum post containing the outcome you want. One post
-   is one durable Task; replies
-   continue its native Agent session, while a new post starts a clean context. If Discord is
-   unavailable or disabled, use **Admin Web → Tasks → New task** to create a minimal Task.
+OpenDelegate is a personal, self-hosted coordinator for Agents running on several Devices:
 
-Each Device defaults to **Agent execution → Auto**. You can choose **Prefer** or **Pinned** from its
-Device page, or tell that Device’s Configuration Chat, for example, _“Use Claude Opus on this
-NAS.”_ Repeat on the Mac Studio with the GPT model you want. OpenDelegate resolves each request
-against that target Device’s tested model catalog, shows the exact provider-native model ID for
-review, and applies it only to new native sessions.
+- one fixed, always-on **Main** owns durable Tasks, scheduling, policy, approvals, audit, and Admin Web;
+- every computer, including Main, joins as a **Worker Device** and reports its verified capabilities;
+- Workers connect outbound to Main—there is no pairwise SSH mesh and no Worker database credential;
+- deterministic code chooses healthy Devices and routes, while Agents handle semantic planning and work;
+- each Device keeps credentials, provider sessions, Workspaces, and local Markdown Knowledge locally;
+- Admin Web is the setup and operations surface; Discord Forum can be connected later as the primary
+  conversational Task inbox, but it is not required for initial setup.
 
-Read the [complete setup guide](docs/GETTING_STARTED.md), including owner recovery, additional
-Devices, the first Task, and troubleshooting.
+You tell OpenDelegate the outcome. Main may split it across Windows development, macOS build or
+signing, and Linux/NAS work, then collect the result without asking you to coordinate each handoff.
 
-## Why OpenDelegate
+## 5-minute setup (recommended)
 
-Create a Task from a phone or computer and state the result, not the placement plan. The Main Agent
-can divide it into Windows development, macOS build or signing, and Linux server Work Orders, while
-deterministic scheduling chooses the eligible Devices and routes.
+You do not need to learn OpenDelegate commands first. Use a capable local setup Agent such as
+**Hermes, Codex, or Claude**.
 
-- One Discord Forum post maps to one durable Task and context boundary.
-- Optional deterministic monitors can originate the same ordinary Forum-backed Tasks
-  for incidents or improvements. Per-category authority can disable, propose for
-  review, or execute them without bypassing Policy, approvals, budgets, or audit.
-- Your command-sending phone or laptop can disconnect. Only the fixed Main and Devices needed for
-  current work must be available.
-- Placement is visible in Admin and audit, but routine Tasks do not require you to choose a Device,
-  OS, route, or Agent provider.
-- Deterministic software owns identity, policy, health, routing, leases, retries, persistence, and
-  state transitions. Agents handle semantic judgment and assigned work.
-- Workers connect only to Main. They do not need an NxN SSH mesh or direct database access.
-- Codex, Claude, and custom runners sit behind Agent Adapter contracts while useful provider-native
-  sessions remain resumable.
-- A ready bridged Codex or Claude Worker may use up to four local child Agents for one Work Order;
-  they stay inside that Run's Workspace and Policy, while only Main can delegate across Devices.
-- Each Device keeps its own selective, linked Markdown Knowledge. Main never receives its filenames,
-  titles, links, graph, index, snippets, or content.
-- Results can arrive as a Discord response or attachment, file, Artifact, hosted view, or verified
-  Git reference.
-- If login, MFA, CAPTCHA, legal confirmation, or OS permission needs you, the same Task can pause
-  with a time-bounded, revocable Owner Handoff through Main and continue after you reply. A raw
-  Worker VNC endpoint or credential is never posted to Discord by default.
+### 1. Choose Main
+
+Pick one computer that can remain online and that you can reach for recovery. Main is fixed in the
+first milestone. It may be a NAS, server, desktop, or another reliable Device.
+
+### 2. Prepare the setup Agent on Main
+
+Open Hermes, Codex, or Claude on the intended Main. For Hermes, use the
+[official Hermes setup path](docs/HERMES_SETUP_AGENT.md) and verify it with `hermes doctor`.
+Hermes is a setup Agent here; this does not make it an OpenDelegate runtime Agent Adapter.
+
+### 3. Clone or update OpenDelegate
+
+```sh
+git clone https://github.com/jugol/OpenDelegate.git
+cd OpenDelegate
+```
+
+If the checkout already exists:
+
+```sh
+git pull --ff-only
+```
+
+When Hermes is the setup Agent for source, trust the repository skills once and start a fresh session:
+
+```sh
+hermes skills trust
+hermes
+```
+
+Source Main setup uses `.agents/skills/opendelegate-init/SKILL.md`; Worker join uses
+`.agents/skills/opendelegate-join/SKILL.md`. A verified release bundle instead uses
+`skills/opendelegate-init/SKILL.md` and `skills/opendelegate-join/SKILL.md` through its bundled
+`AGENTS.md` and does not use project-skill trust. Keep `HERMES_HOME`, OpenDelegate runtime state,
+credentials, provider homes, sessions, databases, logs, private keys, Knowledge, Artifacts, and
+Device grants outside the checkout or bundle.
+
+### 4. Ask the setup Agent to configure Main
+
+Copy this prompt:
+
+> Set up OpenDelegate on this computer as my fixed, always-on Main Device. Identify whether this is a
+> source checkout or a verified release bundle, then follow its AGENTS.md, canonical product documents,
+> and Main initialization skill. Keep all runtime state and credentials outside the project. Never ask
+> me to paste tokens, credentials, private keys, provider homes, sessions, databases, or grant contents
+> into chat. Do everything safe and reversible, ask only for consequential owner decisions or secure
+> owner-only actions, report the exact support status, and continue until Admin Web is ready.
+
+The Agent will inspect the host, distinguish source from bundle, check `supportStatus`, prepare an
+integrity-checked preview or launcher when applicable, initialize Main, open the local owner-claim
+flow, and leave exact recovery steps when an external prerequisite is missing.
+
+### 5. Finish Main in Admin Web
+
+1. Claim the owner account locally and store all ten one-time recovery codes.
+2. Run **Assess device** so Main records bounded, non-secret capability evidence.
+3. Review the Main and co-located Worker profiles, database, routes, Artifact policy, and startup plan.
+4. Add Discord later if you want Forum posts to become durable conversational Tasks.
+
+SQLite is the zero-configuration default. Provider credentials and Discord tokens never belong in
+chat; use provider-native authentication or OpenDelegate's secure intake panel.
+
+## Add every Device
+
+Repeat this flow for each macOS, Windows, Linux, or NAS computer:
+
+1. In Main Admin Web, choose **Add Device**, define its intended role, and create a short-lived,
+   single-use enrollment grant.
+2. Move the **unopened** grant file through an owner-controlled secure handoff. Never paste or attach
+   its contents in chat.
+3. On the new Device, clone/pull the same repository or open the matching verified bundle. If Hermes
+   is used with source, run `hermes skills trust` and start a fresh session there.
+4. Give the local Agent this prompt:
+
+   > Join this computer to my fixed OpenDelegate Main as an outbound-only Worker using the unopened
+   > single-use grant file at `<absolute-path-to-grant-file>`. Follow AGENTS.md and the matching Worker
+   > join skill. Pass only the grant path to OpenDelegate tooling; never print, paste, log, summarize,
+   > or copy its contents. Detect this Device's capabilities, keep credentials and Knowledge local,
+   > ask before protected network or privileged changes, and verify that Main sees the joined Device.
+
+5. Back in Admin Web, assess the Device, register Workspaces, and review its Roles, Instructions,
+   routes, Agent profile, service state, and Computer Use readiness.
+
+Workers connect only to Main. OpenDelegate—not the owner—chooses the eligible Device, route, and
+Agent binding for ordinary Tasks.
+
+## Use OpenDelegate
+
+- **Admin Web:** configure the Instance, inspect Devices and Tasks, approve protected work, review
+  audit and Artifacts, recover from outages, and create Tasks when Discord is disabled.
+- **Discord Forum (optional during setup):** after binding a bot and Forum, one post becomes one
+  durable Task; replies continue its native Agent session and a new post starts clean context.
+- **Configuration Chat:** change OpenDelegate configuration and Device profiles; do not use it for
+  project work.
+- **Artifacts:** receive files, reports, images, patches, and isolated hosted results through Main.
+- **Owner Handoff:** complete login, MFA, CAPTCHA, legal confirmation, or OS-permission steps without
+  exposing credentials to the Agent or Discord.
+
+## How responsibilities are split
+
+- **Main deterministic services:** identity, durable state, eligibility, routes, leases, retries,
+  budgets, Policy, approvals, audit, Discord projection, and Artifact delivery.
+- **Main Agent:** understands intent, decomposes Tasks, and synthesizes Worker results.
+- **Worker services:** Device identity, local capabilities, Workspaces, resource locks, provider
+  sessions, local Knowledge, execution, and result upload.
+- **Worker Agents:** perform only the assigned Work Order under the Device's exact Policy and binding.
+
+Codex and Claude are the current first-class runtime Agent Adapters. Generic runners remain an
+extension point. Hermes is currently documented as a setup Agent only, not as a first-class runtime
+Adapter.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    owner["Owner<br/>phone or laptop"] --> discord["Discord Forum<br/>one post = one Task"]
-    owner --> admin["Admin Web<br/>setup and operations"]
-    discord --> main["Fixed Main Device<br/>Control Plane + Main Agent"]
-    admin --> main
+    owner["Owner<br/>phone or computer"] --> admin["Admin Web<br/>setup and operations"]
+    owner --> discord["Discord Forum<br/>optional Task inbox"]
+    admin --> main["Fixed always-on Main<br/>Control Plane + Main Agent"]
+    discord --> main
     main --> database[("Main-owned SQLite or PostgreSQL")]
     main --> artifacts["Artifact Gateway"]
-    main <-->|"authenticated Device API<br/>configured route"| mac["macOS Worker"]
-    main <-->|"authenticated Device API<br/>configured route"| windows["Windows Worker"]
-    main <-->|"authenticated Device API<br/>configured route"| linux["Linux Worker / NAS"]
-    mac -. "local only" .-> macKnowledge["Markdown Knowledge"]
-    windows -. "local only" .-> windowsKnowledge["Markdown Knowledge"]
-    linux -. "local only" .-> linuxKnowledge["Markdown Knowledge"]
+    main <-->|"authenticated outbound Device channel"| mac["macOS Worker"]
+    main <-->|"authenticated outbound Device channel"| windows["Windows Worker"]
+    main <-->|"authenticated outbound Device channel"| linux["Linux / NAS Worker"]
+    mac -. "local only" .-> macState["Credentials, sessions, Workspaces, Knowledge"]
+    windows -. "local only" .-> winState["Credentials, sessions, Workspaces, Knowledge"]
+    linux -. "local only" .-> linuxState["Credentials, sessions, Workspaces, Knowledge"]
 ```
 
-Workers do not connect to the database or to one another as an OpenDelegate control mesh. LAN,
-Omada, Tailscale, tunnels, and custom networking are deterministic Transport Profile options between
-Main and each Device.
+LAN, Omada, Tailscale, tunnels, and custom networking are Transport Profile options between each
+Worker and Main. They provide reachability, not application identity or permission.
 
 ## Current source state
 
@@ -357,9 +382,9 @@ session. Ambient global homes are never inherited.
   retrieval, indexing, and agent tools.
 - `packages/acceptance` and `packages/simulator` — deterministic Task journeys, restart cases, and
   replay fixtures.
-- `skills/opendelegate-init` — agent-facing initialization workflow with explicit internal-preview
+- `.agents/skills/opendelegate-init` — agent-facing initialization workflow with explicit internal-preview
   gating.
-- `skills/opendelegate-join` — credential-safe, outbound-only Worker enrollment and recovery
+- `.agents/skills/opendelegate-join` — credential-safe, outbound-only Worker enrollment and recovery
   workflow.
 - `docs` — product, architecture, security, design, research, and release evidence.
 
