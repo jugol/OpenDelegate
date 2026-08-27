@@ -126,18 +126,15 @@ test("English and Korean newcomer entry points route Hermes safely", async () =>
     assert.match(content, /skills\/opendelegate-join\/SKILL\.md/u);
   }
 
-  assert.match(readme, /Codex, Claude, or Hermes/u);
-  assert.match(readme, /hermes skills trust[\s\S]*fresh Hermes session/u);
+  assert.match(readme, /Hermes, Codex, or Claude/u);
+  assert.match(readme, /hermes skills trust[\s\S]*fresh session/u);
   assert.match(
     readme,
-    /does not claim or\s+implement Hermes as a first-class OpenDelegate runtime adapter/u,
+    /Hermes is a setup Agent[\s\S]*does not make it an OpenDelegate runtime Agent Adapter/u,
   );
-  assert.match(korean, /Codex나 Claude, Hermes/u);
-  assert.match(korean, /hermes skills trust[\s\S]*새 Hermes 세션/u);
-  assert.match(
-    korean,
-    /Hermes를 OpenDelegate 실행용 Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다/u,
-  );
+  assert.match(korean, /Hermes, Codex, Claude/u);
+  assert.match(korean, /hermes skills trust[\s\S]*새 세션/u);
+  assert.match(korean, /Hermes는 현재 setup Agent[\s\S]*first-class runtime Adapter가 아닙니다/u);
   assert.match(gettingStarted, /effective\s+`HERMES_HOME`[\s\S]*outside/u);
 });
 

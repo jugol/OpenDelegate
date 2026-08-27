@@ -3,146 +3,173 @@
 언어: [English](README.md) · **[한국어](README.ko.md)** · [日本語](README.ja.md) ·
 [Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md)
 
-**Discord에서 원하는 결과만 말하세요. 실행 위치와 방법은 OpenDelegate가 결정합니다.** 휴대폰이나
-노트북이 꺼져도 고정된 상시 가동 Main이 macOS, Windows, Linux 작업을 조율합니다.
+**내가 가진 여러 컴퓨터의 AI Agent를 하나의 개인 Control Plane으로 연결하고 관리합니다.** 이
+저장소를 clone 또는 pull한 뒤 setup Agent에게 주면, 사용자가 직접 토폴로지를 설계하지 않아도 하나의
+상시 가동 Main과 macOS·Windows·Linux/NAS Worker Device를 설정하도록 안내합니다.
 
-![Discord 명령을 상시 가동 Main에서 Windows·macOS·Linux 장치로 자동 분배하는 OpenDelegate](docs/design/opendelegate-orchestration-hero.png)
+![상시 가동 Main이 Windows·macOS·Linux Device의 Agent를 조율하는 OpenDelegate](docs/design/opendelegate-orchestration-hero.png)
 
 > [!TIP]
-> **여기서 시작하세요:** [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요) ·
-> [상세 설정](#상세-설정) ·
-> [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) ·
-> [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
-
-## 권장 설치: Agent에게 맡기세요
-
-**가장 짧고 권장되는 방법입니다. OpenDelegate 명령어부터 배울 필요가 없습니다.**
-
-1. 고정된 상시 가동 **Main Device**로 사용할 컴퓨터로 갑니다.
-2. 그 컴퓨터에서 Codex나 Claude, Hermes 같은 유능한 로컬 setup Agent를 열고 이 저장소 URL을 줍니다.
-3. 다음과 같이 말합니다.
-
-   > 이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 저장소의
-   > Main 설치 지침을 직접 찾아 따르고, 안전하게 할 수 있는 일은 모두 처리해 줘. 내 결정이나 Owner
-   > 전용 보안 작업이 필요할 때만 질문해 줘. 인증 정보, Token 등 비밀값을 채팅에 붙여 넣으라고 하지
-   > 말고 Provider의 기본 인증 절차나 OpenDelegate 보안 입력 화면으로 안내해 줘. Admin Web이 열려서
-   > 나머지 설정을 마칠 수 있을 때까지 계속 진행해 줘.
-
-4. Agent가 묻는 내용에 답합니다. Agent는 저장소의 init skill을 스스로 찾고, 소스와 Release
-   Bundle을 구분하고, 지원 상태를 확인하고, Runtime 데이터를 Checkout 밖에 보관하며, 사용자가 이
-   README를 Shell 명령으로 옮겨 적지 않아도 Admin Web을 실행합니다.
-
-Hermes로 source checkout을 설정할 때는 먼저 [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md)에
-따라 저장소 루트에서 `hermes skills trust`를 실행한 뒤 그 위치에서 새 Hermes 세션을 시작합니다.
-검증된 bundle은 포함된 `AGENTS.md`와 `skills/` 경로를 사용하며 project-skill trust를 사용하지 않습니다.
-
-Admin Web이 열리면 우측 **Configuration Chat**에서 계속 설정하세요. 이미 설정된 내용을 먼저
-확인해 달라고 한 뒤, Device 평가, 내장 SQLite 또는 외부 PostgreSQL, Codex와 Claude, Discord
-Forum, 연결 Route, Agent Model, Artifact 공개 방식, Service 시작 방식, 추가 Device까지 자연어로
-안내해 달라고 하면 됩니다. OpenDelegate는 사용자가 모든 설정 화면을 직접 찾아다니게 하지 않고,
-대화 안에서 검토 가능한 구조화된 변경안을 보여 줍니다.
-
-![Device 평가와 Configuration Chat이 열린 OpenDelegate Admin Web](docs/design/admin-configuration-chat-implemented.png)
-
-_결정론적 Browser Fixture에서 캡처한 현재 Admin Web입니다. 먼저 **장치 평가**를 실행한 뒤 나머지
-설정은 Configuration Chat에서 진행하세요. 상단 배너는 이 Source Build가 지원되지 않는다는 사실을
-정확히 표시하며, 이 이미지는 실제 Platform 또는 Release 증거가 아닙니다._
-
-SQLite는 별도 URI가 필요 없는 기본 로컬 Database입니다. Provider 인증 정보나 Discord Token은
-채팅에 입력하지 마세요. 실제로 필요할 때 Configuration Chat이 이유를 설명하고 전용 보안 입력
-Form을 띄웁니다. Main 설정이 끝나면 **Device 추가**에서 일회용 Grant를 발급하고, 추가 컴퓨터의
-Agent에게 전달하세요. 그 Agent가 Worker Join 지침을 스스로 찾아 진행합니다.
-
-## 상세 설정
+> **여기서 시작하세요:** [무엇을 하는가](#opendelegate가-하는-일) ·
+> [5분 설정](#5분-설정권장) · [Device 추가](#모든-device-추가) ·
+> [사용 방법](#opendelegate-사용) · [전체 가이드(영문)](docs/GETTING_STARTED.md) ·
+> [Hermes 가이드(영문)](docs/HERMES_SETUP_AGENT.md)
 
 > [!WARNING]
-> 이 저장소는 지원되는 릴리스가 아니라 **지원되지 않는 내부 프리뷰**를 빌드합니다. 실제
-> 플랫폼, Provider, Discord, Network, 권한 및 패키징 증거가 아직 완성되지 않았습니다. 릴리스된
-> 제품으로 표방하거나 무인 프로덕션 Control Plane으로 사용하지 마십시오. 자세한 내용은
-> [현재 소스 상태](#현재-소스-상태)를 확인하십시오.
+> 이 저장소는 현재 **공개 소스 pre-alpha**이며 지원되지 않는 내부 프리뷰만 빌드할 수 있습니다.
+> 지원되는 OpenDelegate 릴리스는 아직 없습니다. 검토와 통제된 검증에만 사용하고, 무인 프로덕션
+> Control Plane으로 준비됐다고 표현하지 마십시오.
 
-OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run start`는 없습니다.
+## OpenDelegate가 하는 일
 
-1. Main으로 사용할 컴퓨터에서 이 저장소 URL을 Codex, Claude 또는 Hermes에게 주십시오. 이미 지원되는 플랫폼
-   bundle이 있다면 압축을 푼 디렉터리를 대신 여십시오. Agent가 소스와 bundle을 구분하고
-   `supportStatus`와 `SHA256SUMS`를 확인합니다. 현재 소스는 표시된
-   [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
-2. [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요)의 문장을 보냅니다. Agent가
-   source에서는 `AGENTS.md`와 `.agents/skills/opendelegate-init/SKILL.md`, bundle에서는
-   `skills/opendelegate-init/SKILL.md`를 스스로 찾으므로 사용자가 내부 파일 구조를 알 필요가 없습니다.
-3. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
-   Forum Binding을 추가·교체·확장·비활성화할 수 있습니다. 필요한 App, Forum, Tag, Permission은
-   [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따르세요.
-4. Agent의 안내에 따라 Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
-5. Admin Web에서 **장치 평가**를 먼저 실행하고 Codex, Claude, 브라우저 자동화, Computer Use,
-   Knowledge의 결정론적 결과를 확인한 뒤 우측 하단 Configuration Chat에서 Device, Agent, Route,
-   Artifact와 선택적 Discord 설정을 마칩니다. Provider 자격 증명은 채팅에 입력하지 않으며,
-   Discord 토큰은 보안 인증 정보 패널에만 입력합니다.
-6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
-   파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
-   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent가 source에서는
-   `.agents/skills/opendelegate-join/SKILL.md`, bundle에서는 `skills/opendelegate-join/SKILL.md`를 찾습니다.
-7. Discord를 설정했다면 독립된 Task마다 Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은
-   동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
-   Discord를 사용하지 않거나 사용할 수 없으면 **Admin Web → Tasks → 새 작업**에서 만듭니다.
+OpenDelegate는 여러 Device에서 실행되는 Agent를 위한 개인용 self-hosted 조정 시스템입니다.
 
-각 Device의 기본값은 **Agent 실행 → 자동**입니다. Device 화면에서 **우선** 또는 **고정**을
-선택하거나 해당 Device의 Configuration Chat에 _“이 NAS에서는 Claude Opus를 사용해 줘”_라고
-말할 수 있습니다. Mac Studio 화면에서는 원하는 GPT 모델을 같은 방식으로 설정합니다.
-OpenDelegate는 각 요청을 해당 Device의 검증된 모델 카탈로그와 대조해 정확한 Provider-native
-모델 ID를 검토용으로 보여 주며, 변경은 새 native Session부터 적용합니다.
+- 하나의 고정된 상시 가동 **Main**이 Task, 스케줄링, Policy, Approval, Audit, Admin Web을 소유합니다.
+- Main을 포함한 각 컴퓨터는 **Worker Device**로 연결되어 검증된 Capability를 보고합니다.
+- Worker는 Main으로만 outbound 연결하며, NxN SSH Mesh나 Worker용 DB 자격 증명이 필요 없습니다.
+- 결정론적 코드가 정상 Device와 Route를 선택하고 Agent는 의미론적 계획과 실제 작업을 담당합니다.
+- 각 Device의 Credential, Provider Session, Workspace, Markdown Knowledge는 해당 Device에만 남습니다.
+- Admin Web은 설정·운영 화면입니다. Discord Forum은 나중에 주 대화형 Task Inbox로 연결할 수 있지만
+  최초 설정에 필수는 아닙니다.
 
-Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
-[전체 설정 가이드(영문)](docs/GETTING_STARTED.md)와
-[Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md)를 참고하십시오.
+사용자는 원하는 결과만 말합니다. Main은 필요하면 Windows 개발, macOS 빌드·서명, Linux/NAS 작업으로
+나누고 각 결과를 모으므로 사용자가 직접 Device 간 인계를 관리하지 않아도 됩니다.
 
-## OpenDelegate를 만드는 이유
+## 5분 설정(권장)
 
-휴대폰이나 컴퓨터에서 배치 계획이 아니라 원하는 결과를 말하십시오. Main Agent는 필요하면 Windows
-개발, macOS 빌드·서명, Linux 배포로 나누고 실제 Device와 Route는 결정론적 스케줄러가 고릅니다.
+OpenDelegate 명령부터 배울 필요는 없습니다. **Hermes, Codex, Claude** 같은 유능한 로컬 setup Agent를
+사용하십시오.
 
-- Discord Forum 게시글 하나는 지속성 있는 Task 하나와 하나의 컨텍스트 경계에 대응합니다.
-- 선택적 결정론적 모니터는 장애나 개선 사항을 동일한 일반 Forum 기반 Task로 만들 수 있습니다.
-  카테고리별로 비활성화, 검토 제안, 자동 실행을 선택해도 Policy, 승인, 예산, 감사는 우회하지 않습니다.
-- 명령을 보낸 휴대폰이나 노트북은 연결을 끊어도 됩니다. 현재 작업에 필요한 고정 Main과 Device만
-  사용 가능하면 됩니다.
-- 결정론적 소프트웨어가 ID, Policy, 상태, 라우팅, Lease, 재시도, 영속성, 상태 전이를 담당합니다.
-  Agent는 의미론적 판단과 할당된 작업을 담당합니다.
-- Worker는 Main에만 연결됩니다. NxN SSH 메시나 데이터베이스 직접 접근은 필요하지 않습니다.
-- Codex, Claude 및 사용자 정의 Runner는 Agent Adapter 계약 뒤에 배치되며, 유용한 Provider-native
-  세션은 재개할 수 있습니다.
-- Hermes는 신뢰한 Project Skill을 읽고 설치를 돕는 setup Agent로 사용할 수 있지만, 이 저장소는
-  Hermes를 OpenDelegate 실행용 Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다.
-- 준비된 Codex 또는 Claude Worker는 하나의 Work Order 안에서 로컬 하위 Agent를 최대 4개까지
-  사용할 수 있습니다. 이들은 같은 Run의 Workspace와 Policy 안에 머물며, Device 간 분배는 Main만
-  수행합니다.
-- 각 Device는 선택적으로 사용하는 연결된 Markdown Knowledge를 로컬에 보관합니다. Main은 파일명,
-  제목, 링크, 그래프, 인덱스, 스니펫 또는 내용을 절대 전달받지 않습니다.
-- 결과는 Discord 응답·첨부, 파일, Artifact, 호스팅 화면 또는 검증된 Git 참조로 받을 수 있습니다.
-- 로그인, MFA, CAPTCHA, 법적 확인 또는 OS 권한이 필요하면 같은 Task가 Main을 통한 만료·취소 가능한
-  Owner Handoff에서 잠시 멈췄다가 사용자의 응답 후 이어집니다.
+### 1. Main 선택
+
+계속 켜둘 수 있고 장애 시 직접 접근할 수 있는 컴퓨터 하나를 고릅니다. 첫 Milestone에서 Main은
+고정입니다. NAS, Server, Desktop 또는 다른 안정적인 Device를 사용할 수 있습니다.
+
+### 2. Main에서 setup Agent 준비
+
+Main으로 사용할 컴퓨터에서 Hermes, Codex 또는 Claude를 엽니다. Hermes는
+[공식 Hermes 설정 경로](docs/HERMES_SETUP_AGENT.md)로 설치한 뒤 `hermes doctor`로 확인합니다.
+여기서 Hermes는 setup Agent이며 OpenDelegate의 runtime Agent Adapter가 되는 것은 아닙니다.
+
+### 3. OpenDelegate clone 또는 업데이트
+
+```sh
+git clone https://github.com/jugol/OpenDelegate.git
+cd OpenDelegate
+```
+
+이미 checkout이 있다면 다음을 실행합니다.
+
+```sh
+git pull --ff-only
+```
+
+Hermes로 source를 설정할 때는 저장소 Skill을 한 번 신뢰하고 새 세션을 시작합니다.
+
+```sh
+hermes skills trust
+hermes
+```
+
+source Main 설정은 `.agents/skills/opendelegate-init/SKILL.md`, Worker 연결은
+`.agents/skills/opendelegate-join/SKILL.md`를 사용합니다. 검증된 Release Bundle은 포함된 `AGENTS.md`를
+통해 `skills/opendelegate-init/SKILL.md`와 `skills/opendelegate-join/SKILL.md`를 사용하며 project-skill
+trust를 사용하지 않습니다. `HERMES_HOME`, OpenDelegate Runtime State, Credential, Provider Home,
+Session, DB, Log, Private Key, Knowledge, Artifact, Device Grant는 checkout이나 bundle 밖에 보관합니다.
+
+### 4. setup Agent에게 Main 설정 요청
+
+다음 문장을 그대로 보냅니다.
+
+> 이 컴퓨터를 고정된 상시 가동 OpenDelegate Main Device로 설정해 줘. source checkout인지 검증된
+> release bundle인지 확인하고, AGENTS.md와 정식 제품 문서, Main 초기화 Skill을 따라 줘. 모든 Runtime
+> State와 Credential은 프로젝트 밖에 보관해. Token, Credential, Private Key, Provider Home, Session,
+> DB, Grant 내용을 채팅에 붙여 넣으라고 하지 마. 안전하고 되돌릴 수 있는 일은 직접 처리하고, 중요한
+> Owner 결정이나 Owner 전용 보안 작업이 필요할 때만 질문해. 정확한 Support Status를 보고하고 Admin
+> Web을 사용할 준비가 될 때까지 계속 진행해.
+
+Agent는 Host를 검사하고, source와 bundle을 구분하고, `supportStatus`를 확인하고, 필요한 경우
+Integrity가 확인된 Preview나 Launcher를 준비하고, Main을 초기화하고, Local Owner Claim을 열어 줍니다.
+외부 전제조건이 없으면 정확한 복구 절차를 남깁니다.
+
+### 5. Admin Web에서 Main 마무리
+
+1. 로컬에서 Owner 계정을 Claim하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
+2. **장치 평가**를 실행해 Main의 제한된 비밀 제외 Capability Evidence를 저장합니다.
+3. Main과 co-located Worker Profile, DB, Route, Artifact Policy, 시작 방식을 검토합니다.
+4. Forum 게시글을 대화형 Task로 사용하고 싶을 때 Discord를 나중에 추가합니다.
+
+SQLite는 별도 설정이 필요 없는 기본값입니다. Provider Credential과 Discord Token은 채팅에 넣지 말고
+Provider의 기본 인증 또는 OpenDelegate의 보안 입력 Panel을 사용합니다.
+
+## 모든 Device 추가
+
+각 macOS, Windows, Linux, NAS 컴퓨터에서 다음 절차를 반복합니다.
+
+1. Main Admin Web에서 **Device 추가**를 선택하고 용도를 정한 뒤 수명이 짧은 일회용 Enrollment Grant를
+   만듭니다.
+2. Grant File을 **열지 않은 채** Owner가 통제하는 안전한 방식으로 옮깁니다. 내용을 채팅에 붙이거나
+   첨부하지 않습니다.
+3. 새 Device에서 같은 저장소를 clone/pull하거나 해당 플랫폼용 검증된 bundle을 엽니다. Hermes로
+   source를 사용한다면 `hermes skills trust`를 실행하고 새 세션을 시작합니다.
+4. 로컬 Agent에게 다음 문장을 보냅니다.
+
+   > 이 컴퓨터를 열어보지 않은 일회용 Grant File `<absolute-path-to-grant-file>`을 사용해 내 고정
+   > OpenDelegate Main의 outbound-only Worker로 연결해 줘. AGENTS.md와 Worker Join Skill을 따라 줘.
+   > OpenDelegate Tool에는 Grant 경로만 전달하고 내용을 출력·붙여넣기·Log·요약·복사하지 마. 이
+   > Device의 Capability를 감지하고 Credential과 Knowledge는 로컬에 유지해. 보호된 Network 또는 권한
+   > 변경 전에는 질문하고, Main에서 연결된 Device로 보이는지 확인해.
+
+5. Admin Web에서 Device를 평가하고 Workspace를 등록한 뒤 Role, Instruction, Route, Agent Profile,
+   Service 상태, Computer Use 준비 상태를 검토합니다.
+
+Worker는 Main에만 연결됩니다. 일반 Task에서 실제 Device, Route, Agent Binding은 사용자가 아니라
+OpenDelegate가 선택합니다.
+
+## OpenDelegate 사용
+
+- **Admin Web:** Instance 설정, Device·Task 검사, 보호 작업 승인, Audit·Artifact 확인, 장애 복구,
+  Discord 비활성 상태에서 Task 생성.
+- **Discord Forum(최초 설정 시 선택):** Bot과 Forum을 연결하면 게시글 하나가 지속성 있는 Task 하나가
+  되고, 답글은 같은 Native Agent Session을 이어가며 새 게시글은 깨끗한 Context에서 시작합니다.
+- **Configuration Chat:** OpenDelegate 설정과 Device Profile을 변경합니다. 프로젝트 작업에는 사용하지
+  않습니다.
+- **Artifact:** File, Report, Image, Patch, 격리된 Hosted Result를 Main을 통해 받습니다.
+- **Owner Handoff:** Login, MFA, CAPTCHA, 법적 확인, OS Permission 작업을 Credential 노출 없이
+  완료합니다.
+
+## 역할 분담
+
+- **Main 결정론적 Service:** Identity, Durable State, Eligibility, Route, Lease, Retry, Budget, Policy,
+  Approval, Audit, Discord Projection, Artifact Delivery.
+- **Main Agent:** Owner Intent 이해, Task 분해, Worker 결과 종합.
+- **Worker Service:** Device Identity, Local Capability, Workspace, Resource Lock, Provider Session,
+  Local Knowledge, 실행, 결과 Upload.
+- **Worker Agent:** 해당 Device의 정확한 Policy와 Binding 안에서 할당된 Work Order만 수행.
+
+Codex와 Claude가 현재 first-class runtime Agent Adapter입니다. Generic Runner는 확장 지점으로 남아
+있습니다. Hermes는 현재 setup Agent로만 문서화되어 있으며 first-class runtime Adapter가 아닙니다.
 
 ## 아키텍처
 
 ```mermaid
 flowchart LR
-    owner["Owner<br/>휴대폰 또는 노트북"] --> discord["Discord Forum<br/>게시글 하나 = Task 하나"]
-    owner --> admin["Admin Web<br/>설정 및 운영"]
-    discord --> main["고정 Main Device<br/>Control Plane + Main Agent"]
-    admin --> main
+    owner["Owner<br/>휴대폰 또는 컴퓨터"] --> admin["Admin Web<br/>설정 및 운영"]
+    owner --> discord["Discord Forum<br/>선택적 Task Inbox"]
+    admin --> main["고정 상시 가동 Main<br/>Control Plane + Main Agent"]
+    discord --> main
     main --> database[("Main 전용 SQLite 또는 PostgreSQL")]
     main --> artifacts["Artifact Gateway"]
-    main <-->|"인증된 Device API<br/>설정된 연결 경로"| mac["macOS Worker"]
-    main <-->|"인증된 Device API<br/>설정된 연결 경로"| windows["Windows Worker"]
-    main <-->|"인증된 Device API<br/>설정된 연결 경로"| linux["Linux Worker / NAS"]
-    mac -. "Device 로컬 전용" .-> macKnowledge["Markdown Knowledge"]
-    windows -. "Device 로컬 전용" .-> windowsKnowledge["Markdown Knowledge"]
-    linux -. "Device 로컬 전용" .-> linuxKnowledge["Markdown Knowledge"]
+    main <-->|"인증된 Outbound Device Channel"| mac["macOS Worker"]
+    main <-->|"인증된 Outbound Device Channel"| windows["Windows Worker"]
+    main <-->|"인증된 Outbound Device Channel"| linux["Linux / NAS Worker"]
+    mac -. "Device 로컬" .-> macState["Credential, Session, Workspace, Knowledge"]
+    windows -. "Device 로컬" .-> winState["Credential, Session, Workspace, Knowledge"]
+    linux -. "Device 로컬" .-> linuxState["Credential, Session, Workspace, Knowledge"]
 ```
 
-Worker는 OpenDelegate Control Mesh의 일부로 데이터베이스나 서로에게 연결되지 않습니다. LAN, Omada,
-Tailscale, 터널, 사용자 정의 네트워크는 Main과 각 Device 사이에서 사용하는 결정론적 Transport
-Profile 옵션입니다.
+LAN, Omada, Tailscale, Tunnel, Custom Network는 각 Worker와 Main 사이의 Transport Profile
+선택지입니다. Network Reachability는 Application Identity나 Permission을 대신하지 않습니다.
 
 ## 현재 소스 상태
 
