@@ -1,6 +1,8 @@
 # OpenDelegate
 
-Languages: **[English](README.md)** · [한국어](README.ko.md)
+Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](README.ja.md) ·
+[Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md) ·
+[繁體中文](README.zh-TW.md)
 
 OpenDelegate is a repository for setting up and operating Hermes Agents across several computers.
 It is not a separate web control plane. You clone the repository on one Origin computer, give it to

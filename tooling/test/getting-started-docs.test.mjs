@@ -55,3 +55,19 @@ test("legacy product documents are visibly deprecated", async () => {
     assert.match(content, /CONTEXT\.md/u);
   }
 });
+
+test("every localized README uses the SSH-first flow", async () => {
+  for (const filename of [
+    "README.ja.md",
+    "README.fr.md",
+    "README.es.md",
+    "README.zh-CN.md",
+    "README.zh-TW.md",
+  ]) {
+    const content = await readRepositoryFile(filename);
+    assert.match(content, /SSH/u);
+    assert.match(content, /Peer|ピア|对等|對等/u);
+    assert.match(content, /hermes skills trust/u);
+    assert.doesNotMatch(content, /Admin Web →|Main Admin Web|Configuration Chat/u);
+  }
+});

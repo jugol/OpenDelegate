@@ -1,6 +1,8 @@
 # OpenDelegate
 
-언어: [English](README.md) · **[한국어](README.ko.md)**
+언어: [English](README.md) · **[한국어](README.ko.md)** · [日本語](README.ja.md) ·
+[Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md) ·
+[繁體中文](README.zh-TW.md)
 
 OpenDelegate는 여러 컴퓨터의 Hermes Agent를 설치하고 운영하기 위한 저장소입니다. 별도의 웹 Control
 Plane이 아닙니다. 한 대의 Origin 컴퓨터에서 저장소를 clone한 뒤 로컬 setup Agent에게 주면, 그
