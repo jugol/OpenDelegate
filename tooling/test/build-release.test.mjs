@@ -25,6 +25,7 @@ import {
   PINNED_PNPM_ARCHIVE_INTEGRITY,
   PINNED_PNPM_VERSION,
   REQUIRED_RELEASE_NODE_VERSION,
+  LEGACY_RELEASE_DISABLED_MESSAGE,
   RELEASE_SKILL_DIRECTORIES,
   assertCleanBundleSource,
   assertBundledApplicationPayload,
@@ -78,6 +79,7 @@ import { stageNativeReleaseAssets } from "../native-release-assets.mjs";
 import { withLinuxReleaseSmokeSecretFixture } from "../release-smoke-secret.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
+const buildReleasePath = fileURLToPath(new URL("../build-release.mjs", import.meta.url));
 const execFile = promisify(execFileCallback);
 const auditedCommit = "a".repeat(40);
 const zeroObject = "0".repeat(40);
@@ -127,8 +129,29 @@ test("macOS Swift release builders disable debug metadata and remap private path
   }
 });
 
-test("release bundles carry both agent-facing installation skills", () => {
-  assert.deepEqual(RELEASE_SKILL_DIRECTORIES, ["opendelegate-init", "opendelegate-join"]);
+test("legacy release bundles do not carry current SSH-first project skills", () => {
+  assert.deepEqual(RELEASE_SKILL_DIRECTORIES, []);
+  assert.match(LEGACY_RELEASE_DISABLED_MESSAGE, /bundle builder is retired/u);
+});
+
+test("direct legacy release builder fails closed without creating a destination", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-retired-release-"));
+  const destination = join(root, "internal-preview");
+  t.after(() => rm(root, { force: true, recursive: true }));
+
+  await assert.rejects(
+    execFile(
+      process.execPath,
+      [buildReleasePath, "--destination", destination, "--internal-preview"],
+      { cwd: repositoryRoot, windowsHide: true },
+    ),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /bundle builder is retired/u);
+      return true;
+    },
+  );
+  await assert.rejects(access(destination), (error) => error.code === "ENOENT");
 });
 
 test("target-native release assets stage stable production paths without freezing hashes", async (t) => {
@@ -1750,6 +1773,7 @@ test("bundle guidance is Agent-first and never presents source-checkout commands
   );
 
   assert.match(readme, /unsupported internal preview/u);
+  assert.match(readme, /bundle builder is retired/u);
   assert.match(readme, /win32\/arm64/u);
   assert.match(readme, /\.\\opendelegate\.cmd help/u);
   assert.doesNotMatch(readme, /\.\\opendelegate\.cmd init(?:\s|$)/u);

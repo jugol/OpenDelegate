@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { CANONICAL_DOCUMENTS, checkCanonicalDocumentation } from "../check-canonical-docs.mjs";
+import { REQUIRED_DOCUMENTS, checkCanonicalDocumentation } from "../check-canonical-docs.mjs";
 
 const approvedDocuments = new Map([
   ["CONTEXT.md", "Approved — 2026-07-24"],
@@ -19,7 +19,7 @@ async function createFixture(t) {
     await rm(rootDirectory, { force: true, recursive: true });
   });
 
-  for (const document of CANONICAL_DOCUMENTS) {
+  for (const document of REQUIRED_DOCUMENTS) {
     const filePath = join(rootDirectory, document);
     await mkdir(dirname(filePath), { recursive: true });
     const status = approvedDocuments.get(document);
@@ -30,7 +30,7 @@ async function createFixture(t) {
     await writeFile(filePath, content, "utf8");
   }
 
-  await writeReadme(rootDirectory, CANONICAL_DOCUMENTS);
+  await writeReadme(rootDirectory, REQUIRED_DOCUMENTS);
   return rootDirectory;
 }
 
@@ -39,14 +39,15 @@ async function writeReadme(rootDirectory, documents) {
   await writeFile(join(rootDirectory, "README.md"), `# Fixture\n\n${links}\n`, "utf8");
 }
 
-test("accepts the approved leading Status contract and canonical README order", async (t) => {
+test("accepts the current contract, retained legacy approvals, and required README order", async (t) => {
   const rootDirectory = await createFixture(t);
 
   const result = await checkCanonicalDocumentation(rootDirectory);
 
   assert.deepEqual(result, {
-    approvedDocumentCount: 4,
-    canonicalDocumentCount: 5,
+    currentDocumentCount: 1,
+    legacyApprovedDocumentCount: 3,
+    requiredDocumentCount: 5,
   });
 });
 
@@ -78,17 +79,13 @@ test("rejects an approved Status that is not the first field after the title", a
   );
 });
 
-test("rejects canonical README links in the wrong order", async (t) => {
+test("rejects required README links in the wrong order", async (t) => {
   const rootDirectory = await createFixture(t);
-  const reordered = [
-    CANONICAL_DOCUMENTS[1],
-    CANONICAL_DOCUMENTS[0],
-    ...CANONICAL_DOCUMENTS.slice(2),
-  ];
+  const reordered = [REQUIRED_DOCUMENTS[1], REQUIRED_DOCUMENTS[0], ...REQUIRED_DOCUMENTS.slice(2)];
   await writeReadme(rootDirectory, reordered);
 
   await assert.rejects(
     checkCanonicalDocumentation(rootDirectory),
-    /README\.md must link canonical documents in the required order/,
+    /README\.md must link required planning documents in this order/,
   );
 });

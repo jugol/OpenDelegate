@@ -1,4 +1,4 @@
-name: Release validation
+name: Legacy prototype validation
 
 on:
   workflow_dispatch:
@@ -97,35 +97,6 @@ jobs:
 
       - name: Build applications
         run: pnpm build
-
-      - name: Smoke an explicitly unsupported platform bundle
-        run: >-
-          pnpm release:build --destination "${{ runner.temp }}/opendelegate-internal-preview"
-          --internal-preview
-
-      - name: Archive manually requested internal preview on macOS or Linux
-        if: runner.os != 'Windows'
-        run: >-
-          tar -C "${{ runner.temp }}" -czf "${{ runner.temp }}/opendelegate-internal-preview-${{
-          runner.os }}-${{ runner.arch }}.tar.gz" opendelegate-internal-preview
-
-      - name: Archive manually requested internal preview on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: >-
-          Compress-Archive -LiteralPath '${{ runner.temp }}/opendelegate-internal-preview'
-          -DestinationPath '${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{
-          runner.arch }}.zip'
-
-      - name: Upload manually requested internal preview
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}
-          path: |
-            ${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}.tar.gz
-            ${{ runner.temp }}/opendelegate-internal-preview-${{ runner.os }}-${{ runner.arch }}.zip
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Install browser runner
         run: pnpm --filter @opendelegate/admin-web exec playwright install --with-deps chromium

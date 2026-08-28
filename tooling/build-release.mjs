@@ -137,7 +137,9 @@ const attestationEvidencePrefix = "docs/release/evidence/";
 const fullGitCommitPattern = /^[0-9a-f]{40}$/;
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const regularFileMode = "100644";
-export const RELEASE_SKILL_DIRECTORIES = Object.freeze(["opendelegate-init", "opendelegate-join"]);
+export const RELEASE_SKILL_DIRECTORIES = Object.freeze([]);
+export const LEGACY_RELEASE_DISABLED_MESSAGE =
+  "The Admin Web bundle builder is retired and does not implement the current SSH-first OpenDelegate workflow. Use README.md and CONTEXT.md from the source checkout.";
 
 export async function isDirectReleaseInvocation(invokedPath, modulePath = currentFile) {
   if (invokedPath === undefined) {
@@ -664,6 +666,11 @@ export function renderBundleReadme(
   return `# OpenDelegate ${productVersion} ${statusLabel}
 
 ${renderBundleReadmeLanguageNavigation(locale)}
+
+> [!CAUTION]
+> ${LEGACY_RELEASE_DISABLED_MESSAGE}
+> The historical instructions below are retained only as legacy prototype evidence and must not be
+> used for current Device setup.
 
 ${copy.packageDescription(`${platform}/${architecture}`)}
 
@@ -3740,20 +3747,10 @@ async function listTreeEntries(directory) {
 }
 
 function printHelp() {
-  process.stdout.write(`Build an OpenDelegate platform bundle.
-
-Usage:
-  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256 --runner-executable-sha256 LOWERCASE_SHA256
-  node tooling/build-release.mjs --destination ABSOLUTE_PATH --internal-preview
-  node tooling/build-release.mjs --destination ABSOLUTE_PATH --git-executable ABSOLUTE_PATH --git-executable-sha256 LOWERCASE_SHA256 --runner-executable-sha256 LOWERCASE_SHA256 --platform-signing-policy ABSOLUTE_PATH --platform-signing-policy-sha256 LOWERCASE_SHA256
-
-An incomplete first-milestone ledger can only produce a clearly marked unsupported
-internal preview. Existing destinations and paths inside the source checkout are
-always rejected.
-`);
+  process.stdout.write(`${LEGACY_RELEASE_DISABLED_MESSAGE}\n`);
 }
 
-async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) {
+export async function runCommittedReleaseCli(options, rawArguments, dependencies = {}) {
   const runnerIdentity = await pinBuildRunnerIdentity(options, dependencies);
   const gitProvenance = await pinBuildGitProvenance(options, dependencies);
   const source =
@@ -3806,11 +3803,8 @@ if (await isDirectReleaseInvocation(process.argv[1])) {
     const arguments_ = parseReleaseArguments(process.argv.slice(2));
     if (arguments_.help) {
       printHelp();
-    } else if (expectedReleaseCommit === undefined && configuredReleaseSource === undefined) {
-      await runCommittedReleaseCli(arguments_, process.argv.slice(2));
     } else {
-      const result = await buildRelease(arguments_);
-      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      throw new Error(LEGACY_RELEASE_DISABLED_MESSAGE);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Release build failed.";

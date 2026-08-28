@@ -25,7 +25,13 @@ test("SSH-first init and join skills are discoverable and bounded", async () => 
   assert.match(init.data, /version: 0\.2\.0/u);
   assert.match(init.body, /SSH/u);
   assert.match(init.body, /hermes peer add/u);
-  assert.match(init.body, /hermes peer dm --timeout 7200/u);
+  assert.match(init.body, /hermes peer dm/u);
+  assert.doesNotMatch(init.body, /hermes peer dm --timeout/u);
+  assert.match(init.body, /echo OpenDelegate-SSH-ready/u);
+  assert.doesNotMatch(init.body, /TARGET true/u);
+  assert.match(init.body, /ssh -t TARGET hermes setup/u);
+  assert.match(init.body, /ssh -t TARGET hermes gateway setup/u);
+  assert.match(init.body, /OpenDelegate-Agent-ready/u);
   assert.match(init.body, /Do not create an OpenDelegate Admin Web/u);
   assert.match(init.body, /unexpected change is a hard failure/u);
 
@@ -35,6 +41,11 @@ test("SSH-first init and join skills are discoverable and bounded", async () => 
   assert.match(joinSkill.body, /Do not use Admin Web or\s+an enrollment grant/u);
   assert.match(joinSkill.body, /Preserve Device-local config/u);
   assert.match(joinSkill.body, /Do not infer power state from API state/u);
+  assert.doesNotMatch(joinSkill.body, /hermes peer dm --timeout/u);
+  assert.match(joinSkill.body, /echo OpenDelegate-SSH-ready/u);
+  assert.doesNotMatch(joinSkill.body, /TARGET true/u);
+  assert.match(joinSkill.body, /ssh -t TARGET hermes setup/u);
+  assert.match(joinSkill.body, /ssh -t TARGET hermes gateway setup/u);
 });
 
 test("current project routing ignores the legacy web prototype", async () => {

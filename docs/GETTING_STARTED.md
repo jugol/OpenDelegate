@@ -36,8 +36,11 @@ Do not put passwords or private keys in this table or chat.
 The Agent first probes each approved target without changing it:
 
 ```sh
-ssh -o BatchMode=yes -o ConnectTimeout=10 TARGET true
+ssh -o BatchMode=yes -o ConnectTimeout=10 TARGET "echo OpenDelegate-SSH-ready"
 ```
+
+A successful probe prints exactly `OpenDelegate-SSH-ready`. `echo` works with the common POSIX,
+PowerShell, and `cmd.exe` SSH shells, unlike the POSIX-only `true` command.
 
 A first connection may require the owner to verify and accept the expected host key. A changed host
 key is never accepted automatically. Authentication failure and host identity failure are different
@@ -59,11 +62,22 @@ macOS or Linux:
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
 
-After installation:
+Remote installers can skip the Hermes setup wizard when SSH has no TTY. Reconnect with a PTY and let
+the owner complete any missing Device-local provider and model setup:
+
+```sh
+ssh -t TARGET hermes setup
+```
+
+The owner enters provider credentials only in that target terminal. Do not relay them through Agent
+chat. Then verify the target itself can run an Agent turn:
 
 ```sh
 hermes doctor
+hermes chat -q "Reply with exactly: OpenDelegate-Agent-ready"
 ```
+
+The second command must return `OpenDelegate-Agent-ready` before peer setup continues.
 
 For an existing installation, use the installation method reported by `hermes doctor` and
 `hermes update`. Do not replace a working Device-local Hermes home or copy another Device's home.
@@ -83,10 +97,11 @@ Do not commit the rendered Device file when it contains real hosts, addresses, u
 
 ## 5. Configure the target Peer API
 
-On the target, use the official interactive gateway setup:
+Gateway setup is also interactive. Run it in the target's owner-controlled terminal, or allocate a
+PTY when entering through SSH:
 
 ```sh
-hermes gateway setup
+ssh -t TARGET hermes gateway setup
 ```
 
 Enable the API Server platform, choose the private listener and port, and create a strong
@@ -106,8 +121,9 @@ On a headless Linux system that must start at boot, the owner may approve a syst
 hermes gateway install --system --start-now
 ```
 
-The setup Agent must inspect `hermes gateway install --help` on the target before selecting a service
-shape.
+Do not run `hermes gateway setup` through non-interactive SSH with stdin at EOF; it may exit without
+enabling the API Server. The setup Agent must inspect `hermes gateway install --help` on the target
+before selecting a service shape.
 
 ## 6. Register the peer on Origin
 
@@ -146,11 +162,13 @@ Device offline solely because `/health` fails.
 Write the request to a file so shell characters are not interpreted, then send it:
 
 ```sh
-hermes peer dm --timeout 7200 DEVICE_NAME < REQUEST_FILE
+hermes peer dm DEVICE_NAME < REQUEST_FILE
 ```
 
-The response must come from the target Agent and include an observable result. Long work runs in the
-background with completion notification rather than holding one foreground terminal open.
+The response must come from the target Agent and include an observable result. The published command
+is synchronous and currently has no `--timeout` option. For longer work, use Hermes Bot messaging
+when available, or ask the target to start a background job and return a durable handle; check that
+handle in a later peer request rather than holding one foreground terminal open.
 
 ## 9. Add or repair one Device later
 

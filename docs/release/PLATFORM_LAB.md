@@ -1,5 +1,9 @@
 # First-milestone platform lab
 
+> [!CAUTION]
+> This is historical acceptance material for the retained Admin Web prototype, not the current
+> SSH-first owner workflow. See `../../CONTEXT.md`.
+
 This document records the non-secret prerequisites and procedure for OpenDelegate's live release
 gate. It does not grant access and must never contain passwords, private keys, bot tokens, recovery
 codes, enrollment grants, private network addresses, private hostnames, or private Task content.

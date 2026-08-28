@@ -1,5 +1,9 @@
 # Release evidence and bundle policy
 
+> [!CAUTION]
+> This document covers the retained Admin Web prototype. Its bundle builder is retired, and these
+> instructions do not release the current SSH-first OpenDelegate workflow. See `../../CONTEXT.md`.
+
 OpenDelegate does not infer release readiness from compilation, unit tests, hosted CI, or a
 successful internal-preview smoke. The first milestone is releasable only when every criterion under
 [`First Milestone Acceptance Criteria`](../PRODUCT_SPEC.md#first-milestone-acceptance-criteria) has
@@ -79,12 +83,16 @@ runtime features are also ready. Enclosed candidate metadata always remains
 `release-candidate`; the verifier computes effective status from external sidecars,
 independently provisioned trust roots, and revocation policy.
 
-## Build an unsupported internal preview
+## Historical internal-preview procedure (retired)
+
+Do not run the commands in this section. They document the old prototype's bundle contract for
+source review and regression tests. The direct builder now fails closed with a pointer to the current
+SSH-first workflow.
 
 The bundle builder requires exactly **Node.js 24.18.0**. It rejects every other runtime version,
 even if that version satisfies the contributor engine range.
 
-Prepare and validate the checkout:
+The retired procedure first prepared and validated the checkout:
 
 ```sh
 node --version
@@ -95,8 +103,8 @@ pnpm build
 pnpm test:browser
 ```
 
-`node --version` must print `v24.18.0`, and `git status --short` must print nothing. Then build a
-platform-specific validation bundle:
+Historically, `node --version` had to print `v24.18.0`, and `git status --short` had to print nothing.
+The next command is preserved only as a record and now fails:
 
 ```sh
 pnpm release:build --destination ABSOLUTE_PATH --internal-preview
@@ -109,9 +117,9 @@ The destination must:
 - not already exist; and
 - contain `internal-preview` in its final directory name.
 
-The builder refuses to overwrite an existing destination. It builds Admin Web, deploys Main's
-production dependencies, bundles the Main CLI, downloads the exact official Node.js 24.18.0 archive
-for the current OS and architecture, verifies its audited archive SHA-256, and writes:
+Before retirement, the builder refused to overwrite an existing destination. It built Admin Web,
+deployed Main's production dependencies, bundled the Main CLI, downloaded the exact official Node.js
+24.18.0 archive for the current OS and architecture, verified its audited archive SHA-256, and wrote:
 
 - `release-metadata.json` with distinct build and audited-source identities, candidate attestation
   paths when verified, dirty-state, platform, architecture, official runtime archive/executable
@@ -366,7 +374,10 @@ SHA-256 and clears ambient Git repository and configuration overrides. The sanit
 retains the verified executable digests. Output paths must be absent; partial publication rolls
 back without overwrite.
 
-## Production gate
+## Historical production gate (retired)
+
+This section is also a record of the legacy prototype. It does not authorize a release and its
+`release:build` command now fails closed.
 
 The production evidence check is:
 

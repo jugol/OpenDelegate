@@ -2,7 +2,7 @@
   "name": "opendelegate",
   "version": "0.1.0-alpha.48",
   "private": true,
-  "description": "A personal, self-hosted control plane for orchestrating AI agents across devices.",
+  "description": "SSH-first procedures for setting up and operating Hermes Agents across devices; legacy control-plane prototype source is retained for reference.",
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@11.15.1",

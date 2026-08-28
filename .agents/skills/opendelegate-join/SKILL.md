@@ -40,8 +40,11 @@ roles, and routes unless the owner asked to change them.
 Probe:
 
 ```sh
-ssh -o BatchMode=yes -o ConnectTimeout=10 TARGET true
+ssh -o BatchMode=yes -o ConnectTimeout=10 TARGET "echo OpenDelegate-SSH-ready"
 ```
+
+A successful probe prints exactly `OpenDelegate-SSH-ready`. The marker command must remain portable
+across POSIX shells, PowerShell, and `cmd.exe`.
 
 A first connection may pause for owner verification. An unexpected host-key change fails closed.
 
@@ -63,7 +66,11 @@ Server settings. Distinguish:
 - Update through the installation method reported by `hermes doctor`.
 - Preserve Device-local config, auth, memory, sessions, databases, provider homes, and keys.
 - Create or patch Device-local `DEVICE.md` from `templates/DEVICE.md`.
-- Configure the API Server with `hermes gateway setup` when absent.
+- If provider/model setup is missing, allocate a PTY with `ssh -t TARGET hermes setup` and let the
+  owner enter credentials in the target terminal.
+- Verify a bounded target-local `hermes chat -q` response before peer registration.
+- Configure the API Server with `ssh -t TARGET hermes gateway setup` when absent. Do not run the
+  interactive wizard with stdin at EOF.
 - Use the native gateway install/start lifecycle when service state is the problem.
 - Update Origin `hermes peer add` only when name, route, note, or key state requires it.
 
@@ -76,8 +83,10 @@ hermes gateway status
 hermes peer list
 ```
 
-Probe target `/health`, then send one real peer request with a two-hour deadline. The request should
-perform a harmless Device-local observation and return the result.
+Probe target `/health`, then send one real peer request. The request should perform a harmless
+Device-local observation and return the result. Do not invent a `--timeout` flag; the published
+`hermes peer dm` command is synchronous. Use Bot messaging or a start/status request pair for longer
+work.
 
 ### 6. Report
 
