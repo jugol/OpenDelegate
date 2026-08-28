@@ -21,10 +21,10 @@
     "@opendelegate/policy": "workspace:*",
     "better-sqlite3": "13.0.1",
     "kysely": "0.29.4",
-    "pg": "8.22.0"
+    "pg": "8.23.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",
-    "@types/pg": "8.20.0"
+    "@types/pg": "8.23.1"
   }
 }

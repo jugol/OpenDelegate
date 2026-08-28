@@ -16,10 +16,10 @@
     "@opendelegate/secrets": "workspace:*",
     "@opendelegate/storage-sql": "workspace:*",
     "@opendelegate/transport": "workspace:*",
-    "pg": "8.22.0"
+    "pg": "8.23.0"
   },
   "devDependencies": {
-    "@types/pg": "8.20.0"
+    "@types/pg": "8.23.1"
   },
   "scripts": {
     "test": "node --experimental-strip-types --test",
