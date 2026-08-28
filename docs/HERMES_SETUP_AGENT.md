@@ -65,11 +65,21 @@ Use the native terminal prompt or secure local input.
 
 ## Peer API configuration
 
-The target must run the Hermes `api_server` gateway platform with a strong `API_SERVER_KEY`.
-Use:
+Each target needs a working Device-local model and provider before it can answer peer requests.
+Remote installers may skip setup without a TTY, so use an owner-controlled TTY when setup is missing:
 
 ```sh
-hermes gateway setup
+ssh -t TARGET hermes setup
+```
+
+The owner enters provider credentials in that target terminal. Verify `hermes doctor` and one bounded
+local `hermes chat -q` response before configuring the Peer API.
+
+The target must run the Hermes `api_server` gateway platform with a strong `API_SERVER_KEY`.
+`hermes gateway setup` is interactive; run it in the same owner-controlled TTY or allocate a PTY:
+
+```sh
+ssh -t TARGET hermes gateway setup
 hermes gateway install --start-now --start-on-login
 hermes gateway status
 ```
@@ -84,8 +94,11 @@ hermes peer list
 Normal Device work then uses:
 
 ```sh
-hermes peer dm --timeout 7200 DEVICE_NAME < REQUEST_FILE
+hermes peer dm DEVICE_NAME < REQUEST_FILE
 ```
+
+The published command is synchronous and currently has no `--timeout` option. Use Hermes Bot
+messaging when available, or split long work into a start request and later status requests.
 
 ## State boundary
 

@@ -1,5 +1,8 @@
 # Changelog
 
+> [!CAUTION] Most entries below describe the retained Admin Web control-plane prototype. The current
+> SSH-first Hermes Device federation direction is defined by `CONTEXT.md` and `README.md`.
+
 All notable OpenDelegate source changes are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Released versions will

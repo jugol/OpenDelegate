@@ -57,8 +57,11 @@ OpenDelegate checkout.
 For each approved target:
 
 ```sh
-ssh -o BatchMode=yes -o ConnectTimeout=10 TARGET true
+ssh -o BatchMode=yes -o ConnectTimeout=10 TARGET "echo OpenDelegate-SSH-ready"
 ```
+
+A successful probe prints exactly `OpenDelegate-SSH-ready`. Use this cross-shell marker instead of
+the POSIX-only `true` command so Windows OpenSSH targets work with their configured default shell.
 
 A first-time host key requires owner verification. An unexpected change is a hard failure. Never
 weaken `StrictHostKeyChecking` to hide an identity problem.
@@ -69,6 +72,20 @@ Through SSH, detect the remote OS, architecture, current Hermes version, `HERMES
 status. Install Hermes only through the official platform installer when missing. For an existing
 installation, use `hermes doctor` and its detected update path.
 
+Remote installers may skip provider and model setup when SSH has no TTY. If the target is not
+already configured, allocate a PTY and let the owner complete Device-local setup:
+
+```sh
+ssh -t TARGET hermes setup
+```
+
+Never relay provider credentials through Agent chat. Before continuing, verify `hermes doctor` and a
+bounded target-local response:
+
+```sh
+hermes chat -q "Reply with exactly: OpenDelegate-Agent-ready"
+```
+
 Do not copy Origin's Hermes home, config, auth, memory, sessions, provider home, or peer keys.
 
 ### 5. Write Device-local metadata
@@ -78,10 +95,11 @@ local paths, and boundaries on the target only. Do not commit the rendered file.
 
 ### 6. Configure the target gateway
 
-Inspect live CLI help, then use the official lifecycle:
+`hermes gateway setup` is interactive. Run it in an owner-controlled target terminal or allocate an
+SSH PTY; never invoke it through non-interactive SSH with stdin at EOF:
 
 ```sh
-hermes gateway setup
+ssh -t TARGET hermes gateway setup
 hermes gateway install --start-now --start-on-login
 hermes gateway status
 ```
@@ -111,9 +129,13 @@ Verify separately:
 3. remote `hermes gateway status`;
 4. Origin-to-target `/health` returning `status: ok`;
 5. Origin peer roster showing `key set`;
-6. one real `hermes peer dm --timeout 7200` request and reply.
+6. one real `hermes peer dm` request and reply.
 
 Do not report a Device as powered off from `/health` alone.
+
+The published `hermes peer dm` command is synchronous and has no `--timeout` option. For longer
+work, use Bot messaging when available, or have the Device start background work, return a durable
+local handle, and answer later status requests.
 
 ### 9. Hand off the fleet
 

@@ -32,14 +32,18 @@ not require a separate Admin Web, central database, enrollment grant, or Discord
    accepted automatically.
 8. **Secrets never enter chat or source.** SSH credentials, peer API keys, provider credentials,
    and private keys remain in their local secure stores.
-9. **Power and Agent readiness are separate.** Tailscale/network presence and Hermes `/health`
+9. **Targets answer locally before peer registration.** A remote install can skip model/provider setup
+   without a TTY. Complete missing setup in an owner-controlled target TTY and verify one bounded
+   local Agent response before registering the Peer API.
+10. **Power and Agent readiness are separate.** Tailscale/network presence and Hermes `/health`
    readiness are reported independently.
-10. **Shared storage is human-readable only.** Shared libraries may contain docs, project files,
+11. **Shared storage is human-readable only.** Shared libraries may contain docs, project files,
     knowledge, and artifacts, but not Hermes runtime homes or credentials.
-11. **Explicit Device names win.** Semantic role routing is a convenience; an owner-named target
+12. **Explicit Device names win.** Semantic role routing is a convenience; an owner-named target
     always takes priority.
-12. **Long work is allowed.** Peer turns may run for up to two hours and should use background
-    completion notification instead of a foreground terminal wait.
+13. **Long work must use shipped behavior.** The public `hermes peer dm` command is synchronous and
+    has no `--timeout` flag. Use Bot messaging when available, or split long work into start and
+    status requests with a durable Device-local handle.
 
 ## Canonical flow
 
@@ -49,12 +53,14 @@ not require a separate Admin Web, central database, enrollment grant, or Discord
    local SSH configuration.
 4. Origin probes SSH without mutation and verifies host identity.
 5. Origin installs or updates Hermes on each target through the official platform path.
-6. Each target receives a Device-local `DEVICE.md`, API server configuration, and native gateway
+6. Each target completes any missing model/provider setup in an owner-controlled TTY and proves one
+   local Agent response.
+7. Each target receives a Device-local `DEVICE.md`, API server configuration, and native gateway
    lifecycle.
-7. Origin registers the target with `hermes peer add` and stores the peer credential locally.
-8. Origin distinguishes Tailscale/network presence from Peer API health.
-9. Origin sends a real peer request and verifies the response.
-10. Later owner work is routed through peer messages; SSH is reserved for setup and recovery.
+8. Origin registers the target with `hermes peer add` and stores the peer credential locally.
+9. Origin distinguishes Tailscale/network presence from Peer API health.
+10. Origin sends a real peer request and verifies the response.
+11. Later owner work is routed through peer messages; SSH is reserved for setup and recovery.
 
 ## Legacy boundary
 

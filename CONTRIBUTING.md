@@ -1,29 +1,43 @@
 # Contributing to OpenDelegate
 
-OpenDelegate welcomes focused issues and pull requests that preserve its personal-first security
-model and fixed-Main architecture.
+OpenDelegate welcomes focused issues and pull requests that preserve its SSH-first Hermes Device
+federation model.
 
-The repository is pre-release. A passing local build is useful engineering evidence, but it does not
-make a change release-ready or make an operating system, provider, Discord integration, or Computer
-Use backend supported.
+The current product is the Agent procedure, project skills, templates, and documentation described
+in `CONTEXT.md`. The TypeScript applications, packages, Admin Web, enrollment system, and release
+builder are a retained legacy prototype. Do not extend or present that prototype as the current
+owner workflow unless the owner explicitly requests legacy work.
 
 ## Read the product contract first
 
-Read [`AGENTS.md`](AGENTS.md), then read these files in order before planning or implementing a
-change:
+Read these files before planning or implementing a current OpenDelegate change:
 
-1. [`CONTEXT.md`](CONTEXT.md)
-2. [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md)
-3. [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
-4. [`docs/DECISIONS.md`](docs/DECISIONS.md)
+1. [`AGENTS.md`](AGENTS.md)
+2. [`CONTEXT.md`](CONTEXT.md)
+3. [`README.md`](README.md)
+4. The applicable skill under [`.agents/skills`](.agents/skills)
 5. Relevant primary-source material under [`docs/research`](docs/research)
 
-These documents are the canonical product contract. Do not weaken an accepted invariant for
-implementation convenience. Material changes to persistence, protocols, security, platform support,
-release packaging, or extension boundaries require an ADR under [`docs/adr`](docs/adr) and any
-corresponding canonical-document update before behavior changes.
+`CONTEXT.md` is the current product contract. `docs/PRODUCT_SPEC.md`, `docs/IMPLEMENTATION_PLAN.md`,
+`docs/DECISIONS.md`, `apps/`, `packages/`, and release tooling describe the legacy Admin Web
+prototype. Their historical approval status does not override `CONTEXT.md`.
 
-## Development environment
+## Current SSH-first work
+
+End users do not need the legacy TypeScript runtime. Contributors use the pinned Node.js and pnpm
+toolchain only to run repository policy checks for documentation, project-skill, template, and
+routing changes:
+
+```sh
+pnpm docs:check
+pnpm test:tooling
+```
+
+The repository's required pull-request checks remain the final integration gate.
+
+## Legacy prototype development environment
+
+Use this section only when the owner explicitly asks to maintain the retained TypeScript prototype.
 
 Release bundles require exactly **Node.js 24.18.0**, as recorded in `.node-version`. The contributor
 engine also accepts Node.js 22 from 22.14.0 onward, but release-builder and release-proof work must
@@ -59,7 +73,10 @@ implement the smallest coherent behavior, and refactor while the suite stays gre
 should exercise duplicate delivery, denial, restart, cancellation, and partial failure wherever
 those conditions apply.
 
-## Release evidence and internal previews
+## Legacy release evidence and internal previews
+
+The commands in this section concern the retained Admin Web prototype. They do not build or release
+the current SSH-first OpenDelegate workflow.
 
 Run:
 
@@ -72,24 +89,8 @@ criteria. Hosted CI, fake adapters, WSL, and contract tests cannot substitute fo
 platform-lab evidence where the specification requires real macOS, Windows, Linux, Discord,
 provider, reboot, or desktop behavior.
 
-An unsupported, platform-specific validation bundle may be built on Node 24.18.0:
-
-```sh
-pnpm release:build --destination ABSOLUTE_PATH --internal-preview
-```
-
-The destination must be absent, absolute, and outside the checkout. Never commit the bundle, runtime
-state, or generated evidence back into the source tree.
-
-The production command intentionally fails until every criterion has complete evidence:
-
-```sh
-pnpm release:gate
-pnpm release:build --destination ABSOLUTE_PATH
-```
-
-Do not bypass the gate, remove the internal-preview marker, publish an unsupported bundle under a
-release tag, or describe a contract fixture as live platform proof. See
+The legacy bundle builder is retired and direct invocation fails closed. Do not bypass that guard,
+publish an old internal preview, or describe a contract fixture as current platform proof. See
 [`docs/release/README.md`](docs/release/README.md) and
 [`docs/release/PLATFORM_LAB.md`](docs/release/PLATFORM_LAB.md).
 
@@ -114,10 +115,11 @@ builds follow the changed workspace packages plus their dependents. The Admin We
 runs only for Admin Web or dependency-manifest changes. Secret scanning and dependency review are
 the only additional required checks.
 
-Do not rerun the same full suite on every operating system for ordinary pull requests. Use the
-manually dispatched **Release validation** workflow when a release candidate or a platform-sensitive
-change needs the macOS, Windows, Linux, PostgreSQL, Node compatibility, native helper, and
-packaged-bundle matrix. CodeQL and dependency audits run weekly or on explicit manual request.
+Do not rerun the same full suite on every operating system for ordinary pull requests. The manually
+dispatched **Legacy prototype validation** workflow exists only for explicitly requested maintenance
+of the retained prototype across macOS, Windows, Linux, PostgreSQL, Node compatibility, and native
+helpers. It no longer builds or uploads bundles. CodeQL and dependency audits run weekly or on
+explicit manual request.
 
 ## Issues and security
 

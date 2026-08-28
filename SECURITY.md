@@ -1,16 +1,16 @@
 # Security policy
 
-OpenDelegate is pre-release software and has no supported release line.
+OpenDelegate's current SSH-first workflow has no separately published executable release line. It
+coordinates existing Hermes installations and owner-approved SSH access.
 
-| Version                                      | Security support |
-| -------------------------------------------- | ---------------- |
-| Source checkout and internal-preview bundles | Not supported    |
-| Public releases                              | None published   |
+| Surface                                        | Security support                |
+| ---------------------------------------------- | ------------------------------- |
+| Current source instructions and project skills | Best-effort pre-release support |
+| Retained Admin Web prototype and old bundles   | Not supported                   |
+| Public OpenDelegate executable releases        | None published                  |
 
-Internal-preview code includes security controls and negative-path tests, but it has not completed
-the final implementation threat-model review, three-OS live matrix, provider and Discord integration
-proof, service/restart proof, or real Computer Use acceptance. Do not expose an internal preview as
-an unattended production control plane.
+Do not run or expose the retained Admin Web prototype as an unattended production control plane. It
+does not implement the current OpenDelegate workflow.
 
 ## Reporting a vulnerability
 
@@ -35,7 +35,24 @@ Include the smallest private reproduction that establishes impact, together with
 or bundle identifier and a safe contact method. This pre-release project does not currently promise
 a response or remediation SLA.
 
-## Security boundaries
+## Current security boundaries
+
+- Treat an unexpected SSH host-key change as a hard failure.
+- Keep SSH credentials, private keys, Hermes API keys, and provider credentials out of source, logs,
+  shared storage, and Agent chat.
+- Keep each Device's Hermes home, config, auth, sessions, databases, memories, locks, and process
+  state local to that Device.
+- Use private reachability such as Tailscale, LAN, or an existing VPN, but do not treat network
+  membership as authentication. Every Hermes Peer API requires its own strong key.
+- Prefer one Origin-to-Device SSH relationship instead of an all-to-all SSH mesh.
+- Report network presence, SSH reachability, gateway state, `/health`, and Agent replies separately.
+  A failed `/health` probe does not prove a Device is powered off.
+- Use SSH for installation, updates, recovery, and diagnostics. Use authenticated Hermes peer or Bot
+  messaging for normal Agent work after setup.
+
+## Legacy prototype boundaries
+
+The following boundaries apply only when reviewing or testing the retained TypeScript prototype:
 
 Security-sensitive boundaries include:
 
@@ -56,7 +73,8 @@ Security-sensitive boundaries include:
 - the rule that Device Knowledge never leaves its Device.
 
 Private-network membership, VPN reachability, source IP, or tunnel access is never application
-identity. Workers must not receive database credentials, and SSH is not the control-plane protocol.
+identity. Workers must not receive database credentials. These legacy constraints do not redefine
+the current SSH bootstrap and Hermes peer-messaging model in `CONTEXT.md`.
 
 ## Safe testing
 

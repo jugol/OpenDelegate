@@ -37,7 +37,9 @@ for the other Devices.
 
 ### 2. Install Hermes and clone OpenDelegate
 
-Install Hermes through the official installer, then run:
+Install Hermes by following the official
+[Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation),
+then run:
 
 ```sh
 hermes doctor
@@ -55,6 +57,9 @@ git pull --ff-only
 
 Project skills live under `.agents/skills/` and load only after the repository is trusted and a fresh
 Hermes session starts.
+
+You do not need pnpm, Node.js, `apps/`, or `packages/` for the current SSH-first workflow. Those
+directories belong to the retained legacy prototype.
 
 ### 3. Prepare SSH access
 
@@ -93,13 +98,15 @@ For every Device, the Agent:
 1. probes the configured SSH target without changing it;
 2. detects the OS, architecture, current Hermes installation, and service state;
 3. installs or updates Hermes through the official platform installer;
-4. keeps `HERMES_HOME` and all runtime data outside the OpenDelegate checkout;
-5. writes a Device-local `DEVICE.md` containing the Device ID, role, routes, and local boundaries;
-6. configures the Hermes API server and gateway without putting API keys in chat or source files;
-7. starts the gateway through the native Hermes lifecycle for that OS;
-8. registers the Device on Origin with `hermes peer add`;
-9. checks Tailscale or network presence separately from Hermes `/health` readiness; and
-10. sends one bounded `hermes peer dm` request and verifies the reply.
+4. completes any missing Device-local model/provider setup in an owner-controlled TTY and verifies a
+   local Agent response;
+5. keeps `HERMES_HOME` and all runtime data outside the OpenDelegate checkout;
+6. writes a Device-local `DEVICE.md` containing the Device ID, role, routes, and local boundaries;
+7. configures the Hermes API server and gateway without putting API keys in chat or source files;
+8. starts the gateway through the native Hermes lifecycle for that OS;
+9. registers the Device on Origin with `hermes peer add`;
+10. checks Tailscale or network presence separately from Hermes `/health` readiness; and
+11. sends one bounded `hermes peer dm` request and verifies the reply.
 
 A failed `/health` probe means the Hermes Peer API is not ready from Origin. It does not prove that
 the computer is powered off.
@@ -124,8 +131,10 @@ Ask the Origin Agent for the outcome, not the connection mechanics:
 - "Collect status from every Device."
 
 The Origin checks the Device role and Peer API readiness, writes a bounded peer request, and sends it
-with `hermes peer dm`. Long requests use a two-hour deadline and background completion notification.
-SSH remains available for installation, updates, service recovery, and direct operator diagnostics.
+with `hermes peer dm`. The published command is synchronous and currently has no `--timeout` option.
+For longer work, use Hermes Bot messaging when available, or ask the target to start the work and
+return a durable handle before checking status in a later peer message. SSH remains available for
+installation, updates, service recovery, and direct operator diagnostics.
 
 ## Device roles
 

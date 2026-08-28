@@ -36,7 +36,8 @@ Agent에게 일을 보낼지 결정합니다. 다른 Device의 중앙 DB 역할�
 
 ### 2. Hermes 설치 및 OpenDelegate clone
 
-공식 Installer로 Hermes를 설치한 뒤 실행합니다.
+공식 [Hermes 설치 안내](https://hermes-agent.nousresearch.com/docs/getting-started/installation)에
+따라 Hermes를 설치한 뒤 실행합니다.
 
 ```sh
 hermes doctor
@@ -53,6 +54,9 @@ git pull --ff-only
 ```
 
 Project Skill은 `.agents/skills/`에 있으며, 저장소를 신뢰하고 새 Hermes 세션을 시작한 뒤 로드됩니다.
+
+현재 SSH-first 절차에는 pnpm, Node.js, `apps/`, `packages/`가 필요하지 않습니다. 해당 디렉터리는
+보존 중인 Legacy Prototype입니다.
 
 ### 3. SSH 연결 준비
 
@@ -89,13 +93,15 @@ Setup Agent는 `.agents/skills/opendelegate-init/SKILL.md`를 따라 실제 Shel
 1. 설정된 SSH Target을 읽기 전용으로 확인합니다.
 2. OS, Architecture, Hermes 설치 상태, Service 상태를 감지합니다.
 3. 공식 Platform Installer로 Hermes를 설치하거나 업데이트합니다.
-4. `HERMES_HOME`과 Runtime Data를 OpenDelegate Checkout 밖에 보관합니다.
-5. Device ID, 역할, Route, Local Boundary가 담긴 Device-local `DEVICE.md`를 만듭니다.
-6. API Key를 Chat이나 Source File에 넣지 않고 Hermes API Server와 Gateway를 설정합니다.
-7. 해당 OS의 Hermes Native Lifecycle로 Gateway를 시작합니다.
-8. Origin에서 `hermes peer add`로 Device를 등록합니다.
-9. Tailscale/Network 접속 상태와 Hermes `/health` 준비 상태를 따로 확인합니다.
-10. 실제 `hermes peer dm` 요청을 보내고 응답을 검증합니다.
+4. Device-local Model/Provider 설정이 없다면 Owner가 제어하는 TTY에서 완료하고 Local Agent 응답을
+   검증합니다.
+5. `HERMES_HOME`과 Runtime Data를 OpenDelegate Checkout 밖에 보관합니다.
+6. Device ID, 역할, Route, Local Boundary가 담긴 Device-local `DEVICE.md`를 만듭니다.
+7. API Key를 Chat이나 Source File에 넣지 않고 Hermes API Server와 Gateway를 설정합니다.
+8. 해당 OS의 Hermes Native Lifecycle로 Gateway를 시작합니다.
+9. Origin에서 `hermes peer add`로 Device를 등록합니다.
+10. Tailscale/Network 접속 상태와 Hermes `/health` 준비 상태를 따로 확인합니다.
+11. 실제 `hermes peer dm` 요청을 보내고 응답을 검증합니다.
 
 `/health` 실패는 Origin에서 Hermes Peer API를 사용할 수 없다는 뜻일 뿐, 컴퓨터 전원이 꺼졌다는
 증거가 아닙니다.
@@ -121,8 +127,9 @@ Agent는 `.agents/skills/opendelegate-join/SKILL.md`를 따릅니다. Admin Web�
 - "모든 Device 상태를 모아 줘."
 
 Origin은 Device 역할과 Peer API 준비 상태를 확인하고 제한된 Peer Request를 작성해 `hermes peer dm`으로
-전달합니다. 긴 작업은 2시간 Deadline과 Background 완료 알림을 사용합니다. SSH는 설치, 업데이트,
-Service 복구, 운영자 진단에 계속 사용합니다.
+전달합니다. 공개된 명령은 동기 방식이며 현재 `--timeout` Option이 없습니다. 오래 걸리는 작업은 지원되는
+경우 Hermes Bot Message를 사용하거나, Target이 Background 작업을 시작하고 Handle을 반환하게 한 뒤 다음
+Peer Message에서 상태를 확인합니다. SSH는 설치, 업데이트, Service 복구, 운영자 진단에 계속 사용합니다.
 
 ## Device 역할
 

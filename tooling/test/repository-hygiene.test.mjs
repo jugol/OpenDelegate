@@ -121,7 +121,8 @@ test("pull requests stay lean while release validation retains the bounded platf
   assert.doesNotMatch(pullRequestWorkflow, /^\s+matrix:\s*$/mu);
   assert.doesNotMatch(pullRequestWorkflow, /release:build/u);
 
-  assert.match(releaseWorkflow, /^name:\s*Release validation\s*$/mu);
+  assert.match(releaseWorkflow, /^name:\s*Legacy prototype validation\s*$/mu);
+  assert.doesNotMatch(releaseWorkflow, /release:build/u);
   assert.match(releaseWorkflow, /^\s+workflow_dispatch:\s*$/mu);
   assert.doesNotMatch(releaseWorkflow, /^\s+pull_request:\s*$/mu);
   assert.doesNotMatch(releaseWorkflow, /^\s+push:\s*$/mu);
