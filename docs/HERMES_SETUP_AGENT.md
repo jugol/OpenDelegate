@@ -1,151 +1,165 @@
-# Hermes setup Agent guide
+# Hermes setup Agent procedure
 
-This guide describes how Hermes acts as the Origin setup Agent for OpenDelegate's SSH-first Device
-federation. It does not install or operate a separate OpenDelegate website.
+Use this document when an Agent is asked to configure a multi-computer Hermes environment from this
+repository.
 
-## Install Hermes on Origin
+## Contract
 
-Windows PowerShell:
+You are a setup and operations Agent. Use official Hermes Agent as the runtime. This repository supplies
+workflow, templates, safety boundaries, and field-tested troubleshooting; it does not replace Hermes.
 
-```powershell
-iex (irm https://hermes-agent.nousresearch.com/install.ps1)
+The workflow is:
+
+```text
+discover → install → connect → verify → operate
 ```
 
-macOS or Linux:
+Do not mark setup complete after installation alone.
+
+## Phase 1 — Discover
+
+Read:
+
+1. `AGENTS.md`
+2. `docs/SECURITY_BOUNDARIES.md`
+3. `docs/QUICKSTART.md`
+4. `.agents/skills/opendelegate-setup/SKILL.md`
+
+Then inspect only the local Device and owner-approved peers. Record non-secret facts:
+
+- stable Device ID;
+- OS and role;
+- Hermes executable, version, home, profiles, and services;
+- verified capabilities;
+- candidate private routes;
+- whether the Device may sleep;
+- blocked prerequisites and required approvals.
+
+Do not infer CUDA, Xcode, Computer Use, Docker, or another capability from the OS name.
+
+## Phase 2 — Install
+
+Use the current official Hermes documentation for installation and service management.
+
+Required verification:
 
 ```sh
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-```
-
-Then:
-
-```sh
+hermes --version
 hermes doctor
-git clone https://github.com/jugol/OpenDelegate.git
-cd OpenDelegate
-hermes skills trust
-hermes
-```
-
-Start a fresh Hermes session after trusting the repository.
-
-## Give Hermes the fleet setup request
-
-Example:
-
-> Read CONTEXT.md and set up my Hermes fleet. This computer is Origin. Use my existing SSH aliases
-> `nas`, `mac-studio`, and `windows`. Verify each host identity, detect the OS, install or update
-> Hermes, write a Device-local DEVICE.md, configure and start the API Server gateway, register each
-> peer on Origin, and prove one request/reply. Keep all credentials and Hermes state Device-local.
-
-Hermes loads `.agents/skills/opendelegate-init/SKILL.md` for this request.
-
-## What Hermes may do automatically
-
-- inspect local SSH configuration without printing private keys;
-- probe approved SSH targets in BatchMode;
-- detect remote OS and Hermes installation;
-- run official Hermes install or update commands;
-- write non-secret Device metadata;
-- run `hermes gateway setup`, install, start, and status commands inside the approved scope;
-- register peers on Origin;
-- probe Tailscale presence and `/health`;
-- send a bounded peer request and verify the response.
-
-## What needs the owner
-
-- accepting a first-time SSH host key after verifying it;
-- entering an SSH password, MFA, sudo password, or other secret;
-- approving service installation or another privilege boundary;
-- selecting an encrypted route when several materially different transport options exist;
-- resolving an unexpected host-key change.
-
-Hermes must never ask the owner to paste a password, private key, API key, or token into Agent chat.
-Use the native terminal prompt or secure local input.
-
-## Peer API configuration
-
-Each target needs a working Device-local model and provider before it can answer peer requests.
-Remote installers may skip setup without a TTY, so use an owner-controlled TTY when setup is missing:
-
-```sh
-ssh -t TARGET hermes setup
-```
-
-The owner enters provider credentials in that target terminal. Verify `hermes doctor` and one bounded
-local `hermes chat -q` response before configuring the Peer API.
-
-The target must run the Hermes `api_server` gateway platform with a strong `API_SERVER_KEY` over an
-encrypted transport. Plain HTTP is acceptable only inside Tailscale, another authenticated encrypted
-VPN, or an SSH tunnel bound to Origin loopback; otherwise use validated HTTPS. Never send a peer key
-or Agent request over direct plain-HTTP LAN.
-`hermes gateway setup` is interactive; run it in the same owner-controlled TTY or allocate a PTY:
-
-```sh
-ssh -t TARGET hermes gateway setup
-hermes gateway install --start-now --start-on-login
+hermes profile list
 hermes gateway status
 ```
 
-Register the encrypted route and non-secret role note on Origin first. This example uses HTTP inside
-Tailscale's WireGuard transport:
+Prefer one Hermes code installation with named Profiles over duplicate installations on one Device.
+Give each independently running bot/Profile its own credentials and state.
 
-```sh
-hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note "role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES"
-```
+Use native service management:
 
-The peer note is Origin's durable semantic-routing index. `DEVICE.md` remains target-local operator
-and peer-Agent context and is not automatically loaded by Hermes core.
+- Linux: the documented user or system service;
+- macOS: launchd;
+- Windows: the current official persistent Gateway path.
 
-The public CLI has no masked key prompt or key-stdin option. In an owner-only local Origin terminal,
-use a no-echo prompt and pass only a transient variable name in the recorded command:
+Record a rollback before replacing a working service definition or profile.
 
-```sh
-set +x
-OPENDELEGATE_PEER_NOTE='role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES'
-printf 'Peer API key: ' >&2
-IFS= read -r -s OPENDELEGATE_PEER_KEY
-printf '\n' >&2
-hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note "$OPENDELEGATE_PEER_NOTE" --key "$OPENDELEGATE_PEER_KEY"
-unset OPENDELEGATE_PEER_KEY OPENDELEGATE_PEER_NOTE
-hermes peer list
-```
+## Phase 3 — Connect
 
-Never read the target `.env`, transfer the key through Agent chat or SSH output, or place a literal
-key in an Agent tool argument. Hermes stores it under Origin's local home. Because the current CLI
-briefly receives the expanded key in process argv, fail closed if an owner-only session or transient
-argv exposure is not acceptable. The PowerShell 7 masked-input equivalent is in `GETTING_STARTED.md`.
-The key-setting `peer add` must repeat the same `--note` because the CLI replaces the stored peer
-entry. Verify both `key set` and the role note with `hermes peer list`.
+### Route selection
 
-Normal Device work then uses:
+Use an owner-approved route in this order of concern:
 
-```sh
-hermes peer dm DEVICE_NAME < REQUEST_FILE
-```
+1. identity and authentication;
+2. stable reachability;
+3. least authority;
+4. operational simplicity;
+5. fallback cost.
 
-The published command is synchronous and currently has no `--timeout` option. Use Hermes Bot
-messaging when available, or split long work into a start request and later status requests.
+Possible transports include SSH and Hermes peer/API. Never treat reachability as identity or authority.
+Never disable SSH host-key checking or accept an unexpected key change.
 
-## State boundary
+### Local boundaries
 
-Never synchronize, commit, or copy these between Devices:
+Keep these on the Device that uses them:
 
-- `HERMES_HOME`;
-- `config.yaml` or `.env`;
+- `.env` and API keys;
 - auth files and provider homes;
-- sessions and state databases;
-- peer keys and SSH keys;
-- locks, logs, or process state.
+- sessions and databases;
+- Gateway locks and process state;
+- peer keys;
+- private Device metadata.
 
-A shared library may carry human-readable knowledge, source files, and artifacts only.
+Only generic templates and reviewed, non-secret documentation belong in Git.
 
-## Diagnose without confusing Device power and Agent readiness
+### Device files
 
-1. Check Tailscale or network presence.
-2. Check the target host through SSH.
-3. Check `hermes gateway status` on the target.
-4. Check `/health` from Origin.
-5. Check `hermes peer list` and one `peer dm` request.
+Create ignored local copies:
 
-A failed step identifies one boundary. It does not prove every earlier boundary failed.
+- `templates/DEVICE.md` → `DEVICE.local.md`
+- `templates/AGENTS.md` → `AGENTS.local.md`
+- `templates/fleet.example.yaml` → `fleet.local.yaml`
+
+Populate private endpoints only in those local files.
+
+## Phase 4 — Verify
+
+Run a deterministic `/health` probe before Agent turns. Treat it as liveness evidence only; verify the
+authenticated peer identity and authorization separately. Then send one bounded, read-only request to an
+explicit Worker using `templates/PEER_REQUEST.txt`.
+
+A valid result must carry:
+
+- the matching request ID;
+- the expected Device ID;
+- an allowed status;
+- a concise observable summary;
+- shared outputs or an empty list;
+- unresolved issues or `none`.
+
+Verify that the result reaches the original owner conversation. A remote result stored only in the
+Worker's Bot Chat is not end-to-end completion.
+
+## Phase 5 — Operate
+
+- The Agent receiving the owner request stays responsible for the final result.
+- Delegate only when another Device is useful.
+- Honor explicit Device names.
+- Treat laptops that sleep as best-effort Workers.
+- Keep unknown-duration work on a durable orchestration path.
+- Defer Gateway restart while peer work is active.
+- Reconcile interrupted work before accepting unrelated completion claims.
+
+## Reasonable timeout layers
+
+Timeouts have different responsibilities:
+
+| Layer | Example bound |
+| --- | --- |
+| Health probe | 5–10 seconds |
+| Foreground peer observation | up to 600 seconds |
+| Agent tool guard | longer than peer observation, for example 900 seconds |
+| Whole Gateway turn | longer than tool guard, for example 3600 seconds |
+
+These values are examples, not universal defaults. Increasing a timeout does not create durable
+execution. `hermes peer dm` is synchronous and does not provide transport-level exactly-once dispatch.
+
+## Restart fencing
+
+Before an update, model change, profile migration, or Gateway restart:
+
+1. list active Agent turns and background processes;
+2. identify in-flight peer requests;
+3. defer restart until bounded work completes;
+4. if restart is unavoidable, persist the pending correlation IDs and origin routes;
+5. reconcile after startup before claiming completion.
+
+## Completion report
+
+Report:
+
+- Devices configured;
+- Profiles and service states;
+- routes and identity checks, without secret values;
+- verified capabilities;
+- acceptance requests and results;
+- known limitations;
+- rollback locations;
+- protected actions that remain pending.

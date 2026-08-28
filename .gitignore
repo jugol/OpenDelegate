@@ -1,38 +1,42 @@
-# Dependencies
+# Build and dependency leftovers from the retired app
 node_modules/
-.pnpm-store/
-
-# Build and test output
 dist/
 build/
 coverage/
-.playwright-mcp/
-playwright-report/
-test-results/
-*.tsbuildinfo
-packages/computer-use-os/native/**/out/
-packages/computer-use-os/native/**/.build/
 
-# Tool caches
-.eslintcache
-.vitest/
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
 
-# Logs
-*.log
-pnpm-debug.log*
-
-# Environment files and local credentials
+# Local Hermes and fleet state
 .env
 .env.*
 !.env.example
+.hermes/
+hermes-home/
+local/
+private/
+secrets/
+state/
+logs/
+backups/
 
-# OpenDelegate runtime data must remain outside the source checkout.
-.opendelegate/
-.runtime/
+# Populated private templates
+DEVICE.local.md
+AGENTS.local.md
+fleet.local.yaml
 
-# Editors and operating systems
-.idea/
-.vscode/
-.DS_Store
-Thumbs.db
-Desktop.ini
+# Credentials and keys
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Temporary files
+*.tmp
+*.bak
+*.log

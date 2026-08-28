@@ -1,5 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Report a security vulnerability
-    url: https://github.com/jugol/OpenDelegate/security/advisories/new
-    about: Privately report a suspected vulnerability; never disclose security details in an issue.

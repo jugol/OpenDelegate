@@ -1,6 +1,0 @@
-interface:
-  display_name: "Join OpenDelegate Device"
-  short_description: "Add or repair one SSH-reachable Hermes Device"
-  default_prompt:
-    "Use $opendelegate-join to add or repair this Device from Origin and register its Hermes peer
-    safely."

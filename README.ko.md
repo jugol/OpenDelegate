@@ -1,189 +1,118 @@
+님들의 Agent에게 그냥 이 Git 저장소 URL을 주고 환경설정을 시키세요.
+
 # OpenDelegate
 
-언어: [English](README.md) · **[한국어](README.ko.md)** · [日本語](README.ja.md) ·
-[Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md) ·
-[繁體中文](README.zh-TW.md)
+**OpenDelegate는 Hermes Device Agent Federation을 위한 가벼운 실전 Setup Kit입니다.**
 
-OpenDelegate는 여러 컴퓨터의 Hermes Agent를 설치하고 운영하기 위한 저장소입니다. 별도의 웹 Control
-Plane이 아닙니다. 한 대의 Origin 컴퓨터에서 저장소를 clone한 뒤 로컬 setup Agent에게 주면, 그
-Agent가 SSH로 다른 Device에 연결해 설정을 진행합니다.
+Owner가 컴퓨터마다 설정 명령을 외우는 대신, Agent에게 이 저장소를 줘서 전체 환경을 발견·설치·연결·
+검증하게 만드는 것이 목적입니다. 우리가 먼저 밟은 지뢰와 복구법을 정리해 다음 사람이 같은 문제를
+반복하지 않게 합니다.
+
+언어: [English](README.md) · **한국어**
+
+## 목표 상태
+
+설정이 끝나면 다음이 가능해야 합니다.
+
+- 안정적인 컴퓨터 한 대가 상시 Coordinator와 Messaging 진입점 역할을 합니다.
+- Mac Studio, Windows, Linux/NAS, MacBook 등은 각자의 로컬 Capability를 유지합니다.
+- Device는 SSH, Hermes peer/API 또는 Owner가 승인한 다른 private route로 연결됩니다.
+- Discord·휴대폰·연결된 컴퓨터 어디에서 명령해도 가장 적합한 Device에서 작업을 끝냅니다.
+- 결과는 원래 대화로 돌아옵니다.
+- Credential, Session, DB와 각 `HERMES_HOME`은 Device-local로 유지됩니다.
+
+이 저장소는 Windows PATH, 잘못된 Service Lifecycle, Discord Intent와 mention policy, Peer quoting,
+timeout 충돌, Gateway restart 중 완료 수집 유실, 잠드는 Portable Device, 단순 Reachability와 인증된
+Authority의 차이처럼 우리가 먼저 겪은 문제를 정리합니다.
+
+## 가장 짧은 시작 방법
+
+1. 상시 Coordinator로 사용할 컴퓨터에서 Agent를 엽니다.
+2. 이 저장소 URL을 줍니다.
+3. 다음처럼 요청합니다.
+
+> 이 저장소를 Hermes Federation Setup Kit로 읽어. 이 컴퓨터와 내가 승인한 다른 컴퓨터를 발견하고,
+> 각 Device에 공식 Hermes Agent를 설치하거나 복구해. Credential과 `HERMES_HOME`은 각 Device에만
+> 두고, SSH나 Hermes peer/API 등 적절한 private route를 선택해. Device 역할과 Gateway Service를
+> 설정한 다음 실제 위임 요청이 적합한 컴퓨터에서 끝나고 원래 대화로 돌아오는지 검증해. 이 저장소의
+> 보안·timeout·restart·recovery 지침을 따라. Push, 배포, 파괴적 삭제, 권한 확대, Secret 공개,
+> Network·Firewall 변경은 먼저 확인해.
+
+4. Coordinator가 요청하면 추가 컴퓨터에서도 같은 방식으로 로컬 Device Agent를 설치·등록합니다.
+5. Health, Identity, 위임, 결과 회수, Service 재시작, Rollback까지 증명하기 전에는 완료라고 하지 않습니다.
+
+상세 순서는 [Quick Start](docs/QUICKSTART.md)를 참고하세요.
+
+## Setup Agent가 수행할 일
 
 ```text
-Owner
-  │
-  ▼
-Origin Hermes Agent
-  ├── SSH ──> 각 Device의 Hermes 설치·업데이트·복구
-  ├── peer dm ──> 설정 후 일반 Agent 작업 전달
-  └── shared library ──> 필요한 문서와 Artifact 교환
+발견 → 설치 → 연결 → 검증 → 운영
 ```
 
-현재 운영 방식은 단순합니다.
+### 발견
 
-- SSH는 최초 설정과 복구 Channel입니다.
-- 설정이 끝난 뒤 일반 Agent 작업은 Hermes Peer API로 전달합니다.
-- Peer API Traffic은 Tailscale 또는 다른 암호화된 Private Transport로 전달합니다.
-- Hermes State, Credential, Session, Memory는 각 Device에 따로 보관합니다.
-- OpenDelegate Admin Web을 따로 설치하거나 관리하지 않습니다.
-- Enrollment Grant 절차를 사용하지 않습니다.
+- OS, 기존 Hermes 설치, Profile, Service, 안정적인 Route와 Device 역할을 확인합니다.
+- OS 이름만 보고 Capability를 추정하지 않고 실제 Probe로 검증합니다.
+- 안정적인 Coordinator를 선택하고 잠드는 MacBook은 best-effort Worker로 취급합니다.
 
-## 빠른 시작
+### 설치
 
-### 1. Origin 컴퓨터 선택
+- 최신 공식 Hermes 문서를 기준으로 설치·복구합니다.
+- `hermes doctor`를 통과합니다.
+- Linux `systemd`, macOS `launchd`, Windows 공식 Gateway 시작 경로를 사용합니다.
+- Profile과 Credential은 해당 Device에만 둡니다.
 
-Origin은 Owner가 Hermes와 대화하고 작업을 요청하는 컴퓨터입니다. Peer 목록을 보관하고 어떤 Device
-Agent에게 일을 보낼지 결정합니다. 다른 Device의 중앙 DB 역할을 하지는 않습니다.
+### 연결
 
-### 2. Hermes 설치 및 OpenDelegate clone
+- SSH, Hermes peer/API 또는 Owner가 승인한 다른 private route를 선택합니다.
+- Reachability를 Identity나 Authority로 간주하지 않습니다.
+- 실제 IP, Token, Peer Key, Private Path는 저장소에 기록하지 않습니다.
 
-공식 [Hermes 설치 안내](https://hermes-agent.nousresearch.com/docs/getting-started/installation)에
-따라 Hermes를 설치한 뒤 실행합니다.
+### 검증
 
-```sh
-hermes doctor
-git clone https://github.com/jugol/OpenDelegate.git
-cd OpenDelegate
-hermes skills trust
-hermes
+- Agent turn 전에 deterministic health check를 수행합니다.
+- 지정한 Device에 bounded request를 보내고 완전한 결과를 받습니다.
+- 결과가 원래 대화로 돌아오는지 확인합니다.
+- 진행 중 Peer 작업을 끊지 않고 Gateway restart를 검증합니다.
+- Rollback 근거를 남깁니다.
+
+### 운영
+
+- 다른 Device가 실제로 유용할 때만 위임합니다.
+- 요청을 받은 Origin Agent가 Owner에게 최종 결과를 책임집니다.
+- Timeout을 Remote Worker 실패로 단정하지 않습니다.
+- 미지의 장기 작업은 Durable Orchestration 경로로 처리합니다.
+
+## 저장소 구성
+
+```text
+.agents/skills/opendelegate-setup/  Agent용 Setup Workflow
+docs/QUICKSTART.md                 Owner·Agent 체크리스트
+docs/HERMES_SETUP_AGENT.md        상세 Setup Agent 절차
+docs/HERMES_FEDERATION_OPERATIONS.md
+                                   Peer timeout·restart·recovery
+docs/SECURITY_BOUNDARIES.md        Secret·Authority·State 경계
+templates/                         Device·Agent·Peer·Fleet 템플릿
+examples/four-device-fleet.md      일반화된 4-Device 예시
 ```
 
-이미 저장소가 있다면 다음으로 갱신합니다.
+## 중요한 경계
 
-```sh
-git pull --ff-only
-```
+현재 실전 경로는 **공식 Hermes Agent**를 사용합니다. 이 Kit는 raw `hermes peer dm`이 exactly-once
+Dispatch, Durable Request Store, 무제한 장기 작업 자동 복구를 이미 제공한다고 주장하지 않습니다. 그런
+보장이 필요하면 Durable Orchestration Service를 사용해야 합니다. 과거 OpenDelegate 앱 구현은 Git
+History에 남아 있지만 현재 Setup Kit Tree에는 포함되지 않습니다.
 
-Project Skill은 `.agents/skills/`에 있으며, 저장소를 신뢰하고 새 Hermes 세션을 시작한 뒤 로드됩니다.
+## 보안
 
-현재 SSH-first 절차에는 pnpm, Node.js, `apps/`, `packages/`가 필요하지 않습니다. 해당 디렉터리는
-보존 중인 Legacy Prototype입니다.
+- Device 사이에 `HERMES_HOME` 전체를 동기화하지 않습니다.
+- `.env`, Auth, Session, DB, Peer Key, Credential을 Git에 넣지 않습니다.
+- Push, 배포, 외부 메시지, 결제, 파괴적 삭제, 권한 확대, Private Data 공개는 확인합니다.
+- SSH Host Key 검증을 끄거나 예상하지 못한 Key 변경을 승인하지 않습니다.
+- Unsandboxed Hermes API를 신뢰하지 않는 Network에 노출하지 않습니다.
 
-### 3. SSH 연결 준비
+연결 전 [보안 경계](docs/SECURITY_BOUNDARIES.md)를 읽으세요.
 
-각 Target Device는 Origin에서 SSH Host, IP 또는 `~/.ssh/config` Alias로 접근할 수 있어야 합니다.
-Peer API에는 별도의 암호화 Transport가 필요합니다. Tailscale을 우선 사용하며, 인증된 암호화 VPN,
-Origin Loopback에 Bind한 SSH Tunnel, 또는 검증된 HTTPS도 사용할 수 있습니다.
+## 라이선스
 
-설정 전에 다음을 확인합니다.
-
-- Target Device에서 SSH가 활성화돼 있습니다.
-- Origin에 Owner가 승인한 SSH Key 또는 Login 방식이 있습니다.
-- 최초 연결 시 예상 SSH Host Key를 확인합니다.
-- Hermes가 없다면 Target Device가 공식 Installer에 접근할 수 있습니다.
-
-OpenDelegate는 예상하지 못한 SSH Host Key 변경을 절대 허용하지 않습니다.
-
-### 4. Hermes에게 설정 요청
-
-예시:
-
-> 이 OpenDelegate 저장소를 사용해 내 Hermes Device Agent들을 설정해 줘. 이 컴퓨터를 Origin으로
-> 사용하고 기존 SSH 설정의 `nas`, `mac-studio`, `windows`에 연결해. 각 OS를 감지하고 Hermes를
-> 설치하거나 업데이트한 뒤, Device 역할이 들어간 로컬 DEVICE.md를 만들고 암호화 Transport 뒤에
-> Peer API와 Gateway Service를 설정해. Origin Peer 목록에 역할 Note를 등록하고 실제 요청과 응답까지
-> 검증해. Credential, Session,
-> Memory, DB, Private Key, Hermes Home은 각 Device 로컬에 유지하고, 바뀐 SSH Host Key는 절대
-> 허용하지 마. SSH 인증처럼 Owner만 할 수 있는 작업이 꼭 필요할 때만 질문해.
-
-Setup Agent는 `.agents/skills/opendelegate-init/SKILL.md`를 따라 실제 Shell 작업을 수행합니다. Owner가
-컴퓨터마다 명령을 복사해 붙일 필요는 없습니다.
-
-## Setup Agent가 하는 일
-
-각 Device마다 다음을 수행합니다.
-
-1. 설정된 SSH Target을 읽기 전용으로 확인합니다.
-2. OS, Architecture, Hermes 설치 상태, Service 상태를 감지합니다.
-3. 공식 Platform Installer로 Hermes를 설치하거나 업데이트합니다.
-4. Device-local Model/Provider 설정이 없다면 Owner가 제어하는 TTY에서 완료하고 Local Agent 응답을
-   검증합니다.
-5. `HERMES_HOME`과 Runtime Data를 OpenDelegate Checkout 밖에 보관합니다.
-6. Device ID, 역할, Route, Local Boundary가 담긴 Device-local `DEVICE.md`를 만듭니다.
-7. API Key를 Chat이나 Source File에 넣지 않고 암호화 Transport 뒤에 Hermes API Server와 Gateway를
-   설정합니다.
-8. 해당 OS의 Hermes Native Lifecycle로 Gateway를 시작합니다.
-9. Origin에서 `hermes peer add --note`로 Secret이 아닌 Device Route와 역할 Note를 등록한 뒤, 같은
-   Note를 유지하면서 Owner가 Masked Local Input으로 Peer Key를 입력하게 합니다. Literal Key를 Agent
-   Chat이나 Tool Argument에 넣지 않습니다.
-10. Tailscale/Network 접속 상태와 Hermes `/health` 준비 상태를 따로 확인합니다.
-11. 실제 `hermes peer dm` 요청을 보내고 응답을 검증합니다.
-
-`/health` 실패는 Origin에서 Hermes Peer API를 사용할 수 없다는 뜻일 뿐, 컴퓨터 전원이 꺼졌다는
-증거가 아닙니다.
-
-## 새 Device 추가
-
-Origin Agent에게 SSH Target과 원하는 역할만 말합니다.
-
-> `render-box`를 Windows GPU Device로 추가해 줘. 내 SSH Config에 있는 Alias를 사용하고 Hermes를
-> 설치하거나 업데이트해. Device 역할과 Peer API를 설정하고 Origin에 등록한 뒤 요청과 응답을
-> 검증해.
-
-Agent는 `.agents/skills/opendelegate-join/SKILL.md`를 따릅니다. Admin Web이나 Enrollment Grant는
-사용하지 않습니다.
-
-## 평소 사용
-
-접속 방법이 아니라 원하는 결과를 Origin Agent에게 말합니다.
-
-- "Windows에서 이 이미지를 렌더링해 줘."
-- "Mac Studio에서 macOS 앱을 빌드해 줘."
-- "NAS에서 이 Dataset을 받고 백그라운드로 계속 처리해 줘."
-- "모든 Device 상태를 모아 줘."
-
-Origin은 `hermes peer list`의 저장된 역할 Note와 Peer API 준비 상태를 확인하고 제한된 Peer Request를
-작성해 `hermes peer dm`으로 전달합니다. 공개된 명령은 동기 방식이며 현재 `--timeout` Option이 없습니다. 오래 걸리는 작업은 지원되는
-경우 Hermes Bot Message를 사용하거나, Target이 Background 작업을 시작하고 Handle을 반환하게 한 뒤 다음
-Peer Message에서 상태를 확인합니다. SSH는 설치, 업데이트, Service 복구, 운영자 진단에 계속 사용합니다.
-
-## Device 역할
-
-역할은 예시이며 제품에 하드코딩된 제한이 아닙니다.
-
-| 역할 | 대표 작업 |
-| --- | --- |
-| Origin | Owner 대화, Routing, 결과 취합 |
-| NAS | Storage, Download, Docker, 장시간 Service |
-| macOS | Xcode, Apple Signing, Metal, macOS Application |
-| Windows | CUDA/RTX, ComfyUI, Windows Application |
-| Laptop | 이동 중 대화와 짧은 Local 작업 |
-
-Owner는 Device 이름과 역할을 다르게 정할 수 있습니다. 명시적인 Device 이름은 Semantic Routing보다
-항상 우선합니다. `DEVICE.md`는 Target-local 운영자 및 Peer Agent Context이며 Hermes Core가 자동으로
-읽는 파일은 아닙니다. Origin의 지속 가능한 Semantic Index는 `hermes peer list`에 표시되는 Secret이 아닌
-Peer Note입니다.
-
-## State 및 Security Boundary
-
-- `HERMES_HOME`을 동기화하거나 Commit하지 않습니다.
-- `config.yaml`, `.env`, Auth File, State DB, Session, Peer Key, Lock, Provider Home을 Device 간에
-  복사하지 않습니다.
-- API Key와 SSH Credential은 Device 로컬에 두고 Agent Prompt에 넣지 않습니다. 현재
-  `hermes peer add`에는 Masked Key Prompt가 없으므로 Peer Key 입력은 Owner-only Local TTY에서만
-  수행하고, Agent는 Target `.env`를 읽거나 Key를 SSH·Chat으로 운반하지 않습니다.
-- 모든 Device 사이에 Pairwise Trust를 만들지 않습니다. 설정용 SSH는 Origin에서 Target으로만
-  사용하고, 일반 Agent 작업은 등록된 Peer Route로 보냅니다.
-- Direct Plain-HTTP LAN으로 Peer Key나 Agent Request를 보내지 않습니다. HTTP는 Tailscale, 인증된
-  암호화 VPN, Origin Loopback에 Bind한 SSH Tunnel 안에서만 허용하고, 그 밖에는 검증된 HTTPS를
-  사용합니다.
-- Shared Storage에는 사람이 읽을 수 있는 Knowledge, Project File, Artifact만 둡니다.
-- Tailscale에서 Online인 Device도 Hermes Gateway가 중지됐을 수 있습니다. 두 상태를 구분해 보고합니다.
-
-## 저장소 구조
-
-- `.agents/skills/opendelegate-init/` — Origin 설정 및 SSH 기반 Multi-Device Bootstrap.
-- `.agents/skills/opendelegate-join/` — SSH로 Device 하나를 추가하거나 복구.
-- `docs/GETTING_STARTED.md` — 전체 SSH-first 절차.
-- `docs/HERMES_SETUP_AGENT.md` — Hermes 전용 설정 참고.
-- `templates/DEVICE.md` — 일반화된 Device Metadata Template.
-- `apps/`, `packages/`, `docs/adr/`, `docs/design/`, `docs/release/`, Legacy 운영 문서, 기존 Control
-  Plane 문서 — 현재 운영 방식이 아닌 Legacy Prototype 자료.
-
-## Legacy Prototype 안내
-
-저장소에는 과거의 Main/Worker Control Plane Prototype이 남아 있습니다. Admin Web, Discord Forum
-Orchestration, Enrollment Grant, Release Tooling 코드가 여기에 포함됩니다. 재사용 가능성을 위해 보존하지만
-현재 OpenDelegate 설정·관리 방식은 아니며, Owner에게 별도 웹사이트를 운영하라고 안내하면 안 됩니다.
-
-현재 OpenDelegate의 목적은 기존 로컬 Agent가 SSH와 Hermes Peer 연결을 사용해 실용적인 Multi-Device
-Hermes Fleet를 설정하고 관리하도록 돕는 것입니다.
+Apache License 2.0. [LICENSE](LICENSE)를 참고하세요.

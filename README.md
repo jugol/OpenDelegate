@@ -1,204 +1,128 @@
+Give your Agent this repository URL and ask it to configure your multi-computer Hermes environment.
+
 # OpenDelegate
 
-Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](README.ja.md) ·
-[Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md) ·
-[繁體中文](README.zh-TW.md)
+**OpenDelegate is a lightweight, field-tested setup kit for Hermes Device Agent federation.**
 
-OpenDelegate is a repository for setting up and operating Hermes Agents across several computers.
-It is not a separate web control plane. You clone the repository on one Origin computer, give it to
-your local setup Agent, and let that Agent connect to the other Devices over SSH.
+It exists so an owner can hand one repository URL to an Agent instead of manually wiring every
+computer. The Agent discovers each machine, installs or repairs official Hermes Agent, chooses an
+owner-approved connection, assigns Device roles, starts the right services, and verifies that one
+request can reach the best computer and finish there.
 
-```text
-Owner
-  │
-  ▼
-Origin Hermes Agent
-  ├── SSH ──> install, update, and recover Hermes on each Device
-  ├── peer dm ──> send normal Agent work after setup
-  └── shared library ──> exchange human-readable files and artifacts when needed
-```
+Language: **English** · [한국어](README.ko.md)
 
-The current operating model is deliberately simple:
+## The intended outcome
 
-- SSH is the bootstrap and recovery channel.
-- Hermes Peer API is the normal Agent-to-Agent work channel after setup.
-- Tailscale or another encrypted private transport carries Peer API traffic.
-- Each Device keeps its own Hermes state, credentials, sessions, and memory.
-- There is no OpenDelegate Admin Web to install or maintain.
-- There is no enrollment-grant workflow.
+After setup:
+
+- one stable computer can act as the always-on coordinator and messaging entry point;
+- macOS, Windows, Linux/NAS, and portable Devices retain their useful local capabilities;
+- Devices connect through SSH, Hermes peer/API, or another owner-approved private route;
+- a request sent from Discord, a phone, or any connected computer can be delegated to the best
+  eligible Device;
+- the result returns to the original conversation;
+- credentials, sessions, databases, and each `HERMES_HOME` stay Device-local.
+
+This repository also records the traps we hit first: PATH drift, stale services, Discord intents and
+mention policy, peer quoting, conflicting timeout layers, Gateway restart races, completion loss,
+sleeping portable Devices, and the difference between reachability and authenticated authority.
 
 ## Quick start
 
-### 1. Choose the Origin computer
+1. Open an Agent on the computer that should coordinate the fleet.
+2. Give it this repository URL.
+3. Send this prompt:
 
-The Origin is the computer where you talk to Hermes and ask for work. It keeps the peer roster and
-decides which Device Agent should receive each request. The Origin does not become a central database
-for the other Devices.
+> Read this repository as a Hermes federation setup kit. Discover this computer and the other
+> owner-approved computers I want to connect. Install or repair official Hermes Agent locally, keep
+> credentials and `HERMES_HOME` Device-local, choose an appropriate private connection such as SSH or
+> Hermes peer/API, assign useful Device roles, install persistent Gateway services, and prove one
+> end-to-end delegated request. Follow the repository's security and recovery guidance. Ask before
+> pushes, deployments, destructive deletion, authority expansion, secret disclosure, or network and
+> firewall changes.
 
-### 2. Install Hermes and clone OpenDelegate
+4. Repeat on additional computers when the coordinator asks you to install or register their local
+   Device Agent.
+5. Do not call setup complete until the Agent proves health, peer identity, delegation, result return,
+   service persistence, and rollback.
 
-Install Hermes by following the official
-[Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation),
-then run:
+See [Quick start](docs/QUICKSTART.md) for the detailed checklist.
 
-```sh
-hermes doctor
-git clone https://github.com/jugol/OpenDelegate.git
-cd OpenDelegate
-hermes skills trust
-hermes
+## What the setup Agent should do
+
+The canonical workflow is:
+
+```text
+discover → install → connect → verify → operate
 ```
 
-If the repository already exists:
+### Discover
 
-```sh
-git pull --ff-only
+- identify OS, host role, existing Hermes install, profiles, services, and stable routes;
+- verify required capabilities instead of inferring them from the OS name;
+- choose one stable coordinator and treat sleeping portable computers as best-effort Workers.
+
+### Install
+
+- install or repair official Hermes Agent using its current official documentation;
+- run `hermes doctor`;
+- use native service management (`systemd`, `launchd`, or Windows login/service integration);
+- keep profile state and credentials local to that Device.
+
+### Connect
+
+- select SSH, Hermes peer/API, or another owner-approved private route;
+- authenticate above the network: reachability is not identity or authority;
+- use stable Device IDs and roles;
+- never commit real IP addresses, tokens, peer keys, or private paths to this repository.
+
+### Verify
+
+- probe deterministic health endpoints before spending an Agent turn;
+- send a bounded request to the intended Device;
+- require a complete result envelope and return it to the original conversation;
+- verify restart behavior without interrupting active peer work;
+- record rollback evidence.
+
+### Operate
+
+- delegate only when another Device is genuinely useful;
+- keep the receiving Agent responsible for the owner's final answer;
+- treat timeout as an observation boundary, not proof that a remote Worker failed;
+- use durable orchestration for unknown-duration work.
+
+## Repository contents
+
+```text
+.agents/skills/opendelegate-setup/  Agent-facing setup workflow
+docs/QUICKSTART.md                 Owner and Agent checklist
+docs/HERMES_SETUP_AGENT.md        Detailed setup-Agent procedure
+docs/HERMES_FEDERATION_OPERATIONS.md
+                                   Peer timeout, restart, and recovery guidance
+docs/SECURITY_BOUNDARIES.md        Secret, authority, and state boundaries
+templates/                         Device, Agent, peer request, and fleet templates
+examples/four-device-fleet.md      Generic multi-Device example
 ```
 
-Project skills live under `.agents/skills/` and load only after the repository is trusted and a fresh
-Hermes session starts.
+## Important boundary
 
-You do not need pnpm, Node.js, `apps/`, or `packages/` for the current SSH-first workflow. Those
-directories belong to the retained legacy prototype.
+The practical path documented here uses **official Hermes Agent**. This kit does not claim that raw
+`hermes peer dm` already provides exactly-once dispatch, durable request storage, or automatic recovery
+for arbitrarily long work. For those guarantees, use a durable orchestration service. The historical
+OpenDelegate application implementation remains available in Git history, but it is not part of the
+current setup-kit tree.
 
-### 3. Prepare SSH access
+## Safety
 
-Each target Device must already be reachable from the Origin through an SSH host, IP address, or
-`~/.ssh/config` alias. The Peer API separately requires encrypted transport: prefer Tailscale; an
-authenticated encrypted VPN, an SSH tunnel bound to Origin loopback, or validated HTTPS also works.
+- Never synchronize an entire `HERMES_HOME` between Devices.
+- Never place `.env`, auth files, sessions, databases, peer keys, or credentials in Git.
+- Confirm pushes, deployments, external messages, purchases, destructive deletion, authority
+  expansion, and private-data disclosure.
+- Never disable SSH host-key verification or accept an unexpected key change.
+- Do not expose an unsandboxed Hermes API server to an untrusted network.
 
-Before setup, verify:
+Read [Security boundaries](docs/SECURITY_BOUNDARIES.md) before connecting a fleet.
 
-- SSH is enabled on the target Device.
-- The Origin has an owner-approved key or login method.
-- The expected SSH host key is known or confirmed on first connection.
-- The target can reach the internet for the official Hermes installer when Hermes is not installed.
+## License
 
-OpenDelegate never accepts an unexpected SSH host-key change.
-
-### 4. Give the setup request to Hermes
-
-Example:
-
-> Set up my Hermes Device Agents from this OpenDelegate repository. Use this computer as Origin.
-> Connect to `nas`, `mac-studio`, and `windows` through my existing SSH configuration. Detect each OS,
-> install or update Hermes, create a Device-local DEVICE.md with its role, configure its encrypted
-> Peer API and gateway service, register its role note in the Origin peer roster, and verify one real
-> request and reply. Keep
-> credentials, sessions, memories, databases, private keys, and Hermes homes local to each Device.
-> Never accept a changed SSH host key, and ask me only when SSH authentication or another owner-only
-> action is unavoidable.
-
-The setup Agent follows `.agents/skills/opendelegate-init/SKILL.md` and handles the shell work. The
-owner does not manually copy commands between computers.
-
-## What the setup Agent does
-
-For every Device, the Agent:
-
-1. probes the configured SSH target without changing it;
-2. detects the OS, architecture, current Hermes installation, and service state;
-3. installs or updates Hermes through the official platform installer;
-4. completes any missing Device-local model/provider setup in an owner-controlled TTY and verifies a
-   local Agent response;
-5. keeps `HERMES_HOME` and all runtime data outside the OpenDelegate checkout;
-6. writes a Device-local `DEVICE.md` containing the Device ID, role, routes, and local boundaries;
-7. configures the Hermes API server and gateway behind encrypted transport without putting API keys
-   in chat or source files;
-8. starts the gateway through the native Hermes lifecycle for that OS;
-9. registers the non-secret Device route and durable role note with `hermes peer add --note`, then
-   pauses for the owner to enter the peer key through masked local Origin input while preserving the
-   same note, without exposing a literal key to Agent chat or tool arguments;
-10. checks Tailscale or network presence separately from Hermes `/health` readiness; and
-11. sends one bounded `hermes peer dm` request and verifies the reply.
-
-A failed `/health` probe means the Hermes Peer API is not ready from Origin. It does not prove that
-the computer is powered off.
-
-## Add another Device
-
-Tell the Origin Agent the new SSH target and intended role:
-
-> Add `render-box` as my Windows GPU Device. Use the SSH alias already in my config, install or update
-> Hermes, configure its Device role and Peer API, register it on Origin, and verify a request/reply.
-
-The Agent follows `.agents/skills/opendelegate-join/SKILL.md`. No Admin Web or enrollment grant is
-involved.
-
-## Daily use
-
-Ask the Origin Agent for the outcome, not the connection mechanics:
-
-- "Have Windows render these images."
-- "Ask the Mac Studio to build the macOS app."
-- "Let the NAS download this dataset and keep working in the background."
-- "Collect status from every Device."
-
-The Origin reads the persisted role note with `hermes peer list`, checks Peer API readiness, writes a
-bounded peer request, and sends it with `hermes peer dm`. The published command is synchronous and
-currently has no `--timeout` option.
-For longer work, use Hermes Bot messaging when available, or ask the target to start the work and
-return a durable handle before checking status in a later peer message. SSH remains available for
-installation, updates, service recovery, and direct operator diagnostics.
-
-## Device roles
-
-Roles are examples, not hard-coded product limits:
-
-| Role | Typical work |
-| --- | --- |
-| Origin | owner conversation, routing, result collection |
-| NAS | storage, downloads, Docker, long-running services |
-| macOS | Xcode, Apple signing, Metal, macOS applications |
-| Windows | CUDA/RTX, ComfyUI, Windows applications |
-| Laptop | portable interaction and short local work |
-
-The owner can name Devices and roles differently. Explicit Device names always override semantic
-routing. `DEVICE.md` is target-local operator and peer-Agent context, not automatic Hermes core
-context; Origin's durable semantic index is the non-secret peer `--note` shown by `hermes peer list`.
-
-## State and security boundaries
-
-- Never synchronize or commit `HERMES_HOME`.
-- Never copy `config.yaml`, `.env`, auth files, state databases, sessions, peer keys, locks, or
-  provider homes between Devices.
-- API keys and SSH credentials remain Device-local and outside Agent prompts. The current
-  `hermes peer add` CLI has no masked key prompt, so peer-key entry is an owner-only local TTY step;
-  the Agent never reads the target `.env` or transports the key over SSH or chat.
-- Do not create pairwise trust between every Device. The Origin needs SSH access for setup; normal
-  Agent work uses registered peer routes.
-- Never send a peer key or Agent request over direct plain-HTTP LAN. HTTP is acceptable only inside
-  Tailscale, another authenticated encrypted VPN, or an SSH tunnel bound to Origin loopback;
-  otherwise use validated HTTPS.
-- Shared storage contains only human-readable knowledge, project files, and artifacts.
-- A Device that is Tailscale-online may still have a stopped Hermes gateway. Report those states
-  separately.
-
-## Repository layout
-
-- `.agents/skills/opendelegate-init/` — configure Origin and bootstrap multiple Devices over SSH.
-- `.agents/skills/opendelegate-join/` — add or repair one Device over SSH.
-- `docs/GETTING_STARTED.md` — complete SSH-first walkthrough.
-- `docs/HERMES_SETUP_AGENT.md` — Hermes-specific setup notes and commands.
-- `templates/DEVICE.md` — generic Device metadata template.
-- `apps/`, `packages/`, `docs/adr/`, `docs/design/`, `docs/release/`, legacy operational guides, and
-  the old control-plane documents — retained legacy prototype material, not the current operating
-  workflow.
-
-## Documentation status
-
-- [Current domain context](CONTEXT.md) — the active SSH-first product direction.
-- [Legacy product specification](docs/PRODUCT_SPEC.md) — the earlier Admin Web prototype.
-- [Legacy implementation plan](docs/IMPLEMENTATION_PLAN.md) — retained for historical reference.
-- [Legacy decision log](docs/DECISIONS.md) — earlier control-plane decisions.
-- [Platform capability research](docs/research/platform-capabilities.md) — reusable OS research.
-
-## Legacy prototype notice
-
-This repository still contains an earlier Main/Worker control-plane prototype with Admin Web,
-Discord Forum orchestration, enrollment grants, and release tooling. That code is kept for reference
-and possible reuse. It is not the current OpenDelegate setup or management path and must not be used
-to tell owners to operate a separate website.
-
-OpenDelegate's current purpose is to help an existing local Agent set up and manage a practical
-multi-Device Hermes fleet through SSH and Hermes peer connections.
+Apache License 2.0. See [LICENSE](LICENSE).

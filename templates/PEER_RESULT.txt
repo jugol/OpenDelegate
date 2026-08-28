@@ -1,0 +1,8 @@
+[PEER_RESULT]
+request_id: REQUEST_UUID
+device: EXECUTING_DEVICE_ID
+status: completed
+summary: CONCISE_OBSERVABLE_RESULT
+shared_outputs: []
+unresolved: none
+[/PEER_RESULT]
