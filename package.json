@@ -39,13 +39,13 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "22.20.1",
-    "esbuild": "0.28.1",
-    "eslint": "10.7.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.9.1",
     "eslint-config-prettier": "10.1.8",
-    "globals": "17.7.0",
-    "pnpm": "11.15.1",
+    "globals": "17.11.0",
+    "pnpm": "11.24.0",
     "prettier": "3.9.6",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.65.0"
+    "typescript-eslint": "8.68.0"
   }
 }
