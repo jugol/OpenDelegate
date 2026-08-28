@@ -1,0 +1,25 @@
+# Generic example only. Keep populated private inventory outside Git.
+fleet:
+  coordinator:
+    device_id: coordinator
+    role: messaging, coordination, long-running work
+    route: COORDINATOR_PRIVATE_URL
+    availability: always-on
+  workers:
+    - device_id: mac-worker
+      role: Apple build and macOS applications
+      route: MAC_PRIVATE_URL
+      availability: fixed
+    - device_id: windows-worker
+      role: GPU and Windows applications
+      route: WINDOWS_PRIVATE_URL
+      availability: fixed
+    - device_id: portable-worker
+      role: owner interaction and short portable work
+      route: PORTABLE_PRIVATE_URL
+      availability: best-effort
+policy:
+  explicit_device_names_win: true
+  health_before_dispatch: true
+  credentials_are_device_local: true
+  unknown_duration_requires_durable_orchestration: true

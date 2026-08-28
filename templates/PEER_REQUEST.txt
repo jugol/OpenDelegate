@@ -1,0 +1,11 @@
+[PEER_REQUEST]
+request_id: REQUEST_UUID
+origin: ORIGIN_DEVICE_ID
+reply_to: ORIGIN_DEVICE_ID
+visited: [ORIGIN_DEVICE_ID]
+depth: 0
+objective: READ_ONLY_BOUNDED_OBJECTIVE
+completion: OBSERVABLE_COMPLETION_CRITERIA
+shared_refs: []
+constraints: No file changes, service changes, external messages, credential access, or further delegation.
+[/PEER_REQUEST]
