@@ -36,6 +36,7 @@ import {
   assertRuntimeExternalDependencies,
   assertSupportMatrixTarget,
   collectShaBoundAttestationPaths,
+  copyReleaseSkills,
   createCommittedSourceSnapshot,
   createChecksumManifest,
   createPackagedMainSmokeContract,
@@ -129,9 +130,29 @@ test("macOS Swift release builders disable debug metadata and remap private path
   }
 });
 
-test("legacy release bundles do not carry current SSH-first project skills", () => {
+test("legacy release bundles do not carry current SSH-first project skills", async (t) => {
   assert.deepEqual(RELEASE_SKILL_DIRECTORIES, []);
   assert.match(LEGACY_RELEASE_DISABLED_MESSAGE, /bundle builder is retired/u);
+
+  const root = await mkdtemp(join(tmpdir(), "opendelegate-retired-skills-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const sourceRoot = join(root, "source");
+  const staging = join(root, "staging");
+  for (const skill of ["opendelegate-init", "opendelegate-join"]) {
+    const directory = join(sourceRoot, ".agents", "skills", skill);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "SKILL.md"), `${skill}\n`, "utf8");
+  }
+  await mkdir(staging);
+
+  await copyReleaseSkills(staging, sourceRoot);
+
+  for (const skill of ["opendelegate-init", "opendelegate-join"]) {
+    await assert.rejects(
+      access(join(staging, "skills", skill)),
+      (error) => error.code === "ENOENT",
+    );
+  }
 });
 
 test("direct legacy release builder fails closed without creating a destination", async (t) => {

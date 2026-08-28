@@ -111,12 +111,31 @@ Use `--system` only on an owner-approved headless Linux service that must start 
 
 ### 7. Register the peer on Origin
 
-Enter the target key through owner-controlled secure local input and register:
+Register the non-secret route first:
 
 ```sh
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key <API_SERVER_KEY>
+hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT
+```
+
+The public CLI has no masked key prompt or key-stdin option. Pause for the unavoidable owner-only
+step in a local Origin terminal. Never read the target `.env`, copy the key over SSH, ask for it in
+chat, or place a literal key in a terminal tool argument. For Bash or Zsh, the recorded command may
+contain the variable name only:
+
+```sh
+set +x
+printf 'Peer API key: ' >&2
+IFS= read -r -s OPENDELEGATE_PEER_KEY
+printf '\n' >&2
+hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key "$OPENDELEGATE_PEER_KEY"
+unset OPENDELEGATE_PEER_KEY
 hermes peer list
 ```
+
+For PowerShell 7, use `Read-Host -MaskInput` and clear the transient variable as documented in
+`docs/GETTING_STARTED.md`. The current CLI briefly receives the expanded value in process argv. If
+the Origin cannot provide masked no-echo local input or its policy forbids transient argv exposure,
+stop with a peer-key registration blocker. Do not improvise a weaker transfer path.
 
 Prefer a stable private address, such as a Tailscale IP. Keep route descriptions non-secret.
 

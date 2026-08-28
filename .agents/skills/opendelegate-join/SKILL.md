@@ -72,7 +72,11 @@ Server settings. Distinguish:
 - Configure the API Server with `ssh -t TARGET hermes gateway setup` when absent. Do not run the
   interactive wizard with stdin at EOF.
 - Use the native gateway install/start lifecycle when service state is the problem.
-- Update Origin `hermes peer add` only when name, route, note, or key state requires it.
+- Update Origin `hermes peer add` only when name, route, note, or key state requires it. Register
+  non-secret route metadata without `--key` first. If key state requires repair, use the init
+  skill's owner-only masked/no-echo `OPENDELEGATE_PEER_KEY` procedure. Never read the target `.env`,
+  carry a key through SSH or chat, or place a literal key in an Agent tool argument. Fail closed
+  when secure local input or transient process-argv exposure is not acceptable.
 
 ### 5. Verify
 
