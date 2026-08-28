@@ -4,6 +4,24 @@ Use this guide when the owner wants Hermes Agent to help install or join OpenDel
 
 Hermes is a setup and configuration Agent for this guide. This document does not claim that Hermes is a first-class OpenDelegate runtime Agent Adapter, and it does not implement one. OpenDelegate runtime support remains the Agent Adapter contract described for Codex, Claude, and generic command runners. Hermes may read the repository, trust project skills, and drive the owner-facing setup checklist just like another capable local Agent.
 
+## Repository mission
+
+The intended workflow is **discover → install → connect → verify → operate**. The owner gives this
+repository URL to an Agent on each computer instead of manually transcribing a fleet setup guide. The
+Agent discovers local facts, installs or repairs official Hermes, selects an owner-approved connection
+such as SSH or Hermes peer/API, applies that Device's role, starts the correct service, and proves an
+end-to-end delegated Task before declaring setup complete.
+
+Connections remain implementation choices, not authority. Always authenticate the peer above the
+network route; never treat reachability as identity or authority. Keep secrets and runtime state local,
+confirm protected changes, and record rollback evidence. Use the field-tested failure notes in this
+repository as setup checks: PATH visibility, service supervision, Discord intents and mention policy,
+peer input quoting, timeout ordering, restart fencing, result recovery, and portable-Device sleep.
+
+The current practical fleet uses official Hermes features. OpenDelegate's larger source implementation
+is the durable control-plane target for Task, Run, lease, outbox, and result reconciliation; this guide
+does not pretend that raw Hermes peer messaging already has those guarantees.
+
 ## Happy path
 
 1. Install Hermes on the Device where you want help.

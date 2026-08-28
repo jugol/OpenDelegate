@@ -1,5 +1,6 @@
 님들의 agent에게 그냥 이 git repo url 주고 환경설정 시키세요!!
 이 저장소의 Hermes 온보딩 목표는 모든 컴퓨터에 Hermes Agent를 각각 설치해 Agent들이 Task 단위로 협업하고, Discord나 휴대폰에서 보낸 요청이 가장 적합한 컴퓨터와 Project로 자동 라우팅되게 하는 것입니다.
+이 저장소는 Agent에게 URL을 주기 위한 저장소입니다. Owner가 수동 명령을 외우는 대신 Agent가 환경을 진단·구성·검증하고, 우리가 먼저 밟은 지뢰를 피하게 만드는 것이 목적입니다.
 
 # OpenDelegate
 
@@ -52,6 +53,33 @@ SQLite는 별도 URI가 필요 없는 기본 로컬 Database입니다. Provider 
 채팅에 입력하지 마세요. 실제로 필요할 때 Configuration Chat이 이유를 설명하고 전용 보안 입력
 Form을 띄웁니다. Main 설정이 끝나면 **Device 추가**에서 일회용 Grant를 발급하고, 추가 컴퓨터의
 Agent에게 전달하세요. 그 Agent가 Worker Join 지침을 스스로 찾아 진행합니다.
+
+## 이 저장소의 목적
+
+이 저장소는 Agent에게 URL을 주기 위한 저장소입니다. 각 컴퓨터의 Agent에게 이 URL을 주고, 그
+컴퓨터를 하나의 Owner 통제 Hermes Device Agent fleet에 편입시키라고 요청하는 것이 기본 사용법입니다.
+Setup Agent는 다음을 수행해야 합니다.
+
+1. 운영체제, 기존 Hermes 설치 상태, 안정적인 Network route와 유용한 Device 역할을 발견합니다.
+2. 공식 Hermes Agent를 로컬에 설치하거나 복구하고 `hermes doctor`를 통과합니다.
+3. SSH, Hermes peer/API 또는 Owner가 승인한 다른 private route 중 환경에 맞는 연결을 선택하되,
+   Credential과 각 `HERMES_HOME`은 해당 Device에만 둡니다.
+4. 안정적인 상시 Coordinator 한 대를 선택하고 Apple build, Windows/GPU, Storage, 휴대용 상호작용 같은
+   역할과 Gateway 서비스를 설정합니다.
+5. 한 컴퓨터에서 내린 명령이 가장 적합한 Device까지 전달되어 그곳에서 작업을 끝내고 원래 대화로
+   결과를 되돌리는지 end-to-end로 검증합니다.
+6. 되돌릴 수 있는 백업과 검증 근거를 남기고, 안전하게 자동화할 수 없는 권한이나 Capability를
+   솔직하게 설명합니다.
+
+이 저장소는 우리가 먼저 밟은 지뢰를 정리한 field guide이기도 합니다. Windows PATH, 잘못된 Service
+Lifecycle, Discord Intent와 mention policy, Peer quoting, 서로 충돌하는 timeout, Gateway 재시작 중 완료
+수집 유실, Credential 경계, 잠드는 Portable Device, 단순 Reachability와 Durable Orchestration의 차이를
+설치 전 Check로 재사용합니다. 실제 IP, Token, Private Key 또는 Device-local runtime state를 Git 문서에
+복사하지 않습니다.
+
+현재 실제 fleet 구성은 공식 Hermes 기능과 이 branch의 setup 지침을 사용합니다. 더 큰 OpenDelegate
+source tree는 장기적인 durable control plane 구현이며, 현재 Hermes peer transport가 이미 OpenDelegate의
+exactly-once Run·Result reconciliation을 제공한다고 주장하지 않습니다.
 
 ## 상세 설정
 

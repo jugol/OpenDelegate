@@ -60,9 +60,9 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   assertAppearsBefore(readme, recommendedHeading, detailedHeading);
   assertAppearsBefore(readme, detailedHeading, "## Why OpenDelegate");
   assert.equal(
-    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 22,
+    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 23,
     true,
-    "The onboarding line, hero, and recommended installation must be visible within the first 22 README lines",
+    "The onboarding line, hero, and recommended installation must be visible within the first 23 README lines",
   );
   const setupJourney = readme.slice(
     readme.indexOf(recommendedHeading),
@@ -228,6 +228,27 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   );
   assert.match(supportMatrix, /Provider command identity release blocker/u);
   assert.match(supportMatrix, /persists only the provider selection/u);
+});
+
+test("repository purpose is Agent-run multi-Device federation setup and field-tested recovery", async () => {
+  const [readme, koreanReadme, hermesGuide] = await Promise.all([
+    readRepositoryFile("README.md"),
+    readRepositoryFile("README.ko.md"),
+    readRepositoryFile("docs/HERMES_SETUP_AGENT.md"),
+  ]);
+
+  assert.match(readme, /This repository is meant to be handed to an Agent/u);
+  assert.match(readme, /SSH, Hermes peer\/API, or another owner-approved private route/u);
+  assert.match(readme, /a command sent to one computer[\s\S]*best eligible Device/u);
+  assert.match(readme, /field-tested map of the traps/u);
+  assert.match(readme, /The current practical fleet path uses official Hermes features/u);
+  assert.doesNotMatch(readme, /The current supported fleet path/u);
+  assert.match(koreanReadme, /이 저장소는 Agent에게 URL을 주기 위한 저장소입니다/u);
+  assert.match(koreanReadme, /SSH, Hermes peer\/API 또는 Owner가 승인한 다른 private route/u);
+  assert.match(koreanReadme, /한 컴퓨터에서 내린 명령[\s\S]*적합한 Device/u);
+  assert.match(koreanReadme, /우리가 먼저 밟은 지뢰/u);
+  assert.match(hermesGuide, /discover → install → connect → verify → operate/u);
+  assert.match(hermesGuide, /never treat reachability as identity or authority/u);
 });
 
 test("every localized README exposes the same simple Agent-first installation", async () => {

@@ -1,5 +1,6 @@
 Give your Agent this Git repository URL and ask it to configure the environment for you.
 This repository's Hermes onboarding goal is to install Hermes Agent separately on every computer so the Agents collaborate by Task and route requests from Discord or a phone to the best computer and Project automatically.
+This repository is meant to be handed to an Agent; it is a field-tested setup and recovery guide, not a pile of manual commands for the owner to memorize.
 
 # OpenDelegate
 
@@ -56,6 +57,32 @@ Provider credentials and Discord tokens never belong in chat: when one is genuin
 Configuration Chat explains why and exposes the dedicated secure intake form. After Main is ready,
 use **Add Device** and give each additional computer's Agent its single-use grant; that Agent will
 discover the Worker join instructions.
+
+## What this repository is for
+
+This repository is meant to be handed to an Agent. Give the URL to the Agent on each computer and ask
+it to make that computer part of one owner-controlled Hermes Device Agent fleet. The setup Agent should:
+
+1. discover the operating system, installed Hermes state, stable network routes, and useful Device role;
+2. install or repair official Hermes Agent locally and pass `hermes doctor`;
+3. connect the computers through SSH, Hermes peer/API, or another owner-approved private route while
+   keeping credentials and each `HERMES_HOME` Device-local;
+4. select one stable always-on coordinator, assign roles such as Apple build, Windows/GPU, storage, or
+   portable interaction, and configure the appropriate Gateway services;
+5. prove end to end that a command sent to one computer can reach the best eligible Device, finish the
+   work there, and return the result to the original conversation; and
+6. leave rollback evidence and explain any capability or approval that cannot be configured safely.
+
+This is also a field-tested map of the traps we hit first: PATH drift, wrong service lifecycles, Discord
+intents and mention policy, peer quoting, conflicting timeout layers, completion loss across Gateway
+restart, credential boundaries, sleeping portable Devices, and the gap between reachability and durable
+orchestration. The Agent should use those lessons as checks, not copy private addresses, tokens, or
+machine-specific runtime state.
+
+The current practical fleet path uses official Hermes features and the setup guidance in this branch.
+The larger OpenDelegate source tree remains the long-term durable control-plane implementation; do not
+claim that the current Hermes peer transport already provides OpenDelegate's exactly-once Run and result
+reconciliation guarantees.
 
 ## Detailed setup
 
