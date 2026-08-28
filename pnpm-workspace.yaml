@@ -15,11 +15,11 @@ blockExoticSubdeps: true
 
 overrides:
   "@hono/node-server": 2.0.10
-  brace-expansion: 5.0.8
+  "brace-expansion@<5.0.9": 5.0.9
   fast-uri@3.1.4: 3.1.5
   fast-uri@4.1.1: 4.1.2
   hono@4.12.31: 4.12.34
   ip-address@10.2.0: 10.3.1
-  nanoid@3.3.16: 3.3.17
+  "nanoid@<3.3.18": 3.3.18
   postcss@8.5.22: 8.5.23
   undici@7.28.0: 7.29.0
