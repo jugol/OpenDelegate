@@ -1,3 +1,6 @@
+님들의 agent에게 그냥 이 git repo url 주고 환경설정 시키세요!!
+이 저장소의 Hermes 온보딩 목표는 모든 컴퓨터에 Hermes Agent를 각각 설치해 Agent들이 Task 단위로 협업하고, Discord나 휴대폰에서 보낸 요청이 가장 적합한 컴퓨터와 Project로 자동 라우팅되게 하는 것입니다.
+
 # OpenDelegate
 
 언어: [English](README.md) · **[한국어](README.ko.md)** · [日本語](README.ja.md) ·
@@ -10,6 +13,7 @@
 
 > [!TIP]
 > **여기서 시작하세요:** [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요) ·
+> [Hermes Device Agent 운영](#hermes-device-agent-운영-가이드) ·
 > [상세 설정](#상세-설정) ·
 > [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) ·
 > [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
@@ -117,6 +121,113 @@ Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
 - 결과는 Discord 응답·첨부, 파일, Artifact, 호스팅 화면 또는 검증된 Git 참조로 받을 수 있습니다.
 - 로그인, MFA, CAPTCHA, 법적 확인 또는 OS 권한이 필요하면 같은 Task가 Main을 통한 만료·취소 가능한
   Owner Handoff에서 잠시 멈췄다가 사용자의 응답 후 이어집니다.
+
+## Hermes Device Agent 운영 가이드
+
+> [!IMPORTANT]
+> 현재 실제 멀티 Device 운영은 공식 Hermes Agent의 Bot Mode, Messaging Gateway, peer 기능을
+> 사용합니다. 이 저장소의 OpenDelegate source build는 아직 지원되지 않는 내부 프리뷰이며,
+> Hermes를 OpenDelegate runtime Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다.
+
+### 처음 설치하는 사람을 위한 가장 짧은 방법
+
+각 컴퓨터에서 이 저장소 URL을 해당 컴퓨터의 Agent에게 주고 다음처럼 요청하세요.
+
+> 공식 Hermes 문서를 기준으로 이 컴퓨터에 Hermes Agent를 설치하고 `hermes doctor`를 통과시켜 줘.
+> 이 저장소의 Hermes setup 문서와 Device 운영 원칙을 읽고, 이 컴퓨터의 역할에 맞게 Messaging
+> Gateway와 Bot/peer 연결을 제안해 줘. 비밀값, `HERMES_HOME`, Session, DB, 인증 파일, Peer Key는
+> 다른 Device나 Git으로 복사하지 말고, 설치·서비스·네트워크 변경 전에는 내가 승인해야 하는지
+> 확인해 줘.
+
+공식 설치 명령과 OpenDelegate setup prompt는
+[Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md)에 있습니다. 설치 후에는 항상
+`hermes doctor`로 확인하고, Messaging 연결은 `hermes gateway setup`으로 구성합니다.
+
+### Device별 역할과 연결 방식
+
+| Device | 기본 역할 | 권장 실행 방식 | 연결 원칙 |
+| --- | --- | --- | --- |
+| NAS/Linux | 상시 가동 Discord 대표, 조율, 저장·다운로드·장기 작업 | Linux 설치 후 Gateway를 user service 또는 필요한 경우 boot-time system service로 운영 | Discord/휴대폰 요청의 기본 진입점. 다른 Device가 실제로 유리할 때만 위임 |
+| Mac Studio | Xcode, Apple build/signing, Metal, macOS 앱 | macOS `launchd`용 `hermes gateway install` | Apple 전용 능력이 필요한 Task를 명시적으로 라우팅 |
+| Windows | CUDA/RTX, ComfyUI, Windows 앱 | Windows native 설치 후 `hermes gateway install`; Scheduled Task 또는 Startup fallback 사용 | GPU·Windows 전용 Task를 명시적으로 라우팅 |
+| MacBook | 휴대용 Owner 상호작용과 짧은 macOS 작업 | macOS `launchd`; 잠자기 전 장기 작업은 고정 Device로 넘김 | 항상 켜져 있다고 가정하지 않고 best-effort 대상으로 취급 |
+
+각 Device는 독립적인 Hermes 설치와 Profile을 가집니다. 다른 Gateway는 private connection 또는
+`hermes peer`로 등록하되 실제 URL과 Key는 각 Device의 로컬 설정에만 둡니다. Git 문서에는 IP,
+Token, Peer Key를 적지 않습니다. 연결 여부만 볼 때는 Agent turn을 보내지 말고 등록된 health
+endpoint를 먼저 확인합니다.
+
+### 운영 철학
+
+- 요청을 받은 Origin Agent가 Owner와의 대화와 최종 결과를 책임집니다. 모든 Device에 무조건
+  fan-out하지 않고, 실제로 도움이 되는 한 곳에만 우선 위임합니다.
+- Device를 명시한 요청은 그 Device를 우선합니다. 자동 의미 라우팅은 편의 기능이지 고정 배치
+  보장이 아닙니다.
+- NAS는 Discord 대표지만 모든 일을 직접 하지 않습니다. Windows GPU, Apple build, 장기 저장처럼
+  검증된 역할에 맞춰 Task를 넘깁니다.
+- `HERMES_HOME`, `.env`, 인증 파일, Session, DB, 로그, 잠금 파일, Private/Peer Key는 Device-local로
+  유지합니다. 공유하는 것은 사람이 읽을 수 있는 문서, Project 파일, 검증된 Artifact뿐입니다.
+- `AgentShared/`는 교환 규칙이지 Hermes runtime 복제본이 아닙니다. 원본 Owner 대화, 비밀값,
+  Device-local memory를 자동 동기화하지 않습니다.
+- 안전하고 되돌릴 수 있는 로컬 작업은 진행하되, Push·배포·외부 메시지·결제·파괴적 삭제·권한
+  확대·민감정보 공개는 Owner 확인 후 실행합니다.
+- Hermes Bot/peer federation과 OpenDelegate runtime orchestration은 구분합니다. 앞쪽은 현재 공식
+  Hermes 기능이고, 뒤쪽은 이 저장소의 별도 제품 경계와 release evidence를 따라야 합니다.
+
+### 경험한 문제와 우회 방법
+
+- **Windows 설치 뒤 `hermes`가 안 보임:** 기존 Terminal은 새 User PATH를 모를 수 있습니다. PATH를
+  임의로 덧붙이지 말고 새 PowerShell/Windows Terminal을 연 뒤 `hermes --version`과
+  `hermes doctor`를 다시 실행합니다.
+- **Windows에서 다른 CLI를 `Ctrl+C`한 뒤 Gateway까지 종료됨:** foreground Python을 임시로 띄우지
+  말고 공식 `hermes gateway install`을 사용합니다. Windows에서는 분리된 Scheduled Task와
+  `pythonw.exe`가 이 문제를 피합니다.
+- **Bot이 Online인데 Discord 응답이 없음:** `hermes gateway status`, 사용자 allowlist 또는 pairing,
+  Discord Message Content/Server Members Intent, channel 권한, `@mention` 또는 free-response 설정을
+  순서대로 확인합니다. REST 성공만으로 Gateway WebSocket 수신 상태가 건강하다고 단정하지 않습니다.
+- **엉뚱한 대화 문맥이 섞임:** 독립 Task는 새 Discord thread 또는 `/new`/`/reset`으로 시작합니다.
+  공유 channel의 사용자별 Session 격리를 임의로 끄지 않습니다.
+- **MacBook 위임이 자주 끊김:** 잠자기 가능한 Device를 Coordinator나 장기 작업의 유일한 실행처로
+  두지 않습니다. 장기 작업은 NAS, Mac Studio, Windows 중 적합한 고정 Device로 넘깁니다.
+- **Peer DM에서 quoting/줄바꿈이 깨짐:** 긴 요청은 shell argument로 직접 넣지 말고 파일 또는 stdin으로
+  전달합니다. `hermes peer dm <device> < request.txt` 형태를 사용합니다.
+- **Peer 작업은 끝났는데 Origin이 결과를 못 받음:** 동기 대기 timeout은 Worker 실패가 아닙니다.
+  Remote Agent는 계속 실행 중일 수 있으므로 `completion_unknown`으로 취급하고, 새 요청을 만들기 전에
+  같은 `request_id`를 correlation key로 사용해 Remote Bot Chat 기록에서 기존 완료 결과를 회수하되,
+  조회는 읽기 전용으로 제한합니다. 현재 `hermes peer dm`은 durable ledger나 idempotent dispatch를 제공하지 않으므로 같은 ID로
+  원래 objective를 다시 보내면 안 됩니다.
+- **긴 Peer 작업을 background로 보낸 뒤 결과가 사라짐:** Gateway에 딸린 추적되지 않은 shell
+  background process는 재시작 때 함께 종료될 수 있습니다. one-shot Hermes cron도 기본 3분 interrupt라
+  600초 Peer wait collector가 될 수 없습니다. 결과가 나중에 돌아온다고 말하려면 OpenDelegate Worker Run
+  또는 Gateway cgroup 밖에서 별도로 설치된 OS-supervised collector가 원 Discord thread와 request state를
+  지속성 있게 소유해야 합니다. 그런 경로가 없으면 장기 완료 자동 회수를 보장하지 않습니다.
+- **설정 변경 때문에 Gateway를 재시작해야 함:** Gateway를 재시작하기 전에 진행 중인 Peer 작업과
+  background process를 확인합니다. 진행 중인 Peer 작업이 있으면 결과를 수집할 때까지 재시작을 미루고,
+  피할 수 없다면 pending `request_id`와 원래 thread를 먼저 보존한 뒤 시작 직후 회수합니다.
+- **Timeout 값이 서로 먼저 끊음:** foreground terminal/peer transport보다 Agent tool guard를 길게,
+  tool guard보다 전체 Gateway turn을 길게 둡니다. 예시는
+  [Hermes Device Federation 운영 문서](docs/HERMES_FEDERATION_OPERATIONS.md)를 따르며, timeout 증가는
+  durable request identity와 recovery를 대체하지 않습니다.
+- **여러 Device의 상태가 서로 덮임:** Hermes home 전체를 복사하거나 동기화하지 않습니다. Profile,
+  Credentials, Session, DB는 각 Device에서 별도로 유지하고 공유 문서만 명시적으로 교환합니다.
+
+### Hermes Bot 짧은 사용법
+
+```sh
+hermes doctor                 # 설치와 필수 도구 점검
+hermes gateway status         # Messaging Gateway 상태 확인
+hermes peer list              # 등록된 다른 Device 확인
+hermes -p <bot> chat          # 로컬 Bot/Profile과 대화
+hermes cron list              # Bot Routine과 예약 작업 확인
+hermes peer dm <device> < request.txt
+```
+
+Desktop의 **Bots** 탭에서 Device별 Profile을 만들거나, 여러 connection이 등록된 경우
+**Create on**으로 Bot이 살 컴퓨터를 지정할 수 있습니다. Discord나 다른 Messaging 안에서는
+`/new` 또는 `/reset`으로 새 대화를 시작하고, `/model`로 모델을 확인·변경하며, `/whoami`로 현재
+권한을 확인하고, `/stop`으로 실행 중인 Agent를 중지합니다. Server channel에서는 기본적으로
+`@mention`이 필요하고, mention-free 운영은 명시적으로 free-response channel을 설정한 곳에만
+적용합니다.
 
 ## 아키텍처
 

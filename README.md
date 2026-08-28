@@ -1,3 +1,6 @@
+Give your Agent this Git repository URL and ask it to configure the environment for you.
+This repository's Hermes onboarding goal is to install Hermes Agent separately on every computer so the Agents collaborate by Task and route requests from Discord or a phone to the best computer and Project automatically.
+
 # OpenDelegate
 
 Languages: **[English](README.md)** · [한국어](README.ko.md) · [日本語](README.ja.md) ·
@@ -13,6 +16,7 @@ phone or laptop may disconnect while a fixed always-on Main coordinates macOS, W
 > [Detailed setup](#detailed-setup) ·
 > [Complete setup guide](docs/GETTING_STARTED.md) ·
 > [Hermes setup Agent guide](docs/HERMES_SETUP_AGENT.md) ·
+> [Hermes Device Agent fleet notes (Korean)](README.ko.md#hermes-device-agent-운영-가이드) ·
 > [Discord Forum setup](docs/DISCORD_SETUP.md)
 
 ## Recommended installation: ask your Agent

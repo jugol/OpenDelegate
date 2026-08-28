@@ -66,6 +66,66 @@ A source checkout has `AGENTS.md`, `CONTEXT.md`, `package.json`, `pnpm-lock.yaml
 
 A release bundle has `release-metadata.json`, `SHA256SUMS`, `runtime`, a platform launcher, docs, and `skills/...`. Hermes should verify the checksums, read the bundle release docs, and use only bundled launchers. It should not use pnpm, source-only scripts, or a global Node runtime from inside a bundle.
 
+## Operating a Hermes Device Agent fleet
+
+A current Hermes fleet may use official Bot Mode, Messaging Gateway, Connections, and `hermes peer`
+without turning Hermes into an OpenDelegate runtime adapter. Install Hermes separately on every
+computer, run `hermes doctor`, and configure that Device's gateway locally. Keep the always-on
+Discord representative on a stable Device; route GPU, Apple build, storage, and portable work to
+Devices with those verified roles.
+
+Use the platform-native gateway lifecycle:
+
+- Linux: `hermes gateway install` for a user service, or the documented `--system` form for a
+  boot-time service when the owner explicitly chooses it.
+- macOS: `hermes gateway install` creates the launchd agent.
+- Windows: `hermes gateway install` creates a logon Scheduled Task with the official Startup-folder
+  fallback.
+
+Register private peer connections locally and inspect them with `hermes peer list`. Send long or
+structured peer requests through stdin, for example `hermes peer dm <device> < request.txt`, rather
+than interpolating owner text into a shell argument. A sleeping portable computer is best-effort,
+not an always-on coordinator. When exact placement matters, name the target Device explicitly.
+
+### Long-running peer work and restart recovery
+
+A foreground wait timeout is not proof that the Worker failed. The remote API may have accepted the
+turn and may continue after the Origin's terminal or tool guard stops waiting. Preserve the request
+envelope and `request_id` before dispatch, and do not promise that a reply will arrive later unless a
+durable completion handle owns both the remote call and the exact origin Task or Discord thread.
+
+`hermes peer dm` does not provide a durable request ledger or idempotent dispatch. Its `request_id` is
+operator-defined correlation data inside the message body, not a transport-enforced idempotency key.
+A local pending record helps recovery but does not turn a second dispatch into an exactly-once retry.
+
+Keep the timeout layers ordered. `terminal.timeout` bounds one foreground observation;
+`timeouts.tools.sequential_call` and `timeouts.tools.concurrent_batch` must be longer than that
+transport bound; `agent.gateway_timeout` must be longer than the complete tool cycle. A practical
+Hermes-only coordinator baseline is 600 seconds for terminal work, 900 seconds for tool guards, and
+3600 seconds for the Gateway turn. These are budgets, not evidence that work failed.
+
+For unknown-duration work, prefer a durable OpenDelegate Worker Run. A one-shot Hermes cron is not a
+durable collector for a peer wait that can outlive its run limit; the default cron interrupt is shorter
+than the 600-second peer transport bound. A Hermes-only deployment needs an explicit OS-supervised
+collector outside the Gateway cgroup, with its own persistent request state and exact delivery target.
+If that service is not installed, do not claim durable automatic completion: keep work inside the bounded
+foreground path or report that long-run collection is unavailable. Never use an untracked background
+shell process. If a wait times out or a Gateway restart interrupts the collector, reuse the same
+`request_id` only as a correlation key for a read-only inspection of the peer's canonical Bot Chat or
+request record. Recover an existing `PEER_RESULT` without resending the objective. If no stored result is
+visible, report `completion_unknown` and require an explicit decision before retry.
+
+Before restarting a Gateway for an update, model change, or profile migration, inspect active peer
+requests and background work. Always defer the restart while in-flight peer work exists; collect its
+result first. When restart is unavoidable, persist pending IDs and origin bindings first and reconcile them
+immediately after startup. See [Hermes Device Federation operations](HERMES_FEDERATION_OPERATIONS.md)
+for the full timeout hierarchy, completion contract, and recovery playbook.
+
+Do not commit private gateway URLs or copy peer keys between repositories. Do not synchronize one
+Device's `HERMES_HOME` into another Device. Share only reviewed project files, human-readable
+knowledge, and verified artifacts. The owner-facing Korean fleet guide and troubleshooting notes are
+in [README.ko.md](../README.ko.md#hermes-device-agent-운영-가이드).
+
 ## State and credential boundaries
 
 Never synchronize or commit any Device's `HERMES_HOME`, Hermes credentials, sessions, databases, logs, auth files, provider homes, private keys, peer keys, OpenDelegate runtime homes, Device Knowledge, generated Artifacts, or grant file contents.

@@ -68,6 +68,10 @@ test("source docs point to .agents skills and bundle output keeps skills paths",
     hermesGuide,
     /does not claim that Hermes is a first-class OpenDelegate runtime Agent Adapter/u,
   );
+  assert.match(hermesGuide, /## Operating a Hermes Device Agent fleet/u);
+  assert.match(hermesGuide, /hermes gateway install[\s\S]*hermes peer list/u);
+  assert.match(hermesGuide, /hermes peer dm <device> < request\.txt/u);
+  assert.match(hermesGuide, /Do not synchronize one[\s\S]*`HERMES_HOME`/u);
 
   assert.match(
     releaseBuilder,
@@ -85,14 +89,48 @@ test("source docs point to .agents skills and bundle output keeps skills paths",
   assert.doesNotMatch(bundleReadme, /\.agents\/skills/u);
 });
 
-test("localized source READMEs do not introduce Hermes runtime-adapter claims", async () => {
-  const localized = [
-    "README.ko.md",
-    "README.ja.md",
-    "README.fr.md",
-    "README.es.md",
-    "README.zh-CN.md",
-  ];
+test("Hermes fleet guidance preserves long-running peer completion across timeout and restart boundaries", async () => {
+  const [koreanReadme, hermesGuide, operationsGuide] = await Promise.all([
+    readRepositoryFile("README.ko.md"),
+    readRepositoryFile("docs/HERMES_SETUP_AGENT.md"),
+    readRepositoryFile("docs/HERMES_FEDERATION_OPERATIONS.md"),
+  ]);
+
+  assert.match(koreanReadme, /동기 대기 timeout[\s\S]*Worker 실패가 아닙니다/u);
+  assert.match(koreanReadme, /같은 `request_id`[\s\S]*완료 결과를 회수/u);
+  assert.match(koreanReadme, /Gateway를 재시작[\s\S]*진행 중인 Peer 작업/u);
+  assert.match(hermesGuide, /A foreground wait timeout is not proof that the Worker failed/u);
+  assert.match(hermesGuide, /durable completion handle/u);
+  assert.match(hermesGuide, /reuse the same\s+`request_id`/u);
+  assert.match(
+    hermesGuide,
+    /`hermes peer dm` does not provide a durable request ledger or idempotent dispatch/u,
+  );
+  assert.match(
+    hermesGuide,
+    /A one-shot Hermes cron is not a\s+durable collector for a peer wait that can outlive its run limit/u,
+  );
+  assert.match(
+    hermesGuide,
+    /`terminal\.timeout`[\s\S]*`timeouts\.tools\.sequential_call`[\s\S]*`agent\.gateway_timeout`/u,
+  );
+  assert.match(hermesGuide, /defer the restart[\s\S]*in-flight peer work/u);
+  assert.match(operationsGuide, /## Timeout hierarchy/u);
+  assert.match(operationsGuide, /## Durable completion contract/u);
+  assert.match(operationsGuide, /## Gateway restart fencing/u);
+  assert.match(operationsGuide, /same `request_id`/u);
+  assert.match(
+    operationsGuide,
+    /`hermes peer dm` does not enforce idempotency or persist a durable request ledger/u,
+  );
+  assert.match(operationsGuide, /must not be reported as Worker failure/u);
+  assert.match(operationsGuide, /untracked background shell process/u);
+  assert.match(operationsGuide, /default three-minute cron interrupt/u);
+  assert.doesNotMatch(operationsGuide, /one-shot Routine\/cron[^.]*own the local collector/u);
+});
+
+test("other localized source READMEs do not introduce Hermes runtime-adapter claims", async () => {
+  const localized = ["README.ja.md", "README.fr.md", "README.es.md", "README.zh-CN.md"];
   for (const filename of localized) {
     const content = await readRepositoryFile(filename);
     assert.doesNotMatch(
@@ -126,10 +164,11 @@ test("Korean README links Hermes setup guidance without runtime-adapter claims",
     readme,
     /Hermes를 OpenDelegate 실행용 Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다/u,
   );
-  assert.doesNotMatch(
-    readme,
-    /Hermes[^\n]{0,80}(?:runtime|Runtime)[^\n]{0,80}(?:adapter|Adapter)/u,
-  );
+  assert.match(readme, /## Hermes Device Agent 운영 가이드/u);
+  assert.match(readme, /NAS\/Linux[\s\S]*Mac Studio[\s\S]*Windows[\s\S]*MacBook/u);
+  assert.match(readme, /hermes gateway install/u);
+  assert.match(readme, /hermes peer dm <device> < request\.txt/u);
+  assert.match(readme, /`HERMES_HOME`[\s\S]*Device-local/u);
 });
 
 test("setup docs route Main and Worker skills by input type", async () => {
