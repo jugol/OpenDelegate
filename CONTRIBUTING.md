@@ -28,6 +28,18 @@ End users do not need the legacy TypeScript runtime. Contributors use the pinned
 toolchain only to run repository policy checks for documentation, project-skill, template, and
 routing changes:
 
+Install Node.js 24.18.0 from `.node-version`, then activate the repository's pinned pnpm and install
+the frozen workspace before running any pnpm command. If your Node distribution does not include
+Corepack, install Corepack by following the official pnpm installation guide first.
+
+```sh
+corepack enable
+corepack prepare pnpm@11.15.1 --activate
+pnpm install --frozen-lockfile
+```
+
+Run the focused checks:
+
 ```sh
 pnpm docs:check
 pnpm test:tooling

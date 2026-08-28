@@ -25,6 +25,9 @@ test("SSH-first init and join skills are discoverable and bounded", async () => 
   assert.match(init.data, /version: 0\.2\.0/u);
   assert.match(init.body, /SSH/u);
   assert.match(init.body, /hermes peer add/u);
+  assert.match(init.body, /OPENDELEGATE_PEER_KEY/u);
+  assert.match(init.body, /masked|no-echo/u);
+  assert.doesNotMatch(init.body, /--key <API_SERVER_KEY>/u);
   assert.match(init.body, /hermes peer dm/u);
   assert.doesNotMatch(init.body, /hermes peer dm --timeout/u);
   assert.match(init.body, /echo OpenDelegate-SSH-ready/u);
@@ -40,6 +43,10 @@ test("SSH-first init and join skills are discoverable and bounded", async () => 
   assert.match(joinSkill.body, /Add or repair one Device/u);
   assert.match(joinSkill.body, /Do not use Admin Web or\s+an enrollment grant/u);
   assert.match(joinSkill.body, /Preserve Device-local config/u);
+  assert.match(joinSkill.body, /hermes peer add/u);
+  assert.match(joinSkill.body, /OPENDELEGATE_PEER_KEY/u);
+  assert.match(joinSkill.body, /masked|no-echo/u);
+  assert.doesNotMatch(joinSkill.body, /--key <API_SERVER_KEY>/u);
   assert.match(joinSkill.body, /Do not infer power state from API state/u);
   assert.doesNotMatch(joinSkill.body, /hermes peer dm --timeout/u);
   assert.match(joinSkill.body, /echo OpenDelegate-SSH-ready/u);

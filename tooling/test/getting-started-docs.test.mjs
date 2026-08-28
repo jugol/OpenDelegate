@@ -62,6 +62,10 @@ test("README leads with SSH-first Hermes federation", async () => {
   assert.match(guide, /hermes chat -q "Reply with exactly: OpenDelegate-Agent-ready"/u);
   assert.match(guide, /hermes gateway setup/u);
   assert.match(guide, /hermes peer add/u);
+  assert.match(guide, /OPENDELEGATE_PEER_KEY/u);
+  assert.match(guide, /read -r -s OPENDELEGATE_PEER_KEY/u);
+  assert.match(guide, /Read-Host -MaskInput/u);
+  assert.doesNotMatch(guide, /--key <API_SERVER_KEY>/u);
   assert.match(guide, /hermes peer dm DEVICE_NAME/u);
   assert.doesNotMatch(guide, /hermes peer dm --timeout/u);
 
@@ -69,6 +73,8 @@ test("README leads with SSH-first Hermes federation", async () => {
   assert.match(hermesGuide, /API_SERVER_KEY/u);
   assert.match(hermesGuide, /owner-controlled TTY/u);
   assert.match(hermesGuide, /hermes setup/u);
+  assert.match(hermesGuide, /OPENDELEGATE_PEER_KEY/u);
+  assert.doesNotMatch(hermesGuide, /--key <API_SERVER_KEY>/u);
   assert.doesNotMatch(hermesGuide, /hermes peer dm --timeout/u);
   assert.equal(template.isFile(), true);
 
@@ -76,6 +82,9 @@ test("README leads with SSH-first Hermes federation", async () => {
   assert.doesNotMatch(packageManifest, /"description": "A personal, self-hosted control plane/u);
   assert.match(contributing, /CONTEXT\.md` is the current product contract/u);
   assert.match(contributing, /Legacy prototype development environment/u);
+  assert.match(contributing, /Node\.js 24\.18\.0/u);
+  assert.match(contributing, /corepack prepare pnpm@11\.15\.1 --activate/u);
+  assert.match(contributing, /pnpm install --frozen-lockfile/u);
   assert.match(security, /Current security boundaries/u);
   assert.match(security, /failed `\/health` probe does not prove a Device is powered off/u);
   assert.match(releaseBuilder, /LEGACY_RELEASE_DISABLED_MESSAGE/u);

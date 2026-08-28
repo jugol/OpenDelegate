@@ -104,7 +104,9 @@ For every Device, the Agent:
 6. writes a Device-local `DEVICE.md` containing the Device ID, role, routes, and local boundaries;
 7. configures the Hermes API server and gateway without putting API keys in chat or source files;
 8. starts the gateway through the native Hermes lifecycle for that OS;
-9. registers the Device on Origin with `hermes peer add`;
+9. registers the non-secret Device route with `hermes peer add`, then pauses for the owner to enter
+   the peer key through masked local Origin input without exposing a literal key to Agent chat or
+   tool arguments;
 10. checks Tailscale or network presence separately from Hermes `/health` readiness; and
 11. sends one bounded `hermes peer dm` request and verifies the reply.
 
@@ -156,7 +158,9 @@ routing.
 - Never synchronize or commit `HERMES_HOME`.
 - Never copy `config.yaml`, `.env`, auth files, state databases, sessions, peer keys, locks, or
   provider homes between Devices.
-- API keys and SSH credentials remain Device-local and outside Agent prompts.
+- API keys and SSH credentials remain Device-local and outside Agent prompts. The current
+  `hermes peer add` CLI has no masked key prompt, so peer-key entry is an owner-only local TTY step;
+  the Agent never reads the target `.env` or transports the key over SSH or chat.
 - Do not create pairwise trust between every Device. The Origin needs SSH access for setup; normal
   Agent work uses registered peer routes.
 - Shared storage contains only human-readable knowledge, project files, and artifacts.

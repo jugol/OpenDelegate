@@ -127,15 +127,44 @@ before selecting a service shape.
 
 ## 6. Register the peer on Origin
 
-From Origin, register the target's private API route and key:
+The Agent may register the target's private API route without a key:
 
 ```sh
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key <API_SERVER_KEY>
+hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT
+```
+
+The published CLI has no masked key prompt or key-stdin option. The Agent must never read the
+target's `.env`, carry the key over SSH, place a literal key in an Agent tool argument, or ask for it
+in chat. Key entry is an unavoidable owner-only step in an owner-controlled local Origin terminal.
+Turn off shell tracing first, and enter the key into a transient variable with no echo.
+
+Bash or Zsh:
+
+```sh
+set +x
+printf 'Peer API key: ' >&2
+IFS= read -r -s OPENDELEGATE_PEER_KEY
+printf '\n' >&2
+hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key "$OPENDELEGATE_PEER_KEY"
+unset OPENDELEGATE_PEER_KEY
 hermes peer list
 ```
 
-The key is entered through an owner-controlled local terminal or secure input. It is stored locally
-under Origin's Hermes home, not in OpenDelegate.
+PowerShell 7:
+
+```powershell
+Set-PSDebug -Off
+$env:OPENDELEGATE_PEER_KEY = Read-Host -MaskInput 'Peer API key'
+hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key $env:OPENDELEGATE_PEER_KEY
+Remove-Item Env:OPENDELEGATE_PEER_KEY
+hermes peer list
+```
+
+Hermes stores the credential as `HERMES_PEER_<NAME>_KEY` in Origin's local Hermes `.env`. The current
+CLI briefly receives the expanded value in process argv. Use only an owner-only local session where
+other principals cannot inspect that process. If the Origin cannot provide masked local input or its
+policy forbids transient argv exposure, stop and report the peer-key registration blocker rather
+than weakening the boundary.
 
 Prefer a stable Tailscale IP or another private route that remains valid when Origin moves between
 networks. Keep a LAN or VPN route only as a tested fallback.

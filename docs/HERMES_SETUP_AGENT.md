@@ -84,12 +84,29 @@ hermes gateway install --start-now --start-on-login
 hermes gateway status
 ```
 
-Register it on Origin:
+Register the non-secret route on Origin first:
 
 ```sh
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key <API_SERVER_KEY>
+hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT
+```
+
+The public CLI has no masked key prompt or key-stdin option. In an owner-only local Origin terminal,
+use a no-echo prompt and pass only a transient variable name in the recorded command:
+
+```sh
+set +x
+printf 'Peer API key: ' >&2
+IFS= read -r -s OPENDELEGATE_PEER_KEY
+printf '\n' >&2
+hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key "$OPENDELEGATE_PEER_KEY"
+unset OPENDELEGATE_PEER_KEY
 hermes peer list
 ```
+
+Never read the target `.env`, transfer the key through Agent chat or SSH output, or place a literal
+key in an Agent tool argument. Hermes stores it under Origin's local home. Because the current CLI
+briefly receives the expanded key in process argv, fail closed if an owner-only session or transient
+argv exposure is not acceptable. The PowerShell 7 masked-input equivalent is in `GETTING_STARTED.md`.
 
 Normal Device work then uses:
 

@@ -31,7 +31,10 @@ not require a separate Admin Web, central database, enrollment grant, or Discord
 7. **Host identity fails closed.** An unexpected SSH host-key change is an error and is never
    accepted automatically.
 8. **Secrets never enter chat or source.** SSH credentials, peer API keys, provider credentials,
-   and private keys remain in their local secure stores.
+   and private keys remain in their local secure stores. Because the public `hermes peer add` CLI
+   has no masked key prompt, the Agent registers non-secret route metadata first and pauses for an
+   owner-only masked local Origin input. It never reads a target `.env` or transports a key through
+   SSH, chat, or a literal tool argument.
 9. **Targets answer locally before peer registration.** A remote install can skip model/provider setup
    without a TTY. Complete missing setup in an owner-controlled target TTY and verify one bounded
    local Agent response before registering the Peer API.
@@ -57,7 +60,8 @@ not require a separate Admin Web, central database, enrollment grant, or Discord
    local Agent response.
 7. Each target receives a Device-local `DEVICE.md`, API server configuration, and native gateway
    lifecycle.
-8. Origin registers the target with `hermes peer add` and stores the peer credential locally.
+8. Origin registers the target's non-secret route with `hermes peer add`; the owner completes masked
+   peer-key input in a local Origin TTY, and Hermes stores the credential under Origin's local home.
 9. Origin distinguishes Tailscale/network presence from Peer API health.
 10. Origin sends a real peer request and verifies the response.
 11. Later owner work is routed through peer messages; SSH is reserved for setup and recovery.

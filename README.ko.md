@@ -99,7 +99,8 @@ Setup Agent는 `.agents/skills/opendelegate-init/SKILL.md`를 따라 실제 Shel
 6. Device ID, 역할, Route, Local Boundary가 담긴 Device-local `DEVICE.md`를 만듭니다.
 7. API Key를 Chat이나 Source File에 넣지 않고 Hermes API Server와 Gateway를 설정합니다.
 8. 해당 OS의 Hermes Native Lifecycle로 Gateway를 시작합니다.
-9. Origin에서 `hermes peer add`로 Device를 등록합니다.
+9. Origin에서 `hermes peer add`로 Secret이 아닌 Device Route를 등록한 뒤, Owner가 Masked Local
+   Input으로 Peer Key를 입력하게 합니다. Literal Key를 Agent Chat이나 Tool Argument에 넣지 않습니다.
 10. Tailscale/Network 접속 상태와 Hermes `/health` 준비 상태를 따로 확인합니다.
 11. 실제 `hermes peer dm` 요청을 보내고 응답을 검증합니다.
 
@@ -151,7 +152,9 @@ Owner는 Device 이름과 역할을 다르게 정할 수 있습니다. 명시적
 - `HERMES_HOME`을 동기화하거나 Commit하지 않습니다.
 - `config.yaml`, `.env`, Auth File, State DB, Session, Peer Key, Lock, Provider Home을 Device 간에
   복사하지 않습니다.
-- API Key와 SSH Credential은 Device 로컬에 두고 Agent Prompt에 넣지 않습니다.
+- API Key와 SSH Credential은 Device 로컬에 두고 Agent Prompt에 넣지 않습니다. 현재
+  `hermes peer add`에는 Masked Key Prompt가 없으므로 Peer Key 입력은 Owner-only Local TTY에서만
+  수행하고, Agent는 Target `.env`를 읽거나 Key를 SSH·Chat으로 운반하지 않습니다.
 - 모든 Device 사이에 Pairwise Trust를 만들지 않습니다. 설정용 SSH는 Origin에서 Target으로만
   사용하고, 일반 Agent 작업은 등록된 Peer Route로 보냅니다.
 - Shared Storage에는 사람이 읽을 수 있는 Knowledge, Project File, Artifact만 둡니다.
