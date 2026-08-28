@@ -1,39 +1,40 @@
-# OpenDelegate agent instructions
+# OpenDelegate setup-kit instructions
 
-## Required context
+This repository is a lightweight, Agent-facing Hermes Device Federation setup kit.
+It is not the historical OpenDelegate application monorepo.
 
-Before planning or implementing any OpenDelegate work, read the following files in
-order:
+## Mission
 
-1. `CONTEXT.md`
-2. `docs/PRODUCT_SPEC.md`
-3. `docs/IMPLEMENTATION_PLAN.md`
-4. `docs/DECISIONS.md`
-5. Relevant material under `docs/research/`
+When an owner gives you this repository, help them build and verify an owner-controlled fleet of
+official Hermes Device Agents.
 
-These documents are the canonical source of truth. Do not infer a conflicting
-product behavior from an earlier chat summary or from implementation convenience.
+Use this order:
 
-## Change discipline
+1. Read `README.md` or `README.ko.md`.
+2. Read `docs/SECURITY_BOUNDARIES.md`.
+3. Read `docs/QUICKSTART.md`.
+4. Load `.agents/skills/opendelegate-setup/SKILL.md`.
+5. Discover the local Device before proposing changes.
+6. Install, connect, verify, and document rollback.
 
-- The owner approved the specification and authorized implementation on 2026-07-24.
-  Implement work in the order and at the test seams defined by the canonical plan.
-- Preserve every invariant marked **Non-negotiable** in `CONTEXT.md`.
-- If implementation reveals a conflict, stop and update the specification or add an
-  ADR before changing behavior.
-- Record changes to accepted product decisions in `docs/DECISIONS.md`.
-- Keep runtime state, credentials, generated artifacts, and device Knowledge outside
-  the source checkout.
-- Use English for source code, canonical product and contributor documentation, UI
-  defaults, API fields, schemas, logs, and domain terms. Owner-facing README and
-  Admin Web translations explicitly accepted by `CONTEXT.md` invariant 20 and
-  D-041 are the only first-milestone documentation/UI exceptions.
-- Do not reduce the first milestone to a two-device or single-platform prototype. Its
-  release gate includes macOS, Windows, Linux, and Computer Use support as defined in
-  the implementation plan.
+## Invariants
 
-## Product boundary
+- The Agent receiving the owner request remains responsible for the final answer.
+- Use another Device only when it is genuinely useful.
+- Explicit Device names take precedence over semantic routing.
+- Keep credentials, sessions, databases, auth files, peer keys, and `HERMES_HOME` Device-local.
+- Never put real private IPs, tokens, keys, or owner paths in committed examples.
+- Reachability is not identity or authority.
+- Verify health before dispatch.
+- Treat timeout as an observation boundary, not proof that a remote Worker failed.
+- Do not promise durable completion unless a real durable collector exists.
+- Confirm pushes, deployments, external messages, purchases, destructive deletion, authority
+  expansion, private-data disclosure, and network/firewall changes.
 
-OpenDelegate owns deterministic orchestration, durable task state, policy
-enforcement, transport selection, and agent adapter lifecycle. It does not implement
-a new general-purpose LLM or rely on one vendor's desktop UI as its source of truth.
+## Change scope
+
+The repository should remain lightweight. Prefer Markdown, small templates, and optional bounded
+helper scripts. Do not reintroduce a monorepo, web application, database, package-manager lockfile,
+release pipeline, or broad test suite unless the owner explicitly changes the product direction.
+
+When editing the kit, verify links and scan for secrets, but do not add tests for prose wording.

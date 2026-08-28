@@ -1,501 +1,118 @@
-님들의 agent에게 그냥 이 git repo url 주고 환경설정 시키세요!!
-이 저장소의 Hermes 온보딩 목표는 모든 컴퓨터에 Hermes Agent를 각각 설치해 Agent들이 Task 단위로 협업하고, Discord나 휴대폰에서 보낸 요청이 가장 적합한 컴퓨터와 Project로 자동 라우팅되게 하는 것입니다.
-이 저장소는 Agent에게 URL을 주기 위한 저장소입니다. Owner가 수동 명령을 외우는 대신 Agent가 환경을 진단·구성·검증하고, 우리가 먼저 밟은 지뢰를 피하게 만드는 것이 목적입니다.
+님들의 Agent에게 그냥 이 Git 저장소 URL을 주고 환경설정을 시키세요.
 
 # OpenDelegate
 
-언어: [English](README.md) · **[한국어](README.ko.md)** · [日本語](README.ja.md) ·
-[Français](README.fr.md) · [Español](README.es.md) · [简体中文](README.zh-CN.md)
+**OpenDelegate는 Hermes Device Agent Federation을 위한 가벼운 실전 Setup Kit입니다.**
 
-**Discord에서 원하는 결과만 말하세요. 실행 위치와 방법은 OpenDelegate가 결정합니다.** 휴대폰이나
-노트북이 꺼져도 고정된 상시 가동 Main이 macOS, Windows, Linux 작업을 조율합니다.
+Owner가 컴퓨터마다 설정 명령을 외우는 대신, Agent에게 이 저장소를 줘서 전체 환경을 발견·설치·연결·
+검증하게 만드는 것이 목적입니다. 우리가 먼저 밟은 지뢰와 복구법을 정리해 다음 사람이 같은 문제를
+반복하지 않게 합니다.
 
-![Discord 명령을 상시 가동 Main에서 Windows·macOS·Linux 장치로 자동 분배하는 OpenDelegate](docs/design/opendelegate-orchestration-hero.png)
+언어: [English](README.md) · **한국어**
 
-> [!TIP]
-> **여기서 시작하세요:** [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요) ·
-> [Hermes Device Agent 운영](#hermes-device-agent-운영-가이드) ·
-> [상세 설정](#상세-설정) ·
-> [전체 설정 가이드(영문)](docs/GETTING_STARTED.md) ·
-> [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md) · [Discord Forum 설정](docs/DISCORD_SETUP.md)
+## 목표 상태
 
-## 권장 설치: Agent에게 맡기세요
+설정이 끝나면 다음이 가능해야 합니다.
 
-**가장 짧고 권장되는 방법입니다. OpenDelegate 명령어부터 배울 필요가 없습니다.**
+- 안정적인 컴퓨터 한 대가 상시 Coordinator와 Messaging 진입점 역할을 합니다.
+- Mac Studio, Windows, Linux/NAS, MacBook 등은 각자의 로컬 Capability를 유지합니다.
+- Device는 SSH, Hermes peer/API 또는 Owner가 승인한 다른 private route로 연결됩니다.
+- Discord·휴대폰·연결된 컴퓨터 어디에서 명령해도 가장 적합한 Device에서 작업을 끝냅니다.
+- 결과는 원래 대화로 돌아옵니다.
+- Credential, Session, DB와 각 `HERMES_HOME`은 Device-local로 유지됩니다.
 
-1. 고정된 상시 가동 **Main Device**로 사용할 컴퓨터로 갑니다.
-2. 그 컴퓨터에서 Codex나 Claude, Hermes 같은 유능한 로컬 setup Agent를 열고 이 저장소 URL을 줍니다.
-3. 다음과 같이 말합니다.
+이 저장소는 Windows PATH, 잘못된 Service Lifecycle, Discord Intent와 mention policy, Peer quoting,
+timeout 충돌, Gateway restart 중 완료 수집 유실, 잠드는 Portable Device, 단순 Reachability와 인증된
+Authority의 차이처럼 우리가 먼저 겪은 문제를 정리합니다.
 
-   > 이 컴퓨터가 고정된 상시 가동 OpenDelegate Main Device로 동작하도록 세팅해 줘. 이 저장소의
-   > Main 설치 지침을 직접 찾아 따르고, 안전하게 할 수 있는 일은 모두 처리해 줘. 내 결정이나 Owner
-   > 전용 보안 작업이 필요할 때만 질문해 줘. 인증 정보, Token 등 비밀값을 채팅에 붙여 넣으라고 하지
-   > 말고 Provider의 기본 인증 절차나 OpenDelegate 보안 입력 화면으로 안내해 줘. Admin Web이 열려서
-   > 나머지 설정을 마칠 수 있을 때까지 계속 진행해 줘.
+## 가장 짧은 시작 방법
 
-4. Agent가 묻는 내용에 답합니다. Agent는 저장소의 init skill을 스스로 찾고, 소스와 Release
-   Bundle을 구분하고, 지원 상태를 확인하고, Runtime 데이터를 Checkout 밖에 보관하며, 사용자가 이
-   README를 Shell 명령으로 옮겨 적지 않아도 Admin Web을 실행합니다.
+1. 상시 Coordinator로 사용할 컴퓨터에서 Agent를 엽니다.
+2. 이 저장소 URL을 줍니다.
+3. 다음처럼 요청합니다.
 
-Admin Web이 열리면 우측 **Configuration Chat**에서 계속 설정하세요. 이미 설정된 내용을 먼저
-확인해 달라고 한 뒤, Device 평가, 내장 SQLite 또는 외부 PostgreSQL, Codex와 Claude, Discord
-Forum, 연결 Route, Agent Model, Artifact 공개 방식, Service 시작 방식, 추가 Device까지 자연어로
-안내해 달라고 하면 됩니다. OpenDelegate는 사용자가 모든 설정 화면을 직접 찾아다니게 하지 않고,
-대화 안에서 검토 가능한 구조화된 변경안을 보여 줍니다.
+> 이 저장소를 Hermes Federation Setup Kit로 읽어. 이 컴퓨터와 내가 승인한 다른 컴퓨터를 발견하고,
+> 각 Device에 공식 Hermes Agent를 설치하거나 복구해. Credential과 `HERMES_HOME`은 각 Device에만
+> 두고, SSH나 Hermes peer/API 등 적절한 private route를 선택해. Device 역할과 Gateway Service를
+> 설정한 다음 실제 위임 요청이 적합한 컴퓨터에서 끝나고 원래 대화로 돌아오는지 검증해. 이 저장소의
+> 보안·timeout·restart·recovery 지침을 따라. Push, 배포, 파괴적 삭제, 권한 확대, Secret 공개,
+> Network·Firewall 변경은 먼저 확인해.
 
-![Device 평가와 Configuration Chat이 열린 OpenDelegate Admin Web](docs/design/admin-configuration-chat-implemented.png)
+4. Coordinator가 요청하면 추가 컴퓨터에서도 같은 방식으로 로컬 Device Agent를 설치·등록합니다.
+5. Health, Identity, 위임, 결과 회수, Service 재시작, Rollback까지 증명하기 전에는 완료라고 하지 않습니다.
 
-_결정론적 Browser Fixture에서 캡처한 현재 Admin Web입니다. 먼저 **장치 평가**를 실행한 뒤 나머지
-설정은 Configuration Chat에서 진행하세요. 상단 배너는 이 Source Build가 지원되지 않는다는 사실을
-정확히 표시하며, 이 이미지는 실제 Platform 또는 Release 증거가 아닙니다._
+상세 순서는 [Quick Start](docs/QUICKSTART.md)를 참고하세요.
 
-SQLite는 별도 URI가 필요 없는 기본 로컬 Database입니다. Provider 인증 정보나 Discord Token은
-채팅에 입력하지 마세요. 실제로 필요할 때 Configuration Chat이 이유를 설명하고 전용 보안 입력
-Form을 띄웁니다. Main 설정이 끝나면 **Device 추가**에서 일회용 Grant를 발급하고, 추가 컴퓨터의
-Agent에게 전달하세요. 그 Agent가 Worker Join 지침을 스스로 찾아 진행합니다.
+## Setup Agent가 수행할 일
 
-## 이 저장소의 목적
-
-이 저장소는 Agent에게 URL을 주기 위한 저장소입니다. 각 컴퓨터의 Agent에게 이 URL을 주고, 그
-컴퓨터를 하나의 Owner 통제 Hermes Device Agent fleet에 편입시키라고 요청하는 것이 기본 사용법입니다.
-Setup Agent는 다음을 수행해야 합니다.
-
-1. 운영체제, 기존 Hermes 설치 상태, 안정적인 Network route와 유용한 Device 역할을 발견합니다.
-2. 공식 Hermes Agent를 로컬에 설치하거나 복구하고 `hermes doctor`를 통과합니다.
-3. SSH, Hermes peer/API 또는 Owner가 승인한 다른 private route 중 환경에 맞는 연결을 선택하되,
-   Credential과 각 `HERMES_HOME`은 해당 Device에만 둡니다.
-4. 안정적인 상시 Coordinator 한 대를 선택하고 Apple build, Windows/GPU, Storage, 휴대용 상호작용 같은
-   역할과 Gateway 서비스를 설정합니다.
-5. 한 컴퓨터에서 내린 명령이 가장 적합한 Device까지 전달되어 그곳에서 작업을 끝내고 원래 대화로
-   결과를 되돌리는지 end-to-end로 검증합니다.
-6. 되돌릴 수 있는 백업과 검증 근거를 남기고, 안전하게 자동화할 수 없는 권한이나 Capability를
-   솔직하게 설명합니다.
-
-이 저장소는 우리가 먼저 밟은 지뢰를 정리한 field guide이기도 합니다. Windows PATH, 잘못된 Service
-Lifecycle, Discord Intent와 mention policy, Peer quoting, 서로 충돌하는 timeout, Gateway 재시작 중 완료
-수집 유실, Credential 경계, 잠드는 Portable Device, 단순 Reachability와 Durable Orchestration의 차이를
-설치 전 Check로 재사용합니다. 실제 IP, Token, Private Key 또는 Device-local runtime state를 Git 문서에
-복사하지 않습니다.
-
-현재 실제 fleet 구성은 공식 Hermes 기능과 이 branch의 setup 지침을 사용합니다. 더 큰 OpenDelegate
-source tree는 장기적인 durable control plane 구현이며, 현재 Hermes peer transport가 이미 OpenDelegate의
-exactly-once Run·Result reconciliation을 제공한다고 주장하지 않습니다.
-
-## 상세 설정
-
-> [!WARNING]
-> 이 저장소는 지원되는 릴리스가 아니라 **지원되지 않는 내부 프리뷰**를 빌드합니다. 실제
-> 플랫폼, Provider, Discord, Network, 권한 및 패키징 증거가 아직 완성되지 않았습니다. 릴리스된
-> 제품으로 표방하거나 무인 프로덕션 Control Plane으로 사용하지 마십시오. 자세한 내용은
-> [현재 소스 상태](#현재-소스-상태)를 확인하십시오.
-
-OpenDelegate는 Agent와 함께 설치합니다. Owner 설치 절차에 `npm run start`는 없습니다.
-
-1. Main으로 사용할 컴퓨터에서 이 저장소 URL을 Codex, Claude 또는 Hermes에게 주십시오. 이미 지원되는 플랫폼
-   bundle이 있다면 압축을 푼 디렉터리를 대신 여십시오. Agent가 소스와 bundle을 구분하고
-   `supportStatus`와 `SHA256SUMS`를 확인합니다. 현재 소스는 표시된
-   [내부 프리뷰](#내부-프리뷰-빌드)만 만들 수 있습니다.
-2. [Agent에게 맡기는 권장 설치](#권장-설치-agent에게-맡기세요)의 문장을 보냅니다. Agent는 source
-   checkout이면 `.agents/skills/opendelegate-init/SKILL.md`, 검증된 bundle이면
-   `skills/opendelegate-init/SKILL.md`를 읽으므로 사용자가 내부 파일 구조를 알 필요가 없습니다.
-3. 최초 Main 초기화에서 Discord를 생략해도 됩니다. 이후 Owner 인증을 거친 Configuration Chat에서
-   Forum Binding을 추가·교체·확장·비활성화할 수 있습니다. 필요한 App, Forum, Tag, Permission은
-   [Discord Forum 설정 가이드](docs/DISCORD_SETUP.md)를 따르세요.
-4. Agent의 안내에 따라 Owner Claim을 완료하고 일회용 복구 코드 10개를 모두 안전하게 보관합니다.
-5. Admin Web에서 **장치 평가**를 먼저 실행하고 Codex, Claude, 브라우저 자동화, Computer Use,
-   Knowledge의 결정론적 결과를 확인한 뒤 우측 하단 Configuration Chat에서 Device, Agent, Route,
-   Artifact와 선택적 Discord 설정을 마칩니다. Provider 자격 증명은 채팅에 입력하지 않으며,
-   Discord 토큰은 보안 인증 정보 패널에만 입력합니다.
-6. Device를 추가할 때는 Configuration Chat에서 유효 시간이 짧은 일회용 Device Grant를 발급받습니다.
-   파일을 열지 않은 채 Owner가 통제하는 안전한 방법으로 전달한 다음, 대상 Device의 Agent에게
-   이 컴퓨터를 Worker로 연결하라고 요청합니다. Agent는 source checkout이면
-   `.agents/skills/opendelegate-join/SKILL.md`, 검증된 bundle이면 `skills/opendelegate-join/SKILL.md`를
-   읽습니다.
-7. Discord를 설정했다면 독립된 Task마다 Forum에 새 게시글을 하나 만듭니다. 같은 게시글의 답글은
-   동일한 Task와 native Agent Session을 이어가며, 새 게시글은 깨끗한 Context에서 시작합니다.
-   Discord를 사용하지 않거나 사용할 수 없으면 **Admin Web → Tasks → 새 작업**에서 만듭니다.
-
-각 Device의 기본값은 **Agent 실행 → 자동**입니다. Device 화면에서 **우선** 또는 **고정**을
-선택하거나 해당 Device의 Configuration Chat에 _“이 NAS에서는 Claude Opus를 사용해 줘”_라고
-말할 수 있습니다. Mac Studio 화면에서는 원하는 GPT 모델을 같은 방식으로 설정합니다.
-OpenDelegate는 각 요청을 해당 Device의 검증된 모델 카탈로그와 대조해 정확한 Provider-native
-모델 ID를 검토용으로 보여 주며, 변경은 새 native Session부터 적용합니다.
-
-Owner 복구, 추가 Device, 첫 Task 및 문제 해결까지 포함한
-[전체 설정 가이드(영문)](docs/GETTING_STARTED.md)와 [Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md)를 참고하십시오.
-
-## OpenDelegate를 만드는 이유
-
-휴대폰이나 컴퓨터에서 배치 계획이 아니라 원하는 결과를 말하십시오. Main Agent는 필요하면 Windows
-개발, macOS 빌드·서명, Linux 배포로 나누고 실제 Device와 Route는 결정론적 스케줄러가 고릅니다.
-
-- Discord Forum 게시글 하나는 지속성 있는 Task 하나와 하나의 컨텍스트 경계에 대응합니다.
-- 선택적 결정론적 모니터는 장애나 개선 사항을 동일한 일반 Forum 기반 Task로 만들 수 있습니다.
-  카테고리별로 비활성화, 검토 제안, 자동 실행을 선택해도 Policy, 승인, 예산, 감사는 우회하지 않습니다.
-- 명령을 보낸 휴대폰이나 노트북은 연결을 끊어도 됩니다. 현재 작업에 필요한 고정 Main과 Device만
-  사용 가능하면 됩니다.
-- 결정론적 소프트웨어가 ID, Policy, 상태, 라우팅, Lease, 재시도, 영속성, 상태 전이를 담당합니다.
-  Agent는 의미론적 판단과 할당된 작업을 담당합니다.
-- Worker는 Main에만 연결됩니다. NxN SSH 메시나 데이터베이스 직접 접근은 필요하지 않습니다.
-- Codex, Claude 및 사용자 정의 Runner는 Agent Adapter 계약 뒤에 배치되며, 유용한 Provider-native
-  세션은 재개할 수 있습니다.
-- Hermes는 Project Skill을 읽고 설치를 돕는 setup Agent로 사용할 수 있지만, 이 저장소는
-  Hermes를 OpenDelegate 실행용 Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다.
-- 준비된 Codex 또는 Claude Worker는 하나의 Work Order 안에서 로컬 하위 Agent를 최대 4개까지
-  사용할 수 있습니다. 이들은 같은 Run의 Workspace와 Policy 안에 머물며, Device 간 분배는 Main만
-  수행합니다.
-- 각 Device는 선택적으로 사용하는 연결된 Markdown Knowledge를 로컬에 보관합니다. Main은 파일명,
-  제목, 링크, 그래프, 인덱스, 스니펫 또는 내용을 절대 전달받지 않습니다.
-- 결과는 Discord 응답·첨부, 파일, Artifact, 호스팅 화면 또는 검증된 Git 참조로 받을 수 있습니다.
-- 로그인, MFA, CAPTCHA, 법적 확인 또는 OS 권한이 필요하면 같은 Task가 Main을 통한 만료·취소 가능한
-  Owner Handoff에서 잠시 멈췄다가 사용자의 응답 후 이어집니다.
-
-## Hermes Device Agent 운영 가이드
-
-> [!IMPORTANT]
-> 현재 실제 멀티 Device 운영은 공식 Hermes Agent의 Bot Mode, Messaging Gateway, peer 기능을
-> 사용합니다. 이 저장소의 OpenDelegate source build는 아직 지원되지 않는 내부 프리뷰이며,
-> Hermes를 OpenDelegate runtime Agent Adapter로 구현하거나 지원한다고 주장하지 않습니다.
-
-### 처음 설치하는 사람을 위한 가장 짧은 방법
-
-각 컴퓨터에서 이 저장소 URL을 해당 컴퓨터의 Agent에게 주고 다음처럼 요청하세요.
-
-> 공식 Hermes 문서를 기준으로 이 컴퓨터에 Hermes Agent를 설치하고 `hermes doctor`를 통과시켜 줘.
-> 이 저장소의 Hermes setup 문서와 Device 운영 원칙을 읽고, 이 컴퓨터의 역할에 맞게 Messaging
-> Gateway와 Bot/peer 연결을 제안해 줘. 비밀값, `HERMES_HOME`, Session, DB, 인증 파일, Peer Key는
-> 다른 Device나 Git으로 복사하지 말고, 설치·서비스·네트워크 변경 전에는 내가 승인해야 하는지
-> 확인해 줘.
-
-공식 설치 명령과 OpenDelegate setup prompt는
-[Hermes Setup Agent 가이드(영문)](docs/HERMES_SETUP_AGENT.md)에 있습니다. 설치 후에는 항상
-`hermes doctor`로 확인하고, Messaging 연결은 `hermes gateway setup`으로 구성합니다.
-
-### Device별 역할과 연결 방식
-
-| Device | 기본 역할 | 권장 실행 방식 | 연결 원칙 |
-| --- | --- | --- | --- |
-| NAS/Linux | 상시 가동 Discord 대표, 조율, 저장·다운로드·장기 작업 | Linux 설치 후 Gateway를 user service 또는 필요한 경우 boot-time system service로 운영 | Discord/휴대폰 요청의 기본 진입점. 다른 Device가 실제로 유리할 때만 위임 |
-| Mac Studio | Xcode, Apple build/signing, Metal, macOS 앱 | macOS `launchd`용 `hermes gateway install` | Apple 전용 능력이 필요한 Task를 명시적으로 라우팅 |
-| Windows | CUDA/RTX, ComfyUI, Windows 앱 | Windows native 설치 후 `hermes gateway install`; Scheduled Task 또는 Startup fallback 사용 | GPU·Windows 전용 Task를 명시적으로 라우팅 |
-| MacBook | 휴대용 Owner 상호작용과 짧은 macOS 작업 | macOS `launchd`; 잠자기 전 장기 작업은 고정 Device로 넘김 | 항상 켜져 있다고 가정하지 않고 best-effort 대상으로 취급 |
-
-각 Device는 독립적인 Hermes 설치와 Profile을 가집니다. 다른 Gateway는 private connection 또는
-`hermes peer`로 등록하되 실제 URL과 Key는 각 Device의 로컬 설정에만 둡니다. Git 문서에는 IP,
-Token, Peer Key를 적지 않습니다. 연결 여부만 볼 때는 Agent turn을 보내지 말고 등록된 health
-endpoint를 먼저 확인합니다.
-
-### 운영 철학
-
-- 요청을 받은 Origin Agent가 Owner와의 대화와 최종 결과를 책임집니다. 모든 Device에 무조건
-  fan-out하지 않고, 실제로 도움이 되는 한 곳에만 우선 위임합니다.
-- Device를 명시한 요청은 그 Device를 우선합니다. 자동 의미 라우팅은 편의 기능이지 고정 배치
-  보장이 아닙니다.
-- NAS는 Discord 대표지만 모든 일을 직접 하지 않습니다. Windows GPU, Apple build, 장기 저장처럼
-  검증된 역할에 맞춰 Task를 넘깁니다.
-- `HERMES_HOME`, `.env`, 인증 파일, Session, DB, 로그, 잠금 파일, Private/Peer Key는 Device-local로
-  유지합니다. 공유하는 것은 사람이 읽을 수 있는 문서, Project 파일, 검증된 Artifact뿐입니다.
-- `AgentShared/`는 교환 규칙이지 Hermes runtime 복제본이 아닙니다. 원본 Owner 대화, 비밀값,
-  Device-local memory를 자동 동기화하지 않습니다.
-- 안전하고 되돌릴 수 있는 로컬 작업은 진행하되, Push·배포·외부 메시지·결제·파괴적 삭제·권한
-  확대·민감정보 공개는 Owner 확인 후 실행합니다.
-- Hermes Bot/peer federation과 OpenDelegate runtime orchestration은 구분합니다. 앞쪽은 현재 공식
-  Hermes 기능이고, 뒤쪽은 이 저장소의 별도 제품 경계와 release evidence를 따라야 합니다.
-
-### 경험한 문제와 우회 방법
-
-- **Windows 설치 뒤 `hermes`가 안 보임:** 기존 Terminal은 새 User PATH를 모를 수 있습니다. PATH를
-  임의로 덧붙이지 말고 새 PowerShell/Windows Terminal을 연 뒤 `hermes --version`과
-  `hermes doctor`를 다시 실행합니다.
-- **Windows에서 다른 CLI를 `Ctrl+C`한 뒤 Gateway까지 종료됨:** foreground Python을 임시로 띄우지
-  말고 공식 `hermes gateway install`을 사용합니다. Windows에서는 분리된 Scheduled Task와
-  `pythonw.exe`가 이 문제를 피합니다.
-- **Bot이 Online인데 Discord 응답이 없음:** `hermes gateway status`, 사용자 allowlist 또는 pairing,
-  Discord Message Content/Server Members Intent, channel 권한, `@mention` 또는 free-response 설정을
-  순서대로 확인합니다. REST 성공만으로 Gateway WebSocket 수신 상태가 건강하다고 단정하지 않습니다.
-- **엉뚱한 대화 문맥이 섞임:** 독립 Task는 새 Discord thread 또는 `/new`/`/reset`으로 시작합니다.
-  공유 channel의 사용자별 Session 격리를 임의로 끄지 않습니다.
-- **MacBook 위임이 자주 끊김:** 잠자기 가능한 Device를 Coordinator나 장기 작업의 유일한 실행처로
-  두지 않습니다. 장기 작업은 NAS, Mac Studio, Windows 중 적합한 고정 Device로 넘깁니다.
-- **Peer DM에서 quoting/줄바꿈이 깨짐:** 긴 요청은 shell argument로 직접 넣지 말고 파일 또는 stdin으로
-  전달합니다. `hermes peer dm <device> < request.txt` 형태를 사용합니다.
-- **Peer 작업은 끝났는데 Origin이 결과를 못 받음:** 동기 대기 timeout은 Worker 실패가 아닙니다.
-  Remote Agent는 계속 실행 중일 수 있으므로 `completion_unknown`으로 취급하고, 새 요청을 만들기 전에
-  같은 `request_id`를 correlation key로 사용해 Remote Bot Chat 기록에서 기존 완료 결과를 회수하되,
-  조회는 읽기 전용으로 제한합니다. 현재 `hermes peer dm`은 durable ledger나 idempotent dispatch를 제공하지 않으므로 같은 ID로
-  원래 objective를 다시 보내면 안 됩니다.
-- **긴 Peer 작업을 background로 보낸 뒤 결과가 사라짐:** Gateway에 딸린 추적되지 않은 shell
-  background process는 재시작 때 함께 종료될 수 있습니다. one-shot Hermes cron도 기본 3분 interrupt라
-  600초 Peer wait collector가 될 수 없습니다. 결과가 나중에 돌아온다고 말하려면 OpenDelegate Worker Run
-  또는 Gateway cgroup 밖에서 별도로 설치된 OS-supervised collector가 원 Discord thread와 request state를
-  지속성 있게 소유해야 합니다. 그런 경로가 없으면 장기 완료 자동 회수를 보장하지 않습니다.
-- **설정 변경 때문에 Gateway를 재시작해야 함:** Gateway를 재시작하기 전에 진행 중인 Peer 작업과
-  background process를 확인합니다. 진행 중인 Peer 작업이 있으면 결과를 수집할 때까지 재시작을 미루고,
-  피할 수 없다면 pending `request_id`와 원래 thread를 먼저 보존한 뒤 시작 직후 회수합니다.
-- **Timeout 값이 서로 먼저 끊음:** foreground terminal/peer transport보다 Agent tool guard를 길게,
-  tool guard보다 전체 Gateway turn을 길게 둡니다. 예시는
-  [Hermes Device Federation 운영 문서](docs/HERMES_FEDERATION_OPERATIONS.md)를 따르며, timeout 증가는
-  durable request identity와 recovery를 대체하지 않습니다.
-- **여러 Device의 상태가 서로 덮임:** Hermes home 전체를 복사하거나 동기화하지 않습니다. Profile,
-  Credentials, Session, DB는 각 Device에서 별도로 유지하고 공유 문서만 명시적으로 교환합니다.
-
-### Hermes Bot 짧은 사용법
-
-```sh
-hermes doctor                 # 설치와 필수 도구 점검
-hermes gateway status         # Messaging Gateway 상태 확인
-hermes peer list              # 등록된 다른 Device 확인
-hermes -p <bot> chat          # 로컬 Bot/Profile과 대화
-hermes cron list              # Bot Routine과 예약 작업 확인
-hermes peer dm <device> < request.txt
+```text
+발견 → 설치 → 연결 → 검증 → 운영
 ```
 
-Desktop의 **Bots** 탭에서 Device별 Profile을 만들거나, 여러 connection이 등록된 경우
-**Create on**으로 Bot이 살 컴퓨터를 지정할 수 있습니다. Discord나 다른 Messaging 안에서는
-`/new` 또는 `/reset`으로 새 대화를 시작하고, `/model`로 모델을 확인·변경하며, `/whoami`로 현재
-권한을 확인하고, `/stop`으로 실행 중인 Agent를 중지합니다. Server channel에서는 기본적으로
-`@mention`이 필요하고, mention-free 운영은 명시적으로 free-response channel을 설정한 곳에만
-적용합니다.
+### 발견
 
-## 아키텍처
+- OS, 기존 Hermes 설치, Profile, Service, 안정적인 Route와 Device 역할을 확인합니다.
+- OS 이름만 보고 Capability를 추정하지 않고 실제 Probe로 검증합니다.
+- 안정적인 Coordinator를 선택하고 잠드는 MacBook은 best-effort Worker로 취급합니다.
 
-```mermaid
-flowchart LR
-    owner["Owner<br/>휴대폰 또는 노트북"] --> discord["Discord Forum<br/>게시글 하나 = Task 하나"]
-    owner --> admin["Admin Web<br/>설정 및 운영"]
-    discord --> main["고정 Main Device<br/>Control Plane + Main Agent"]
-    admin --> main
-    main --> database[("Main 전용 SQLite 또는 PostgreSQL")]
-    main --> artifacts["Artifact Gateway"]
-    main <-->|"인증된 Device API<br/>설정된 연결 경로"| mac["macOS Worker"]
-    main <-->|"인증된 Device API<br/>설정된 연결 경로"| windows["Windows Worker"]
-    main <-->|"인증된 Device API<br/>설정된 연결 경로"| linux["Linux Worker / NAS"]
-    mac -. "Device 로컬 전용" .-> macKnowledge["Markdown Knowledge"]
-    windows -. "Device 로컬 전용" .-> windowsKnowledge["Markdown Knowledge"]
-    linux -. "Device 로컬 전용" .-> linuxKnowledge["Markdown Knowledge"]
-```
+### 설치
 
-Worker는 OpenDelegate Control Mesh의 일부로 데이터베이스나 서로에게 연결되지 않습니다. LAN, Omada,
-Tailscale, 터널, 사용자 정의 네트워크는 Main과 각 Device 사이에서 사용하는 결정론적 Transport
-Profile 옵션입니다.
+- 최신 공식 Hermes 문서를 기준으로 설치·복구합니다.
+- `hermes doctor`를 통과합니다.
+- Linux `systemd`, macOS `launchd`, Windows 공식 Gateway 시작 경로를 사용합니다.
+- Profile과 Credential은 해당 Device에만 둡니다.
 
-## 현재 소스 상태
+### 연결
 
-다음 표는 프로덕션 형태로 구현된 소스 경로와 지원을 표방하기 전에 여전히 필요한 외부 증거를
-구분합니다.
+- SSH, Hermes peer/API 또는 Owner가 승인한 다른 private route를 선택합니다.
+- Reachability를 Identity나 Authority로 간주하지 않습니다.
+- 실제 IP, Token, Peer Key, Private Path는 저장소에 기록하지 않습니다.
 
-| 영역             | 소스에 구현되어 테스트할 수 있는 범위                                                                                                                                                                                                                                                      | 첫 Milestone에 여전히 필요한 범위                                                                                                                                                |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main 및 영속성   | 번들 `opendelegate` CLI, 구성된 Control Plane, SQLite/PostgreSQL Storage 계약(호스팅 PostgreSQL 증명은 현재 17로 고정), 지속성 있는 Task 실행·Approval·Audit·Artifact·Enrollment·Discord·Device Channel 서비스, 중단된 Action의 결과가 불명확하면 안전하게 실패하는 시작 시 Reconciliation | 지원을 선언할 각 Main 플랫폼에서의 깨끗한 Host 설치, Database Migration/Restore, Service Restart 및 완전한 Reconciliation 증거. 다른 PostgreSQL 메이저 버전은 아직 검증되지 않음 |
-| Owner 접근       | Loopback 전용 최초 Claim, Passphrase 로그인, 복구 코드, 세션 폐기, CSRF 방어 및 SQL 영속성                                                                                                                                                                                                 | 릴리스에 유효한 Remote Route, 재시작, 탈취된 Browser Session 폐기 및 Discord와 독립적인 복구 증거                                                                                |
-| Admin Web        | 인증된 Device·Task·Approval·Enrollment·Artifact·Audit·Emergency Control·Configuration Chat 화면, Capability-aware Control, 선택 상태가 유지되는 반응형 영어·한국어·일본어·프랑스어·스페인어·중국어(간체) UI                                                                                | 실제 Device Onboarding 및 장애 상황 Journey, Release Bundle의 Accessibility/Overflow 증거, 실제 운영자 인수 테스트                                                               |
-| Device Runtime   | 일회용 Enrollment, Device-scoped Identity, 인증된 Outbound Main–Worker Channel, Lease 기반 Dispatch, 지속성 있는 Inbox/Outbox, Run Supervision, Workspace, 로컬 Agent 실행, 로컬 Knowledge MCP, Computer Use MCP 및 Artifact Upload                                                        | Enrollment가 완료된 실제 Device, Route Loss/Restart Recovery, Omada/Tailscale 형태의 혼합 Route 증거 및 세 OS 계열의 Persistent Service 증거                                     |
-| Agent 및 Discord | Codex App Server와 Claude Agent SDK를 우선 사용하는 Adapter, 기능이 제한된 CLI Fallback, Generic Command, Native Session 연속성, Single-writer Enforcement 및 정확한 Action Authorization, Discord HTTP/Gateway·Forum Reconciliation·Control·Main 구성                                     | 고정된 버전의 인증된 실제 Codex/Claude 실행, 전용 Community Server·Forum·Bot·Token·Intent·Permission·Reconnect·Mobile·Outage 증거                                                |
-| Knowledge        | Device-local Linked Markdown Discovery, 제한된 Retrieval, 결정론적 Indexing, Admission Check 및 내용을 Main 계약 밖에 유지하는 Agent용 MCP Tool                                                                                                                                            | 각 실제 Device 계열에서 Packet 수준 No-egress 증거와 Create/Update/Rebuild Journey                                                                                               |
-| Artifact         | Main 소유 Local Store, 인증된 재개 가능 Worker Upload, 격리된 Static/Interactive Gateway 경로, Signed Access, Exposure Policy 계약 및 Admin 점검                                                                                                                                           | 실제 Discord 표시, Retention/Exposure Journey, 패키징된 Build의 Hostile-content 검증 및 Owner Device에서의 Cross-network 열기                                                    |
-| 플랫폼 서비스    | Windows SCM, macOS launchd, Linux systemd/Foreground 소스 구현, 분리된 Core/Owner-session Helper Host, 인증된 Local IPC, Install/Start/Stop/Restart/Upgrade/Rollback/Diagnose/Uninstall 명령 경로                                                                                          | 권한이 필요한 깨끗한 Host 실행, Reboot/Login/Logout Persistence, 실패 Rollback, Permission Onboarding, 필요한 플랫폼의 Signing/Notarization 및 Lab 증거                          |
-| Computer Use     | Device-wide Desktop Lock, 정확한 Action Authorization, 일회용 Local Capability Broker, Session-helper IPC, Native Windows/macOS/Linux Backend 소스, Readiness/Permission Probe, Capture/Input/Cancel/Emergency-stop 계약 및 결정론적·Native Fixture 테스트                                 | 실제 macOS·Windows·선언된 그래픽 Linux 환경의 Reference Interaction과 Screenshot·Exclusivity·Cancellation·Permission Failure·Locked-session·Headless Linux 증거                  |
+### 검증
 
-필요한 Sandbox를 강제할 수 있을 때까지 Native Windows의 Claude SDK 실행은 의도적으로 지원 대상으로
-표방하지 않습니다. Windows에서는 Codex, WSL2 또는 설정된 Container를 사용하십시오. WSL2나 Container
-Worker는 Native Windows Service, Restart, Permission 또는 Computer Use 릴리스 기준을 대체하지
-않습니다.
+- Agent turn 전에 deterministic health check를 수행합니다.
+- 지정한 Device에 bounded request를 보내고 완전한 결과를 받습니다.
+- 결과가 원래 대화로 돌아오는지 확인합니다.
+- 진행 중 Peer 작업을 끊지 않고 Gateway restart를 검증합니다.
+- Rollback 근거를 남깁니다.
 
-프로젝트 의존성 자동 설치는 현재 자격 증명이 없는 공식 Registry Staging 경계에서 Script를 끈 npm만
-지원합니다. OpenDelegate는 명시적으로 설정된 System Package Manager의 설치 전용 요청도 수락하며,
-해당 Manager 실행 파일을 고정한 뒤 실행 직전에 다시 검증합니다. 저장소 추가와 원격 설치 프로그램은
-계속 승인 대상입니다. 이는 구현 증거일 뿐이며, 기존 Source와 권한 동작이 대상 Clean-host Lab을
-통과하기 전에는 어떤 System Package Manager도 Release 지원 대상으로 표방하지 않습니다.
+### 운영
 
-기계가 읽을 수 있는 Release Ledger는
-[`docs/release/acceptance-evidence.json`](docs/release/acceptance-evidence.json)에 있습니다.
-`pnpm release:status`로 현재 상태를 확인할 수 있습니다. 36개 인수 기준 모두 증거가 필요하며 플랫폼
-또는 Computer Use Gate는 하나도 면제할 수 없습니다.
-
-릴리스 관련 용어는 의도적으로 좁은 의미를 가집니다.
-
-| Label                       | 의미                                                                                                                                          |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public source pre-alpha     | 검토 가능한 소스. 지원되지 않으며 완성된 설치본이 아님                                                                                        |
-| `internal-preview-*` bundle | 로컬 검증 Payload. 로컬 Smoke Test를 통과해도 항상 지원되지 않음                                                                              |
-| `release-candidate` bundle  | 36개 Gate를 모두 통과했지만 아직 승격되거나 지원되지 않은 Artifact                                                                            |
-| `released`                  | 유효한 불변 Candidate와 신뢰된 게시자, Platform Authenticity, Promotion, Supported Channel, Revocation Policy 전체 Chain으로 계산된 실효 상태 |
-
-현재 `released` Artifact는 없습니다.
-
-## 구현된 Admin Web
-
-아래 스크린샷은 현재 구현된 Admin Web을 보여줍니다. 결정론적 API Fixture를 사용하는 Browser
-Suite에서 캡처했습니다. UI는 인증된 Admin API 계약을 호출하지만, 이 이미지는 실제 Discord Binding,
-실제 Worker Enrollment 또는 3개 OS 인수 테스트의 증거가 아닙니다. 기본값은 영어입니다. 언어 선택기를
-사용하면 Owner 대상 UI 전체를 한국어, 일본어, 프랑스어, 스페인어 또는 중국어(간체)로 전환할 수
-있습니다. Owner가 작성한 Task 내용이나 Agent 대화 기록은 번역하지 않습니다.
-
-![구현된 OpenDelegate Task 작업 화면](docs/design/admin-tasks-implemented.png)
-
-_Task 작업 Design Fixture: 인증된 목록/상세 데이터 및 제어 기능. 각 제어 기능은 Main이 보고한
-Capability 상태를 따릅니다. 이 Fixture는 실제 외부 Runtime이 준비되었다는 증거가 아닙니다._
-
-![구현된 OpenDelegate Owner 로그인](docs/design/admin-login-implemented.png)
-
-_구현된 Owner 로그인 및 복구 진입 화면. 최초 Owner Claim은 별도의 Loopback 전용 Bootstrap Flow로
-유지됩니다._
-
-## 내부 프리뷰 빌드
-
-Release Bundle에는 정확히 **Node.js 24.18.0**이 필요합니다. 저장소에는 pnpm 11.15.1이 고정되어
-있습니다. Node.js 22.14 이상인 Node 22 계열은 Contributor 호환성 대상으로 유지되지만 Release
-Bundle을 만들 수는 없습니다.
-
-의존성을 설치한 깨끗하고 Commit된 Checkout에서 실행합니다.
-
-```sh
-node --version
-git status --short
-pnpm install --frozen-lockfile
-pnpm check
-pnpm build
-pnpm test:browser
-pnpm release:build --destination ABSOLUTE_PATH --internal-preview
-```
-
-`node --version`은 `v24.18.0`을 출력해야 하며 `git status --short`는 아무것도 출력하지 않아야
-합니다. `ABSOLUTE_PATH`는 소스 Checkout 외부에 있는, 아직 존재하지 않는 경로여야 합니다. Builder는
-기존 Destination을 덮어쓰지 않습니다. 최소 Launcher는 깨끗한 Commit을 내보낸 뒤 Assembly 전에 일회용
-Snapshot에서 Release Logic을 다시 실행합니다. Builder는 고정된 공식 Node Archive를 내려받고 감사된
-SHA-256을 검증하여 플랫폼별 Bundle을 생성합니다. 여기에는 Main/Worker Launcher, Admin Asset,
-Init/Join Skill, Release Metadata, Dependency-instance Legal Inventory, Checksum과 더불어
-CLI/Service/Worker Command, 깨끗한 Home Initialization, Main Health, Admin Serving, Owner
-Claim/Login, Session-cookie Round-trip 및 정상 종료에 대한 제한된 Smoke Evidence가 포함됩니다.
-
-Destination 이름에는 `internal-preview`가 포함되어야 합니다. 생성된 `INTERNAL_PREVIEW.md`와
-`release-metadata.json`에는 Bundle이 지원되지 않는다는 사실과 정확한 Release Evidence 상태가
-기록됩니다. Discord와 기타 Owner 선택이 지속성 있는 Main 설정 생성 전에 모두 확정되도록, 조립된
-Bundle은 위의 Agent-first [권장 설치](#권장-설치-agent에게-맡기세요)를 통해서만 초기화하십시오. 내부 프리뷰는
-Foreground에서 실행되고 지속성 있는 OS 서비스를 설치하지 않으며 Release Tag로 게시해서는 안 됩니다.
-
-인수 기준이 하나라도 미완료이면 프로덕션 빌드는 의도적으로 실패합니다.
-
-```sh
-pnpm release:gate
-pnpm release:build \
-  --destination ABSOLUTE_PATH \
-  --git-executable ABSOLUTE_UNLINKED_GIT \
-  --git-executable-sha256 APPROVED_GIT_EXECUTABLE_SHA256 \
-  --runner-executable-sha256 APPROVED_NODE_EXECUTABLE_SHA256
-```
-
-위 `release:build` 호출은 Linux x64 Candidate에서만 표시된 그대로 사용할 수 있습니다. macOS와
-Windows에서는 대상 플랫폼별 필수 Credential Policy를 다음과 같이 추가해야 합니다.
-
-```sh
-  --platform-signing-policy ABSOLUTE_PLATFORM_SIGNING_POLICY \
-  --platform-signing-policy-sha256 APPROVED_PLATFORM_SIGNING_POLICY_SHA256
-```
-
-`pnpm release:sign`은 명시적으로 확인된 지원되지 않는 Preview에만 의도적으로 제한되며 Release
-Candidate를 거부합니다. 36개 Criterion Gate가 완료되면 깨끗하고 Hash가 고정된 대상 네이티브 Runner가
-`pnpm release:finalize`를 사용해 각 Production Candidate를 Freeze하고 Candidate-v2 게시자
-Attestation을 생성합니다. 구성된 외부 Promotion과 Supported Channel Receipt Chain을 검증해야만 이
-불변 Candidate의 실효 상태가 `released`가 될 수 있습니다. 자세한 내용은
-[Release Trust 절차](docs/release/README.md#supported-promotion-trust-path)를 참고하십시오.
-
-Credential이 없는 운영자 입력 골격은 다음 명령으로 생성할 수 있습니다.
-
-```sh
-pnpm release:examples -- --destination ABSOLUTE_NEW_DIRECTORY
-```
-
-모든 생성물에는 `PLACEHOLDER`와 `NOT-A-RELEASE`가 표시되며 Credential, 서명, Artifact, Release
-증거를 포함하지 않습니다. 자세한 내용은 [Release 입력 예시 가이드](docs/release/EXAMPLES.md)를
-참고하십시오.
-
-프로덕션 `release:gate`와 Candidate 모드 `release:build` 명령은 36개 구현 Gate와 실제 증거 Gate를
-모두 통과한 뒤에만 성공할 수 있습니다. 지원되지 않는 Preview에 대한 서명은 이 프로덕션 Gate를
-충족하지도 우회하지도 않습니다. [정확한 첫 Milestone 지원 Matrix](docs/release/SUPPORT_MATRIX.md),
-[릴리스 증거 가이드](docs/release/README.md)와
-[플랫폼 Lab 체크리스트](docs/release/PLATFORM_LAB.md)를 참고하십시오.
-
-## 개발
-
-```sh
-pnpm install --frozen-lockfile
-pnpm setup:browser
-pnpm check
-pnpm build
-pnpm test:browser
-```
-
-`pnpm setup:browser`는 Admin Web Browser Suite용 Chromium을 설치합니다. Linux에서는 Playwright가 OS
-의존성 설치도 요청할 수 있습니다.
-
-Admin 개발 서버는 다음 명령으로 실행합니다.
-
-```sh
-pnpm dev:admin
-```
-
-이 개발 서버는 Owner 설치 경로가 아닙니다. 번들 Main을 검증할 때는 생성된 Internal-preview
-Launcher를 사용하십시오.
-
-Codex와 Claude 인증은 기본적으로 각 OpenDelegate Device의 `state/providers/codex` 및
-`state/providers/claude`에 격리됩니다. Owner는 Main init에서
-`--codex-home ABSOLUTE_PATH` 또는 `--claude-home ABSOLUTE_PATH`를 지정해 기존 로컬 Provider
-디렉터리를 명시적인 공유 SSOT로 사용할 수 있습니다. OpenDelegate는 로그인 정보를 복사하지 않고
-그 경로를 저장하며, 실행과 장치 평가에 같은 home을 사용합니다. Provider 설정, 플러그인, 캐시 및
-native session 저장소는 공유되지만 각 Task는 계속 별도의 native session을 사용합니다. 전역 home을
-암묵적으로 상속하지는 않습니다.
+- 다른 Device가 실제로 유용할 때만 위임합니다.
+- 요청을 받은 Origin Agent가 Owner에게 최종 결과를 책임집니다.
+- Timeout을 Remote Worker 실패로 단정하지 않습니다.
+- 미지의 장기 작업은 Durable Orchestration 경로로 처리합니다.
 
 ## 저장소 구성
 
-- `apps/main` — Main 구성, 결정론적 CLI, Action Authorization, Device Channel, Discord, Artifact 및
-  Agent Runtime 연결.
-- `apps/worker`, `apps/service-host` — Enrollment된 Worker Runtime과 Platform Service 정의가
-  사용하는 지속성 있는 Core/Session Process Host.
-- `apps/control-plane` — 인증된 HTTP 및 Local-claim 경계.
-- `apps/admin-web` — Owner 로그인, Device, Task, Approval, Enrollment, Artifact, Audit, 긴급 작업 및
-  Configuration Chat.
-- `apps/artifact-gateway` — 격리된 Artifact 전달 경계.
-- `packages/domain`, `packages/policy`, `packages/scheduler` — 결정론적 Domain Mechanic 및 실행
-  가능한 Policy.
-- `packages/storage-sql`, `packages/owner-auth`, `packages/task-service`, `packages/configuration` —
-  Main 영속성 및 Application Service.
-- `packages/device-identity`, `packages/device-channel`, `packages/worker-runtime`,
-  `packages/transport`, `packages/device-discovery` — Device Enrollment, 인증된 Main–Worker 통신 및
-  Worker 실행.
-- `packages/agent-adapters`, `packages/discord-adapter` — 여전히 자격 증명을 사용하는 실제 증거가
-  필요한 프로그래밍 방식 Provider 및 Discord Forum 통합.
-- `packages/artifact-store` — Main이 소유하는 Artifact Byte 및 Metadata 경계.
-- `packages/platform-services`, `packages/computer-use-os` — OS Service 및 Graphical Runtime 구현.
-  소스와 Fixture 결과는 지원되는 설치 서비스나 3개 OS Desktop Control의 증거가 아닙니다.
-- `packages/session-helper-ipc`, `packages/session-helper-runtime`, `packages/computer-use-mcp`,
-  `packages/run-capability-broker` — Run별로 제한되고 인증된 Owner-session Capability.
-- `packages/knowledge`, `packages/knowledge-mcp` — Device-local Markdown Discovery, 연결형
-  Retrieval, Indexing 및 Agent Tool.
-- `packages/acceptance`, `packages/simulator` — 결정론적 Task Journey, Restart Case 및 Replay
-  Fixture.
-- `.agents/skills/opendelegate-init` — 명시적인 Internal-preview Gate를 갖춘 Agent 대상 초기화 Workflow.
-- `.agents/skills/opendelegate-join` — 자격 증명을 노출하지 않는 Outbound-only Worker Enrollment 및 복구
-  Workflow.
-- `docs` — Product, Architecture, Security, Design, Research 및 Release Evidence.
+```text
+.agents/skills/opendelegate-setup/  Agent용 Setup Workflow
+docs/QUICKSTART.md                 Owner·Agent 체크리스트
+docs/HERMES_SETUP_AGENT.md        상세 Setup Agent 절차
+docs/HERMES_FEDERATION_OPERATIONS.md
+                                   Peer timeout·restart·recovery
+docs/SECURITY_BOUNDARIES.md        Secret·Authority·State 경계
+templates/                         Device·Agent·Peer·Fleet 템플릿
+examples/four-device-fleet.md      일반화된 4-Device 예시
+```
 
-## 정식 제품 문서
+## 중요한 경계
 
-제품 동작을 계획하거나 변경하기 전에 다음 순서로 읽으십시오.
+현재 실전 경로는 **공식 Hermes Agent**를 사용합니다. 이 Kit는 raw `hermes peer dm`이 exactly-once
+Dispatch, Durable Request Store, 무제한 장기 작업 자동 복구를 이미 제공한다고 주장하지 않습니다. 그런
+보장이 필요하면 Durable Orchestration Service를 사용해야 합니다. 과거 OpenDelegate 앱 구현은 Git
+History에 남아 있지만 현재 Setup Kit Tree에는 포함되지 않습니다.
 
-1. [`CONTEXT.md`](CONTEXT.md) — 간결한 Domain Model, Vocabulary 및 변경할 수 없는 Invariant.
-2. [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md) — 전체 Product 및 Architecture 명세.
-3. [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) — Delivery Phase, 공개 Test Seam 및
-   Release Gate.
-4. [`docs/DECISIONS.md`](docs/DECISIONS.md) — 승인된 Product Decision 및 근거.
-5. [`docs/research/platform-capabilities.md`](docs/research/platform-capabilities.md) — 1차 출처
-   기반 Platform Constraint.
+## 보안
 
-Contributor Workflow는 [CONTRIBUTING.md](CONTRIBUTING.md)에 문서화되어 있습니다. Security Boundary와
-검증된 비공개 취약점 신고 경로는 [SECURITY.md](SECURITY.md)에 있습니다. 안전한 Main Metadata
-Snapshot과 새 Target 복원 절차는 [Backup 및 Restore 가이드](docs/BACKUP_AND_RESTORE.md)를
-참고하십시오.
+- Device 사이에 `HERMES_HOME` 전체를 동기화하지 않습니다.
+- `.env`, Auth, Session, DB, Peer Key, Credential을 Git에 넣지 않습니다.
+- Push, 배포, 외부 메시지, 결제, 파괴적 삭제, 권한 확대, Private Data 공개는 확인합니다.
+- SSH Host Key 검증을 끄거나 예상하지 못한 Key 변경을 승인하지 않습니다.
+- Unsandboxed Hermes API를 신뢰하지 않는 Network에 노출하지 않습니다.
 
-OpenDelegate는 [Apache License 2.0](LICENSE)으로 배포됩니다. 저장소 콘텐츠, Domain Term, API, Log 및
-UI 기본값에는 영어를 사용합니다. 이 README와 Owner 대상 Admin UI는 위에 링크한 다섯 가지 번역으로도
-제공됩니다.
+연결 전 [보안 경계](docs/SECURITY_BOUNDARIES.md)를 읽으세요.
+
+## 라이선스
+
+Apache License 2.0. [LICENSE](LICENSE)를 참고하세요.

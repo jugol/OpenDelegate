@@ -1,4 +1,0 @@
-interface:
-  display_name: "Initialize OpenDelegate"
-  short_description: "Set up Main, owner access, and service startup"
-  default_prompt: "Use $opendelegate-init to initialize this OpenDelegate installation safely."
