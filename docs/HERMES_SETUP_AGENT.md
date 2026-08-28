@@ -57,7 +57,7 @@ Hermes loads `.agents/skills/opendelegate-init/SKILL.md` for this request.
 - accepting a first-time SSH host key after verifying it;
 - entering an SSH password, MFA, sudo password, or other secret;
 - approving service installation or another privilege boundary;
-- selecting a route when several materially different private-network options exist;
+- selecting an encrypted route when several materially different transport options exist;
 - resolving an unexpected host-key change.
 
 Hermes must never ask the owner to paste a password, private key, API key, or token into Agent chat.
@@ -75,7 +75,10 @@ ssh -t TARGET hermes setup
 The owner enters provider credentials in that target terminal. Verify `hermes doctor` and one bounded
 local `hermes chat -q` response before configuring the Peer API.
 
-The target must run the Hermes `api_server` gateway platform with a strong `API_SERVER_KEY`.
+The target must run the Hermes `api_server` gateway platform with a strong `API_SERVER_KEY` over an
+encrypted transport. Plain HTTP is acceptable only inside Tailscale, another authenticated encrypted
+VPN, or an SSH tunnel bound to Origin loopback; otherwise use validated HTTPS. Never send a peer key
+or Agent request over direct plain-HTTP LAN.
 `hermes gateway setup` is interactive; run it in the same owner-controlled TTY or allocate a PTY:
 
 ```sh
@@ -84,22 +87,27 @@ hermes gateway install --start-now --start-on-login
 hermes gateway status
 ```
 
-Register the non-secret route on Origin first:
+Register the encrypted route and non-secret role note on Origin first. This example uses HTTP inside
+Tailscale's WireGuard transport:
 
 ```sh
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT
+hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note "role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES"
 ```
+
+The peer note is Origin's durable semantic-routing index. `DEVICE.md` remains target-local operator
+and peer-Agent context and is not automatically loaded by Hermes core.
 
 The public CLI has no masked key prompt or key-stdin option. In an owner-only local Origin terminal,
 use a no-echo prompt and pass only a transient variable name in the recorded command:
 
 ```sh
 set +x
+OPENDELEGATE_PEER_NOTE='role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES'
 printf 'Peer API key: ' >&2
 IFS= read -r -s OPENDELEGATE_PEER_KEY
 printf '\n' >&2
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key "$OPENDELEGATE_PEER_KEY"
-unset OPENDELEGATE_PEER_KEY
+hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note "$OPENDELEGATE_PEER_NOTE" --key "$OPENDELEGATE_PEER_KEY"
+unset OPENDELEGATE_PEER_KEY OPENDELEGATE_PEER_NOTE
 hermes peer list
 ```
 
@@ -107,6 +115,8 @@ Never read the target `.env`, transfer the key through Agent chat or SSH output,
 key in an Agent tool argument. Hermes stores it under Origin's local home. Because the current CLI
 briefly receives the expanded key in process argv, fail closed if an owner-only session or transient
 argv exposure is not acceptable. The PowerShell 7 masked-input equivalent is in `GETTING_STARTED.md`.
+The key-setting `peer add` must repeat the same `--note` because the CLI replaces the stored peer
+entry. Verify both `key set` and the role note with `hermes peer list`.
 
 Normal Device work then uses:
 

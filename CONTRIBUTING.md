@@ -4,9 +4,10 @@ OpenDelegate welcomes focused issues and pull requests that preserve its SSH-fir
 federation model.
 
 The current product is the Agent procedure, project skills, templates, and documentation described
-in `CONTEXT.md`. The TypeScript applications, packages, Admin Web, enrollment system, and release
-builder are a retained legacy prototype. Do not extend or present that prototype as the current
-owner workflow unless the owner explicitly requests legacy work.
+in `CONTEXT.md`. The TypeScript applications, packages, Admin Web, enrollment system, `docs/adr/`,
+`docs/design/`, `docs/release/`, legacy operational guides, and release builder are a retained
+legacy prototype. Do not extend or present that prototype as the current owner workflow unless the
+owner explicitly requests legacy work.
 
 ## Read the product contract first
 

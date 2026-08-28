@@ -9,7 +9,7 @@ SSH-first リポジトリです。別の管理 Web サイトではありませ�
 
 - Origin Agent が SSH を使用して各 Device に Hermes をインストール、更新、復旧します。
 - セットアップ後の通常作業は Hermes Peer API で送信します。
-- Tailscale、LAN、または既存の VPN が接続経路を提供します。
+- Peer API の通信には Tailscale または別の暗号化されたプライベート経路を使用します。
 - Hermes の設定、資格情報、Session、Memory、Database は各 Device に保持します。
 - OpenDelegate Admin Web や Enrollment Grant は使用しません。
 

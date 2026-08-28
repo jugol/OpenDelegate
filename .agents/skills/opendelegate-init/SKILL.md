@@ -35,7 +35,7 @@ Collect or discover, without reading private keys:
 - Device name;
 - SSH target or alias;
 - intended role;
-- preferred private route and fallback;
+- preferred encrypted Peer API transport and fallback;
 - whether the Device should run at login or boot.
 
 Do not include passwords, private keys, API keys, or real credentials in the inventory.
@@ -91,7 +91,9 @@ Do not copy Origin's Hermes home, config, auth, memory, sessions, provider home,
 ### 5. Write Device-local metadata
 
 Create `$HERMES_HOME/DEVICE.md` from `templates/DEVICE.md`. Set the real Device ID, role, routes,
-local paths, and boundaries on the target only. Do not commit the rendered file.
+local paths, boundaries, and non-secret Origin peer note on the target only. Do not commit the
+rendered file. Do not assume Hermes core automatically loads `DEVICE.md`; Origin routes by the
+persisted peer note and explicit owner target names.
 
 ### 6. Configure the target gateway
 
@@ -104,17 +106,20 @@ hermes gateway install --start-now --start-on-login
 hermes gateway status
 ```
 
-Enable the API Server platform on a private listener. The strong `API_SERVER_KEY` stays in the
-target's local secret store. Do not ask for it in chat.
+Enable the API Server platform only on an encrypted transport. Plain HTTP is acceptable inside
+Tailscale, another authenticated encrypted VPN, or an SSH tunnel bound to Origin loopback; otherwise
+use validated HTTPS. The strong `API_SERVER_KEY` stays in the target's local secret store. Do not
+ask for it in chat or send it over direct plain-HTTP LAN.
 
 Use `--system` only on an owner-approved headless Linux service that must start at boot.
 
 ### 7. Register the peer on Origin
 
-Register the non-secret route first:
+Register the encrypted route and non-secret semantic-routing note first. This example uses HTTP only
+inside Tailscale's encrypted transport:
 
 ```sh
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT
+hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note "role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES"
 ```
 
 The public CLI has no masked key prompt or key-stdin option. Pause for the unavoidable owner-only
@@ -124,11 +129,12 @@ contain the variable name only:
 
 ```sh
 set +x
+OPENDELEGATE_PEER_NOTE='role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES'
 printf 'Peer API key: ' >&2
 IFS= read -r -s OPENDELEGATE_PEER_KEY
 printf '\n' >&2
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key "$OPENDELEGATE_PEER_KEY"
-unset OPENDELEGATE_PEER_KEY
+hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note "$OPENDELEGATE_PEER_NOTE" --key "$OPENDELEGATE_PEER_KEY"
+unset OPENDELEGATE_PEER_KEY OPENDELEGATE_PEER_NOTE
 hermes peer list
 ```
 
@@ -137,7 +143,9 @@ For PowerShell 7, use `Read-Host -MaskInput` and clear the transient variable as
 the Origin cannot provide masked no-echo local input or its policy forbids transient argv exposure,
 stop with a peer-key registration blocker. Do not improvise a weaker transfer path.
 
-Prefer a stable private address, such as a Tailscale IP. Keep route descriptions non-secret.
+The key-setting call must repeat the same `--note` because `peer add` replaces the stored entry.
+Verify that `hermes peer list` shows `key set` and the intended role note. Prefer a stable Tailscale
+address; otherwise require another encrypted transport. Keep route descriptions non-secret.
 
 ### 8. Verify each boundary
 
@@ -147,7 +155,7 @@ Verify separately:
 2. SSH reachability and host identity;
 3. remote `hermes gateway status`;
 4. Origin-to-target `/health` returning `status: ok`;
-5. Origin peer roster showing `key set`;
+5. Origin peer roster showing `key set` and the intended role note;
 6. one real `hermes peer dm` request and reply.
 
 Do not report a Device as powered off from `/health` alone.

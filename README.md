@@ -22,7 +22,7 @@ The current operating model is deliberately simple:
 
 - SSH is the bootstrap and recovery channel.
 - Hermes Peer API is the normal Agent-to-Agent work channel after setup.
-- Tailscale, LAN, or an existing VPN provides reachability.
+- Tailscale or another encrypted private transport carries Peer API traffic.
 - Each Device keeps its own Hermes state, credentials, sessions, and memory.
 - There is no OpenDelegate Admin Web to install or maintain.
 - There is no enrollment-grant workflow.
@@ -64,8 +64,8 @@ directories belong to the retained legacy prototype.
 ### 3. Prepare SSH access
 
 Each target Device must already be reachable from the Origin through an SSH host, IP address, or
-`~/.ssh/config` alias. Use Tailscale or another private network when the Devices are not on the same
-LAN.
+`~/.ssh/config` alias. The Peer API separately requires encrypted transport: prefer Tailscale; an
+authenticated encrypted VPN, an SSH tunnel bound to Origin loopback, or validated HTTPS also works.
 
 Before setup, verify:
 
@@ -82,8 +82,9 @@ Example:
 
 > Set up my Hermes Device Agents from this OpenDelegate repository. Use this computer as Origin.
 > Connect to `nas`, `mac-studio`, and `windows` through my existing SSH configuration. Detect each OS,
-> install or update Hermes, create a Device-local DEVICE.md with its role, configure its Peer API and
-> gateway service, register it in the Origin peer roster, and verify one real request and reply. Keep
+> install or update Hermes, create a Device-local DEVICE.md with its role, configure its encrypted
+> Peer API and gateway service, register its role note in the Origin peer roster, and verify one real
+> request and reply. Keep
 > credentials, sessions, memories, databases, private keys, and Hermes homes local to each Device.
 > Never accept a changed SSH host key, and ask me only when SSH authentication or another owner-only
 > action is unavoidable.
@@ -102,11 +103,12 @@ For every Device, the Agent:
    local Agent response;
 5. keeps `HERMES_HOME` and all runtime data outside the OpenDelegate checkout;
 6. writes a Device-local `DEVICE.md` containing the Device ID, role, routes, and local boundaries;
-7. configures the Hermes API server and gateway without putting API keys in chat or source files;
+7. configures the Hermes API server and gateway behind encrypted transport without putting API keys
+   in chat or source files;
 8. starts the gateway through the native Hermes lifecycle for that OS;
-9. registers the non-secret Device route with `hermes peer add`, then pauses for the owner to enter
-   the peer key through masked local Origin input without exposing a literal key to Agent chat or
-   tool arguments;
+9. registers the non-secret Device route and durable role note with `hermes peer add --note`, then
+   pauses for the owner to enter the peer key through masked local Origin input while preserving the
+   same note, without exposing a literal key to Agent chat or tool arguments;
 10. checks Tailscale or network presence separately from Hermes `/health` readiness; and
 11. sends one bounded `hermes peer dm` request and verifies the reply.
 
@@ -132,8 +134,9 @@ Ask the Origin Agent for the outcome, not the connection mechanics:
 - "Let the NAS download this dataset and keep working in the background."
 - "Collect status from every Device."
 
-The Origin checks the Device role and Peer API readiness, writes a bounded peer request, and sends it
-with `hermes peer dm`. The published command is synchronous and currently has no `--timeout` option.
+The Origin reads the persisted role note with `hermes peer list`, checks Peer API readiness, writes a
+bounded peer request, and sends it with `hermes peer dm`. The published command is synchronous and
+currently has no `--timeout` option.
 For longer work, use Hermes Bot messaging when available, or ask the target to start the work and
 return a durable handle before checking status in a later peer message. SSH remains available for
 installation, updates, service recovery, and direct operator diagnostics.
@@ -151,7 +154,8 @@ Roles are examples, not hard-coded product limits:
 | Laptop | portable interaction and short local work |
 
 The owner can name Devices and roles differently. Explicit Device names always override semantic
-routing.
+routing. `DEVICE.md` is target-local operator and peer-Agent context, not automatic Hermes core
+context; Origin's durable semantic index is the non-secret peer `--note` shown by `hermes peer list`.
 
 ## State and security boundaries
 
@@ -163,6 +167,9 @@ routing.
   the Agent never reads the target `.env` or transports the key over SSH or chat.
 - Do not create pairwise trust between every Device. The Origin needs SSH access for setup; normal
   Agent work uses registered peer routes.
+- Never send a peer key or Agent request over direct plain-HTTP LAN. HTTP is acceptable only inside
+  Tailscale, another authenticated encrypted VPN, or an SSH tunnel bound to Origin loopback;
+  otherwise use validated HTTPS.
 - Shared storage contains only human-readable knowledge, project files, and artifacts.
 - A Device that is Tailscale-online may still have a stopped Hermes gateway. Report those states
   separately.
@@ -174,8 +181,9 @@ routing.
 - `docs/GETTING_STARTED.md` — complete SSH-first walkthrough.
 - `docs/HERMES_SETUP_AGENT.md` — Hermes-specific setup notes and commands.
 - `templates/DEVICE.md` — generic Device metadata template.
-- `apps/`, `packages/`, and the old control-plane documents — retained legacy prototype source, not
-  the current operating workflow.
+- `apps/`, `packages/`, `docs/adr/`, `docs/design/`, `docs/release/`, legacy operational guides, and
+  the old control-plane documents — retained legacy prototype material, not the current operating
+  workflow.
 
 ## Documentation status
 

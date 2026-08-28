@@ -1,5 +1,10 @@
 # Discord Forum setup
 
+> [!WARNING]
+> **Legacy prototype only.** This guide configures the retired Admin Web/Main prototype; it is not
+> part of the current SSH-first OpenDelegate workflow. Read [`CONTEXT.md`](../CONTEXT.md) and
+> [`README.md`](../README.md) for current Device setup and operations.
+
 OpenDelegate uses Discord as an owner-facing Task client: one Forum post maps to one durable Task,
 and replies in that post continue the same Task. Main remains the source of truth.
 

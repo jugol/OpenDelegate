@@ -42,8 +42,10 @@ a response or remediation SLA.
   shared storage, and Agent chat.
 - Keep each Device's Hermes home, config, auth, sessions, databases, memories, locks, and process
   state local to that Device.
-- Use private reachability such as Tailscale, LAN, or an existing VPN, but do not treat network
-  membership as authentication. Every Hermes Peer API requires its own strong key.
+- Encrypt every Peer API path. Plain HTTP is acceptable only inside Tailscale, another authenticated
+  encrypted VPN, or an SSH tunnel bound to Origin loopback; otherwise use validated HTTPS. Never
+  send a peer key or Agent request over direct plain-HTTP LAN. Transport encryption does not replace
+  the strong per-peer API key.
 - Prefer one Origin-to-Device SSH relationship instead of an all-to-all SSH mesh.
 - Report network presence, SSH reachability, gateway state, `/health`, and Agent replies separately.
   A failed `/health` probe does not prove a Device is powered off.

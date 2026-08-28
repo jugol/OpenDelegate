@@ -34,6 +34,7 @@ test("README leads with SSH-first Hermes federation", async () => {
   assert.match(readme, /setting up and operating Hermes Agents across several computers/u);
   assert.match(readme, /SSH is the bootstrap and recovery channel/u);
   assert.match(readme, /Hermes Peer API is the normal Agent-to-Agent work channel/u);
+  assert.match(readme, /encrypted private transport/u);
   assert.match(readme, /There is no OpenDelegate Admin Web/u);
   assert.match(readme, /There is no enrollment-grant workflow/u);
   assert.match(readme, /hermes skills trust/u);
@@ -62,6 +63,12 @@ test("README leads with SSH-first Hermes federation", async () => {
   assert.match(guide, /hermes chat -q "Reply with exactly: OpenDelegate-Agent-ready"/u);
   assert.match(guide, /hermes gateway setup/u);
   assert.match(guide, /hermes peer add/u);
+  assert.match(guide, /--note/u);
+  assert.match(guide, /OPENDELEGATE_PEER_NOTE/u);
+  assert.match(guide, /--note "\$OPENDELEGATE_PEER_NOTE" --key "\$OPENDELEGATE_PEER_KEY"/u);
+  assert.match(guide, /--note \$env:OPENDELEGATE_PEER_NOTE --key \$env:OPENDELEGATE_PEER_KEY/u);
+  assert.match(guide, /encrypted transport/u);
+  assert.doesNotMatch(guide, /Keep a LAN/u);
   assert.match(guide, /OPENDELEGATE_PEER_KEY/u);
   assert.match(guide, /read -r -s OPENDELEGATE_PEER_KEY/u);
   assert.match(guide, /Read-Host -MaskInput/u);
@@ -74,6 +81,10 @@ test("README leads with SSH-first Hermes federation", async () => {
   assert.match(hermesGuide, /owner-controlled TTY/u);
   assert.match(hermesGuide, /hermes setup/u);
   assert.match(hermesGuide, /OPENDELEGATE_PEER_KEY/u);
+  assert.match(hermesGuide, /OPENDELEGATE_PEER_NOTE/u);
+  assert.match(hermesGuide, /--note/u);
+  assert.match(hermesGuide, /--note "\$OPENDELEGATE_PEER_NOTE" --key "\$OPENDELEGATE_PEER_KEY"/u);
+  assert.match(hermesGuide, /encrypted transport/u);
   assert.doesNotMatch(hermesGuide, /--key <API_SERVER_KEY>/u);
   assert.doesNotMatch(hermesGuide, /hermes peer dm --timeout/u);
   assert.equal(template.isFile(), true);
@@ -86,6 +97,7 @@ test("README leads with SSH-first Hermes federation", async () => {
   assert.match(contributing, /corepack prepare pnpm@11\.15\.1 --activate/u);
   assert.match(contributing, /pnpm install --frozen-lockfile/u);
   assert.match(security, /Current security boundaries/u);
+  assert.match(security, /Encrypt every Peer API path/u);
   assert.match(security, /failed `\/health` probe does not prove a Device is powered off/u);
   assert.match(releaseBuilder, /LEGACY_RELEASE_DISABLED_MESSAGE/u);
   assert.match(releaseBuilder, /bundle builder is retired/u);
@@ -103,18 +115,98 @@ test("legacy product documents are visibly deprecated", async () => {
   }
 });
 
-test("every localized README uses the SSH-first flow", async () => {
+test("legacy operational guides are visibly deprecated", async () => {
   for (const filename of [
-    "README.ja.md",
-    "README.fr.md",
-    "README.es.md",
-    "README.zh-CN.md",
-    "README.zh-TW.md",
+    "docs/DISCORD_SETUP.md",
+    "docs/SERVICE_LIFECYCLE.md",
+    "docs/BACKUP_AND_RESTORE.md",
   ]) {
+    const content = await readRepositoryFile(filename);
+    assert.match(content.slice(0, 800), /Legacy prototype/u);
+    assert.match(content.slice(0, 800), /CONTEXT\.md/u);
+  }
+});
+
+test("every localized README uses the SSH-first flow", async () => {
+  const localizedReadmes = [
+    ["README.ko.md", /암호화(?:된)? (?:Private )?Transport/u],
+    ["README.ja.md", /暗号化されたプライベート経路/u],
+    ["README.fr.md", /transport privé chiffré/u],
+    ["README.es.md", /transporte privado cifrado/u],
+    ["README.zh-CN.md", /加密的专用传输通道/u],
+    ["README.zh-TW.md", /加密的專用傳輸通道/u],
+  ];
+
+  for (const [filename, encryptedTransport] of localizedReadmes) {
     const content = await readRepositoryFile(filename);
     assert.match(content, /SSH/u);
     assert.match(content, /Peer|ピア|对等|對等/u);
+    assert.match(content, encryptedTransport);
     assert.match(content, /hermes skills trust/u);
     assert.doesNotMatch(content, /Admin Web →|Main Admin Web|Configuration Chat/u);
+    assert.doesNotMatch(content, /Tailscale(?:、|,)\s*LAN|LAN(?:、|,)\s*(?:または|or|ou|o)/u);
+  }
+});
+
+test("current setup surfaces fail closed on routing and transport boundaries", async () => {
+  const currentSetupPaths = [
+    "README.md",
+    "README.ko.md",
+    "CONTEXT.md",
+    "SECURITY.md",
+    "templates/DEVICE.md",
+    "docs/GETTING_STARTED.md",
+    "docs/HERMES_SETUP_AGENT.md",
+    ".agents/skills/opendelegate-init/SKILL.md",
+    ".agents/skills/opendelegate-join/SKILL.md",
+  ];
+  const currentSetup = new Map(
+    await Promise.all(
+      currentSetupPaths.map(async (path) => [path, await readRepositoryFile(path)]),
+    ),
+  );
+
+  for (const [path, content] of currentSetup) {
+    assert.match(content, /direct plain-HTTP LAN/iu, `${path} must reject direct plain-HTTP LAN`);
+  }
+
+  for (const path of [
+    "README.md",
+    "CONTEXT.md",
+    "templates/DEVICE.md",
+    "docs/GETTING_STARTED.md",
+    "docs/HERMES_SETUP_AGENT.md",
+    ".agents/skills/opendelegate-init/SKILL.md",
+    ".agents/skills/opendelegate-join/SKILL.md",
+  ]) {
+    assert.match(
+      currentSetup.get(path),
+      /not automatic|not automatically loaded|does not automatically load|Do not assume Hermes core automatically loads/u,
+      `${path} must distinguish DEVICE.md from Hermes core context`,
+    );
+  }
+
+  for (const path of ["README.md", "CONTEXT.md", "AGENTS.md"]) {
+    const content = path === "AGENTS.md" ? await readRepositoryFile(path) : currentSetup.get(path);
+    assert.match(
+      content,
+      /Explicit Device names always override|explicitly named Device priority|explicitly named Device always wins/u,
+      `${path} must give an explicit Device name priority over semantic routing`,
+    );
+  }
+
+  for (const path of [
+    "docs/GETTING_STARTED.md",
+    "docs/HERMES_SETUP_AGENT.md",
+    ".agents/skills/opendelegate-init/SKILL.md",
+    ".agents/skills/opendelegate-join/SKILL.md",
+  ]) {
+    const content = currentSetup.get(path);
+    assert.match(content, /repeat the same\s+`--note`/iu, `${path} must preserve the routing note`);
+    assert.match(
+      content,
+      /replaces the stored (?:peer\s+)?entry/u,
+      `${path} must explain peer-entry replacement`,
+    );
   }
 });

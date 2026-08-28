@@ -1,5 +1,10 @@
 # Main metadata backup and restore
 
+> [!WARNING]
+> **Legacy prototype only.** This document covers the retained Main metadata store; current
+> OpenDelegate keeps every Hermes home and runtime state Device-local and does not create this Main
+> database. Read [`CONTEXT.md`](../CONTEXT.md) for the current boundary.
+
 OpenDelegate backups are explicit, owner-controlled snapshots of Main metadata.
 They are not a replication or failover mechanism and they never move a Worker's
 Device-local Knowledge.

@@ -1,4 +1,5 @@
 interface:
   display_name: "Initialize OpenDelegate"
-  short_description: "Set up Main, owner access, and service startup"
-  default_prompt: "Use $opendelegate-init to initialize this OpenDelegate installation safely."
+  short_description: "Set up an SSH-first Hermes Device fleet"
+  default_prompt:
+    "Use $opendelegate-init to configure this Origin and its SSH-reachable Hermes peers safely."
