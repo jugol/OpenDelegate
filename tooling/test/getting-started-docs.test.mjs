@@ -36,11 +36,6 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   const detailedHeading = "## Detailed setup";
   const readmeLead = readme.slice(0, readme.indexOf(recommendedHeading));
   assert.match(
-    readme,
-    /^Give your Agent this Git repository URL and ask it to configure the environment for you\.\r?\nThis repository's Hermes onboarding goal is/u,
-  );
-  assert.doesNotMatch(readmeLead, /^님들의 agent에게/u);
-  assert.match(
     readmeLead,
     /Tell OpenDelegate the outcome you want in Discord[\s\S]*decides where and how to run it/u,
   );
@@ -50,19 +45,15 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   assertAppearsBefore(readme, "opendelegate-orchestration-hero.png", "**Start here:**");
   assert.match(readmeLead, /\[Complete setup guide\]\(docs\/GETTING_STARTED\.md\)/u);
   assert.match(readmeLead, /\[Hermes setup Agent guide\]\(docs\/HERMES_SETUP_AGENT\.md\)/u);
-  assert.match(
-    readmeLead,
-    /\[Hermes Device Agent fleet notes \(Korean\)\]\(README\.ko\.md#hermes-device-agent-운영-가이드\)/u,
-  );
   assert.match(readmeLead, /\[Discord Forum setup\]\(docs\/DISCORD_SETUP\.md\)/u);
   assert.equal(readmeLead.includes(`(#${githubHeadingAnchor(recommendedHeading)})`), true);
   assertAppearsBefore(readme, "**Start here:**", recommendedHeading);
   assertAppearsBefore(readme, recommendedHeading, detailedHeading);
   assertAppearsBefore(readme, detailedHeading, "## Why OpenDelegate");
   assert.equal(
-    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 23,
+    readme.slice(0, readme.indexOf(recommendedHeading)).split(/\r?\n/u).length <= 18,
     true,
-    "The onboarding line, hero, and recommended installation must be visible within the first 23 README lines",
+    "The hero and recommended installation must be visible within the first 18 README lines",
   );
   const setupJourney = readme.slice(
     readme.indexOf(recommendedHeading),
@@ -230,27 +221,6 @@ test("README leads with one simple Agent-first setup and keeps the detailed jour
   assert.match(supportMatrix, /persists only the provider selection/u);
 });
 
-test("repository purpose is Agent-run multi-Device federation setup and field-tested recovery", async () => {
-  const [readme, koreanReadme, hermesGuide] = await Promise.all([
-    readRepositoryFile("README.md"),
-    readRepositoryFile("README.ko.md"),
-    readRepositoryFile("docs/HERMES_SETUP_AGENT.md"),
-  ]);
-
-  assert.match(readme, /This repository is meant to be handed to an Agent/u);
-  assert.match(readme, /SSH, Hermes peer\/API, or another owner-approved private route/u);
-  assert.match(readme, /a command sent to one computer[\s\S]*best eligible Device/u);
-  assert.match(readme, /field-tested map of the traps/u);
-  assert.match(readme, /The current practical fleet path uses official Hermes features/u);
-  assert.doesNotMatch(readme, /The current supported fleet path/u);
-  assert.match(koreanReadme, /이 저장소는 Agent에게 URL을 주기 위한 저장소입니다/u);
-  assert.match(koreanReadme, /SSH, Hermes peer\/API 또는 Owner가 승인한 다른 private route/u);
-  assert.match(koreanReadme, /한 컴퓨터에서 내린 명령[\s\S]*적합한 Device/u);
-  assert.match(koreanReadme, /우리가 먼저 밟은 지뢰/u);
-  assert.match(hermesGuide, /discover → install → connect → verify → operate/u);
-  assert.match(hermesGuide, /never treat reachability as identity or authority/u);
-});
-
 test("every localized README exposes the same simple Agent-first installation", async () => {
   const locales = [
     {
@@ -266,7 +236,6 @@ test("every localized README exposes the same simple Agent-first installation", 
       promisePattern: /Discord에서 원하는 결과만 말하세요.*실행 위치와 방법은 OpenDelegate가 결정/u,
       securePromptPattern: /비밀값을 채팅에 붙여 넣으라고 하지\s*> 말고/u,
       unsafePromptPattern: /인증 정보를 제공해야 할 때만 질문/u,
-      maxLeadLines: 22,
     },
     {
       filename: "README.ja.md",
@@ -331,12 +300,6 @@ test("every localized README exposes the same simple Agent-first installation", 
 
   for (const locale of locales) {
     const content = await readRepositoryFile(locale.filename);
-    if (locale.filename === "README.ko.md") {
-      assert.match(
-        content,
-        /^님들의 agent에게 그냥 이 git repo url 주고 환경설정 시키세요!!\r?\n이 저장소의 Hermes 온보딩 목표는/u,
-      );
-    }
     const readmeLead = content.slice(0, content.indexOf(locale.heading));
     assert.match(readmeLead, locale.promisePattern);
     assert.match(readmeLead, /docs\/design\/opendelegate-orchestration-hero\.png/u);
@@ -354,10 +317,9 @@ test("every localized README exposes the same simple Agent-first installation", 
     assertAppearsBefore(content, locale.detailedHeading, locale.nextHeading);
     assertAppearsBefore(content, locale.heading, locale.nextHeading);
     assert.equal(
-      content.slice(0, content.indexOf(locale.heading)).split(/\r?\n/u).length <=
-        (locale.maxLeadLines ?? 18),
+      content.slice(0, content.indexOf(locale.heading)).split(/\r?\n/u).length <= 18,
       true,
-      `${locale.filename} onboarding, hero, and recommended installation must stay near the top`,
+      `${locale.filename} hero and recommended installation must be visible within the first 18 lines`,
     );
     const quickStart = content.slice(
       content.indexOf(locale.heading),
