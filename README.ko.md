@@ -22,7 +22,7 @@ Origin Hermes Agent
 
 - SSH는 최초 설정과 복구 Channel입니다.
 - 설정이 끝난 뒤 일반 Agent 작업은 Hermes Peer API로 전달합니다.
-- Tailscale, LAN, 기존 VPN은 Device 간 Reachability를 제공합니다.
+- Peer API Traffic은 Tailscale 또는 다른 암호화된 Private Transport로 전달합니다.
 - Hermes State, Credential, Session, Memory는 각 Device에 따로 보관합니다.
 - OpenDelegate Admin Web을 따로 설치하거나 관리하지 않습니다.
 - Enrollment Grant 절차를 사용하지 않습니다.
@@ -61,7 +61,8 @@ Project Skill은 `.agents/skills/`에 있으며, 저장소를 신뢰하고 새 H
 ### 3. SSH 연결 준비
 
 각 Target Device는 Origin에서 SSH Host, IP 또는 `~/.ssh/config` Alias로 접근할 수 있어야 합니다.
-같은 LAN이 아니라면 Tailscale 같은 Private Network를 사용합니다.
+Peer API에는 별도의 암호화 Transport가 필요합니다. Tailscale을 우선 사용하며, 인증된 암호화 VPN,
+Origin Loopback에 Bind한 SSH Tunnel, 또는 검증된 HTTPS도 사용할 수 있습니다.
 
 설정 전에 다음을 확인합니다.
 
@@ -78,8 +79,9 @@ OpenDelegate는 예상하지 못한 SSH Host Key 변경을 절대 허용하지 �
 
 > 이 OpenDelegate 저장소를 사용해 내 Hermes Device Agent들을 설정해 줘. 이 컴퓨터를 Origin으로
 > 사용하고 기존 SSH 설정의 `nas`, `mac-studio`, `windows`에 연결해. 각 OS를 감지하고 Hermes를
-> 설치하거나 업데이트한 뒤, Device 역할이 들어간 로컬 DEVICE.md를 만들고 Peer API와 Gateway
-> Service를 설정해. Origin Peer 목록에 등록하고 실제 요청과 응답까지 검증해. Credential, Session,
+> 설치하거나 업데이트한 뒤, Device 역할이 들어간 로컬 DEVICE.md를 만들고 암호화 Transport 뒤에
+> Peer API와 Gateway Service를 설정해. Origin Peer 목록에 역할 Note를 등록하고 실제 요청과 응답까지
+> 검증해. Credential, Session,
 > Memory, DB, Private Key, Hermes Home은 각 Device 로컬에 유지하고, 바뀐 SSH Host Key는 절대
 > 허용하지 마. SSH 인증처럼 Owner만 할 수 있는 작업이 꼭 필요할 때만 질문해.
 
@@ -97,10 +99,12 @@ Setup Agent는 `.agents/skills/opendelegate-init/SKILL.md`를 따라 실제 Shel
    검증합니다.
 5. `HERMES_HOME`과 Runtime Data를 OpenDelegate Checkout 밖에 보관합니다.
 6. Device ID, 역할, Route, Local Boundary가 담긴 Device-local `DEVICE.md`를 만듭니다.
-7. API Key를 Chat이나 Source File에 넣지 않고 Hermes API Server와 Gateway를 설정합니다.
+7. API Key를 Chat이나 Source File에 넣지 않고 암호화 Transport 뒤에 Hermes API Server와 Gateway를
+   설정합니다.
 8. 해당 OS의 Hermes Native Lifecycle로 Gateway를 시작합니다.
-9. Origin에서 `hermes peer add`로 Secret이 아닌 Device Route를 등록한 뒤, Owner가 Masked Local
-   Input으로 Peer Key를 입력하게 합니다. Literal Key를 Agent Chat이나 Tool Argument에 넣지 않습니다.
+9. Origin에서 `hermes peer add --note`로 Secret이 아닌 Device Route와 역할 Note를 등록한 뒤, 같은
+   Note를 유지하면서 Owner가 Masked Local Input으로 Peer Key를 입력하게 합니다. Literal Key를 Agent
+   Chat이나 Tool Argument에 넣지 않습니다.
 10. Tailscale/Network 접속 상태와 Hermes `/health` 준비 상태를 따로 확인합니다.
 11. 실제 `hermes peer dm` 요청을 보내고 응답을 검증합니다.
 
@@ -127,8 +131,8 @@ Agent는 `.agents/skills/opendelegate-join/SKILL.md`를 따릅니다. Admin Web�
 - "NAS에서 이 Dataset을 받고 백그라운드로 계속 처리해 줘."
 - "모든 Device 상태를 모아 줘."
 
-Origin은 Device 역할과 Peer API 준비 상태를 확인하고 제한된 Peer Request를 작성해 `hermes peer dm`으로
-전달합니다. 공개된 명령은 동기 방식이며 현재 `--timeout` Option이 없습니다. 오래 걸리는 작업은 지원되는
+Origin은 `hermes peer list`의 저장된 역할 Note와 Peer API 준비 상태를 확인하고 제한된 Peer Request를
+작성해 `hermes peer dm`으로 전달합니다. 공개된 명령은 동기 방식이며 현재 `--timeout` Option이 없습니다. 오래 걸리는 작업은 지원되는
 경우 Hermes Bot Message를 사용하거나, Target이 Background 작업을 시작하고 Handle을 반환하게 한 뒤 다음
 Peer Message에서 상태를 확인합니다. SSH는 설치, 업데이트, Service 복구, 운영자 진단에 계속 사용합니다.
 
@@ -145,7 +149,9 @@ Peer Message에서 상태를 확인합니다. SSH는 설치, 업데이트, Servi
 | Laptop | 이동 중 대화와 짧은 Local 작업 |
 
 Owner는 Device 이름과 역할을 다르게 정할 수 있습니다. 명시적인 Device 이름은 Semantic Routing보다
-항상 우선합니다.
+항상 우선합니다. `DEVICE.md`는 Target-local 운영자 및 Peer Agent Context이며 Hermes Core가 자동으로
+읽는 파일은 아닙니다. Origin의 지속 가능한 Semantic Index는 `hermes peer list`에 표시되는 Secret이 아닌
+Peer Note입니다.
 
 ## State 및 Security Boundary
 
@@ -157,6 +163,9 @@ Owner는 Device 이름과 역할을 다르게 정할 수 있습니다. 명시적
   수행하고, Agent는 Target `.env`를 읽거나 Key를 SSH·Chat으로 운반하지 않습니다.
 - 모든 Device 사이에 Pairwise Trust를 만들지 않습니다. 설정용 SSH는 Origin에서 Target으로만
   사용하고, 일반 Agent 작업은 등록된 Peer Route로 보냅니다.
+- Direct Plain-HTTP LAN으로 Peer Key나 Agent Request를 보내지 않습니다. HTTP는 Tailscale, 인증된
+  암호화 VPN, Origin Loopback에 Bind한 SSH Tunnel 안에서만 허용하고, 그 밖에는 검증된 HTTPS를
+  사용합니다.
 - Shared Storage에는 사람이 읽을 수 있는 Knowledge, Project File, Artifact만 둡니다.
 - Tailscale에서 Online인 Device도 Hermes Gateway가 중지됐을 수 있습니다. 두 상태를 구분해 보고합니다.
 
@@ -167,7 +176,8 @@ Owner는 Device 이름과 역할을 다르게 정할 수 있습니다. 명시적
 - `docs/GETTING_STARTED.md` — 전체 SSH-first 절차.
 - `docs/HERMES_SETUP_AGENT.md` — Hermes 전용 설정 참고.
 - `templates/DEVICE.md` — 일반화된 Device Metadata Template.
-- `apps/`, `packages/`, 기존 Control Plane 문서 — 현재 운영 방식이 아닌 Legacy Prototype Source.
+- `apps/`, `packages/`, `docs/adr/`, `docs/design/`, `docs/release/`, Legacy 운영 문서, 기존 Control
+  Plane 문서 — 현재 운영 방식이 아닌 Legacy Prototype 자료.
 
 ## Legacy Prototype 안내
 

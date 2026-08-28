@@ -15,7 +15,8 @@ On the Origin computer:
 On each target:
 
 - SSH is enabled.
-- The target is reachable through an existing private network.
+- The target has an encrypted Peer API path: Tailscale, another authenticated encrypted VPN, an SSH
+  tunnel bound to Origin loopback, or validated HTTPS.
 - The account used for setup may install software and configure the Hermes gateway with owner
   approval where the OS requires it.
 
@@ -94,6 +95,8 @@ Each target receives its own `$HERMES_HOME/DEVICE.md`. Start from `templates/DEV
 - local boundaries and state that must never leave the Device.
 
 Do not commit the rendered Device file when it contains real hosts, addresses, usernames, or paths.
+`DEVICE.md` is local operator and peer-Agent context; Hermes core does not automatically load that
+filename. Origin keeps the routable non-secret role summary in the peer `--note` instead.
 
 ## 5. Configure the target Peer API
 
@@ -104,7 +107,8 @@ PTY when entering through SSH:
 ssh -t TARGET hermes gateway setup
 ```
 
-Enable the API Server platform, choose the private listener and port, and create a strong
+Enable the API Server platform, choose the listener and port for the approved encrypted transport,
+and create a strong
 `API_SERVER_KEY`. Store the key in the target's Device-local Hermes secret store or `.env`; never put
 it in this repository or an Agent prompt.
 
@@ -127,11 +131,15 @@ before selecting a service shape.
 
 ## 6. Register the peer on Origin
 
-The Agent may register the target's private API route without a key:
+The Agent may register the target's encrypted API route and durable non-secret role note without a
+key. This example uses HTTP only inside Tailscale's encrypted WireGuard transport:
 
 ```sh
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT
+hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note "role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES"
 ```
+
+The note is Origin's persistent semantic-routing index. Keep it short and non-secret. Explicit
+Device names still override role routing. Verify the note with `hermes peer list`.
 
 The published CLI has no masked key prompt or key-stdin option. The Agent must never read the
 target's `.env`, carry the key over SSH, place a literal key in an Agent tool argument, or ask for it
@@ -142,11 +150,12 @@ Bash or Zsh:
 
 ```sh
 set +x
+OPENDELEGATE_PEER_NOTE='role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES'
 printf 'Peer API key: ' >&2
 IFS= read -r -s OPENDELEGATE_PEER_KEY
 printf '\n' >&2
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key "$OPENDELEGATE_PEER_KEY"
-unset OPENDELEGATE_PEER_KEY
+hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note "$OPENDELEGATE_PEER_NOTE" --key "$OPENDELEGATE_PEER_KEY"
+unset OPENDELEGATE_PEER_KEY OPENDELEGATE_PEER_NOTE
 hermes peer list
 ```
 
@@ -154,20 +163,23 @@ PowerShell 7:
 
 ```powershell
 Set-PSDebug -Off
+$env:OPENDELEGATE_PEER_NOTE = 'role=ROLE; capabilities=CAPABILITIES; boundaries=BOUNDARIES'
 $env:OPENDELEGATE_PEER_KEY = Read-Host -MaskInput 'Peer API key'
-hermes peer add DEVICE_NAME --url http://PRIVATE_ADDRESS:PORT --key $env:OPENDELEGATE_PEER_KEY
-Remove-Item Env:OPENDELEGATE_PEER_KEY
+hermes peer add DEVICE_NAME --url http://TAILSCALE_ADDRESS:PORT --note $env:OPENDELEGATE_PEER_NOTE --key $env:OPENDELEGATE_PEER_KEY
+Remove-Item Env:OPENDELEGATE_PEER_KEY, Env:OPENDELEGATE_PEER_NOTE
 hermes peer list
 ```
 
-Hermes stores the credential as `HERMES_PEER_<NAME>_KEY` in Origin's local Hermes `.env`. The current
-CLI briefly receives the expanded value in process argv. Use only an owner-only local session where
-other principals cannot inspect that process. If the Origin cannot provide masked local input or its
-policy forbids transient argv exposure, stop and report the peer-key registration blocker rather
-than weakening the boundary.
+`hermes peer add` replaces the stored peer entry, so the key-setting call must repeat the same
+`--note`; otherwise the role index is lost. Hermes stores the credential as `HERMES_PEER_<NAME>_KEY`
+in Origin's local Hermes `.env`. The current CLI briefly receives the expanded value in process argv.
+Use only an owner-only local session where other principals cannot inspect that process. If the
+Origin cannot provide masked local input or its policy forbids transient argv exposure, stop and
+report the peer-key registration blocker rather than weakening the boundary.
 
-Prefer a stable Tailscale IP or another private route that remains valid when Origin moves between
-networks. Keep a LAN or VPN route only as a tested fallback.
+Prefer a stable Tailscale address. HTTP is acceptable there because Tailscale encrypts the path. An
+authenticated encrypted VPN or an SSH tunnel bound to Origin loopback is also acceptable; otherwise
+use validated HTTPS. Never send a peer key or Agent request over direct plain-HTTP LAN.
 
 ## 7. Verify network and Agent readiness separately
 
@@ -180,7 +192,7 @@ tailscale status
 Hermes Peer API readiness:
 
 ```sh
-curl -fsS --max-time 10 http://PRIVATE_ADDRESS:PORT/health
+curl -fsS --max-time 10 http://TAILSCALE_ADDRESS:PORT/health
 ```
 
 A Device may be powered on and Tailscale-online while its Hermes gateway is stopped. Do not call a

@@ -10,8 +10,9 @@ Before planning or performing OpenDelegate work, read:
 4. `.agents/skills/opendelegate-join/SKILL.md` for adding or repairing one Device
 
 `CONTEXT.md` is the current source of truth. The earlier Admin Web product specification,
-implementation plan, decision log, `apps/`, `packages/`, and release tooling are legacy prototype
-material unless the owner explicitly asks to work on that prototype.
+implementation plan, decision log, `docs/adr/`, `docs/design/`, `docs/release/`, legacy operational
+guides, `apps/`, `packages/`, and release tooling are legacy prototype material unless the owner
+explicitly asks to work on that prototype.
 
 ## Request routing
 
@@ -21,6 +22,8 @@ material unless the owner explicitly asks to work on that prototype.
   `.agents/skills/opendelegate-join/SKILL.md`.
 - Normal work after setup uses Hermes peer messaging. SSH remains the installation, update, recovery,
   and operator-diagnostic channel.
+- Before routing by role, read `hermes peer list`. The persisted non-secret peer note is Origin's
+  durable role and capability index. An explicitly named Device always wins over semantic routing.
 
 ## Current product boundary
 
@@ -34,6 +37,9 @@ material unless the owner explicitly asks to work on that prototype.
 - Never accept an unexpected SSH host-key change.
 - Never infer that a Device is powered off from a failed Hermes `/health` probe.
 - Never put SSH credentials, peer API keys, provider tokens, or private keys in source, logs, or chat.
+- Peer API traffic must use encrypted transport. Plain HTTP is allowed only inside Tailscale, another
+  authenticated encrypted VPN, or an SSH tunnel bound to Origin loopback; otherwise use validated
+  HTTPS. Never send a peer key or Agent request over direct plain-HTTP LAN.
 
 ## Change discipline
 

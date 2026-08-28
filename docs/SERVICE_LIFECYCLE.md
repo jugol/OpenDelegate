@@ -1,5 +1,10 @@
 # Native service lifecycle CLI
 
+> [!WARNING]
+> **Legacy prototype only.** This CLI manages retained Main/Worker prototype services; it is not the
+> Hermes gateway lifecycle used by current OpenDelegate. Read [`CONTEXT.md`](../CONTEXT.md) and
+> [`docs/GETTING_STARTED.md`](GETTING_STARTED.md) for the current SSH-first workflow.
+
 Status: **native adapters and release-authority verification implemented; real support-eligible
 native signing, provisioned promotion evidence, and live privileged host proof remain required**
 

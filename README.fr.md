@@ -9,7 +9,7 @@ Fonctionnement actuel :
 
 - l'Agent Origin utilise SSH pour installer, mettre à jour et réparer Hermes sur chaque Device ;
 - après l'installation, les tâches ordinaires passent par l'API Peer de Hermes ;
-- Tailscale, le LAN ou un VPN existant fournit la connectivité ;
+- le trafic de l'API Peer passe par Tailscale ou un autre transport privé chiffré ;
 - la configuration, les identifiants, les sessions, la mémoire et les bases Hermes restent sur chaque
   Device ;
 - OpenDelegate n'utilise ni Admin Web ni Enrollment Grant.

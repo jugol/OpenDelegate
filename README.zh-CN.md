@@ -8,7 +8,7 @@ OpenDelegate 是一个通过 SSH 在多台计算机上安装和运行 Hermes Age
 
 - Origin Agent 通过 SSH 在各个 Device 上安装、更新和修复 Hermes；
 - 完成设置后，普通 Agent 工作通过 Hermes Peer API 发送；
-- Tailscale、局域网或现有 VPN 提供网络连接；
+- Peer API 流量通过 Tailscale 或其他加密的专用传输通道传送；
 - Hermes 配置、凭据、会话、记忆和数据库保留在各自 Device 上；
 - OpenDelegate 不使用 Admin Web 或 Enrollment Grant。
 

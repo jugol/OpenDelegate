@@ -23,7 +23,7 @@ an enrollment grant.
 - Origin Hermes home and peer roster;
 - target SSH hostname, address, or alias;
 - intended Device name and role;
-- approved private route;
+- approved encrypted Peer API route;
 - owner decision for login-start or boot-start service.
 
 Never request a password, private key, peer key, or provider token in chat.
@@ -32,8 +32,9 @@ Never request a password, private key, peer key, or provider token in chat.
 
 ### 1. Read current context
 
-Read `CONTEXT.md`, Origin `DEVICE.md`, and the current peer roster. Preserve existing Device names,
-roles, and routes unless the owner asked to change them.
+Read `CONTEXT.md` and the current `hermes peer list` roster, including each non-secret role note.
+Read target-local `DEVICE.md` only on that target. Preserve existing Device names, roles, and routes
+unless the owner asked to change them. Do not assume Hermes core automatically loads `DEVICE.md`.
 
 ### 2. Prove target identity
 
@@ -72,11 +73,16 @@ Server settings. Distinguish:
 - Configure the API Server with `ssh -t TARGET hermes gateway setup` when absent. Do not run the
   interactive wizard with stdin at EOF.
 - Use the native gateway install/start lifecycle when service state is the problem.
-- Update Origin `hermes peer add` only when name, route, note, or key state requires it. Register
-  non-secret route metadata without `--key` first. If key state requires repair, use the init
-  skill's owner-only masked/no-echo `OPENDELEGATE_PEER_KEY` procedure. Never read the target `.env`,
-  carry a key through SSH or chat, or place a literal key in an Agent tool argument. Fail closed
-  when secure local input or transient process-argv exposure is not acceptable.
+- Expose the Peer API only through encrypted transport. Plain HTTP is acceptable inside Tailscale,
+  another authenticated encrypted VPN, or an SSH tunnel bound to Origin loopback; otherwise use
+  validated HTTPS. Never send a key or Agent request over direct plain-HTTP LAN.
+- Update Origin `hermes peer add` only when name, encrypted route, note, or key state requires it.
+  Register non-secret route metadata with `--note` and without `--key` first. If key state requires
+  repair, use the init skill's owner-only masked/no-echo `OPENDELEGATE_PEER_KEY` and
+  `OPENDELEGATE_PEER_NOTE` procedure. Repeat the same `--note` during key entry because `peer add`
+  replaces the stored entry. Never read the target `.env`, carry a key through SSH or chat, or place
+  a literal key in an Agent tool argument. Fail closed when secure local input or transient
+  process-argv exposure is not acceptable.
 
 ### 5. Verify
 
@@ -107,5 +113,5 @@ Name the exact unresolved owner action if any.
 
 ## Verification
 
-Join is complete when Origin can name the Device, show its intended role and private route, and
-receive one verified Hermes peer response from it.
+Join is complete when Origin can name the Device, read its intended role note and encrypted route
+from `hermes peer list`, and receive one verified Hermes peer response from it.

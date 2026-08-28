@@ -10,9 +10,9 @@ control-plane direction preserved under legacy product documents and source dire
 OpenDelegate is a repository and Agent procedure for setting up and managing Hermes Agents on
 multiple computers. One Origin Agent uses the owner's existing SSH access to install, update,
 configure, and recover Hermes on target Devices. After setup, normal Agent work travels through the
-Hermes Peer API. Tailscale, LAN, or another existing private network provides reachability. Each
-Device keeps its own Hermes home, credentials, sessions, memory, and process state. OpenDelegate does
-not require a separate Admin Web, central database, enrollment grant, or Discord management site.
+Hermes Peer API over an encrypted private transport such as Tailscale. Each Device keeps its own
+Hermes home, credentials, sessions, memory, and process state. OpenDelegate does not require a
+separate Admin Web, central database, enrollment grant, or Discord management site.
 
 ## Non-negotiable invariants
 
@@ -38,13 +38,18 @@ not require a separate Admin Web, central database, enrollment grant, or Discord
 9. **Targets answer locally before peer registration.** A remote install can skip model/provider setup
    without a TTY. Complete missing setup in an owner-controlled target TTY and verify one bounded
    local Agent response before registering the Peer API.
-10. **Power and Agent readiness are separate.** Tailscale/network presence and Hermes `/health`
+10. **Peer transport is encrypted.** Plain HTTP is acceptable only inside Tailscale, another
+    authenticated encrypted VPN, or an SSH tunnel bound to Origin loopback. Otherwise use validated
+    HTTPS. A direct plain-HTTP LAN route must not carry a peer key or Agent request.
+11. **Power and Agent readiness are separate.** Tailscale/network presence and Hermes `/health`
    readiness are reported independently.
-11. **Shared storage is human-readable only.** Shared libraries may contain docs, project files,
+12. **Shared storage is human-readable only.** Shared libraries may contain docs, project files,
     knowledge, and artifacts, but not Hermes runtime homes or credentials.
-12. **Explicit Device names win.** Semantic role routing is a convenience; an owner-named target
-    always takes priority.
-13. **Long work must use shipped behavior.** The public `hermes peer dm` command is synchronous and
+13. **Role routing is durable and inspectable.** Target-local `DEVICE.md` is operator and peer-Agent
+    context, not automatically loaded Hermes core context. Origin persists the non-secret role,
+    capabilities, and boundaries in the peer `--note`, reads them with `hermes peer list`, and gives
+    an explicitly named Device priority over semantic routing.
+14. **Long work must use shipped behavior.** The public `hermes peer dm` command is synchronous and
     has no `--timeout` flag. Use Bot messaging when available, or split long work into start and
     status requests with a durable Device-local handle.
 
@@ -59,16 +64,18 @@ not require a separate Admin Web, central database, enrollment grant, or Discord
 6. Each target completes any missing model/provider setup in an owner-controlled TTY and proves one
    local Agent response.
 7. Each target receives a Device-local `DEVICE.md`, API server configuration, and native gateway
-   lifecycle.
-8. Origin registers the target's non-secret route with `hermes peer add`; the owner completes masked
-   peer-key input in a local Origin TTY, and Hermes stores the credential under Origin's local home.
+   lifecycle. The Peer API is exposed only through an encrypted transport.
+8. Origin registers the target's non-secret route and role note with `hermes peer add --note`; the
+   owner completes masked peer-key input in a local Origin TTY while preserving the same note, and
+   Hermes stores the credential under Origin's local home.
 9. Origin distinguishes Tailscale/network presence from Peer API health.
 10. Origin sends a real peer request and verifies the response.
 11. Later owner work is routed through peer messages; SSH is reserved for setup and recovery.
 
 ## Legacy boundary
 
-The `apps/`, `packages/`, release tooling, and earlier product specifications describe a previous
-Admin Web control-plane prototype. They may be reviewed or reused, but they do not define current
-OpenDelegate operation. Current onboarding must never instruct an owner to create an Admin Web
-Instance, enrollment grant, database, or Discord Forum merely to manage Device Agents.
+The `apps/`, `packages/`, release tooling, `docs/adr/`, `docs/design/`, `docs/release/`, legacy
+operational guides, and earlier product specifications describe a previous Admin Web control-plane
+prototype. They may be reviewed or reused, but they do not define current OpenDelegate operation.
+Current onboarding must never instruct an owner to create an Admin Web Instance, enrollment grant,
+database, or Discord Forum merely to manage Device Agents.
